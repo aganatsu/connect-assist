@@ -55,6 +55,16 @@ interface UnifiedZoneData {
     liquidityScore: number;
     summary: string;
     nearbyPools: number;
+    entryTriggerState?: "unswept" | "swept_rejected" | "swept_absorbed" | "none";
+    gateReason?: string;
+    entryTrigger?: {
+      level: number;
+      type: "buy-side" | "sell-side";
+      nearEdge: "above_high" | "below_low" | "inside";
+      distanceToZone: number;
+      maxDistance: number;
+      state: "unswept" | "swept_rejected" | "swept_absorbed" | "none";
+    } | null;
     sweepEvent: {
       level: number;
       type: string;
@@ -91,6 +101,7 @@ const STATE_COLORS: Record<string, string> = {
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
   waiting_for_sweep: "text-purple-400",
+  waiting_for_reconfirmation: "text-orange-400",
   no_zone: "text-zinc-400",
   no_impulse: "text-zinc-400",
   error: "text-red-400",
@@ -102,6 +113,7 @@ const STATE_LABELS: Record<string, string> = {
   at_zone: "📍 At Zone — Waiting Confirmation",
   watching: "⏳ Watching (price not at zone)",
   waiting_for_sweep: "⏳ Sweep Wait — Liquidity Unswept",
+  waiting_for_reconfirmation: "⏳ Reconfirmation Wait — Sweep Not Rejected",
   no_zone: "— No Zone Found",
   no_impulse: "— No Impulse",
   error: "⚠ Error",
@@ -225,18 +237,26 @@ export function UnifiedZonePanel({ data }: Props) {
 
         {/* 4. Liquidity */}
         <StoryBullet
-          filled={!!data.liquidity && data.liquidity.liquidityScore > 0}
+          filled={data.liquidity?.entryTriggerState === "swept_rejected"}
+          partial={
+            data.liquidity?.entryTriggerState === "unswept" ||
+            data.liquidity?.entryTriggerState === "swept_absorbed"
+          }
           label="Liquidity"
         >
-          {data.liquidity && data.liquidity.liquidityScore > 0 ? (
+          {data.liquidity ? (
             <span className="text-zinc-200">
-              {data.liquidity.summary}
+              {data.liquidity.gateReason || data.liquidity.summary}
               {data.liquidity.sweepEvent && (
                 <span className={data.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
                   [{data.liquidity.sweepEvent.type} swept{data.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
                 </span>
               )}
-              <span className="text-zinc-300 ml-1">({data.liquidity.nearbyPools} pools)</span>
+              <span className="text-zinc-300 ml-1">
+                ({data.liquidity.nearbyPools} nearby; {
+                  data.liquidity.entryTrigger ? "1 gating" : "0 gating"
+                })
+              </span>
             </span>
           ) : (
             <span className="text-zinc-400">No significant pools near zone</span>
@@ -289,6 +309,10 @@ export function UnifiedZonePanel({ data }: Props) {
             </div>
           ) : data.state === "confirmed" || data.state === "triggered" ? (
             <span className="text-orange-400">R:R below minimum — no entry</span>
+          ) : data.state === "waiting_for_sweep" ? (
+            <span className="text-purple-400">Waiting for qualified local/internal sweep</span>
+          ) : data.state === "waiting_for_reconfirmation" ? (
+            <span className="text-orange-400">Sweep was not rejected — waiting for a fresh trigger and confirmation</span>
           ) : (
             <span className="text-zinc-400">Not yet</span>
           )}

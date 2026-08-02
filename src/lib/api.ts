@@ -538,6 +538,28 @@ export interface StagedSetup {
   candidate_id: string;
   lifecycle_version?: string;
   lifecycle_reason?: string | null;
+  lifecycle_phase?: string | null;
+  lifecycle_reason_code?: string | null;
+  lifecycle_evidence?: {
+    version?: string;
+    reasonCode?: string;
+    phase?: string;
+    milestones?: string[];
+    observedAt?: string;
+    observedPrice?: number | null;
+    frozenDirection?: "long" | "short" | null;
+    freshDirection?: "long" | "short" | null;
+    boundary?: {
+      level?: number | null;
+      source?: string;
+      bufferPrice?: number | null;
+      zone?: { low?: number; high?: number } | null;
+    } | null;
+    score?: number | null;
+    threshold?: number | null;
+    sweep?: Record<string, unknown> | null;
+    detail?: Record<string, unknown> | null;
+  } | null;
   qualified_at?: string | null;
   pending_order_id?: string | null;
   position_id?: string | null;

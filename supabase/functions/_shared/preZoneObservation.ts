@@ -21,6 +21,7 @@ const COMPLETE_WAITING_STATES = new Set([
   "watching",
   "at_zone",
   "waiting_for_sweep",
+  "waiting_for_reconfirmation",
 ]);
 
 /**
@@ -48,7 +49,8 @@ export function classifyUnifiedWatch(
     COMPLETE_WAITING_STATES.has(input.unifiedState || "") &&
     (
       input.requireUnifiedZone ||
-      input.unifiedState === "waiting_for_sweep"
+      input.unifiedState === "waiting_for_sweep" ||
+      input.unifiedState === "waiting_for_reconfirmation"
     )
   ) {
     return "execution_watch";
@@ -78,5 +80,9 @@ export function requiresFreshCandidateHandoff(
   nextExecutionEligible: boolean,
 ): boolean {
   if (!setup) return false;
-  return isPreZoneObservation(setup) !== !nextExecutionEligible;
+  // Observation -> executable must create a fresh candidate so incomplete
+  // evidence cannot be promoted in place. The reverse is intentionally not a
+  // handoff: a later scan failing to rediscover the zone does not erase the
+  // already-frozen executable thesis.
+  return isPreZoneObservation(setup) && nextExecutionEligible;
 }

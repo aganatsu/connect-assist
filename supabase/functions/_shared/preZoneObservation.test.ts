@@ -37,7 +37,14 @@ Deno.test("noise below the normal Watchlist quality floor is not staged", () => 
 });
 
 Deno.test("a complete zone waiting for price, confirmation or sweep is executable watch evidence", () => {
-  for (const unifiedState of ["watching", "at_zone", "waiting_for_sweep"]) {
+  for (
+    const unifiedState of [
+      "watching",
+      "at_zone",
+      "waiting_for_sweep",
+      "waiting_for_reconfirmation",
+    ]
+  ) {
     assertEquals(
       classifyUnifiedWatch({
         ...base,
@@ -95,6 +102,19 @@ Deno.test("an observation can never be silently converted into an execution cand
   );
   assertEquals(
     requiresFreshCandidateHandoff({ execution_eligible: true }, false),
-    true,
+    false,
+  );
+});
+
+Deno.test("a frozen execution candidate survives a later no-zone observation", () => {
+  const executionCandidate = {
+    execution_eligible: true,
+    setup_type: "unified_zone_watch",
+    originating_zone: { low: 63_310, high: 63_627.66 },
+  };
+
+  assertEquals(
+    requiresFreshCandidateHandoff(executionCandidate, false),
+    false,
   );
 });

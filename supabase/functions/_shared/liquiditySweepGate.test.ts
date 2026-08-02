@@ -123,6 +123,40 @@ Deno.test("Liquidity Sweep Gate — entryTriggerState = 'none' when no pools at 
   assertEquals(result.hasUnsweptEntryTrigger, false);
 });
 
+Deno.test("Liquidity Sweep Gate — internal BSL inside bearish zone is the gate authority", () => {
+  const candles = generateBaseCandles(50);
+  const result = findZoneLiquidity(
+    candles,
+    1.1200,
+    1.1150,
+    "bearish",
+    [makePool(1.1180, "buy-side", 3, false)],
+  );
+
+  assertEquals(result.entryTriggerState, "unswept");
+  assertEquals(result.hasUnsweptEntryTrigger, true);
+  assertEquals(result.entryTrigger?.nearEdge, "inside");
+  assertEquals(result.entryTrigger?.level, 1.1180);
+  assert(result.gateReason.includes("Local BSL inside zone"));
+});
+
+Deno.test("Liquidity Sweep Gate — distant ATR-near BSL is context only and cannot block", () => {
+  const candles = generateBaseCandles(50);
+  const result = findZoneLiquidity(
+    candles,
+    1.1200,
+    1.1150,
+    "bearish",
+    [makePool(1.1240, "buy-side", 3, false)],
+  );
+
+  assertEquals(result.nearbyPools.length, 1);
+  assertEquals(result.nearbyPools[0].gateEligible, false);
+  assertEquals(result.entryTriggerState, "none");
+  assertEquals(result.hasUnsweptEntryTrigger, false);
+  assert(result.gateReason.includes("contextual"));
+});
+
 // ─── zoneLiquidity.ts: swept_absorbed penalty ───────────────────────
 
 Deno.test("Liquidity Sweep Gate — swept_absorbed entry-trigger applies -2.0 penalty", () => {
@@ -174,8 +208,18 @@ Deno.test("Liquidity Sweep Gate — configMapper: requireLiquiditySweep maps fro
 
 Deno.test("Liquidity Sweep Gate — unified engine: waiting_for_sweep is a valid state", () => {
   // Verify the type system accepts it
-  const validStates = ["no_impulse", "no_zone", "watching", "at_zone", "confirmed", "triggered", "waiting_for_sweep"];
+  const validStates = [
+    "no_impulse",
+    "no_zone",
+    "watching",
+    "at_zone",
+    "confirmed",
+    "triggered",
+    "waiting_for_sweep",
+    "waiting_for_reconfirmation",
+  ];
   assert(validStates.includes("waiting_for_sweep"));
+  assert(validStates.includes("waiting_for_reconfirmation"));
 });
 
 // ─── Regression: gate OFF = no behavior change ──────────────────────

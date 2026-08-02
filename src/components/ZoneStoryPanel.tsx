@@ -79,6 +79,17 @@ interface ZoneStoryData {
     liquidityScore: number;
     summary: string;
     nearbyPools: number;
+    entryTriggerState?: "unswept" | "swept_rejected" | "swept_absorbed" | "none";
+    hasUnsweptEntryTrigger?: boolean;
+    gateReason?: string;
+    entryTrigger?: {
+      level: number;
+      type: "buy-side" | "sell-side";
+      nearEdge: "above_high" | "below_low" | "inside";
+      distanceToZone: number;
+      maxDistance: number;
+      state: "unswept" | "swept_rejected" | "swept_absorbed" | "none";
+    } | null;
     sweepEvent: {
       level: number;
       type: string;
@@ -264,6 +275,7 @@ const STATE_COLORS: Record<string, string> = {
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
   waiting_for_sweep: "text-purple-400",
+  waiting_for_reconfirmation: "text-orange-400",
   no_zone: "text-zinc-400",
   no_impulse: "text-zinc-400",
   error: "text-red-400",
@@ -275,6 +287,7 @@ const STATE_LABELS: Record<string, string> = {
   at_zone: "📍 At Zone",
   watching: "⏳ Watching",
   waiting_for_sweep: "⏳ Sweep Wait",
+  waiting_for_reconfirmation: "⏳ Reconfirmation Wait",
   no_zone: "— No Zone",
   no_impulse: "— No Impulse",
   error: "⚠ Error",
@@ -757,19 +770,39 @@ export function ZoneStoryPanel({
           {/* Liquidity Row */}
           <tr className="border-b border-zinc-800/50">
             <td className="py-1.5 pr-2 align-top">
-              <Bullet filled={!!unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0} />
+              <Bullet
+                filled={unifiedData.liquidity?.entryTriggerState === "swept_rejected"}
+                partial={
+                  unifiedData.liquidity?.entryTriggerState === "unswept" ||
+                  unifiedData.liquidity?.entryTriggerState === "swept_absorbed"
+                }
+              />
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Liquidity</td>
             <td className="py-1.5">
-              {unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0 ? (
+              {unifiedData.liquidity ? (
                 <span className="text-zinc-200">
-                  {unifiedData.liquidity.summary}
+                  <span className={
+                    unifiedData.liquidity.entryTriggerState === "swept_rejected"
+                      ? "text-green-400"
+                      : unifiedData.liquidity.entryTriggerState === "unswept"
+                      ? "text-purple-400"
+                      : unifiedData.liquidity.entryTriggerState === "swept_absorbed"
+                      ? "text-orange-400"
+                      : "text-zinc-400"
+                  }>
+                    {unifiedData.liquidity.gateReason || unifiedData.liquidity.summary}
+                  </span>
                   {unifiedData.liquidity.sweepEvent && (
                     <span className={unifiedData.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
                       [{unifiedData.liquidity.sweepEvent.type} swept{unifiedData.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
                     </span>
                   )}
-                  <span className="text-zinc-400 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
+                  <span className="text-zinc-400 ml-1">
+                    ({unifiedData.liquidity.nearbyPools} nearby; {
+                      unifiedData.liquidity.entryTrigger ? "1 gating" : "0 gating"
+                    })
+                  </span>
                 </span>
               ) : (
                 <span className="text-zinc-400">No significant pools near zone</span>
@@ -829,6 +862,10 @@ export function ZoneStoryPanel({
                 </div>
               ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
                 <span className="text-orange-400">R:R below minimum — no entry</span>
+              ) : unifiedData.state === "waiting_for_sweep" ? (
+                <span className="text-purple-400">Waiting for qualified local/internal sweep</span>
+              ) : unifiedData.state === "waiting_for_reconfirmation" ? (
+                <span className="text-orange-400">Sweep was not rejected — waiting for a fresh trigger and confirmation</span>
               ) : (
                 <span className="text-zinc-400">Not yet</span>
               )}
