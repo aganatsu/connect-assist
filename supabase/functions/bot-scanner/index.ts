@@ -174,6 +174,12 @@ import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts"
 import {
   evaluateZoneLocalEnforcement,
 } from "../_shared/zoneLocalEnforcement.ts";
+import {
+  loadCrossTimeframeActivation,
+} from "../_shared/crossTimeframeActivationStore.ts";
+import {
+  resolveCrossTimeframeAuthority,
+} from "../_shared/crossTimeframeAuthority.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -1485,10 +1491,29 @@ async function runScanForUser(
     userId,
     botId: BOT_ID,
   });
+  const crossTimeframeActivation = await loadCrossTimeframeActivation(
+    supabase,
+    {
+      userId,
+      botId: BOT_ID,
+    },
+  );
+  const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
+    rawConfig: config as unknown as Record<string, unknown>,
+    runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+    activation: crossTimeframeActivation,
+  });
   console.log(
     `[scan ${scanCycleId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
       + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
       + ` runtimeEnforced=${zoneLocalActivation?.runtimeEnforced === true}`,
+  );
+  console.log(
+    `[scan ${scanCycleId}] Cross-TF authority`
+      + ` requested=${crossTimeframeAuthority.requestedMode}`
+      + ` certified=${crossTimeframeAuthority.certifiedMaximum}`
+      + ` effective=${crossTimeframeAuthority.effectiveMode}`
+      + ` reason=${crossTimeframeAuthority.reason}`,
   );
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
@@ -3944,6 +3969,7 @@ async function runScanForUser(
 
     const detail: any = {
       pair,
+      crossTimeframeAuthority,
       score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
@@ -4565,6 +4591,7 @@ async function runScanForUser(
             observedAt: candles[candles.length - 1]?.datetime ||
               new Date().toISOString(),
             candidates: multiTF.allZones,
+            crossTimeframePolicy: crossTimeframeAuthority.policy,
           });
           if (persisted > 0) {
             console.log(

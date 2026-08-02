@@ -329,6 +329,7 @@ export const botConfigApi = {
           requireUnifiedZone: boolean;
           impulseZoneGateMode: string;
           zoneLocalEnforcementMode: string;
+          crossTfAuthorityMode: string;
           minConfluence: number;
           riskPerTrade: number;
         };

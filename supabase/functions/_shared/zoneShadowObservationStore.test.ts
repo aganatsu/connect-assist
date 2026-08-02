@@ -179,7 +179,7 @@ Deno.test("zone shadow store records the observation-only model top three even w
   assertEquals(rows[1].cross_tf_shadow_decision, "block");
   assertEquals(
     rows[1].cross_tf_reason_codes,
-    ["parent_zone_too_far"],
+    ["parent_zone_too_far", "nested_impulse_required"],
   );
   assertEquals(rows.every((row) => row.ranking_disagreed === false), true);
 });
