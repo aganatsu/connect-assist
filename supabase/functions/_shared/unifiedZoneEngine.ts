@@ -33,6 +33,10 @@ import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput }
 import { buildConceptEvidence } from "./conceptEvidence.ts";
 import { observeZoneLocalPoint } from "./zoneLocalConfluence.ts";
 import { rankZoneCandidatesShadow } from "./zoneCandidateShadowRanking.ts";
+import {
+  classifyZoneCandidateLifecycle,
+  rankZoneCandidateModels,
+} from "./zoneCandidateModel.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -211,6 +215,29 @@ export function findUnifiedZone(
   const multiTFResult = findBestEntryZoneMultiTF(
     h1Candles, h4Candles, entryCandles, direction, currentPrice, htfData, options, dailyCandles, labels,
   );
+  const annotateCandidateLifecycle = (
+    result: typeof multiTFResult.h1Result | null | undefined,
+    sourceCandles: Candle[],
+  ) => {
+    if (!result?.evidence) return;
+    for (const candidate of result.allZones) {
+      candidate.candidateLifecycle = classifyZoneCandidateLifecycle({
+        zone: {
+          low: candidate.poi.low,
+          high: candidate.poi.high,
+          direction: candidate.poi.direction,
+        },
+        candlesAfterFormation: sourceCandles.slice(
+          candidate.poi.candleIndex + 1,
+        ),
+      });
+      candidate.canonicalImpulseMetrics =
+        result.evidence.canonicalImpulse?.metrics ?? null;
+    }
+  };
+  annotateCandidateLifecycle(multiTFResult.h1Result, h1Candles);
+  annotateCandidateLifecycle(multiTFResult.h4Result, h4Candles);
+  annotateCandidateLifecycle(multiTFResult.dailyResult, dailyCandles ?? []);
   annotateZoneLiquidityObservations({
     multiTFResult,
     h1Candles,
@@ -236,6 +263,48 @@ export function findUnifiedZone(
       candidate.poi.evidence?.entityId ||
       `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
     candidate.shadowRanking = shadowRankings.get(candidateId);
+  }
+  const candidateModels = rankZoneCandidateModels(
+    multiTFResult.allZones
+      .filter((candidate) => candidate.candidateLifecycle)
+      .map((candidate) => {
+        const candidateId = candidate.localConfluence?.candidateId ||
+          candidate.poi.evidence?.entityId ||
+          `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
+        const liquiditySweepQualified =
+          candidate.localConfluence?.items.some((item) =>
+            item.source === "liquidity_pool" &&
+            item.qualification?.qualified === true &&
+            item.attributes.relevance === "entry_trigger"
+          ) === true;
+        return {
+          candidateId,
+          zone: {
+            low: candidate.poi.low,
+            high: candidate.poi.high,
+            direction: candidate.poi.direction,
+          },
+          currentPrice,
+          atr: candidate.localConfluence?.atr ?? 0,
+          localConfluenceScore:
+            candidate.shadowRanking?.shadowLocalScore ?? 0,
+          liquiditySweepQualified,
+          impulseSweepOrigin:
+            candidate.canonicalImpulseMetrics?.sweepOrigin === true,
+          lifecycle: candidate.candidateLifecycle!,
+          displacementPercentile:
+            candidate.canonicalImpulseMetrics?.displacementPercentile ?? null,
+          htfLayerCount: candidate.htfLayers.length,
+          fibScore: candidate.fibScore,
+          fibDepth: candidate.fibDepth,
+        };
+      }),
+  );
+  for (const candidate of multiTFResult.allZones) {
+    const candidateId = candidate.localConfluence?.candidateId ||
+      candidate.poi.evidence?.entityId ||
+      `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
+    candidate.candidateModel = candidateModels.get(candidateId);
   }
 
   // No zone found

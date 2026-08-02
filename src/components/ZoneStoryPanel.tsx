@@ -158,6 +158,32 @@ interface ImpulseGateData {
         creditedFamilies: number;
       };
     } | null;
+    candidateLifecycle?: {
+      state:
+        | "fresh"
+        | "tapped_and_held"
+        | "partially_mitigated"
+        | "violated";
+      retestCount: number;
+      maxPenetrationPercent: number;
+      explanation: string;
+    } | null;
+    candidateModel?: {
+      enforcement: "observe_only";
+      rank: number;
+      topCandidate: boolean;
+      eligible: boolean;
+      totalScore: number;
+      distanceATR: number | null;
+      factors: {
+        zoneLocalConfluence: number;
+        proximityToCurrentPrice: number;
+        sweepQuality: number;
+        retestQuality: number;
+        displacementQuality: number;
+        structuralImportance: number;
+      };
+    } | null;
   } | null;
   scoringEnabled?: boolean;
   directionDetail?: {
@@ -526,6 +552,45 @@ export function ZoneStoryPanel({
                   <span className="ml-2 rounded bg-orange-500/15 px-1 py-0.5 text-[9px] font-bold text-orange-400">
                     RANK DISAGREEMENT
                   </span>
+                )}
+              </td>
+            </tr>
+          )}
+
+          {gateData?.bestZone?.candidateModel && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                Candidate model
+              </td>
+              <td className="py-1">
+                <span className="text-[10px] font-mono text-zinc-300">
+                  Observe-only #{gateData.bestZone.candidateModel.rank} · score{" "}
+                  {gateData.bestZone.candidateModel.totalScore.toFixed(2)}
+                </span>
+                <span className="ml-2 rounded bg-cyan-500/15 px-1 py-0.5 text-[9px] text-cyan-300">
+                  {gateData.bestZone.candidateLifecycle?.state
+                    ?.replaceAll("_", " ") ?? "lifecycle unavailable"}
+                </span>
+                <div className="mt-1 text-[9px] text-zinc-400">
+                  Local{" "}
+                  {gateData.bestZone.candidateModel.factors.zoneLocalConfluence
+                    .toFixed(1)} · proximity{" "}
+                  {gateData.bestZone.candidateModel.factors
+                    .proximityToCurrentPrice.toFixed(1)} · sweep{" "}
+                  {gateData.bestZone.candidateModel.factors.sweepQuality
+                    .toFixed(1)} · retest{" "}
+                  {gateData.bestZone.candidateModel.factors.retestQuality
+                    .toFixed(1)} · displacement{" "}
+                  {gateData.bestZone.candidateModel.factors.displacementQuality
+                    .toFixed(1)} · structure{" "}
+                  {gateData.bestZone.candidateModel.factors
+                    .structuralImportance.toFixed(1)}
+                </div>
+                {gateData.bestZone.candidateLifecycle?.explanation && (
+                  <div className="mt-1 text-[9px] text-zinc-500">
+                    {gateData.bestZone.candidateLifecycle.explanation}
+                  </div>
                 )}
               </td>
             </tr>

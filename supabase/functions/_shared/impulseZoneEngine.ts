@@ -32,7 +32,12 @@ import {
   canonicalImpulseMatchesLegacy,
   detectCanonicalImpulse,
   type CanonicalImpulseDetection,
+  type CanonicalImpulseMetrics,
 } from "./canonicalImpulseDetector.ts";
+import {
+  type CanonicalZoneLifecycleObservation,
+  type ZoneCandidateModelObservation,
+} from "./zoneCandidateModel.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +89,12 @@ export interface RankedPOI {
   shadowRanking?: ZoneCandidateShadowRanking;
   /** Counterfactual levels used only for outcome validation. */
   validationTrade?: ZoneValidationTrade;
+  /** Observation-only Phase 3 lifecycle classification. */
+  candidateLifecycle?: CanonicalZoneLifecycleObservation;
+  /** Relative impulse metrics inherited from this candidate's timeframe. */
+  canonicalImpulseMetrics?: CanonicalImpulseMetrics | null;
+  /** Observation-only Phase 3 cross-factor candidate rank. */
+  candidateModel?: ZoneCandidateModelObservation;
 }
 
 export interface ZoneValidationTrade {

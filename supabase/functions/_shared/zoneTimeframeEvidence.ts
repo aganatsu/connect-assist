@@ -22,6 +22,10 @@ import {
 import { canonicalCandidateId } from "./zoneCandidateIdentity.ts";
 import { buildEntityId } from "./conceptEvidence.ts";
 import { CANONICAL_IMPULSE_DETECTOR_VERSION } from "./canonicalImpulseDetector.ts";
+import type {
+  CanonicalZoneLifecycleObservation,
+  ZoneCandidateModelObservation,
+} from "./zoneCandidateModel.ts";
 
 export const ZONE_TF_EVIDENCE_CONTRACT_VERSION = "zone-tf-evidence.v1";
 
@@ -156,6 +160,8 @@ export interface SlotEvidence {
     htfConfluenceScore: number;
     htfLayers: string[];
     totalScore: number;
+    candidateLifecycle: CanonicalZoneLifecycleObservation | null;
+    candidateModel: ZoneCandidateModelObservation | null;
   }>;
   truncated: { legs: number; pois: number; candidates: number } | null;
 }
@@ -345,6 +351,8 @@ function candidateRecord(zone: RankedPOI, rank: number, symbol: string, timefram
     htfConfluenceScore: zone.htfConfluenceScore,
     htfLayers: zone.htfLayers ?? [],
     totalScore: zone.totalScore,
+    candidateLifecycle: zone.candidateLifecycle ?? null,
+    candidateModel: zone.candidateModel ?? null,
   };
 }
 
