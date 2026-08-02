@@ -202,6 +202,17 @@ import {
   type StyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
+import {
+  crossTimeframeAuthorityLine,
+  directionVerdictLines,
+  durationLabel,
+  parseSignalReason,
+  rMultiple,
+  styleLadderLines,
+  tgLine,
+  watchlistOriginLines,
+  zoneEvidenceLines,
+} from "../_shared/telegramDetail.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
