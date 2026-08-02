@@ -126,6 +126,9 @@ Deno.serve(async (req) => {
           style_base_policy_hash: row.style_base_policy_hash ?? null,
           style_policy_hash: row.style_policy_hash ?? null,
           style_policy_snapshot: row.style_policy_snapshot ?? null,
+          canonical_detector_version:
+            row.canonical_detector_version ?? null,
+          canonical_parity: row.canonical_parity ?? null,
           pending_order_id: row.pending_order_id ?? null,
           confirmation_attempt: row.confirmation_attempt ?? 0,
           event_linked: row.event_linked ?? false,

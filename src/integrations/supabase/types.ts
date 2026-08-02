@@ -2874,6 +2874,8 @@ export type Database = {
       zone_timeframe_evidence: {
         Row: {
           bot_id: string
+          canonical_detector_version: string | null
+          canonical_parity: boolean | null
           confirmation_attempt: number
           contract_version: string
           created_at: string
@@ -2908,6 +2910,8 @@ export type Database = {
         }
         Insert: {
           bot_id: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number
           contract_version?: string
           created_at?: string
@@ -2942,6 +2946,8 @@ export type Database = {
         }
         Update: {
           bot_id?: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number
           contract_version?: string
           created_at?: string
@@ -2979,6 +2985,8 @@ export type Database = {
       zone_timeframe_evidence_summary: {
         Row: {
           bot_id: string
+          canonical_detector_version: string | null
+          canonical_parity: boolean | null
           confirmation_attempt: number | null
           contract_version: string | null
           created_at: string
@@ -3008,6 +3016,8 @@ export type Database = {
         }
         Insert: {
           bot_id: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number | null
           contract_version?: string | null
           created_at?: string
@@ -3037,6 +3047,8 @@ export type Database = {
         }
         Update: {
           bot_id?: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number | null
           contract_version?: string | null
           created_at?: string
