@@ -93,6 +93,21 @@ function modeledCandidate(
       structuralImportance: 2,
     },
   };
+  value.timeframeLineage = {
+    contractVersion: "cross-tf-zone-lineage.v1",
+    enforcement: "observe_only",
+    candidateId,
+    candidateTimeframe: "5min",
+    parentCandidateId: "parent-1h",
+    parentTimeframe: "1h",
+    relationship: modelRank === 1 ? "qualified_nested" : "context_only",
+    directionAligned: true,
+    overlapAmount: modelRank === 1 ? 0.001 : 0,
+    overlapPercentOfChild: modelRank === 1 ? 100 : 0,
+    parentDistance: modelRank === 1 ? 0 : 0.002,
+    parentDistanceATR: modelRank === 1 ? 0 : 1,
+    explanation: "test lineage",
+  };
   return value;
 }
 
@@ -158,6 +173,8 @@ Deno.test("zone shadow store records the observation-only model top three even w
   );
   assertEquals(rows[0].candidate_model_winner, true);
   assertEquals(rows[0].candidate_lifecycle_state, "tapped_and_held");
+  assertEquals(rows[0].timeframe_relationship, "qualified_nested");
+  assertEquals(rows[0].parent_candidate_id, "parent-1h");
   assertEquals(rows.every((row) => row.ranking_disagreed === false), true);
 });
 

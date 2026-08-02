@@ -4500,6 +4500,8 @@ async function runScanForUser(
               multiTF.bestZone.zone.candidateLifecycle ?? null,
             candidateModel:
               multiTF.bestZone.zone.candidateModel ?? null,
+            timeframeLineage:
+              multiTF.bestZone.zone.timeframeLineage ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4521,6 +4523,7 @@ async function runScanForUser(
             shadowRanking: candidate.shadowRanking ?? null,
             candidateLifecycle: candidate.candidateLifecycle ?? null,
             candidateModel: candidate.candidateModel ?? null,
+            timeframeLineage: candidate.timeframeLineage ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,

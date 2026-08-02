@@ -26,6 +26,7 @@ import type {
   CanonicalZoneLifecycleObservation,
   ZoneCandidateModelObservation,
 } from "./zoneCandidateModel.ts";
+import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 
 export const ZONE_TF_EVIDENCE_CONTRACT_VERSION = "zone-tf-evidence.v1";
 
@@ -162,6 +163,7 @@ export interface SlotEvidence {
     totalScore: number;
     candidateLifecycle: CanonicalZoneLifecycleObservation | null;
     candidateModel: ZoneCandidateModelObservation | null;
+    timeframeLineage: CrossTimeframeZoneLineage | null;
   }>;
   truncated: { legs: number; pois: number; candidates: number } | null;
 }
@@ -353,6 +355,7 @@ function candidateRecord(zone: RankedPOI, rank: number, symbol: string, timefram
     totalScore: zone.totalScore,
     candidateLifecycle: zone.candidateLifecycle ?? null,
     candidateModel: zone.candidateModel ?? null,
+    timeframeLineage: zone.timeframeLineage ?? null,
   };
 }
 

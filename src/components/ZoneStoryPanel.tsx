@@ -184,6 +184,20 @@ interface ImpulseGateData {
         structuralImportance: number;
       };
     } | null;
+    timeframeLineage?: {
+      relationship:
+        | "qualified_nested"
+        | "context_only"
+        | "standalone_lower_tf"
+        | "timeframe_conflict"
+        | "no_parent_context";
+      candidateTimeframe: string;
+      parentCandidateId: string | null;
+      parentTimeframe: string | null;
+      overlapPercentOfChild: number;
+      parentDistanceATR: number | null;
+      explanation: string;
+    } | null;
   } | null;
   scoringEnabled?: boolean;
   directionDetail?: {
@@ -592,6 +606,32 @@ export function ZoneStoryPanel({
                     {gateData.bestZone.candidateLifecycle.explanation}
                   </div>
                 )}
+              </td>
+            </tr>
+          )}
+
+          {gateData?.bestZone?.timeframeLineage && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                TF lineage
+              </td>
+              <td className="py-1">
+                <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[9px] font-mono text-violet-300">
+                  {gateData.bestZone.timeframeLineage.relationship.replaceAll(
+                    "_",
+                    " ",
+                  )}
+                </span>
+                <span className="ml-2 text-[10px] font-mono text-zinc-300">
+                  {gateData.bestZone.timeframeLineage.candidateTimeframe}
+                  {gateData.bestZone.timeframeLineage.parentTimeframe
+                    ? ` → parent ${gateData.bestZone.timeframeLineage.parentTimeframe}`
+                    : " → no parent"}
+                </span>
+                <div className="mt-1 text-[9px] text-zinc-500">
+                  {gateData.bestZone.timeframeLineage.explanation}
+                </div>
               </td>
             </tr>
           )}

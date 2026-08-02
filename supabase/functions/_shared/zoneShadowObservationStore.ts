@@ -108,6 +108,11 @@ export function buildZoneShadowObservationRows(
         candidate.candidateLifecycle?.state ?? null,
       candidate_lifecycle: candidate.candidateLifecycle ?? null,
       candidate_model: candidate.candidateModel ?? null,
+      timeframe_relationship:
+        candidate.timeframeLineage?.relationship ?? null,
+      parent_candidate_id:
+        candidate.timeframeLineage?.parentCandidateId ?? null,
+      candidate_lineage: candidate.timeframeLineage ?? null,
       evidence_source: input.evidenceSource ?? "forward_observation",
       replay_run_id: input.replayRunId ?? null,
       replay_contract_version: input.replayContractVersion ?? null,

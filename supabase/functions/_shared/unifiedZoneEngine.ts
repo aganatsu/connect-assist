@@ -37,6 +37,7 @@ import {
   classifyZoneCandidateLifecycle,
   rankZoneCandidateModels,
 } from "./zoneCandidateModel.ts";
+import { buildCrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -305,6 +306,29 @@ export function findUnifiedZone(
       candidate.poi.evidence?.entityId ||
       `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
     candidate.candidateModel = candidateModels.get(candidateId);
+  }
+  if (options?.collectEvidence) {
+    const lineage = buildCrossTimeframeZoneLineage({
+      hierarchy: labels,
+      candidates: multiTFResult.allZones.map((candidate) => ({
+        candidateId: candidate.localConfluence?.candidateId ||
+          candidate.poi.evidence?.entityId ||
+          `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`,
+        timeframe: candidate.poi.evidence?.timeframe ||
+          candidate.localConfluence?.items[0]?.evidence?.timeframe ||
+          "unknown",
+        direction: candidate.poi.direction,
+        low: candidate.poi.low,
+        high: candidate.poi.high,
+        atr: candidate.localConfluence?.atr ?? 0,
+      })),
+    });
+    for (const candidate of multiTFResult.allZones) {
+      const candidateId = candidate.localConfluence?.candidateId ||
+        candidate.poi.evidence?.entityId ||
+        `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
+      candidate.timeframeLineage = lineage.get(candidateId);
+    }
   }
 
   // No zone found
