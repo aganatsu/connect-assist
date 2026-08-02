@@ -13,6 +13,7 @@ import {
   buildStyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
 import { generateGamePlansWithRetry } from "../_shared/gamePlanGeneration.ts";
+import { resolveGamePlanMarketScope } from "../_shared/gamePlanMarketScope.ts";
 import {
   beginScanSourceTally,
   endScanSourceTally,
@@ -144,6 +145,17 @@ Deno.serve(async (req) => {
     const scanCache = createScanCache(fetchCandles);
     const retryCache = createScanCache(fetchCandles);
     const currentSession = getCurrentSession();
+    const marketScope = resolveGamePlanMarketScope(
+      config.instruments,
+      new Date(),
+    );
+    if (marketScope.eligibleSymbols.length === 0) {
+      return respond({
+        error:
+          "No enabled instruments are open for Game Plan generation in the current market window",
+        marketScope,
+      }, 409);
+    }
     const generateForSymbol = async (
       symbol: string,
       cache: ReturnType<typeof createScanCache>,
@@ -220,7 +232,7 @@ Deno.serve(async (req) => {
       );
     };
     const generation = await generateGamePlansWithRetry({
-      symbols: config.instruments,
+      symbols: marketScope.eligibleSymbols,
       batchSize: 3,
       batchDelayMs: 1_200,
       retryDelayMs: 1_500,
@@ -240,6 +252,7 @@ Deno.serve(async (req) => {
         missingSymbols: generation.missingSymbols,
         details: errors,
         source: sourceSummary,
+        marketScope,
       }, 503);
     }
     const instrumentPlans = generation.plans;
@@ -249,7 +262,7 @@ Deno.serve(async (req) => {
       const newsEvents = await fetchNewsForGamePlan(
         supabaseUrl,
         serviceRoleKey,
-        config.instruments,
+        marketScope.eligibleSymbols,
       );
       gamePlan = enrichGamePlanWithNews(gamePlan, newsEvents);
       gamePlan = enrichGamePlanWithDirectionalNews(gamePlan);
@@ -278,6 +291,7 @@ Deno.serve(async (req) => {
         hierarchy: ["Twelve Data", "Polygon"],
         source: sourceSummary,
         generationErrors: errors,
+        gamePlanMarketScope: marketScope,
       },
     });
     const tradeableCount = gamePlan.plans.filter((plan) =>
@@ -305,6 +319,7 @@ Deno.serve(async (req) => {
       validityPolicy: gamePlan.validityPolicy,
       runtimeConfigProvenance: styleResolution.provenance,
       warnings: errors,
+      marketScope,
     });
   } catch (error: any) {
     console.error("[game-plan-refresh] Failed:", error?.message || error);
