@@ -1928,6 +1928,7 @@ export type Database = {
           evidence: Json
           from_status: string | null
           id: string
+          lifecycle_phase: string | null
           reason: string | null
           reason_code: string | null
           staged_setup_id: string
@@ -1943,6 +1944,7 @@ export type Database = {
           evidence?: Json
           from_status?: string | null
           id?: string
+          lifecycle_phase?: string | null
           reason?: string | null
           reason_code?: string | null
           staged_setup_id: string
@@ -1958,6 +1960,7 @@ export type Database = {
           evidence?: Json
           from_status?: string | null
           id?: string
+          lifecycle_phase?: string | null
           reason?: string | null
           reason_code?: string | null
           staged_setup_id?: string
@@ -2007,6 +2010,7 @@ export type Database = {
           invalidation_reason: string | null
           last_eval_at: string
           lifecycle_evidence: Json
+          lifecycle_phase: string | null
           lifecycle_reason: string | null
           lifecycle_reason_code: string | null
           lifecycle_version: string
@@ -2072,6 +2076,7 @@ export type Database = {
           invalidation_reason?: string | null
           last_eval_at?: string
           lifecycle_evidence?: Json
+          lifecycle_phase?: string | null
           lifecycle_reason?: string | null
           lifecycle_reason_code?: string | null
           lifecycle_version?: string
@@ -2137,6 +2142,7 @@ export type Database = {
           invalidation_reason?: string | null
           last_eval_at?: string
           lifecycle_evidence?: Json
+          lifecycle_phase?: string | null
           lifecycle_reason?: string | null
           lifecycle_reason_code?: string | null
           lifecycle_version?: string
