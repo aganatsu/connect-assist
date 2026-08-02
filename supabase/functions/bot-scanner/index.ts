@@ -3018,14 +3018,29 @@ async function runScanForUser(
             // Build TP method label
             const tpMethodUsed = config.tpMethod || "rr_ratio";
             const tpMethodLabel = tpMethodUsed === "rr_ratio" ? `R:R (${config.tpRatio || 2.0}:1)` : tpMethodUsed === "next_level" ? "Next Structure Level" : tpMethodUsed === "fixed_pips" ? "Fixed Pips" : `ATR ×${config.tpATRMultiple || 2.0}`;
+            const fillSR = parseSignalReason(pending.signal_reason);
+            const fillRR = (() => {
+              const e = Number(actualFillPrice), s = Number(pending.stop_loss), t = Number(pending.take_profit);
+              if (![e, s, t].every(Number.isFinite) || Math.abs(e - s) <= 0) return null;
+              return (Math.abs(t - e) / Math.abs(e - s)).toFixed(2);
+            })();
             const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
-              `<b>Symbol:</b> ${pending.symbol}\n` +
-              `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-              `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${fmtPx(actualFillPrice, pending.symbol)}\n` +
-              `<b>SL:</b> ${fmtPx(pending.stop_loss, pending.symbol)}\n` +
-              `<b>TP:</b> ${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})\n` +
-              `<b>Score:</b> ${pending.signal_score}\n\n` +
+              tgLine("Symbol", pending.symbol) +
+              tgLine("Direction", String(pending.direction).toUpperCase()) +
+              tgLine("Size", `${pending.size} lots`) +
+              tgLine("Entry", fmtPx(actualFillPrice, pending.symbol)) +
+              tgLine("Zone Level", fmtPx(pending.entry_price, pending.symbol)) +
+              tgLine("SL", fmtPx(pending.stop_loss, pending.symbol)) +
+              tgLine("TP", `${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})`) +
+              (fillRR ? tgLine("Planned R:R", `${fillRR}:1`) : "") +
+              tgLine("Score", pending.signal_score) +
+              tgLine("Time in Zone", durationLabel(pending.zone_touch_time)) +
+              "\n" +
+              zoneEvidenceLines(fillSR) +
+              directionVerdictLines(fillSR.directionVerdict) +
+              styleLadderLines(fillSR) +
+              watchlistOriginLines(fillSR) +
+              "\n" +
               `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
               `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
               confSupporting + `\n` +
