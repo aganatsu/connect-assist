@@ -245,7 +245,20 @@ Deno.serve(async (req) => {
       attempt,
       error,
     }));
-    if (!generation.complete) {
+    // A symbol whose every attempt returned zero candles is a data-provider
+    // coverage gap (e.g. index feeds not enabled), not a transient failure.
+    // Those symbols are excluded from the scope so one unsupported instrument
+    // cannot block an otherwise complete plan.
+    const dataUnavailableSymbols = generation.missingSymbols.filter((symbol) => {
+      const attempts = generation.failures.filter((f) => f.symbol === symbol);
+      return attempts.length > 0 &&
+        attempts.every((f) => /daily=0/.test(f.error));
+    });
+    const unavailableSet = new Set(dataUnavailableSymbols);
+    const blockingMissing = generation.missingSymbols.filter((symbol) =>
+      !unavailableSet.has(symbol)
+    );
+    if (blockingMissing.length > 0 || generation.plans.length === 0) {
       return respond({
         error:
           "Game Plan refresh was incomplete; the previous complete plan remains active",
@@ -254,6 +267,20 @@ Deno.serve(async (req) => {
         source: sourceSummary,
         marketScope,
       }, 503);
+    }
+    if (dataUnavailableSymbols.length > 0) {
+      console.warn(
+        `[game-plan-refresh] Excluding symbols with no provider data: ${
+          dataUnavailableSymbols.join(", ")
+        }`,
+      );
+      marketScope.eligibleSymbols = marketScope.eligibleSymbols.filter(
+        (symbol) => !unavailableSet.has(symbol),
+      );
+      marketScope.excludedSymbols = [
+        ...marketScope.excludedSymbols,
+        ...dataUnavailableSymbols,
+      ];
     }
     const instrumentPlans = generation.plans;
 
