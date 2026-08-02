@@ -390,11 +390,11 @@ export function TimeframeEvidencePanel({
                               Model #{candidate.candidateModel?.rank} ·{" "}
                               {candidate.type.toUpperCase()} ·{" "}
                               {candidate.candidateLifecycle?.state
-                                ?.replaceAll("_", " ") ?? "lifecycle unknown"} ·
+                                ?.replace(/_/g, " ") ?? "lifecycle unknown"} ·
                               score{" "}
                               {candidate.candidateModel?.totalScore.toFixed(2)}
                               {candidate.timeframeLineage
-                                ? ` · ${candidate.timeframeLineage.relationship.replaceAll("_", " ")}`
+                                ? ` · ${candidate.timeframeLineage.relationship.replace(/_/g, " ")}`
                                 : ""}
                             </div>
                           ))}

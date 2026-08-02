@@ -610,7 +610,7 @@ export function ZoneStoryPanel({
                 </span>
                 <span className="ml-2 rounded bg-cyan-500/15 px-1 py-0.5 text-[9px] text-cyan-300">
                   {gateData.bestZone.candidateLifecycle?.state
-                    ?.replaceAll("_", " ") ?? "lifecycle unavailable"}
+                    ?.replace(/_/g, " ") ?? "lifecycle unavailable"}
                 </span>
                 <div className="mt-1 text-[9px] text-zinc-400">
                   Local{" "}
@@ -644,10 +644,7 @@ export function ZoneStoryPanel({
               </td>
               <td className="py-1">
                 <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[9px] font-mono text-violet-300">
-                  {gateData.bestZone.timeframeLineage.relationship.replaceAll(
-                    "_",
-                    " ",
-                  )}
+                  {gateData.bestZone.timeframeLineage.relationship.replace(/_/g, " ")}
                 </span>
                 <span className="ml-2 text-[10px] font-mono text-zinc-300">
                   {gateData.bestZone.timeframeLineage.candidateTimeframe}
@@ -678,7 +675,7 @@ export function ZoneStoryPanel({
                   </span>
                   <span className="rounded bg-violet-500/10 px-1 py-0.5 text-violet-300">
                     {frozenCrossTimeframeContext.relationship?.classification
-                      ?.replaceAll("_", " ") || "no lineage"}
+                      ?.replace(/_/g, " ") || "no lineage"}
                   </span>
                   <span className="rounded bg-zinc-800 px-1 py-0.5 text-zinc-300">
                     policy {frozenCrossTimeframeContext.stylePolicy.policyHash.slice(0, 8)}
