@@ -2377,11 +2377,19 @@ async function runScanForUser(
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
               if (telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
+                const invalidSR = parseSignalReason(pending.signal_reason);
                 const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
-                  `<b>Symbol:</b> ${pending.symbol}\n` +
-                  `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-                  `<b>Check:</b> ${thesisResult.checkType}\n` +
-                  `<b>Reason:</b> ${thesisResult.reason}`;
+                  tgLine("Symbol", pending.symbol) +
+                  tgLine("Direction", String(pending.direction).toUpperCase()) +
+                  tgLine("Check", thesisResult.checkType) +
+                  tgLine("Reason", thesisResult.reason) +
+                  tgLine("Cancel Code", thesisResult.cancelReason) +
+                  tgLine("Zone Trigger", fmtPx(pending.entry_price, pending.symbol)) +
+                  tgLine("Waited", durationLabel(pending.created_at)) +
+                  "\n" +
+                  zoneEvidenceLines(invalidSR) +
+                  directionVerdictLines(invalidSR.directionVerdict) +
+                  watchlistOriginLines(invalidSR);
                 await Promise.all(telegramChatIds.map(async (chatId: string) => {
                   try {
                     await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
