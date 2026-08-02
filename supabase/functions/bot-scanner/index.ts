@@ -113,6 +113,7 @@ import {
 import {
   buildFrozenSetupStrategyContext,
   buildSetupLifecycleEvidence,
+  readFrozenCrossTimeframeAuthority,
   readFrozenSetupStrategyContext,
   resolvePendingConfirmationMethod,
   resolvePendingIndicatorMinimum,
@@ -123,6 +124,11 @@ import {
   validateFrozenSetupIdentity,
   type SetupLifecycleEvidence,
 } from "../_shared/setupLifecycle.ts";
+import {
+  buildFrozenCrossTimeframeContext,
+  loadCurrentEvidenceCertificateReferences,
+  type EvidenceCertificateReference,
+} from "../_shared/frozenCrossTimeframeContext.ts";
 import {
   beginScannerOperation,
   claimScannerLock,
@@ -169,6 +175,18 @@ import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts"
 import {
   evaluateZoneLocalEnforcement,
 } from "../_shared/zoneLocalEnforcement.ts";
+import {
+  loadCrossTimeframeActivation,
+} from "../_shared/crossTimeframeActivationStore.ts";
+import {
+  resolveCrossTimeframeAuthority,
+} from "../_shared/crossTimeframeAuthority.ts";
+import {
+  evaluateCrossTimeframeEntryAuthority,
+} from "../_shared/crossTimeframeEntryAuthority.ts";
+import {
+  evaluateCrossTimeframeShadowCandidate,
+} from "../_shared/crossTimeframeShadowValidation.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -1480,10 +1498,29 @@ async function runScanForUser(
     userId,
     botId: BOT_ID,
   });
+  const crossTimeframeActivation = await loadCrossTimeframeActivation(
+    supabase,
+    {
+      userId,
+      botId: BOT_ID,
+    },
+  );
+  const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
+    rawConfig: config as unknown as Record<string, unknown>,
+    runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+    activation: crossTimeframeActivation,
+  });
   console.log(
     `[scan ${scanCycleId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
       + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
       + ` runtimeEnforced=${zoneLocalActivation?.runtimeEnforced === true}`,
+  );
+  console.log(
+    `[scan ${scanCycleId}] Cross-TF authority`
+      + ` requested=${crossTimeframeAuthority.requestedMode}`
+      + ` certified=${crossTimeframeAuthority.certifiedMaximum}`
+      + ` effective=${crossTimeframeAuthority.effectiveMode}`
+      + ` reason=${crossTimeframeAuthority.reason}`,
   );
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
@@ -2103,6 +2140,7 @@ async function runScanForUser(
     string,
     DirectionVerdictDecision
   >();
+  let _evidenceCertificateReferences: EvidenceCertificateReference[] = [];
   if ((config as any).gamePlanEnabled !== false) {
     try {
       _lastGamePlanForValidation = await loadActiveGamePlan(
@@ -2124,6 +2162,17 @@ async function runScanForUser(
   } catch (directionLoadErr: any) {
     console.warn(
       `[scan ${scanCycleId}] Fill authorization: failed to load active Direction Verdicts: ${directionLoadErr?.message}`,
+    );
+  }
+  try {
+    _evidenceCertificateReferences = await loadCurrentEvidenceCertificateReferences(
+      supabase,
+      userId,
+      BOT_ID,
+    );
+  } catch (certificateLoadErr: any) {
+    console.warn(
+      `[scan ${scanCycleId}] Frozen context: current evidence certificates unavailable: ${certificateLoadErr?.message}`,
     );
   }
 
@@ -2733,6 +2782,13 @@ async function runScanForUser(
               maximumPips: bestSpread?.effectiveMax,
             },
             runtimeGates: pendingRuntimeGates,
+            crossTimeframeAuthority:
+              readFrozenCrossTimeframeAuthority(pending) ||
+              evaluateCrossTimeframeEntryAuthority({
+                authorityResolution: crossTimeframeAuthority,
+                evaluation: null,
+              }),
+            requireCrossTimeframeAuthority: true,
           });
           const pendingHierarchy = rawFinalAuthorization.decisionHierarchy ||
             evaluateDecisionHierarchy({
@@ -3927,6 +3983,7 @@ async function runScanForUser(
 
     const detail: any = {
       pair,
+      crossTimeframeAuthority,
       score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
@@ -4496,6 +4553,14 @@ async function runScanForUser(
               multiTF.bestZone.zone.localConfluence ?? null,
             shadowRanking:
               multiTF.bestZone.zone.shadowRanking ?? null,
+            candidateLifecycle:
+              multiTF.bestZone.zone.candidateLifecycle ?? null,
+            candidateModel:
+              multiTF.bestZone.zone.candidateModel ?? null,
+            timeframeLineage:
+              multiTF.bestZone.zone.timeframeLineage ?? null,
+            canonicalImpulseMetrics:
+              multiTF.bestZone.zone.canonicalImpulseMetrics ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4515,6 +4580,11 @@ async function runScanForUser(
             evidence: candidate.poi.evidence ?? null,
             localConfluence: candidate.localConfluence ?? null,
             shadowRanking: candidate.shadowRanking ?? null,
+            candidateLifecycle: candidate.candidateLifecycle ?? null,
+            candidateModel: candidate.candidateModel ?? null,
+            timeframeLineage: candidate.timeframeLineage ?? null,
+            canonicalImpulseMetrics:
+              candidate.canonicalImpulseMetrics ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
@@ -4535,11 +4605,12 @@ async function runScanForUser(
             observedAt: candles[candles.length - 1]?.datetime ||
               new Date().toISOString(),
             candidates: multiTF.allZones,
+            crossTimeframePolicy: crossTimeframeAuthority.policy,
           });
           if (persisted > 0) {
             console.log(
               `[scan ${scanCycleId}] ${pair} stored ${persisted}`
-              + ` observe-only zone-rank disagreement candidates`,
+              + ` observe-only zone candidate model rows`,
             );
           }
         } catch (shadowStoreErr: any) {
@@ -4955,6 +5026,17 @@ async function runScanForUser(
       (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
     const selectedZoneLocalEnforcement = () =>
       (detail as any).zoneLocalEnforcement ?? null;
+    const selectedCrossTimeframeContext = () =>
+      buildFrozenCrossTimeframeContext({
+        timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
+        symbol: pair,
+        gamePlan: activeGamePlan,
+        directionVerdict: activeDirectionVerdict,
+        stylePolicy: pairStylePolicy,
+        zoneStory: (detail as any).impulseZone || null,
+        evidenceCertificates: _evidenceCertificateReferences,
+        crossTimeframeAuthority,
+      });
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4977,6 +5059,7 @@ async function runScanForUser(
         zoneLocalConfluence: selectedZoneLocalConfluence(),
         zoneCandidateShadowRanking: selectedZoneShadowRanking(),
         zoneLocalEnforcement: selectedZoneLocalEnforcement(),
+        crossTimeframeContext: selectedCrossTimeframeContext(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -5124,6 +5207,22 @@ async function runScanForUser(
       softPenalty: pairConfig.zoneLocalSoftPenalty,
       minimumLocalScore: pairConfig.zoneLocalMinimumScore,
     });
+    const crossTimeframeEntryDecision =
+      evaluateCrossTimeframeEntryAuthority({
+        authorityResolution: crossTimeframeAuthority,
+        evaluation: izData?.bestZone
+          ? evaluateCrossTimeframeShadowCandidate(
+            izData.bestZone,
+            crossTimeframeAuthority.policy,
+          )
+          : null,
+        candidateId:
+          izData?.bestZone?.candidateModel?.candidateId ||
+          izData?.bestZone?.localConfluence?.candidateId ||
+          null,
+      });
+    (detail as any).crossTimeframeEntryAuthority =
+      crossTimeframeEntryDecision;
     (detail as any).zoneLocalEnforcement = zoneLocalDecision;
     // ── Gameplan hierarchy shadow audit ─────────────────────────────────────
     // Observability only: this result is persisted for later outcome analysis,
@@ -5920,7 +6019,21 @@ async function runScanForUser(
       scanDetails.push(detail);
       continue;
     }
+    if (!crossTimeframeEntryDecision.allowed) {
+      detail.status = "skipped_cross_timeframe_authority";
+      detail.skipReason =
+        `Cross-Timeframe Authority (${crossTimeframeEntryDecision.effectiveMode}): `
+        + crossTimeframeEntryDecision.reasonCodes.join(", ");
+      console.log(
+        `[scan ${scanCycleId}] ⛔ ${pair}: CROSS-TF HARD BLOCK — `
+          + crossTimeframeEntryDecision.reasonCodes.join(", "),
+      );
+      scanDetails.push(detail);
+      continue;
+    }
     const zoneLocalScoreAdj = zoneLocalDecision.scoreAdjustment;
+    const crossTimeframeScoreAdj =
+      crossTimeframeEntryDecision.scoreAdjustment;
     // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
     // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
@@ -5938,7 +6051,8 @@ async function runScanForUser(
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
     const effectiveScore = analysis.score + fotsiPenalty +
-      impulseZonePenaltyVal + zoneLocalScoreAdj + ictTotalAdj +
+      impulseZonePenaltyVal + zoneLocalScoreAdj +
+      crossTimeframeScoreAdj + ictTotalAdj +
       verdictScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
@@ -5957,6 +6071,14 @@ async function runScanForUser(
         `[scan ${scanCycleId}] ${pair} Zone-local soft adjustment: `
           + `${zoneLocalScoreAdj.toFixed(1)}% (${zoneLocalDecision.reason}, `
           + `effective ${effectiveScore.toFixed(1)}%)`,
+      );
+    }
+    if (crossTimeframeScoreAdj !== 0) {
+      console.log(
+        `[scan ${scanCycleId}] ${pair} Cross-TF soft adjustment: `
+          + `${crossTimeframeScoreAdj.toFixed(1)}% (`
+          + `${crossTimeframeEntryDecision.reason}, effective `
+          + `${effectiveScore.toFixed(1)}%)`,
       );
     }
     // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──
@@ -6201,6 +6323,7 @@ async function runScanForUser(
           conceptEvidence: selectedZoneConceptEvidence(),
           zoneLocalConfluence: selectedZoneLocalConfluence(),
           zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+          crossTimeframeContext: selectedCrossTimeframeContext(),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -7268,6 +7391,7 @@ async function runScanForUser(
               conceptEvidence: selectedZoneConceptEvidence(),
               zoneLocalConfluence: selectedZoneLocalConfluence(),
               zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+              crossTimeframeContext: selectedCrossTimeframeContext(),
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -7683,6 +7807,8 @@ async function runScanForUser(
           },
           evaluatedAt: nowStr,
         };
+        const directCrossTimeframeContext =
+          selectedCrossTimeframeContext();
         const rawDirectAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
@@ -7734,6 +7860,8 @@ async function runScanForUser(
             maximumPips: directBestSpread?.effectiveMax,
           },
           runtimeGates: directRuntimeGates,
+          crossTimeframeAuthority: directCrossTimeframeContext.authority,
+          requireCrossTimeframeAuthority: true,
         });
         const directHierarchy = rawDirectAuthorization.decisionHierarchy ||
           evaluateDecisionHierarchy({
@@ -7811,6 +7939,7 @@ async function runScanForUser(
             conceptEvidence: selectedZoneConceptEvidence(),
             zoneLocalConfluence: selectedZoneLocalConfluence(),
             zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+            crossTimeframeContext: selectedCrossTimeframeContext(),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
@@ -8928,6 +9057,9 @@ async function runScanForUser(
               // reaches confirmation. Placement itself does not execute.
               spread: { required: false, available: true, passed: true },
               runtimeGates: breakerRuntimeGates,
+              crossTimeframeAuthority:
+                selectedCrossTimeframeContext().authority,
+              requireCrossTimeframeAuthority: true,
             });
             const breakerHierarchy =
               rawBreakerAuthorization.decisionHierarchy ||
@@ -8995,6 +9127,7 @@ async function runScanForUser(
                 decisionContext: breakerAuthorization.decisionContext,
                 gamePlan: activeGamePlan,
                 directionVerdict: activeDirectionVerdict,
+                crossTimeframeContext: selectedCrossTimeframeContext(),
                 originatingZone: breakerOriginatingZone,
                 confirmationMethod:
                   pairConfig.confirmationMethod || "choch",

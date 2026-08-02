@@ -1584,6 +1584,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             symbol={t.symbol}
                             direction={t.direction}
                             timeframeEvidenceId={sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId}
+                            frozenCrossTimeframeContext={sr.frozenStrategyContext?.crossTimeframeContext}
                           />
                           {sr.decisionContext && (
                             <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">

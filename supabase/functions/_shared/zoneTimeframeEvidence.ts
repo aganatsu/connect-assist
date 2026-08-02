@@ -21,6 +21,12 @@ import {
 } from "./impulseZoneEngine.ts";
 import { canonicalCandidateId } from "./zoneCandidateIdentity.ts";
 import { buildEntityId } from "./conceptEvidence.ts";
+import { CANONICAL_IMPULSE_DETECTOR_VERSION } from "./canonicalImpulseDetector.ts";
+import type {
+  CanonicalZoneLifecycleObservation,
+  ZoneCandidateModelObservation,
+} from "./zoneCandidateModel.ts";
+import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 
 export const ZONE_TF_EVIDENCE_CONTRACT_VERSION = "zone-tf-evidence.v1";
 
@@ -76,6 +82,23 @@ export interface SlotEvidence {
   skippedReason: string | null;
   candleCount: number;
   reason: string;
+  canonicalImpulse: {
+    detectorVersion: string;
+    matchesLegacy: boolean;
+    selectionKey: string | null;
+    metrics: {
+      rangeAbsolute: number;
+      atrNormalizedSize: number | null;
+      displacementPercentile: number | null;
+      strongestDirectionalBodyRatio: number | null;
+      bodyStrengthPercentile: number | null;
+      bosSignificanceATR: number | null;
+      recencyBars: number;
+      sweepOrigin: boolean;
+      sweptLevel: number | null;
+      structureIntact: boolean;
+    } | null;
+  } | null;
   rejections: Array<{
     stage: "impulse" | "mapping" | "qualification" | "fib" | "bounds" | "quality" | "ranking";
     code: string;
@@ -138,6 +161,9 @@ export interface SlotEvidence {
     htfConfluenceScore: number;
     htfLayers: string[];
     totalScore: number;
+    candidateLifecycle: CanonicalZoneLifecycleObservation | null;
+    candidateModel: ZoneCandidateModelObservation | null;
+    timeframeLineage: CrossTimeframeZoneLineage | null;
   }>;
   truncated: { legs: number; pois: number; candidates: number } | null;
 }
@@ -327,6 +353,9 @@ function candidateRecord(zone: RankedPOI, rank: number, symbol: string, timefram
     htfConfluenceScore: zone.htfConfluenceScore,
     htfLayers: zone.htfLayers ?? [],
     totalScore: zone.totalScore,
+    candidateLifecycle: zone.candidateLifecycle ?? null,
+    candidateModel: zone.candidateModel ?? null,
+    timeframeLineage: zone.timeframeLineage ?? null,
   };
 }
 
@@ -351,6 +380,7 @@ export function buildTimeframeEvidence(
         : "Slot not evaluated in this cycle",
       candleCount: candles.length,
       reason: result?.reason ?? "not_evaluated",
+      canonicalImpulse: null,
       rejections: [],
       impulses: [],
       pois: [],
@@ -493,6 +523,17 @@ export function buildTimeframeEvidence(
     skippedReason: null,
     candleCount: candles.length,
     reason: result!.reason,
+    canonicalImpulse: result!.evidence?.canonicalImpulse
+      ? {
+        detectorVersion:
+          result!.evidence.canonicalImpulse.detectorVersion,
+        matchesLegacy:
+          result!.evidence.canonicalMatchesLegacy === true,
+        selectionKey:
+          result!.evidence.canonicalImpulse.selectionKey,
+        metrics: result!.evidence.canonicalImpulse.metrics,
+      }
+      : null,
     rejections: terminalRejections(result!, options),
     impulses,
     pois,
@@ -512,6 +553,8 @@ export interface EvidenceRow extends Record<string, unknown> {
   pending_order_id: string;
   confirmation_attempt: number;
   event_linked?: boolean;
+  canonical_detector_version?: string | null;
+  canonical_parity?: boolean | null;
 }
 
 /**
@@ -568,6 +611,7 @@ export function buildScanEvidenceRow(
       limits,
     ),
   ];
+  const canonicalSlots = slotEvidence.filter((slot) => slot.canonicalImpulse);
 
   let payloadTruncated = slotEvidence.some((s) => s.truncated !== null);
   const truncationDetail: Record<string, unknown> = {};
@@ -598,6 +642,12 @@ export function buildScanEvidenceRow(
     parent_evidence_id: context.parentEvidenceId ?? null,
     pending_order_id: context.pendingOrderId ?? NIL_UUID,
     confirmation_attempt: context.confirmationAttempt ?? 0,
+    canonical_detector_version: canonicalSlots.length > 0
+      ? CANONICAL_IMPULSE_DETECTOR_VERSION
+      : null,
+    canonical_parity: canonicalSlots.length > 0
+      ? canonicalSlots.every((slot) => slot.canonicalImpulse?.matchesLegacy === true)
+      : null,
     event_linked: false,
     slots: slotEvidence,
     engine_options: pickEngineOptions(options),
@@ -803,6 +853,7 @@ export function buildConfirmationEvidenceRow(
       skippedReason: null,
       candleCount: observation.candleCount,
       reason: observation.reason,
+      canonicalImpulse: null,
       rejections: [],
       confirmation: observation,
       impulses: [],

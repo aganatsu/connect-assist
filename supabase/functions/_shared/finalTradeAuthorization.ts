@@ -13,6 +13,9 @@ import {
   type EntryConfirmationDecision,
   evaluateDecisionHierarchy,
 } from "./decisionContract.ts";
+import type {
+  CrossTimeframeEntryAuthorityDecision,
+} from "./crossTimeframeEntryAuthority.ts";
 
 export type TradeDirection = "long" | "short";
 
@@ -48,6 +51,8 @@ export type FinalAuthorizationCode =
   | "spread_unavailable"
   | "spread_too_wide"
   | "risk_reward"
+  | "cross_timeframe_unavailable"
+  | "cross_timeframe_blocked"
   | "additional_gate"
   | "authorized";
 
@@ -123,6 +128,8 @@ export interface FinalTradeAuthorizationInput {
   requirePropFirmResult?: boolean;
   spread: SpreadAuthorizationState;
   runtimeGates: FinalRuntimeGateStates;
+  crossTimeframeAuthority?: CrossTimeframeEntryAuthorityDecision | null;
+  requireCrossTimeframeAuthority?: boolean;
   additionalGates?: AdditionalAuthorizationGate[];
   now?: Date;
 }
@@ -135,6 +142,7 @@ export interface FinalTradeAuthorizationDecision {
   checks: AdditionalAuthorizationGate[];
   evaluatedAt: string;
   decisionHierarchy?: DecisionHierarchyResult;
+  crossTimeframeAuthority?: CrossTimeframeEntryAuthorityDecision | null;
 }
 
 function asFiniteNumber(value: unknown, fallback = 0): number {
@@ -268,6 +276,42 @@ export function evaluateFinalTradeAuthorization(
     passed: true,
     reason: `Risk/reward ${rr.toFixed(2)} meets minimum`,
   });
+
+  if (
+    input.requireCrossTimeframeAuthority === true &&
+    !input.crossTimeframeAuthority
+  ) {
+    return deny(
+      "cross_timeframe_unavailable",
+      "Cross-timeframe authority evidence is unavailable",
+      true,
+      checks,
+      now,
+    );
+  }
+  if (input.crossTimeframeAuthority) {
+    if (!input.crossTimeframeAuthority.allowed) {
+      return {
+        ...deny(
+          "cross_timeframe_blocked",
+          `Cross-timeframe authority blocked entry: ${
+            input.crossTimeframeAuthority.reasonCodes.join(", ")
+          }`,
+          false,
+          checks,
+          now,
+        ),
+        crossTimeframeAuthority: input.crossTimeframeAuthority,
+      };
+    }
+    checks.push({
+      passed: true,
+      reason:
+        `Cross-timeframe authority ${input.crossTimeframeAuthority.effectiveMode}: ${
+          input.crossTimeframeAuthority.reason
+        }`,
+    });
+  }
 
   const decisionHierarchy = evaluateDecisionHierarchy({
     symbol: candidate.symbol,
@@ -444,5 +488,6 @@ export function evaluateFinalTradeAuthorization(
     checks,
     evaluatedAt: now.toISOString(),
     decisionHierarchy,
+    crossTimeframeAuthority: input.crossTimeframeAuthority || null,
   };
 }

@@ -10,6 +10,12 @@ import type { MarketConceptEvidence } from "./conceptEvidence.ts";
 import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import type { ZoneLocalEnforcementDecision } from "./zoneLocalEnforcement.ts";
+import type {
+  CrossTimeframeEntryAuthorityDecision,
+} from "./crossTimeframeEntryAuthority.ts";
+import type {
+  FrozenCrossTimeframeContext,
+} from "./frozenCrossTimeframeContext.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
@@ -79,6 +85,8 @@ export interface FrozenSetupStrategyContext {
   zoneCandidateShadowRanking?: ZoneCandidateShadowRanking | null;
   /** Effective evidence-capped policy decision at candidate creation. */
   zoneLocalEnforcement?: ZoneLocalEnforcementDecision | null;
+  /** Exact cross-timeframe authority and provenance frozen at qualification. */
+  crossTimeframeContext?: FrozenCrossTimeframeContext | null;
   scenarioZoneStory: {
     contractVersion: typeof SCENARIO_ZONE_STORY_VERSION;
     enforcement: "observe_only";
@@ -213,6 +221,7 @@ export function buildFrozenSetupStrategyContext(input: {
   zoneLocalConfluence?: ZoneLocalConfluenceObservation | null;
   zoneCandidateShadowRanking?: ZoneCandidateShadowRanking | null;
   zoneLocalEnforcement?: ZoneLocalEnforcementDecision | null;
+  crossTimeframeContext?: FrozenCrossTimeframeContext | null;
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
@@ -262,9 +271,9 @@ export function buildFrozenSetupStrategyContext(input: {
       : null,
     conceptEvidence: input.conceptEvidence || [],
     zoneLocalConfluence: input.zoneLocalConfluence || null,
-    zoneCandidateShadowRanking:
-      input.zoneCandidateShadowRanking || null,
+    zoneCandidateShadowRanking: input.zoneCandidateShadowRanking || null,
     zoneLocalEnforcement: input.zoneLocalEnforcement || null,
+    crossTimeframeContext: input.crossTimeframeContext || null,
     scenarioZoneStory: {
       contractVersion: SCENARIO_ZONE_STORY_VERSION,
       enforcement: "observe_only",
@@ -324,6 +333,24 @@ export function readFrozenSetupStrategyContext(
     ) {
       return context as FrozenSetupStrategyContext;
     }
+  }
+  return null;
+}
+
+export function readFrozenCrossTimeframeAuthority(
+  row: Record<string, unknown>,
+): CrossTimeframeEntryAuthorityDecision | null {
+  const frozen = readFrozenSetupStrategyContext(row);
+  const authority = asRecord(
+    asRecord(frozen?.crossTimeframeContext).authority,
+  );
+  if (
+    authority.contractVersion === "cross-tf-entry-authority.v1" &&
+    ["observe", "soft", "hard"].includes(String(authority.effectiveMode)) &&
+    typeof authority.allowed === "boolean" &&
+    Array.isArray(authority.reasonCodes)
+  ) {
+    return authority as unknown as CrossTimeframeEntryAuthorityDecision;
   }
   return null;
 }

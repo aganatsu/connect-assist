@@ -28,6 +28,17 @@ import {
   type ZoneLocalConfluenceObservation,
 } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
+import {
+  canonicalImpulseMatchesLegacy,
+  detectCanonicalImpulse,
+  type CanonicalImpulseDetection,
+  type CanonicalImpulseMetrics,
+} from "./canonicalImpulseDetector.ts";
+import {
+  type CanonicalZoneLifecycleObservation,
+  type ZoneCandidateModelObservation,
+} from "./zoneCandidateModel.ts";
+import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -79,6 +90,14 @@ export interface RankedPOI {
   shadowRanking?: ZoneCandidateShadowRanking;
   /** Counterfactual levels used only for outcome validation. */
   validationTrade?: ZoneValidationTrade;
+  /** Observation-only Phase 3 lifecycle classification. */
+  candidateLifecycle?: CanonicalZoneLifecycleObservation;
+  /** Relative impulse metrics inherited from this candidate's timeframe. */
+  canonicalImpulseMetrics?: CanonicalImpulseMetrics | null;
+  /** Observation-only Phase 3 cross-factor candidate rank. */
+  candidateModel?: ZoneCandidateModelObservation;
+  /** Observation-only Phase 4 parent/child timeframe relationship. */
+  timeframeLineage?: CrossTimeframeZoneLineage;
 }
 
 export interface ZoneValidationTrade {
@@ -125,6 +144,8 @@ export interface ZoneEngineEvidenceSnapshot {
   mappedPOIs: ImpulsePOI[];
   qualificationMeasurements: POIQualificationMeasurement[];
   rankedZones: RankedPOI[];
+  canonicalImpulse: CanonicalImpulseDetection | null;
+  canonicalMatchesLegacy: boolean | null;
 }
 
 export interface ZoneQualificationResult {
@@ -1604,6 +1625,13 @@ export function findBestEntryZone(
   let collectedPOIs: ImpulsePOI[] = [];
   let collectedMeasurements: POIQualificationMeasurement[] = [];
   let collectedRankedZones: RankedPOI[] = [];
+  const canonicalImpulse = options?.collectEvidence
+    ? detectCanonicalImpulse(
+      htfCandles,
+      direction,
+      options.evidenceContext?.timeframe,
+    )
+    : null;
   const finish = (result: ZoneEngineResult): ZoneEngineResult => {
     if (!options?.collectEvidence) return result;
     return {
@@ -1615,6 +1643,11 @@ export function findBestEntryZone(
         mappedPOIs: collectedPOIs,
         qualificationMeasurements: collectedMeasurements,
         rankedZones: collectedRankedZones,
+        canonicalImpulse,
+        canonicalMatchesLegacy: canonicalImpulseMatchesLegacy(
+          canonicalImpulse?.impulse ?? null,
+          result.impulse,
+        ),
       },
     };
   };

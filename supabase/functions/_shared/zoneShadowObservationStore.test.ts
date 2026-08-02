@@ -55,6 +55,62 @@ function candidate(
   };
 }
 
+function modeledCandidate(
+  candidateId: string,
+  legacyRank: number,
+  shadowRank: number,
+  modelRank: number,
+): any {
+  const value = candidate(candidateId, legacyRank, shadowRank);
+  value.candidateLifecycle = {
+    contractVersion: "zone-candidate-model.v1",
+    state: modelRank === 1 ? "tapped_and_held" : "fresh",
+    retestCount: modelRank === 1 ? 1 : 0,
+    maxPenetrationPercent: modelRank === 1 ? 35 : 0,
+    lastTouchIndex: modelRank === 1 ? 4 : null,
+    lastTouchClosedOutsideNearBoundary: modelRank === 1,
+    violatedAtIndex: null,
+    structureIntact: true,
+    explanation: "test fixture",
+  };
+  value.candidateModel = {
+    contractVersion: "zone-candidate-model.v1",
+    enforcement: "observe_only",
+    candidateId,
+    rank: modelRank,
+    topCandidate: modelRank <= 3,
+    eligible: true,
+    totalScore: 20 - modelRank,
+    distanceToCurrentPrice: 0.001,
+    distanceATR: 0.5,
+    lifecycle: value.candidateLifecycle,
+    factors: {
+      zoneLocalConfluence: 2,
+      proximityToCurrentPrice: 2,
+      sweepQuality: 1.5,
+      retestQuality: 2,
+      displacementQuality: 3,
+      structuralImportance: 2,
+    },
+  };
+  value.timeframeLineage = {
+    contractVersion: "cross-tf-zone-lineage.v1",
+    enforcement: "observe_only",
+    candidateId,
+    candidateTimeframe: "5min",
+    parentCandidateId: "parent-1h",
+    parentTimeframe: "1h",
+    relationship: modelRank === 1 ? "qualified_nested" : "context_only",
+    directionAligned: true,
+    overlapAmount: modelRank === 1 ? 0.001 : 0,
+    overlapPercentOfChild: modelRank === 1 ? 100 : 0,
+    parentDistance: modelRank === 1 ? 0 : 0.002,
+    parentDistanceATR: modelRank === 1 ? 0 : 1,
+    explanation: "test lineage",
+  };
+  return value;
+}
+
 const context = {
   userId: "57c79dee-db6b-4fae-b34a-4b64ce33ca34",
   botId: "smc",
@@ -100,6 +156,55 @@ Deno.test("zone shadow store skips agreement scans to avoid noisy data volume", 
   assertEquals(rows, []);
 });
 
+Deno.test("zone shadow store records the observation-only model top three even when legacy and local agree", () => {
+  const rows = buildZoneShadowObservationRows({
+    ...context,
+    candidates: [
+      modeledCandidate("first", 1, 1, 1),
+      modeledCandidate("second", 2, 2, 2),
+      modeledCandidate("third", 3, 3, 3),
+      modeledCandidate("fourth", 4, 4, 4),
+    ],
+  });
+  assertEquals(rows.length, 3);
+  assertEquals(
+    rows.map((row) => row.candidate_model_rank),
+    [1, 2, 3],
+  );
+  assertEquals(rows[0].candidate_model_winner, true);
+  assertEquals(rows[0].candidate_lifecycle_state, "tapped_and_held");
+  assertEquals(rows[0].timeframe_relationship, "qualified_nested");
+  assertEquals(rows[0].parent_candidate_id, "parent-1h");
+  assertEquals(rows[0].cross_tf_shadow_decision, "allow");
+  assertEquals(rows[1].cross_tf_shadow_decision, "block");
+  assertEquals(
+    rows[1].cross_tf_reason_codes,
+    ["parent_zone_too_far", "nested_impulse_required"],
+  );
+  assertEquals(rows.every((row) => row.ranking_disagreed === false), true);
+});
+
+Deno.test("cross-TF policy disagreement is persisted even when local rank agrees", () => {
+  const value = modeledCandidate("legacy", 1, 1, 1);
+  value.timeframeLineage = {
+    ...value.timeframeLineage,
+    relationship: "timeframe_conflict",
+    directionAligned: false,
+  };
+  const rows = buildZoneShadowObservationRows({
+    ...context,
+    candidates: [value],
+  });
+  assertEquals(
+    zoneShadowDisagreementKey([value])?.startsWith("authority:"),
+    true,
+  );
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0].legacy_execution_decision, "allow");
+  assertEquals(rows[0].cross_tf_shadow_decision, "block");
+  assertEquals(rows[0].cross_tf_disagreed, true);
+});
+
 Deno.test("zone shadow store preserves style provenance and validation levels", () => {
   const rows = buildZoneShadowObservationRows({
     ...context,
@@ -125,7 +230,7 @@ Deno.test("zone shadow store separates retrospective evidence from activation", 
   ];
   assertEquals(
     zoneShadowDisagreementKey(candidates),
-    "legacy:shadow",
+    "rank:legacy:shadow",
   );
   const rows = buildZoneShadowObservationRows({
     ...context,

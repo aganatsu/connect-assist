@@ -158,6 +158,46 @@ interface ImpulseGateData {
         creditedFamilies: number;
       };
     } | null;
+    candidateLifecycle?: {
+      state:
+        | "fresh"
+        | "tapped_and_held"
+        | "partially_mitigated"
+        | "violated";
+      retestCount: number;
+      maxPenetrationPercent: number;
+      explanation: string;
+    } | null;
+    candidateModel?: {
+      enforcement: "observe_only";
+      rank: number;
+      topCandidate: boolean;
+      eligible: boolean;
+      totalScore: number;
+      distanceATR: number | null;
+      factors: {
+        zoneLocalConfluence: number;
+        proximityToCurrentPrice: number;
+        sweepQuality: number;
+        retestQuality: number;
+        displacementQuality: number;
+        structuralImportance: number;
+      };
+    } | null;
+    timeframeLineage?: {
+      relationship:
+        | "qualified_nested"
+        | "context_only"
+        | "standalone_lower_tf"
+        | "timeframe_conflict"
+        | "no_parent_context";
+      candidateTimeframe: string;
+      parentCandidateId: string | null;
+      parentTimeframe: string | null;
+      overlapPercentOfChild: number;
+      parentDistanceATR: number | null;
+      explanation: string;
+    } | null;
   } | null;
   scoringEnabled?: boolean;
   directionDetail?: {
@@ -183,6 +223,30 @@ interface ZoneLocalEnforcementData {
   reason: string;
 }
 
+interface FrozenCrossTimeframeContextData {
+  contractVersion: string;
+  enforcement: "observe_only";
+  gamePlan: { id: string | null; version: string | null };
+  directionVerdict: { id: string | null; version: string | null };
+  stylePolicy: {
+    version: string;
+    basePolicyHash: string;
+    policyHash: string;
+  };
+  selectedZone: {
+    candidateId: string | null;
+    timeframe: string | null;
+  } | null;
+  relationship: {
+    classification: string;
+    parentTimeframe: string | null;
+  } | null;
+  evidenceCertificates: Array<{
+    featureKey: string;
+    certificateHash: string;
+  }>;
+}
+
 interface Props {
   unifiedData: ZoneStoryData | null | undefined;
   gateData?: ImpulseGateData | null | undefined;
@@ -191,6 +255,7 @@ interface Props {
   symbol?: string;
   direction?: string | null;
   timeframeEvidenceId?: string | null;
+  frozenCrossTimeframeContext?: FrozenCrossTimeframeContextData | null;
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -223,6 +288,7 @@ export function ZoneStoryPanel({
   symbol,
   direction,
   timeframeEvidenceId,
+  frozenCrossTimeframeContext,
 }: Props) {
   if (!unifiedData) {
     return (
@@ -527,6 +593,111 @@ export function ZoneStoryPanel({
                     RANK DISAGREEMENT
                   </span>
                 )}
+              </td>
+            </tr>
+          )}
+
+          {gateData?.bestZone?.candidateModel && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                Candidate model
+              </td>
+              <td className="py-1">
+                <span className="text-[10px] font-mono text-zinc-300">
+                  Observe-only #{gateData.bestZone.candidateModel.rank} · score{" "}
+                  {gateData.bestZone.candidateModel.totalScore.toFixed(2)}
+                </span>
+                <span className="ml-2 rounded bg-cyan-500/15 px-1 py-0.5 text-[9px] text-cyan-300">
+                  {gateData.bestZone.candidateLifecycle?.state
+                    ?.replaceAll("_", " ") ?? "lifecycle unavailable"}
+                </span>
+                <div className="mt-1 text-[9px] text-zinc-400">
+                  Local{" "}
+                  {gateData.bestZone.candidateModel.factors.zoneLocalConfluence
+                    .toFixed(1)} · proximity{" "}
+                  {gateData.bestZone.candidateModel.factors
+                    .proximityToCurrentPrice.toFixed(1)} · sweep{" "}
+                  {gateData.bestZone.candidateModel.factors.sweepQuality
+                    .toFixed(1)} · retest{" "}
+                  {gateData.bestZone.candidateModel.factors.retestQuality
+                    .toFixed(1)} · displacement{" "}
+                  {gateData.bestZone.candidateModel.factors.displacementQuality
+                    .toFixed(1)} · structure{" "}
+                  {gateData.bestZone.candidateModel.factors
+                    .structuralImportance.toFixed(1)}
+                </div>
+                {gateData.bestZone.candidateLifecycle?.explanation && (
+                  <div className="mt-1 text-[9px] text-zinc-500">
+                    {gateData.bestZone.candidateLifecycle.explanation}
+                  </div>
+                )}
+              </td>
+            </tr>
+          )}
+
+          {gateData?.bestZone?.timeframeLineage && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                TF lineage
+              </td>
+              <td className="py-1">
+                <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[9px] font-mono text-violet-300">
+                  {gateData.bestZone.timeframeLineage.relationship.replaceAll(
+                    "_",
+                    " ",
+                  )}
+                </span>
+                <span className="ml-2 text-[10px] font-mono text-zinc-300">
+                  {gateData.bestZone.timeframeLineage.candidateTimeframe}
+                  {gateData.bestZone.timeframeLineage.parentTimeframe
+                    ? ` → parent ${gateData.bestZone.timeframeLineage.parentTimeframe}`
+                    : " → no parent"}
+                </span>
+                <div className="mt-1 text-[9px] text-zinc-500">
+                  {gateData.bestZone.timeframeLineage.explanation}
+                </div>
+              </td>
+            </tr>
+          )}
+
+          {frozenCrossTimeframeContext && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                Frozen authority
+              </td>
+              <td className="py-1">
+                <div className="flex flex-wrap gap-1 text-[9px] font-mono">
+                  <span className="rounded bg-primary/10 px-1 py-0.5 text-primary">
+                    GP {frozenCrossTimeframeContext.gamePlan.version?.slice(0, 8) || "none"}
+                  </span>
+                  <span className="rounded bg-cyan-500/10 px-1 py-0.5 text-cyan-300">
+                    DV {frozenCrossTimeframeContext.directionVerdict.version?.slice(0, 8) || "none"}
+                  </span>
+                  <span className="rounded bg-violet-500/10 px-1 py-0.5 text-violet-300">
+                    {frozenCrossTimeframeContext.relationship?.classification
+                      ?.replaceAll("_", " ") || "no lineage"}
+                  </span>
+                  <span className="rounded bg-zinc-800 px-1 py-0.5 text-zinc-300">
+                    policy {frozenCrossTimeframeContext.stylePolicy.policyHash.slice(0, 8)}
+                  </span>
+                  {frozenCrossTimeframeContext.evidenceCertificates.map(
+                    (certificate) => (
+                      <span
+                        key={`${certificate.featureKey}:${certificate.certificateHash}`}
+                        className="rounded bg-emerald-500/10 px-1 py-0.5 text-emerald-300"
+                      >
+                        cert {certificate.featureKey}{" "}
+                        {certificate.certificateHash.slice(0, 8)}
+                      </span>
+                    ),
+                  )}
+                </div>
+                <div className="mt-1 text-[9px] text-zinc-500">
+                  Immutable setup evidence · {frozenCrossTimeframeContext.contractVersion}
+                </div>
               </td>
             </tr>
           )}

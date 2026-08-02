@@ -778,6 +778,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_price: number | null
           current_price_old: string | null
           decision_context: Json | null
@@ -1047,6 +1050,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_price: number
           decision_context: Json | null
           direction: string
@@ -1887,6 +1893,7 @@ export type Database = {
         Row: {
           bot_id: string
           candidate_id: string
+          candidate_lineage: Json | null
           created_at: string
           direction: string
           evidence: Json
@@ -1945,6 +1952,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_factors: Json
           current_score: number
           direction: string
@@ -2709,12 +2719,26 @@ export type Database = {
           activation_eligible: boolean
           bot_id: string
           candidate_id: string
+          candidate_lineage: Json | null
+          candidate_lifecycle: Json | null
+          candidate_lifecycle_state: string | null
+          candidate_model: Json | null
+          candidate_model_rank: number | null
+          candidate_model_version: string | null
+          candidate_model_winner: boolean
           created_at: string
+          cross_tf_disagreed: boolean
+          cross_tf_evaluation: Json | null
+          cross_tf_policy: Json | null
+          cross_tf_policy_version: string | null
+          cross_tf_reason_codes: string[]
+          cross_tf_shadow_decision: string | null
           direction: string
           entry_price: number
           evidence_source: string
           id: string
           legacy_comparable_score: number
+          legacy_execution_decision: string | null
           legacy_rank: number
           legacy_winner: boolean
           legacy_zone_score: number
@@ -2724,6 +2748,7 @@ export type Database = {
           observed_at: string
           outcome_checked_at: string | null
           outcome_status: string
+          parent_candidate_id: string | null
           price_reached_entry: boolean | null
           rank_delta: number
           ranking_disagreed: boolean
@@ -2741,6 +2766,7 @@ export type Database = {
           style_policy_version: string | null
           symbol: string
           take_profit: number | null
+          timeframe_relationship: string | null
           tp_hit: boolean | null
           tp_hit_time_minutes: number | null
           trading_style: string
@@ -2753,12 +2779,26 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id: string
+          candidate_lineage?: Json | null
+          candidate_lifecycle?: Json | null
+          candidate_lifecycle_state?: string | null
+          candidate_model?: Json | null
+          candidate_model_rank?: number | null
+          candidate_model_version?: string | null
+          candidate_model_winner?: boolean
           created_at?: string
+          cross_tf_disagreed?: boolean
+          cross_tf_evaluation?: Json | null
+          cross_tf_policy?: Json | null
+          cross_tf_policy_version?: string | null
+          cross_tf_reason_codes?: string[]
+          cross_tf_shadow_decision?: string | null
           direction: string
           entry_price: number
           evidence_source?: string
           id?: string
           legacy_comparable_score: number
+          legacy_execution_decision?: string | null
           legacy_rank: number
           legacy_winner?: boolean
           legacy_zone_score: number
@@ -2768,6 +2808,7 @@ export type Database = {
           observed_at?: string
           outcome_checked_at?: string | null
           outcome_status?: string
+          parent_candidate_id?: string | null
           price_reached_entry?: boolean | null
           rank_delta: number
           ranking_disagreed?: boolean
@@ -2785,6 +2826,7 @@ export type Database = {
           style_policy_version?: string | null
           symbol: string
           take_profit?: number | null
+          timeframe_relationship?: string | null
           tp_hit?: boolean | null
           tp_hit_time_minutes?: number | null
           trading_style: string
@@ -2797,12 +2839,26 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id?: string
+          candidate_lineage?: Json | null
+          candidate_lifecycle?: Json | null
+          candidate_lifecycle_state?: string | null
+          candidate_model?: Json | null
+          candidate_model_rank?: number | null
+          candidate_model_version?: string | null
+          candidate_model_winner?: boolean
           created_at?: string
+          cross_tf_disagreed?: boolean
+          cross_tf_evaluation?: Json | null
+          cross_tf_policy?: Json | null
+          cross_tf_policy_version?: string | null
+          cross_tf_reason_codes?: string[]
+          cross_tf_shadow_decision?: string | null
           direction?: string
           entry_price?: number
           evidence_source?: string
           id?: string
           legacy_comparable_score?: number
+          legacy_execution_decision?: string | null
           legacy_rank?: number
           legacy_winner?: boolean
           legacy_zone_score?: number
@@ -2812,6 +2868,7 @@ export type Database = {
           observed_at?: string
           outcome_checked_at?: string | null
           outcome_status?: string
+          parent_candidate_id?: string | null
           price_reached_entry?: boolean | null
           rank_delta?: number
           ranking_disagreed?: boolean
@@ -2829,6 +2886,7 @@ export type Database = {
           style_policy_version?: string | null
           symbol?: string
           take_profit?: number | null
+          timeframe_relationship?: string | null
           tp_hit?: boolean | null
           tp_hit_time_minutes?: number | null
           trading_style?: string
@@ -2874,6 +2932,8 @@ export type Database = {
       zone_timeframe_evidence: {
         Row: {
           bot_id: string
+          canonical_detector_version: string | null
+          canonical_parity: boolean | null
           confirmation_attempt: number
           contract_version: string
           created_at: string
@@ -2908,6 +2968,8 @@ export type Database = {
         }
         Insert: {
           bot_id: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number
           contract_version?: string
           created_at?: string
@@ -2942,6 +3004,8 @@ export type Database = {
         }
         Update: {
           bot_id?: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number
           contract_version?: string
           created_at?: string
@@ -2979,6 +3043,8 @@ export type Database = {
       zone_timeframe_evidence_summary: {
         Row: {
           bot_id: string
+          canonical_detector_version: string | null
+          canonical_parity: boolean | null
           confirmation_attempt: number | null
           contract_version: string | null
           created_at: string
@@ -3008,6 +3074,8 @@ export type Database = {
         }
         Insert: {
           bot_id: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number | null
           contract_version?: string | null
           created_at?: string
@@ -3037,6 +3105,8 @@ export type Database = {
         }
         Update: {
           bot_id?: string
+          canonical_detector_version?: string | null
+          canonical_parity?: boolean | null
           confirmation_attempt?: number | null
           contract_version?: string | null
           created_at?: string

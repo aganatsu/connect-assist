@@ -123,6 +123,18 @@ import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceDat
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
+  loadCrossTimeframeActivation,
+} from "../_shared/crossTimeframeActivationStore.ts";
+import {
+  resolveCrossTimeframeAuthority,
+} from "../_shared/crossTimeframeAuthority.ts";
+import {
+  evaluateCrossTimeframeEntryAuthority,
+} from "../_shared/crossTimeframeEntryAuthority.ts";
+import {
+  evaluateCrossTimeframeShadowCandidate,
+} from "../_shared/crossTimeframeShadowValidation.ts";
+import {
   cleanupZoneReplayEvidence,
   persistZoneReplayEvidence,
   ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
@@ -1746,6 +1758,17 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         botId: "smc",
       })
       : null;
+    const crossTimeframeActivation = backtestOwner?.user_id
+      ? await loadCrossTimeframeActivation(db, {
+        userId: backtestOwner.user_id,
+        botId: "smc",
+      })
+      : null;
+    const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
+      rawConfig: config as unknown as Record<string, unknown>,
+      runtimeTarget: "paper",
+      activation: crossTimeframeActivation,
+    });
     console.log(
       `[backtest:${runId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
         + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
@@ -2553,7 +2576,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         let izData: any = null;
         let unifiedResult: UnifiedZoneResult | null = null;
         let cascadeResult: CascadeResult | null = null;
-        let signalSource: "cascade" | "unified" | "standalone" = "standalone";
+        let signalSource: "cascade" | "unified" | "standalone" =
+          "standalone";
+        let selectedCrossTfCandidate: any = null;
         const pipSize = (SPECS[symbol] || SPECS["EUR/USD"]).pipSize;
 
         if (analysis.direction && relevantH1.length >= 20) {
@@ -2606,6 +2631,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
+              collectEvidence: zoneLocalReplayEvidence === true,
               strictATRMult: config.marketFillStrictATRMult,
               minQualityScore: config.zoneQualityThreshold,
               maxAgeBars: config.zoneMaxAgeBars,
@@ -2640,10 +2666,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
             // ── Derive izData from unified result (backward compat with downstream code) ──
             const multiTF = unifiedResult.multiTFResult;
+            selectedCrossTfCandidate = multiTF.bestZone?.zone || null;
             if (
               zoneLocalReplayEvidence === true &&
               backtestOwner?.user_id &&
-              zoneShadowDisagreementKey(multiTF.allZones)
+              zoneShadowDisagreementKey(
+                multiTF.allZones,
+                crossTimeframeAuthority.policy,
+              )
             ) {
               try {
                 const replayZoneStylePolicy = await buildResolvedStylePolicy({
@@ -2671,6 +2701,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                   candidates: multiTF.allZones,
                   candles: outcomeCandlesAfter(entryCandles, candleMs),
                   pipSize: spec.pipSize,
+                  crossTimeframePolicy: crossTimeframeAuthority.policy,
                 });
                 if (replayEvidence.inserted > 0) {
                   console.log(
@@ -3126,10 +3157,25 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           softPenalty: config.zoneLocalSoftPenalty,
           minimumLocalScore: config.zoneLocalMinimumScore,
         });
+        const crossTimeframeDecision =
+          evaluateCrossTimeframeEntryAuthority({
+            authorityResolution: crossTimeframeAuthority,
+            evaluation: selectedCrossTfCandidate
+              ? evaluateCrossTimeframeShadowCandidate(
+                selectedCrossTfCandidate,
+                crossTimeframeAuthority.policy,
+              )
+              : null,
+            candidateId:
+              selectedCrossTfCandidate?.candidateModel?.candidateId ||
+              selectedCrossTfCandidate?.localConfluence?.candidateId ||
+              null,
+          });
 
         // ── Effective Score (now matches live scanner formula) ──
         let effectiveScore = analysis.score + fotsiPenalty +
           impulseZonePenaltyVal + zoneLocalDecision.scoreAdjustment +
+          crossTimeframeDecision.scoreAdjustment +
           ictTotalAdj + verdictScoreAdj;
 
         if (!zoneLocalDecision.allowed) {
@@ -3156,6 +3202,45 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               effectiveScore,
               blockedBy: [
                 `Zone-Local Confluence: ${zoneLocalDecision.reason}`,
+              ],
+              factors: analysis.factors.map((factor: any) => ({
+                name: factor.name,
+                present: factor.present,
+                weight: factor.weight,
+              })),
+              ...cf,
+              regime: analysis.regimeInfo?.regime || "unknown",
+              session: session.name,
+            });
+          }
+          continue;
+        }
+        if (!crossTimeframeDecision.allowed) {
+          diagnostics.skippedGateBlocked++;
+          const label = "Cross-Timeframe Authority";
+          diagnostics.gateBlockReasons[label] =
+            (diagnostics.gateBlockReasons[label] || 0) + 1;
+          if (researchMode && analysis.stopLoss && analysis.takeProfit) {
+            const cf = computeCounterfactual(
+              symbol,
+              analysis.direction,
+              candle.close,
+              analysis.stopLoss,
+              analysis.takeProfit,
+              entryCandles,
+              i + 1,
+              200,
+            );
+            blockedTrades.push({
+              symbol,
+              direction: analysis.direction,
+              time: candle.datetime,
+              score: analysis.score,
+              effectiveScore,
+              blockedBy: [
+                `Cross-Timeframe Authority: ${
+                  crossTimeframeDecision.reasonCodes.join(", ")
+                }`,
               ],
               factors: analysis.factors.map((factor: any) => ({
                 name: factor.name,

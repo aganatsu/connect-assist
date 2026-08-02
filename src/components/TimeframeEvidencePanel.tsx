@@ -19,6 +19,21 @@ interface SlotEvidence {
   skippedReason: string | null;
   candleCount: number;
   reason: string;
+  canonicalImpulse?: {
+    detectorVersion: string;
+    matchesLegacy: boolean;
+    selectionKey: string | null;
+    metrics: {
+      atrNormalizedSize: number | null;
+      displacementPercentile: number | null;
+      strongestDirectionalBodyRatio: number | null;
+      bodyStrengthPercentile: number | null;
+      bosSignificanceATR: number | null;
+      recencyBars: number;
+      sweepOrigin: boolean;
+      structureIntact: boolean;
+    } | null;
+  } | null;
   rejections?: Array<{
     code: string;
     measured: number | null;
@@ -62,6 +77,21 @@ interface SlotEvidence {
     rank: number;
     type: string;
     totalScore: number;
+    candidateLifecycle?: {
+      state: string;
+      explanation: string;
+    } | null;
+    candidateModel?: {
+      rank: number;
+      topCandidate: boolean;
+      totalScore: number;
+      enforcement: "observe_only";
+    } | null;
+    timeframeLineage?: {
+      relationship: string;
+      parentTimeframe: string | null;
+      explanation: string;
+    } | null;
   }>;
 }
 
@@ -69,6 +99,8 @@ interface EvidenceRecord {
   id: string;
   symbol: string;
   direction: string;
+  canonical_detector_version: string | null;
+  canonical_parity: boolean | null;
   observed_at: string;
   trading_style: string | null;
   style_policy_snapshot: {
@@ -273,6 +305,14 @@ export function TimeframeEvidencePanel({
                   )}
                 </div>
               )}
+              {record.canonical_detector_version && (
+                <div className="text-[11px] text-muted-foreground">
+                  {record.canonical_detector_version} ·{" "}
+                  {record.canonical_parity
+                    ? "legacy selection parity"
+                    : "selection disagreement recorded"}
+                </div>
+              )}
               {(record.slots ?? []).map((slot) => (
                 <div
                   key={slot.slot}
@@ -290,6 +330,40 @@ export function TimeframeEvidencePanel({
                     )
                     : (
                       <div className="mt-1 space-y-1 text-[11px] text-muted-foreground">
+                        {slot.canonicalImpulse && (
+                          <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-1.5">
+                            <div className="font-medium text-foreground">
+                              Canonical impulse ·{" "}
+                              {slot.canonicalImpulse.detectorVersion} ·{" "}
+                              {slot.canonicalImpulse.matchesLegacy
+                                ? "legacy parity"
+                                : "detector disagreement"}
+                            </div>
+                            {slot.canonicalImpulse.metrics && (
+                              <div>
+                                Size{" "}
+                                {slot.canonicalImpulse.metrics.atrNormalizedSize
+                                    ?.toFixed(2) ?? "—"}× ATR · displacement p
+                                {slot.canonicalImpulse.metrics
+                                    .displacementPercentile?.toFixed(0) ?? "—"} ·
+                                body p
+                                {slot.canonicalImpulse.metrics
+                                    .bodyStrengthPercentile?.toFixed(0) ?? "—"} ·
+                                BOS{" "}
+                                {slot.canonicalImpulse.metrics.bosSignificanceATR
+                                    ?.toFixed(2) ?? "—"}× ATR · age{" "}
+                                {slot.canonicalImpulse.metrics.recencyBars} bars ·
+                                sweep origin{" "}
+                                {slot.canonicalImpulse.metrics.sweepOrigin
+                                  ? "yes"
+                                  : "no"} · structure{" "}
+                                {slot.canonicalImpulse.metrics.structureIntact
+                                  ? "intact"
+                                  : "broken"}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <div>
                           Legs: {slot.impulses.length}
                           {slot.impulses.some((leg) => leg.selected)
@@ -300,6 +374,30 @@ export function TimeframeEvidencePanel({
                           POIs: {slot.pois.filter((poi) => poi.accepted).length}{" "}
                           accepted / {slot.pois.length} mapped
                         </div>
+                        {slot.candidates
+                          .filter((candidate) =>
+                            candidate.candidateModel?.topCandidate === true
+                          )
+                          .sort((a, b) =>
+                            (a.candidateModel?.rank ?? 99) -
+                            (b.candidateModel?.rank ?? 99)
+                          )
+                          .map((candidate) => (
+                            <div
+                              key={`model-${candidate.candidateId}`}
+                              className="rounded border border-cyan-500/20 bg-cyan-500/5 px-1.5 py-1"
+                            >
+                              Model #{candidate.candidateModel?.rank} ·{" "}
+                              {candidate.type.toUpperCase()} ·{" "}
+                              {candidate.candidateLifecycle?.state
+                                ?.replaceAll("_", " ") ?? "lifecycle unknown"} ·
+                              score{" "}
+                              {candidate.candidateModel?.totalScore.toFixed(2)}
+                              {candidate.timeframeLineage
+                                ? ` · ${candidate.timeframeLineage.relationship.replaceAll("_", " ")}`
+                                : ""}
+                            </div>
+                          ))}
                         {(slot.rejections ?? []).map((rejection) => (
                           <div
                             key={`${slot.slot}-${rejection.code}`}

@@ -795,6 +795,39 @@ Deno.test("mapNestedToFlat: zone-local controls default safe and map exactly", (
   assertEquals(mapped.zoneLocalMinimumScore, 2.5);
 });
 
+Deno.test("mapNestedToFlat: cross-timeframe authority controls default safe and map exactly", () => {
+  const defaults = mapNestedToFlat(null);
+  assertEquals(defaults.crossTfAuthorityMode, "observe");
+  assertEquals(defaults.crossTfRequireNestedImpulse, true);
+  assertEquals(defaults.crossTfAllowStandaloneLowerTimeframe, false);
+  assertEquals(defaults.crossTfMaximumZoneSeparationATR, 0.25);
+  assertEquals(defaults.crossTfMinimumParentChildOverlapPercent, 50);
+  assertEquals(defaults.crossTfRequireSweepOrigin, false);
+  assertEquals(defaults.crossTfRetestQuality, "fresh_or_held");
+  assertEquals(defaults.crossTfMaximumCandidatesPerTimeframe, 3);
+
+  const mapped = mapNestedToFlat({
+    strategy: {
+      crossTfAuthorityMode: "hard",
+      crossTfRequireNestedImpulse: false,
+      crossTfAllowStandaloneLowerTimeframe: true,
+      crossTfMaximumZoneSeparationATR: 0.5,
+      crossTfMinimumParentChildOverlapPercent: 65,
+      crossTfRequireSweepOrigin: true,
+      crossTfRetestQuality: "fresh_only",
+      crossTfMaximumCandidatesPerTimeframe: 2,
+    },
+  });
+  assertEquals(mapped.crossTfAuthorityMode, "hard");
+  assertEquals(mapped.crossTfRequireNestedImpulse, false);
+  assertEquals(mapped.crossTfAllowStandaloneLowerTimeframe, true);
+  assertEquals(mapped.crossTfMaximumZoneSeparationATR, 0.5);
+  assertEquals(mapped.crossTfMinimumParentChildOverlapPercent, 65);
+  assertEquals(mapped.crossTfRequireSweepOrigin, true);
+  assertEquals(mapped.crossTfRetestQuality, "fresh_only");
+  assertEquals(mapped.crossTfMaximumCandidatesPerTimeframe, 2);
+});
+
 // ─── maxConfirmationAttempts ─────────────────────────────────────────────────
 
 Deno.test("maxConfirmationAttempts: defaults to 3 when no config is set", () => {

@@ -300,6 +300,52 @@ function validateConfig(config: any): string[] {
     ) {
       errors.push("strategy.zoneLocalMinimumScore must be between 0 and 9");
     }
+    if (
+      s.crossTfAuthorityMode !== undefined &&
+      !["observe", "soft", "hard"].includes(s.crossTfAuthorityMode)
+    ) {
+      errors.push(
+        "strategy.crossTfAuthorityMode must be observe, soft, or hard",
+      );
+    }
+    if (
+      typeof s.crossTfMaximumZoneSeparationATR === "number" &&
+      (s.crossTfMaximumZoneSeparationATR < 0 ||
+        s.crossTfMaximumZoneSeparationATR > 3)
+    ) {
+      errors.push(
+        "strategy.crossTfMaximumZoneSeparationATR must be between 0 and 3",
+      );
+    }
+    if (
+      typeof s.crossTfMinimumParentChildOverlapPercent === "number" &&
+      (s.crossTfMinimumParentChildOverlapPercent < 0 ||
+        s.crossTfMinimumParentChildOverlapPercent > 100)
+    ) {
+      errors.push(
+        "strategy.crossTfMinimumParentChildOverlapPercent must be between 0 and 100",
+      );
+    }
+    if (
+      s.crossTfRetestQuality !== undefined &&
+      !["fresh_only", "fresh_or_held", "any_non_violated"].includes(
+        s.crossTfRetestQuality,
+      )
+    ) {
+      errors.push(
+        "strategy.crossTfRetestQuality must be fresh_only, fresh_or_held, or any_non_violated",
+      );
+    }
+    if (
+      typeof s.crossTfMaximumCandidatesPerTimeframe === "number" &&
+      (s.crossTfMaximumCandidatesPerTimeframe < 1 ||
+        s.crossTfMaximumCandidatesPerTimeframe > 5 ||
+        !Number.isInteger(s.crossTfMaximumCandidatesPerTimeframe))
+    ) {
+      errors.push(
+        "strategy.crossTfMaximumCandidatesPerTimeframe must be an integer between 1 and 5",
+      );
+    }
   }
 
   // Risk validations

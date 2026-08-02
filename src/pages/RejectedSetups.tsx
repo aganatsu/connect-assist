@@ -115,6 +115,19 @@ interface ZoneLocalValidationSummary {
   evidence_source: "forward_observation" | "retrospective_replay";
   activation_eligible: boolean;
   replay_runs: number;
+  cross_tf_disagreement_scans: number;
+  cross_tf_resolved_legacy_trades: number;
+  winners_retained: number;
+  losers_avoided: number;
+  missed_opportunities: number;
+  false_positives: number;
+  legacy_expectancy_r: number | null;
+  cross_tf_expectancy_r: number | null;
+  cross_tf_expectancy_delta_r: number | null;
+  cross_tf_avg_mfe_pips: number | null;
+  cross_tf_avg_mae_pips: number | null;
+  cross_tf_minimum_sample_ready: boolean;
+  cross_tf_enforcement: "observe_only";
 }
 
 // ── Constants ──
@@ -255,7 +268,7 @@ async function fetchZoneLocalValidation(
   const { data, error } = await (supabase as any)
     .from("zone_candidate_shadow_validation_summary")
     .select(
-      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement, evidence_source, activation_eligible, replay_runs",
+      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement, evidence_source, activation_eligible, replay_runs, cross_tf_disagreement_scans, cross_tf_resolved_legacy_trades, winners_retained, losers_avoided, missed_opportunities, false_positives, legacy_expectancy_r, cross_tf_expectancy_r, cross_tf_expectancy_delta_r, cross_tf_avg_mfe_pips, cross_tf_avg_mae_pips, cross_tf_minimum_sample_ready, cross_tf_enforcement",
     )
     .eq("user_id", userId)
     .eq("bot_id", "smc")
@@ -1262,11 +1275,11 @@ function ZoneLocalValidationCard({
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <CardTitle className="text-sm font-medium">
-              Zone-Local Candidate Validation
+              Zone Candidate & Cross-TF Validation
             </CardTitle>
             <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Tests whether the zone with the strongest nearby evidence performs
-              better than the legacy-selected zone.
+              Compares legacy selection with zone-local ranking and the
+              observation-only parent/child timeframe policy.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1376,7 +1389,7 @@ function ZoneLocalDatasetTable({
         </div>
       ) : (
         <div className="overflow-x-auto rounded border border-border/40">
-          <table className="w-full min-w-[760px] text-[10px]">
+          <table className="w-full min-w-[1180px] text-[10px]">
             <thead className="bg-muted/30 text-muted-foreground">
               <tr>
                 <th className="px-2 py-1.5 text-left font-medium">Style / Pair</th>
@@ -1386,6 +1399,12 @@ function ZoneLocalDatasetTable({
                 <th className="px-2 py-1.5 text-right font-medium">Local win</th>
                 <th className="px-2 py-1.5 text-right font-medium">Local MFE</th>
                 <th className="px-2 py-1.5 text-right font-medium">Local MAE</th>
+                <th className="px-2 py-1.5 text-right font-medium">TF disagreements</th>
+                <th className="px-2 py-1.5 text-right font-medium">Winners kept</th>
+                <th className="px-2 py-1.5 text-right font-medium">Losers avoided</th>
+                <th className="px-2 py-1.5 text-right font-medium">Missed</th>
+                <th className="px-2 py-1.5 text-right font-medium">False +</th>
+                <th className="px-2 py-1.5 text-right font-medium">Expectancy Δ</th>
                 <th className="px-2 py-1.5 text-right font-medium">
                   {retrospective ? "Replay runs" : "Readiness"}
                 </th>
@@ -1409,6 +1428,20 @@ function ZoneLocalDatasetTable({
                   <td className="px-2 py-1.5 text-right font-medium text-primary">{formatValidationPercent(row.shadow_disagreement_win_rate)}</td>
                   <td className="px-2 py-1.5 text-right text-success">{formatValidationPips(row.shadow_winner_avg_mfe_pips, row.symbol)}</td>
                   <td className="px-2 py-1.5 text-right text-destructive">{formatValidationPips(row.shadow_winner_avg_mae_pips, row.symbol)}</td>
+                  <td className="px-2 py-1.5 text-right">{Number(row.cross_tf_disagreement_scans || 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-success">{Number(row.winners_retained || 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-success">{Number(row.losers_avoided || 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-warning">{Number(row.missed_opportunities || 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-destructive">{Number(row.false_positives || 0)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${
+                    Number(row.cross_tf_expectancy_delta_r || 0) >= 0
+                      ? "text-success"
+                      : "text-destructive"
+                  }`}>
+                    {row.cross_tf_expectancy_delta_r == null
+                      ? "—"
+                      : `${Number(row.cross_tf_expectancy_delta_r).toFixed(3)}R`}
+                  </td>
                   <td className="px-2 py-1.5 text-right">
                     {retrospective ? (
                       <span>{Number(row.replay_runs || 0)}</span>
