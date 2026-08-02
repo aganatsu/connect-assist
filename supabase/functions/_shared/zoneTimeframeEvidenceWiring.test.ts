@@ -68,6 +68,25 @@ Deno.test("evidence migration protects payload immutability and service-only cou
   );
 });
 
+Deno.test("canonical impulse metrics are persisted with immutable parity provenance", () => {
+  const evidence = functionSource("_shared/zoneTimeframeEvidence.ts");
+  const cleanup = functionSource("data-cleanup/index.ts");
+  const migration = repoSource(
+    "supabase/migrations/20260801220000_add_canonical_impulse_observability.sql",
+  );
+
+  assertStringIncludes(evidence, "canonical_detector_version:");
+  assertStringIncludes(evidence, "canonical_parity:");
+  assertStringIncludes(evidence, "displacementPercentile");
+  assertStringIncludes(evidence, "bodyStrengthPercentile");
+  assertStringIncludes(evidence, "bosSignificanceATR");
+  assertStringIncludes(evidence, "sweepOrigin");
+  assertStringIncludes(cleanup, "row.canonical_detector_version");
+  assertStringIncludes(cleanup, "row.canonical_parity");
+  assertStringIncludes(migration, "NEW.canonical_detector_version");
+  assertStringIncludes(migration, "NEW.canonical_parity");
+});
+
 Deno.test("cleanup compacts linked evidence before deleting bounded raw batches", () => {
   const cleanup = functionSource("data-cleanup/index.ts");
   const summaryWrite = cleanup.indexOf('.from("zone_timeframe_evidence_summary")');

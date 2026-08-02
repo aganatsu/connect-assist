@@ -31,6 +31,10 @@ import {
   type HTFConfluenceData,
 } from "./impulseZoneEngine.ts";
 import { buildConceptEvidence } from "./conceptEvidence.ts";
+import {
+  canonicalImpulseMatchesLegacy,
+  detectCanonicalImpulse,
+} from "./canonicalImpulseDetector.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -231,6 +235,46 @@ Deno.test("findImpulseLeg — returns null for wrong direction", () => {
     assertEquals(result.direction, "bearish");
     assert(result.isValid);
   }
+});
+
+Deno.test("canonical detector preserves bullish and bearish legacy selection", () => {
+  for (
+    const [candles, direction] of [
+      [generateBullishImpulseCandles(50), "bullish"],
+      [generateBearishImpulseCandles(50), "bearish"],
+    ] as const
+  ) {
+    const legacy = findImpulseLeg(candles, direction);
+    const canonical = detectCanonicalImpulse(candles, direction, "1H");
+    assert(
+      canonicalImpulseMatchesLegacy(canonical.impulse, legacy),
+      `${direction} canonical impulse must match the legacy-selected leg`,
+    );
+    if (legacy) {
+      assertExists(canonical.impulse);
+      assertExists(canonical.metrics);
+      assert(canonical.metrics.atrNormalizedSize !== null);
+      assert(canonical.metrics.displacementPercentile !== null);
+      assert(canonical.metrics.bodyStrengthPercentile !== null);
+    }
+  }
+});
+
+Deno.test("canonical detector is deterministic and pair/timeframe relative", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const first = detectCanonicalImpulse(candles, "bullish", "1H");
+  const second = detectCanonicalImpulse(candles, "bullish", "1H");
+  assertEquals(first, second);
+  assertEquals(first.detectorVersion, "canonical-impulse.v1");
+  assertEquals(first.timeframe, "1H");
+  assert(
+    (first.metrics?.displacementPercentile ?? -1) >= 0 &&
+      (first.metrics?.displacementPercentile ?? 101) <= 100,
+  );
+  assert(
+    (first.metrics?.bodyStrengthPercentile ?? -1) >= 0 &&
+      (first.metrics?.bodyStrengthPercentile ?? 101) <= 100,
+  );
 });
 
 Deno.test("mapImpulsePOIs — returns empty for invalid impulse", () => {

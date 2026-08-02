@@ -28,6 +28,11 @@ import {
   type ZoneLocalConfluenceObservation,
 } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
+import {
+  canonicalImpulseMatchesLegacy,
+  detectCanonicalImpulse,
+  type CanonicalImpulseDetection,
+} from "./canonicalImpulseDetector.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,6 +130,8 @@ export interface ZoneEngineEvidenceSnapshot {
   mappedPOIs: ImpulsePOI[];
   qualificationMeasurements: POIQualificationMeasurement[];
   rankedZones: RankedPOI[];
+  canonicalImpulse: CanonicalImpulseDetection | null;
+  canonicalMatchesLegacy: boolean | null;
 }
 
 export interface ZoneQualificationResult {
@@ -1604,6 +1611,13 @@ export function findBestEntryZone(
   let collectedPOIs: ImpulsePOI[] = [];
   let collectedMeasurements: POIQualificationMeasurement[] = [];
   let collectedRankedZones: RankedPOI[] = [];
+  const canonicalImpulse = options?.collectEvidence
+    ? detectCanonicalImpulse(
+      htfCandles,
+      direction,
+      options.evidenceContext?.timeframe,
+    )
+    : null;
   const finish = (result: ZoneEngineResult): ZoneEngineResult => {
     if (!options?.collectEvidence) return result;
     return {
@@ -1615,6 +1629,11 @@ export function findBestEntryZone(
         mappedPOIs: collectedPOIs,
         qualificationMeasurements: collectedMeasurements,
         rankedZones: collectedRankedZones,
+        canonicalImpulse,
+        canonicalMatchesLegacy: canonicalImpulseMatchesLegacy(
+          canonicalImpulse?.impulse ?? null,
+          result.impulse,
+        ),
       },
     };
   };
