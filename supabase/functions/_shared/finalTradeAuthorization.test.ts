@@ -86,6 +86,28 @@ Deno.test("final authorization allows a fully valid candidate", () => {
   assertEquals(result.code, "authorized");
 });
 
+Deno.test("final authorization fails closed when Cross-TF authority is required but missing", () => {
+  const input = baseInput();
+  input.requireCrossTimeframeAuthority = true;
+  input.crossTimeframeAuthority = null;
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.authorized, false);
+  assertEquals(result.code, "cross_timeframe_unavailable");
+});
+
+Deno.test("final authorization blocks a certified Hard Cross-TF rejection", () => {
+  const input = baseInput();
+  input.requireCrossTimeframeAuthority = true;
+  input.crossTimeframeAuthority = {
+    effectiveMode: "hard",
+    allowed: false,
+    reasonCodes: ["parent_direction_conflict"],
+  } as any;
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.authorized, false);
+  assertEquals(result.code, "cross_timeframe_blocked");
+});
+
 for (
   const [name, mutate, expected] of [
     [

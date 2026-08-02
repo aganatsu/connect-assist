@@ -94,9 +94,20 @@ import {
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
+  readFrozenCrossTimeframeAuthority,
   readFrozenSetupStrategyContext,
   validateFrozenSetupIdentity,
 } from "../_shared/setupLifecycle.ts";
+import {
+  loadCrossTimeframeActivation,
+} from "../_shared/crossTimeframeActivationStore.ts";
+import {
+  resolveCrossTimeframeAuthority,
+  type CrossTimeframeAuthorityResolution,
+} from "../_shared/crossTimeframeAuthority.ts";
+import {
+  evaluateCrossTimeframeEntryAuthority,
+} from "../_shared/crossTimeframeEntryAuthority.ts";
 import {
   beginScannerOperation,
   completeScannerOperation,
@@ -308,6 +319,7 @@ Deno.serve(async (req) => {
       stylePolicy: ResolvedStylePolicy;
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
+      crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
     }> = {};
     const configFailureUsers = new Map<string, Error>();
 
@@ -399,6 +411,18 @@ Deno.serve(async (req) => {
         resolution: styleResolution,
         config: styleResolution.config,
       });
+      const crossTimeframeActivation = await loadCrossTimeframeActivation(
+        supabase,
+        { userId, botId: BOT_ID },
+      );
+      const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
+        rawConfig: styleResolution.config as unknown as Record<
+          string,
+          unknown
+        >,
+        runtimeTarget: account?.execution_mode === "live" ? "live" : "paper",
+        activation: crossTimeframeActivation,
+      });
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
@@ -409,6 +433,7 @@ Deno.serve(async (req) => {
         stylePolicy,
         gamePlan,
         directionVerdicts,
+        crossTimeframeAuthority,
       };
     }
 
@@ -451,6 +476,7 @@ Deno.serve(async (req) => {
           stylePolicy: runtimeStylePolicy,
           gamePlan,
           directionVerdicts,
+          crossTimeframeAuthority,
         } = userData;
 
         // Avoid market-data work when execution is administratively disabled.
@@ -1033,6 +1059,13 @@ Deno.serve(async (req) => {
             maximumPips: bestSpread?.effectiveMax,
           },
           runtimeGates,
+          crossTimeframeAuthority:
+            readFrozenCrossTimeframeAuthority(pending) ||
+            evaluateCrossTimeframeEntryAuthority({
+              authorityResolution: crossTimeframeAuthority,
+              evaluation: null,
+            }),
+          requireCrossTimeframeAuthority: true,
         });
         const hierarchy = rawAuthorization.decisionHierarchy ||
           evaluateDecisionHierarchy({

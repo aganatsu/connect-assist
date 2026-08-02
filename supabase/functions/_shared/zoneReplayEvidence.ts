@@ -4,6 +4,9 @@ import {
   buildZoneShadowObservationRows,
   zoneShadowDisagreementKey,
 } from "./zoneShadowObservationStore.ts";
+import type {
+  CrossTimeframeShadowPolicy,
+} from "./crossTimeframeShadowValidation.ts";
 
 export const ZONE_LOCAL_REPLAY_CONTRACT_VERSION =
   "zone-local-retrospective-replay.v1";
@@ -25,6 +28,7 @@ export interface ZoneReplayEvidenceInput {
   candidates: RankedPOI[];
   candles: OutcomeCandle[];
   pipSize: number;
+  crossTimeframePolicy?: CrossTimeframeShadowPolicy;
 }
 
 export interface ZoneReplayEvidenceResult {
@@ -64,7 +68,10 @@ export async function persistZoneReplayEvidence(
   client: ReplayEvidenceClient,
   input: ZoneReplayEvidenceInput,
 ): Promise<ZoneReplayEvidenceResult> {
-  const disagreementKey = zoneShadowDisagreementKey(input.candidates);
+  const disagreementKey = zoneShadowDisagreementKey(
+    input.candidates,
+    input.crossTimeframePolicy,
+  );
   if (!disagreementKey) {
     return {
       disagreement: false,
@@ -97,6 +104,7 @@ export async function persistZoneReplayEvidence(
     replayRunId: input.replayRunId,
     replayContractVersion: ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
     activationEligible: false,
+    crossTimeframePolicy: input.crossTimeframePolicy,
   });
   const checkedAt = new Date().toISOString();
   const resolvedRows = rows.map((row) => {

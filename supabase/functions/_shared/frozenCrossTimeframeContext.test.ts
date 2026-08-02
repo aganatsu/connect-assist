@@ -3,6 +3,7 @@ import {
   buildFrozenCrossTimeframeContext,
   FROZEN_CROSS_TF_CONTEXT_VERSION,
 } from "./frozenCrossTimeframeContext.ts";
+import { resolveCrossTimeframeAuthority } from "./crossTimeframeAuthority.ts";
 
 const stylePolicy = {
   contractVersion: "style-policy.v1.3",
@@ -10,6 +11,11 @@ const stylePolicy = {
   policyHash: "pair-hash",
   style: "scalper",
 } as any;
+const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
+  rawConfig: { crossTfAuthorityMode: "observe" },
+  runtimeTarget: "paper",
+  activation: null,
+});
 
 Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certificates", () => {
   const frozen = buildFrozenCrossTimeframeContext({
@@ -75,6 +81,7 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
       status: "eligible_log_only",
       generatedAt: "2026-08-01T12:00:00.000Z",
     }],
+    crossTimeframeAuthority,
   });
 
   assertEquals(frozen.contractVersion, FROZEN_CROSS_TF_CONTEXT_VERSION);
@@ -92,6 +99,8 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
     frozen.evidenceCertificates.map((item) => item.featureKey),
     ["gameplan_hierarchy", "thesis_conviction"],
   );
+  assertEquals(frozen.authority.effectiveMode, "observe");
+  assertEquals(frozen.authority.allowed, true);
 });
 
 Deno.test("frozen cross-TF context records absence instead of inventing lineage", () => {
@@ -101,10 +110,12 @@ Deno.test("frozen cross-TF context records absence instead of inventing lineage"
     directionVerdict: null,
     stylePolicy,
     zoneStory: null,
+    crossTimeframeAuthority,
   });
   assertEquals(frozen.selectedZone, null);
   assertEquals(frozen.relationship, null);
   assertEquals(frozen.parentImpulse, null);
   assertEquals(frozen.childImpulse, null);
   assertEquals(frozen.evidenceCertificates, []);
+  assertEquals(frozen.authority.evidenceAvailable, false);
 });
