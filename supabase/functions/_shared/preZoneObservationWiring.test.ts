@@ -44,7 +44,7 @@ Deno.test("pre-zone observations are explicitly non-executable", () => {
   );
   assertStringIncludes(
     scanner,
-    "sl_level: executionEligible ? stopLoss : null",
+    "sl_level: executionEligible ? watchlistInvalidation?.level : null",
   );
 });
 
@@ -62,10 +62,10 @@ Deno.test("a complete zone creates a fresh candidate rather than rewriting the o
 });
 
 Deno.test("Watchlist labels observation-only rows and excludes them from near-gate counts", () => {
-  assertStringIncludes(watchlist, "OBSERVE ONLY · WAITING ZONE");
+  assertStringIncludes(watchlist, "getWatchlistDisplay");
   assertStringIncludes(
     watchlist,
-    "setup.execution_eligible === false",
+    'watchlistDisplay.state === "monitoring"',
   );
   assertStringIncludes(
     watchlist,

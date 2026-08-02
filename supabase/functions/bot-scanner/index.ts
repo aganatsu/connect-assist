@@ -125,6 +125,11 @@ import {
   type SetupLifecycleEvidence,
 } from "../_shared/setupLifecycle.ts";
 import {
+  deriveWatchlistInvalidation,
+  isWatchlistInvalidated,
+  type WatchlistDirection,
+} from "../_shared/watchlistInvalidation.ts";
+import {
   buildFrozenCrossTimeframeContext,
   loadCurrentEvidenceCertificateReferences,
   type EvidenceCertificateReference,
@@ -5110,6 +5115,20 @@ async function runScanForUser(
       (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
     const selectedZoneLocalEnforcement = () =>
       (detail as any).zoneLocalEnforcement ?? null;
+    const watchlistInvalidationFor = (
+      direction: WatchlistDirection,
+      originatingZone: unknown,
+      proposedLevel: unknown,
+      impulse?: unknown,
+    ) =>
+      deriveWatchlistInvalidation({
+        direction,
+        zone: originatingZone,
+        impulse,
+        proposedLevel,
+        bufferPrice: adjustedSlBuffer *
+          (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+      });
     const selectedCrossTimeframeContext = () =>
       buildFrozenCrossTimeframeContext({
         timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
@@ -5207,30 +5226,81 @@ async function runScanForUser(
       }
     }
 
-    // SL invalidation check for existing staged setups
-    if (existingStaged && existingStaged.sl_level && stagingEnabled) {
-      const slLevel = parseFloat(existingStaged.sl_level);
-      const slBreached = existingStaged.direction === "long"
-        ? analysis.lastPrice < slLevel
-        : analysis.lastPrice > slLevel;
-      if (slBreached) {
+    // Watchlist invalidation is a structural thesis boundary, not an active
+    // trade stop loss. Re-derive legacy rows from their frozen zone before
+    // evaluating them so an old in-zone SL cannot prematurely kill a setup.
+    if (
+      existingStaged &&
+      existingStaged.execution_eligible !== false &&
+      existingStaged.sl_level &&
+      stagingEnabled
+    ) {
+      const storedLevel = parseFloat(existingStaged.sl_level);
+      const frozenImpulse =
+        existingStaged.analysis_snapshot?.impulseZone?.impulse ||
+        existingStaged.analysis_snapshot?.impulse ||
+        null;
+      const invalidation = watchlistInvalidationFor(
+        existingStaged.direction as WatchlistDirection,
+        existingStaged.originating_zone,
+        storedLevel,
+        frozenImpulse,
+      );
+      const boundaryLevel = invalidation.level;
+      const boundaryChanged = boundaryLevel !== null &&
+        Number.isFinite(storedLevel) &&
+        Math.abs(boundaryLevel - storedLevel) > Number.EPSILON;
+      const boundaryBreached = boundaryLevel !== null &&
+        isWatchlistInvalidated(
+          existingStaged.direction as WatchlistDirection,
+          analysis.lastPrice,
+          boundaryLevel,
+        );
+      if (boundaryBreached) {
         try {
           await supabase.from("staged_setups").update({
             status: "invalidated",
-            invalidation_reason: `SL level breached (price ${analysis.lastPrice.toFixed(5)} vs SL ${slLevel.toFixed(5)})`,
+            sl_level: boundaryLevel,
+            invalidation_reason:
+              `Structural invalidation breached before entry (price ${analysis.lastPrice.toFixed(5)} vs boundary ${boundaryLevel.toFixed(5)}; source ${invalidation.source})`,
             resolved_at: new Date().toISOString(),
-          }).eq("id", existingStaged.id);
+          }).eq("id", existingStaged.id).eq("user_id", userId);
           stagedInvalidated++;
           stagedMap.delete(stagedKey!);
-          console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — SL breached (${analysis.lastPrice.toFixed(5)} vs ${slLevel.toFixed(5)})`);
+          console.log(
+            `[staging] Invalidated ${pair} ${existingStaged.direction} — structural boundary breached (${analysis.lastPrice.toFixed(5)} vs ${boundaryLevel.toFixed(5)}, ${invalidation.source})`,
+          );
         } catch (e: any) {
-          console.warn(`[staging] Failed to invalidate SL-breached ${pair}: ${e?.message}`);
+          console.warn(
+            `[staging] Failed to invalidate structurally breached ${pair}: ${e?.message}`,
+          );
         }
         detail.status = "staged_invalidated";
-        detail.reason = `Staged setup invalidated — SL breached`;
-        detail.staging = { action: "invalidated", reason: "sl_breached" };
+        detail.reason =
+          `Staged setup invalidated — structural boundary breached before entry`;
+        detail.staging = {
+          action: "invalidated",
+          reason: "structural_invalidation_breached",
+          boundary: boundaryLevel,
+          source: invalidation.source,
+        };
         scanDetails.push(detail);
         continue;
+      } else if (boundaryChanged) {
+        try {
+          await supabase.from("staged_setups").update({
+            sl_level: boundaryLevel,
+            last_eval_at: new Date().toISOString(),
+          }).eq("id", existingStaged.id).eq("user_id", userId);
+          existingStaged.sl_level = boundaryLevel;
+          console.log(
+            `[staging] Repaired ${pair} ${existingStaged.direction} Watchlist boundary ${storedLevel.toFixed(5)} → ${boundaryLevel.toFixed(5)} (${invalidation.source})`,
+          );
+        } catch (e: any) {
+          console.warn(
+            `[staging] Failed to repair ${pair} Watchlist boundary: ${e?.message}`,
+          );
+        }
       }
     }
 
@@ -5415,6 +5485,14 @@ async function runScanForUser(
       const observationReason = executionEligible
         ? null
         : "Directional candidate is visible for observation only; no valid unified zone exists";
+      const watchlistInvalidation = executionEligible
+        ? watchlistInvalidationFor(
+          analysis.direction as WatchlistDirection,
+          originatingZone,
+          stopLoss,
+          isCascade ? null : unifiedZoneData?.impulse,
+        )
+        : null;
       const needsHandoff = requiresFreshCandidateHandoff(
         existingStaged,
         executionEligible,
@@ -5536,7 +5614,7 @@ async function runScanForUser(
         // A pre-zone row has no executable price structure yet. Keep projected
         // protection levels empty so the ordinary SL-breach lifecycle cannot
         // treat an observation as though it were an armed setup.
-        sl_level: executionEligible ? stopLoss : null,
+        sl_level: executionEligible ? watchlistInvalidation?.level : null,
         tp_level: executionEligible ? takeProfit : null,
         ...decisionFields,
         authorization_result: {
@@ -5720,6 +5798,23 @@ async function runScanForUser(
               const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
                 : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
                 : stagingTTLMinutes;
+              const zoneWatchOrigin = {
+                type: izData.bestZone.type || "impulse_zone",
+                low: izData.bestZone.low,
+                high: izData.bestZone.high,
+                entry: izData.bestZone.refinedEntry ??
+                  ((izData.bestZone.high + izData.bestZone.low) / 2),
+                fibDepth: izData.bestZone.fibDepth || null,
+                selectedTimeframe: izData.selectedTF || null,
+              };
+              const zoneWatchInvalidation = watchlistInvalidationFor(
+                analysis.direction as WatchlistDirection,
+                zoneWatchOrigin,
+                analysis.direction === "long"
+                  ? izData.impulse.low
+                  : izData.impulse.high,
+                izData.impulse,
+              );
               await supabase.from("staged_setups").insert({
                 user_id: userId,
                 bot_id: BOT_ID,
@@ -5732,17 +5827,9 @@ async function runScanForUser(
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
                 entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
+                sl_level: zoneWatchInvalidation.level,
                 tp_level: analysis.takeProfit,
-                ...stagedDecisionFields({
-                  type: izData.bestZone.type || "impulse_zone",
-                  low: izData.bestZone.low,
-                  high: izData.bestZone.high,
-                  entry: izData.bestZone.refinedEntry ??
-                    ((izData.bestZone.high + izData.bestZone.low) / 2),
-                  fibDepth: izData.bestZone.fibDepth || null,
-                  selectedTimeframe: izData.selectedTF || null,
-                }),
+                ...stagedDecisionFields(zoneWatchOrigin),
                 scan_cycles: 1,
                 min_cycles: 1,
                 ttl_minutes: styleTTL,
@@ -5765,7 +5852,13 @@ async function runScanForUser(
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
                 entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
+                sl_level: watchlistInvalidationFor(
+                  analysis.direction as WatchlistDirection,
+                  existingStagedForZone.originating_zone,
+                  existingStagedForZone.sl_level,
+                  existingStagedForZone.analysis_snapshot?.impulseZone
+                    ?.impulse,
+                ).level,
               }).eq("id", existingStagedForZone.id);
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
@@ -5819,6 +5912,20 @@ async function runScanForUser(
                 const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
                   : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
                   : stagingTTLMinutes;
+                const sweepWatchOrigin = {
+                  type: "standalone_sweep_watch",
+                  low: izData.bestZone?.low ?? null,
+                  high: izData.bestZone?.high ?? null,
+                  entry: izData.bestZone?.entry ?? analysis.lastPrice,
+                  nearbyPools: liq.nearbyPools,
+                  liquiditySummary: liq.summary || null,
+                };
+                const sweepWatchInvalidation = watchlistInvalidationFor(
+                  analysis.direction as WatchlistDirection,
+                  sweepWatchOrigin,
+                  izData.bestZone?.sl ?? analysis.stopLoss,
+                  izData.impulse,
+                );
                 await supabase.from("staged_setups").insert({
                   user_id: userId,
                   bot_id: BOT_ID,
@@ -5831,16 +5938,9 @@ async function runScanForUser(
                   current_factors: presentFactors,
                   missing_factors: missingFactors,
                   entry_price: izData.bestZone?.entry ?? analysis.lastPrice,
-                  sl_level: izData.bestZone?.sl ?? (analysis.direction === "long" ? analysis.lastPrice - 0.0050 : analysis.lastPrice + 0.0050),
+                  sl_level: sweepWatchInvalidation.level,
                   tp_level: analysis.takeProfit,
-                  ...stagedDecisionFields({
-                    type: "standalone_sweep_watch",
-                    low: izData.bestZone?.low || null,
-                    high: izData.bestZone?.high || null,
-                    entry: izData.bestZone?.entry ?? analysis.lastPrice,
-                    nearbyPools: liq.nearbyPools,
-                    liquiditySummary: liq.summary || null,
-                  }),
+                  ...stagedDecisionFields(sweepWatchOrigin),
                   scan_cycles: 1,
                   min_cycles: 1,
                   ttl_minutes: styleTTL,
@@ -6347,7 +6447,12 @@ async function runScanForUser(
             scan_cycles: existingStaged.scan_cycles + 1,
             last_eval_at: new Date().toISOString(),
             entry_price: analysis.lastPrice,
-            sl_level: analysis.stopLoss,
+            sl_level: watchlistInvalidationFor(
+              analysis.direction as WatchlistDirection,
+              existingStaged.originating_zone,
+              existingStaged.sl_level ?? analysis.stopLoss,
+              existingStaged.analysis_snapshot?.impulseZone?.impulse,
+            ).level,
             tp_level: analysis.takeProfit,
           }).eq("id", existingStaged.id);
           console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
@@ -9393,7 +9498,12 @@ async function runScanForUser(
                 scan_cycles: existingStaged.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
                 entry_price: analysis.lastPrice,
-                sl_level: analysis.stopLoss,
+                sl_level: watchlistInvalidationFor(
+                  analysis.direction as WatchlistDirection,
+                  existingStaged.originating_zone,
+                  existingStaged.sl_level ?? analysis.stopLoss,
+                  existingStaged.analysis_snapshot?.impulseZone?.impulse,
+                ).level,
                 tp_level: analysis.takeProfit,
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
@@ -9422,6 +9532,14 @@ async function runScanForUser(
               const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
                 : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
                 : stagingTTLMinutes;
+              const confluenceWatchOrigin = {
+                type: setupClassification.setupType ||
+                  "confluence_watch",
+                entry: analysis.lastPrice,
+                stopLoss: analysis.stopLoss,
+                takeProfit: analysis.takeProfit,
+                signalSource: (detail as any).signalSource || null,
+              };
               await supabase.from("staged_setups").insert({
                 user_id: userId,
                 bot_id: BOT_ID,
@@ -9434,16 +9552,13 @@ async function runScanForUser(
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
                 entry_price: analysis.lastPrice,
-                sl_level: analysis.stopLoss,
+                sl_level: watchlistInvalidationFor(
+                  analysis.direction as WatchlistDirection,
+                  confluenceWatchOrigin,
+                  analysis.stopLoss,
+                ).level,
                 tp_level: analysis.takeProfit,
-                ...stagedDecisionFields({
-                  type: setupClassification.setupType ||
-                    "confluence_watch",
-                  entry: analysis.lastPrice,
-                  stopLoss: analysis.stopLoss,
-                  takeProfit: analysis.takeProfit,
-                  signalSource: (detail as any).signalSource || null,
-                }),
+                ...stagedDecisionFields(confluenceWatchOrigin),
                 scan_cycles: 1,
                 min_cycles: minStagingCycles,
                 ttl_minutes: styleTTL,
