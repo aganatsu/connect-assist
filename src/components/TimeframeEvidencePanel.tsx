@@ -7,6 +7,10 @@
  */
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  type EvidenceTimeframes,
+  formatTimeframeLadder,
+} from "./timeframeEvidenceFormat";
 
 interface SlotEvidence {
   slot: "top" | "mid" | "low";
@@ -69,7 +73,7 @@ interface EvidenceRecord {
   trading_style: string | null;
   style_policy_snapshot: {
     style?: string;
-    timeframes?: Record<string, string>;
+    timeframes?: EvidenceTimeframes;
   } | null;
   selected_timeframe: string | null;
   final_reason: string | null;
@@ -264,9 +268,9 @@ export function TimeframeEvidencePanel({
               {record.style_policy_snapshot?.timeframes && (
                 <div className="text-[11px] text-muted-foreground">
                   Ladder{" "}
-                  {Object.entries(record.style_policy_snapshot.timeframes)
-                    .map(([role, timeframe]) => `${role} ${timeframe}`)
-                    .join(" → ")}
+                  {formatTimeframeLadder(
+                    record.style_policy_snapshot.timeframes,
+                  )}
                 </div>
               )}
               {(record.slots ?? []).map((slot) => (
