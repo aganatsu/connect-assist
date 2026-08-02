@@ -779,6 +779,9 @@ export type Database = {
           confirmation_method: string | null
           created_at: string
           cross_tf_context_version: string | null
+          cross_tf_effective_mode: string | null
+          cross_tf_entry_allowed: boolean | null
+          cross_tf_entry_authority: Json | null
           cross_tf_relationship: string | null
           cross_tf_timeframe_evidence_id: string | null
           current_price: number | null
@@ -834,6 +837,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number | null
           current_price_old?: string | null
           decision_context?: Json | null
@@ -887,6 +896,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number | null
           current_price_old?: string | null
           decision_context?: Json | null
@@ -1051,6 +1066,9 @@ export type Database = {
           confirmation_method: string | null
           created_at: string
           cross_tf_context_version: string | null
+          cross_tf_effective_mode: string | null
+          cross_tf_entry_allowed: boolean | null
+          cross_tf_entry_authority: Json | null
           cross_tf_relationship: string | null
           cross_tf_timeframe_evidence_id: string | null
           current_price: number
@@ -1115,6 +1133,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_price: number
           decision_context?: Json | null
           direction: string
@@ -1177,6 +1201,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number
           decision_context?: Json | null
           direction?: string
@@ -1893,7 +1923,6 @@ export type Database = {
         Row: {
           bot_id: string
           candidate_id: string
-          candidate_lineage: Json | null
           created_at: string
           direction: string
           evidence: Json
@@ -1953,6 +1982,9 @@ export type Database = {
           confirmation_method: string | null
           created_at: string
           cross_tf_context_version: string | null
+          cross_tf_effective_mode: string | null
+          cross_tf_entry_allowed: boolean | null
+          cross_tf_entry_authority: Json | null
           cross_tf_relationship: string | null
           cross_tf_timeframe_evidence_id: string | null
           current_factors: Json
@@ -2012,6 +2044,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_factors?: Json
           current_score: number
           direction: string
@@ -2069,6 +2107,12 @@ export type Database = {
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
+          cross_tf_context_version?: string | null
+          cross_tf_effective_mode?: string | null
+          cross_tf_entry_allowed?: boolean | null
+          cross_tf_entry_authority?: Json | null
+          cross_tf_relationship?: string | null
+          cross_tf_timeframe_evidence_id?: string | null
           current_factors?: Json
           current_score?: number
           direction?: string
@@ -2719,9 +2763,9 @@ export type Database = {
           activation_eligible: boolean
           bot_id: string
           candidate_id: string
-          candidate_lineage: Json | null
           candidate_lifecycle: Json | null
           candidate_lifecycle_state: string | null
+          candidate_lineage: Json | null
           candidate_model: Json | null
           candidate_model_rank: number | null
           candidate_model_version: string | null
@@ -2779,9 +2823,9 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id: string
-          candidate_lineage?: Json | null
           candidate_lifecycle?: Json | null
           candidate_lifecycle_state?: string | null
+          candidate_lineage?: Json | null
           candidate_model?: Json | null
           candidate_model_rank?: number | null
           candidate_model_version?: string | null
@@ -2839,9 +2883,9 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id?: string
-          candidate_lineage?: Json | null
           candidate_lifecycle?: Json | null
           candidate_lifecycle_state?: string | null
+          candidate_lineage?: Json | null
           candidate_model?: Json | null
           candidate_model_rank?: number | null
           candidate_model_version?: string | null
@@ -3138,16 +3182,69 @@ export type Database = {
       }
     }
     Views: {
+      cross_timeframe_authority_runtime_status: {
+        Row: {
+          activation_updated_at: string | null
+          allow_standalone_lower_timeframe: boolean | null
+          authority_stage: string | null
+          available: boolean | null
+          bot_id: string | null
+          certified_maximum: string | null
+          effective_mode: string | null
+          evidence_hash: string | null
+          maximum_candidates_per_timeframe: number | null
+          maximum_zone_separation_atr: number | null
+          minimum_parent_child_overlap_percent: number | null
+          requested_mode: string | null
+          require_nested_impulse: boolean | null
+          require_sweep_origin: boolean | null
+          retest_quality: string | null
+          revision: number | null
+          runtime_enforced: boolean | null
+          runtime_scope: string | null
+          runtime_target: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
+      cross_timeframe_entry_authority_audit: {
+        Row: {
+          bot_id: string | null
+          candidate_id: string | null
+          cross_tf_effective_mode: string | null
+          cross_tf_entry_allowed: boolean | null
+          cross_tf_entry_authority: Json | null
+          direction: string | null
+          lifecycle_stage: string | null
+          observed_at: string | null
+          row_id: string | null
+          symbol: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
       zone_candidate_shadow_validation_summary: {
         Row: {
           activation_eligible: boolean | null
           bot_id: string | null
+          cross_tf_avg_mae_pips: number | null
+          cross_tf_avg_mfe_pips: number | null
+          cross_tf_disagreement_scans: number | null
+          cross_tf_enforcement: string | null
+          cross_tf_expectancy_delta_r: number | null
+          cross_tf_expectancy_r: number | null
+          cross_tf_minimum_sample_ready: boolean | null
+          cross_tf_resolved_legacy_trades: number | null
           disagreement_scans: number | null
           enforcement: string | null
           evidence_source: string | null
+          false_positives: number | null
           legacy_disagreement_samples: number | null
           legacy_disagreement_win_rate: number | null
+          legacy_expectancy_r: number | null
+          losers_avoided: number | null
           minimum_sample_ready: boolean | null
+          missed_opportunities: number | null
           observed_scans: number | null
           replay_runs: number | null
           resolved_candidates: number | null
@@ -3158,6 +3255,7 @@ export type Database = {
           symbol: string | null
           trading_style: string | null
           user_id: string | null
+          winners_retained: number | null
         }
         Relationships: []
       }
