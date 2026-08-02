@@ -296,10 +296,14 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
               if (telegramChatIds.length > 0 && shouldNotify("trade_management")) {
                 const alertMsg = `⚠️ <b>Broker Sync Alert (OANDA)</b>\n\n` +
                   `<b>Symbol:</b> ${pos.symbol}\n` +
+                  `<b>Direction:</b> ${String(pos.direction ?? "").toUpperCase()}\n` +
                   `<b>Position:</b> ${pos.position_id}\n` +
                   `<b>Issue:</b> ${count} consecutive SL sync failures\n` +
                   `<b>DB SL:</b> ${intendedSL?.toFixed(5) ?? "null"}\n` +
-                  `<b>Broker SL:</b> ${brokerSL?.toFixed(5) ?? "null"}`;
+                  `<b>Broker SL:</b> ${brokerSL?.toFixed(5) ?? "null"}\n` +
+                  `<b>Drift:</b> ${(intendedSL != null && brokerSL != null) ? Math.abs(intendedSL - brokerSL).toFixed(5) : "unknown"}\n` +
+                  `<b>Entry:</b> ${pos.entry_price ?? "—"}\n` +
+                  `<b>Status:</b> OANDA value is authoritative — DB was corrected`;
                 const supabaseUrl = Deno.env.get("SUPABASE_URL");
                 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
                 for (const chatId of telegramChatIds) {
