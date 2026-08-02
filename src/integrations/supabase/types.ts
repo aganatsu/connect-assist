@@ -1929,6 +1929,7 @@ export type Database = {
           from_status: string | null
           id: string
           reason: string | null
+          reason_code: string | null
           staged_setup_id: string
           symbol: string
           to_status: string
@@ -1943,6 +1944,7 @@ export type Database = {
           from_status?: string | null
           id?: string
           reason?: string | null
+          reason_code?: string | null
           staged_setup_id: string
           symbol: string
           to_status: string
@@ -1957,6 +1959,7 @@ export type Database = {
           from_status?: string | null
           id?: string
           reason?: string | null
+          reason_code?: string | null
           staged_setup_id?: string
           symbol?: string
           to_status?: string
@@ -2003,7 +2006,9 @@ export type Database = {
           initial_score: number
           invalidation_reason: string | null
           last_eval_at: string
+          lifecycle_evidence: Json
           lifecycle_reason: string | null
+          lifecycle_reason_code: string | null
           lifecycle_version: string
           min_cycles: number
           missing_factors: Json
@@ -2066,7 +2071,9 @@ export type Database = {
           initial_score: number
           invalidation_reason?: string | null
           last_eval_at?: string
+          lifecycle_evidence?: Json
           lifecycle_reason?: string | null
+          lifecycle_reason_code?: string | null
           lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
@@ -2129,7 +2136,9 @@ export type Database = {
           initial_score?: number
           invalidation_reason?: string | null
           last_eval_at?: string
+          lifecycle_evidence?: Json
           lifecycle_reason?: string | null
+          lifecycle_reason_code?: string | null
           lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
