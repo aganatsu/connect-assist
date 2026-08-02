@@ -175,7 +175,34 @@ Deno.test("zone shadow store records the observation-only model top three even w
   assertEquals(rows[0].candidate_lifecycle_state, "tapped_and_held");
   assertEquals(rows[0].timeframe_relationship, "qualified_nested");
   assertEquals(rows[0].parent_candidate_id, "parent-1h");
+  assertEquals(rows[0].cross_tf_shadow_decision, "allow");
+  assertEquals(rows[1].cross_tf_shadow_decision, "block");
+  assertEquals(
+    rows[1].cross_tf_reason_codes,
+    ["parent_zone_too_far"],
+  );
   assertEquals(rows.every((row) => row.ranking_disagreed === false), true);
+});
+
+Deno.test("cross-TF policy disagreement is persisted even when local rank agrees", () => {
+  const value = modeledCandidate("legacy", 1, 1, 1);
+  value.timeframeLineage = {
+    ...value.timeframeLineage,
+    relationship: "timeframe_conflict",
+    directionAligned: false,
+  };
+  const rows = buildZoneShadowObservationRows({
+    ...context,
+    candidates: [value],
+  });
+  assertEquals(
+    zoneShadowDisagreementKey([value])?.startsWith("authority:"),
+    true,
+  );
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0].legacy_execution_decision, "allow");
+  assertEquals(rows[0].cross_tf_shadow_decision, "block");
+  assertEquals(rows[0].cross_tf_disagreed, true);
 });
 
 Deno.test("zone shadow store preserves style provenance and validation levels", () => {
@@ -203,7 +230,7 @@ Deno.test("zone shadow store separates retrospective evidence from activation", 
   ];
   assertEquals(
     zoneShadowDisagreementKey(candidates),
-    "legacy:shadow",
+    "rank:legacy:shadow",
   );
   const rows = buildZoneShadowObservationRows({
     ...context,

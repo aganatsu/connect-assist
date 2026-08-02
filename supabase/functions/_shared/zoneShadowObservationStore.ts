@@ -1,4 +1,7 @@
 import type { RankedPOI } from "./impulseZoneEngine.ts";
+import {
+  evaluateCrossTimeframeShadowCandidate,
+} from "./crossTimeframeShadowValidation.ts";
 
 export interface ZoneShadowObservationContext {
   userId: string;
@@ -33,8 +36,24 @@ export function zoneShadowDisagreementKey(
   );
   const legacyId = legacyWinner?.localConfluence?.candidateId;
   const shadowId = shadowWinner?.localConfluence?.candidateId;
-  if (!legacyId || !shadowId || legacyId === shadowId) return null;
-  return `${legacyId}:${shadowId}`;
+  if (legacyId && shadowId && legacyId !== shadowId) {
+    return `rank:${legacyId}:${shadowId}`;
+  }
+  const authorityDisagreements = eligible
+    .map((candidate) => ({
+      candidate,
+      evaluation: evaluateCrossTimeframeShadowCandidate(candidate),
+    }))
+    .filter((item) => item.evaluation.disagreed)
+    .map((item) =>
+      `${
+        item.candidate.localConfluence!.candidateId
+      }:${item.evaluation.legacyDecision}:${item.evaluation.proposedDecision}`
+    )
+    .sort();
+  return authorityDisagreements.length > 0
+    ? `authority:${authorityDisagreements.join("|")}`
+    : null;
 }
 
 export function buildZoneShadowObservationRows(
@@ -60,17 +79,33 @@ export function buildZoneShadowObservationRows(
   const modelTopThree = eligible.filter((candidate) =>
     candidate.candidateModel?.topCandidate === true
   );
-  if (modelTopThree.length === 0 && !rankingDisagreed) return [];
+  const crossTfEvaluations = new Map(
+    eligible.map((candidate) => [
+      candidate.localConfluence!.candidateId,
+      evaluateCrossTimeframeShadowCandidate(candidate),
+    ]),
+  );
+  const crossTfDisagreed = eligible.some((candidate) =>
+    crossTfEvaluations.get(
+      candidate.localConfluence!.candidateId,
+    )?.disagreed === true
+  );
+  if (
+    modelTopThree.length === 0 && !rankingDisagreed && !crossTfDisagreed
+  ) return [];
 
-  const observedCandidates = Array.from(new Set([
-    ...modelTopThree,
-    ...(rankingDisagreed && legacyWinner ? [legacyWinner] : []),
-    ...(rankingDisagreed && shadowWinner ? [shadowWinner] : []),
-  ]));
+  const observedCandidates = Array.from(
+    new Set([
+      ...modelTopThree,
+      ...(rankingDisagreed && legacyWinner ? [legacyWinner] : []),
+      ...(rankingDisagreed && shadowWinner ? [shadowWinner] : []),
+    ]),
+  );
   return observedCandidates.map((candidate) => {
     const local = candidate.localConfluence!;
     const ranking = candidate.shadowRanking!;
     const trade = candidate.validationTrade!;
+    const crossTf = crossTfEvaluations.get(local.candidateId)!;
     return {
       user_id: input.userId,
       bot_id: input.botId,
@@ -100,19 +135,24 @@ export function buildZoneShadowObservationRows(
       shadow_local_score: ranking.shadowLocalScore,
       local_confluence: local,
       shadow_ranking: ranking,
-      candidate_model_version:
-        candidate.candidateModel?.contractVersion ?? null,
+      candidate_model_version: candidate.candidateModel?.contractVersion ??
+        null,
       candidate_model_rank: candidate.candidateModel?.rank ?? null,
       candidate_model_winner: candidate.candidateModel?.rank === 1,
-      candidate_lifecycle_state:
-        candidate.candidateLifecycle?.state ?? null,
+      candidate_lifecycle_state: candidate.candidateLifecycle?.state ?? null,
       candidate_lifecycle: candidate.candidateLifecycle ?? null,
       candidate_model: candidate.candidateModel ?? null,
-      timeframe_relationship:
-        candidate.timeframeLineage?.relationship ?? null,
-      parent_candidate_id:
-        candidate.timeframeLineage?.parentCandidateId ?? null,
+      timeframe_relationship: candidate.timeframeLineage?.relationship ?? null,
+      parent_candidate_id: candidate.timeframeLineage?.parentCandidateId ??
+        null,
       candidate_lineage: candidate.timeframeLineage ?? null,
+      cross_tf_policy_version: crossTf.contractVersion,
+      cross_tf_policy: crossTf.policy,
+      legacy_execution_decision: crossTf.legacyDecision,
+      cross_tf_shadow_decision: crossTf.proposedDecision,
+      cross_tf_disagreed: crossTf.disagreed,
+      cross_tf_reason_codes: crossTf.reasonCodes,
+      cross_tf_evaluation: crossTf,
       evidence_source: input.evidenceSource ?? "forward_observation",
       replay_run_id: input.replayRunId ?? null,
       replay_contract_version: input.replayContractVersion ?? null,
