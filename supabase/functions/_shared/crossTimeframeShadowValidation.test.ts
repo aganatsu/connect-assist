@@ -46,30 +46,54 @@ Deno.test("reference shadow policy blocks false lower-TF independence", () => {
   assertEquals(standalone.proposedDecision, "block");
   assertEquals(
     standalone.reasonCodes,
-    ["standalone_lower_timeframe_not_allowed"],
+    [
+      "standalone_lower_timeframe_not_allowed",
+      "nested_impulse_required",
+    ],
   );
 
   const conflict = evaluateCrossTimeframeShadowCandidate(candidate({
     relationship: "timeframe_conflict",
   }));
   assertEquals(conflict.proposedDecision, "block");
-  assertEquals(conflict.reasonCodes, ["parent_direction_conflict"]);
+  assertEquals(conflict.reasonCodes, [
+    "parent_direction_conflict",
+    "nested_impulse_required",
+  ]);
 });
 
-Deno.test("context-only parent is retained only within the reference ATR separation", () => {
+Deno.test("context-only parent obeys both nesting and ATR policy controls", () => {
+  const contextPolicy = {
+    contractVersion: "cross-tf-shadow-policy.v1" as const,
+    enforcement: "observe_only" as const,
+    requireNestedImpulse: false,
+    allowStandaloneLowerTimeframe: false,
+    maximumZoneSeparationATR: 0.25,
+    minimumParentChildOverlapPercent: 50,
+    requireSweepOrigin: false,
+    allowedRetestQuality: ["fresh", "tapped_and_held"] as const,
+    maximumCandidatesPerTimeframe: 3,
+  };
   assertEquals(
     evaluateCrossTimeframeShadowCandidate(candidate({
       relationship: "context_only",
       distanceATR: 0.2,
-    })).proposedDecision,
+    }), contextPolicy).proposedDecision,
     "allow",
   );
   assertEquals(
     evaluateCrossTimeframeShadowCandidate(candidate({
       relationship: "context_only",
       distanceATR: 0.8,
-    })).reasonCodes,
+    }), contextPolicy).reasonCodes,
     ["parent_zone_too_far"],
+  );
+  assertEquals(
+    evaluateCrossTimeframeShadowCandidate(candidate({
+      relationship: "context_only",
+      distanceATR: 0.2,
+    })).reasonCodes,
+    ["nested_impulse_required"],
   );
 });
 
@@ -128,6 +152,9 @@ Deno.test("GBP/CAD 2:25 regression: 15m impulse cannot replace conflicting 1H au
   }));
   assertEquals(result.legacyDecision, "allow");
   assertEquals(result.proposedDecision, "block");
-  assertEquals(result.reasonCodes, ["parent_direction_conflict"]);
+  assertEquals(result.reasonCodes, [
+    "parent_direction_conflict",
+    "nested_impulse_required",
+  ]);
   assertEquals(result.enforcement, "observe_only");
 });

@@ -11,6 +11,9 @@ import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import type { ZoneLocalEnforcementDecision } from "./zoneLocalEnforcement.ts";
 import type {
+  CrossTimeframeEntryAuthorityDecision,
+} from "./crossTimeframeEntryAuthority.ts";
+import type {
   FrozenCrossTimeframeContext,
 } from "./frozenCrossTimeframeContext.ts";
 
@@ -330,6 +333,24 @@ export function readFrozenSetupStrategyContext(
     ) {
       return context as FrozenSetupStrategyContext;
     }
+  }
+  return null;
+}
+
+export function readFrozenCrossTimeframeAuthority(
+  row: Record<string, unknown>,
+): CrossTimeframeEntryAuthorityDecision | null {
+  const frozen = readFrozenSetupStrategyContext(row);
+  const authority = asRecord(
+    asRecord(frozen?.crossTimeframeContext).authority,
+  );
+  if (
+    authority.contractVersion === "cross-tf-entry-authority.v1" &&
+    ["observe", "soft", "hard"].includes(String(authority.effectiveMode)) &&
+    typeof authority.allowed === "boolean" &&
+    Array.isArray(authority.reasonCodes)
+  ) {
+    return authority as unknown as CrossTimeframeEntryAuthorityDecision;
   }
   return null;
 }

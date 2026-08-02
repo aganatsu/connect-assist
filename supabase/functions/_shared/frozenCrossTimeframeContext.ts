@@ -1,6 +1,17 @@
 import type { DirectionVerdictDecision } from "./decisionContract.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ResolvedStylePolicy } from "./stylePolicy.ts";
+import type {
+  CrossTimeframeAuthorityResolution,
+} from "./crossTimeframeAuthority.ts";
+import {
+  evaluateCrossTimeframeShadowCandidate,
+} from "./crossTimeframeShadowValidation.ts";
+import {
+  evaluateCrossTimeframeEntryAuthority,
+  type CrossTimeframeEntryAuthorityDecision,
+} from "./crossTimeframeEntryAuthority.ts";
+import type { RankedPOI } from "./impulseZoneEngine.ts";
 
 export const FROZEN_CROSS_TF_CONTEXT_VERSION = "frozen-cross-tf-context.v1";
 
@@ -51,6 +62,7 @@ export interface FrozenCrossTimeframeContext {
   parentImpulse: FrozenImpulseReference | null;
   childImpulse: FrozenImpulseReference | null;
   evidenceCertificates: EvidenceCertificateReference[];
+  authority: CrossTimeframeEntryAuthorityDecision;
 }
 
 type UnknownRecord = Record<string, any>;
@@ -108,6 +120,7 @@ export function buildFrozenCrossTimeframeContext(input: {
   stylePolicy: ResolvedStylePolicy;
   zoneStory?: unknown;
   evidenceCertificates?: EvidenceCertificateReference[];
+  crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
 }): FrozenCrossTimeframeContext {
   const story = record(input.zoneStory);
   const best = record(story.bestZone);
@@ -140,6 +153,12 @@ export function buildFrozenCrossTimeframeContext(input: {
         : null,
       modelRank: finite(best.candidateModel?.rank),
     }
+    : null;
+  const shadowEvaluation = selectedZone
+    ? evaluateCrossTimeframeShadowCandidate(
+      best as unknown as RankedPOI,
+      input.crossTimeframeAuthority.policy,
+    )
     : null;
 
   return {
@@ -188,6 +207,11 @@ export function buildFrozenCrossTimeframeContext(input: {
         a.featureKey.localeCompare(b.featureKey) ||
         a.variantKey.localeCompare(b.variantKey)
       ),
+    authority: evaluateCrossTimeframeEntryAuthority({
+      authorityResolution: input.crossTimeframeAuthority,
+      evaluation: shadowEvaluation,
+      candidateId: selectedZone?.candidateId || null,
+    }),
   };
 }
 

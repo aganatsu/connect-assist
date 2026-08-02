@@ -28,8 +28,13 @@ Deno.test("live and backtest resolve one policy timeframe authority", () => {
     );
     assertStringIncludes(
       source,
-      "directionTimeframeLabels(timeframeAuthority)",
-      `${surface} direction labels must come from the authority`,
+      "buildStyleDecisionEvidence(",
+      `${surface} direction evidence must come from the authority`,
+    );
+    assertStringIncludes(
+      source,
+      "timeframeAuthority,",
+      `${surface} must pass the resolved authority into direction evidence`,
     );
     assertStringIncludes(
       source,
