@@ -1736,7 +1736,9 @@ async function runScanForUser(
               (mgmtPos ? tgLine("Open For", durationLabel(mgmtPos.open_time)) : "") +
               zoneEvidenceLines(mgmtSR) +
               tgLine("Reason", a.reason) +
-              (a.attribution ? tgLine("Attributed To", String((a.attribution as any).source ?? (a.attribution as any).kind ?? "").replace(/_/g, " ")) : "");
+              (a.attribution
+                ? tgLine("Trigger", `${String(a.attribution.trigger).replace(/_/g, " ")}${a.attribution.marketContext?.session ? ` · ${a.attribution.marketContext.session}` : ""}`)
+                : "");
             await Promise.all(telegramChatIds.map(async (chatId) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
