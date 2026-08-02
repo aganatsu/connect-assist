@@ -87,6 +87,11 @@ interface SlotEvidence {
       totalScore: number;
       enforcement: "observe_only";
     } | null;
+    timeframeLineage?: {
+      relationship: string;
+      parentTimeframe: string | null;
+      explanation: string;
+    } | null;
   }>;
 }
 
@@ -388,6 +393,9 @@ export function TimeframeEvidencePanel({
                                 ?.replaceAll("_", " ") ?? "lifecycle unknown"} ·
                               score{" "}
                               {candidate.candidateModel?.totalScore.toFixed(2)}
+                              {candidate.timeframeLineage
+                                ? ` · ${candidate.timeframeLineage.relationship.replaceAll("_", " ")}`
+                                : ""}
                             </div>
                           ))}
                         {(slot.rejections ?? []).map((rejection) => (

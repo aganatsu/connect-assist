@@ -38,6 +38,7 @@ import {
   type CanonicalZoneLifecycleObservation,
   type ZoneCandidateModelObservation,
 } from "./zoneCandidateModel.ts";
+import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,8 @@ export interface RankedPOI {
   canonicalImpulseMetrics?: CanonicalImpulseMetrics | null;
   /** Observation-only Phase 3 cross-factor candidate rank. */
   candidateModel?: ZoneCandidateModelObservation;
+  /** Observation-only Phase 4 parent/child timeframe relationship. */
+  timeframeLineage?: CrossTimeframeZoneLineage;
 }
 
 export interface ZoneValidationTrade {

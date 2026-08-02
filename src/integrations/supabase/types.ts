@@ -1887,6 +1887,7 @@ export type Database = {
         Row: {
           bot_id: string
           candidate_id: string
+          candidate_lineage: Json | null
           created_at: string
           direction: string
           evidence: Json
@@ -2730,6 +2731,7 @@ export type Database = {
           observed_at: string
           outcome_checked_at: string | null
           outcome_status: string
+          parent_candidate_id: string | null
           price_reached_entry: boolean | null
           rank_delta: number
           ranking_disagreed: boolean
@@ -2747,6 +2749,7 @@ export type Database = {
           style_policy_version: string | null
           symbol: string
           take_profit: number | null
+          timeframe_relationship: string | null
           tp_hit: boolean | null
           tp_hit_time_minutes: number | null
           trading_style: string
@@ -2759,6 +2762,7 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id: string
+          candidate_lineage?: Json | null
           candidate_lifecycle?: Json | null
           candidate_lifecycle_state?: string | null
           candidate_model?: Json | null
@@ -2780,6 +2784,7 @@ export type Database = {
           observed_at?: string
           outcome_checked_at?: string | null
           outcome_status?: string
+          parent_candidate_id?: string | null
           price_reached_entry?: boolean | null
           rank_delta: number
           ranking_disagreed?: boolean
@@ -2797,6 +2802,7 @@ export type Database = {
           style_policy_version?: string | null
           symbol: string
           take_profit?: number | null
+          timeframe_relationship?: string | null
           tp_hit?: boolean | null
           tp_hit_time_minutes?: number | null
           trading_style: string
@@ -2809,6 +2815,7 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id?: string
+          candidate_lineage?: Json | null
           candidate_lifecycle?: Json | null
           candidate_lifecycle_state?: string | null
           candidate_model?: Json | null
@@ -2830,6 +2837,7 @@ export type Database = {
           observed_at?: string
           outcome_checked_at?: string | null
           outcome_status?: string
+          parent_candidate_id?: string | null
           price_reached_entry?: boolean | null
           rank_delta?: number
           ranking_disagreed?: boolean
@@ -2847,6 +2855,7 @@ export type Database = {
           style_policy_version?: string | null
           symbol?: string
           take_profit?: number | null
+          timeframe_relationship?: string | null
           tp_hit?: boolean | null
           tp_hit_time_minutes?: number | null
           trading_style?: string
