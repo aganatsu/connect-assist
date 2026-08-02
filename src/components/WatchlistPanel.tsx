@@ -381,7 +381,8 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                     <p className="text-[11px] text-foreground/50 text-center py-2">No resolved setups yet</p>
                   ) : (
                     history.slice(0, 20).map(s => (
-                      <div key={s.id} className="flex items-center justify-between text-[11px] py-0.5 px-1.5 rounded bg-muted/10">
+                      <div key={s.id} className="text-[11px] py-0.5 px-1.5 rounded bg-muted/10">
+                        <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 min-w-0">
                           {s.direction === "long"
                             ? <TrendingUp className="h-2.5 w-2.5 text-success shrink-0" />
@@ -404,6 +405,12 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                           <span className="text-foreground/50 text-[10px]">{s.scan_cycles} cycles</span>
                           <span className="text-foreground/50 text-[10px]">{timeAgo(s.resolved_at || s.updated_at)}</span>
                         </div>
+                        </div>
+                        {(s.invalidation_reason || s.lifecycle_reason) && (
+                          <p className="text-[10px] text-foreground/55 leading-tight mt-0.5 pl-4">
+                            {s.invalidation_reason || s.lifecycle_reason}
+                          </p>
+                        )}
                       </div>
                     ))
                   )}
