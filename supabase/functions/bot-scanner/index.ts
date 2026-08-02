@@ -1718,12 +1718,25 @@ async function runScanForUser(
               : a.action === "trailing_enabled" ? "TRAILING ENABLED"
               : a.action === "partial_enabled" ? "PARTIAL TP ENABLED"
               : a.action.toUpperCase().replace("_", " ");
+            const mgmtPos: any = positionsToManage.find((p: any) => p.position_id === a.positionId);
+            const mgmtEntry = mgmtPos ? parseFloat(mgmtPos.entry_price) : NaN;
+            const mgmtPrice = mgmtPos ? parseFloat(mgmtPos.current_price ?? mgmtPos.entry_price) : NaN;
+            const mgmtSR = parseSignalReason(mgmtPos?.signal_reason);
+            const mgmtR = mgmtPos
+              ? rMultiple(mgmtEntry, mgmtSR.originalSL ?? mgmtPos.stop_loss, mgmtPrice, mgmtPos.direction)
+              : null;
             const msg = `${emoji} <b>Trade Management</b>\n\n` +
-              `<b>Symbol:</b> ${a.symbol}\n` +
-              `<b>Action:</b> ${actionLabel}\n` +
-              (a.newSL ? `<b>New SL:</b> ${fmtPx(a.newSL, a.symbol)}\n` : "") +
-              (a.newTP ? `<b>New TP:</b> ${fmtPx(a.newTP, a.symbol)}\n` : "") +
-              `<b>Reason:</b> ${a.reason}`;
+              tgLine("Symbol", `${a.symbol}${mgmtPos ? ` (${String(mgmtPos.direction).toUpperCase()})` : ""}`) +
+              tgLine("Action", actionLabel) +
+              (mgmtPos ? tgLine("Entry", fmtPx(mgmtEntry, a.symbol)) : "") +
+              (Number.isFinite(mgmtPrice) ? tgLine("Current", fmtPx(mgmtPrice, a.symbol)) : "") +
+              (a.newSL ? tgLine("New SL", fmtPx(a.newSL, a.symbol)) : "") +
+              (a.newTP ? tgLine("New TP", fmtPx(a.newTP, a.symbol)) : "") +
+              (mgmtR !== null ? tgLine("Open R", `${mgmtR >= 0 ? "+" : ""}${mgmtR.toFixed(2)}R`) : "") +
+              (mgmtPos ? tgLine("Open For", durationLabel(mgmtPos.open_time)) : "") +
+              zoneEvidenceLines(mgmtSR) +
+              tgLine("Reason", a.reason) +
+              (a.attribution ? tgLine("Attributed To", String((a.attribution as any).source ?? (a.attribution as any).kind ?? "").replace(/_/g, " ")) : "");
             await Promise.all(telegramChatIds.map(async (chatId) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
