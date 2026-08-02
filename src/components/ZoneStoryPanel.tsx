@@ -223,6 +223,30 @@ interface ZoneLocalEnforcementData {
   reason: string;
 }
 
+interface FrozenCrossTimeframeContextData {
+  contractVersion: string;
+  enforcement: "observe_only";
+  gamePlan: { id: string | null; version: string | null };
+  directionVerdict: { id: string | null; version: string | null };
+  stylePolicy: {
+    version: string;
+    basePolicyHash: string;
+    policyHash: string;
+  };
+  selectedZone: {
+    candidateId: string | null;
+    timeframe: string | null;
+  } | null;
+  relationship: {
+    classification: string;
+    parentTimeframe: string | null;
+  } | null;
+  evidenceCertificates: Array<{
+    featureKey: string;
+    certificateHash: string;
+  }>;
+}
+
 interface Props {
   unifiedData: ZoneStoryData | null | undefined;
   gateData?: ImpulseGateData | null | undefined;
@@ -231,6 +255,7 @@ interface Props {
   symbol?: string;
   direction?: string | null;
   timeframeEvidenceId?: string | null;
+  frozenCrossTimeframeContext?: FrozenCrossTimeframeContextData | null;
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -263,6 +288,7 @@ export function ZoneStoryPanel({
   symbol,
   direction,
   timeframeEvidenceId,
+  frozenCrossTimeframeContext,
 }: Props) {
   if (!unifiedData) {
     return (
@@ -631,6 +657,46 @@ export function ZoneStoryPanel({
                 </span>
                 <div className="mt-1 text-[9px] text-zinc-500">
                   {gateData.bestZone.timeframeLineage.explanation}
+                </div>
+              </td>
+            </tr>
+          )}
+
+          {frozenCrossTimeframeContext && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">
+                Frozen authority
+              </td>
+              <td className="py-1">
+                <div className="flex flex-wrap gap-1 text-[9px] font-mono">
+                  <span className="rounded bg-primary/10 px-1 py-0.5 text-primary">
+                    GP {frozenCrossTimeframeContext.gamePlan.version?.slice(0, 8) || "none"}
+                  </span>
+                  <span className="rounded bg-cyan-500/10 px-1 py-0.5 text-cyan-300">
+                    DV {frozenCrossTimeframeContext.directionVerdict.version?.slice(0, 8) || "none"}
+                  </span>
+                  <span className="rounded bg-violet-500/10 px-1 py-0.5 text-violet-300">
+                    {frozenCrossTimeframeContext.relationship?.classification
+                      ?.replaceAll("_", " ") || "no lineage"}
+                  </span>
+                  <span className="rounded bg-zinc-800 px-1 py-0.5 text-zinc-300">
+                    policy {frozenCrossTimeframeContext.stylePolicy.policyHash.slice(0, 8)}
+                  </span>
+                  {frozenCrossTimeframeContext.evidenceCertificates.map(
+                    (certificate) => (
+                      <span
+                        key={`${certificate.featureKey}:${certificate.certificateHash}`}
+                        className="rounded bg-emerald-500/10 px-1 py-0.5 text-emerald-300"
+                      >
+                        cert {certificate.featureKey}{" "}
+                        {certificate.certificateHash.slice(0, 8)}
+                      </span>
+                    ),
+                  )}
+                </div>
+                <div className="mt-1 text-[9px] text-zinc-500">
+                  Immutable setup evidence · {frozenCrossTimeframeContext.contractVersion}
                 </div>
               </td>
             </tr>

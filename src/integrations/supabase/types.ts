@@ -778,6 +778,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_price: number | null
           current_price_old: string | null
           decision_context: Json | null
@@ -1047,6 +1050,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_price: number
           decision_context: Json | null
           direction: string
@@ -1946,6 +1952,9 @@ export type Database = {
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
+          cross_tf_context_version: string | null
+          cross_tf_relationship: string | null
+          cross_tf_timeframe_evidence_id: string | null
           current_factors: Json
           current_score: number
           direction: string
