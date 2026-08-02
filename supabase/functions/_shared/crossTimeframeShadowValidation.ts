@@ -5,12 +5,14 @@ export const CROSS_TF_SHADOW_POLICY_VERSION = "cross-tf-shadow-policy.v1";
 export interface CrossTimeframeShadowPolicy {
   contractVersion: typeof CROSS_TF_SHADOW_POLICY_VERSION;
   enforcement: "observe_only";
-  requireNestedImpulse: true;
-  allowStandaloneLowerTimeframe: false;
+  requireNestedImpulse: boolean;
+  allowStandaloneLowerTimeframe: boolean;
   maximumZoneSeparationATR: number;
   minimumParentChildOverlapPercent: number;
-  requireSweepOrigin: false;
-  allowedRetestQuality: Array<"fresh" | "tapped_and_held">;
+  requireSweepOrigin: boolean;
+  allowedRetestQuality: Array<
+    "fresh" | "tapped_and_held" | "partially_mitigated"
+  >;
   maximumCandidatesPerTimeframe: number;
 }
 
@@ -94,6 +96,13 @@ export function evaluateCrossTimeframeShadowCandidate(
       case "no_parent_context":
         // The highest configured timeframe is itself the context authority.
         break;
+    }
+    if (
+      policy.requireNestedImpulse &&
+      lineage.relationship !== "qualified_nested" &&
+      lineage.relationship !== "no_parent_context"
+    ) {
+      reasons.push("nested_impulse_required");
     }
   }
   if (

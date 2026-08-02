@@ -1,6 +1,7 @@
 import type { RankedPOI } from "./impulseZoneEngine.ts";
 import {
   evaluateCrossTimeframeShadowCandidate,
+  type CrossTimeframeShadowPolicy,
 } from "./crossTimeframeShadowValidation.ts";
 
 export interface ZoneShadowObservationContext {
@@ -18,10 +19,12 @@ export interface ZoneShadowObservationContext {
   replayRunId?: string | null;
   replayContractVersion?: string | null;
   activationEligible?: boolean;
+  crossTimeframePolicy?: CrossTimeframeShadowPolicy;
 }
 
 export function zoneShadowDisagreementKey(
   candidates: RankedPOI[],
+  policy?: CrossTimeframeShadowPolicy,
 ): string | null {
   const eligible = candidates.filter((candidate) =>
     candidate.localConfluence &&
@@ -42,7 +45,7 @@ export function zoneShadowDisagreementKey(
   const authorityDisagreements = eligible
     .map((candidate) => ({
       candidate,
-      evaluation: evaluateCrossTimeframeShadowCandidate(candidate),
+      evaluation: evaluateCrossTimeframeShadowCandidate(candidate, policy),
     }))
     .filter((item) => item.evaluation.disagreed)
     .map((item) =>
@@ -82,7 +85,10 @@ export function buildZoneShadowObservationRows(
   const crossTfEvaluations = new Map(
     eligible.map((candidate) => [
       candidate.localConfluence!.candidateId,
-      evaluateCrossTimeframeShadowCandidate(candidate),
+      evaluateCrossTimeframeShadowCandidate(
+        candidate,
+        input.crossTimeframePolicy,
+      ),
     ]),
   );
   const crossTfDisagreed = eligible.some((candidate) =>

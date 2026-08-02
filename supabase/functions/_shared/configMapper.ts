@@ -227,6 +227,19 @@ export const RUNTIME_DEFAULTS = {
   zoneLocalEnforcementMode: "observe" as "observe" | "soft" | "hard",
   zoneLocalSoftPenalty: 10,
   zoneLocalMinimumScore: 1,
+  // Cross-timeframe impulse authority. Requested mode is always capped by the
+  // evidence activation registry before it can affect runtime decisions.
+  crossTfAuthorityMode: "observe" as "observe" | "soft" | "hard",
+  crossTfRequireNestedImpulse: true,
+  crossTfAllowStandaloneLowerTimeframe: false,
+  crossTfMaximumZoneSeparationATR: 0.25,
+  crossTfMinimumParentChildOverlapPercent: 50,
+  crossTfRequireSweepOrigin: false,
+  crossTfRetestQuality: "fresh_or_held" as
+    | "fresh_only"
+    | "fresh_or_held"
+    | "any_non_violated",
+  crossTfMaximumCandidatesPerTimeframe: 3,
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -524,6 +537,14 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     zoneLocalEnforcementMode: (strategy.zoneLocalEnforcementMode ?? raw.zoneLocalEnforcementMode ?? RUNTIME_DEFAULTS.zoneLocalEnforcementMode) as "observe" | "soft" | "hard",
     zoneLocalSoftPenalty: strategy.zoneLocalSoftPenalty ?? raw.zoneLocalSoftPenalty ?? RUNTIME_DEFAULTS.zoneLocalSoftPenalty,
     zoneLocalMinimumScore: strategy.zoneLocalMinimumScore ?? raw.zoneLocalMinimumScore ?? RUNTIME_DEFAULTS.zoneLocalMinimumScore,
+    crossTfAuthorityMode: (strategy.crossTfAuthorityMode ?? raw.crossTfAuthorityMode ?? RUNTIME_DEFAULTS.crossTfAuthorityMode) as "observe" | "soft" | "hard",
+    crossTfRequireNestedImpulse: strategy.crossTfRequireNestedImpulse ?? raw.crossTfRequireNestedImpulse ?? RUNTIME_DEFAULTS.crossTfRequireNestedImpulse,
+    crossTfAllowStandaloneLowerTimeframe: strategy.crossTfAllowStandaloneLowerTimeframe ?? raw.crossTfAllowStandaloneLowerTimeframe ?? RUNTIME_DEFAULTS.crossTfAllowStandaloneLowerTimeframe,
+    crossTfMaximumZoneSeparationATR: strategy.crossTfMaximumZoneSeparationATR ?? raw.crossTfMaximumZoneSeparationATR ?? RUNTIME_DEFAULTS.crossTfMaximumZoneSeparationATR,
+    crossTfMinimumParentChildOverlapPercent: strategy.crossTfMinimumParentChildOverlapPercent ?? raw.crossTfMinimumParentChildOverlapPercent ?? RUNTIME_DEFAULTS.crossTfMinimumParentChildOverlapPercent,
+    crossTfRequireSweepOrigin: strategy.crossTfRequireSweepOrigin ?? raw.crossTfRequireSweepOrigin ?? RUNTIME_DEFAULTS.crossTfRequireSweepOrigin,
+    crossTfRetestQuality: (strategy.crossTfRetestQuality ?? raw.crossTfRetestQuality ?? RUNTIME_DEFAULTS.crossTfRetestQuality) as "fresh_only" | "fresh_or_held" | "any_non_violated",
+    crossTfMaximumCandidatesPerTimeframe: strategy.crossTfMaximumCandidatesPerTimeframe ?? raw.crossTfMaximumCandidatesPerTimeframe ?? RUNTIME_DEFAULTS.crossTfMaximumCandidatesPerTimeframe,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,
