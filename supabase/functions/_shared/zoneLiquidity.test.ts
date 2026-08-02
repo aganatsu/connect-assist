@@ -195,6 +195,34 @@ Deno.test("findZoneLiquidity — pool inside zone is detected", () => {
   assertEquals(result.nearbyPools.length, 1);
   assertEquals(result.nearbyPools[0].nearEdge, "inside");
   assertEquals(result.nearbyPools[0].distanceToZone, 0);
+  assertEquals(result.nearbyPools[0].relevance, "entry_trigger");
+  assertEquals(result.nearbyPools[0].gateEligible, true);
+  assertEquals(result.entryTriggerState, "unswept");
+  assert(result.gateReason.includes("inside zone"));
+});
+
+Deno.test("findZoneLiquidity — broad ATR-near pool stays contextual when it is not zone-local", () => {
+  const candles = generateBaseCandles(50);
+  // This BSL is within the old 1.5 ATR nearby envelope, but outside the
+  // tighter max(half-zone-width, 0.25 ATR) entry-trigger envelope.
+  const pools: LiquidityPool[] = [
+    makePool(1.1240, "buy-side", 3),
+  ];
+  const result = findZoneLiquidity(
+    candles,
+    1.1200,
+    1.1150,
+    "bearish",
+    pools,
+  );
+
+  assertEquals(result.nearbyPools.length, 1);
+  assertEquals(result.nearbyPools[0].relevance, "neutral");
+  assertEquals(result.nearbyPools[0].gateEligible, false);
+  assertEquals(result.entryTriggerState, "none");
+  assertEquals(result.hasUnsweptEntryTrigger, false);
+  assertEquals(result.entryTrigger, null);
+  assert(result.gateReason.includes("none local enough to gate entry"));
 });
 
 Deno.test("findZoneLiquidity — weak pool (strength < min) is filtered out", () => {

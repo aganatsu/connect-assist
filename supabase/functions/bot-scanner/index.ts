@@ -169,6 +169,7 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
+import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import {
   annotateEvidenceLifecycle,
@@ -4587,6 +4588,11 @@ async function runScanForUser(
             liquidityScore: unifiedResult.liquidity.liquidityScore,
             summary: unifiedResult.liquidity.summary,
             nearbyPools: unifiedResult.liquidity.nearbyPools.length,
+            entryTriggerState: unifiedResult.liquidity.entryTriggerState,
+            hasUnsweptEntryTrigger:
+              unifiedResult.liquidity.hasUnsweptEntryTrigger,
+            entryTrigger: unifiedResult.liquidity.entryTrigger,
+            gateReason: unifiedResult.liquidity.gateReason,
             sweepEvent: unifiedResult.liquidity.sweepEvent ? {
               level: unifiedResult.liquidity.sweepEvent.level,
               type: unifiedResult.liquidity.sweepEvent.type,
@@ -4605,7 +4611,7 @@ async function runScanForUser(
           reason: unifiedResult.reason,
           entryTriggerState: unifiedResult.liquidity?.entryTriggerState || null,
           hasUnsweptEntryTrigger:
-            unifiedResult.liquidity?.entryTriggerState === "unswept",
+            unifiedResult.liquidity?.hasUnsweptEntryTrigger === true,
           gatePolicy: {
             requireLiquiditySweep:
               pairConfig.requireLiquiditySweep === true,
@@ -5491,7 +5497,8 @@ async function runScanForUser(
           executionEligible: false,
         };
       const setupType = executionEligible
-        ? unifiedZoneData?.state === "waiting_for_sweep"
+        ? unifiedZoneData?.state === "waiting_for_sweep" ||
+            unifiedZoneData?.state === "waiting_for_reconfirmation"
           ? "sweep_watch"
           : isCascade
           ? "cascade_zone_watch"
@@ -5720,9 +5727,13 @@ async function runScanForUser(
       const watchResult = await stageUnifiedWatch(true);
       detail.status = unifiedZoneData?.state === "waiting_for_sweep"
         ? "waiting_for_sweep"
+        : unifiedZoneData?.state === "waiting_for_reconfirmation"
+        ? "waiting_for_reconfirmation"
         : "waiting_for_unified_confirmation";
       detail.skipReason = unifiedZoneData?.state === "waiting_for_sweep"
-        ? "Unified zone is complete but liquidity has not swept and rejected yet"
+        ? "Unified zone is complete but its qualified local/internal liquidity trigger remains unswept"
+        : unifiedZoneData?.state === "waiting_for_reconfirmation"
+        ? "Unified zone remains valid, but the local sweep did not reject; a fresh trigger and confirmation are required"
         : "Unified zone is complete but its entry trigger is not ready";
       if (watchResult === "failed") {
         detail.status = "unified_watch_insert_failed";
@@ -5903,21 +5914,23 @@ async function runScanForUser(
         continue;
       }
 
-      // ── Standalone Sweep Gate: block if unswept inducement detected ──────
+      // ── Standalone Sweep Gate: obey the canonical local sweep state ─────
       // When requireLiquiditySweep is ON and this is a standalone entry (unified
       // gate did NOT pass), check whether the unified zone engine detected nearby
-      // liquidity pools that haven't been swept yet. If so, block the trade and
-      // watchlist it — same behavior as the unified path's waiting_for_sweep state.
+      // qualified local/internal liquidity trigger is not ready. Broad nearby
+      // pools are context only and cannot block an entry.
       if (pairConfig.requireLiquiditySweep && !unifiedGatePassed && unifiedZoneData?.liquidity) {
         const liq = unifiedZoneData.liquidity;
-        const hasSweepEvent = liq.sweepEvent !== null;
-        const sweepRejected = liq.sweepEvent?.rejected === true;
-        // Block if: pools exist near zone AND (no sweep occurred OR sweep was absorbed)
-        if (liq.nearbyPools > 0 && (!hasSweepEvent || !sweepRejected)) {
-          detail.status = "waiting_for_sweep";
-          detail.skipReason = `Standalone Sweep Gate: unswept inducement detected (${liq.summary || liq.nearbyPools + " pool(s)"}) — waiting for BSL/SSL sweep before entry`;
-          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${liq.nearbyPools} unswept pool(s) near zone, blocking standalone entry. Watchlisted.`);
-          // Stage as sweep_watch (same pattern as unified waiting_for_sweep)
+        const sweepGate = evaluateStandaloneSweepGate({
+          requireLiquiditySweep: pairConfig.requireLiquiditySweep,
+          unifiedGatePassed,
+          liquidity: liq,
+        });
+        if (sweepGate.blocked) {
+          detail.status = sweepGate.status;
+          detail.skipReason = sweepGate.reason;
+          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${sweepGate.reason}. Watchlisted.`);
+          // Stage as sweep_watch until the local sweep authority permits entry.
           if (stagingEnabled && analysis.direction && !isPaused) {
             try {
               if (!existingStaged) {
@@ -5934,6 +5947,8 @@ async function runScanForUser(
                   entry: izData.bestZone?.entry ?? analysis.lastPrice,
                   nearbyPools: liq.nearbyPools,
                   liquiditySummary: liq.summary || null,
+                  entryTriggerState: liq.entryTriggerState || null,
+                  entryTrigger: liq.entryTrigger || null,
                 };
                 const sweepWatchInvalidation = watchlistInvalidationFor(
                   analysis.direction as WatchlistDirection,
@@ -5966,9 +5981,16 @@ async function runScanForUser(
                   analysis_snapshot: {
                     score: analysis.score,
                     direction: analysis.direction,
-                    source: "standalone_sweep_gate",
+                    source: "standalone_local_sweep_gate",
                     unifiedZone: unifiedZoneData ? { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF } : null,
-                    liquidity: { nearbyPools: liq.nearbyPools, summary: liq.summary, sweepEvent: liq.sweepEvent },
+                    liquidity: {
+                      nearbyPools: liq.nearbyPools,
+                      summary: liq.summary,
+                      gateReason: liq.gateReason,
+                      entryTriggerState: liq.entryTriggerState,
+                      entryTrigger: liq.entryTrigger,
+                      sweepEvent: liq.sweepEvent,
+                    },
                   },
                 });
                 stagedNew++;

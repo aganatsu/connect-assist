@@ -130,6 +130,63 @@ const gateData: NonNullable<ZoneStoryProps["gateData"]> = {
 };
 
 describe("ZoneStoryPanel zone-local explanations", () => {
+  it("shows the qualified internal sweep authority instead of a generic nearby-pool claim", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          state: "waiting_for_sweep",
+          liquidity: {
+            liquidityScore: 1,
+            summary: "BSL @ 1.27450 (3 touches)",
+            nearbyPools: 2,
+            entryTriggerState: "unswept",
+            hasUnsweptEntryTrigger: true,
+            gateReason: "Local BSL inside zone is unswept — sweep required",
+            entryTrigger: {
+              level: 1.2745,
+              type: "buy-side",
+              nearEdge: "inside",
+              distanceToZone: 0,
+              maxDistance: 0.0005,
+              state: "unswept",
+            },
+            sweepEvent: null,
+          },
+        }}
+        symbol="GBP/USD"
+      />,
+    );
+
+    expect(screen.getByText(/Local BSL inside zone is unswept/)).toBeTruthy();
+    expect(screen.getByText(/\(2 nearby; 1 gating\)/)).toBeTruthy();
+    expect(screen.queryByText("No significant pools near zone")).toBeNull();
+  });
+
+  it("labels contextual pools as non-gating", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          liquidity: {
+            liquidityScore: 0,
+            summary: "2 contextual pool(s); none local enough to gate entry",
+            nearbyPools: 2,
+            entryTriggerState: "none",
+            hasUnsweptEntryTrigger: false,
+            gateReason: "2 contextual pool(s); none local enough to gate entry",
+            entryTrigger: null,
+            sweepEvent: null,
+          },
+        }}
+        symbol="GBP/USD"
+      />,
+    );
+
+    expect(screen.getByText(/none local enough to gate entry/)).toBeTruthy();
+    expect(screen.getByText(/\(2 nearby; 0 gating\)/)).toBeTruthy();
+  });
+
   it("does not count a Fib 15 pips beyond a 10-pip zone as local confluence", () => {
     render(
       <ZoneStoryPanel
