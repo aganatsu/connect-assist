@@ -185,7 +185,7 @@ SELECT
   position.cross_tf_effective_mode,
   position.cross_tf_entry_allowed,
   position.cross_tf_entry_authority,
-  position.open_time
+  position.created_at AS observed_at
 FROM public.paper_positions AS position
 WHERE position.cross_tf_entry_authority IS NOT NULL;
 

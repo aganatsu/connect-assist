@@ -83,4 +83,12 @@ Deno.test("database audit contract preserves authority through every lifecycle t
     migration,
     "cross_timeframe_entry_authority_audit",
   );
+  assertStringIncludes(
+    migration,
+    "position.created_at AS observed_at",
+  );
+  assert(
+    !migration.includes("position.open_time"),
+    "the audit UNION must not mix text open_time with timestamptz lifecycle timestamps",
+  );
 });
