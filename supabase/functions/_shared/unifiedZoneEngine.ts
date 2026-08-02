@@ -93,7 +93,8 @@ export type UnifiedState =
   | "at_zone"            // Price at zone, waiting for confirmation
   | "confirmed"          // Confirmation fired, entry ready
   | "triggered"          // Price at entry level — execute
-  | "waiting_for_sweep"; // Liquidity Sweep Gate: entry-trigger pool exists but unswept — wait
+  | "waiting_for_sweep"  // Qualified local/internal trigger exists but is unswept
+  | "waiting_for_reconfirmation"; // Trigger was swept without rejection
 
 export interface ImpulseStory {
   direction: "bullish" | "bearish";
@@ -441,8 +442,9 @@ export function findUnifiedZone(
   // This gate only applies when the setup would otherwise proceed (at_zone/confirmed/triggered).
   if (cfg.requireLiquiditySweep && liquidity) {
     if (liquidity.entryTriggerState === "swept_absorbed") {
-      // Level broken through — zone invalidated, demote to watching
-      state = "watching";
+      // The sweep did not reject. Preserve the zone, but require a fresh
+      // local trigger and directional confirmation before allowing entry.
+      state = "waiting_for_reconfirmation";
     } else if (liquidity.hasUnsweptEntryTrigger &&
                (state === "at_zone" || state === "confirmed" || state === "triggered")) {
       // Entry-trigger pool exists but hasn't been swept yet — wait for sweep
@@ -669,8 +671,15 @@ function buildStorySummary(
   }
 
   // Line 4: Liquidity
-  if (liquidity && liquidity.liquidityScore > 0) {
-    lines.push(`${filled} Liquidity: ${liquidity.summary}`);
+  if (liquidity?.entryTriggerState === "swept_rejected") {
+    lines.push(`${filled} Liquidity: ${liquidity.gateReason}`);
+  } else if (
+    liquidity?.entryTriggerState === "unswept" ||
+    liquidity?.entryTriggerState === "swept_absorbed"
+  ) {
+    lines.push(`◐ Liquidity: ${liquidity.gateReason}`);
+  } else if (liquidity) {
+    lines.push(`${empty} Liquidity: ${liquidity.gateReason}`);
   } else {
     lines.push(`${empty} Liquidity: No significant pools near zone`);
   }
@@ -688,7 +697,9 @@ function buildStorySummary(
   if (entry) {
     lines.push(`${filled} Entry: ${entry.direction.toUpperCase()} @ ${entry.entryPrice.toFixed(5)}  SL: ${entry.slPrice.toFixed(5)}  R:R ${entry.rrRatio}:1`);
   } else if (state === "waiting_for_sweep") {
-    lines.push(`${empty} Entry: Waiting for liquidity sweep (entry-trigger pool unswept)`);
+    lines.push(`${empty} Entry: Waiting for qualified local/internal liquidity sweep`);
+  } else if (state === "waiting_for_reconfirmation") {
+    lines.push(`${empty} Entry: Sweep did not reject — waiting for a fresh trigger and confirmation`);
   } else if (state === "confirmed" || state === "triggered") {
     lines.push(`${empty} Entry: R:R below minimum (${DEFAULT_UNIFIED_CONFIG.minRR}:1)`);
   } else {

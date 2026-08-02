@@ -37,7 +37,14 @@ Deno.test("noise below the normal Watchlist quality floor is not staged", () => 
 });
 
 Deno.test("a complete zone waiting for price, confirmation or sweep is executable watch evidence", () => {
-  for (const unifiedState of ["watching", "at_zone", "waiting_for_sweep"]) {
+  for (
+    const unifiedState of [
+      "watching",
+      "at_zone",
+      "waiting_for_sweep",
+      "waiting_for_reconfirmation",
+    ]
+  ) {
     assertEquals(
       classifyUnifiedWatch({
         ...base,

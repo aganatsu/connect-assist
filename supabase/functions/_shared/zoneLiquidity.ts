@@ -49,6 +49,10 @@ export interface ZoneLiquidityResult {
   hasUnsweptEntryTrigger: boolean;
   /** Lifecycle state of the nearest entry-trigger pool */
   entryTriggerState: EntryTriggerState;
+  /** The exact local/internal pool permitted to control the sweep gate */
+  entryTrigger: EntryTriggerEvidence | null;
+  /** Human-readable explanation of why liquidity is or is not gating entry */
+  gateReason: string;
 }
 
 export interface NearbyPool {
@@ -59,6 +63,17 @@ export interface NearbyPool {
   nearEdge: "above_high" | "below_low" | "inside";
   /** Relevance for the trade direction */
   relevance: "target" | "entry_trigger" | "neutral";
+  /** Whether this pool is local enough to control entry rather than provide context only */
+  gateEligible: boolean;
+}
+
+export interface EntryTriggerEvidence {
+  level: number;
+  type: "buy-side" | "sell-side";
+  nearEdge: NearbyPool["nearEdge"];
+  distanceToZone: number;
+  maxDistance: number;
+  state: EntryTriggerState;
 }
 
 export interface SweepEvent {
@@ -89,6 +104,10 @@ export interface ZoneLiquidityConfig {
   minPoolStrength: number;
   /** Penalty for swept_absorbed entry-trigger pools (level broken through). Default: 2.0 */
   sweptAbsorbedPenalty: number;
+  /** Max outside-zone trigger distance as an ATR multiplier. Default: 0.25 */
+  entryTriggerAtrMult: number;
+  /** Max outside-zone trigger distance as a zone-width multiplier. Default: 0.5 */
+  entryTriggerZoneWidthMult: number;
 }
 
 export const DEFAULT_ZONE_LIQUIDITY_CONFIG: ZoneLiquidityConfig = {
@@ -96,6 +115,8 @@ export const DEFAULT_ZONE_LIQUIDITY_CONFIG: ZoneLiquidityConfig = {
   sweepMaxAge: 15,
   minPoolStrength: 2,
   sweptAbsorbedPenalty: 2.0,
+  entryTriggerAtrMult: 0.25,
+  entryTriggerZoneWidthMult: 0.5,
 };
 
 // ─── Core Function ──────────────────────────────────────────────────
@@ -122,6 +143,14 @@ export function findZoneLiquidity(
   const cfg = { ...DEFAULT_ZONE_LIQUIDITY_CONFIG, ...config };
   const atr = calculateATR(candles, 14);
   const nearbyThreshold = atr * cfg.nearbyAtrMult;
+  const zoneWidth = Math.max(Math.abs(zoneHigh - zoneLow), Number.EPSILON);
+  const entryTriggerMaxDistance = Math.min(
+    nearbyThreshold,
+    Math.max(
+      zoneWidth * cfg.entryTriggerZoneWidthMult,
+      atr * cfg.entryTriggerAtrMult,
+    ),
+  );
   const currentIndex = candles.length - 1;
 
   // ── 1. Find pools near the zone edges ──
@@ -146,21 +175,38 @@ export function findZoneLiquidity(
 
     if (distanceToZone > nearbyThreshold) continue;
 
-    // Determine relevance based on trade direction:
-    // For BEARISH continuation: BSL above zone = entry trigger (price sweeps up then drops)
-    // For BULLISH continuation: SSL below zone = entry trigger (price sweeps down then rallies)
+    // Determine relevance based on trade direction. A direction-matching pool
+    // inside the zone is an internal trigger; a pool outside the zone can only
+    // control entry when it is within the tighter local threshold. The broader
+    // ATR threshold above remains useful context, but cannot block execution.
+    const correctTriggerType =
+      (direction === "bearish" && pool.type === "buy-side") ||
+      (direction === "bullish" && pool.type === "sell-side");
+    const correctTriggerEdge =
+      nearEdge === "inside" ||
+      (direction === "bearish" && nearEdge === "above_high") ||
+      (direction === "bullish" && nearEdge === "below_low");
+    const gateEligible =
+      correctTriggerType &&
+      correctTriggerEdge &&
+      (nearEdge === "inside" || distanceToZone <= entryTriggerMaxDistance);
+
     let relevance: NearbyPool["relevance"] = "neutral";
-    if (direction === "bearish" && pool.type === "buy-side" && nearEdge === "above_high") {
-      relevance = "entry_trigger"; // BSL above zone — sweep this then short
-    } else if (direction === "bullish" && pool.type === "sell-side" && nearEdge === "below_low") {
-      relevance = "entry_trigger"; // SSL below zone — sweep this then long
+    if (gateEligible) {
+      relevance = "entry_trigger";
     } else if (direction === "bearish" && pool.type === "sell-side" && nearEdge === "below_low") {
       relevance = "target"; // SSL below = target for shorts
     } else if (direction === "bullish" && pool.type === "buy-side" && nearEdge === "above_high") {
       relevance = "target"; // BSL above = target for longs
     }
 
-    nearbyPools.push({ pool, distanceToZone, nearEdge, relevance });
+    nearbyPools.push({
+      pool,
+      distanceToZone,
+      nearEdge,
+      relevance,
+      gateEligible,
+    });
   }
 
   // Sort by relevance (entry_trigger first) then by distance
@@ -176,24 +222,25 @@ export function findZoneLiquidity(
   let sweepEvent: SweepEvent | null = null;
   let swept = false;
 
-  // Check entry-trigger pools for sweeps
+  // Check the nearest qualified local/internal trigger for a current sweep.
   const triggerPools = nearbyPools.filter(np => np.relevance === "entry_trigger");
-  for (const np of triggerPools) {
-    if (np.pool.swept && np.pool.sweptAtIndex !== undefined) {
-      const candlesSinceSweep = currentIndex - np.pool.sweptAtIndex;
-      if (candlesSinceSweep <= cfg.sweepMaxAge) {
-        swept = true;
-        sweepEvent = {
-          level: np.pool.price,
-          type: np.pool.type,
-          depth: np.pool.sweepDepth ?? 0,
-          rejected: np.pool.rejectionConfirmed ?? false,
-          sweepIndex: np.pool.sweptAtIndex,
-          sweepTime: candles[np.pool.sweptAtIndex]?.datetime ?? "",
-          candlesSinceSweep,
-        };
-        break; // Use the most relevant sweep
-      }
+  const primaryTrigger = triggerPools[0] ?? null;
+  if (primaryTrigger?.pool.swept &&
+      primaryTrigger.pool.sweptAtIndex !== undefined) {
+    const candlesSinceSweep =
+      currentIndex - primaryTrigger.pool.sweptAtIndex;
+    if (candlesSinceSweep <= cfg.sweepMaxAge) {
+      swept = true;
+      sweepEvent = {
+        level: primaryTrigger.pool.price,
+        type: primaryTrigger.pool.type,
+        depth: primaryTrigger.pool.sweepDepth ?? 0,
+        rejected: primaryTrigger.pool.rejectionConfirmed ?? false,
+        sweepIndex: primaryTrigger.pool.sweptAtIndex,
+        sweepTime:
+          candles[primaryTrigger.pool.sweptAtIndex]?.datetime ?? "",
+        candlesSinceSweep,
+      };
     }
   }
 
@@ -201,8 +248,7 @@ export function findZoneLiquidity(
   let entryTriggerState: EntryTriggerState = "none";
   let hasUnsweptEntryTrigger = false;
 
-  if (triggerPools.length > 0) {
-    const primaryTrigger = triggerPools[0]; // Closest entry-trigger pool
+  if (primaryTrigger && sweepEvent) {
     if (primaryTrigger.pool.state === "swept_rejected") {
       entryTriggerState = "swept_rejected";
     } else if (primaryTrigger.pool.state === "swept_absorbed") {
@@ -212,10 +258,46 @@ export function findZoneLiquidity(
       entryTriggerState = "swept_rejected";
     } else if (primaryTrigger.pool.swept && !primaryTrigger.pool.rejectionConfirmed) {
       entryTriggerState = "swept_absorbed";
+    }
+  } else if (primaryTrigger && !primaryTrigger.pool.swept) {
+    entryTriggerState = "unswept";
+    hasUnsweptEntryTrigger = true;
+  }
+
+  const entryTrigger: EntryTriggerEvidence | null = primaryTrigger
+    ? {
+      level: primaryTrigger.pool.price,
+      type: primaryTrigger.pool.type,
+      nearEdge: primaryTrigger.nearEdge,
+      distanceToZone: primaryTrigger.distanceToZone,
+      maxDistance: entryTriggerMaxDistance,
+      state: entryTriggerState,
+    }
+    : null;
+
+  const contextualPoolCount = nearbyPools.filter(
+    (pool) => !pool.gateEligible,
+  ).length;
+  const triggerLabel =
+    primaryTrigger?.pool.type === "buy-side" ? "BSL" : "SSL";
+  const localityLabel =
+    primaryTrigger?.nearEdge === "inside" ? "inside zone" : "near zone";
+  let gateReason = contextualPoolCount > 0
+    ? `${contextualPoolCount} contextual pool(s); none local enough to gate entry`
+    : "No qualified local/internal entry-trigger pool";
+  if (primaryTrigger) {
+    if (entryTriggerState === "unswept") {
+      gateReason =
+        `Local ${triggerLabel} ${localityLabel} is unswept — sweep required`;
+    } else if (entryTriggerState === "swept_rejected") {
+      gateReason =
+        `Local ${triggerLabel} swept and rejected — confirmation may proceed`;
+    } else if (entryTriggerState === "swept_absorbed") {
+      gateReason =
+        `Local ${triggerLabel} swept without rejection — fresh trigger and confirmation required`;
     } else {
-      // Pool exists but not swept → unswept
-      entryTriggerState = "unswept";
-      hasUnsweptEntryTrigger = true;
+      gateReason =
+        `Local ${triggerLabel} sweep is stale — not gating this setup`;
     }
   }
 
@@ -285,6 +367,8 @@ export function findZoneLiquidity(
 
   const summary = summaryParts.length > 0
     ? summaryParts.join(" | ")
+    : contextualPoolCount > 0
+    ? `${contextualPoolCount} contextual pool(s); none local enough to gate entry`
     : "No significant liquidity near zone";
 
   return {
@@ -296,5 +380,7 @@ export function findZoneLiquidity(
     summary,
     hasUnsweptEntryTrigger,
     entryTriggerState,
+    entryTrigger,
+    gateReason,
   };
 }

@@ -21,6 +21,7 @@ const COMPLETE_WAITING_STATES = new Set([
   "watching",
   "at_zone",
   "waiting_for_sweep",
+  "waiting_for_reconfirmation",
 ]);
 
 /**
@@ -48,7 +49,8 @@ export function classifyUnifiedWatch(
     COMPLETE_WAITING_STATES.has(input.unifiedState || "") &&
     (
       input.requireUnifiedZone ||
-      input.unifiedState === "waiting_for_sweep"
+      input.unifiedState === "waiting_for_sweep" ||
+      input.unifiedState === "waiting_for_reconfirmation"
     )
   ) {
     return "execution_watch";

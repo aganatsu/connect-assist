@@ -5,59 +5,27 @@
  * the bot blocks entry if the unified zone engine detected unswept liquidity pools
  * near the zone.
  *
- * This test extracts the gate logic into a pure function and tests it in isolation,
- * since the full bot-scanner requires Supabase/network dependencies.
+ * The scanner imports the same pure authority evaluated here, so production and
+ * tests cannot drift back to the old "any nearby pool blocks" behavior.
  *
  * Run: deno test --allow-all supabase/functions/bot-scanner/standaloneSweepGate.test.ts
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 
-// ── Extract the standalone sweep gate logic as a pure function ──
-// This mirrors the exact conditions from bot-scanner/index.ts lines 5041-5110
-interface LiquidityData {
-  liquidityScore: number;
-  summary: string | null;
-  nearbyPools: number;
-  sweepEvent: {
-    level: number;
-    type: string;
-    rejected: boolean;
-  } | null;
-}
-
-interface StandaloneSweepGateInput {
-  requireLiquiditySweep: boolean;
-  unifiedGatePassed: boolean;
-  liquidity: LiquidityData | null;
-}
-
-interface StandaloneSweepGateResult {
-  blocked: boolean;
-  reason: string | null;
-}
-
-/**
- * Pure logic extracted from bot-scanner — determines if standalone entry should be blocked.
- */
-function evaluateStandaloneSweepGate(input: StandaloneSweepGateInput): StandaloneSweepGateResult {
-  if (!input.requireLiquiditySweep || input.unifiedGatePassed || !input.liquidity) {
-    return { blocked: false, reason: null };
-  }
-
-  const liq = input.liquidity;
-  const hasSweepEvent = liq.sweepEvent !== null;
-  const sweepRejected = liq.sweepEvent?.rejected === true;
-
-  // Block if: pools exist near zone AND (no sweep occurred OR sweep was absorbed)
-  if (liq.nearbyPools > 0 && (!hasSweepEvent || !sweepRejected)) {
-    return {
-      blocked: true,
-      reason: `Standalone Sweep Gate: unswept inducement detected (${liq.summary || liq.nearbyPools + " pool(s)"}) — waiting for BSL/SSL sweep before entry`,
-    };
-  }
-
-  return { blocked: false, reason: null };
-}
+Deno.test("bot-scanner uses canonical standalone sweep authority, not nearby-pool count", () => {
+  const scanner = Deno.readTextFileSync(
+    new URL("./index.ts", import.meta.url),
+  );
+  assertEquals(
+    scanner.includes("evaluateStandaloneSweepGate({"),
+    true,
+  );
+  assertEquals(
+    scanner.includes("liq.nearbyPools > 0"),
+    false,
+  );
+});
 
 // ─── Test 1: USD/JPY scenario — unswept inducement blocks standalone entry ───
 // This is the EXACT bug scenario: unified engine found inducement (minor_swing, quality 9/10)
@@ -68,15 +36,16 @@ Deno.test("BUG FIX: Unswept inducement near zone blocks standalone entry", () =>
     requireLiquiditySweep: true,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 1.0,
       summary: "Inducement: minor_swing (quality 9/10)",
-      nearbyPools: 1,
-      sweepEvent: null, // No sweep happened — pool is still live
+      gateReason: "Local SSL inside zone is unswept — sweep required",
+      entryTriggerState: "unswept",
+      hasUnsweptEntryTrigger: true,
     },
   });
 
   assertEquals(result.blocked, true, "Should block standalone entry when unswept inducement exists");
-  assertEquals(result.reason?.includes("unswept inducement"), true, "Reason should mention unswept inducement");
+  assertEquals(result.status, "waiting_for_sweep");
+  assertEquals(result.reason?.includes("Local SSL"), true, "Reason should identify the local trigger");
 });
 
 // ─── Test 2: Swept + rejected pool allows entry ───
@@ -86,14 +55,10 @@ Deno.test("Swept + rejected pool allows standalone entry", () => {
     requireLiquiditySweep: true,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 2.0,
       summary: "SSL swept and rejected",
-      nearbyPools: 1,
-      sweepEvent: {
-        level: 1.0950,
-        type: "ssl",
-        rejected: true, // Swept AND rejected — inducement consumed
-      },
+      gateReason: "Local SSL swept and rejected — confirmation may proceed",
+      entryTriggerState: "swept_rejected",
+      hasUnsweptEntryTrigger: false,
     },
   });
 
@@ -107,18 +72,15 @@ Deno.test("Swept but absorbed (not rejected) blocks standalone entry", () => {
     requireLiquiditySweep: true,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 1.0,
       summary: "SSL swept but absorbed",
-      nearbyPools: 1,
-      sweepEvent: {
-        level: 1.0950,
-        type: "ssl",
-        rejected: false, // Swept but NOT rejected — absorbed
-      },
+      gateReason: "Local SSL swept without rejection — fresh trigger and confirmation required",
+      entryTriggerState: "swept_absorbed",
+      hasUnsweptEntryTrigger: false,
     },
   });
 
   assertEquals(result.blocked, true, "Should block when sweep was absorbed (not rejected)");
+  assertEquals(result.status, "waiting_for_reconfirmation");
 });
 
 // ─── Test 4: requireLiquiditySweep OFF — no blocking ───
@@ -128,10 +90,10 @@ Deno.test("requireLiquiditySweep OFF allows standalone entry regardless", () => 
     requireLiquiditySweep: false,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 1.0,
       summary: "Inducement: minor_swing (quality 9/10)",
-      nearbyPools: 1,
-      sweepEvent: null,
+      gateReason: "Local SSL inside zone is unswept — sweep required",
+      entryTriggerState: "unswept",
+      hasUnsweptEntryTrigger: true,
     },
   });
 
@@ -144,10 +106,10 @@ Deno.test("Unified gate passed bypasses standalone sweep gate", () => {
     requireLiquiditySweep: true,
     unifiedGatePassed: true, // Unified story complete — full conviction
     liquidity: {
-      liquidityScore: 1.0,
       summary: "Inducement: minor_swing (quality 9/10)",
-      nearbyPools: 1,
-      sweepEvent: null,
+      gateReason: "Local SSL inside zone is unswept — sweep required",
+      entryTriggerState: "unswept",
+      hasUnsweptEntryTrigger: true,
     },
   });
 
@@ -166,36 +128,33 @@ Deno.test("No liquidity data allows standalone entry", () => {
   assertEquals(result.blocked, false, "Should NOT block when no liquidity data available");
 });
 
-// ─── Test 7: Zero nearby pools — no blocking ───
-// Liquidity data exists but no pools near the zone.
-Deno.test("Zero nearby pools allows standalone entry", () => {
+// ─── Test 7: Context-only pools — no blocking ───
+Deno.test("Context-only nearby pools do not control standalone entry", () => {
   const result = evaluateStandaloneSweepGate({
     requireLiquiditySweep: true,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 0,
-      summary: null,
-      nearbyPools: 0,
-      sweepEvent: null,
+      summary: "2 contextual pools",
+      gateReason: "2 contextual pool(s); none local enough to gate entry",
+      entryTriggerState: "none",
+      hasUnsweptEntryTrigger: false,
     },
   });
 
-  assertEquals(result.blocked, false, "Should NOT block when there are no nearby pools");
+  assertEquals(result.blocked, false, "Context-only pools must never gate entry");
 });
 
-// ─── Test 8: Multiple unswept pools — blocks entry ───
-Deno.test("Multiple unswept pools blocks standalone entry", () => {
+// ─── Test 8: State alone cannot claim an unswept authority ───
+Deno.test("Inconsistent unswept state without a qualified trigger fails open", () => {
   const result = evaluateStandaloneSweepGate({
     requireLiquiditySweep: true,
     unifiedGatePassed: false,
     liquidity: {
-      liquidityScore: 3.0,
-      summary: "2 SSL pools below zone",
-      nearbyPools: 2,
-      sweepEvent: null,
+      summary: "legacy unswept label",
+      entryTriggerState: "unswept",
+      hasUnsweptEntryTrigger: false,
     },
   });
 
-  assertEquals(result.blocked, true, "Should block when multiple unswept pools exist");
-  assertEquals(result.reason?.includes("2 SSL pools below zone"), true, "Reason should include pool summary");
+  assertEquals(result.blocked, false, "Both canonical state and qualified-trigger evidence are required");
 });
