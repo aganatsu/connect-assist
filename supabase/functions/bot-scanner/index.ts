@@ -124,6 +124,11 @@ import {
   type SetupLifecycleEvidence,
 } from "../_shared/setupLifecycle.ts";
 import {
+  buildFrozenCrossTimeframeContext,
+  loadCurrentEvidenceCertificateReferences,
+  type EvidenceCertificateReference,
+} from "../_shared/frozenCrossTimeframeContext.ts";
+import {
   beginScannerOperation,
   claimScannerLock,
   completeScannerOperation,
@@ -2103,6 +2108,7 @@ async function runScanForUser(
     string,
     DirectionVerdictDecision
   >();
+  let _evidenceCertificateReferences: EvidenceCertificateReference[] = [];
   if ((config as any).gamePlanEnabled !== false) {
     try {
       _lastGamePlanForValidation = await loadActiveGamePlan(
@@ -2124,6 +2130,17 @@ async function runScanForUser(
   } catch (directionLoadErr: any) {
     console.warn(
       `[scan ${scanCycleId}] Fill authorization: failed to load active Direction Verdicts: ${directionLoadErr?.message}`,
+    );
+  }
+  try {
+    _evidenceCertificateReferences = await loadCurrentEvidenceCertificateReferences(
+      supabase,
+      userId,
+      BOT_ID,
+    );
+  } catch (certificateLoadErr: any) {
+    console.warn(
+      `[scan ${scanCycleId}] Frozen context: current evidence certificates unavailable: ${certificateLoadErr?.message}`,
     );
   }
 
@@ -4502,6 +4519,8 @@ async function runScanForUser(
               multiTF.bestZone.zone.candidateModel ?? null,
             timeframeLineage:
               multiTF.bestZone.zone.timeframeLineage ?? null,
+            canonicalImpulseMetrics:
+              multiTF.bestZone.zone.canonicalImpulseMetrics ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4524,6 +4543,8 @@ async function runScanForUser(
             candidateLifecycle: candidate.candidateLifecycle ?? null,
             candidateModel: candidate.candidateModel ?? null,
             timeframeLineage: candidate.timeframeLineage ?? null,
+            canonicalImpulseMetrics:
+              candidate.canonicalImpulseMetrics ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
@@ -4964,6 +4985,16 @@ async function runScanForUser(
       (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
     const selectedZoneLocalEnforcement = () =>
       (detail as any).zoneLocalEnforcement ?? null;
+    const selectedCrossTimeframeContext = () =>
+      buildFrozenCrossTimeframeContext({
+        timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
+        symbol: pair,
+        gamePlan: activeGamePlan,
+        directionVerdict: activeDirectionVerdict,
+        stylePolicy: pairStylePolicy,
+        zoneStory: (detail as any).impulseZone || null,
+        evidenceCertificates: _evidenceCertificateReferences,
+      });
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4986,6 +5017,7 @@ async function runScanForUser(
         zoneLocalConfluence: selectedZoneLocalConfluence(),
         zoneCandidateShadowRanking: selectedZoneShadowRanking(),
         zoneLocalEnforcement: selectedZoneLocalEnforcement(),
+        crossTimeframeContext: selectedCrossTimeframeContext(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -6210,6 +6242,7 @@ async function runScanForUser(
           conceptEvidence: selectedZoneConceptEvidence(),
           zoneLocalConfluence: selectedZoneLocalConfluence(),
           zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+          crossTimeframeContext: selectedCrossTimeframeContext(),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -7277,6 +7310,7 @@ async function runScanForUser(
               conceptEvidence: selectedZoneConceptEvidence(),
               zoneLocalConfluence: selectedZoneLocalConfluence(),
               zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+              crossTimeframeContext: selectedCrossTimeframeContext(),
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -7820,6 +7854,7 @@ async function runScanForUser(
             conceptEvidence: selectedZoneConceptEvidence(),
             zoneLocalConfluence: selectedZoneLocalConfluence(),
             zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+            crossTimeframeContext: selectedCrossTimeframeContext(),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
@@ -9004,6 +9039,7 @@ async function runScanForUser(
                 decisionContext: breakerAuthorization.decisionContext,
                 gamePlan: activeGamePlan,
                 directionVerdict: activeDirectionVerdict,
+                crossTimeframeContext: selectedCrossTimeframeContext(),
                 originatingZone: breakerOriginatingZone,
                 confirmationMethod:
                   pairConfig.confirmationMethod || "choch",
