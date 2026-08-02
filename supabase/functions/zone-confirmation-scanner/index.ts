@@ -37,6 +37,14 @@ import {
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
+import {
+  directionVerdictLines,
+  durationLabel,
+  parseSignalReason,
+  styleLadderLines,
+  tgLine,
+  zoneEvidenceLines,
+} from "../_shared/telegramDetail.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import {
