@@ -3039,7 +3039,6 @@ async function runScanForUser(
               zoneEvidenceLines(fillSR) +
               directionVerdictLines(fillSR.directionVerdict) +
               styleLadderLines(fillSR) +
-              watchlistOriginLines(fillSR) +
               "\n" +
               `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
               `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
