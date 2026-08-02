@@ -252,7 +252,7 @@ Deno.serve(async (req: Request) => {
       const sevenDaysAgo = new Date(Date.now() - ALERT_ROLLING_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { data: recentResolved, error: alertErr } = await supabase
         .from("rejected_setups")
-        .select("outcome_status, user_id")
+        .select("outcome_status, user_id, symbol, rejection_reason")
         .neq("outcome_status", "pending")
         .neq("outcome_status", "inconclusive")
         .gte("rejected_at", sevenDaysAgo);
@@ -291,11 +291,29 @@ Deno.serve(async (req: Request) => {
               })();
 
               if (chatIds.length > 0) {
+                const topOf = (key: string) => {
+                  const counts = new Map<string, number>();
+                  for (const w of winners as any[]) {
+                    const v = String(w?.[key] ?? "").trim();
+                    if (!v) continue;
+                    counts.set(v, (counts.get(v) || 0) + 1);
+                  }
+                  return [...counts.entries()]
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([v, c]) => `${v} (${c})`)
+                    .join(", ");
+                };
+                const topReasons = topOf("rejection_reason");
+                const topSymbols = topOf("symbol");
                 const msg = `📊 <b>Gate Effectiveness Alert</b>\n\n` +
                   `<b>Winner-block rate:</b> ${(winnerRate * 100).toFixed(1)}%\n` +
                   `<b>Period:</b> Last ${ALERT_ROLLING_DAYS} days\n` +
                   `<b>Resolved setups:</b> ${recentResolved.length}\n` +
-                  `<b>Would-have-won:</b> ${winners.length}\n\n` +
+                  `<b>Would-have-won:</b> ${winners.length}\n` +
+                  (topReasons ? `<b>Top blocking gates:</b> ${topReasons}\n` : "") +
+                  (topSymbols ? `<b>Most affected pairs:</b> ${topSymbols}\n` : "") +
+                  `\n` +
                   `⚠️ Gates may be too strict — more than half of blocked setups would have been profitable.\n` +
                   `Consider reviewing gate thresholds.`;
 
