@@ -202,6 +202,17 @@ import {
   type StyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
+import {
+  crossTimeframeAuthorityLine,
+  directionVerdictLines,
+  durationLabel,
+  parseSignalReason,
+  rMultiple,
+  styleLadderLines,
+  tgLine,
+  watchlistOriginLines,
+  zoneEvidenceLines,
+} from "../_shared/telegramDetail.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
@@ -1707,12 +1718,27 @@ async function runScanForUser(
               : a.action === "trailing_enabled" ? "TRAILING ENABLED"
               : a.action === "partial_enabled" ? "PARTIAL TP ENABLED"
               : a.action.toUpperCase().replace("_", " ");
+            const mgmtPos: any = positionsToManage.find((p: any) => p.position_id === a.positionId);
+            const mgmtEntry = mgmtPos ? parseFloat(mgmtPos.entry_price) : NaN;
+            const mgmtPrice = mgmtPos ? parseFloat(mgmtPos.current_price ?? mgmtPos.entry_price) : NaN;
+            const mgmtSR = parseSignalReason(mgmtPos?.signal_reason);
+            const mgmtR = mgmtPos
+              ? rMultiple(mgmtEntry, mgmtSR.originalSL ?? mgmtPos.stop_loss, mgmtPrice, mgmtPos.direction)
+              : null;
             const msg = `${emoji} <b>Trade Management</b>\n\n` +
-              `<b>Symbol:</b> ${a.symbol}\n` +
-              `<b>Action:</b> ${actionLabel}\n` +
-              (a.newSL ? `<b>New SL:</b> ${fmtPx(a.newSL, a.symbol)}\n` : "") +
-              (a.newTP ? `<b>New TP:</b> ${fmtPx(a.newTP, a.symbol)}\n` : "") +
-              `<b>Reason:</b> ${a.reason}`;
+              tgLine("Symbol", `${a.symbol}${mgmtPos ? ` (${String(mgmtPos.direction).toUpperCase()})` : ""}`) +
+              tgLine("Action", actionLabel) +
+              (mgmtPos ? tgLine("Entry", fmtPx(mgmtEntry, a.symbol)) : "") +
+              (Number.isFinite(mgmtPrice) ? tgLine("Current", fmtPx(mgmtPrice, a.symbol)) : "") +
+              (a.newSL ? tgLine("New SL", fmtPx(a.newSL, a.symbol)) : "") +
+              (a.newTP ? tgLine("New TP", fmtPx(a.newTP, a.symbol)) : "") +
+              (mgmtR !== null ? tgLine("Open R", `${mgmtR >= 0 ? "+" : ""}${mgmtR.toFixed(2)}R`) : "") +
+              (mgmtPos ? tgLine("Open For", durationLabel(mgmtPos.open_time)) : "") +
+              zoneEvidenceLines(mgmtSR) +
+              tgLine("Reason", a.reason) +
+              (a.attribution
+                ? tgLine("Trigger", `${String(a.attribution.trigger).replace(/_/g, " ")}${a.attribution.marketContext?.session ? ` · ${a.attribution.marketContext.session}` : ""}`)
+                : "");
             await Promise.all(telegramChatIds.map(async (chatId) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -1984,12 +2010,26 @@ async function runScanForUser(
           const emoji = closeReason === "tp_hit" ? "🎯" : "🛑";
           const label = closeReason === "tp_hit" ? "TAKE PROFIT HIT" : "STOP LOSS HIT";
           const pnlEmoji = pnl >= 0 ? "✅" : "❌";
+          const closeSR = parseSignalReason(pos.signal_reason);
+          const closeOrigSL = closeSR.originalSL ?? pos.stop_loss;
+          const closeR = rMultiple(pos.entry_price, closeOrigSL, hitPrice, pos.direction);
           const msg = `${emoji} <b>${label}</b>\n\n` +
-            `<b>Symbol:</b> ${pos.symbol} (${pos.direction.toUpperCase()})\n` +
-            `<b>Entry:</b> ${pos.entry_price}\n` +
-            `<b>Exit:</b> ${hitPrice}\n` +
-            `<b>P&L:</b> ${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)\n` +
-            `<b>Size:</b> ${pos.size} lots`;
+            tgLine("Symbol", `${pos.symbol} (${String(pos.direction).toUpperCase()})`) +
+            tgLine("Entry", fmtPx(pos.entry_price, pos.symbol)) +
+            tgLine("Exit", fmtPx(hitPrice, pos.symbol)) +
+            tgLine("SL at close", fmtPx(pos.stop_loss, pos.symbol)) +
+            (String(closeOrigSL) !== String(pos.stop_loss) ? tgLine("Original SL", fmtPx(closeOrigSL, pos.symbol)) : "") +
+            tgLine("TP", fmtPx(pos.take_profit, pos.symbol)) +
+            tgLine("P&L", `${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)`) +
+            (closeR !== null ? tgLine("R Multiple", `${closeR >= 0 ? "+" : ""}${closeR.toFixed(2)}R`) : "") +
+            tgLine("Size", `${pos.size} lots`) +
+            tgLine("Held", durationLabel(pos.open_time)) +
+            "\n" +
+            zoneEvidenceLines(closeSR) +
+            directionVerdictLines(closeSR.directionVerdict) +
+            styleLadderLines(closeSR) +
+            watchlistOriginLines(closeSR) +
+            tgLine("Setup", closeSR.setupType ? String(closeSR.setupType).toUpperCase() : null);
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -2337,11 +2377,19 @@ async function runScanForUser(
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
               if (telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
+                const invalidSR = parseSignalReason(pending.signal_reason);
                 const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
-                  `<b>Symbol:</b> ${pending.symbol}\n` +
-                  `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-                  `<b>Check:</b> ${thesisResult.checkType}\n` +
-                  `<b>Reason:</b> ${thesisResult.reason}`;
+                  tgLine("Symbol", pending.symbol) +
+                  tgLine("Direction", String(pending.direction).toUpperCase()) +
+                  tgLine("Check", thesisResult.checkType) +
+                  tgLine("Reason", thesisResult.reason) +
+                  tgLine("Cancel Code", thesisResult.cancelReason) +
+                  tgLine("Zone Trigger", fmtPx(pending.entry_price, pending.symbol)) +
+                  tgLine("Waited", durationLabel(pending.created_at)) +
+                  "\n" +
+                  zoneEvidenceLines(invalidSR) +
+                  directionVerdictLines(invalidSR.directionVerdict) +
+                  watchlistOriginLines(invalidSR);
                 await Promise.all(telegramChatIds.map(async (chatId: string) => {
                   try {
                     await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -2398,12 +2446,23 @@ async function runScanForUser(
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
+              const touchSR = parseSignalReason(pending.signal_reason);
               const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
-                `<b>Symbol:</b> ${pending.symbol}\n` +
-                `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-                `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]\n` +
-                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}\n` +
-                `<b>Entry Level:</b> ${entryPrice}`;
+                tgLine("Symbol", pending.symbol) +
+                tgLine("Direction", String(pending.direction).toUpperCase()) +
+                tgLine("Zone Range", `${pending.entry_zone_type} [${fmtPx(pending.entry_zone_low || "0", pending.symbol)} – ${fmtPx(pending.entry_zone_high || "0", pending.symbol)}]`) +
+                tgLine("Entry Level", fmtPx(entryPrice, pending.symbol)) +
+                tgLine("Planned SL", fmtPx(pending.stop_loss, pending.symbol)) +
+                tgLine("Planned TP", fmtPx(pending.take_profit, pending.symbol)) +
+                tgLine("Size", pending.size ? `${pending.size} lots` : null) +
+                tgLine("Score", pending.signal_score) +
+                tgLine("Waiting for", `${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}`) +
+                tgLine("Waited in Zone Setup", durationLabel(pending.created_at)) +
+                "\n" +
+                zoneEvidenceLines(touchSR) +
+                directionVerdictLines(touchSR.directionVerdict) +
+                styleLadderLines(touchSR) +
+                watchlistOriginLines(touchSR);
               await Promise.all(telegramChatIds.map(async (chatId: string) => {
                 try {
                   await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -2959,14 +3018,28 @@ async function runScanForUser(
             // Build TP method label
             const tpMethodUsed = config.tpMethod || "rr_ratio";
             const tpMethodLabel = tpMethodUsed === "rr_ratio" ? `R:R (${config.tpRatio || 2.0}:1)` : tpMethodUsed === "next_level" ? "Next Structure Level" : tpMethodUsed === "fixed_pips" ? "Fixed Pips" : `ATR ×${config.tpATRMultiple || 2.0}`;
+            const fillSR = parseSignalReason(pending.signal_reason);
+            const fillRR = (() => {
+              const e = Number(actualFillPrice), s = Number(pending.stop_loss), t = Number(pending.take_profit);
+              if (![e, s, t].every(Number.isFinite) || Math.abs(e - s) <= 0) return null;
+              return (Math.abs(t - e) / Math.abs(e - s)).toFixed(2);
+            })();
             const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
-              `<b>Symbol:</b> ${pending.symbol}\n` +
-              `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-              `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${fmtPx(actualFillPrice, pending.symbol)}\n` +
-              `<b>SL:</b> ${fmtPx(pending.stop_loss, pending.symbol)}\n` +
-              `<b>TP:</b> ${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})\n` +
-              `<b>Score:</b> ${pending.signal_score}\n\n` +
+              tgLine("Symbol", pending.symbol) +
+              tgLine("Direction", String(pending.direction).toUpperCase()) +
+              tgLine("Size", `${pending.size} lots`) +
+              tgLine("Entry", fmtPx(actualFillPrice, pending.symbol)) +
+              tgLine("Zone Level", fmtPx(pending.entry_price, pending.symbol)) +
+              tgLine("SL", fmtPx(pending.stop_loss, pending.symbol)) +
+              tgLine("TP", `${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})`) +
+              (fillRR ? tgLine("Planned R:R", `${fillRR}:1`) : "") +
+              tgLine("Score", pending.signal_score) +
+              tgLine("Time in Zone", durationLabel(pending.zone_touch_time)) +
+              "\n" +
+              zoneEvidenceLines(fillSR) +
+              directionVerdictLines(fillSR.directionVerdict) +
+              styleLadderLines(fillSR) +
+              "\n" +
               `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
               `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
               confSupporting + `\n` +
@@ -3236,7 +3309,18 @@ async function runScanForUser(
         );
         // Notify via Telegram
         if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
-          const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
+          const pf: any = propFirmGateResult;
+          const msg = `🚨 <b>PROP FIRM EMERGENCY</b>\n\n` +
+            tgLine("Reason", pf.reason) +
+            tgLine("Positions Closed", closedCount) +
+            tgLine("Account Mode", isLiveMode ? "LIVE" : "PAPER") +
+            tgLine("Equity Used", brokerEquity != null ? `$${Number(brokerEquity).toFixed(2)} (broker)` : `$${Number(balance).toFixed(2)} (paper)`) +
+            tgLine("Daily P&L", pf.dailyPnl != null ? `$${Number(pf.dailyPnl).toFixed(2)}` : null) +
+            tgLine("Daily Loss Limit", pf.dailyLossLimit != null ? `$${Number(pf.dailyLossLimit).toFixed(2)}` : null) +
+            tgLine("Total Drawdown", pf.totalDrawdown != null ? `$${Number(pf.totalDrawdown).toFixed(2)}` : null) +
+            tgLine("Max Drawdown", pf.maxDrawdownLimit != null ? `$${Number(pf.maxDrawdownLimit).toFixed(2)}` : null) +
+            tgLine("Size Multiplier", pf.maxPositionSizeMultiplier) +
+            `\nAll exposure was flattened to protect the account.`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -7598,30 +7682,33 @@ async function runScanForUser(
             // TP method label
             const zoneTpMethod = pairConfig.tpMethod || "rr_ratio";
             const zoneTpLabel = zoneTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : zoneTpMethod === "next_level" ? "Next Structure Level" : zoneTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR \u00d7${pairConfig.tpATRMultiple || 2.0}`;
-            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
-
-` +
-              `<b>Symbol:</b> ${pair}
-` +
-              `<b>Direction:</b> ${analysis.direction.toUpperCase()}
-` +
-              `<b>Zone Trigger:</b> ${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)
-` +
-              `<b>Current Price:</b> ${fmtPx(analysis.lastPrice, pair)}
-` +
-              `<b>Size:</b> ${limitSize} lots
-` +
-              `<b>SL:</b> ${fmtPx(limitSL, pair)}
-` +
-              `<b>TP:</b> ${fmtPx(limitTP, pair)} (${zoneTpLabel})
-` +
-              `<b>Score:</b> ${analysis.score.toFixed(1)}
-` +
-              `<b>Confirm Mode:</b> ${zoneConfLabel}
-` +
-              `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone"}
-` +
-              `<b>Expires:</b> ${expiryMinutes}min` +
+            const zoneSR = { impulseZone: (detail as any).impulseZone || null };
+            const zoneRR = (() => {
+              const risk = Math.abs(limitEntry.price - limitSL);
+              return risk > 0 ? (Math.abs(limitTP - limitEntry.price) / risk).toFixed(2) : null;
+            })();
+            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>\n\n` +
+              tgLine("Symbol", pair) +
+              tgLine("Direction", analysis.direction.toUpperCase()) +
+              tgLine("Zone Trigger", `${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)`) +
+              tgLine("Zone Range", `${fmtPx(limitEntry.zoneLow, pair)} – ${fmtPx(limitEntry.zoneHigh, pair)}`) +
+              tgLine("Current Price", fmtPx(analysis.lastPrice, pair)) +
+              tgLine("Distance", `${(Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1)} pips`) +
+              tgLine("Size", `${limitSize} lots`) +
+              tgLine("SL", fmtPx(limitSL, pair)) +
+              tgLine("TP", `${fmtPx(limitTP, pair)} (${zoneTpLabel})`) +
+              (zoneRR ? tgLine("Planned R:R", `${zoneRR}:1`) : "") +
+              tgLine("Score", analysis.score.toFixed(1)) +
+              tgLine("Session", analysis.session?.name) +
+              "\n" +
+              zoneEvidenceLines(zoneSR) +
+              directionVerdictLines((detail as any).directionVerdict) +
+              styleLadderLines({}, timeframeAuthority?.roles) +
+              crossTimeframeAuthorityLine(crossTimeframeAuthority) +
+              "\n" +
+              tgLine("Confirm Mode", zoneConfLabel) +
+              tgLine("Confirmation", unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone") +
+              tgLine("Expires", `${expiryMinutes}min`) +
               (isPromotedFromStaging && existingStaged ? `
 
 📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
@@ -8427,17 +8514,29 @@ async function runScanForUser(
           // TP method label for notification
           const openTpMethod = pairConfig.tpMethod || "rr_ratio";
           const openTpLabel = openTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : openTpMethod === "next_level" ? "Next Structure Level" : openTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR ×${pairConfig.tpATRMultiple || 2.0}`;
+          const openRR = (() => {
+            const risk = Math.abs(marketEntryPrice - sl);
+            return risk > 0 ? (Math.abs(tp - marketEntryPrice) / risk).toFixed(2) : null;
+          })();
+          const openSR = { impulseZone: (detail as any).impulseZone || null };
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
-            `<b>Symbol:</b> ${pair}\n` +
-            `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
-            `<b>Size:</b> ${size} lots\n` +
-            `<b>Entry:</b> ${fmtPx(analysis.lastPrice, pair)}\n` +
-            `<b>SL:</b> ${fmtPx(sl, pair)}\n` +
-            `<b>TP:</b> ${fmtPx(tp, pair)} (${openTpLabel})\n` +
-            `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
-            `<b>Session:</b> ${analysis.session.name}\n` +
-            `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
-            `<b>Summary:</b> ${analysis.summary || "—"}` +
+            tgLine("Symbol", pair) +
+            tgLine("Direction", analysis.direction.toUpperCase()) +
+            tgLine("Size", `${size} lots`) +
+            tgLine("Entry", fmtPx(marketEntryPrice, pair)) +
+            tgLine("SL", fmtPx(sl, pair)) +
+            tgLine("TP", `${fmtPx(tp, pair)} (${openTpLabel})`) +
+            (openRR ? tgLine("Planned R:R", `${openRR}:1`) : "") +
+            tgLine("Score", analysis.score.toFixed(1)) +
+            tgLine("Session", analysis.session.name) +
+            tgLine("Setup", `${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)`) +
+            "\n" +
+            zoneEvidenceLines(openSR) +
+            directionVerdictLines((detail as any).directionVerdict) +
+            styleLadderLines({}, timeframeAuthority?.roles) +
+            crossTimeframeAuthorityLine(crossTimeframeAuthority) +
+            "\n" +
+            tgLine("Summary", analysis.summary || "—") +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "") +
             (unifiedZoneData?.confirmation ? `\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> ${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " ✓" : ""}\n<b>Detail:</b> ${unifiedZoneData.confirmation.detail}${unifiedZoneData.confirmation.score > 0 ? `\n<b>Score:</b> +${unifiedZoneData.confirmation.score.toFixed(1)}` : ""}` : "");
