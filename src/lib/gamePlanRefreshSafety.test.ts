@@ -34,6 +34,19 @@ describe("manual Game Plan refresh safety", () => {
     expect(refreshFunctionSource).not.toContain("pairs_scanned: 0");
   });
 
+  it("uses market-aware completeness so closed weekend pairs cannot block crypto", () => {
+    expect(refreshFunctionSource).toContain("resolveGamePlanMarketScope");
+    expect(refreshFunctionSource).toContain(
+      "symbols: marketScope.eligibleSymbols",
+    );
+    expect(scannerSource).toContain("gamePlanSymbolsMatchScope");
+    expect(scannerSource).toContain(
+      "const missingGamePlanSymbols = gamePlanSymbols.filter",
+    );
+    expect(gamePlanPanelSource).toContain("STALE PLAN");
+    expect(gamePlanPanelSource).toContain("currentPlanIsExpired");
+  });
+
   it("does not enter trading or position-management paths", () => {
     expect(refreshFunctionSource).not.toContain("paper_positions");
     expect(refreshFunctionSource).not.toContain("manageOpenPositions");

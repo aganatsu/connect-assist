@@ -635,6 +635,14 @@ export function GamePlanPanel() {
     return gamePlanLogs[selectedPlanIdx] || null;
   }, [gamePlanLogs, selectedPlanIdx]);
 
+  const currentPlanIsExpired = useMemo(() => {
+    if (!currentPlan?.plans?.length) return false;
+    return currentPlan.plans.every((plan) => {
+      if (!plan.expiresAt) return false;
+      return new Date(plan.expiresAt).getTime() <= Date.now();
+    });
+  }, [currentPlan]);
+
   const tradeablePairs = useMemo(() => {
     if (!currentPlan) return [];
     return currentPlan.plans.filter(p => getPlanState(p) === "tradeable");
@@ -728,6 +736,20 @@ export function GamePlanPanel() {
               </span>
             )}
           </div>
+
+          {selectedPlanIdx === 0 && currentPlanIsExpired && (
+            <div
+              role="status"
+              className="flex items-start gap-2 border border-orange-500/30 bg-orange-500/10 p-2 text-[10px] font-mono text-orange-300"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                STALE PLAN — this version has expired and is shown only for history.
+                It is not current trading authority. The next complete market-eligible
+                refresh will replace it.
+              </span>
+            </div>
+          )}
 
           {/* History selector */}
           {showHistory && gamePlanLogs && gamePlanLogs.length > 1 && (

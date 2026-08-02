@@ -89,6 +89,10 @@ import {
   type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
 import {
+  gamePlanSymbolsMatchScope,
+  resolveGamePlanMarketScope,
+} from "../_shared/gamePlanMarketScope.ts";
+import {
   applyGamePlanValidityWindow,
   buildGamePlanConfigSnapshot,
   enrichGamePlanWithDirectionalNews,
@@ -3418,6 +3422,8 @@ async function runScanForUser(
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
+      const gamePlanMarketScope = resolveGamePlanMarketScope(config.instruments, now);
+      const gamePlanSymbols = gamePlanMarketScope.eligibleSymbols;
       const lastGP = _lastGamePlanForValidation;
       const lastGPTime = lastGP?.generatedAt
         ? new Date(lastGP.generatedAt).getTime()
@@ -3427,25 +3433,37 @@ async function runScanForUser(
         session: currentSessionName,
         style: scanStylePolicy.style,
       });
+      const lastPlanMatchesMarketScope = lastGP
+        ? gamePlanSymbolsMatchScope(
+          lastGP.plans.map((plan) => plan.symbol),
+          gamePlanMarketScope,
+        )
+        : false;
 
-      console.log(`[scan ${scanCycleId}] Game Plan validity check: session=${currentSessionName}, style=${scanStylePolicy.style}, ageHours=${hoursSinceLastGP.toFixed(2)}, reusable=${reuseDecision.reusable}, validityMinutes=${gamePlanValidityMinutes}, expiresAt=${reuseDecision.expiresAt || "none"}, reason=${reuseDecision.reason}`);
+      console.log(`[scan ${scanCycleId}] Game Plan validity check: session=${currentSessionName}, style=${scanStylePolicy.style}, ageHours=${hoursSinceLastGP.toFixed(2)}, reusable=${reuseDecision.reusable && lastPlanMatchesMarketScope}, validityMinutes=${gamePlanValidityMinutes}, expiresAt=${reuseDecision.expiresAt || "none"}, reason=${lastPlanMatchesMarketScope ? reuseDecision.reason : "market_scope_changed"}, scope=${gamePlanMarketScope.reason}, eligible=[${gamePlanSymbols.join(", ")}], excluded=[${gamePlanMarketScope.excludedSymbols.join(", ")}]`);
 
-      if (reuseDecision.reusable && lastGP) {
+      if (reuseDecision.reusable && lastGP && lastPlanMatchesMarketScope) {
         // Reuse the immutable active version — don't regenerate or notify.
         activeGamePlan = lastGP;
         console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING version ${lastGP.planVersion} for ${currentSessionName} (${hoursSinceLastGP.toFixed(1)}h old, expires ${reuseDecision.expiresAt}) — NO notification sent`);
       } else {
-        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${reuseDecision.reason}`);
+        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${lastPlanMatchesMarketScope ? reuseDecision.reason : "market_scope_changed"}`);
       }
 
-      if (!activeGamePlan) {
+      if (!activeGamePlan && gamePlanSymbols.length === 0) {
+        console.log(
+          `[scan ${scanCycleId}] Game Plan: no enabled instruments are open in market scope ${gamePlanMarketScope.reason}; previous plan will not be reused`,
+        );
+      }
+
+      if (!activeGamePlan && gamePlanSymbols.length > 0) {
       console.log(`[scan ${scanCycleId}] Game Plan: generating NEW plan for ${currentSessionName} session...`);
       const instrumentPlans: InstrumentGamePlan[] = [];
       // Fetch HTF data for each enabled instrument (batched to respect rate limits)
       const GP_BATCH_SIZE = 3;
       const GP_BATCH_DELAY = 1200;
-      for (let i = 0; i < config.instruments.length; i += GP_BATCH_SIZE) {
-        const batch = config.instruments.slice(i, i + GP_BATCH_SIZE);
+      for (let i = 0; i < gamePlanSymbols.length; i += GP_BATCH_SIZE) {
+        const batch = gamePlanSymbols.slice(i, i + GP_BATCH_SIZE);
         const batchPlans = await Promise.all(batch.map(async (sym: string) => {
           try {
             // Fetch legacy session/level datasets plus the exact structural
@@ -3535,12 +3553,12 @@ async function runScanForUser(
         for (const plan of batchPlans) {
           if (plan) instrumentPlans.push(plan);
         }
-        if (i + GP_BATCH_SIZE < config.instruments.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
+        if (i + GP_BATCH_SIZE < gamePlanSymbols.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
       }
       const generatedGamePlanSymbols = new Set(
         instrumentPlans.map((plan) => plan.symbol),
       );
-      const missingGamePlanSymbols = config.instruments.filter(
+      const missingGamePlanSymbols = gamePlanSymbols.filter(
         (symbol: string) => !generatedGamePlanSymbols.has(symbol),
       );
       if (missingGamePlanSymbols.length === 0) {
@@ -3554,7 +3572,7 @@ async function runScanForUser(
         try {
           const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
           const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-          const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
+          const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, gamePlanSymbols);
           if (newsEvents.length > 0) {
             activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
             activeGamePlan = enrichGamePlanWithDirectionalNews(activeGamePlan);
@@ -3586,6 +3604,7 @@ async function runScanForUser(
               marketDataSnapshot: {
                 hierarchy: ["Twelve Data", "Polygon"],
                 scanCycleId,
+                gamePlanMarketScope,
               },
             },
           );
@@ -3626,7 +3645,7 @@ async function runScanForUser(
         }
       } else {
         console.error(
-          `[scan ${scanCycleId}] Game Plan: incomplete generation (${instrumentPlans.length}/${config.instruments.length}); missing [${missingGamePlanSymbols.join(", ")}]. Previous complete plan remains authoritative; partial plan was not activated.`,
+          `[scan ${scanCycleId}] Game Plan: incomplete generation (${instrumentPlans.length}/${gamePlanSymbols.length}); missing [${missingGamePlanSymbols.join(", ")}]. Previous complete plan remains authoritative; partial plan was not activated.`,
         );
       }
       } // close if (!activeGamePlan) — new plan generation block
