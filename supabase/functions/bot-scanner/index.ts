@@ -8514,17 +8514,29 @@ async function runScanForUser(
           // TP method label for notification
           const openTpMethod = pairConfig.tpMethod || "rr_ratio";
           const openTpLabel = openTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : openTpMethod === "next_level" ? "Next Structure Level" : openTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR ×${pairConfig.tpATRMultiple || 2.0}`;
+          const openRR = (() => {
+            const risk = Math.abs(marketEntryPrice - sl);
+            return risk > 0 ? (Math.abs(tp - marketEntryPrice) / risk).toFixed(2) : null;
+          })();
+          const openSR = { impulseZone: (detail as any).impulseZone || null };
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
-            `<b>Symbol:</b> ${pair}\n` +
-            `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
-            `<b>Size:</b> ${size} lots\n` +
-            `<b>Entry:</b> ${fmtPx(analysis.lastPrice, pair)}\n` +
-            `<b>SL:</b> ${fmtPx(sl, pair)}\n` +
-            `<b>TP:</b> ${fmtPx(tp, pair)} (${openTpLabel})\n` +
-            `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
-            `<b>Session:</b> ${analysis.session.name}\n` +
-            `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
-            `<b>Summary:</b> ${analysis.summary || "—"}` +
+            tgLine("Symbol", pair) +
+            tgLine("Direction", analysis.direction.toUpperCase()) +
+            tgLine("Size", `${size} lots`) +
+            tgLine("Entry", fmtPx(marketEntryPrice, pair)) +
+            tgLine("SL", fmtPx(sl, pair)) +
+            tgLine("TP", `${fmtPx(tp, pair)} (${openTpLabel})`) +
+            (openRR ? tgLine("Planned R:R", `${openRR}:1`) : "") +
+            tgLine("Score", analysis.score.toFixed(1)) +
+            tgLine("Session", analysis.session.name) +
+            tgLine("Setup", `${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)`) +
+            "\n" +
+            zoneEvidenceLines(openSR) +
+            directionVerdictLines((detail as any).directionVerdict) +
+            styleLadderLines({}, timeframeAuthority?.roles) +
+            crossTimeframeAuthorityLine(crossTimeframeAuthority) +
+            "\n" +
+            tgLine("Summary", analysis.summary || "—") +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "") +
             (unifiedZoneData?.confirmation ? `\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> ${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " ✓" : ""}\n<b>Detail:</b> ${unifiedZoneData.confirmation.detail}${unifiedZoneData.confirmation.score > 0 ? `\n<b>Score:</b> +${unifiedZoneData.confirmation.score.toFixed(1)}` : ""}` : "");
