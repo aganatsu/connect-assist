@@ -2719,6 +2719,7 @@ export type Database = {
           activation_eligible: boolean
           bot_id: string
           candidate_id: string
+          candidate_lineage: Json | null
           candidate_lifecycle: Json | null
           candidate_lifecycle_state: string | null
           candidate_model: Json | null
@@ -2726,11 +2727,18 @@ export type Database = {
           candidate_model_version: string | null
           candidate_model_winner: boolean
           created_at: string
+          cross_tf_disagreed: boolean
+          cross_tf_evaluation: Json | null
+          cross_tf_policy: Json | null
+          cross_tf_policy_version: string | null
+          cross_tf_reason_codes: string[]
+          cross_tf_shadow_decision: string | null
           direction: string
           entry_price: number
           evidence_source: string
           id: string
           legacy_comparable_score: number
+          legacy_execution_decision: string | null
           legacy_rank: number
           legacy_winner: boolean
           legacy_zone_score: number
@@ -2779,11 +2787,18 @@ export type Database = {
           candidate_model_version?: string | null
           candidate_model_winner?: boolean
           created_at?: string
+          cross_tf_disagreed?: boolean
+          cross_tf_evaluation?: Json | null
+          cross_tf_policy?: Json | null
+          cross_tf_policy_version?: string | null
+          cross_tf_reason_codes?: string[]
+          cross_tf_shadow_decision?: string | null
           direction: string
           entry_price: number
           evidence_source?: string
           id?: string
           legacy_comparable_score: number
+          legacy_execution_decision?: string | null
           legacy_rank: number
           legacy_winner?: boolean
           legacy_zone_score: number
@@ -2832,11 +2847,18 @@ export type Database = {
           candidate_model_version?: string | null
           candidate_model_winner?: boolean
           created_at?: string
+          cross_tf_disagreed?: boolean
+          cross_tf_evaluation?: Json | null
+          cross_tf_policy?: Json | null
+          cross_tf_policy_version?: string | null
+          cross_tf_reason_codes?: string[]
+          cross_tf_shadow_decision?: string | null
           direction?: string
           entry_price?: number
           evidence_source?: string
           id?: string
           legacy_comparable_score?: number
+          legacy_execution_decision?: string | null
           legacy_rank?: number
           legacy_winner?: boolean
           legacy_zone_score?: number

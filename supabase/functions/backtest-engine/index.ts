@@ -2606,6 +2606,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
+              collectEvidence: zoneLocalReplayEvidence === true,
               strictATRMult: config.marketFillStrictATRMult,
               minQualityScore: config.zoneQualityThreshold,
               maxAgeBars: config.zoneMaxAgeBars,
