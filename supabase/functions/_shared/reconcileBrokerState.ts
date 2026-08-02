@@ -302,7 +302,7 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
                   `<b>DB SL:</b> ${intendedSL?.toFixed(5) ?? "null"}\n` +
                   `<b>Broker SL:</b> ${brokerSL?.toFixed(5) ?? "null"}\n` +
                   `<b>Drift:</b> ${(intendedSL != null && brokerSL != null) ? Math.abs(intendedSL - brokerSL).toFixed(5) : "unknown"}\n` +
-                  `<b>Entry:</b> ${pos.entry_price ?? "—"}\n` +
+                  `<b>TP:</b> ${pos.take_profit?.toFixed(5) ?? "—"}\n` +
                   `<b>Status:</b> OANDA value is authoritative — DB was corrected`;
                 const supabaseUrl = Deno.env.get("SUPABASE_URL");
                 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -482,7 +482,7 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
                 `<b>DB SL:</b> ${intendedSL?.toFixed(5) ?? "null"}\n` +
                 `<b>Broker SL:</b> ${brokerSL?.toFixed(5) ?? "null"}\n` +
                 `<b>Drift:</b> ${(intendedSL != null && brokerSL != null) ? Math.abs(intendedSL - brokerSL).toFixed(5) : "unknown"}\n` +
-                `<b>Entry:</b> ${pos.entry_price ?? "—"}\n` +
+                `<b>TP:</b> ${pos.take_profit?.toFixed(5) ?? "—"}\n` +
                 `<b>Status:</b> Correction still running — broker value written to DB`;
               const supabaseUrl = Deno.env.get("SUPABASE_URL");
               const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
