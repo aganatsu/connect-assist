@@ -4496,6 +4496,10 @@ async function runScanForUser(
               multiTF.bestZone.zone.localConfluence ?? null,
             shadowRanking:
               multiTF.bestZone.zone.shadowRanking ?? null,
+            candidateLifecycle:
+              multiTF.bestZone.zone.candidateLifecycle ?? null,
+            candidateModel:
+              multiTF.bestZone.zone.candidateModel ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4515,6 +4519,8 @@ async function runScanForUser(
             evidence: candidate.poi.evidence ?? null,
             localConfluence: candidate.localConfluence ?? null,
             shadowRanking: candidate.shadowRanking ?? null,
+            candidateLifecycle: candidate.candidateLifecycle ?? null,
+            candidateModel: candidate.candidateModel ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
@@ -4539,7 +4545,7 @@ async function runScanForUser(
           if (persisted > 0) {
             console.log(
               `[scan ${scanCycleId}] ${pair} stored ${persisted}`
-              + ` observe-only zone-rank disagreement candidates`,
+              + ` observe-only zone candidate model rows`,
             );
           }
         } catch (shadowStoreErr: any) {

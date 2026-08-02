@@ -2709,6 +2709,12 @@ export type Database = {
           activation_eligible: boolean
           bot_id: string
           candidate_id: string
+          candidate_lifecycle: Json | null
+          candidate_lifecycle_state: string | null
+          candidate_model: Json | null
+          candidate_model_rank: number | null
+          candidate_model_version: string | null
+          candidate_model_winner: boolean
           created_at: string
           direction: string
           entry_price: number
@@ -2753,6 +2759,12 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id: string
+          candidate_lifecycle?: Json | null
+          candidate_lifecycle_state?: string | null
+          candidate_model?: Json | null
+          candidate_model_rank?: number | null
+          candidate_model_version?: string | null
+          candidate_model_winner?: boolean
           created_at?: string
           direction: string
           entry_price: number
@@ -2797,6 +2809,12 @@ export type Database = {
           activation_eligible?: boolean
           bot_id?: string
           candidate_id?: string
+          candidate_lifecycle?: Json | null
+          candidate_lifecycle_state?: string | null
+          candidate_model?: Json | null
+          candidate_model_rank?: number | null
+          candidate_model_version?: string | null
+          candidate_model_winner?: boolean
           created_at?: string
           direction?: string
           entry_price?: number

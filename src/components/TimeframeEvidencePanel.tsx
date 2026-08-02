@@ -77,6 +77,16 @@ interface SlotEvidence {
     rank: number;
     type: string;
     totalScore: number;
+    candidateLifecycle?: {
+      state: string;
+      explanation: string;
+    } | null;
+    candidateModel?: {
+      rank: number;
+      topCandidate: boolean;
+      totalScore: number;
+      enforcement: "observe_only";
+    } | null;
   }>;
 }
 
@@ -359,6 +369,27 @@ export function TimeframeEvidencePanel({
                           POIs: {slot.pois.filter((poi) => poi.accepted).length}{" "}
                           accepted / {slot.pois.length} mapped
                         </div>
+                        {slot.candidates
+                          .filter((candidate) =>
+                            candidate.candidateModel?.topCandidate === true
+                          )
+                          .sort((a, b) =>
+                            (a.candidateModel?.rank ?? 99) -
+                            (b.candidateModel?.rank ?? 99)
+                          )
+                          .map((candidate) => (
+                            <div
+                              key={`model-${candidate.candidateId}`}
+                              className="rounded border border-cyan-500/20 bg-cyan-500/5 px-1.5 py-1"
+                            >
+                              Model #{candidate.candidateModel?.rank} ·{" "}
+                              {candidate.type.toUpperCase()} ·{" "}
+                              {candidate.candidateLifecycle?.state
+                                ?.replaceAll("_", " ") ?? "lifecycle unknown"} ·
+                              score{" "}
+                              {candidate.candidateModel?.totalScore.toFixed(2)}
+                            </div>
+                          ))}
                         {(slot.rejections ?? []).map((rejection) => (
                           <div
                             key={`${slot.slot}-${rejection.code}`}

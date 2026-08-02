@@ -51,17 +51,23 @@ export function buildZoneShadowObservationRows(
   const shadowWinner = eligible.find((candidate) =>
     candidate.shadowRanking?.shadowRank === 1
   );
-  if (
-    !legacyWinner ||
-    !shadowWinner ||
-    legacyWinner.localConfluence?.candidateId ===
-      shadowWinner.localConfluence?.candidateId
-  ) {
-    return [];
-  }
+  const rankingDisagreed = Boolean(
+    legacyWinner &&
+      shadowWinner &&
+      legacyWinner.localConfluence?.candidateId !==
+        shadowWinner.localConfluence?.candidateId,
+  );
+  const modelTopThree = eligible.filter((candidate) =>
+    candidate.candidateModel?.topCandidate === true
+  );
+  if (modelTopThree.length === 0 && !rankingDisagreed) return [];
 
-  const winners = Array.from(new Set([legacyWinner, shadowWinner]));
-  return winners.map((candidate) => {
+  const observedCandidates = Array.from(new Set([
+    ...modelTopThree,
+    ...(rankingDisagreed && legacyWinner ? [legacyWinner] : []),
+    ...(rankingDisagreed && shadowWinner ? [shadowWinner] : []),
+  ]));
+  return observedCandidates.map((candidate) => {
     const local = candidate.localConfluence!;
     const ranking = candidate.shadowRanking!;
     const trade = candidate.validationTrade!;
@@ -88,12 +94,20 @@ export function buildZoneShadowObservationRows(
       rank_delta: ranking.rankDelta,
       legacy_winner: ranking.legacyRank === 1,
       shadow_winner: ranking.shadowRank === 1,
-      ranking_disagreed: true,
+      ranking_disagreed: rankingDisagreed,
       legacy_zone_score: ranking.legacyZoneScore,
       legacy_comparable_score: ranking.legacyComparableScore,
       shadow_local_score: ranking.shadowLocalScore,
       local_confluence: local,
       shadow_ranking: ranking,
+      candidate_model_version:
+        candidate.candidateModel?.contractVersion ?? null,
+      candidate_model_rank: candidate.candidateModel?.rank ?? null,
+      candidate_model_winner: candidate.candidateModel?.rank === 1,
+      candidate_lifecycle_state:
+        candidate.candidateLifecycle?.state ?? null,
+      candidate_lifecycle: candidate.candidateLifecycle ?? null,
+      candidate_model: candidate.candidateModel ?? null,
       evidence_source: input.evidenceSource ?? "forward_observation",
       replay_run_id: input.replayRunId ?? null,
       replay_contract_version: input.replayContractVersion ?? null,
