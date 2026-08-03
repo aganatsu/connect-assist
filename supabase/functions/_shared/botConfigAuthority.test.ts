@@ -9,7 +9,7 @@ import {
   assertFalse,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
-import { resolveEffectiveRuntimeConfig } from "./runtimeConfigStore.ts";
+import { resolveEffectiveRuntimeConfig } from "./runtimeConfigResolver.ts";
 
 const scannerSource = await Deno.readTextFile(
   "./supabase/functions/bot-scanner/index.ts",
