@@ -185,6 +185,12 @@ import {
   persistZoneTimeframeEvidence,
   type EvidenceRow,
 } from "../_shared/zoneTimeframeEvidence.ts";
+import {
+  compareDealingRangeDecisions,
+  evaluateCanonicalDealingRange,
+  normalizeDealingRangeMode,
+  resolveCanonicalDealingRange,
+} from "../_shared/canonicalDealingRange.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
   evaluateZoneLocalEnforcement,
@@ -4817,6 +4823,42 @@ async function runScanForUser(
           // market state.
           (detail as any).timeframeEvidenceId = timeframeEvidenceRow.id;
           (detail as any).timeframeEvidenceScanCycleId = scanCycleId;
+
+          const canonicalRangeSelection = resolveCanonicalDealingRange({
+            slots: timeframeEvidenceRow.slots,
+            parentTimeframe:
+              multiTF.bestZone?.zone.timeframeLineage?.parentTimeframe || null,
+            childTimeframe: multiTF.selectedTF || "",
+            frozenAt: timeframeEvidenceRow.observed_at,
+          });
+          const canonicalMode = normalizeDealingRangeMode(
+            (pairConfig as any).dealingRangeMode,
+            {
+              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+              onlySellInPremium: pairConfig.onlySellInPremium,
+            },
+          );
+          const canonicalEvaluation = evaluateCanonicalDealingRange({
+            range: canonicalRangeSelection.range,
+            direction: analysis.direction as "long" | "short",
+            price: analysis.lastPrice,
+            mode: canonicalMode,
+          });
+          const rollingBlocked =
+            (pairConfig.onlyBuyInDiscount &&
+              analysis.direction === "long" &&
+              analysis.pd.currentZone === "premium") ||
+            (pairConfig.onlySellInPremium &&
+              analysis.direction === "short" &&
+              analysis.pd.currentZone === "discount");
+          (detail as any).canonicalDealingRangeObservation = {
+            selectionReason: canonicalRangeSelection.reason,
+            ...compareDealingRangeDecisions({
+              canonical: canonicalEvaluation,
+              rollingAllowed: !rollingBlocked,
+              rollingPercent: analysis.pd.zonePercent,
+            }),
+          };
         } catch (tfEvidenceErr: any) {
           console.warn(
             `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`

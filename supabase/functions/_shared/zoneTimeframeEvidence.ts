@@ -543,6 +543,9 @@ export function buildTimeframeEvidence(
 }
 
 export interface EvidenceRow extends Record<string, unknown> {
+  observed_at: string;
+  selected_timeframe: string | null;
+  slots: SlotEvidence[];
   id: string;
   user_id: string;
   bot_id: string;
