@@ -1,6 +1,6 @@
 # Streamlined Decision Phase 6 - Path Parity
 
-Implemented 2026-08-03. Scanner and backtest call the shared evaluator.
+Implemented 2026-08-03 in PR #170; Node build and Deno suite CI-verified. Scanner and backtest call the shared evaluator.
 Watchlist, rejection, pending, fill, position, and close paths carry the same
 frozen origin. Pending confirmation refreshes lifecycle state without replacing
 origin evidence. Manual scanner routes share the scanner implementation.

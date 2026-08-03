@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: Phases 3-8 implemented; local and CI verification pending
+Status: Phases 3-8 complete and CI-verified in PR #170
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -153,12 +153,12 @@ A trade is authorized only when:
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
 | 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
 | 2 | Canonical evidence-to-pillar mapping | Observation only | Complete; PR #169 |
-| 3 | Freeze and persist summary through lifecycle | Observation only | Implemented; verification pending |
-| 4 | Historical replay and comparison engine | Observation only | Implemented; verification pending |
-| 5 | Rejected Setups comparison UI | Observation only | Implemented; verification pending |
-| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Implemented; verification pending |
+| 3 | Freeze and persist summary through lifecycle | Observation only | Complete; PR #170 |
+| 4 | Historical replay and comparison engine | Observation only | Complete; PR #170 |
+| 5 | Rejected Setups comparison UI | Observation only | Complete; PR #170 |
+| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Complete; PR #170 |
 | 7 | Evidence review and retirement proposal | Documentation only | Complete; no retirement |
-| 8 | Controlled enforcement | Opt-in, evidence-gated | Implemented with owner approval; verification pending |
+| 8 | Controlled enforcement | Opt-in, evidence-gated | Complete; PR #170, owner-approved |
 
 ## Phase 1 - Decision Summary Contract
 
@@ -314,9 +314,9 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Verify phases 3-8 with the full Node build and Deno suite, review the database
-migration, open a fully described pull request, pass CI, and merge. After
-deployment, remain in observe mode until a certificate is deliberately issued.
+Merge PR #170 after final CI, deploy the migration and functions, and remain in
+observe mode until a certificate is deliberately issued from sufficient forward
+and historical evidence.
 
 ## Restart Prompt
 
