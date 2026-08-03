@@ -27,6 +27,7 @@ export interface RuntimeConfigProvenance {
     impulseZoneGateMode: string;
     zoneLocalEnforcementMode: string;
     crossTfAuthorityMode: string;
+    dealingRangeMode: string;
     minConfluence: number;
     riskPerTrade: number;
   };
@@ -155,6 +156,9 @@ export async function loadEffectiveRuntimeConfig(
         ),
         crossTfAuthorityMode: String(
           effectiveConfig.crossTfAuthorityMode || "observe",
+        ),
+        dealingRangeMode: String(
+          effectiveConfig.dealingRangeMode || "avoid_wrong_side",
         ),
         minConfluence: Number(effectiveConfig.minConfluence),
         riskPerTrade: Number(effectiveConfig.riskPerTrade),

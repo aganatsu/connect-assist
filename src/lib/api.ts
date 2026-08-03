@@ -330,6 +330,7 @@ export const botConfigApi = {
           impulseZoneGateMode: string;
           zoneLocalEnforcementMode: string;
           crossTfAuthorityMode: string;
+          dealingRangeMode: string;
           minConfluence: number;
           riskPerTrade: number;
         };
@@ -338,6 +339,21 @@ export const botConfigApi = {
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
   reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
+  getDealingRangeComparison: () => invokeFunction<{
+    summary: {
+      sampleSize: number; available: number; unavailable: number;
+      agreements: number; disagreements: number;
+      canonicalAllowed: number; canonicalBlocked: number;
+      winnersPreserved: number; winnersBlocked: number;
+      poorEntriesRejected: number; poorEntriesAllowed: number;
+    };
+    rows: Array<{
+      id: string; source: "closed" | "rejected"; symbol: string; direction: string;
+      observedAt: string; outcome: "won" | "lost" | "inconclusive";
+      rollingAllowed: boolean | null; canonicalAllowed: boolean | null;
+      canonicalPercent: number | null; explanation: string | null; decisionsMatch: boolean | null;
+    }>;
+  }>("bot-config", { action: "dealing_range.comparison" }),
   // Preset CRUD
   listPresets: () => invokeFunction<Array<{ id: string; name: string; description: string; config_json: any; created_at: string; updated_at: string }>>("bot-config", { action: "presets.list" }),
   savePreset: (name: string, config: any, description?: string) => invokeFunction<{ success: boolean; id: string; updated: boolean }>("bot-config", { action: "presets.save", name, config, description }),
