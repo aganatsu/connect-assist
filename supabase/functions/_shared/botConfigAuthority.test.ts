@@ -65,7 +65,7 @@ Deno.test("canonical mapper owns the effective empty-config defaults", () => {
 });
 
 Deno.test("scanner preserves the historical partial-TP style sentinel", () => {
-  const resolved = loadEffectiveRuntimeConfig(
+  const resolved = resolveEffectiveRuntimeConfig(
     null,
     "day_trader",
   );

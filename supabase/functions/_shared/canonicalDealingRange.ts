@@ -165,7 +165,7 @@ export function readFrozenCanonicalDealingRange(
   if (selection.available !== true) return null;
   if (range.contractVersion !== CANONICAL_DEALING_RANGE_VERSION) return null;
   if (!finite(range.high) || !finite(range.low) || range.high <= range.low) return null;
-  if (!finite(range.midpoint) || range.midpoint !== (range.high + range.low) / 2) return null;
+  if (!finite(range.midpoint) || range.midpoint !== Number((((range.high + range.low) / 2).toPrecision(15)))) return null;
   if (typeof range.impulseId !== "string" || typeof range.timeframe !== "string") return null;
   if (range.direction !== "bullish" && range.direction !== "bearish") return null;
   if (range.source !== "higher_timeframe_parent" && range.source !== "entry_timeframe_impulse") return null;
