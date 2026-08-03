@@ -81,6 +81,15 @@ import {
   computeFibLevels,
 } from "../_shared/smcAnalysis.ts";
 import {
+  buildScanEvidenceRow,
+} from "../_shared/zoneTimeframeEvidence.ts";
+import {
+  evaluateCanonicalDealingRange,
+  normalizeDealingRangeMode,
+  resolveCanonicalDealingRange,
+  type DealingRangeEvaluation,
+} from "../_shared/canonicalDealingRange.ts";
+import {
   runConfluenceAnalysis,
   DEFAULT_FACTOR_WEIGHTS,
   resolveWeightScale,
@@ -2579,6 +2588,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         let signalSource: "cascade" | "unified" | "standalone" =
           "standalone";
         let selectedCrossTfCandidate: any = null;
+        let canonicalDealingRangeEvaluation: DealingRangeEvaluation | null = null;
         const pipSize = (SPECS[symbol] || SPECS["EUR/USD"]).pipSize;
 
         if (analysis.direction && relevantH1.length >= 20) {
@@ -2631,7 +2641,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
-              collectEvidence: zoneLocalReplayEvidence === true,
+              collectEvidence: true,
               strictATRMult: config.marketFillStrictATRMult,
               minQualityScore: config.zoneQualityThreshold,
               maxAgeBars: config.zoneMaxAgeBars,
@@ -2667,6 +2677,47 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             // ── Derive izData from unified result (backward compat with downstream code) ──
             const multiTF = unifiedResult.multiTFResult;
             selectedCrossTfCandidate = multiTF.bestZone?.zone || null;
+            const canonicalEvidence = buildScanEvidenceRow(
+              multiTF,
+              {
+                top: { timeframe: zoneTFLabels.top, candles: zoneDailyCandles ?? [] },
+                mid: { timeframe: zoneTFLabels.mid, candles: zoneH4Candles ?? [] },
+                low: { timeframe: zoneTFLabels.low, candles: zoneH1Candles ?? [] },
+              },
+              {
+                userId: backtestOwner?.user_id || "00000000-0000-0000-0000-000000000000",
+                botId: "smc",
+                scanCycleId: runId,
+                symbol,
+                direction: zoneDirection as "bullish" | "bearish",
+                observedAt: candle.datetime,
+                tradingStyle: resolvedTradingStyle,
+                stylePolicyVersion: "backtest-observation",
+                styleBasePolicyHash: "backtest-observation",
+                stylePolicyHash: "backtest-observation",
+                evidenceSource: "backtest",
+              },
+              zoneOpts,
+            );
+            const canonicalSelection = resolveCanonicalDealingRange({
+              slots: canonicalEvidence.slots,
+              parentTimeframe:
+                multiTF.bestZone?.zone.timeframeLineage?.parentTimeframe || null,
+              childTimeframe: multiTF.selectedTF || "",
+              frozenAt: canonicalEvidence.observed_at,
+            });
+            canonicalDealingRangeEvaluation = evaluateCanonicalDealingRange({
+              range: canonicalSelection.range,
+              direction: analysis.direction as "long" | "short",
+              price: analysis.lastPrice,
+              mode: normalizeDealingRangeMode(
+                (config as any).dealingRangeMode,
+                {
+                  onlyBuyInDiscount: config.onlyBuyInDiscount,
+                  onlySellInPremium: config.onlySellInPremium,
+                },
+              ),
+            });
             if (
               zoneLocalReplayEvidence === true &&
               backtestOwner?.user_id &&
@@ -3404,6 +3455,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           barDecisionEvidence.labels.structure,
           directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
+
+        if (canonicalDealingRangeEvaluation) {
+          gates.push({
+            passed: true,
+            reason: "[observe:canonical-dealing-range] " +
+              canonicalDealingRangeEvaluation.explanation,
+          });
+        }
 
         // ── Game Plan + Direction Verdict Alignment Gate ──
         // Shared with the live scanner so backtest results reflect the exact
