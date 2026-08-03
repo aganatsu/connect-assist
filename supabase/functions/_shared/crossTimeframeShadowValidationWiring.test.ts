@@ -19,7 +19,7 @@ Deno.test("forward and replay observations share one cross-TF evaluation", () =>
   assertStringIncludes(store, "cross_tf_reason_codes");
   assertStringIncludes(
     replay,
-    "collectEvidence: zoneLocalReplayEvidence === true",
+    "collectEvidence: true",
   );
 });
 

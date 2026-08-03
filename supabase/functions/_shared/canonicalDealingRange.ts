@@ -97,7 +97,7 @@ function toCanonicalRange(
     timeframe: impulse.timeframe,
     high: impulse.high,
     low: impulse.low,
-    midpoint: (impulse.high + impulse.low) / 2,
+    midpoint: Number((((impulse.high + impulse.low) / 2).toPrecision(15))),
     direction,
     frozenAt,
   };
