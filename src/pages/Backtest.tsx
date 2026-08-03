@@ -171,6 +171,16 @@ function FieldRow({ label, description, children }: { label: string; description
   );
 }
 
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
+  return (
+    <FieldRow label={label}>
+      <select value={value} onChange={event => onChange(event.target.value)} className="w-full bg-secondary border border-border rounded px-2 py-1.5 text-xs">
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </FieldRow>
+  );
+}
+
 function Toggle({ label, description, checked, onChange }: { label: string; description?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-start justify-between gap-2 px-2.5 py-2 border border-border/40 hover:border-border/80 transition-colors">
@@ -618,8 +628,7 @@ export default function Backtest() {
                   <div className="grid grid-cols-2 gap-2">
                     <Toggle label="Require HTF Bias" description="Only trade in direction of daily bias" checked={config.strategy.requireHTFBias} onChange={v => updateConfig("strategy", "requireHTFBias", v)} />
                     <Toggle label="HTF Bias Hard Veto" description="Hard block: no ranging exception" checked={config.strategy.htfBiasHardVeto} onChange={v => updateConfig("strategy", "htfBiasHardVeto", v)} />
-                    <Toggle label="Only Buy in Discount" description="Longs only in discount zone" checked={config.strategy.onlyBuyInDiscount} onChange={v => updateConfig("strategy", "onlyBuyInDiscount", v)} />
-                    <Toggle label="Only Sell in Premium" description="Shorts only in premium zone" checked={config.strategy.onlySellInPremium} onChange={v => updateConfig("strategy", "onlySellInPremium", v)} />
+                    <SelectField label="Dealing Range Mode" value={config.strategy.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Avoid Wrong Side" }, { value: "strict_value", label: "Strict Value" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
                   </div>
                 </TabsContent>
 

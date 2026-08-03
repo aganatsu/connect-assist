@@ -1003,3 +1003,13 @@ Deno.test("visible precision and SMC enhancement tuning maps to engine sub-confi
   assertEquals(enhancements.trendlineConfig?.minTouches, 4);
   assertEquals(enhancements.trendlineConfig?.trapTouchThreshold, 5);
 });
+
+Deno.test("canonical dealing range mode defaults safely and maps explicit values", () => {
+  assertEquals(mapNestedToFlat({}).dealingRangeMode, "avoid_wrong_side");
+  assertEquals(mapNestedToFlat({
+    strategy: { dealingRangeMode: "off" },
+  }).dealingRangeMode, "off");
+  assertEquals(mapNestedToFlat({
+    strategy: { dealingRangeMode: "strict_value" },
+  }).dealingRangeMode, "strict_value");
+});

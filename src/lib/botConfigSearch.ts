@@ -41,8 +41,7 @@ const scanLabels = [
   "HTF Bias Timeframe",
   "HTF Bias Required",
   "HTF Bias Hard Veto",
-  "Only Buy in Discount",
-  "Only Sell in Premium",
+  "Dealing Range Mode",
   "Enable Regime Scoring",
   "Regime Strength",
   "Structural Conviction Gate",
@@ -279,6 +278,7 @@ const enterAliases: AliasMap = {
   "Confirmation Method": ["choch confirmation", "indicator confirmation"],
   "Per-Pair Gate Overrides": ["symbol overrides", "pair settings"],
   "Premium/Discount & Fib": ["premium discount weight", "fib weight"],
+  "Dealing Range Mode": ["canonical range", "avoid wrong side", "strict value"],
   "Fair Value Gap": ["fvg weight"],
   "Order Block": ["order block weight", "ob weight"],
 };
