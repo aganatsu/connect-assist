@@ -1,6 +1,6 @@
 # Streamlined Trade Decision - Phase 2
 
-Status: implementation complete; CI verification pending
+Status: complete and CI-verified
 
 ## Outcome
 
@@ -103,12 +103,13 @@ docs/STREAMLINED_EVIDENCE_OWNERSHIP.md
 
 ## Verification
 
-- Local diff formatting: pending final check
+- Local diff formatting: passed
 - Local Node/Deno execution: unavailable in workspace
-- GitHub Actions Node tests/build: pending
-- GitHub Actions Deno tests: pending
-- Pull request: pending
-- Merge: pending
+- GitHub Actions Node tests/build: passed
+- GitHub Actions Deno tests: passed after retrying an external esm.sh HTTP 522
+- GitHub Actions run: 30834487774
+- Pull request: #169
+- Merge: completed through PR #169
 
 ## Next proposed phase
 

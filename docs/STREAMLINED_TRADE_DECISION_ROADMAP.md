@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: Phase 2 implementation complete; CI verification pending
+Status: Phase 2 complete and CI-verified in PR #169
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -152,7 +152,7 @@ A trade is authorized only when:
 |---|---|---|---|
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
 | 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
-| 2 | Canonical evidence-to-pillar mapping | Observation only | Implementation complete; CI pending |
+| 2 | Canonical evidence-to-pillar mapping | Observation only | Complete; PR #169 |
 | 3 | Freeze and persist summary through lifecycle | Observation only | Not started |
 | 4 | Historical replay and comparison engine | Observation only | Not started |
 | 5 | Rejected Setups comparison UI | Observation only | Not started |
@@ -314,16 +314,17 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Finish Phase 2 verification:
+Phase 3 lifecycle persistence is the next proposed phase:
 
-1. open the described Phase 2 PR;
-2. pass Node tests, production build, and Deno tests;
-3. record the PR and CI run in this tracker and the Phase 2 report;
-4. merge to main.
+1. define one immutable storage projection for the observation summary;
+2. persist it with candidate, Watchlist, pending, rejection, position, and
+   closed-trade evidence;
+3. preserve the same candidate identity and origin evidence;
+4. allow only current price, Thesis Health, and Safety Authorization to refresh;
+5. keep all stored summaries observation-only.
 
-After Phase 2 is verified, Phase 3 lifecycle persistence is the next proposed
-phase. Do not begin Phase 3 without owner approval. Do not enforce the new
-summary, delete tiers, or change thresholds.
+Do not begin Phase 3 without owner approval. Do not enforce the new summary,
+delete tiers, or change thresholds.
 
 ## Restart Prompt
 
