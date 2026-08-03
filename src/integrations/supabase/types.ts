@@ -817,6 +817,9 @@ export type Database = {
           staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
+          streamlined_decision_frozen_at: string | null
+          streamlined_decision_latest: Json | null
+          streamlined_decision_origin: Json | null
           style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
@@ -876,6 +879,9 @@ export type Database = {
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -935,6 +941,9 @@ export type Database = {
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -996,6 +1005,9 @@ export type Database = {
           size: number | null
           size_old: string | null
           stop_loss: string | null
+          streamlined_decision_frozen_at: string | null
+          streamlined_decision_latest: Json | null
+          streamlined_decision_origin: Json | null
           symbol: string
           take_profit: string | null
           user_id: string
@@ -1023,6 +1035,9 @@ export type Database = {
           size?: number | null
           size_old?: string | null
           stop_loss?: string | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           symbol: string
           take_profit?: string | null
           user_id: string
@@ -1050,6 +1065,9 @@ export type Database = {
           size?: number | null
           size_old?: string | null
           stop_loss?: string | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           symbol?: string
           take_profit?: string | null
           user_id?: string
@@ -1112,6 +1130,9 @@ export type Database = {
           staged_setup_id: string | null
           status: string
           stop_loss: number
+          streamlined_decision_frozen_at: string | null
+          streamlined_decision_latest: Json | null
+          streamlined_decision_origin: Json | null
           style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
@@ -1180,6 +1201,9 @@ export type Database = {
           staged_setup_id?: string | null
           status?: string
           stop_loss: number
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -1248,6 +1272,9 @@ export type Database = {
           staged_setup_id?: string | null
           status?: string
           stop_loss?: number
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -1502,6 +1529,9 @@ export type Database = {
           shadow_decision: Json | null
           sl_hit: boolean | null
           stop_loss: number | null
+          streamlined_decision_frozen_at: string | null
+          streamlined_decision_latest: Json | null
+          streamlined_decision_origin: Json | null
           symbol: string
           take_profit: number | null
           tier1_count: number
@@ -1539,6 +1569,9 @@ export type Database = {
           shadow_decision?: Json | null
           sl_hit?: boolean | null
           stop_loss?: number | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           symbol: string
           take_profit?: number | null
           tier1_count?: number
@@ -1576,6 +1609,9 @@ export type Database = {
           shadow_decision?: Json | null
           sl_hit?: boolean | null
           stop_loss?: number | null
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           symbol?: string
           take_profit?: number | null
           tier1_count?: number
@@ -2030,6 +2066,9 @@ export type Database = {
           sl_level: number | null
           staged_at: string
           status: string
+          streamlined_decision_frozen_at: string | null
+          streamlined_decision_latest: Json | null
+          streamlined_decision_origin: Json | null
           style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
@@ -2096,6 +2135,9 @@ export type Database = {
           sl_level?: number | null
           staged_at?: string
           status?: string
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -2162,6 +2204,9 @@ export type Database = {
           sl_level?: number | null
           staged_at?: string
           status?: string
+          streamlined_decision_frozen_at?: string | null
+          streamlined_decision_latest?: Json | null
+          streamlined_decision_origin?: Json | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
@@ -2448,6 +2493,45 @@ export type Database = {
           user_id?: string
           variant_key?: string
           walk_forward_consistent?: boolean
+        }
+        Relationships: []
+      }
+      streamlined_decision_certificates: {
+        Row: {
+          certified: boolean
+          comparable: number
+          created_at: string
+          evidence: Json
+          expires_at: string
+          id: string
+          minimum_comparable: number
+          runtime_targets: string[]
+          styles: string[]
+          user_id: string
+        }
+        Insert: {
+          certified?: boolean
+          comparable?: number
+          created_at?: string
+          evidence?: Json
+          expires_at: string
+          id?: string
+          minimum_comparable?: number
+          runtime_targets?: string[]
+          styles?: string[]
+          user_id: string
+        }
+        Update: {
+          certified?: boolean
+          comparable?: number
+          created_at?: string
+          evidence?: Json
+          expires_at?: string
+          id?: string
+          minimum_comparable?: number
+          runtime_targets?: string[]
+          styles?: string[]
+          user_id?: string
         }
         Relationships: []
       }
