@@ -52,6 +52,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
@@ -2928,7 +2929,7 @@ async function runScanForUser(
             directionVerdict: pendingDirectionVerdict,
             requireDirectionVerdict: true,
             gamePlan: _lastGamePlanForValidation,
-            gamePlanEnabled: config.gamePlanEnabled,
+            gamePlanEnabled: config.gamePlanEnabled && !((config as any).singleOwnershipMode === "enforce" && account.execution_mode !== "live"),
             gamePlanMode: config.gpEnforcementMode,
             gamePlanMinimumConfidence: config.gpHardBlockThreshold,
             thesisResult: pendingThesisResult,
@@ -2965,7 +2966,7 @@ async function runScanForUser(
               symbol: pending.symbol,
               direction: pending.direction as "long" | "short",
               gamePlan: _lastGamePlanForValidation,
-              gamePlanEnabled: config.gamePlanEnabled,
+              gamePlanEnabled: config.gamePlanEnabled && !((config as any).singleOwnershipMode === "enforce" && account.execution_mode !== "live"),
               gamePlanMode: config.gpEnforcementMode,
               gamePlanMinimumConfidence: config.gpHardBlockThreshold,
               directionVerdict: pendingDirectionVerdict,
@@ -2982,8 +2983,32 @@ async function runScanForUser(
           } catch {
             parsedPendingEvidence = {};
           }
+          const pendingOwnershipFill = evaluateSingleOwnershipFillAuthorization({
+            frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
+            evaluatedAt: nowStr,
+            candidateId: parsedPendingEvidence.candidateId || pending.id,
+            symbol: pending.symbol,
+            direction: pending.direction as "long" | "short",
+            directionVerdict: pendingDirectionVerdict,
+            canonicalLocation: {
+              required: normalizeDealingRangeMode((config as any).dealingRangeMode) !== "off",
+              available: pendingCanonicalDealingRange.available,
+              allowed: pendingCanonicalDealingRange.available ? pendingCanonicalDealingRange.allowed : null,
+              rangeId: pendingCanonicalDealingRange.range?.impulseId || null,
+              reasonCode: pendingCanonicalDealingRange.code,
+            },
+            confirmation: { passed: true, authorityVersion: "confirmation-authority.v1", reasonCodes: ["zone_confirmation_ready"] },
+            thesis: { valid: pendingThesisResult.valid, reasonCodes: [pendingThesisResult.checkType || "thesis_valid"] },
+            finalChecks: rawFinalAuthorization.checks,
+            rawFinalAuthorized: rawFinalAuthorization.authorized,
+            requestedMode: (config as any).singleOwnershipMode,
+            runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+          });
+          const authorityFinalAuthorization = pendingOwnershipFill.authorized
+            ? { ...rawFinalAuthorization, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement }
+            : { ...rawFinalAuthorization, authorized: false, code: "additional_gate" as const, retryable: true, reason: "Single-ownership fill authorization did not allow entry", singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement };
           const finalAuthorization = attachDecisionContext(
-            rawFinalAuthorization,
+            authorityFinalAuthorization,
             buildTradeDecisionContext({
               stage: "fill",
               symbol: pending.symbol,
@@ -3053,6 +3078,8 @@ async function runScanForUser(
             },
             finalAuthorization,
             decisionContext: finalAuthorization.decisionContext,
+            singleOwnershipDecision: finalAuthorization.singleOwnershipDecision,
+            singleOwnershipEnforcement: finalAuthorization.singleOwnershipEnforcement,
           };
 
           const fillReason = `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`

@@ -74,6 +74,12 @@ import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts"
 import {
   evaluateFinalTradeAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
+import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import {
+  evaluateCanonicalDealingRange,
+  normalizeDealingRangeMode,
+  readFrozenCanonicalDealingRange,
+} from "../_shared/canonicalDealingRange.ts";
 import {
   attachDecisionContext,
   buildTradeDecisionContext,
@@ -1047,6 +1053,17 @@ Deno.serve(async (req) => {
           },
           evaluatedAt: nowStr,
         };
+        const pendingCanonicalDealingRange = evaluateCanonicalDealingRange({
+          range: readFrozenCanonicalDealingRange(
+            readFrozenSetupStrategyContext(pending)?.crossTimeframeContext,
+          ),
+          direction: pending.direction as "long" | "short",
+          price: actualFillPrice,
+          mode: normalizeDealingRangeMode((config as any).dealingRangeMode, {
+            onlyBuyInDiscount: config.onlyBuyInDiscount,
+            onlySellInPremium: config.onlySellInPremium,
+          }),
+        });
         const rawAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
@@ -1066,7 +1083,7 @@ Deno.serve(async (req) => {
           directionVerdict,
           requireDirectionVerdict: true,
           gamePlan,
-          gamePlanEnabled: config.gamePlanEnabled,
+          gamePlanEnabled: config.gamePlanEnabled && !((config as any).singleOwnershipMode === "enforce" && !liveMode),
           gamePlanMode: config.gpEnforcementMode,
           gamePlanMinimumConfidence: config.gpHardBlockThreshold,
           thesisResult,
@@ -1097,7 +1114,7 @@ Deno.serve(async (req) => {
             symbol: pending.symbol,
             direction: pending.direction as "long" | "short",
             gamePlan,
-            gamePlanEnabled: config.gamePlanEnabled,
+            gamePlanEnabled: config.gamePlanEnabled && !((config as any).singleOwnershipMode === "enforce" && !liveMode),
             gamePlanMode: config.gpEnforcementMode,
             gamePlanMinimumConfidence: config.gpHardBlockThreshold,
             directionVerdict,
@@ -1114,8 +1131,32 @@ Deno.serve(async (req) => {
         } catch {
           parsedPendingEvidence = {};
         }
+        const ownershipFill = evaluateSingleOwnershipFillAuthorization({
+          frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
+          evaluatedAt: nowStr,
+          candidateId: parsedPendingEvidence.candidateId || pending.id,
+          symbol: pending.symbol,
+          direction: pending.direction as "long" | "short",
+          directionVerdict,
+          canonicalLocation: {
+            required: normalizeDealingRangeMode((config as any).dealingRangeMode) !== "off",
+            available: pendingCanonicalDealingRange.available,
+            allowed: pendingCanonicalDealingRange.available ? pendingCanonicalDealingRange.allowed : null,
+            rangeId: pendingCanonicalDealingRange.range?.impulseId || null,
+            reasonCode: pendingCanonicalDealingRange.code,
+          },
+          confirmation: { passed: true, authorityVersion: "confirmation-authority.v1", reasonCodes: ["zone_confirmation_ready"] },
+          thesis: { valid: thesisResult.valid, reasonCodes: [thesisResult.checkType || "thesis_valid"] },
+          finalChecks: rawAuthorization.checks,
+          rawFinalAuthorized: rawAuthorization.authorized,
+          requestedMode: (config as any).singleOwnershipMode,
+          runtimeTarget: liveMode ? "live" : "paper",
+        });
+        const authorityRawAuthorization = ownershipFill.authorized
+          ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange }
+          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: true, reason: "Single-ownership fill authorization did not allow entry", singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange };
         const authorization = attachDecisionContext(
-          rawAuthorization,
+          authorityRawAuthorization,
           buildTradeDecisionContext({
             stage: "fill",
             symbol: pending.symbol,
@@ -1185,6 +1226,8 @@ Deno.serve(async (req) => {
           },
           finalAuthorization: authorization,
           decisionContext: authorization.decisionContext,
+          singleOwnershipDecision: authorization.singleOwnershipDecision,
+          singleOwnershipEnforcement: authorization.singleOwnershipEnforcement,
           streamlinedDecisionOrigin: pending.streamlined_decision_origin || parsedPendingEvidence.streamlinedDecisionOrigin || null,
           streamlinedDecisionLatest: {
             ...(parsedPendingEvidence.streamlinedDecisionLatest || {}),
