@@ -335,8 +335,8 @@ function validateConfig(config: any): string[] {
       errors.push("strategy.streamlinedDecisionMode must be off, observe, or enforce");
     }
     if (s.singleOwnershipMode !== undefined &&
-      !["observe", "enforce"].includes(s.singleOwnershipMode)) {
-      errors.push("strategy.singleOwnershipMode must be observe or enforce");
+      !["observe", "enforce", "enforce_live"].includes(s.singleOwnershipMode)) {
+      errors.push("strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
     }
     if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
       errors.push("strategy.confluenceThreshold must be between 0 and 100");

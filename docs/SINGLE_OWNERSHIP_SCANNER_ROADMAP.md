@@ -1,6 +1,6 @@
 # Single-Ownership Scanner Roadmap
 
-Status: paper/demo single-ownership enforcement complete; live enforcement out of scope
+Status: paper and explicit live single-ownership enforcement implemented
 
 ## Decision ownership
 
@@ -28,7 +28,7 @@ Status: paper/demo single-ownership enforcement complete; live enforcement out o
 8. Apply fill-time parity to main pending fills and fast zone confirmation.
 9. Collapse legacy diagnostics in scan, position and signal details.
 
-Live enforcement is out of scope. Operational safety gates are never downgraded.
+Live enforcement requires the explicit `Enforce Live` mode. Operational safety gates are never downgraded.
 Duplicate ICT, conflict, score and tier gates are diagnostic-only in explicit
 paper enforcement. Unified and standalone Zone Story routes remain active, and
 unknown future gates fail closed until explicitly classified.

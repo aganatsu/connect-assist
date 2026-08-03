@@ -10,16 +10,17 @@ const ui = await Deno.readTextFile("./src/components/config/ScanTab.tsx");
 
 Deno.test("single ownership enforcement is default-observe and user visible", () => {
   assertStringIncludes(config, 'singleOwnershipMode: "observe"');
-  assertStringIncludes(endpoint, "strategy.singleOwnershipMode must be observe or enforce");
+  assertStringIncludes(endpoint, "strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
   assertStringIncludes(ui, "Single-Ownership Scanner");
   assertStringIncludes(ui, "Enforce (Paper Only)");
+  assertStringIncludes(ui, "Enforce Live (Real Orders)");
 });
 
-Deno.test("single ownership bypasses legacy score only when paper enforcement is requested", () => {
-  assertStringIncludes(scanner, "legacyScannerEligible || singleOwnershipPaperEnforcement");
-  assertStringIncludes(scanner, 'account.execution_mode !== "live"');
+Deno.test("single ownership bypasses legacy score only when enforcement is requested", () => {
+  assertStringIncludes(scanner, "legacyScannerEligible || singleOwnershipEnforcementRequested");
+  assertStringIncludes(scanner, 'singleOwnershipMode === "enforce_live"');
   assertStringIncludes(scanner, "allPassed = singleOwnershipEnforcement.authorized");
-  assertStringIncludes(backtest, 'pairConfig.singleOwnershipMode !== "enforce"');
+  assertStringIncludes(backtest, '["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode)');
   assertStringIncludes(backtest, "allPassed = singleOwnershipEnforcement.authorized");
 });
 

@@ -281,7 +281,7 @@ const enterAliases: AliasMap = {
   "Per-Pair Gate Overrides": ["symbol overrides", "pair settings"],
   "Premium/Discount & Fib": ["premium discount weight", "fib weight"],
   "Dealing Range Mode": ["canonical range", "avoid wrong side", "strict value"],
-  "Single-Ownership Scanner": ["zone story", "paper enforcement", "observe", "legacy diagnostics"],
+  "Single-Ownership Scanner": ["zone story", "paper enforcement", "live enforcement", "real orders", "observe", "legacy diagnostics"],
   "Fair Value Gap": ["fvg weight"],
   "Order Block": ["order block weight", "ob weight"],
 };
