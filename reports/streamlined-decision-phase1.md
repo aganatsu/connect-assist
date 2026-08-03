@@ -1,6 +1,6 @@
 # Streamlined Trade Decision - Phase 1
 
-Status: implementation complete; CI verification pending
+Status: complete and CI-verified
 
 ## Outcome
 
@@ -82,10 +82,11 @@ Observation only. No execution behavior changed.
 
 - Local diff formatting: passed
 - Local Node/Deno execution: unavailable in the workspace environment
-- GitHub Actions Node tests/build: pending
-- GitHub Actions Deno tests: pending
-- Pull request: pending
-- Merge commit: pending
+- GitHub Actions Node tests/build: passed
+- GitHub Actions Deno tests: passed after retrying an external esm.sh HTTP 522
+- GitHub Actions run: 30831976481
+- Pull request: #168
+- Merge: completed through PR #168
 
 ## Next proposed phase
 
