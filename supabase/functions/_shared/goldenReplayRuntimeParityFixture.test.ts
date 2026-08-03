@@ -21,7 +21,7 @@ import type { Candle } from "./smcAnalysis.ts";
 const SYMBOL = "EUR/USD";
 const EVALUATED_AT = "2026-07-22T09:45:00.000Z";
 const EXPECTED_INPUT_FINGERPRINT =
-  "golden-replay-input.v1:caa0ae42f635b2900cdba0b3dc5aedd3bd2ff8abf8c9082e027bb28e0bb3b6b0";
+  "golden-replay-input.v1:0127e3a1ee87f00d52ddf704479ef3132fa71609db4babd59df4af64b0635c22";
 const EXPECTED_DECISION_HASH =
   "3e07d8887e7fa21209a7af099f2cf86f9aa2de3615fed97ea6cd6019631327f8";
 
