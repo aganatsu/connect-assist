@@ -37,6 +37,7 @@ import { RecommendationsDashboard } from "@/components/RecommendationsDashboard"
 import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
 import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
+import { formatNewsGateCountdown } from "@/lib/newsGateCountdown";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
@@ -1253,7 +1254,7 @@ export default function BotView() {
                     if (!selected) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                     }
-                    return <ScanDetailInline signal={selected} />;
+                    return <ScanDetailInline signal={selected} observedAt={currentScan?.scanned_at} />;
                   })()}
               </div>
             </div>
@@ -1390,7 +1391,7 @@ export default function BotView() {
               {(() => {
                 const selected = latestDetailsClean[selectedPairIdx];
                 if (!selected) return <p className="text-xs text-muted-foreground text-center py-8">No pair selected</p>;
-                return <ScanDetailInline signal={selected} />;
+                return <ScanDetailInline signal={selected} observedAt={currentScan?.scanned_at} />;
               })()}
             </div>
           </SheetContent>
@@ -1986,6 +1987,11 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
+  const [newsClock, setNewsClock] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNewsClock(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : d.status === "trade_placed" ? "✅ PLACED" : d.status === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : d.status === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : d.status === "watching_zone" ? "⏳ WATCHING" : d.status === "paused" ? "⏸ PAUSED" : d.status === "no_direction" ? "— NO DIR" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.startsWith("skipped_") ? "SKIPPED" : d.status?.startsWith("staged_") ? "⏳ STAGED" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : d.status === "waiting_for_sweep" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : d.status === "waiting_for_reconfirmation" ? "text-orange-400 bg-orange-500/10 border-orange-500/30" : d.status === "paused" || d.status === "no_direction" ? "text-zinc-400 bg-zinc-500/10 border-zinc-500/30" : "text-muted-foreground bg-muted/20 border-border";
 
@@ -2067,7 +2073,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
               {d.gates.map((g: any, gi: number) => (
                 <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
                   <span>{g.passed ? "✓" : "✗"}</span>
-                  <span>{g.reason}</span>
+                  <span>{formatNewsGateCountdown(g.reason, newsClock, d.scanned_at)}</span>
                 </div>
               ))}
             </div>
@@ -2077,7 +2083,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             <div className="space-y-0.5">
               <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
               {d.rejectionReasons.map((r: string, ri: number) => (
-                <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+                <p key={ri} className="text-[9px] text-destructive">⚠ {formatNewsGateCountdown(r, newsClock, d.scanned_at)}</p>
               ))}
             </div>
           )}
@@ -2181,7 +2187,12 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
   );
 }
 
-function ScanDetailInline({ signal: d }: { signal: any }) {
+function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?: string | null }) {
+  const [newsClock, setNewsClock] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNewsClock(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : d.status === "trade_placed" ? "✅ PLACED" : d.status === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : d.status === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : d.status === "watching_zone" ? "⏳ WATCHING" : d.status === "paused" ? "⏸ PAUSED" : d.status === "no_direction" ? "— NO DIR" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.startsWith("skipped_") ? "SKIPPED" : d.status?.startsWith("staged_") ? "⏳ STAGED" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status?.startsWith("trade_placed") ? "text-success" : d.status === "rejected" ? "text-destructive" : d.status === "waiting_for_sweep" ? "text-purple-400" : d.status === "waiting_for_reconfirmation" ? "text-orange-400" : d.status === "paused" || d.status === "no_direction" ? "text-zinc-400" : "text-muted-foreground";
 
@@ -2385,7 +2396,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {failedGates.map((g: any, gi: number) => (
             <div key={gi} className="flex items-center gap-1 text-[11px] text-destructive">
               <span><ShieldX className="h-2.5 w-2.5" /></span>
-              <span>{g.reason}</span>
+              <span>{formatNewsGateCountdown(g.reason, newsClock, observedAt)}</span>
             </div>
           ))}
         </div>
@@ -2396,7 +2407,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <div className="space-y-0.5">
           <p className="text-[11px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
           {d.rejectionReasons.map((r: string, ri: number) => (
-            <p key={ri} className="text-[11px] text-destructive">⚠ {r}</p>
+            <p key={ri} className="text-[11px] text-destructive">⚠ {formatNewsGateCountdown(r, newsClock, observedAt)}</p>
           ))}
         </div>
       )}

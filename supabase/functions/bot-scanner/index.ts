@@ -903,8 +903,23 @@ async function runSafetyGates(
         if (newsRes.ok) {
           const newsData: any = await newsRes.json();
           if (newsData.hasHighImpact) {
-            const eventNames = (newsData.events || []).map((e: any) => e.name || e.title || "event").join(", ");
-            gates.push({ passed: false, reason: `News filter: high-impact event within ${config.newsFilterPauseMinutes}min — ${eventNames}` });
+            const nearestEvent = [...(newsData.events || [])].sort((a: any, b: any) =>
+              Math.abs(new Date(a.scheduledTime).getTime() - Date.now()) -
+              Math.abs(new Date(b.scheduledTime).getTime() - Date.now())
+            )[0];
+            const eventName = nearestEvent?.name || nearestEvent?.title || "event";
+            const scheduledTime = nearestEvent?.scheduledTime
+              ? new Date(nearestEvent.scheduledTime).toISOString()
+              : null;
+            const scheduleDetail = scheduledTime
+              ? ` (scheduled ${scheduledTime})`
+              : "";
+            gates.push({
+              passed: false,
+              reason:
+                `News filter: high-impact event within ${config.newsFilterPauseMinutes}min` +
+                `${scheduleDetail} — ${eventName}`,
+            });
           } else {
             gates.push({ passed: true, reason: `No high-impact news within ${config.newsFilterPauseMinutes}min for ${symbol}` });
           }
