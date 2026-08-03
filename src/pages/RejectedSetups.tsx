@@ -367,6 +367,11 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
+  const { data: singleOwnershipComparison, isLoading: isLoadingSingleOwnership } = useQuery({
+    queryKey: ["single-ownership-comparison"],
+    queryFn: () => botConfigApi.getSingleOwnershipComparison(),
+    staleTime: 60_000, retry: false,
+  });
   const {
     data: streamlinedDecisionComparison,
     isLoading: isLoadingStreamlinedDecisionComparison,
@@ -1030,6 +1035,27 @@ export default function RejectedSetups() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
+                <CardTitle className="text-sm font-medium">Single-Ownership Decision Comparison</CardTitle>
+                <p className="text-[10px] text-muted-foreground mt-1">Zone Story and explicit authorities compared with legacy percentages and tiers.</p>
+              </div><Badge variant="outline" className="text-[9px]">{isLoadingSingleOwnership ? "Loading" : <>{singleOwnershipComparison?.summary.comparable ?? 0}/{singleOwnershipComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
+              <CardContent className="px-4 pb-4">
+                {singleOwnershipComparison ? <div className="space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
+                    <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{singleOwnershipComparison.summary.coveragePercent.toFixed(1)}%</p></div>
+                    <div><span className="text-muted-foreground">Disagreements</span><p className="font-mono font-bold">{singleOwnershipComparison.summary.disagreements}</p></div>
+                    <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{singleOwnershipComparison.summary.winnersPreserved}</p></div>
+                    <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{singleOwnershipComparison.summary.poorEntriesRejected}</p></div>
+                  </div>
+                  {singleOwnershipComparison.rows.filter(row => row.decisionsMatch === false).slice(0, 10).map(row => <div key={["ownership", row.source, row.id].join(":")} className="border-l-2 border-warning pl-3 text-xs">
+                    <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · legacy {row.legacyDecision} · owned {row.proposedDecision}</span>
+                    <p className="text-muted-foreground mt-0.5">{row.reasonCodes.join(", ") || "Owned authorities allow this setup without legacy score ownership"}</p>
+                  </div>)}
+                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Single-ownership comparison is unavailable.</div>}
               </CardContent>
             </Card>
 
