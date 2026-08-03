@@ -1,6 +1,6 @@
 # Single-Ownership Scanner Roadmap
 
-Status: phases 1-3 implemented; paper-only enforcement pending
+Status: phases 1-6 implemented; legacy retirement pending
 
 ## Decision ownership
 
@@ -26,4 +26,6 @@ Status: phases 1-3 implemented; paper-only enforcement pending
 6. Continue recording the legacy decision and diagnostics for comparison.
 7. Retire score credits and Tier authorization only after paper verification.
 
-Live enforcement is out of scope. Safety gates are never downgraded.
+Live enforcement is out of scope. Operational safety gates are never downgraded.
+Early ICT and conflict hard gates remain in front of the owned boundary until
+their evidence has an explicit owner.
