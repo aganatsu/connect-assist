@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS public.streamlined_decision_certificates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE public.streamlined_decision_certificates ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users read own streamlined certificates"
+  ON public.streamlined_decision_certificates;
 CREATE POLICY "Users read own streamlined certificates"
   ON public.streamlined_decision_certificates FOR SELECT
   USING (auth.uid() = user_id);
