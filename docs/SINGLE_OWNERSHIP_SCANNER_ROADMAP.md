@@ -1,6 +1,6 @@
 # Single-Ownership Scanner Roadmap
 
-Status: observation contract implemented; CI verification pending
+Status: phases 1-3 implemented; paper-only enforcement pending
 
 ## Decision ownership
 

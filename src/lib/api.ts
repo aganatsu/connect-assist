@@ -339,6 +339,10 @@ export const botConfigApi = {
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
   reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
+  getSingleOwnershipComparison: () => invokeFunction<{
+    summary: { sampleSize: number; comparable: number; unavailable: number; coveragePercent: number; agreements: number; disagreements: number; winnersPreserved: number; winnersBlocked: number; poorEntriesRejected: number; poorEntriesAllowed: number; };
+    rows: Array<{ id: string; source: "closed" | "rejected"; symbol: string; direction: string; observedAt: string; outcome: "won" | "lost" | "inconclusive"; legacyDecision: "allow" | "block"; proposedDecision: "allow" | "watch" | "block" | "unavailable" | null; comparable: boolean; decisionsMatch: boolean | null; reasonCodes: string[]; unavailable: string[]; legacyDiagnostics: any; }>;
+  }>("bot-config", { action: "single_ownership.comparison" }),
   getStreamlinedDecisionComparison: () => invokeFunction<{
     summary: { sampleSize: number; comparable: number; unavailable: number; coveragePercent: number; agreements: number; disagreements: number; winnersPreserved: number; winnersBlocked: number; poorEntriesRejected: number; poorEntriesAllowed: number; };
     rows: Array<{ id: string; source: "closed" | "rejected"; symbol: string; direction: string; observedAt: string; outcome: "won" | "lost" | "inconclusive"; currentDecision: "allow" | "block"; proposedDecision: "allow" | "watch" | "block" | "unavailable" | null; comparable: boolean; disagreementReasons: string[]; summary: any | null; }>;

@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { loadEffectiveRuntimeConfig } from "../_shared/runtimeConfigStore.ts";
 import { buildLast100Comparison } from "../_shared/canonicalDealingRangeComparison.ts";
 import { buildStreamlinedReplay } from "../_shared/streamlinedDecisionReplay.ts";
+import { buildSingleOwnershipComparison } from "../_shared/singleOwnershipComparison.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -127,6 +128,23 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(defaultConfig), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (action === "single_ownership.comparison") {
+      const [closedResult, rejectedResult] = await Promise.all([
+        supabase.from("paper_trade_history")
+          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason")
+          .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
+        supabase.from("rejected_setups")
+          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail")
+          .eq("user_id", user.id).eq("bot_id", "smc")
+          .order("rejected_at", { ascending: false }).limit(100),
+      ]);
+      if (closedResult.error) throw closedResult.error;
+      if (rejectedResult.error) throw rejectedResult.error;
+      return new Response(JSON.stringify(buildSingleOwnershipComparison(
+        closedResult.data || [], rejectedResult.data || [],
+      )), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     if (action === "streamlined_decision.comparison") {
