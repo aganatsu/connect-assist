@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   authorityGateOwner,
   classifyAuthorityGates,
+  evaluateAuthorityGateDisposition,
   isLegacyDiagnosticGate,
 } from "./authorityGateOwnership.ts";
 
@@ -27,6 +28,16 @@ Deno.test("owned authorities and operational safety remain enforcing", () => {
   ]) {
     assertEquals(authorityGateOwner(code), "operational_safety", code);
   }
+});
+
+Deno.test("legacy gates stop blocking only in explicit paper enforcement", () => {
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "paper" }).blocksAuthorization, false);
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "observe", runtimeTarget: "paper" }).blocksAuthorization, true);
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "live" }).blocksAuthorization, true);
+});
+
+Deno.test("operational safety always blocks when failed", () => {
+  assertEquals(evaluateAuthorityGateDisposition({ code: "daily_loss_limit", passed: false, requestedMode: "enforce", runtimeTarget: "paper" }).blocksAuthorization, true);
 });
 
 Deno.test("unclassified gates remain enforcing by default", () => {
