@@ -12,8 +12,13 @@ import {
   type CrossTimeframeEntryAuthorityDecision,
 } from "./crossTimeframeEntryAuthority.ts";
 import type { RankedPOI } from "./impulseZoneEngine.ts";
+import {
+  resolveCanonicalDealingRange,
+  type CanonicalDealingRangeSelection,
+} from "./canonicalDealingRange.ts";
+import type { EvidenceRow } from "./zoneTimeframeEvidence.ts";
 
-export const FROZEN_CROSS_TF_CONTEXT_VERSION = "frozen-cross-tf-context.v1";
+export const FROZEN_CROSS_TF_CONTEXT_VERSION = "frozen-cross-tf-context.v2";
 
 export interface EvidenceCertificateReference {
   featureKey: string;
@@ -61,6 +66,7 @@ export interface FrozenCrossTimeframeContext {
   } | null;
   parentImpulse: FrozenImpulseReference | null;
   childImpulse: FrozenImpulseReference | null;
+  canonicalDealingRange: CanonicalDealingRangeSelection;
   evidenceCertificates: EvidenceCertificateReference[];
   authority: CrossTimeframeEntryAuthorityDecision;
 }
@@ -121,6 +127,10 @@ export function buildFrozenCrossTimeframeContext(input: {
   zoneStory?: unknown;
   evidenceCertificates?: EvidenceCertificateReference[];
   crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
+  timeframeEvidence?: Pick<
+    EvidenceRow,
+    "observed_at" | "selected_timeframe" | "slots"
+  > | null;
 }): FrozenCrossTimeframeContext {
   const story = record(input.zoneStory);
   const best = record(story.bestZone);
@@ -160,6 +170,20 @@ export function buildFrozenCrossTimeframeContext(input: {
       input.crossTimeframeAuthority.policy,
     )
     : null;
+  const canonicalDealingRange = input.timeframeEvidence && selectedZone?.timeframe
+    ? resolveCanonicalDealingRange({
+      slots: input.timeframeEvidence.slots,
+      parentTimeframe: typeof lineage.parentTimeframe === "string"
+        ? lineage.parentTimeframe
+        : null,
+      childTimeframe: selectedZone.timeframe,
+      frozenAt: input.timeframeEvidence.observed_at,
+    })
+    : {
+      available: false as const,
+      range: null,
+      reason: "no_valid_impulse_range" as const,
+    };
 
   return {
     contractVersion: FROZEN_CROSS_TF_CONTEXT_VERSION,
@@ -201,6 +225,7 @@ export function buildFrozenCrossTimeframeContext(input: {
     childImpulse: selectedZone
       ? impulseReference(best, record(story.impulse))
       : null,
+    canonicalDealingRange,
     evidenceCertificates: [...(input.evidenceCertificates || [])]
       .filter((item) => item.certificateHash.length > 0)
       .sort((a, b) =>

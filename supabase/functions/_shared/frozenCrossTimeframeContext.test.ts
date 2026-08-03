@@ -82,6 +82,20 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
       generatedAt: "2026-08-01T12:00:00.000Z",
     }],
     crossTimeframeAuthority,
+    timeframeEvidence: {
+      observed_at: "2026-08-03T12:00:00.000Z",
+      selected_timeframe: "15min",
+      slots: [{
+        timeframe: "1h",
+        impulses: [{
+          impulseId: "impulse-parent-1h",
+          selected: true,
+          direction: "bearish",
+          high: 1.72,
+          low: 1.68,
+        }],
+      }],
+    } as any,
   });
 
   assertEquals(frozen.contractVersion, FROZEN_CROSS_TF_CONTEXT_VERSION);
@@ -95,6 +109,15 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
   );
   assertEquals(frozen.parentImpulse?.candidateId, "parent-1");
   assertEquals(frozen.childImpulse?.timeframe, "15min");
+  assertEquals(frozen.canonicalDealingRange.available, true);
+  if (frozen.canonicalDealingRange.available) {
+    assertEquals(
+      frozen.canonicalDealingRange.range.impulseId,
+      "impulse-parent-1h",
+    );
+    assertEquals(frozen.canonicalDealingRange.range.high, 1.72);
+    assertEquals(frozen.canonicalDealingRange.range.low, 1.68);
+  }
   assertEquals(
     frozen.evidenceCertificates.map((item) => item.featureKey),
     ["gameplan_hierarchy", "thesis_conviction"],
@@ -116,6 +139,7 @@ Deno.test("frozen cross-TF context records absence instead of inventing lineage"
   assertEquals(frozen.relationship, null);
   assertEquals(frozen.parentImpulse, null);
   assertEquals(frozen.childImpulse, null);
+  assertEquals(frozen.canonicalDealingRange.available, false);
   assertEquals(frozen.evidenceCertificates, []);
   assertEquals(frozen.authority.evidenceAvailable, false);
 });
