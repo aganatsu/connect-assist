@@ -8,7 +8,7 @@ Deno.test("single-ownership comparison is exposed in Rejected Setups", async () 
     read("supabase/functions/bot-config/index.ts"),
     read("src/lib/api.ts"),
     read("src/pages/RejectedSetups.tsx"),
-    read("src/components/bot-config/ScanTab.tsx"),
+    read("src/components/config/ScanTab.tsx"),
   ]);
 
   assertStringIncludes(endpoint, 'action === "single_ownership.comparison"');
