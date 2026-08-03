@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: approved proposal; implementation not started
+Status: Phase 1 complete and CI-verified in PR #168
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -151,7 +151,7 @@ A trade is authorized only when:
 | Phase | Deliverable | Behavior | Status |
 |---|---|---|---|
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
-| 1 | Pure TradeDecisionSummary contract | Observation only | Not started |
+| 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
 | 2 | Canonical evidence-to-pillar mapping | Observation only | Not started |
 | 3 | Freeze and persist summary through lifecycle | Observation only | Not started |
 | 4 | Historical replay and comparison engine | Observation only | Not started |
@@ -314,16 +314,16 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Implement Phase 1 only:
+Phase 2 evidence mapping is the next proposed phase:
 
-1. define the versioned pure contract;
-2. map existing evidence into its input without changing execution;
-3. add deterministic tests;
-4. attach the observation to scan detail only;
-5. update this tracker and create reports/streamlined-decision-phase1.md;
-6. open a described PR and run full CI.
+1. inventory every active factor, promotion, adjustment, and gate;
+2. assign each evidence item to one decision role;
+3. identify duplicate influence without removing behavior;
+4. define deterministic pillar scoring inputs and missing-evidence rules;
+5. keep all output observation-only.
 
-Do not enforce, delete tiers, or change thresholds in Phase 1.
+Do not begin Phase 2 enforcement, delete tiers, or change thresholds. Phase 2
+requires owner approval before implementation.
 
 ## Restart Prompt
 
