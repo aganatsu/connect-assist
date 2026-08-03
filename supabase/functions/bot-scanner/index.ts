@@ -5236,6 +5236,9 @@ async function runScanForUser(
         zoneStory: (detail as any).impulseZone || null,
         evidenceCertificates: _evidenceCertificateReferences,
         crossTimeframeAuthority,
+        timeframeEvidence: zoneEvidenceRows.find((row) =>
+          row.id === (detail as any).timeframeEvidenceId
+        ) || null,
       });
     const currentWatchlistLifecycle = (executionEligible: boolean) => {
       const lifecycleZoneData = (detail as any).unifiedZone;
