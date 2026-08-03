@@ -1,6 +1,6 @@
 # Single-Ownership Scanner Roadmap
 
-Status: phases 1-6 implemented; legacy retirement pending
+Status: paper/demo single-ownership enforcement complete; live enforcement out of scope
 
 ## Decision ownership
 
@@ -24,8 +24,11 @@ Status: phases 1-6 implemented; legacy retirement pending
 5. Let owned authorities reach safety evaluation without requiring the legacy
    score threshold first in paper enforcement.
 6. Continue recording the legacy decision and diagnostics for comparison.
-7. Retire score credits and Tier authorization only after paper verification.
+7. Retire score, tier, conflict and duplicate ICT authorization in explicit paper enforcement while retaining their diagnostic output.
+8. Apply fill-time parity to main pending fills and fast zone confirmation.
+9. Collapse legacy diagnostics in scan, position and signal details.
 
 Live enforcement is out of scope. Operational safety gates are never downgraded.
-Early ICT and conflict hard gates remain in front of the owned boundary until
-their evidence has an explicit owner.
+Duplicate ICT, conflict, score and tier gates are diagnostic-only in explicit
+paper enforcement. Unified and standalone Zone Story routes remain active, and
+unknown future gates fail closed until explicitly classified.
