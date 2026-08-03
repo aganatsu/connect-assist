@@ -774,6 +774,10 @@ export type Database = {
         Row: {
           bot_id: string | null
           candidate_id: string | null
+          canonical_dealing_range: Json | null
+          canonical_dealing_range_impulse_id: string | null
+          canonical_dealing_range_timeframe: string | null
+          canonical_dealing_range_version: string | null
           close_reason: string | null
           confirmation_config: Json
           confirmation_method: string | null
@@ -836,6 +840,10 @@ export type Database = {
         Insert: {
           bot_id?: string | null
           candidate_id?: string | null
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           close_reason?: string | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -898,6 +906,10 @@ export type Database = {
         Update: {
           bot_id?: string | null
           candidate_id?: string | null
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           close_reason?: string | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -1079,6 +1091,10 @@ export type Database = {
           bot_id: string
           cancel_reason: string | null
           candidate_id: string | null
+          canonical_dealing_range: Json | null
+          canonical_dealing_range_impulse_id: string | null
+          canonical_dealing_range_timeframe: string | null
+          canonical_dealing_range_version: string | null
           confirmation_attempts: number | null
           confirmation_config: Json
           confirmation_method: string | null
@@ -1150,6 +1166,10 @@ export type Database = {
           bot_id?: string
           cancel_reason?: string | null
           candidate_id?: string | null
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -1221,6 +1241,10 @@ export type Database = {
           bot_id?: string
           cancel_reason?: string | null
           candidate_id?: string | null
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -2020,6 +2044,10 @@ export type Database = {
           authorization_result: Json | null
           bot_id: string
           candidate_id: string
+          canonical_dealing_range: Json | null
+          canonical_dealing_range_impulse_id: string | null
+          canonical_dealing_range_timeframe: string | null
+          canonical_dealing_range_version: string | null
           confirmation_config: Json
           confirmation_method: string | null
           created_at: string
@@ -2089,6 +2117,10 @@ export type Database = {
           authorization_result?: Json | null
           bot_id?: string
           candidate_id?: string
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
@@ -2158,6 +2190,10 @@ export type Database = {
           authorization_result?: Json | null
           bot_id?: string
           candidate_id?: string
+          canonical_dealing_range?: Json | null
+          canonical_dealing_range_impulse_id?: string | null
+          canonical_dealing_range_timeframe?: string | null
+          canonical_dealing_range_version?: string | null
           confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
