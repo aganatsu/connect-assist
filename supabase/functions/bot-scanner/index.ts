@@ -216,6 +216,7 @@ import {
 } from "../_shared/crossTimeframeShadowValidation.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
+import { buildConfirmationAuthorityObservation } from "../_shared/confirmationAuthority.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
 import {
   bindTimeframeCandles,
@@ -2715,6 +2716,17 @@ async function runScanForUser(
               significance: undefined,
               closeBased: false,
               supportingSignals: ["indicator_confirmation", indicatorConfResult.summary],
+              authority: buildConfirmationAuthorityObservation({
+                source: "indicator_router", level: "indicator_minimum",
+                direction: pending.direction as "long" | "short",
+                entryReadyUnderCurrentBehavior: true,
+                evaluatedAt: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
+                candleIndex: confirm5mCandles.length - 1,
+                candleTime: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
+                price: confirm5mCandles[confirm5mCandles.length - 1]?.close || null,
+                supportingSignals: ["indicator_confirmation"],
+                reasonCodes: ["indicator_minimum_met"],
+              }),
             };
           }
 
@@ -2867,6 +2879,7 @@ async function runScanForUser(
               price: confirmedSignal.price,
               displacement: confirmedSignal.displacement,
               supportingSignals: confirmedSignal.supportingSignals,
+              authority: confirmedSignal.authority || null,
             },
             evaluatedAt: nowStr,
           };
@@ -3011,6 +3024,7 @@ async function runScanForUser(
               significance: confirmedSignal.significance,
               closeBased: confirmedSignal.closeBased,
               supportingSignals: confirmedSignal.supportingSignals,
+              authority: confirmedSignal.authority || null,
               zoneTouchTime: pending.zone_touch_time,
               confirmationAttempts: pending.confirmation_attempts || 0,
               method: confMethod,

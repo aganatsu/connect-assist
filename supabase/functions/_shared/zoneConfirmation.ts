@@ -31,6 +31,13 @@
 
 import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
 import { evaluateConfirmation, type ConfirmationResult } from "./confirmationHierarchy.ts";
+import {
+  buildConfirmationAuthorityObservation,
+  confirmationLevelFromLegacySignal,
+  type ConfirmationAuthorityLevel,
+  type ConfirmationAuthorityObservation,
+  type ConfirmationAuthoritySource,
+} from "./confirmationAuthority.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +60,34 @@ export interface ConfirmationSignal {
   significance: "internal" | "external" | undefined;
   closeBased: boolean;          // true = candle body closed through (strong)
   supportingSignals: string[];  // additional confirmation factors
+  authority?: ConfirmationAuthorityObservation;
+}
+
+function attachConfirmationAuthority(
+  signal: Omit<ConfirmationSignal, "authority">,
+  candles: Candle[],
+  direction: "long" | "short",
+  source: ConfirmationAuthoritySource,
+  level?: ConfirmationAuthorityLevel,
+): ConfirmationSignal {
+  const candle = candles[signal.candleIndex];
+  return {
+    ...signal,
+    authority: buildConfirmationAuthorityObservation({
+      source,
+      level: level || confirmationLevelFromLegacySignal(signal),
+      direction,
+      entryReadyUnderCurrentBehavior: true,
+      evaluatedAt: candle?.datetime || null,
+      candleIndex: signal.candleIndex,
+      candleTime: candle?.datetime || null,
+      price: signal.price,
+      closeBased: signal.closeBased,
+      displacement: signal.displacement,
+      supportingSignals: signal.supportingSignals,
+      reasonCodes: [source, level || "legacy_tier_" + signal.tier],
+    }),
+  };
 }
 
 export interface ZoneConfirmationConfig {
@@ -227,7 +262,10 @@ function mapHierarchyToSignal(
   const mapping = typeMap[result.type];
   if (!mapping) return null;
 
-  return {
+  const hierarchyLevel: ConfirmationAuthorityLevel = result.type === "sweep_choch"
+    ? "sweep_close_choch"
+    : result.type === "ltf_choch" ? "close_choch" : "displacement";
+  return attachConfirmationAuthority({
     type: mapping.type,
     tier: mapping.tier,
     price: candle.close,
@@ -236,7 +274,7 @@ function mapHierarchyToSignal(
     significance: undefined,
     closeBased: mapping.closeBased,
     supportingSignals: [result.type, result.detail],
-  };
+  }, candles, direction, "unified_hierarchy", hierarchyLevel);
 }
 
 // ─── Main Detection Function (Tiered) ───────────────────────────────────────
@@ -330,7 +368,7 @@ export function detectZoneConfirmation(
       const significance = (choch as any).significance;
       if (significance === "external") supporting.signals.push("external_significance");
 
-      return {
+      return attachConfirmationAuthority({
         type: requiredChochType === "bearish" ? "bearish_choch" : "bullish_choch",
         tier: 1,
         price: candle.close,
@@ -339,7 +377,7 @@ export function detectZoneConfirmation(
         significance,
         closeBased: true,
         supportingSignals: supporting.signals,
-      };
+      }, candles5m, direction, "legacy_tier", "close_choch");
     }
   }
 
@@ -371,7 +409,7 @@ export function detectZoneConfirmation(
 
       if (supportCount < 1) continue;
 
-      return {
+      return attachConfirmationAuthority({
         type: requiredChochType === "bearish" ? "bearish_choch_relaxed" : "bullish_choch_relaxed",
         tier: 2,
         price: candle.close,
@@ -380,7 +418,7 @@ export function detectZoneConfirmation(
         significance,
         closeBased: false,
         supportingSignals: supporting.signals,
-      };
+      }, candles5m, direction, "legacy_tier", "wick_choch_supported");
     }
   }
 
@@ -417,7 +455,7 @@ export function detectZoneConfirmation(
       // Tier 3 requires BOTH engulfing AND rejection wick
       if (!supporting.hasEngulfing || !supporting.hasRejectionWick) continue;
 
-      return {
+      return attachConfirmationAuthority({
         type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",
         tier: 3,
         price: candle.close,
@@ -426,7 +464,7 @@ export function detectZoneConfirmation(
         significance: undefined,
         closeBased: false, // no structural break
         supportingSignals: supporting.signals,
-      };
+      }, candles5m, direction, "legacy_tier", "reversal_pattern");
     }
   }
 

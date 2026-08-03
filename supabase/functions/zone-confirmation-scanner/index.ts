@@ -36,6 +36,7 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
+import { buildConfirmationAuthorityObservation } from "../_shared/confirmationAuthority.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   directionVerdictLines,
@@ -787,6 +788,17 @@ Deno.serve(async (req) => {
             significance: undefined,
             closeBased: false,
             supportingSignals: ["indicator_confirmation", indicatorConfirmation.summary],
+            authority: buildConfirmationAuthorityObservation({
+              source: "indicator_router", level: "indicator_minimum",
+              direction: pending.direction as "long" | "short",
+              entryReadyUnderCurrentBehavior: true,
+              evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
+              candleIndex: candles5m.length - 1,
+              candleTime: candles5m[candles5m.length - 1]?.datetime || null,
+              price: candles5m[candles5m.length - 1]?.close || null,
+              supportingSignals: ["indicator_confirmation"],
+              reasonCodes: ["indicator_minimum_met"],
+            }),
           };
         }
         const confirmedSignal = confirmationSignal!;
@@ -1027,6 +1039,7 @@ Deno.serve(async (req) => {
             price: confirmedSignal.price,
             displacement: confirmedSignal.displacement,
             supportingSignals: confirmedSignal.supportingSignals,
+            authority: confirmedSignal.authority || null,
           },
           evaluatedAt: nowStr,
         };
@@ -1150,6 +1163,7 @@ Deno.serve(async (req) => {
             significance: confirmedSignal.significance,
             closeBased: confirmedSignal.closeBased,
             supportingSignals: confirmedSignal.supportingSignals,
+            authority: confirmedSignal.authority || null,
             zoneTouchTime: pending.zone_touch_time,
             confirmationAttempts: pending.confirmation_attempts || 0,
             method: confirmationMethod,
