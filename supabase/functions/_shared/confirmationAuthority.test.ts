@@ -24,3 +24,18 @@ Deno.test("legacy paths map to explicit named levels", () => {
   assertEquals(confirmationLevelFromLegacySignal({ tier: 2, closeBased: false, supportingSignals: ["engulfing"] }), "wick_choch_supported");
   assertEquals(confirmationLevelFromLegacySignal({ tier: 3, closeBased: false, supportingSignals: ["rejection_wick"] }), "reversal_pattern");
 });
+
+Deno.test("combined routing records partial failures without authorizing", async () => {
+  const { buildRoutedConfirmationObservation } = await import("./confirmationAuthority.ts");
+  const result = buildRoutedConfirmationObservation({
+    method: "choch_and_indicators", direction: "short",
+    structural: buildConfirmationAuthorityObservation({
+      source: "legacy_tier", level: "close_choch", direction: "short",
+      entryReadyUnderCurrentBehavior: true,
+    }),
+    indicatorsPassed: 2, indicatorsRequired: 3, indicatorConfirmed: false,
+  });
+  assertEquals(result.source, "combined_router");
+  assertEquals(result.entryReadyUnderCurrentBehavior, false);
+  assertEquals(result.reasonCodes, ["indicator_minimum_not_met", "structural_confirmation_met"]);
+});

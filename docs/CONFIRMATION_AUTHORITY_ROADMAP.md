@@ -1,6 +1,6 @@
 # Confirmation Authority Roadmap
 
-Status: Phase 1 observation contract implemented; verification pending
+Status: Phase 2 attempt persistence implemented; verification pending
 
 ## Verified current behavior
 
@@ -34,6 +34,10 @@ It does not replace `confirmationPassed`, change tier selection, alter Unified
 Zone scores, or participate in authorization.
 
 ## Next phases
+
+Phase 2 stores router-level authority on immutable fast-scanner confirmation
+attempt rows, including unsuccessful and combined partial results. Both fill
+routes also carry routed authority on successful signals.
 
 1. Persist watch-only and rejected confirmation observations for replay.
 2. Compare hierarchy-only decisions with current legacy/indicator routing.

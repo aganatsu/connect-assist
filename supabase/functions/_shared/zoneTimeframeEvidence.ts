@@ -811,6 +811,7 @@ export interface ConfirmationObservation {
   zoneHigh: number | null;
   zoneLow: number | null;
   currentPrice: number | null;
+  authority?: Record<string, unknown> | null;
 }
 
 /**
