@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: Phase 2 complete and CI-verified in PR #169
+Status: Phases 3-8 implemented; local and CI verification pending
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -153,12 +153,12 @@ A trade is authorized only when:
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
 | 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
 | 2 | Canonical evidence-to-pillar mapping | Observation only | Complete; PR #169 |
-| 3 | Freeze and persist summary through lifecycle | Observation only | Not started |
-| 4 | Historical replay and comparison engine | Observation only | Not started |
-| 5 | Rejected Setups comparison UI | Observation only | Not started |
-| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Not started |
-| 7 | Evidence review and retirement proposal | Documentation only | Not started |
-| 8 | Controlled enforcement | Opt-in, evidence-gated | Not approved |
+| 3 | Freeze and persist summary through lifecycle | Observation only | Implemented; verification pending |
+| 4 | Historical replay and comparison engine | Observation only | Implemented; verification pending |
+| 5 | Rejected Setups comparison UI | Observation only | Implemented; verification pending |
+| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Implemented; verification pending |
+| 7 | Evidence review and retirement proposal | Documentation only | Complete; no retirement |
+| 8 | Controlled enforcement | Opt-in, evidence-gated | Implemented with owner approval; verification pending |
 
 ## Phase 1 - Decision Summary Contract
 
@@ -314,17 +314,9 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Phase 3 lifecycle persistence is the next proposed phase:
-
-1. define one immutable storage projection for the observation summary;
-2. persist it with candidate, Watchlist, pending, rejection, position, and
-   closed-trade evidence;
-3. preserve the same candidate identity and origin evidence;
-4. allow only current price, Thesis Health, and Safety Authorization to refresh;
-5. keep all stored summaries observation-only.
-
-Do not begin Phase 3 without owner approval. Do not enforce the new summary,
-delete tiers, or change thresholds.
+Verify phases 3-8 with the full Node build and Deno suite, review the database
+migration, open a fully described pull request, pass CI, and merge. After
+deployment, remain in observe mode until a certificate is deliberately issued.
 
 ## Restart Prompt
 

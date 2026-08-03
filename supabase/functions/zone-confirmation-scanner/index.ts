@@ -1167,6 +1167,12 @@ Deno.serve(async (req) => {
           },
           finalAuthorization: authorization,
           decisionContext: authorization.decisionContext,
+          streamlinedDecisionOrigin: pending.streamlined_decision_origin || parsedPendingEvidence.streamlinedDecisionOrigin || null,
+          streamlinedDecisionLatest: {
+            ...(parsedPendingEvidence.streamlinedDecisionLatest || {}),
+            contractVersion: "streamlined-decision-lifecycle.v1",
+            evaluatedAt: nowStr, stage: "fill", currentPrice,
+          },
         };
 
         // One database transaction claims the pending order, rechecks account

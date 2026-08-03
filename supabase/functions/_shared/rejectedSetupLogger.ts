@@ -173,6 +173,10 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
         sessionName,
       }),
       shadow_decision: rawDetail?.gamePlanShadowAudit || null,
+      streamlined_decision_origin:
+        rawDetail?.streamlinedDecisionOrigin || null,
+      streamlined_decision_latest:
+        rawDetail?.streamlinedDecisionLatest || null,
     };
 
     // Optional fields — only include if defined

@@ -362,6 +362,16 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <FieldGroup label="Streamlined Decision" description="Off, observe, or evidence-certified enforcement">
+            <Select value={config.strategy?.streamlinedDecisionMode ?? "observe"} onValueChange={v => updateField("strategy", "streamlinedDecisionMode", v)}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="observe">Observe</SelectItem>
+                <SelectItem value="enforce">Enforce (Certificate Required)</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Scoring</p>

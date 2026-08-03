@@ -73,6 +73,7 @@ export interface Phase1StreamlinedObservationInput {
     evaluatedAt?: string | null;
   };
   gates: Array<{ passed: boolean; reason: string }>;
+  safetyComplete?: boolean;
   factors?: LegacyFactorObservation[] | null;
   locationEvidence?: DecisionEvidenceReference | null;
 }
@@ -210,8 +211,8 @@ export function buildStreamlinedTradeDecisionObservation(
       }],
     },
     safety: {
-      // Candidate discovery predates final runtime authorization.
-      complete: false,
+      // Callers must explicitly attest that their current safety-gate set is complete.
+      complete: input.safetyComplete === true,
       evidence: mappedEvidence.safetyEvidence,
       checks: observedSafetyChecks(input.gates, input.evaluatedAt),
     },

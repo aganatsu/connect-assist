@@ -1013,3 +1013,10 @@ Deno.test("canonical dealing range mode defaults safely and maps explicit values
     strategy: { dealingRangeMode: "strict_value" },
   }).dealingRangeMode, "strict_value");
 });
+
+Deno.test("streamlined decision mode defaults to observe and maps enforcement", () => {
+  assertEquals(mapNestedToFlat({}).streamlinedDecisionMode, "observe");
+  assertEquals(mapNestedToFlat({
+    strategy: { streamlinedDecisionMode: "enforce" },
+  }).streamlinedDecisionMode, "enforce");
+});
