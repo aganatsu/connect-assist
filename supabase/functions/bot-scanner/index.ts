@@ -46,6 +46,10 @@ import {
   buildStreamlinedTradeDecisionObservation,
 } from "../_shared/streamlinedTradeDecisionObservation.ts";
 import { lifecycleProjection } from "../_shared/streamlinedDecisionLifecycle.ts";
+import {
+  evaluateSingleOwnershipDecision,
+  operationalSafetyChecks,
+} from "../_shared/singleOwnershipDecision.ts";
 import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
 import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
@@ -242,7 +246,7 @@ import {
   zoneEvidenceLines,
 } from "../_shared/telegramDetail.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
-import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { logRejectedSetup, normalizeRejectedGate, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
 import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
@@ -7166,6 +7170,79 @@ async function runScanForUser(
         null;
       const streamlinedConviction =
         streamlinedDecisionContext?.thesisConviction?.evidence;
+      const canonicalLocationObservation =
+        (detail as any).canonicalDealingRangeObservation?.canonical || null;
+      const singleOwnershipCandidateId =
+        izData?.bestZone?.candidateModel?.candidateId ||
+        izData?.bestZone?.localConfluence?.candidateId ||
+        (detail as any).crossTimeframeCandidateId ||
+        "candidate:" + scanCycleId + ":" + pair;
+      const zoneStoryAvailable = cascadeResult?.state === "triggered" ||
+        unifiedZoneData?.hasZone === true || izData?.hasZone === true;
+      const zoneStoryEntryReady = cascadeResult?.state === "triggered"
+        ? true
+        : unifiedZoneData?.hasZone
+        ? unifiedGatePassed
+        : izData?.hasZone
+        ? izData?.bestZone?.priceAtZoneStrict === true
+        : null;
+      (detail as any).singleOwnershipDecision =
+        evaluateSingleOwnershipDecision({
+          evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
+            new Date().toISOString(),
+          identity: {
+            candidateId: singleOwnershipCandidateId, symbol: pair,
+            direction: analysis.direction as "long" | "short" | null,
+          },
+          direction: {
+            verdict: streamlinedDirectionVerdict?.verdict || null,
+            shouldBlock: streamlinedDirectionVerdict?.shouldBlock ?? null,
+            evidenceId: streamlinedDirectionVerdict?.id || null,
+          },
+          zoneStory: {
+            available: zoneStoryAvailable, valid: zoneStoryAvailable ? true : null,
+            entryReady: zoneStoryEntryReady,
+            source: (detail as any).signalSource || null,
+            candidateId: singleOwnershipCandidateId,
+            impulseId: canonicalLocationObservation?.range?.impulseId || null,
+            poiType: izData?.bestZone?.type || null,
+            reasonCodes: zoneStoryAvailable ? ["zone_story_available"] : ["zone_story_unavailable"],
+          },
+          canonicalLocation: {
+            required: ((pairConfig as any).dealingRangeMode || "avoid_wrong_side") !== "off",
+            available: canonicalLocationObservation?.available === true,
+            allowed: canonicalLocationObservation?.available === true
+              ? canonicalLocationObservation.allowed === true
+              : null,
+            rangeId: canonicalLocationObservation?.range?.impulseId || null,
+            reasonCode: canonicalLocationObservation?.code || null,
+          },
+          confirmation: {
+            required: zoneStoryAvailable, passed: zoneStoryEntryReady,
+            authorityVersion: "confirmation-authority.v1",
+            reasonCodes: zoneStoryEntryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
+          },
+          thesis: {
+            required: streamlinedDecisionContext?.thesisValidity?.required === true,
+            valid: streamlinedDecisionContext?.thesisValidity?.valid ?? null,
+            reasonCodes: [streamlinedDecisionContext?.thesisValidity?.checkType || "thesis_validation"],
+          },
+          safety: {
+            complete: true,
+            checks: operationalSafetyChecks(gates.map((gate) => ({
+              code: normalizeRejectedGate(gate.reason), passed: gate.passed,
+            }))),
+          },
+          legacyDiagnostics: {
+            rawScore: analysis.score, effectiveScore,
+            threshold: conflictAdjustedMinConfluence,
+            tier1Count: analysis.tieredScoring?.tier1Count ?? null,
+            tier2Count: analysis.tieredScoring?.tier2Count ?? null,
+            tier3Count: analysis.tieredScoring?.tier3Count ?? null,
+            tier1GatePassed: analysis.tieredScoring?.tier1GatePassed ?? null,
+          },
+        });
+
       (detail as any).streamlinedTradeDecision =
         buildStreamlinedTradeDecisionObservation({
           evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
@@ -8203,7 +8280,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -8999,7 +9076,7 @@ async function runScanForUser(
           impulseZone: (detail as any).impulseZone || null,
           directionVerdict: (detail as any).directionVerdict || null,
           gamePlanShadowAudit:
-            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
+            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
           signalSource: (detail as any).signalSource || null,
           timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
           unifiedZone: (detail as any).unifiedZone || null,
@@ -9640,7 +9717,7 @@ async function runScanForUser(
             priceAtRejection: analysis.lastPrice,
             rawDetail: {
               scanCycleId,
-              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
+              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
               thesisConviction: (detail as any).thesisConviction || null,
               directionVerdict: (detail as any).directionVerdict || null,
               impulseZone: (detail as any).impulseZone || null,
@@ -10007,7 +10084,7 @@ async function runScanForUser(
               priceAtRejection: analysis.lastPrice,
               rawDetail: {
                 scanCycleId,
-                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
+                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
                 thesisConviction: (detail as any).thesisConviction || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 impulseZone: (detail as any).impulseZone || null,

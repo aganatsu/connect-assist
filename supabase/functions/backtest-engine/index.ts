@@ -207,6 +207,11 @@ import {
 } from "../_shared/goldenReplay.ts";
 import { buildStreamlinedTradeDecisionObservation } from "../_shared/streamlinedTradeDecisionObservation.ts";
 import {
+  evaluateSingleOwnershipDecision,
+  operationalSafetyChecks,
+} from "../_shared/singleOwnershipDecision.ts";
+import { normalizeRejectedGate } from "../_shared/rejectedSetupLogger.ts";
+import {
   buildGoldenReplayRuntimeInputFingerprint,
   buildGoldenReplayReport,
   isGoldenReplaySnapshot,
@@ -3618,6 +3623,53 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             confirmation: { required: false, passed: null, reasonCode: "backtest_confirmation_evidence" },
             gates, safetyComplete: true, factors: analysis.factors,
             locationEvidence: { source: "backtest_zone_story", observedAt: candle.datetime },
+          });
+        (replaySnapshot as any).singleOwnershipDecision =
+          evaluateSingleOwnershipDecision({
+            evaluatedAt: candle.datetime,
+            identity: {
+              candidateId: "backtest:" + runId + ":" + symbol + ":" + candle.datetime,
+              symbol, direction: analysis.direction,
+            },
+            direction: {
+              verdict: directionVerdict?.verdict || null,
+              shouldBlock: directionVerdict?.shouldBlock ?? null,
+            },
+            zoneStory: {
+              available: replayZone.hasZone,
+              valid: replayZone.hasZone ? true : null,
+              entryReady: replayZone.hasZone ? replayZone.entryReady : null,
+              source: replayZone.source,
+              reasonCodes: replayZone.hasZone ? ["zone_story_available"] : ["zone_story_unavailable"],
+            },
+            canonicalLocation: {
+              required: pairConfig.dealingRangeMode !== "off",
+              available: canonicalDealingRangeEvaluation?.available === true,
+              allowed: canonicalDealingRangeEvaluation?.available === true
+                ? canonicalDealingRangeEvaluation.allowed === true : null,
+              rangeId: canonicalDealingRangeEvaluation?.range?.impulseId || null,
+              reasonCode: canonicalDealingRangeEvaluation?.code || null,
+            },
+            confirmation: {
+              required: replayZone.hasZone, passed: replayZone.entryReady,
+              authorityVersion: "confirmation-authority.v1",
+              reasonCodes: replayZone.entryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
+            },
+            thesis: { required: false, valid: null, reasonCodes: ["backtest_thesis_not_required"] },
+            safety: {
+              complete: true,
+              checks: operationalSafetyChecks(gates.map((gate) => ({
+                code: normalizeRejectedGate(gate.reason), passed: gate.passed,
+              }))),
+            },
+            legacyDiagnostics: {
+              rawScore: analysis.score, effectiveScore,
+              threshold: conflictAdjustedMinConfluence,
+              tier1Count: analysis.tieredScoring?.tier1Count ?? null,
+              tier2Count: analysis.tieredScoring?.tier2Count ?? null,
+              tier3Count: analysis.tieredScoring?.tier3Count ?? null,
+              tier1GatePassed: analysis.tieredScoring?.tier1GatePassed ?? null,
+            },
           });
         if (!allPassed) {
           replaySnapshot = await finalizeGoldenReplaySnapshot(
