@@ -29,7 +29,7 @@ Deno.test("scanner attaches the streamlined summary as observation-only detail",
   );
   assertStringIncludes(
     observationAdapter,
-    "// Candidate discovery predates final runtime authorization.",
+    "// Callers must explicitly attest that their current safety-gate set is complete.",
   );
 });
 

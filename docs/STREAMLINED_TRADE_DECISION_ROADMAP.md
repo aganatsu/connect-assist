@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: Phase 2 complete and CI-verified in PR #169
+Status: Phases 3-8 complete and CI-verified in PR #170
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -153,12 +153,12 @@ A trade is authorized only when:
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
 | 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
 | 2 | Canonical evidence-to-pillar mapping | Observation only | Complete; PR #169 |
-| 3 | Freeze and persist summary through lifecycle | Observation only | Not started |
-| 4 | Historical replay and comparison engine | Observation only | Not started |
-| 5 | Rejected Setups comparison UI | Observation only | Not started |
-| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Not started |
-| 7 | Evidence review and retirement proposal | Documentation only | Not started |
-| 8 | Controlled enforcement | Opt-in, evidence-gated | Not approved |
+| 3 | Freeze and persist summary through lifecycle | Observation only | Complete; PR #170 |
+| 4 | Historical replay and comparison engine | Observation only | Complete; PR #170 |
+| 5 | Rejected Setups comparison UI | Observation only | Complete; PR #170 |
+| 6 | Scanner, Watchlist, pending, fill, and backtest parity | Observation only | Complete; PR #170 |
+| 7 | Evidence review and retirement proposal | Documentation only | Complete; no retirement |
+| 8 | Controlled enforcement | Opt-in, evidence-gated | Complete; PR #170, owner-approved |
 
 ## Phase 1 - Decision Summary Contract
 
@@ -314,17 +314,9 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Phase 3 lifecycle persistence is the next proposed phase:
-
-1. define one immutable storage projection for the observation summary;
-2. persist it with candidate, Watchlist, pending, rejection, position, and
-   closed-trade evidence;
-3. preserve the same candidate identity and origin evidence;
-4. allow only current price, Thesis Health, and Safety Authorization to refresh;
-5. keep all stored summaries observation-only.
-
-Do not begin Phase 3 without owner approval. Do not enforce the new summary,
-delete tiers, or change thresholds.
+Merge PR #170 after final CI, deploy the migration and functions, and remain in
+observe mode until a certificate is deliberately issued from sufficient forward
+and historical evidence.
 
 ## Restart Prompt
 

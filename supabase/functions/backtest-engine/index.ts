@@ -205,6 +205,7 @@ import {
   finalizeGoldenReplaySnapshot,
   type GoldenReplaySnapshot,
 } from "../_shared/goldenReplay.ts";
+import { buildStreamlinedTradeDecisionObservation } from "../_shared/streamlinedTradeDecisionObservation.ts";
 import {
   buildGoldenReplayRuntimeInputFingerprint,
   buildGoldenReplayReport,
@@ -3591,6 +3592,33 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           },
           managementContractVersion: "management-policy.v1",
         });
+        (replaySnapshot as any).streamlinedTradeDecision =
+          buildStreamlinedTradeDecisionObservation({
+            evaluatedAt: candle.datetime,
+            candidateId: "backtest:" + runId + ":" + symbol + ":" + candle.datetime,
+            symbol,
+            direction: analysis.direction,
+            authority: {
+              stylePolicyVersion: replayStylePolicy.contractVersion,
+              stylePolicyHash: replayStylePolicy.policyHash,
+              styleBasePolicyHash: replayStylePolicy.basePolicyHash,
+              gamePlanId: replayPairPlan?.gamePlanId || null,
+              gamePlanVersion: activeGamePlan?.planVersion || null,
+              directionVerdictVersion: null,
+            },
+            directionVerdict: directionVerdict ? {
+              verdict: directionVerdict.verdict,
+              confidence: directionVerdict.confidence,
+              shouldBlock: directionVerdict.shouldBlock,
+              evaluatedAt: candle.datetime,
+            } : null,
+            directionReasonCode: "backtest_direction_verdict",
+            legacyScoring: { rawScore: analysis.score, effectiveScore, threshold: conflictAdjustedMinConfluence },
+            thesis: { validationRequired: false, valid: null, conviction: convictionResult?.conviction ?? null, degrading: convictionResult?.thesisDegrading ?? null, reasonCode: "backtest_thesis_evidence" },
+            confirmation: { required: false, passed: null, reasonCode: "backtest_confirmation_evidence" },
+            gates, safetyComplete: true, factors: analysis.factors,
+            locationEvidence: { source: "backtest_zone_story", observedAt: candle.datetime },
+          });
         if (!allPassed) {
           replaySnapshot = await finalizeGoldenReplaySnapshot(
             replaySnapshot,

@@ -368,6 +368,15 @@ export default function RejectedSetups() {
     refetchInterval: 60_000,
   });
   const {
+    data: streamlinedDecisionComparison,
+    isLoading: isLoadingStreamlinedDecisionComparison,
+  } = useQuery({
+    queryKey: ["streamlined-decision-comparison"],
+    queryFn: () => botConfigApi.getStreamlinedDecisionComparison(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const {
     data: dealingRangeComparison,
     isLoading: isLoadingDealingRangeComparison,
     refetch: refetchDealingRangeComparison,
@@ -1021,6 +1030,27 @@ export default function RejectedSetups() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
+                <CardTitle className="text-sm font-medium">Streamlined Decision Comparison</CardTitle>
+                <p className="text-[10px] text-muted-foreground mt-1">Point-in-time legacy decisions compared with the four-pillar observation.</p>
+              </div><Badge variant="outline" className="text-[9px]">{isLoadingStreamlinedDecisionComparison ? "Loading" : <>{streamlinedDecisionComparison?.summary.comparable ?? 0}/{streamlinedDecisionComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
+              <CardContent className="px-4 pb-4">
+                {streamlinedDecisionComparison ? <div className="space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
+                    <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{streamlinedDecisionComparison.summary.coveragePercent.toFixed(1)}%</p></div>
+                    <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{streamlinedDecisionComparison.summary.agreements}</p></div>
+                    <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{streamlinedDecisionComparison.summary.winnersPreserved}</p></div>
+                    <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{streamlinedDecisionComparison.summary.poorEntriesRejected}</p></div>
+                  </div>
+                  {streamlinedDecisionComparison.rows.filter(row => row.comparable && row.disagreementReasons.length > 0).slice(0, 10).map(row => <div key={["streamlined", row.source, row.id].join(":")} className="border-l-2 border-warning pl-3 text-xs">
+                    <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · {row.currentDecision} to {row.proposedDecision}</span>
+                    <p className="text-muted-foreground mt-0.5">{row.disagreementReasons.join(", ") || "Decision changed"}</p>
+                  </div>)}
+                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Streamlined comparison is unavailable.</div>}
               </CardContent>
             </Card>
 

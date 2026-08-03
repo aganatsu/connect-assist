@@ -45,6 +45,9 @@ import {
 import {
   buildStreamlinedTradeDecisionObservation,
 } from "../_shared/streamlinedTradeDecisionObservation.ts";
+import { lifecycleProjection } from "../_shared/streamlinedDecisionLifecycle.ts";
+import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
+import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -1556,6 +1559,8 @@ async function runScanForUser(
     userId,
     botId: BOT_ID,
   });
+  const streamlinedDecisionCertificate =
+    await loadStreamlinedDecisionCertificate(supabase, userId);
   const crossTimeframeActivation = await loadCrossTimeframeActivation(
     supabase,
     {
@@ -5853,7 +5858,7 @@ async function runScanForUser(
                 observedAt: new Date().toISOString(),
               },
             },
-          }).eq("id", existingStaged.id).eq("user_id", userId);
+          }).eq("id", streamlinedStagedId).eq("user_id", userId);
           if (updateError) throw new Error(updateError.message);
           detail.staging = {
             action: executionEligible
@@ -6291,7 +6296,7 @@ async function runScanForUser(
                   current_score: analysis.score,
                   scan_cycles: existingStaged.scan_cycles + 1,
                   last_eval_at: new Date().toISOString(),
-                }).eq("id", existingStaged.id);
+                }).eq("id", streamlinedStagedId);
                 console.log(`[staging] Updated STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — cycle ${existingStaged.scan_cycles + 1}`);
               }
             } catch (e: any) {
@@ -6757,7 +6762,7 @@ async function runScanForUser(
             promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
             last_eval_at: new Date().toISOString(),
             scan_cycles: existingStaged.scan_cycles + 1,
-          }).eq("id", existingStaged.id);
+          }).eq("id", streamlinedStagedId);
           console.log(`[staging] ELIGIBLE ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}%; evaluating remaining gates`);
         } catch (e: any) {
           console.warn(`[staging] Failed to update qualified ${pair}: ${e?.message}`);
@@ -6782,7 +6787,7 @@ async function runScanForUser(
               existingStaged.analysis_snapshot?.impulseZone?.impulse,
             ).level,
             tp_level: analysis.takeProfit,
-          }).eq("id", existingStaged.id);
+          }).eq("id", streamlinedStagedId);
           console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
         } catch (e: any) {
           console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
@@ -7115,7 +7120,7 @@ async function runScanForUser(
         }
       }
 
-      const allPassed = gates.every(g => g.passed);
+      let allPassed = gates.every(g => g.passed);
       (detail as any).gamePlanShadowAudit = finalizeShadowCurrentDecision(
         (detail as any).gamePlanShadowAudit,
         allPassed && !!analysis.stopLoss && !!analysis.takeProfit ? "allow" : "block",
@@ -7204,6 +7209,7 @@ async function runScanForUser(
               null,
           },
           gates,
+          safetyComplete: true,
           factors: analysis.factors,
           locationEvidence: {
             source: "zone_story_and_market_location",
@@ -7211,6 +7217,54 @@ async function runScanForUser(
             observedAt: streamlinedDecisionContext?.evaluatedAt || null,
           },
         });
+      const streamlinedLifecycle = lifecycleProjection(
+        (detail as any).streamlinedTradeDecision,
+        "candidate",
+        analysis.lastPrice,
+      );
+      Object.assign(detail as any, streamlinedLifecycle);
+      const streamlinedEnforcement = evaluateStreamlinedEnforcement({
+        requestedMode: (pairConfig as any).streamlinedDecisionMode,
+        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+        style: resolvedStyle,
+        now: new Date().toISOString(),
+        certificate: streamlinedDecisionCertificate,
+        summary: (detail as any).streamlinedTradeDecision,
+      });
+      (detail as any).streamlinedDecisionEnforcement = streamlinedEnforcement;
+      if (streamlinedEnforcement.effectiveMode === "enforce" &&
+          !streamlinedEnforcement.authorized) {
+        gates.push({ passed: false, reason:
+          "[streamlined:" + streamlinedEnforcement.code + "] Streamlined decision did not authorize entry" });
+        allPassed = false;
+      }
+      const streamlinedStagedId = existingStaged?.id ||
+        (detail as any).staging?.setupId || null;
+      if (streamlinedStagedId) {
+        const { error: streamlinedStageError } = await supabase
+          .from("staged_setups")
+          .update({
+            streamlined_decision_origin:
+              streamlinedLifecycle.streamlinedDecisionOrigin,
+            streamlined_decision_latest:
+              streamlinedLifecycle.streamlinedDecisionLatest,
+          })
+          .eq("id", streamlinedStagedId)
+          .eq("user_id", userId)
+          .is("streamlined_decision_origin", null);
+        if (streamlinedStageError) {
+          console.warn(
+            "[streamlined] Watchlist persistence failed for " + pair + ": " +
+              streamlinedStageError.message,
+          );
+        }
+      }
+      if (streamlinedStagedId) {
+        await supabase.from("staged_setups").update({
+          streamlined_decision_latest:
+            streamlinedLifecycle.streamlinedDecisionLatest,
+        }).eq("id", streamlinedStagedId).eq("user_id", userId);
+      }
       const replayZone = unifiedZoneData?.hasZone
         ? {
           source: (detail as any).signalSource || "unified",
@@ -8130,7 +8184,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -8926,7 +8980,7 @@ async function runScanForUser(
           impulseZone: (detail as any).impulseZone || null,
           directionVerdict: (detail as any).directionVerdict || null,
           gamePlanShadowAudit:
-            (detail as any).gamePlanShadowAudit || null,
+            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
           signalSource: (detail as any).signalSource || null,
           timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
           unifiedZone: (detail as any).unifiedZone || null,
@@ -9567,7 +9621,7 @@ async function runScanForUser(
             priceAtRejection: analysis.lastPrice,
             rawDetail: {
               scanCycleId,
-              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
               thesisConviction: (detail as any).thesisConviction || null,
               directionVerdict: (detail as any).directionVerdict || null,
               impulseZone: (detail as any).impulseZone || null,
@@ -9934,7 +9988,7 @@ async function runScanForUser(
               priceAtRejection: analysis.lastPrice,
               rawDetail: {
                 scanCycleId,
-                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null,
                 thesisConviction: (detail as any).thesisConviction || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 impulseZone: (detail as any).impulseZone || null,
@@ -9981,7 +10035,7 @@ async function runScanForUser(
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
-              }).eq("id", existingStaged.id);
+              }).eq("id", streamlinedStagedId);
               console.log(`[staging] Updated ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (cycle ${existingStaged.scan_cycles + 1})`);
             } catch (e: any) {
               console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
@@ -10111,7 +10165,7 @@ async function runScanForUser(
                       existingStaged.candidate_id || existingStaged.id,
                   },
                 }),
-              }).eq("id", existingStaged.id).eq("user_id", userId);
+              }).eq("id", streamlinedStagedId).eq("user_id", userId);
               console.log(
                 `[staging] Retained frozen ${pair} ${existingStaged.direction} candidate despite score drop to ${analysis.score.toFixed(1)}%`,
               );

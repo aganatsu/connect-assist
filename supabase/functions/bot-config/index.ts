@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { loadEffectiveRuntimeConfig } from "../_shared/runtimeConfigStore.ts";
 import { buildLast100Comparison } from "../_shared/canonicalDealingRangeComparison.ts";
+import { buildStreamlinedReplay } from "../_shared/streamlinedDecisionReplay.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -126,6 +127,23 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(defaultConfig), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (action === "streamlined_decision.comparison") {
+      const [closedResult, rejectedResult] = await Promise.all([
+        supabase.from("paper_trade_history")
+          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason,streamlined_decision_origin")
+          .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
+        supabase.from("rejected_setups")
+          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail,streamlined_decision_origin")
+          .eq("user_id", user.id).eq("bot_id", "smc")
+          .order("rejected_at", { ascending: false }).limit(100),
+      ]);
+      if (closedResult.error) throw closedResult.error;
+      if (rejectedResult.error) throw rejectedResult.error;
+      return new Response(JSON.stringify(buildStreamlinedReplay(
+        closedResult.data || [], rejectedResult.data || [],
+      )), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     if (action === "dealing_range.comparison") {
@@ -293,6 +311,10 @@ function validateConfig(config: any): string[] {
     if (s.dealingRangeMode !== undefined &&
       !["off", "avoid_wrong_side", "strict_value"].includes(s.dealingRangeMode)) {
       errors.push("strategy.dealingRangeMode must be off, avoid_wrong_side, or strict_value");
+    }
+    if (s.streamlinedDecisionMode !== undefined &&
+      !["off", "observe", "enforce"].includes(s.streamlinedDecisionMode)) {
+      errors.push("strategy.streamlinedDecisionMode must be off, observe, or enforce");
     }
     if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
       errors.push("strategy.confluenceThreshold must be between 0 and 100");
@@ -513,7 +535,7 @@ function getDefaultConfig() {
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
       liquiditySweepRequired: false, equalHighsLowsSensitivity: 3, liquidityPoolMinTouches: 2,
-      premiumDiscountEnabled: true, dealingRangeMode: "avoid_wrong_side", onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
+      premiumDiscountEnabled: true, dealingRangeMode: "avoid_wrong_side", streamlinedDecisionMode: "observe", onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
       // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)

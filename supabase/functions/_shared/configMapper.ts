@@ -89,6 +89,7 @@ export const RUNTIME_DEFAULTS = {
   onlyBuyInDiscount: false,
   onlySellInPremium: false,
   dealingRangeMode: "avoid_wrong_side",
+  streamlinedDecisionMode: "observe",
   normalizedScoring: true,
 
   // ── Factor Toggles ──
@@ -507,6 +508,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     onlySellInPremium: strategy.onlySellInPremium ?? RUNTIME_DEFAULTS.onlySellInPremium,
     dealingRangeMode: strategy.dealingRangeMode ?? raw.dealingRangeMode ??
       RUNTIME_DEFAULTS.dealingRangeMode,
+    streamlinedDecisionMode: strategy.streamlinedDecisionMode ??
+      raw.streamlinedDecisionMode ?? RUNTIME_DEFAULTS.streamlinedDecisionMode,
 
     // ── P1 Tuning Fields ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? RUNTIME_DEFAULTS.obLookbackCandles,
