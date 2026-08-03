@@ -1014,6 +1014,13 @@ Deno.test("canonical dealing range mode defaults safely and maps explicit values
   }).dealingRangeMode, "strict_value");
 });
 
+Deno.test("single ownership mode defaults to observe and maps paper enforcement", () => {
+  assertEquals(mapNestedToFlat({}).singleOwnershipMode, "observe");
+  assertEquals(mapNestedToFlat({
+    strategy: { singleOwnershipMode: "enforce" },
+  }).singleOwnershipMode, "enforce");
+});
+
 Deno.test("streamlined decision mode defaults to observe and maps enforcement", () => {
   assertEquals(mapNestedToFlat({}).streamlinedDecisionMode, "observe");
   assertEquals(mapNestedToFlat({

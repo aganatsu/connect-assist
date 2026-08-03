@@ -89,6 +89,7 @@ export const RUNTIME_DEFAULTS = {
   onlyBuyInDiscount: false,
   onlySellInPremium: false,
   dealingRangeMode: "avoid_wrong_side",
+  singleOwnershipMode: "observe",
   streamlinedDecisionMode: "observe",
   normalizedScoring: true,
 
@@ -508,6 +509,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     onlySellInPremium: strategy.onlySellInPremium ?? RUNTIME_DEFAULTS.onlySellInPremium,
     dealingRangeMode: strategy.dealingRangeMode ?? raw.dealingRangeMode ??
       RUNTIME_DEFAULTS.dealingRangeMode,
+    singleOwnershipMode: strategy.singleOwnershipMode ??
+      raw.singleOwnershipMode ?? RUNTIME_DEFAULTS.singleOwnershipMode,
     streamlinedDecisionMode: strategy.streamlinedDecisionMode ??
       raw.streamlinedDecisionMode ?? RUNTIME_DEFAULTS.streamlinedDecisionMode,
 

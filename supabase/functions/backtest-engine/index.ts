@@ -210,6 +210,7 @@ import {
   evaluateSingleOwnershipDecision,
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
+import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { normalizeRejectedGate } from "../_shared/rejectedSetupLogger.ts";
 import {
   buildGoldenReplayRuntimeInputFingerprint,
@@ -3404,7 +3405,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Threshold check ──
-        if (effectiveScore < conflictAdjustedMinConfluence) {
+        if (effectiveScore < conflictAdjustedMinConfluence &&
+            pairConfig.singleOwnershipMode !== "enforce") {
           diagnostics.skippedBelowThreshold++;
           continue;
         }
@@ -3484,7 +3486,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           gates.push({ passed: gpGate.passed, reason: gpGate.reason });
         }
         const failedGates = gates.filter(g => !g.passed);
-        const allPassed = failedGates.length === 0;
+        let allPassed = failedGates.length === 0;
         const replayPairPlan = activeGamePlan?.plans?.find((plan) =>
           plan.symbol === symbol
         ) || null;
@@ -3671,6 +3673,17 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               tier1GatePassed: analysis.tieredScoring?.tier1GatePassed ?? null,
             },
           });
+        const singleOwnershipEnforcement = evaluateSingleOwnershipEnforcement({
+          requestedMode: pairConfig.singleOwnershipMode,
+          runtimeTarget: "paper",
+          decision: (replaySnapshot as any).singleOwnershipDecision,
+        });
+        (replaySnapshot as any).singleOwnershipEnforcement =
+          singleOwnershipEnforcement;
+        if (singleOwnershipEnforcement.effectiveMode === "enforce") {
+          allPassed = singleOwnershipEnforcement.authorized;
+          replaySnapshot.decision.execution.eligible = allPassed;
+        }
         if (!allPassed) {
           replaySnapshot = await finalizeGoldenReplaySnapshot(
             replaySnapshot,

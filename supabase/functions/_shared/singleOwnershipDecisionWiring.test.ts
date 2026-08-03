@@ -22,11 +22,9 @@ Deno.test("single-ownership evidence travels with lifecycle records", () => {
   assertStringIncludes(scanner, "(detail as any).singleOwnershipDecision || null");
 });
 
-Deno.test("phase 1 observation cannot authorize or bypass legacy eligibility", () => {
-  assert(!scanner.includes("singleOwnershipDecision.decision"));
-  assert(!scanner.includes("singleOwnershipDecision.affectsAuthorization"));
-  assertStringIncludes(
-    scanner,
-    "effectiveScore >= conflictAdjustedMinConfluence && analysis.direction",
-  );
+Deno.test("single-ownership enforcement is explicit and paper-scoped", () => {
+  assertStringIncludes(scanner, "singleOwnershipPaperEnforcement");
+  assertStringIncludes(scanner, "account.execution_mode !== \"live\"");
+  assertStringIncludes(scanner, "evaluateSingleOwnershipEnforcement({");
+  assertStringIncludes(backtest, "evaluateSingleOwnershipEnforcement({");
 });

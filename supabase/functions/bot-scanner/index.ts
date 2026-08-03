@@ -51,6 +51,7 @@ import {
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
+import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
@@ -7054,8 +7055,13 @@ async function runScanForUser(
       continue;
     }
 
-    // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-    if (effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused) {
+    // Paper enforcement can evaluate owned authorities without first passing the legacy score.
+    const legacyScannerEligible = effectiveScore >= conflictAdjustedMinConfluence;
+    const singleOwnershipPaperEnforcement =
+      (pairConfig as any).singleOwnershipMode === "enforce" &&
+      account.execution_mode !== "live";
+    if ((legacyScannerEligible || singleOwnershipPaperEnforcement) &&
+        analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -7242,6 +7248,17 @@ async function runScanForUser(
             tier1GatePassed: analysis.tieredScoring?.tier1GatePassed ?? null,
           },
         });
+      const singleOwnershipEnforcement = evaluateSingleOwnershipEnforcement({
+        requestedMode: (pairConfig as any).singleOwnershipMode,
+        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+        decision: (detail as any).singleOwnershipDecision,
+      });
+      (detail as any).singleOwnershipEnforcement = singleOwnershipEnforcement;
+      if (singleOwnershipEnforcement.effectiveMode === "enforce") {
+        // In paper enforcement, named authorities replace all legacy market-quality
+        // scores and gates. Operational safety is already owned by the decision.
+        allPassed = singleOwnershipEnforcement.authorized;
+      }
 
       (detail as any).streamlinedTradeDecision =
         buildStreamlinedTradeDecisionObservation({
