@@ -211,6 +211,7 @@ import {
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { normalizeRejectedGate } from "../_shared/rejectedSetupLogger.ts";
 import {
   buildGoldenReplayRuntimeInputFingerprint,
@@ -3386,8 +3387,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         else diagnostics.scoreDistribution.above80++;
         if (effectiveScore > diagnostics.highestScoreSeen) diagnostics.highestScoreSeen = effectiveScore;
 
+        const legacyGateDiagnostics: any[] = [];
+        const backtestLegacyGateBlocks = (code: string, passed: boolean, reason: string) => {
+          const disposition = evaluateAuthorityGateDisposition({
+            code, passed, requestedMode: pairConfig.singleOwnershipMode,
+            runtimeTarget: "paper",
+          });
+          legacyGateDiagnostics.push({ ...disposition, reason });
+          return disposition.blocksAuthorization;
+        };
+
         // ── Conflict hard block ──
-        if (conflictHardBlock) {
+        if (backtestLegacyGateBlocks("conflict_count", !conflictHardBlock,
+            "Conflict counter: " + opposingCount + " opposing factors")) {
           diagnostics.skippedGateBlocked++;
           if (researchMode && analysis.stopLoss && analysis.takeProfit) {
             const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
@@ -3420,7 +3432,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // ── Zone Score Gate (pre-gate: reject weak impulse zones) ──
         if (izData?.bestZone) {
           const minZoneScore = config.minZoneScore ?? 4;
-          if (izData.bestZone.totalScore < minZoneScore) {
+          const zoneScoreReason = "Zone Score Gate: zone score " +
+            izData.bestZone.totalScore.toFixed(1) + "/9 < minimum " + minZoneScore;
+          if (backtestLegacyGateBlocks("impulse_zone_score",
+              izData.bestZone.totalScore >= minZoneScore, zoneScoreReason)) {
             diagnostics.skippedGateBlocked++;
             const label = "Zone Score Gate";
             diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
@@ -3626,6 +3641,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             gates, safetyComplete: true, factors: analysis.factors,
             locationEvidence: { source: "backtest_zone_story", observedAt: candle.datetime },
           });
+        (replaySnapshot as any).legacyGateDiagnostics = legacyGateDiagnostics;
         (replaySnapshot as any).singleOwnershipDecision =
           evaluateSingleOwnershipDecision({
             evaluatedAt: candle.datetime,

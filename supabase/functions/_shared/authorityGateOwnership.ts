@@ -61,6 +61,21 @@ export function isLegacyDiagnosticGate(code: string): boolean {
   return authorityGateOwner(code) === "legacy_diagnostic";
 }
 
+export function evaluateAuthorityGateDisposition(input: {
+  code: string;
+  passed: boolean;
+  requestedMode?: unknown;
+  runtimeTarget: "paper" | "live";
+}) {
+  const owner = authorityGateOwner(input.code);
+  const diagnosticOnly = input.requestedMode === "enforce" &&
+    input.runtimeTarget === "paper" && owner === "legacy_diagnostic";
+  return {
+    code: input.code, owner, passed: input.passed, diagnosticOnly,
+    blocksAuthorization: !input.passed && !diagnosticOnly,
+  };
+}
+
 export function classifyAuthorityGates(
   checks: Array<{ code: string; passed: boolean; reason?: string }>,
 ) {

@@ -52,6 +52,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
@@ -3868,6 +3869,9 @@ async function runScanForUser(
     let pairConfig = { ...config };
     // Apply per-pair gate overrides (if configured for this symbol)
     applyPairOverrides(pairConfig, pair);
+    const singleOwnershipPaperEnforcement =
+      (pairConfig as any).singleOwnershipMode === "enforce" &&
+      account.execution_mode !== "live";
     const pairRuntimeConfigSnapshot = await buildFrozenRuntimeConfigSnapshot(
       styleResolution,
       pairConfig,
@@ -4435,6 +4439,17 @@ async function runScanForUser(
           })),
         } : null,
       },
+    };
+
+    const legacyGateDiagnostics: any[] = [];
+    const legacyGateBlocks = (code: string, passed: boolean, reason: string) => {
+      const disposition = evaluateAuthorityGateDisposition({
+        code, passed, requestedMode: (pairConfig as any).singleOwnershipMode,
+        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+      });
+      legacyGateDiagnostics.push({ ...disposition, reason });
+      detail.legacyGateDiagnostics = legacyGateDiagnostics;
+      return disposition.blocksAuthorization;
     };
 
     // ── DIRECTION VERDICT (single source of truth for direction) ──
@@ -6226,7 +6241,9 @@ async function runScanForUser(
 
       // ── Zone Score Gate: reject weak zones below minimum quality threshold ──
       const minZoneScore = pairConfig.minZoneScore ?? 4;
-      if (izData.bestZone.totalScore < minZoneScore) {
+      const zoneScoreReason = "Zone Score Gate: zone score " + izData.bestZone.totalScore.toFixed(1) + "/9 < minimum " + minZoneScore;
+      if (legacyGateBlocks("impulse_zone_score",
+          izData.bestZone.totalScore >= minZoneScore, zoneScoreReason)) {
         detail.status = "skipped_weak_zone";
         detail.skipReason = `Zone Score Gate: zone score ${izData.bestZone.totalScore.toFixed(1)}/9 < minimum ${minZoneScore} — low-conviction zone rejected`;
         console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE SCORE GATE — score ${izData.bestZone.totalScore.toFixed(1)}/9 < ${minZoneScore}. Skipping.`);
@@ -6990,7 +7007,8 @@ async function runScanForUser(
     };
 
     // Apply the conflict hard-block decision computed above
-    if (conflictHardBlock) {
+    if (legacyGateBlocks("conflict_count", !conflictHardBlock,
+        "Conflict counter: " + opposingCount + " opposing factors")) {
       // N+ opposing factors = hard block — too much disagreement to trade
       detail.status = "rejected";
       detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
@@ -7001,7 +7019,8 @@ async function runScanForUser(
     }
 
     // ICT HTF hard gate: block trade if weekly bias or containment requirement fails (only in "hard" mode)
-    if (ictHTFResult && !ictHTFResult.passed) {
+    if (ictHTFResult && legacyGateBlocks("htf_alignment",
+        ictHTFResult.passed, "ICT HTF: " + ictHTFResult.reason)) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT HTF BLOCKED: ${ictHTFResult.reason}`];
       detail.reason = ictHTFResult.reason;
@@ -7010,7 +7029,8 @@ async function runScanForUser(
       continue;
     }
     // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
-    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.isValid) {
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult &&
+        legacyGateBlocks("ict_mss", ictMSSResult.isValid, "ICT MSS: " + ictMSSResult.reason)) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
       detail.reason = ictMSSResult.reason;
@@ -7019,7 +7039,8 @@ async function runScanForUser(
       continue;
     }
     // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
-    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.found) {
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult &&
+        legacyGateBlocks("ict_judas", ictJudasResult.found, "ICT Judas: " + ictJudasResult.reason)) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
       detail.reason = ictJudasResult.reason;
@@ -7028,7 +7049,8 @@ async function runScanForUser(
       continue;
     }
     // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
-    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.validCount === 0 && ictFVGResult.totalCount > 0) {
+    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.totalCount > 0 &&
+        legacyGateBlocks("ict_fvg_invalidation", ictFVGResult.validCount > 0, "ICT FVG invalidation")) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT FVG BLOCKED: All ${ictFVGResult.totalCount} FVGs invalidated/exhausted`];
       detail.reason = `All FVGs invalidated (${ictFVGResult.invalidatedCount} closed, ${ictFVGResult.exhaustedCount} exhausted)`;
@@ -7037,7 +7059,8 @@ async function runScanForUser(
       continue;
     }
     // ICT Kill Zone hard gate: block trade if outside all kill zones
-    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.isKillZone) {
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult &&
+        legacyGateBlocks("ict_kill_zone", ictKZResult.isKillZone, "ICT Kill Zone: " + ictKZResult.reason)) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
       detail.reason = ictKZResult.reason;
@@ -7057,9 +7080,6 @@ async function runScanForUser(
 
     // Paper enforcement can evaluate owned authorities without first passing the legacy score.
     const legacyScannerEligible = effectiveScore >= conflictAdjustedMinConfluence;
-    const singleOwnershipPaperEnforcement =
-      (pairConfig as any).singleOwnershipMode === "enforce" &&
-      account.execution_mode !== "live";
     if ((legacyScannerEligible || singleOwnershipPaperEnforcement) &&
         analysis.direction && !isPaused) {
       signalsFound++;
@@ -8297,7 +8317,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -9093,7 +9113,7 @@ async function runScanForUser(
           impulseZone: (detail as any).impulseZone || null,
           directionVerdict: (detail as any).directionVerdict || null,
           gamePlanShadowAudit:
-            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
+            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
           signalSource: (detail as any).signalSource || null,
           timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
           unifiedZone: (detail as any).unifiedZone || null,
@@ -9734,7 +9754,7 @@ async function runScanForUser(
             priceAtRejection: analysis.lastPrice,
             rawDetail: {
               scanCycleId,
-              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
+              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
               thesisConviction: (detail as any).thesisConviction || null,
               directionVerdict: (detail as any).directionVerdict || null,
               impulseZone: (detail as any).impulseZone || null,
@@ -10101,7 +10121,7 @@ async function runScanForUser(
               priceAtRejection: analysis.lastPrice,
               rawDetail: {
                 scanCycleId,
-                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null,
+                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
                 thesisConviction: (detail as any).thesisConviction || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 impulseZone: (detail as any).impulseZone || null,
