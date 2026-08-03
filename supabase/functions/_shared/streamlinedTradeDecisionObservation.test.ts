@@ -2,7 +2,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  buildPhase1StreamlinedTradeDecisionObservation,
+  buildStreamlinedTradeDecisionObservation,
   type Phase1StreamlinedObservationInput,
 } from "./streamlinedTradeDecisionObservation.ts";
 
@@ -58,7 +58,7 @@ function observationInput(): Phase1StreamlinedObservationInput {
 }
 
 Deno.test("Phase 1 adapter records evidence but keeps the proposal unavailable", () => {
-  const result = buildPhase1StreamlinedTradeDecisionObservation(
+  const result = buildStreamlinedTradeDecisionObservation(
     observationInput(),
   );
 
@@ -77,7 +77,7 @@ Deno.test("duplicate normalized safety checks preserve a failure", () => {
     { passed: true, reason: "Portfolio heat 1.0%" },
   ];
 
-  const result = buildPhase1StreamlinedTradeDecisionObservation(input);
+  const result = buildStreamlinedTradeDecisionObservation(input);
 
   assertEquals(result.safetyAuthorization.checks, [{
     code: "portfolio_heat",
@@ -91,5 +91,29 @@ Deno.test("duplicate normalized safety checks preserve a failure", () => {
     decision: "block",
     reasonCodes: ["safety.portfolio_heat"],
   });
+  assertEquals(result.affectsAuthorization, false);
+});
+
+Deno.test("mapped factors produce four pillar scores without changing safety authority", () => {
+  const input = observationInput();
+  input.factors = [
+    { name: "Market Structure", present: true, weight: 2.5 },
+    { name: "Order Block", present: true, weight: 2 },
+    { name: "Liquidity Sweep", present: true, weight: 1.5 },
+    { name: "Session Quality", present: true, weight: 1.5 },
+    { name: "Daily Bias", present: true, weight: 1.5 },
+  ];
+
+  const result = buildStreamlinedTradeDecisionObservation(input);
+
+  assertEquals(result.setupQuality.score, 100);
+  assertEquals(result.setupQuality.evidenceMapping, {
+    version: "streamlined-evidence-registry.v1",
+    complete: true,
+    unmappedFactors: [],
+    excludedEvidence: [],
+  });
+  assertEquals(result.safetyAuthorization.state, "unavailable");
+  assertEquals(result.proposedDecision.decision, "unavailable");
   assertEquals(result.affectsAuthorization, false);
 });

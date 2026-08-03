@@ -21,7 +21,7 @@ Deno.test("scanner attaches the streamlined summary as observation-only detail",
   );
   assertStringIncludes(
     scanner,
-    "buildPhase1StreamlinedTradeDecisionObservation({",
+    "buildStreamlinedTradeDecisionObservation({",
   );
   assertStringIncludes(
     observationAdapter,
@@ -37,7 +37,7 @@ Deno.test("streamlined observation cannot participate in scanner authorization",
   assertStringIncludes(contract, "observationOnly: true");
   assertStringIncludes(contract, "affectsAuthorization: false");
   assertEquals(
-    (scanner.match(/buildPhase1StreamlinedTradeDecisionObservation\(/g) || [])
+    (scanner.match(/buildStreamlinedTradeDecisionObservation\(/g) || [])
       .length,
     1,
   );
@@ -56,5 +56,13 @@ Deno.test("Phase 1 preserves the protected Zone Story evidence reference", () =>
   assertStringIncludes(
     observationAdapter,
     '"phase2_evidence_mapping_pending"',
+  );
+});
+
+Deno.test("Phase 2 maps the scanner factor array through one registry", () => {
+  assertStringIncludes(scanner, "factors: analysis.factors");
+  assertStringIncludes(
+    observationAdapter,
+    "mapLegacyFactorsToPillars({",
   );
 });

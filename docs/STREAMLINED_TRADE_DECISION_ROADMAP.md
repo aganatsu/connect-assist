@@ -1,6 +1,6 @@
 # Streamlined Trade Decision Roadmap
 
-Status: Phase 1 complete and CI-verified in PR #168
+Status: Phase 2 implementation complete; CI verification pending
 Last verified: 2026-08-03
 
 This is the canonical tracker for the streamlined decision work. Update it
@@ -152,7 +152,7 @@ A trade is authorized only when:
 |---|---|---|---|
 | 0 | Verified baseline and durable roadmap | Documentation only | Complete |
 | 1 | Pure TradeDecisionSummary contract | Observation only | Complete; PR #168 |
-| 2 | Canonical evidence-to-pillar mapping | Observation only | Not started |
+| 2 | Canonical evidence-to-pillar mapping | Observation only | Implementation complete; CI pending |
 | 3 | Freeze and persist summary through lifecycle | Observation only | Not started |
 | 4 | Historical replay and comparison engine | Observation only | Not started |
 | 5 | Rejected Setups comparison UI | Observation only | Not started |
@@ -314,16 +314,16 @@ docs/SYSTEM_HARDENING_PHASES.md.
 
 ## Current Next Action
 
-Phase 2 evidence mapping is the next proposed phase:
+Finish Phase 2 verification:
 
-1. inventory every active factor, promotion, adjustment, and gate;
-2. assign each evidence item to one decision role;
-3. identify duplicate influence without removing behavior;
-4. define deterministic pillar scoring inputs and missing-evidence rules;
-5. keep all output observation-only.
+1. open the described Phase 2 PR;
+2. pass Node tests, production build, and Deno tests;
+3. record the PR and CI run in this tracker and the Phase 2 report;
+4. merge to main.
 
-Do not begin Phase 2 enforcement, delete tiers, or change thresholds. Phase 2
-requires owner approval before implementation.
+After Phase 2 is verified, Phase 3 lifecycle persistence is the next proposed
+phase. Do not begin Phase 3 without owner approval. Do not enforce the new
+summary, delete tiers, or change thresholds.
 
 ## Restart Prompt
 

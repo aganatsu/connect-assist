@@ -5,6 +5,12 @@ import {
   type SetupQualityPillar,
   type TradeDecisionSummary,
 } from "./streamlinedTradeDecision.ts";
+import {
+  mapLegacyFactorsToPillars,
+  STREAMLINED_EVIDENCE_REGISTRY_VERSION,
+  type LegacyFactorObservation,
+  type PillarEvidenceMappingResult,
+} from "./streamlinedEvidenceRegistry.ts";
 
 const SAFETY_GATE_CODES = new Set([
   "instrument_disabled",
@@ -67,13 +73,21 @@ export interface Phase1StreamlinedObservationInput {
     evaluatedAt?: string | null;
   };
   gates: Array<{ passed: boolean; reason: string }>;
+  factors?: LegacyFactorObservation[] | null;
   locationEvidence?: DecisionEvidenceReference | null;
 }
 
-function phase1Pillars(
+function observedEvidence(
   input: Phase1StreamlinedObservationInput,
-) {
-  return Object.fromEntries(
+): PillarEvidenceMappingResult {
+  if (input.factors) {
+    return mapLegacyFactorsToPillars({
+      factors: input.factors,
+      evaluatedAt: input.evaluatedAt,
+      locationEvidence: input.locationEvidence,
+    });
+  }
+  const pillars = Object.fromEntries(
     ([
       "structure",
       "location",
@@ -95,6 +109,15 @@ function phase1Pillars(
   ) as Parameters<
     typeof evaluateStreamlinedTradeDecision
   >[0]["setupQuality"]["pillars"];
+  return {
+    registryVersion: STREAMLINED_EVIDENCE_REGISTRY_VERSION,
+    mappingComplete: false,
+    pillars,
+    directionEvidence: [],
+    safetyEvidence: [],
+    excludedEvidence: [],
+    unmappedFactors: [],
+  };
 }
 
 function observedSafetyChecks(
@@ -122,10 +145,11 @@ function observedSafetyChecks(
   return [...byCode.values()];
 }
 
-export function buildPhase1StreamlinedTradeDecisionObservation(
+export function buildStreamlinedTradeDecisionObservation(
   input: Phase1StreamlinedObservationInput,
 ): TradeDecisionSummary {
   const verdict = input.directionVerdict?.verdict;
+  const mappedEvidence = observedEvidence(input);
   return evaluateStreamlinedTradeDecision({
     evaluatedAt: input.evaluatedAt,
     identity: {
@@ -143,16 +167,25 @@ export function buildPhase1StreamlinedTradeDecisionObservation(
       confidence: input.directionVerdict?.confidence ?? null,
       shouldBlock: input.directionVerdict?.shouldBlock ?? null,
       reasonCodes: [input.directionReasonCode],
-      evidence: [{
-        source: "direction_verdict",
-        id: input.directionVerdict?.id || null,
-        version: input.directionVerdict?.verdictVersion || null,
-        observedAt: input.directionVerdict?.evaluatedAt || null,
-      }],
+      evidence: [
+        {
+          source: "direction_verdict",
+          id: input.directionVerdict?.id || null,
+          version: input.directionVerdict?.verdictVersion || null,
+          observedAt: input.directionVerdict?.evaluatedAt || null,
+        },
+        ...mappedEvidence.directionEvidence,
+      ],
     },
     setupQuality: {
       threshold: input.legacyScoring.threshold,
-      pillars: phase1Pillars(input),
+      pillars: mappedEvidence.pillars,
+      evidenceMapping: {
+        version: mappedEvidence.registryVersion,
+        complete: mappedEvidence.mappingComplete,
+        unmappedFactors: mappedEvidence.unmappedFactors,
+        excludedEvidence: mappedEvidence.excludedEvidence,
+      },
       legacyDiagnostics: input.legacyScoring,
     },
     thesis: {
@@ -179,6 +212,7 @@ export function buildPhase1StreamlinedTradeDecisionObservation(
     safety: {
       // Candidate discovery predates final runtime authorization.
       complete: false,
+      evidence: mappedEvidence.safetyEvidence,
       checks: observedSafetyChecks(input.gates, input.evaluatedAt),
     },
   });
