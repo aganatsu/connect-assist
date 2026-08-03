@@ -7,6 +7,7 @@ import {
   evaluateCanonicalDealingRange,
   normalizeDealingRangeMode,
   resolveCanonicalDealingRange,
+  readFrozenCanonicalDealingRange,
   selectCanonicalDealingRange,
 } from "./canonicalDealingRange.ts";
 
@@ -142,6 +143,19 @@ Deno.test("Off and unavailable observations cannot block", () => {
   const unavailable = evaluateCanonicalDealingRange({ range: null, direction: "short", price: 1.151, mode: "strict_value" });
   assertEquals(unavailable.available, false);
   assertEquals(unavailable.allowed, true);
+});
+
+Deno.test("frozen range reader rejects absent and tampered lifecycle data", () => {
+  const selection = selectCanonicalDealingRange({ parentImpulse: parent, frozenAt: "now" });
+  if (!selection.available) throw new Error("expected range");
+  assertEquals(readFrozenCanonicalDealingRange({ canonicalDealingRange: selection }), selection.range);
+  assertEquals(readFrozenCanonicalDealingRange({
+    canonicalDealingRange: {
+      ...selection,
+      range: { ...selection.range, midpoint: 0 },
+    },
+  }), null);
+  assertEquals(readFrozenCanonicalDealingRange(null), null);
 });
 
 Deno.test("comparison records disagreement without enforcing it", () => {

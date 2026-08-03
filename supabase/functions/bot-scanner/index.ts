@@ -190,6 +190,7 @@ import {
   evaluateCanonicalDealingRange,
   normalizeDealingRangeMode,
   resolveCanonicalDealingRange,
+  readFrozenCanonicalDealingRange,
 } from "../_shared/canonicalDealingRange.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
@@ -2846,7 +2847,22 @@ async function runScanForUser(
             },
             evaluatedAt: nowStr,
           };
-          const rawFinalAuthorization = evaluateFinalTradeAuthorization({
+          const pendingCanonicalDealingRange = evaluateCanonicalDealingRange({
+            range: readFrozenCanonicalDealingRange(
+              readFrozenSetupStrategyContext(pending)?.crossTimeframeContext,
+            ),
+            direction: pending.direction as "long" | "short",
+            price: actualFillPrice,
+            mode: normalizeDealingRangeMode(
+              (config as any).dealingRangeMode,
+              {
+                onlyBuyInDiscount: config.onlyBuyInDiscount,
+                onlySellInPremium: config.onlySellInPremium,
+              },
+            ),
+          });
+          const rawFinalAuthorization = {
+            ...evaluateFinalTradeAuthorization({
             account,
             candidate: {
               symbol: pending.symbol,
@@ -2894,7 +2910,9 @@ async function runScanForUser(
                 evaluation: null,
               }),
             requireCrossTimeframeAuthority: true,
-          });
+          }),
+            canonicalDealingRange: pendingCanonicalDealingRange,
+          };
           const pendingHierarchy = rawFinalAuthorization.decisionHierarchy ||
             evaluateDecisionHierarchy({
               symbol: pending.symbol,
@@ -8339,7 +8357,22 @@ async function runScanForUser(
         };
         const directCrossTimeframeContext =
           selectedCrossTimeframeContext();
-        const rawDirectAuthorization = evaluateFinalTradeAuthorization({
+        const directCanonicalDealingRange = evaluateCanonicalDealingRange({
+          range: directCrossTimeframeContext.canonicalDealingRange.available
+            ? directCrossTimeframeContext.canonicalDealingRange.range
+            : null,
+          direction: analysis.direction as "long" | "short",
+          price: marketEntryPrice,
+          mode: normalizeDealingRangeMode(
+            (pairConfig as any).dealingRangeMode,
+            {
+              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+              onlySellInPremium: pairConfig.onlySellInPremium,
+            },
+          ),
+        });
+        const rawDirectAuthorization = {
+          ...evaluateFinalTradeAuthorization({
           account,
           candidate: {
             symbol: pair,
@@ -8392,7 +8425,9 @@ async function runScanForUser(
           runtimeGates: directRuntimeGates,
           crossTimeframeAuthority: directCrossTimeframeContext.authority,
           requireCrossTimeframeAuthority: true,
-        });
+        }),
+          canonicalDealingRange: directCanonicalDealingRange,
+        };
         const directHierarchy = rawDirectAuthorization.decisionHierarchy ||
           evaluateDecisionHierarchy({
             symbol: pair,
