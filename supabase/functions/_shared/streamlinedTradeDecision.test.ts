@@ -46,6 +46,12 @@ function baseInput(): StreamlinedTradeDecisionInput {
     setupQuality: {
       threshold: 60,
       pillars: structuredClone(completePillars),
+      evidenceMapping: {
+        version: "streamlined-evidence-registry.v1",
+        complete: true,
+        unmappedFactors: [],
+        excludedEvidence: [],
+      },
       legacyDiagnostics: {
         rawScore: 67,
         effectiveScore: 72,
@@ -68,6 +74,7 @@ function baseInput(): StreamlinedTradeDecisionInput {
     },
     safety: {
       complete: true,
+      evidence: [],
       checks: [
         { code: "spread", passed: true },
         { code: "portfolio_heat", passed: true },

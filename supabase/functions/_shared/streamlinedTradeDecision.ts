@@ -53,6 +53,12 @@ export interface StreamlinedTradeDecisionInput {
   setupQuality: {
     threshold: number | null;
     pillars: Record<SetupQualityPillar, SetupQualityPillarInput>;
+    evidenceMapping: {
+      version: string;
+      complete: boolean;
+      unmappedFactors: string[];
+      excludedEvidence: DecisionEvidenceReference[];
+    };
     legacyDiagnostics?: {
       rawScore?: number | null;
       effectiveScore?: number | null;
@@ -75,6 +81,7 @@ export interface StreamlinedTradeDecisionInput {
   };
   safety: {
     complete: boolean;
+    evidence: DecisionEvidenceReference[];
     checks: Array<{
       code: string;
       passed: boolean;
@@ -108,6 +115,12 @@ export interface TradeDecisionSummary {
     threshold: number | null;
     passed: boolean | null;
     pillars: Record<SetupQualityPillar, SetupQualityPillarResult>;
+    evidenceMapping: {
+      version: string;
+      complete: boolean;
+      unmappedFactors: string[];
+      excludedEvidence: DecisionEvidenceReference[];
+    };
     legacyDiagnostics: {
       rawScore: number | null;
       effectiveScore: number | null;
@@ -128,6 +141,7 @@ export interface TradeDecisionSummary {
   };
   safetyAuthorization: {
     state: SafetyState;
+    evidence: DecisionEvidenceReference[];
     checks: Array<{
       code: string;
       passed: boolean;
@@ -226,12 +240,16 @@ export function evaluateStreamlinedTradeDecision(
   }
 
   const pillars = normalizePillars(input.setupQuality.pillars);
+  if (!input.setupQuality.evidenceMapping.complete) {
+    unavailable.push("setup_quality.mapping");
+  }
   for (const pillar of PILLARS) {
     if (!pillars[pillar].complete) unavailable.push(`setup_quality.${pillar}`);
   }
   const setupThreshold = bounded(input.setupQuality.threshold, 0, 100);
   if (setupThreshold === null) unavailable.push("setup_quality.threshold");
-  const setupComplete = PILLARS.every((pillar) => pillars[pillar].complete) &&
+  const setupComplete = input.setupQuality.evidenceMapping.complete &&
+    PILLARS.every((pillar) => pillars[pillar].complete) &&
     setupThreshold !== null;
   const setupScore = setupComplete
     ? PILLARS.reduce((total, pillar) => total + (pillars[pillar].score || 0), 0)
@@ -316,6 +334,14 @@ export function evaluateStreamlinedTradeDecision(
       threshold: setupThreshold,
       passed: setupPassed,
       pillars,
+      evidenceMapping: {
+        version: input.setupQuality.evidenceMapping.version,
+        complete: input.setupQuality.evidenceMapping.complete,
+        unmappedFactors: uniqueSorted(
+          input.setupQuality.evidenceMapping.unmappedFactors,
+        ),
+        excludedEvidence: input.setupQuality.evidenceMapping.excludedEvidence,
+      },
       legacyDiagnostics: {
         rawScore: finiteOrNull(input.setupQuality.legacyDiagnostics?.rawScore),
         effectiveScore: finiteOrNull(
@@ -340,6 +366,7 @@ export function evaluateStreamlinedTradeDecision(
     },
     safetyAuthorization: {
       state: safetyState,
+      evidence: input.safety.evidence,
       checks: [...input.safety.checks].sort((a, b) =>
         a.code.localeCompare(b.code)
       ),

@@ -43,7 +43,7 @@ import {
   buildGoldenReplayRuntimeInputFingerprint,
 } from "../_shared/goldenReplayReport.ts";
 import {
-  buildPhase1StreamlinedTradeDecisionObservation,
+  buildStreamlinedTradeDecisionObservation,
 } from "../_shared/streamlinedTradeDecisionObservation.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
@@ -7143,7 +7143,7 @@ async function runScanForUser(
       const streamlinedConviction =
         streamlinedDecisionContext?.thesisConviction?.evidence;
       (detail as any).streamlinedTradeDecision =
-        buildPhase1StreamlinedTradeDecisionObservation({
+        buildStreamlinedTradeDecisionObservation({
           evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
             new Date().toISOString(),
           candidateId: "candidate:" + scanCycleId + ":" + pair,
@@ -7204,6 +7204,7 @@ async function runScanForUser(
               null,
           },
           gates,
+          factors: analysis.factors,
           locationEvidence: {
             source: "zone_story_and_market_location",
             id: (detail as any).crossTimeframeCandidateId || null,
