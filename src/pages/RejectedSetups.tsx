@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
+import { botConfigApi } from "@/lib/api";
 import { formatPipDisplay, rawPipsToDisplay, getPipLabel } from "@/lib/pipDisplay";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -367,6 +368,16 @@ export default function RejectedSetups() {
     refetchInterval: 60_000,
   });
   const {
+    data: dealingRangeComparison,
+    isLoading: isLoadingDealingRangeComparison,
+    refetch: refetchDealingRangeComparison,
+  } = useQuery({
+    queryKey: ["canonical-dealing-range-comparison"],
+    queryFn: () => botConfigApi.getDealingRangeComparison(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const {
     data: closedTradeEvidence = [],
     isLoading: isLoadingClosedTrades,
     refetch: refetchClosedTrades,
@@ -705,6 +716,7 @@ export default function RejectedSetups() {
               onClick={() => {
                 refetch();
                 refetchClosedTrades();
+                refetchDealingRangeComparison();
               }}
               className="h-8 w-8 p-0"
             >
@@ -1009,6 +1021,61 @@ export default function RejectedSetups() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-sm font-medium">Last 100 Setup Comparison</CardTitle>
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Rolling entry-timeframe decisions compared with the frozen canonical impulse range.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-[9px]">
+                    {isLoadingDealingRangeComparison
+                      ? "Loading"
+                      : `${dealingRangeComparison?.summary.available ?? 0}/${dealingRangeComparison?.summary.sampleSize ?? 0} comparable`}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                {isLoadingDealingRangeComparison ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    Loading canonical range comparison…
+                  </div>
+                ) : dealingRangeComparison ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
+                      <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.agreements}</p></div>
+                      <div><span className="text-muted-foreground">Disagreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.disagreements}</p></div>
+                      <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.winnersPreserved}</p></div>
+                      <div><span className="text-muted-foreground">Winners blocked</span><p className="font-mono font-bold text-destructive">{dealingRangeComparison.summary.winnersBlocked}</p></div>
+                      <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.poorEntriesRejected}</p></div>
+                      <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-warning">{dealingRangeComparison.summary.poorEntriesAllowed}</p></div>
+                      <div><span className="text-muted-foreground">Canonical blocks</span><p className="font-mono font-bold">{dealingRangeComparison.summary.canonicalBlocked}</p></div>
+                      <div><span className="text-muted-foreground">Unavailable</span><p className="font-mono font-bold text-muted-foreground">{dealingRangeComparison.summary.unavailable}</p></div>
+                    </div>
+                    {dealingRangeComparison.rows
+                      .filter((row) => row.decisionsMatch === false)
+                      .slice(0, 10)
+                      .map((row) => (
+                        <div key={`${row.source}:${row.id}`} className="border-l-2 border-warning pl-3 text-xs">
+                          <span className="font-mono">
+                            {row.symbol} {row.direction.toUpperCase()} · {row.canonicalPercent?.toFixed(1) ?? "—"}%
+                          </span>
+                          <p className="text-muted-foreground mt-0.5">
+                            {row.explanation || "Canonical explanation unavailable"}
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    Canonical range comparison is unavailable.
+                  </div>
+                )}
               </CardContent>
             </Card>
 

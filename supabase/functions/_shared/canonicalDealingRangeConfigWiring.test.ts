@@ -22,13 +22,15 @@ Deno.test("Bot Config and backtest expose explicit dealing range modes", async (
 
 Deno.test("last-100 report queries both outcomes and exposes evidence coverage", async () => {
   const api = await source("functions/bot-config/index.ts");
-  const ui = await source("../src/components/config/ScanTab.tsx");
+  const rejectedSetups = await source("../src/pages/RejectedSetups.tsx");
+  const scanTab = await source("../src/components/config/ScanTab.tsx");
   assertStringIncludes(api, 'action === "dealing_range.comparison"');
   assertStringIncludes(api, '.from("paper_trade_history")');
   assertStringIncludes(api, '.from("rejected_setups")');
   assertStringIncludes(api, ".limit(100)");
-  assertStringIncludes(ui, "Last 100 Setup Comparison");
-  assertStringIncludes(ui, "Winners preserved");
-  assertStringIncludes(ui, "Poor entries rejected");
-  assertStringIncludes(ui, "Unavailable");
+  assertStringIncludes(rejectedSetups, "Last 100 Setup Comparison");
+  assertStringIncludes(rejectedSetups, "Winners preserved");
+  assertStringIncludes(rejectedSetups, "Poor entries rejected");
+  assertStringIncludes(rejectedSetups, "Unavailable");
+  assert(!scanTab.includes("Last 100 Setup Comparison"));
 });
