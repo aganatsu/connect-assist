@@ -1,3 +1,8 @@
+> Current unresolved authority work is tracked in
+> [SYSTEM_AUTHORITY_STATUS_2026-08-03.md](./SYSTEM_AUTHORITY_STATUS_2026-08-03.md).
+> This roadmap retains historical slice details and should not be used alone to
+> infer current deployment or enforcement status.
+
 # System hardening roadmap
 
 This file is the repository-level status tracker for the agreed eight-phase

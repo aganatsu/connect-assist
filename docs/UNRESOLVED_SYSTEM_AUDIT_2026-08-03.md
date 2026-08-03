@@ -1,3 +1,9 @@
+> Historical audit notice: this document was written against commit `3fa00a4`.
+> Current dispositions and completed later work are maintained in
+> [SYSTEM_AUTHORITY_STATUS_2026-08-03.md](./SYSTEM_AUTHORITY_STATUS_2026-08-03.md).
+> Priority 1 and Priority 11 are complete and must not be reimplemented from
+> this historical plan.
+
 # Unresolved System Audit
 
 Date: 2026-08-03  
