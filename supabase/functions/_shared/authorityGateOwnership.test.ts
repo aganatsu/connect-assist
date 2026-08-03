@@ -36,6 +36,10 @@ Deno.test("legacy gates stop blocking only in explicit paper enforcement", () =>
   assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "live" }).blocksAuthorization, true);
 });
 
+Deno.test("legacy gates are diagnostic under explicit live enforcement", () => {
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce_live", runtimeTarget: "live" }).blocksAuthorization, false);
+});
+
 Deno.test("operational safety always blocks when failed", () => {
   assertEquals(evaluateAuthorityGateDisposition({ code: "daily_loss_limit", passed: false, requestedMode: "enforce", runtimeTarget: "paper" }).blocksAuthorization, true);
 });

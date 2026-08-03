@@ -23,7 +23,7 @@ Deno.test("single-ownership evidence travels with lifecycle records", () => {
 });
 
 Deno.test("single-ownership enforcement is explicit and paper-scoped", () => {
-  assertStringIncludes(scanner, "singleOwnershipPaperEnforcement");
+  assertStringIncludes(scanner, "singleOwnershipEnforcementRequested");
   assertStringIncludes(scanner, "account.execution_mode !== \"live\"");
   assertStringIncludes(scanner, "evaluateSingleOwnershipEnforcement({");
   assertStringIncludes(backtest, "evaluateSingleOwnershipEnforcement({");

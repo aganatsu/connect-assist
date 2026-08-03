@@ -362,12 +362,13 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
-          <FieldGroup label="Single-Ownership Scanner" description="Zone Story and the named authorities own market quality; paper execution only">
+          <FieldGroup label="Single-Ownership Scanner" description="Choose observation, paper enforcement, or explicit live enforcement">
             <Select value={config.strategy?.singleOwnershipMode ?? "observe"} onValueChange={v => updateField("strategy", "singleOwnershipMode", v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="observe">Observe</SelectItem>
                 <SelectItem value="enforce">Enforce (Paper Only)</SelectItem>
+                <SelectItem value="enforce_live">Enforce Live (Real Orders)</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

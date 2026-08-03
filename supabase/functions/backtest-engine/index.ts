@@ -3418,7 +3418,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         // ── Threshold check ──
         if (effectiveScore < conflictAdjustedMinConfluence &&
-            pairConfig.singleOwnershipMode !== "enforce") {
+            !["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode)) {
           diagnostics.skippedBelowThreshold++;
           continue;
         }

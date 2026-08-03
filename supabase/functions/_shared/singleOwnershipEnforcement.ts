@@ -2,7 +2,7 @@ import type {
   SingleOwnershipDecisionResult,
 } from "./singleOwnershipDecision.ts";
 
-export type SingleOwnershipMode = "observe" | "enforce";
+export type SingleOwnershipMode = "observe" | "enforce" | "enforce_live";
 
 export interface SingleOwnershipEnforcementResult {
   requestedMode: SingleOwnershipMode;
@@ -12,7 +12,6 @@ export interface SingleOwnershipEnforcementResult {
   affectsAuthorization: boolean;
   code:
     | "observing"
-    | "live_enforcement_disabled"
     | "owned_authorities_allow"
     | "owned_authorities_do_not_allow";
 }
@@ -22,24 +21,14 @@ export function evaluateSingleOwnershipEnforcement(input: {
   runtimeTarget: "paper" | "live";
   decision: SingleOwnershipDecisionResult;
 }): SingleOwnershipEnforcementResult {
-  const requestedMode: SingleOwnershipMode = input.requestedMode === "enforce"
+  const requestedMode: SingleOwnershipMode = input.requestedMode === "enforce_live"
+    ? "enforce_live"
+    : input.requestedMode === "enforce"
     ? "enforce"
     : "observe";
-  const effectiveMode: SingleOwnershipMode =
-    requestedMode === "enforce" && input.runtimeTarget === "paper"
-      ? "enforce"
-      : "observe";
-
-  if (requestedMode === "enforce" && input.runtimeTarget === "live") {
-    return {
-      requestedMode,
-      effectiveMode,
-      runtimeTarget: input.runtimeTarget,
-      authorized: false,
-      affectsAuthorization: false,
-      code: "live_enforcement_disabled",
-    };
-  }
+  const canEnforce = requestedMode === "enforce_live" ||
+    (requestedMode === "enforce" && input.runtimeTarget === "paper");
+  const effectiveMode: SingleOwnershipMode = canEnforce ? "enforce" : "observe";
   if (effectiveMode === "observe") {
     return {
       requestedMode,

@@ -34,12 +34,21 @@ Deno.test("single ownership enforcement fails closed for watch and unavailable",
   }
 });
 
-Deno.test("single ownership cannot enforce live execution", () => {
+Deno.test("single ownership live mode explicitly enforces live execution", () => {
+  const result = evaluateSingleOwnershipEnforcement({
+    requestedMode: "enforce_live", runtimeTarget: "live",
+    decision: decision("allow"),
+  });
+  assertEquals(result.effectiveMode, "enforce");
+  assertEquals(result.authorized, true);
+  assertEquals(result.affectsAuthorization, true);
+});
+
+Deno.test("paper-only mode remains observe on live execution", () => {
   const result = evaluateSingleOwnershipEnforcement({
     requestedMode: "enforce", runtimeTarget: "live",
     decision: decision("allow"),
   });
   assertEquals(result.effectiveMode, "observe");
-  assertEquals(result.code, "live_enforcement_disabled");
   assertEquals(result.affectsAuthorization, false);
 });

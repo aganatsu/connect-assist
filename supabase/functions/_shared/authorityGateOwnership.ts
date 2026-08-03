@@ -68,8 +68,10 @@ export function evaluateAuthorityGateDisposition(input: {
   runtimeTarget: "paper" | "live";
 }) {
   const owner = authorityGateOwner(input.code);
-  const diagnosticOnly = input.requestedMode === "enforce" &&
-    input.runtimeTarget === "paper" && owner === "legacy_diagnostic";
+  const diagnosticOnly = (
+    (input.requestedMode === "enforce" && input.runtimeTarget === "paper") ||
+    input.requestedMode === "enforce_live"
+  ) && owner === "legacy_diagnostic";
   return {
     code: input.code, owner, passed: input.passed, diagnosticOnly,
     blocksAuthorization: !input.passed && !diagnosticOnly,
