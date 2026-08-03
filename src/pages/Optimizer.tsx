@@ -19,6 +19,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { AppShell } from "@/components/AppShell";
 
 // ─── Types ───
 
@@ -317,7 +318,8 @@ export default function Optimizer() {
   const activeRun = runs.find((r) => r.status === "running");
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
+    <AppShell>
+      <div className="p-1 sm:p-2 max-w-4xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -476,6 +478,7 @@ export default function Optimizer() {
           <RunCard key={run.id} run={run} onRollback={handleRollback} />
         ))}
       </div>
-    </div>
+      </div>
+    </AppShell>
   );
 }
