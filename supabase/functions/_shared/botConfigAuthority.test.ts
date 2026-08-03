@@ -21,7 +21,7 @@ Deno.test("bot-scanner has no local runtime-default object", () => {
     "Runtime defaults must only be declared in _shared/configMapper.ts",
   );
   assert(
-    scannerSource.includes('from "../_shared/runtimeConfigResolver.ts"'),
+    scannerSource.includes('from "../_shared/runtimeConfigStore.ts"'),
     "Scanner must import the shared runtime-config authority",
   );
 });
@@ -43,12 +43,12 @@ Deno.test("bot-scanner loadConfig delegates to the canonical resolver", () => {
   );
   assert(loadConfigBlock, "Could not locate bot-scanner loadConfig");
   assertEquals(
-    (loadConfigBlock[0].match(/resolveEffectiveRuntimeConfig\(/g) ?? []).length,
+    (loadConfigBlock[0].match(/loadEffectiveRuntimeConfig\(/g) ?? []).length,
     1,
   );
   assert(
     loadConfigBlock[0].includes(
-      "return resolveEffectiveRuntimeConfig(data?.config_json || null);",
+      "return await loadEffectiveRuntimeConfig(supabase, {",
     ),
   );
 });

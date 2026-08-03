@@ -26,7 +26,9 @@ describe("manual Game Plan refresh safety", () => {
 
   it("retries missing pairs and never activates an incomplete plan", () => {
     expect(refreshFunctionSource).toContain("generateGamePlansWithRetry");
-    expect(refreshFunctionSource).toContain("if (!generation.complete)");
+    expect(refreshFunctionSource).toContain(
+      "if (blockingMissing.length > 0 || generation.plans.length === 0)",
+    );
     expect(refreshFunctionSource).toContain(
       "previous complete plan remains active",
     );
