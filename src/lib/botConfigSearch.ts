@@ -42,6 +42,7 @@ const scanLabels = [
   "HTF Bias Required",
   "HTF Bias Hard Veto",
   "Dealing Range Mode",
+  "Streamlined Decision",
   "Enable Regime Scoring",
   "Regime Strength",
   "Structural Conviction Gate",
