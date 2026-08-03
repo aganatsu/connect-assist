@@ -42,6 +42,9 @@ import {
 import {
   buildGoldenReplayRuntimeInputFingerprint,
 } from "../_shared/goldenReplayReport.ts";
+import {
+  buildPhase1StreamlinedTradeDecisionObservation,
+} from "../_shared/streamlinedTradeDecisionObservation.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -7132,6 +7135,81 @@ async function runScanForUser(
         state: shadowPairPlan.state,
         stateReason: shadowPairPlan.stateReason,
       } : null;
+      const streamlinedDecisionContext = (detail as any).decisionContext;
+      const streamlinedDirectionVerdict =
+        streamlinedDecisionContext?.directionVerdict ||
+        activeDirectionVerdict ||
+        null;
+      const streamlinedConviction =
+        streamlinedDecisionContext?.thesisConviction?.evidence;
+      (detail as any).streamlinedTradeDecision =
+        buildPhase1StreamlinedTradeDecisionObservation({
+          evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
+            new Date().toISOString(),
+          candidateId: "candidate:" + scanCycleId + ":" + pair,
+          symbol: pair,
+          direction: analysis.direction as "long" | "short" | null,
+          authority: {
+            stylePolicyVersion: pairStylePolicy.contractVersion,
+            stylePolicyHash: pairStylePolicy.policyHash,
+            styleBasePolicyHash: pairStylePolicy.basePolicyHash,
+            timeframeEvidenceId:
+              (detail as any).timeframeEvidenceId || null,
+            gamePlanId:
+              streamlinedDecisionContext?.gamePlan?.id || null,
+            gamePlanVersion:
+              streamlinedDecisionContext?.gamePlan?.version || null,
+            directionVerdictVersion:
+              streamlinedDirectionVerdict?.verdictVersion || null,
+          },
+          directionVerdict: streamlinedDirectionVerdict,
+          directionReasonCode:
+            streamlinedDecisionContext?.hierarchy?.code ||
+            "direction_evidence_unavailable",
+          legacyScoring: {
+            rawScore: analysis.score,
+            effectiveScore,
+            threshold: conflictAdjustedMinConfluence,
+          },
+          thesis: {
+            validationRequired:
+              streamlinedDecisionContext?.thesisValidity?.required === true,
+            valid:
+              streamlinedDecisionContext?.thesisValidity?.valid ?? null,
+            conviction:
+              typeof streamlinedConviction?.conviction === "number"
+                ? streamlinedConviction.conviction
+                : null,
+            degrading:
+              typeof streamlinedConviction?.thesisDegrading === "boolean"
+                ? streamlinedConviction.thesisDegrading
+                : null,
+            reasonCode:
+              streamlinedDecisionContext?.thesisValidity?.checkType ||
+              "thesis_validation",
+            version: THESIS_VALIDATION_VERSION,
+            evaluatedAt:
+              streamlinedDecisionContext?.thesisValidity?.evaluatedAt || null,
+          },
+          confirmation: {
+            required:
+              streamlinedDecisionContext?.entryConfirmation?.required === true,
+            passed:
+              streamlinedDecisionContext?.entryConfirmation?.passed ?? null,
+            reasonCode:
+              streamlinedDecisionContext?.entryConfirmation?.method ||
+              "confirmation_not_required",
+            evaluatedAt:
+              streamlinedDecisionContext?.entryConfirmation?.evaluatedAt ||
+              null,
+          },
+          gates,
+          locationEvidence: {
+            source: "zone_story_and_market_location",
+            id: (detail as any).crossTimeframeCandidateId || null,
+            observedAt: streamlinedDecisionContext?.evaluatedAt || null,
+          },
+        });
       const replayZone = unifiedZoneData?.hasZone
         ? {
           source: (detail as any).signalSource || "unified",
