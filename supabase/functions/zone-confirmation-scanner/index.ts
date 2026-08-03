@@ -36,7 +36,7 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
-import { buildConfirmationAuthorityObservation } from "../_shared/confirmationAuthority.ts";
+import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   directionVerdictLines,
@@ -681,6 +681,18 @@ Deno.serve(async (req) => {
           : confirmationMethod === "indicators"
           ? !!indicatorConfirmation?.confirmed
           : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
+        const confirmationAuthority = buildRoutedConfirmationObservation({
+          method: confirmationMethod,
+          direction: pending.direction as "long" | "short",
+          structural: confirmationSignal?.authority || null,
+          indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
+          indicatorsRequired: confirmationIndicatorMinimum,
+          indicatorConfirmed: indicatorConfirmation?.confirmed === true,
+          evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
+          candleIndex: candles5m.length - 1,
+          candleTime: candles5m[candles5m.length - 1]?.datetime || null,
+          price: currentPrice,
+        });
 
         // ── Phase 1: confirmation-attempt evidence (observation only) ──
         // Never feeds the confirmation decision below; failures are swallowed.
@@ -753,6 +765,7 @@ Deno.serve(async (req) => {
               zoneHigh: zoneHigh > 0 ? zoneHigh : null,
               zoneLow: zoneLow > 0 ? zoneLow : null,
               currentPrice: currentPrice ?? null,
+              authority: confirmationAuthority,
             },
           );
           await persistZoneTimeframeEvidence(supabase, [row], {
@@ -788,19 +801,10 @@ Deno.serve(async (req) => {
             significance: undefined,
             closeBased: false,
             supportingSignals: ["indicator_confirmation", indicatorConfirmation.summary],
-            authority: buildConfirmationAuthorityObservation({
-              source: "indicator_router", level: "indicator_minimum",
-              direction: pending.direction as "long" | "short",
-              entryReadyUnderCurrentBehavior: true,
-              evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
-              candleIndex: candles5m.length - 1,
-              candleTime: candles5m[candles5m.length - 1]?.datetime || null,
-              price: candles5m[candles5m.length - 1]?.close || null,
-              supportingSignals: ["indicator_confirmation"],
-              reasonCodes: ["indicator_minimum_met"],
-            }),
+            authority: confirmationAuthority,
           };
         }
+        confirmationSignal!.authority = confirmationAuthority;
         const confirmedSignal = confirmationSignal!;
 
         // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──

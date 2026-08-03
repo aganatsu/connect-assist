@@ -82,3 +82,58 @@ export function confirmationLevelFromLegacySignal(signal: {
   if (signal.tier === 2) return "wick_choch_supported";
   return "reversal_pattern";
 }
+
+export function buildRoutedConfirmationObservation(input: {
+  method: "choch" | "indicators" | "choch_and_indicators";
+  direction: "long" | "short";
+  structural?: ConfirmationAuthorityObservation | null;
+  indicatorsPassed?: number | null;
+  indicatorsRequired?: number | null;
+  indicatorConfirmed?: boolean;
+  evaluatedAt?: string | null;
+  candleIndex?: number | null;
+  candleTime?: string | null;
+  price?: number | null;
+}): ConfirmationAuthorityObservation {
+  const indicatorPassed = input.indicatorConfirmed === true;
+  if (input.method === "choch" && input.structural) return input.structural;
+  if (input.method === "indicators") {
+    return buildConfirmationAuthorityObservation({
+      source: "indicator_router",
+      level: indicatorPassed ? "indicator_minimum" : "none",
+      direction: input.direction,
+      entryReadyUnderCurrentBehavior: indicatorPassed,
+      evaluatedAt: input.evaluatedAt, candleIndex: input.candleIndex,
+      candleTime: input.candleTime, price: input.price,
+      supportingSignals: ["indicators:" + (input.indicatorsPassed ?? 0) + "/" + (input.indicatorsRequired ?? 0)],
+      reasonCodes: [indicatorPassed ? "indicator_minimum_met" : "indicator_minimum_not_met"],
+    });
+  }
+  if (input.method === "choch_and_indicators") {
+    const structuralPassed = input.structural?.entryReadyUnderCurrentBehavior === true;
+    return buildConfirmationAuthorityObservation({
+      source: "combined_router", level: "combined", direction: input.direction,
+      entryReadyUnderCurrentBehavior: structuralPassed && indicatorPassed,
+      evaluatedAt: input.evaluatedAt,
+      candleIndex: input.structural?.candleIndex ?? input.candleIndex,
+      candleTime: input.structural?.candleTime ?? input.candleTime,
+      price: input.structural?.price ?? input.price,
+      closeBased: input.structural?.closeBased ?? null,
+      displacement: input.structural?.displacement ?? null,
+      supportingSignals: [
+        "structural:" + (input.structural?.source ?? "none") + ":" + (input.structural?.level ?? "none"),
+        "indicators:" + (input.indicatorsPassed ?? 0) + "/" + (input.indicatorsRequired ?? 0),
+      ],
+      reasonCodes: [
+        structuralPassed ? "structural_confirmation_met" : "structural_confirmation_not_met",
+        indicatorPassed ? "indicator_minimum_met" : "indicator_minimum_not_met",
+      ],
+    });
+  }
+  return buildConfirmationAuthorityObservation({
+    source: "unavailable", level: "none", direction: input.direction,
+    entryReadyUnderCurrentBehavior: false, evaluatedAt: input.evaluatedAt,
+    candleIndex: input.candleIndex, candleTime: input.candleTime, price: input.price,
+    reasonCodes: ["structural_confirmation_not_met"],
+  });
+}

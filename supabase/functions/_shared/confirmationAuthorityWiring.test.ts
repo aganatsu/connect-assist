@@ -20,13 +20,15 @@ Deno.test("all confirmation mechanisms expose one observation contract", () => {
   assertStringIncludes(hierarchy, "attachHierarchyAuthority");
   assertStringIncludes(zone, '"unified_hierarchy"');
   assertStringIncludes(zone, '"legacy_tier"');
-  assertStringIncludes(scanner, 'source: "indicator_router"');
-  assertStringIncludes(fastScanner, 'source: "indicator_router"');
+  assertStringIncludes(scanner, "buildRoutedConfirmationObservation");
+  assertStringIncludes(fastScanner, "buildRoutedConfirmationObservation");
 });
 
 Deno.test("both fill routes persist confirmation authority", () => {
   assertStringIncludes(scanner, "authority: confirmedSignal.authority || null");
   assertStringIncludes(fastScanner, "authority: confirmedSignal.authority || null");
+  assertStringIncludes(fastScanner, "authority: confirmationAuthority");
+  assertStringIncludes(fastScanner, "authority: confirmationAuthority");
 });
 
 Deno.test("observation metadata does not become an authorization branch", () => {

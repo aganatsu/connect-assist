@@ -216,7 +216,7 @@ import {
 } from "../_shared/crossTimeframeShadowValidation.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { buildConfirmationAuthorityObservation } from "../_shared/confirmationAuthority.ts";
+import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
 import {
   bindTimeframeCandles,
@@ -2698,6 +2698,19 @@ async function runScanForUser(
             confirmationPassed = !!confirmationSignal && !!indicatorConfResult?.confirmed;
           }
 
+          const confirmationAuthority = buildRoutedConfirmationObservation({
+            method: confMethod,
+            direction: pending.direction as "long" | "short",
+            structural: confirmationSignal?.authority || null,
+            indicatorsPassed: indicatorConfResult?.passedCount ?? null,
+            indicatorsRequired: confirmationIndicatorMinimum,
+            indicatorConfirmed: indicatorConfResult?.confirmed === true,
+            evaluatedAt: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
+            candleIndex: confirm5mCandles.length - 1,
+            candleTime: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
+            price: confirm5mCandles[confirm5mCandles.length - 1]?.close || null,
+          });
+
           if (!confirmationPassed) {
             const chochStatus = confirmationSignal ? `CHoCH=T${confirmationSignal.tier}` : "CHoCH=none";
             const indStatus = indicatorConfResult ? `Indicators=${indicatorConfResult.passedCount}/4` : "";
@@ -2716,19 +2729,11 @@ async function runScanForUser(
               significance: undefined,
               closeBased: false,
               supportingSignals: ["indicator_confirmation", indicatorConfResult.summary],
-              authority: buildConfirmationAuthorityObservation({
-                source: "indicator_router", level: "indicator_minimum",
-                direction: pending.direction as "long" | "short",
-                entryReadyUnderCurrentBehavior: true,
-                evaluatedAt: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
-                candleIndex: confirm5mCandles.length - 1,
-                candleTime: confirm5mCandles[confirm5mCandles.length - 1]?.datetime || null,
-                price: confirm5mCandles[confirm5mCandles.length - 1]?.close || null,
-                supportingSignals: ["indicator_confirmation"],
-                reasonCodes: ["indicator_minimum_met"],
-              }),
+              authority: confirmationAuthority,
             };
           }
+
+          confirmationSignal!.authority = confirmationAuthority;
 
           // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──
           // Tier 1 (close-based CHoCH) and Tier 2 (wick CHoCH + supporting signal) are
