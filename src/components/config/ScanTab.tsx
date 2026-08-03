@@ -1,5 +1,4 @@
 import React from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Globe, Clock, TrendingUp, BarChart3, Crosshair, Sparkles, Layers, BookOpen } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -8,7 +7,6 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, FeatureStateBadge, ConfigTabProps } from "./ConfigShared";
 
@@ -140,12 +138,6 @@ const SMC_ENHANCEMENT_MODULES: {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
-  const { data: dealingRangeComparison, isLoading: comparisonLoading } = useQuery({
-    queryKey: ["canonical-dealing-range-comparison"],
-    queryFn: () => botConfigApi.getDealingRangeComparison(),
-    staleTime: 60_000,
-    retry: false,
-  });
   // Count active instruments
   const ALL_INSTRUMENTS = INSTRUMENTS.map(i => i.symbol);
   const totalPairs = ALL_INSTRUMENTS.length;
@@ -370,34 +362,6 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
-          <div className="border-t border-border/60 pt-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase text-muted-foreground">Last 100 Setup Comparison</span>
-              <Badge variant="outline" className="text-[9px]">
-                {comparisonLoading ? "Loading" : `${dealingRangeComparison?.summary.available ?? 0}/${dealingRangeComparison?.summary.sampleSize ?? 0} comparable`}
-              </Badge>
-            </div>
-            {dealingRangeComparison && (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
-                  <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.agreements}</p></div>
-                  <div><span className="text-muted-foreground">Disagreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.disagreements}</p></div>
-                  <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.winnersPreserved}</p></div>
-                  <div><span className="text-muted-foreground">Winners blocked</span><p className="font-mono font-bold text-destructive">{dealingRangeComparison.summary.winnersBlocked}</p></div>
-                  <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.poorEntriesRejected}</p></div>
-                  <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-warning">{dealingRangeComparison.summary.poorEntriesAllowed}</p></div>
-                  <div><span className="text-muted-foreground">Canonical blocks</span><p className="font-mono font-bold">{dealingRangeComparison.summary.canonicalBlocked}</p></div>
-                  <div><span className="text-muted-foreground">Unavailable</span><p className="font-mono font-bold text-muted-foreground">{dealingRangeComparison.summary.unavailable}</p></div>
-                </div>
-                {dealingRangeComparison.rows.filter((row) => row.decisionsMatch === false).slice(0, 3).map((row) => (
-                  <div key={`${row.source}:${row.id}`} className="border-l-2 border-warning pl-2 text-[10px]">
-                    <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · {row.canonicalPercent?.toFixed(1) ?? "—"}%</span>
-                    <p className="text-muted-foreground">{row.explanation || "Canonical explanation unavailable"}</p>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Scoring</p>
