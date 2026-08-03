@@ -1058,9 +1058,9 @@ export default function RejectedSetups() {
               <CardHeader className="pb-2 pt-3 px-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <CardTitle className="text-sm font-medium">Last 100 Setup Comparison</CardTitle>
+                    <CardTitle className="text-sm font-medium">Canonical Dealing Range Comparison</CardTitle>
                     <p className="text-[10px] text-muted-foreground mt-1">
-                      Rolling entry-timeframe decisions compared with the frozen canonical impulse range.
+                      Last 100 setups: rolling entry-timeframe decisions compared with the frozen canonical impulse range.
                     </p>
                   </div>
                   <Badge variant="outline" className="text-[9px]">

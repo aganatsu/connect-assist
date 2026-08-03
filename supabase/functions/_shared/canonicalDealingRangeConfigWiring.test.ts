@@ -28,9 +28,9 @@ Deno.test("last-100 report queries both outcomes and exposes evidence coverage",
   assertStringIncludes(api, '.from("paper_trade_history")');
   assertStringIncludes(api, '.from("rejected_setups")');
   assertStringIncludes(api, ".limit(100)");
-  assertStringIncludes(rejectedSetups, "Last 100 Setup Comparison");
+  assertStringIncludes(rejectedSetups, "Canonical Dealing Range Comparison");
   assertStringIncludes(rejectedSetups, "Winners preserved");
   assertStringIncludes(rejectedSetups, "Poor entries rejected");
   assertStringIncludes(rejectedSetups, "Unavailable");
-  assert(!scanTab.includes("Last 100 Setup Comparison"));
+  assert(!scanTab.includes("Canonical Dealing Range Comparison"));
 });
