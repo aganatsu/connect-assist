@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
+import type { TieredScoringMeta } from "./TierFactorBreakdown";
+import { LegacyDiagnosticsPanel } from "./LegacyDiagnosticsPanel";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -136,6 +137,10 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
 
   // Extract tieredScoring metadata if available
   const tieredScoring: TieredScoringMeta | null = parsed?.tieredScoring ?? null;
+  const diagnosticFactors: FactorScore[] = [
+    ...(factorScores || []),
+    ...(Array.isArray(parsed?.smcEnhancementFactors) ? parsed.smcEnhancementFactors : []),
+  ];
 
   const setupType: string | null = parsed?.setupType ?? null;
   const setupConfidence: number | null = parsed?.setupConfidence ?? null;
@@ -206,38 +211,18 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
             {s.direction}
           </span>
         )}
-        {s.score !== null && (
-          <span className={`font-mono font-bold text-[11px] ${dirColor}`}>{s.score > 10 ? `${s.score.toFixed(1)}%` : `${s.score}/10`}</span>
-        )}
-        {s.factorCount !== null && s.total !== null && (
-          <span className="text-[9px] text-muted-foreground font-mono">
-            {s.factorCount} factors aligned{s.total ? ` (of ${s.total})` : ""}
-          </span>
-        )}
-        {tieredScoring && <TierScoreSummary tieredScoring={tieredScoring} />}
       </div>
 
-      {/* ── Tier-Grouped Factor Breakdown ── */}
-      {factorScores && factorScores.length > 0 ? (
-        <TierFactorBreakdown factors={factorScores} tieredScoring={tieredScoring} />
-      ) : (
-        /* ── LEGACY: Aligned factor chips from summary text ── */
-        s.alignedFactors.length > 0 && (
-          <div>
-            <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Aligned Factors</p>
-            <div className="flex flex-wrap gap-1">
-              {s.alignedFactors.map((f, i) => (
-                <span
-                  key={i}
-                  className="rounded-full bg-secondary/60 border border-border px-1.5 py-0.5 text-[9px] text-foreground"
-                >
-                  {f}
-                </span>
-              ))}
-            </div>
-          </div>
-        )
-      )}
+      <LegacyDiagnosticsPanel
+        score={s.score}
+        factorCount={s.factorCount}
+        factorTotal={s.total}
+        factors={diagnosticFactors}
+        legacyFactorNames={s.alignedFactors}
+        tieredScoring={tieredScoring}
+        gates={parsed?.gates ?? null}
+        ownershipDiagnostics={parsed?.legacyGateDiagnostics ?? null}
+      />
 
       {/* Extra context */}
       {s.extraContext.length > 0 && (
@@ -253,38 +238,6 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
               </span>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* SMC Enhancement Factors (from smcEnhancements module) */}
-      {parsed?.smcEnhancementFactors && parsed.smcEnhancementFactors.length > 0 && (
-        <div>
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">SMC Enhancements</p>
-          <div className="flex flex-wrap gap-1">
-            {parsed.smcEnhancementFactors.map((f: any, i: number) => (
-              <span
-                key={i}
-                className={`rounded border px-1.5 py-0.5 text-[9px] font-mono ${
-                  f.present && f.weight > 0
-                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                    : f.present && f.weight < 0
-                    ? "bg-red-500/10 border-red-500/30 text-red-400"
-                    : "bg-muted/40 border-border/60 text-muted-foreground"
-                }`}
-              >
-                {f.name}{f.weight ? ` (${f.weight > 0 ? "+" : ""}${f.weight.toFixed(1)})` : ""}
-              </span>
-            ))}
-          </div>
-          {parsed.smcEnhancementFactors.some((f: any) => f.detail) && (
-            <div className="mt-1 space-y-0.5">
-              {parsed.smcEnhancementFactors.filter((f: any) => f.detail && f.present).map((f: any, i: number) => (
-                <p key={i} className="text-[8px] text-muted-foreground/80 leading-tight">
-                  {f.name}: {f.detail}
-                </p>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

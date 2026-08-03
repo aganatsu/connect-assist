@@ -20,7 +20,7 @@ import {
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
-  TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
+  TrendingUp, TrendingDown, Minus, Clock, ShieldX,
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
   Eye, EyeOff, PanelRightClose, PanelRightOpen, MoreVertical, Wallet,
 } from "lucide-react";
@@ -35,7 +35,7 @@ import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
-import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { LegacyDiagnosticsPanel } from "@/components/LegacyDiagnosticsPanel";
 import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
 import { formatNewsGateCountdown } from "@/lib/newsGateCountdown";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
@@ -1448,9 +1448,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
               <div className="mt-1.5 pt-1.5 border-t border-border/40 space-y-1.5">
                 {/* Score + Signal source */}
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className={`text-[10px] font-mono font-bold ${
-                    t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
-                  }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
                   {(() => { try { const sr = JSON.parse(t.signalReason || "{}"); return sr?.signalSource ? (
                     <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
                       sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
@@ -1563,10 +1560,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
                           </span>
                         )}
-                        <span className={`text-[10px] font-mono font-bold ${
-                          t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
-                        }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
-                        {sr?.tieredScoring && <TierScoreSummary tieredScoring={sr.tieredScoring} />}
                       </div>
                       {/* Signal source context note for standalone trades */}
                       {sr?.signalSource && sr.signalSource !== "unified" && sr.signalSource !== "cascade" && (
@@ -1574,6 +1567,14 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
                         </div>
                       )}
+                      <LegacyDiagnosticsPanel
+                        score={Number(t.signalScore)}
+                        factors={sr?.factorScores}
+                        tieredScoring={sr?.tieredScoring}
+                        gates={sr?.gates}
+                        ownershipDiagnostics={sr?.legacyGateDiagnostics}
+                        compact
+                      />
 
                       {hasRichData ? (
                         <>
@@ -1758,21 +1759,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* Phase-1 cleanup: TierFactorBreakdown removed here — it now renders
-                              only inside the position detail drawer to avoid duplication. */}
-                          {/* ── Risk Gates ── */}
-                          {sr.gates && sr.gates.length > 0 && (
-                            <div className="space-y-0.5">
-                              <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
-                              {sr.gates.map((g: any, gi: number) => (
-                                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-                                  <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
-                                  <span>{g.reason}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
                           {/* ── Structure Intelligence ── */}
                           {sr.structureIntel && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1919,7 +1905,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {/* ── Trade Metadata Grid ── */}
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px] border-t border-border/30 pt-1.5">
-                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
@@ -2010,10 +1995,8 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
               {d.signalSource === "unified" ? "UNIFIED ×1" : d.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
             </span>
           )}
-          {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`font-mono font-bold ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : d.score?.toFixed(1)}</span>
           <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
           <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </div>
@@ -2062,22 +2045,16 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
 
-          {/* Tier-Grouped Factors */}
-          {d.factors && (
-            <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
-          )}
-          {/* Risk Gates (legacy gates from runSafetyGates — tier gates are shown inside TierFactorBreakdown) */}
-          {d.gates && (
-            <div className="space-y-0.5">
-              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
-              {d.gates.map((g: any, gi: number) => (
-                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-                  <span>{g.passed ? "✓" : "✗"}</span>
-                  <span>{formatNewsGateCountdown(g.reason, newsClock, d.scanned_at)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          <LegacyDiagnosticsPanel
+            score={d.score}
+            factorCount={d.factorCount}
+            factors={d.factors}
+            tieredScoring={d.tieredScoring}
+            gates={d.gates}
+            ownershipDiagnostics={d.legacyGateDiagnostics}
+            formatGateReason={(reason) => formatNewsGateCountdown(reason, newsClock, d.scanned_at)}
+            compact
+          />
           {/* Rejection Reasons */}
           {d.rejectionReasons && d.rejectionReasons.length > 0 && (
             <div className="space-y-0.5">
@@ -2215,7 +2192,6 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
           </span>
         )}
         <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
-        <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
       {/* Signal source context note for standalone */}
@@ -2224,9 +2200,6 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
           Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
         </div>
       )}
-
-      {/* 2. Tier Score Summary */}
-      {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
 
       {/* 3. Narrative — plain-English thesis */}
       {d.direction && d.direction !== "none" && (
@@ -2267,10 +2240,7 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
           }`}>
             {d.directionVerdict.verdict === "long" ? "↑ LONG" : d.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
           </span>
-          <span className={`text-[10px] font-mono font-bold ${
-            d.directionVerdict.confidence >= 70 ? "text-success" :
-            d.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
-          }`}>{d.directionVerdict.confidence}%</span>
+          <span className="text-[10px] font-mono font-bold">{d.directionVerdict.confidence}%</span>
           <span className="text-[9px] text-muted-foreground">{Math.round(d.directionVerdict.agreement * 100)}% agree</span>
           {d.directionVerdict.shouldBlock && (
             <span className="text-[9px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
@@ -2283,10 +2253,15 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
         </div>
       )}
 
-      {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
-      {d.factors && (
-        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
-      )}
+      <LegacyDiagnosticsPanel
+        score={d.score}
+        factorCount={d.factorCount}
+        factors={d.factors}
+        tieredScoring={d.tieredScoring}
+        gates={d.gates}
+        ownershipDiagnostics={d.legacyGateDiagnostics}
+        compact
+      />
 
       {/* 6. Regime Detection */}
       {d.regimeData && (
