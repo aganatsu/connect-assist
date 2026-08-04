@@ -33,10 +33,7 @@ Deno.test("ownership watch remains waiting instead of becoming rejected", () => 
   }), {
     disposition: "wait",
     status: "waiting_for_reconfirmation",
-    reasons: [
-      "Entry Confirmation is not ready",
-      "ICT Setup Model is waiting for entry confirmation",
-    ],
+    reasons: ["Entry Confirmation is not ready"],
   });
 });
 

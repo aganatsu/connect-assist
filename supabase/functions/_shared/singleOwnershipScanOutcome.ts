@@ -9,7 +9,7 @@ export type SingleOwnershipScanOutcome =
 const REASON_LABELS: Record<string, string> = {
   direction_not_authorized: "HTF Bias does not authorize this direction",
   zone_story_invalid: "ICT Setup Model is invalid",
-  zone_story_waiting: "ICT Setup Model is waiting for entry confirmation",
+  zone_story_waiting: "Entry Confirmation is not ready",
   confirmation_waiting: "Entry Confirmation is not ready",
   thesis_invalid: "Setup Thesis is invalid",
 };
