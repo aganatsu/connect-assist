@@ -9884,15 +9884,39 @@ async function runScanForUser(
         rejectedCount++;
         detail.status = "rejected";
         const failedGates = gates.filter(g => !g.passed);
+        const enforcingOwnedAuthorities = singleOwnershipScanOutcome.disposition !== "legacy";
+        const blockingGateReasons: string[] = [];
+        for (const gate of failedGates) {
+          const code = normalizeRejectedGate(gate.reason);
+          const disposition = evaluateAuthorityGateDisposition({
+            code, passed: false,
+            requestedMode: (pairConfig as any).singleOwnershipMode,
+            runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+          });
+          const duplicatedRollingLocationGate = enforcingOwnedAuthorities && code === "premium_discount";
+          if ((!enforcingOwnedAuthorities || disposition.blocksAuthorization) && !duplicatedRollingLocationGate) {
+            blockingGateReasons.push(gate.reason);
+          } else {
+            legacyGateDiagnostics.push({ ...disposition, reason: gate.reason });
+          }
+        }
+        detail.legacyGateDiagnostics = legacyGateDiagnostics;
         const authorityReasons = singleOwnershipScanOutcome.disposition === "reject"
-          ? singleOwnershipScanOutcome.reasons
+          ? [...singleOwnershipScanOutcome.reasons]
           : [];
+        const canonicalRejection = (detail as any).canonicalDealingRangeObservation?.canonical;
+        const consolidatedAuthorityReasons = authorityReasons.filter((reason) =>
+          !reason.startsWith("Premium/Discount rule blocked entry:")
+        );
+        if (canonicalRejection?.allowed === false && canonicalRejection?.explanation) {
+          consolidatedAuthorityReasons.push(canonicalRejection.explanation);
+        }
         if (!analysis.stopLoss || !analysis.takeProfit) {
-          authorityReasons.push("Valid stop loss and take profit are required");
+          consolidatedAuthorityReasons.push("Valid stop loss and take profit are required");
         }
         detail.rejectionReasons = [...new Set([
-          ...failedGates.map(g => g.reason),
-          ...authorityReasons,
+          ...blockingGateReasons,
+          ...consolidatedAuthorityReasons,
         ])];
         if (detail.rejectionReasons.length === 0) {
           detail.rejectionReasons = ["Trade entry was not authorized; no blocking reason was recorded"];
