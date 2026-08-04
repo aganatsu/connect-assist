@@ -15,7 +15,7 @@ Deno.test("single ownership defaults to observation", () => {
   assertEquals(result.affectsAuthorization, false);
 });
 
-Deno.test("single ownership can authorize a complete paper decision", () => {
+Deno.test("single ownership can authorize a complete decision", () => {
   const result = evaluateSingleOwnershipEnforcement({
     requestedMode: "enforce", runtimeTarget: "paper",
     decision: decision("allow"),
@@ -44,11 +44,12 @@ Deno.test("single ownership live mode explicitly enforces live execution", () =>
   assertEquals(result.affectsAuthorization, true);
 });
 
-Deno.test("paper-only mode remains observe on live execution", () => {
+Deno.test("enforce follows the selected live account", () => {
   const result = evaluateSingleOwnershipEnforcement({
     requestedMode: "enforce", runtimeTarget: "live",
     decision: decision("allow"),
   });
-  assertEquals(result.effectiveMode, "observe");
-  assertEquals(result.affectsAuthorization, false);
+  assertEquals(result.effectiveMode, "enforce");
+  assertEquals(result.authorized, true);
+  assertEquals(result.affectsAuthorization, true);
 });

@@ -6,18 +6,18 @@ const endpoint = await Deno.readTextFile("./supabase/functions/bot-config/index.
 const ui = await Deno.readTextFile("./src/components/config/ScanTab.tsx");
 const policy = await Deno.readTextFile("./supabase/functions/_shared/singleOwnershipEnforcement.ts");
 
-Deno.test("live enforcement is explicit across config and policy", () => {
+Deno.test("enforcement follows the selected account while legacy live values remain compatible", () => {
   assertStringIncludes(endpoint, '"observe", "enforce", "enforce_live"');
-  assertStringIncludes(ui, 'value="enforce_live"');
-  assertStringIncludes(ui, "Enforce Live (Real Orders)");
-  assertStringIncludes(policy, 'requestedMode === "enforce_live"');
+  assertStringIncludes(ui, '<SelectItem value="enforce">Enforce</SelectItem>');
+  assertStringIncludes(ui, 'singleOwnershipMode === "enforce_live" ? "enforce"');
+  assertStringIncludes(policy, 'requestedMode === "enforce" || requestedMode === "enforce_live"');
 });
 
 Deno.test("live enforcement reaches scanner and both fill routes", () => {
   assertStringIncludes(scanner, "singleOwnershipEnforcementRequested");
-  assertStringIncludes(scanner, 'singleOwnershipMode === "enforce_live"');
+  assertStringIncludes(scanner, '["enforce", "enforce_live"].includes((pairConfig as any).singleOwnershipMode)');
   assertStringIncludes(scanner, "evaluateSingleOwnershipFillAuthorization({");
-  assertStringIncludes(fast, 'singleOwnershipMode === "enforce_live"');
+  assertStringIncludes(fast, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
   assertStringIncludes(fast, "evaluateSingleOwnershipFillAuthorization({");
 });
 
