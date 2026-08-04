@@ -349,7 +349,7 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           </span>
         ) : (
           <span className="text-highlight">
-            Direction Verdict pending next scan
+            HTF Bias pending next scan
           </span>
         )}
         <span className="text-muted-foreground">

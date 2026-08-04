@@ -198,7 +198,7 @@ export default function IctAnalysis() {
               {/* ── Direction Verdict ── */}
               {d.directionVerdict && !d.directionVerdict.error && (
                 <AccordionItem value="direction">
-                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Compass className="h-3.5 w-3.5" /> Direction Verdict</span></AccordionTrigger>
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Compass className="h-3.5 w-3.5" /> HTF Bias</span></AccordionTrigger>
                   <AccordionContent>
                     <div className="bg-secondary/30 border border-border p-3 space-y-2">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -337,7 +337,7 @@ export default function IctAnalysis() {
               {/* ── Zone Story ── */}
               {(d.unifiedZone || d.impulseZone) && (
                 <AccordionItem value="zone">
-                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Zone Story</span></AccordionTrigger>
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> ICT Setup Model</span></AccordionTrigger>
                   <AccordionContent>
                     <div className="bg-secondary/30 border border-border p-3">
                       <ZoneStoryPanel

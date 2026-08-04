@@ -21,7 +21,7 @@ export type CollapsedRejectedSetup<T extends RejectedSetupAnalyticsRecord> = T &
 
 export const NORMALIZED_GATE_LABELS: Record<string, string> = {
   duplicate_position: "Duplicate Position",
-  direction_verdict: "Direction Verdict",
+  direction_verdict: "HTF Bias",
   htf_alignment: "HTF Alignment",
   premium_discount: "Premium/Discount Location",
   structural_conviction: "Structural Conviction",
