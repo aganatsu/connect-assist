@@ -62,6 +62,6 @@ Deno.test("active Zone Setup API includes awaiting-confirmation rows", () => {
   const section = botScanner.slice(actionStart, actionEnd);
   assertStringIncludes(
     section,
-    '.in("status", ["pending", "awaiting_confirmation"])',
+    '.in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])',
   );
 });
