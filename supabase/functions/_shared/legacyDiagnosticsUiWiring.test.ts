@@ -7,7 +7,7 @@ const position = await Deno.readTextFile("./src/components/ExpandedPositionCard.
 
 Deno.test("legacy diagnostics are collapsed and explicitly non-authorizing", () => {
   assertStringIncludes(panel, "<details");
-  assertStringIncludes(panel, "Legacy Diagnostics");
+  assertStringIncludes(panel, "Legacy Scores and Filters");
   assertStringIncludes(panel, "Does not authorize");
   assert(!panel.includes("<details open"));
 });
