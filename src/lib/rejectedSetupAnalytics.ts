@@ -87,6 +87,26 @@ export function normalizeRejectedGate(reason: string): string {
     .slice(0, 80) || "other";
 }
 
+export function uniqueRejectionReasons(
+  gates: Array<{ passed?: boolean; reason?: string }> | null | undefined,
+  reasons: string[] | null | undefined,
+): string[] {
+  const failedCodes = new Set(
+    (gates || [])
+      .filter((gate) => gate?.passed === false && gate.reason)
+      .map((gate) => normalizeRejectedGate(String(gate.reason))),
+  );
+  const seen = new Set<string>();
+  const visible: string[] = [];
+  for (const reason of reasons || []) {
+    const code = normalizeRejectedGate(String(reason));
+    if (failedCodes.has(code) || seen.has(code)) continue;
+    seen.add(code);
+    visible.push(reason);
+  }
+  return visible;
+}
+
 export function normalizedGateLabel(code: string): string {
   return NORMALIZED_GATE_LABELS[code]
     || code.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());

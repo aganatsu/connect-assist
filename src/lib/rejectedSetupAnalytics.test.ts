@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collapseRejectedOpportunities,
   normalizeRejectedGate,
+  uniqueRejectionReasons,
   normalizedGateLabel,
 } from "./rejectedSetupAnalytics";
 
@@ -33,6 +34,21 @@ describe("rejected setup opportunity analytics", () => {
       .toBe("gameplan_alignment");
     expect(normalizedGateLabel("consecutive_loss_limit"))
       .toBe("Consecutive-Loss Limit");
+  });
+
+  it("removes authority reasons already explained by a concrete failed gate", () => {
+    expect(uniqueRejectionReasons(
+      [{ passed: false, reason: "Already short on EUR/USD" }],
+      ["Already short on EUR/USD", "Risk check failed: duplicate position", "Setup Thesis is invalid"],
+    )).toEqual(["Setup Thesis is invalid"]);
+  });
+
+  it("deduplicates repeated reasons but preserves distinct blockers", () => {
+    expect(uniqueRejectionReasons([], [
+      "Entry Confirmation is not ready",
+      "Entry Confirmation is not ready",
+      "Setup Thesis is invalid",
+    ])).toEqual(["Entry Confirmation is not ready", "Setup Thesis is invalid"]);
   });
 
   it("collapses repeated scans within a rolling 60-minute gap", () => {

@@ -38,6 +38,7 @@ import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { LegacyDiagnosticsPanel } from "@/components/LegacyDiagnosticsPanel";
 import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
 import { formatNewsGateCountdown } from "@/lib/newsGateCountdown";
+import { uniqueRejectionReasons } from "@/lib/rejectedSetupAnalytics";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
@@ -1978,10 +1979,11 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
   const unavailable = Array.isArray(decision?.completeness?.unavailable)
     ? decision.completeness.unavailable.map((value: string) => value + "_unavailable")
     : [];
-  const reasons = [
+  const reasons = uniqueRejectionReasons(detail?.gates, [
     ...(Array.isArray(decision?.reasonCodes) ? decision.reasonCodes : []),
     ...unavailable,
-  ];
+  ]);
+  const hasFailedGate = Array.isArray(detail?.gates) && detail.gates.some((gate: any) => gate?.passed === false);
   const outcomeColor = outcome === "ALLOW" ? "text-success"
     : outcome === "WATCH" ? "text-warning" : "text-destructive";
   return (
@@ -1997,7 +1999,9 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
         </p>
         {reasons.length > 0 ? reasons.map((reason: string) => (
           <p key={reason} className={outcomeColor}>{reason.replace(/_/g, " ")}</p>
-        )) : (
+        )) : hasFailedGate ? (
+          <p className="text-muted-foreground">Blocking reason is listed under Failed Gates.</p>
+        ) : (
           <p className="text-muted-foreground">No blocking authority reason recorded.</p>
         )}
       </div>
@@ -2014,6 +2018,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
   }, []);
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : d.status === "trade_placed" ? "✅ PLACED" : d.status === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : d.status === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : d.status === "watching_zone" ? "⏳ WATCHING" : d.status === "paused" ? "⏸ PAUSED" : d.status === "no_direction" ? "— NO DIR" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.startsWith("skipped_") ? "SKIPPED" : d.status?.startsWith("staged_") ? "⏳ STAGED" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : d.status === "waiting_for_sweep" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : d.status === "waiting_for_reconfirmation" ? "text-orange-400 bg-orange-500/10 border-orange-500/30" : d.status === "paused" || d.status === "no_direction" ? "text-zinc-400 bg-zinc-500/10 border-zinc-500/30" : "text-muted-foreground bg-muted/20 border-border";
+  const visibleRejectionReasons = uniqueRejectionReasons(d.gates, d.rejectionReasons);
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -2092,10 +2097,10 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
           />
           <TradeDecisionPanel detail={d} />
           {/* Rejection Reasons */}
-          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+          {visibleRejectionReasons.length > 0 && (
             <div className="space-y-0.5">
               <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
-              {d.rejectionReasons.map((r: string, ri: number) => (
+              {visibleRejectionReasons.map((r: string, ri: number) => (
                 <p key={ri} className="text-[9px] text-destructive">⚠ {formatNewsGateCountdown(r, newsClock, d.scanned_at)}</p>
               ))}
             </div>
@@ -2211,6 +2216,7 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
 
   // Only show failed gates
   const failedGates = d.gates?.filter((g: any) => !g.passed) || [];
+  const visibleRejectionReasons = uniqueRejectionReasons(d.gates, d.rejectionReasons);
 
   return (
     <div className="space-y-2">
@@ -2415,10 +2421,10 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
       )}
 
       {/* 8. Rejection Reasons (conditional) */}
-      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+      {visibleRejectionReasons.length > 0 && (
         <div className="space-y-0.5">
           <p className="text-[11px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
-          {d.rejectionReasons.map((r: string, ri: number) => (
+          {visibleRejectionReasons.map((r: string, ri: number) => (
             <p key={ri} className="text-[11px] text-destructive">⚠ {formatNewsGateCountdown(r, newsClock, observedAt)}</p>
           ))}
         </div>
