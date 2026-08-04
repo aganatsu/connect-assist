@@ -41,8 +41,8 @@ Deno.test("zone-local config is safe by default and visible in Bot Config", () =
     "Evidence approval caps the effective mode",
   );
   assert(
-    configUi.indexOf("Zone-Local Confluence Mode") >
-      configUi.indexOf("Impulse Zone Gate Mode"),
+    configUi.indexOf("POI Confluence Mode") >
+      configUi.indexOf("Require Valid POI"),
   );
 });
 

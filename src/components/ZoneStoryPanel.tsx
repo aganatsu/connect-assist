@@ -332,7 +332,7 @@ export function ZoneStoryPanel({
     return (
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-red-900/50">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">ICT Setup Model</span>
           <span className="text-xs font-bold text-red-400">⚠ Error</span>
         </div>
         <p className="text-[10px] text-red-400">{unifiedData.reason}</p>
@@ -351,7 +351,7 @@ export function ZoneStoryPanel({
     return (
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">ICT Setup Model</span>
           <span className={`text-xs font-bold ${stateColor}`}>{stateLabel}</span>
         </div>
         {gateData?.directionDetail ? (
@@ -401,7 +401,7 @@ export function ZoneStoryPanel({
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">ICT Setup Model</span>
           {unifiedData.selectedTF && (
             <span className="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 text-[10px] font-bold">
               via {unifiedData.selectedTF}

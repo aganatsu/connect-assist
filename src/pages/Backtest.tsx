@@ -628,7 +628,7 @@ export default function Backtest() {
                   <div className="grid grid-cols-2 gap-2">
                     <Toggle label="Require HTF Bias" description="Only trade in direction of daily bias" checked={config.strategy.requireHTFBias} onChange={v => updateConfig("strategy", "requireHTFBias", v)} />
                     <Toggle label="HTF Bias Hard Veto" description="Hard block: no ranging exception" checked={config.strategy.htfBiasHardVeto} onChange={v => updateConfig("strategy", "htfBiasHardVeto", v)} />
-                    <SelectField label="Dealing Range Mode" value={config.strategy.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Avoid Wrong Side" }, { value: "strict_value", label: "Strict Value" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
+                    <SelectField label="Premium/Discount Entry Rule" value={config.strategy.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Block Wrong-Side Entries" }, { value: "strict_value", label: "Require Discount Longs / Premium Shorts" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
                   </div>
                 </TabsContent>
 

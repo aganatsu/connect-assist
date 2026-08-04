@@ -15,6 +15,6 @@ Deno.test("single-ownership comparison is exposed in Rejected Setups", async () 
   assertStringIncludes(endpoint, 'from("paper_trade_history")');
   assertStringIncludes(endpoint, 'from("rejected_setups")');
   assertStringIncludes(api, "getSingleOwnershipComparison");
-  assertStringIncludes(rejectedSetups, "Single-Ownership Decision Comparison");
-  assert(!scanTab.includes("Single-Ownership Decision Comparison"));
+  assertStringIncludes(rejectedSetups, "Trade Decision Comparison");
+  assert(!scanTab.includes("Trade Decision Comparison"));
 });

@@ -113,8 +113,8 @@ describe("Bot Config search catalog", () => {
 
   it.each([
     ["scan interval", "scan:Scan Interval (minutes)"],
-    ["direction verdict", "scan:Direction Verdict Authority"],
-    ["thesis validation", "enter:Thesis Conviction"],
+    ["direction verdict", "scan:HTF Bias"],
+    ["thesis validation", "enter:Setup Thesis Validity"],
     ["break even", "exit:Auto Break-Even"],
     ["position sizing", "risk:Position Sizing"],
     ["starting balance", "risk:Starting Balance ($)"],

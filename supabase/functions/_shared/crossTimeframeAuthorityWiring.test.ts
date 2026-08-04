@@ -6,17 +6,17 @@ const root = new URL("../../../", import.meta.url);
 const source = async (path: string) =>
   await Deno.readTextFile(new URL(path, root));
 
-Deno.test("Phase 7 UI exposes every Cross-Timeframe Authority control", async () => {
+Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
   const ui = await source("src/components/config/EnterTab.tsx");
   for (
     const label of [
-      "Cross-Timeframe Authority Mode",
-      "Require Nested Impulse",
-      "Allow Standalone Lower-TF Setup",
-      "Maximum Zone Separation",
-      "Minimum Parent-Child Overlap",
-      "Sweep-Origin Requirement",
-      "Retest Quality",
+      "HTF-to-LTF Alignment Mode",
+      "Require LTF POI Inside HTF Impulse",
+      "Allow LTF Setup Without HTF POI",
+      "Maximum HTF/LTF POI Distance",
+      "Minimum HTF/LTF POI Overlap",
+      "Require BSL/SSL Sweep Before Displacement",
+      "POI Mitigation State",
       "Maximum Candidates Per Timeframe",
       "Certified max",
       "Effective",

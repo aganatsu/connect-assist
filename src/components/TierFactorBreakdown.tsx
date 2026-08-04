@@ -40,23 +40,23 @@ interface TierFactorBreakdownProps {
 
 const TIER_CONFIG: Record<number, { label: string; sublabel: string; color: string; bgColor: string; borderColor: string; pointLabel: string }> = {
   1: {
-    label: "TIER 1",
-    sublabel: "Core Setup",
+    label: "LEGACY CORE",
+    sublabel: "Score Factors",
     color: "text-warn",
     bgColor: "bg-amber-400/10",
     borderColor: "border-amber-400/30",
     pointLabel: "2 pts each",
   },
   2: {
-    label: "TIER 2",
-    sublabel: "Confirmation",
+    label: "LEGACY SUPPORT",
+    sublabel: "Supporting Evidence",
     color: "text-tier2",
     bgColor: "bg-sky-400/10",
     borderColor: "border-sky-400/30",
     pointLabel: "1 pt each",
   },
   3: {
-    label: "TIER 3",
+    label: "LEGACY BONUS",
     sublabel: "Bonus",
     color: "text-tier3",
     bgColor: "bg-violet-400/10",

@@ -43,9 +43,9 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; ti
 ];
 
 const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [
-  { tier: 1, label: "TIER 1 — CORE SETUP", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-amber-500", borderColor: "border-amber-500/40" },
-  { tier: 2, label: "TIER 2 — CONFIRMATION", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-blue-500", borderColor: "border-blue-500/40" },
-  { tier: 3, label: "TIER 3 — BONUS", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-emerald-500", borderColor: "border-emerald-500/40" },
+  { tier: 1, label: "LEGACY CORE SCORE", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-amber-500", borderColor: "border-amber-500/40" },
+  { tier: 2, label: "LEGACY SUPPORTING EVIDENCE", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-blue-500", borderColor: "border-blue-500/40" },
+  { tier: 3, label: "LEGACY BONUS EVIDENCE", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-emerald-500", borderColor: "border-emerald-500/40" },
 ];
 
 // ─── Per-Pair Override Definitions ────────────────────────────────────────────
@@ -61,7 +61,7 @@ const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
 
 const OVERRIDE_FIELDS = [
   { key: 'minRiskReward', label: 'Min R:R', type: 'number', min: 0.1, max: 5, step: 0.1, description: 'Effective R:R threshold (after spread/commission)' },
-  { key: 'minTier1Factors', label: 'Min Tier 1', type: 'number', min: 1, max: 5, step: 1, description: 'Minimum core factors (MS, OB, FVG, P/D, HTF)' },
+  { key: 'minTier1Factors', label: 'Pair Core-Factor Minimum', type: 'number', min: 1, max: 5, step: 1, description: 'Minimum core factors (MS, OB, FVG, P/D, HTF)' },
   { key: 'minConfluence', label: 'Min Confluence %', type: 'number', min: 10, max: 80, step: 5, description: 'Score threshold for this pair' },
   { key: 'maxPerSymbol', label: 'Max Per Symbol', type: 'number', min: 1, max: 5, step: 1, description: 'Max concurrent positions for this pair' },
   { key: 'allowSameDirectionStacking', label: 'Allow Stacking', type: 'toggle', description: 'Allow same-direction stacking' },
@@ -201,8 +201,8 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
       {/* ── Scoring Engine ── */}
       <CollapsibleSection
         id="scoring"
-        title="Scoring Engine"
-        subtitle="Confluence threshold, tier gates, normalization"
+        title="Legacy Scores and Filters"
+        subtitle="Diagnostic percentages, factor groups, and legacy filters"
         icon={<Target className="h-4 w-4" />}
         defaultOpen={true}
       >
@@ -218,9 +218,9 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             <span className="text-sm font-mono font-bold text-primary w-12 text-right">{config.strategy?.minZoneScore ?? 4}</span>
           </div>
         </FieldGroup>
-        <ToggleField label="Tier 1 Gate" description="Require minimum core factors to pass" checked={config.strategy?.tier1GateEnabled ?? true} onChange={v => updateField('strategy', 'tier1GateEnabled', v)} />
+        <ToggleField label="Legacy Core-Factor Filter" description="Require minimum core factors to pass" checked={config.strategy?.tier1GateEnabled ?? true} onChange={v => updateField('strategy', 'tier1GateEnabled', v)} />
         {(config.strategy?.tier1GateEnabled ?? true) && (
-          <FieldGroup label="Min Tier 1 Factors" description="How many core factors must fire">
+          <FieldGroup label="Minimum Core Factors" description="How many core factors must fire">
             <div className="flex items-center gap-4">
               <Slider value={[config.strategy?.minTier1Factors ?? 3]} onValueChange={v => updateField('strategy', 'minTier1Factors', v[0])} min={1} max={5} step={1} className="flex-1" />
               <span className="text-sm font-mono font-bold w-8 text-right">{config.strategy?.minTier1Factors ?? 3}</span>
@@ -230,7 +230,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         <div className="border-t border-border pt-3 space-y-3">
           <ToggleField label="Score Normalization" description="Normalize raw score to 0-100 scale" checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
           <ToggleField
-            label="Thesis Conviction"
+            label="Setup Thesis Validity"
             description={thesisDisplay.description}
             checked={thesisEnabled}
             onChange={v => updateField('strategy', 'thesisConvictionEnabled', v)}
@@ -242,14 +242,14 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
       {/* ── Factor Weights (Full) ── */}
       <CollapsibleSection
         id="factorWeights"
-        title="Factor Weights"
+        title="Legacy Factor Weights"
         subtitle="Fine-tune how much each confluence factor contributes to the overall score"
         icon={<SlidersHorizontal className="h-4 w-4" />}
         searchLabels={FACTOR_WEIGHT_DEFS.map(factor => factor.name)}
         defaultOpen={false}
       >
         <div className="flex items-center justify-between">
-          <SectionHeader title="Factor Weights" description="AI Advisor recommendations can auto-apply here." />
+          <SectionHeader title="Legacy Factor Weights" description="AI Advisor recommendations can auto-apply here." />
           {hasWeightOverrides && (
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={resetAllWeights}>
               <RotateCcw className="h-3 w-3" /> Reset All
@@ -258,7 +258,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         </div>
         {/* How scoring works */}
         <div className="rounded border border-border bg-muted/20 p-3 space-y-1.5">
-          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">How Tiered Scoring Works</p>
+          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">How Legacy Scoring Works</p>
           <p className="text-[10px] text-muted-foreground">
             Each factor has a <span className="font-bold text-foreground">tier base value</span> (T1 = 2pts, T2 = 1pt, T3 = 0.5pts) that determines its importance.
             Your <span className="font-bold text-foreground">custom weight</span> multiplies this base value.
@@ -337,10 +337,10 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </div>
           <div className="space-y-1 p-2 -mx-2 opacity-70">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium">Tier 1 Minimum</span>
+              <span className="text-xs font-medium">Legacy Core-Factor Minimum</span>
               <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
             </div>
-            <p className="text-[10px] text-muted-foreground">At least 2 Tier 1 (Core) factors must be present for any trade to pass. Not adjustable.</p>
+            <p className="text-[10px] text-muted-foreground">At least 2 legacy core factors must be present for any trade to pass. Not adjustable.</p>
           </div>
           <div className="space-y-1 p-2 -mx-2 opacity-70">
             <div className="flex items-center gap-2">
@@ -368,12 +368,12 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
       {/* ── Zone Engine ── */}
       <CollapsibleSection
         id="zoneEngine"
-        title="Zone Engine"
-        subtitle="Impulse zone gate, fib retracement, zone quality"
+        title="POI & Entry Model"
+        subtitle="Impulse POIs, HTF/LTF alignment, liquidity sweep, and retracement"
         icon={<Zap className="h-4 w-4" />}
         defaultOpen={false}
       >
-        <FieldGroup label="Impulse Zone Gate Mode" description="How strictly the zone requirement is enforced">
+        <FieldGroup label="Require Valid POI" description="How a valid impulse POI affects setup qualification">
           <Select value={config.strategy?.impulseZoneGateMode ?? 'hard'} onValueChange={(v: string) => updateField('strategy', 'impulseZoneGateMode', v)}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -384,7 +384,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </Select>
         </FieldGroup>
         <FieldGroup
-          label="Zone-Local Confluence Mode"
+          label="POI Confluence Mode"
           description="Requests how nearby Fib, S/R, HTF POIs and liquidity affect the selected zone. Evidence approval caps the effective mode; without it this remains Observe."
         >
           <Select
@@ -402,7 +402,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         </FieldGroup>
         {(config.strategy?.zoneLocalEnforcementMode ?? "observe") === "soft" && (
           <FieldGroup
-            label="Zone-Local Soft Penalty"
+            label="POI Confluence Penalty"
             description="Score points removed when the legacy winner lacks local support"
           >
             <div className="flex items-center gap-4">
@@ -423,7 +423,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         )}
         {(config.strategy?.zoneLocalEnforcementMode ?? "observe") !== "observe" && (
           <FieldGroup
-            label="Minimum Local Evidence Score"
+            label="Minimum POI Confluence Score"
             description="Minimum deduplicated local evidence score required for the selected zone"
           >
             <div className="flex items-center gap-4">
@@ -445,7 +445,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         <div className="border-t border-border pt-3 space-y-3">
           <div>
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">
-              Cross-Timeframe Impulse Authority
+              HTF-to-LTF POI Alignment
             </p>
             <p className="text-[10px] text-muted-foreground mt-1">
               Available in runtime. A saved request cannot exceed the
@@ -469,7 +469,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             ))}
           </div>
           <FieldGroup
-            label="Cross-Timeframe Authority Mode"
+            label="HTF-to-LTF Alignment Mode"
             description="Observe records decisions only. Soft and Hard require an approved evidence certificate before becoming effective."
             status={crossTfStatus.effective === "observe" ? "monitoring" : "active"}
           >
@@ -487,7 +487,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             </Select>
           </FieldGroup>
           <ToggleField
-            label="Require Nested Impulse"
+            label="Require LTF POI Inside HTF Impulse"
             description="Require the executable zone to be nested inside its parent-timeframe impulse."
             checked={config.strategy?.crossTfRequireNestedImpulse ?? true}
             onChange={v =>
@@ -495,7 +495,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             status="active"
           />
           <ToggleField
-            label="Allow Standalone Lower-TF Setup"
+            label="Allow LTF Setup Without HTF POI"
             description="Permit a lower-timeframe zone without qualified parent context."
             checked={config.strategy?.crossTfAllowStandaloneLowerTimeframe ?? false}
             onChange={v =>
@@ -507,7 +507,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             status="active"
           />
           <FieldGroup
-            label="Maximum Zone Separation"
+            label="Maximum HTF/LTF POI Distance"
             description="Maximum parent-to-child distance, measured in ATR."
             status="active"
           >
@@ -531,7 +531,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
           </FieldGroup>
           <FieldGroup
-            label="Minimum Parent-Child Overlap"
+            label="Minimum HTF/LTF POI Overlap"
             description="Minimum percentage of the child zone that must overlap its parent."
             status="active"
           >
@@ -555,7 +555,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
           </FieldGroup>
           <ToggleField
-            label="Sweep-Origin Requirement"
+            label="Require BSL/SSL Sweep Before Displacement"
             description="Require the authoritative impulse to originate from a detected liquidity sweep."
             checked={config.strategy?.crossTfRequireSweepOrigin ?? false}
             onChange={v =>
@@ -563,7 +563,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             status="active"
           />
           <FieldGroup
-            label="Retest Quality"
+            label="POI Mitigation State"
             description="Choose which lifecycle states remain eligible."
             status="active"
           >
@@ -609,8 +609,8 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           <Select value={String(config.strategy?.fibMaxRetracement ?? 0.786)} onValueChange={(v: string) => updateField('strategy', 'fibMaxRetracement', parseFloat(v))}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="0.786">78.6% — Standard (OTE)</SelectItem>
-              <SelectItem value="0.886">88.6% — Deep (more zones)</SelectItem>
+              <SelectItem value="0.786">78.6% — OTE upper boundary</SelectItem>
+              <SelectItem value="0.886">88.6% — Deep retracement</SelectItem>
               <SelectItem value="1">100% — To impulse origin</SelectItem>
             </SelectContent>
           </Select>
@@ -667,13 +667,13 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           <Input type="number" value={config.entry?.cooldownMinutes ?? 60} onChange={e => updateField('entry', 'cooldownMinutes', parseInt(e.target.value) || 0)} min={0} max={480} step={15} className="h-9 text-sm" />
         </FieldGroup>
         <div className="border-t border-border pt-3 space-y-3">
-          <FieldGroup label="Confirmation Method" description="How entry is confirmed once price reaches zone" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+          <FieldGroup label="Entry Confirmation" description="How entry is confirmed once price reaches zone" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
             <Select value={config.entry?.confirmationMethod ?? "choch"} onValueChange={v => updateField('entry', 'confirmationMethod', v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="choch">CHoCH / BOS (Default)</SelectItem>
+                <SelectItem value="choch">MSS / CHoCH / Reversal Candle (Default)</SelectItem>
                 <SelectItem value="indicators">Indicator Consensus</SelectItem>
-                <SelectItem value="choch_and_indicators">CHoCH + Indicators (Both)</SelectItem>
+                <SelectItem value="choch_and_indicators">MSS / CHoCH + Indicators (Both)</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

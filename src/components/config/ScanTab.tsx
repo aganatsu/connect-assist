@@ -352,17 +352,17 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         )}
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Premium / Discount</p>
-          <FieldGroup label="Dealing Range Mode" description="Uses the frozen canonical impulse range; enforcement remains evidence-gated">
+          <FieldGroup label="Premium/Discount Entry Rule" description="Uses the frozen HTF impulse high and low to determine premium or discount">
             <Select value={config.strategy?.dealingRangeMode ?? "avoid_wrong_side"} onValueChange={v => updateField("strategy", "dealingRangeMode", v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="off">Off</SelectItem>
-                <SelectItem value="avoid_wrong_side">Avoid Wrong Side</SelectItem>
-                <SelectItem value="strict_value">Strict Value</SelectItem>
+                <SelectItem value="avoid_wrong_side">Block Wrong-Side Entries</SelectItem>
+                <SelectItem value="strict_value">Require Discount Longs / Premium Shorts</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>
-          <FieldGroup label="Decision Authority" description="Observe decisions or enforce the unified authority on the selected account">
+          <FieldGroup label="Trade Decision Mode" description="Observe or enforce the ICT setup workflow on the selected account">
             <Select
               value={config.strategy?.singleOwnershipMode === "enforce" || config.strategy?.singleOwnershipMode === "enforce_live" || config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"}
               onValueChange={v => setConfig((previous: any) => ({
@@ -412,7 +412,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
           <ToggleField label="Order Blocks" checked={strat.enableOB !== false} onChange={v => updateField('strategy', 'enableOB', v)} />
           <ToggleField label="Fair Value Gaps" checked={strat.enableFVG !== false} onChange={v => updateField('strategy', 'enableFVG', v)} />
-          <ToggleField label="Liquidity Pools" checked={strat.enableLiquidity !== false} onChange={v => updateField('strategy', 'enableLiquidity', v)} />
+          <ToggleField label="BSL/SSL Liquidity Levels" checked={strat.enableLiquidity !== false} onChange={v => updateField('strategy', 'enableLiquidity', v)} />
           <ToggleField label="Market Structure" checked={strat.enableStructure !== false} onChange={v => updateField('strategy', 'enableStructure', v)} />
           <ToggleField label="Displacement" checked={strat.enableDisplacement !== false} onChange={v => updateField('strategy', 'enableDisplacement', v)} />
           <ToggleField label="Breaker Blocks" checked={strat.enableBreaker ?? false} onChange={v => updateField('strategy', 'enableBreaker', v)} />
@@ -446,8 +446,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <FieldGroup
-            label="Direction Verdict Authority"
-            description="The live pre-zone direction authority used by final trade authorization."
+            label="HTF Bias"
+            description="The higher-timeframe directional bias used before POI and entry confirmation."
             status="active"
           >
             <p className="text-[10px] text-muted-foreground">
@@ -520,7 +520,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                     </span>
                   </div>
                   <p className="text-[9px] text-muted-foreground">
-                    Hard mode requires the Game Plan and Direction Verdict to agree, and the plan must meet this confidence before an automatic trade is authorized. Recommended: 75%.
+                    Hard mode requires the Game Plan and HTF Bias to agree, and the plan must meet this confidence before an automatic trade is authorized. Recommended: 75%.
                   </p>
                 </div>
               )}

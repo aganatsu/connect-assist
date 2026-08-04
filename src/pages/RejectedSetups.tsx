@@ -1040,8 +1040,8 @@ export default function RejectedSetups() {
 
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
-                <CardTitle className="text-sm font-medium">Single-Ownership Decision Comparison</CardTitle>
-                <p className="text-[10px] text-muted-foreground mt-1">Zone Story and explicit authorities compared with legacy percentages and tiers.</p>
+                <CardTitle className="text-sm font-medium">Trade Decision Comparison</CardTitle>
+                <p className="text-[10px] text-muted-foreground mt-1">ICT setup decisions compared with legacy scores and filters.</p>
               </div><Badge variant="outline" className="text-[9px]">{isLoadingSingleOwnership ? "Loading" : <>{singleOwnershipComparison?.summary.comparable ?? 0}/{singleOwnershipComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
               <CardContent className="px-4 pb-4">
                 {singleOwnershipComparison ? <div className="space-y-3">
@@ -1053,15 +1053,15 @@ export default function RejectedSetups() {
                   </div>
                   {singleOwnershipComparison.rows.filter(row => row.decisionsMatch === false).slice(0, 10).map(row => <div key={["ownership", row.source, row.id].join(":")} className="border-l-2 border-warning pl-3 text-xs">
                     <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · legacy {row.legacyDecision} · owned {row.proposedDecision}</span>
-                    <p className="text-muted-foreground mt-0.5">{row.reasonCodes.join(", ") || "Owned authorities allow this setup without legacy score ownership"}</p>
+                    <p className="text-muted-foreground mt-0.5">{row.reasonCodes.join(", ") || "ICT setup rules allow this setup without legacy score ownership"}</p>
                   </div>)}
-                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Single-ownership comparison is unavailable.</div>}
+                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Trade decision comparison is unavailable.</div>}
               </CardContent>
             </Card>
 
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
-                <CardTitle className="text-sm font-medium">Streamlined Decision Comparison</CardTitle>
+                <CardTitle className="text-sm font-medium">Decision Research Comparison</CardTitle>
                 <p className="text-[10px] text-muted-foreground mt-1">Point-in-time legacy decisions compared with the four-pillar observation.</p>
               </div><Badge variant="outline" className="text-[9px]">{isLoadingStreamlinedDecisionComparison ? "Loading" : <>{streamlinedDecisionComparison?.summary.comparable ?? 0}/{streamlinedDecisionComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
               <CardContent className="px-4 pb-4">
@@ -1084,9 +1084,9 @@ export default function RejectedSetups() {
               <CardHeader className="pb-2 pt-3 px-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <CardTitle className="text-sm font-medium">Canonical Dealing Range Comparison</CardTitle>
+                    <CardTitle className="text-sm font-medium">Premium/Discount Range Comparison</CardTitle>
                     <p className="text-[10px] text-muted-foreground mt-1">
-                      Last 100 setups: rolling entry-timeframe decisions compared with the frozen canonical impulse range.
+                      Last 100 setups: rolling entry-timeframe decisions compared with the frozen HTF impulse range.
                     </p>
                   </div>
                   <Badge variant="outline" className="text-[9px]">
@@ -1099,7 +1099,7 @@ export default function RejectedSetups() {
               <CardContent className="px-4 pb-4">
                 {isLoadingDealingRangeComparison ? (
                   <div className="py-8 text-center text-sm text-muted-foreground">
-                    Loading canonical range comparison…
+                    Loading Premium/Discount range comparison…
                   </div>
                 ) : dealingRangeComparison ? (
                   <div className="space-y-3">
@@ -1110,7 +1110,7 @@ export default function RejectedSetups() {
                       <div><span className="text-muted-foreground">Winners blocked</span><p className="font-mono font-bold text-destructive">{dealingRangeComparison.summary.winnersBlocked}</p></div>
                       <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.poorEntriesRejected}</p></div>
                       <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-warning">{dealingRangeComparison.summary.poorEntriesAllowed}</p></div>
-                      <div><span className="text-muted-foreground">Canonical blocks</span><p className="font-mono font-bold">{dealingRangeComparison.summary.canonicalBlocked}</p></div>
+                      <div><span className="text-muted-foreground">HTF range blocks</span><p className="font-mono font-bold">{dealingRangeComparison.summary.canonicalBlocked}</p></div>
                       <div><span className="text-muted-foreground">Unavailable</span><p className="font-mono font-bold text-muted-foreground">{dealingRangeComparison.summary.unavailable}</p></div>
                     </div>
                     {dealingRangeComparison.rows
@@ -1122,14 +1122,14 @@ export default function RejectedSetups() {
                             {row.symbol} {row.direction.toUpperCase()} · {row.canonicalPercent?.toFixed(1) ?? "—"}%
                           </span>
                           <p className="text-muted-foreground mt-0.5">
-                            {row.explanation || "Canonical explanation unavailable"}
+                            {row.explanation || "Premium/Discount explanation unavailable"}
                           </p>
                         </div>
                       ))}
                   </div>
                 ) : (
                   <div className="py-8 text-center text-sm text-muted-foreground">
-                    Canonical range comparison is unavailable.
+                    Premium/Discount range comparison is unavailable.
                   </div>
                 )}
               </CardContent>

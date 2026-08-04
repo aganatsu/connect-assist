@@ -16,7 +16,7 @@ Deno.test("remaining streamlined phases are wired across lifecycle and parity su
   assertStringIncludes(confirmation, "streamlinedDecisionLatest");
   assertStringIncludes(backtest, "buildStreamlinedTradeDecisionObservation");
   assertStringIncludes(config, 'action === "streamlined_decision.comparison"');
-  assertStringIncludes(rejected, "Streamlined Decision Comparison");
+  assertStringIncludes(rejected, "Decision Research Comparison");
   assertStringIncludes(migration, "streamlined decision origin is immutable");
   assert(!scanner.includes("streamlinedTradeDecision.authorized"));
 });

@@ -11,7 +11,7 @@ const ui = await Deno.readTextFile("./src/components/config/ScanTab.tsx");
 Deno.test("single ownership enforcement is default-observe and user visible", () => {
   assertStringIncludes(config, 'singleOwnershipMode: "observe"');
   assertStringIncludes(endpoint, "strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
-  assertStringIncludes(ui, "Decision Authority");
+  assertStringIncludes(ui, "Trade Decision Mode");
   assertStringIncludes(ui, 'streamlinedDecisionMode: "observe"');
   assertStringIncludes(ui, `<SelectItem value="enforce">Enforce</SelectItem>`);
   assertStringIncludes(ui, `config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"`);
