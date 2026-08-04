@@ -1970,6 +1970,41 @@ function ScanLogLine({ log }: { log: any }) {
   );
 }
 
+function TradeDecisionPanel({ detail }: { detail: any }) {
+  const decision = detail?.singleOwnershipDecision;
+  const enforcement = detail?.singleOwnershipEnforcement;
+  if (!decision && !enforcement) return null;
+  const outcome = String(decision?.decision || "unavailable").toUpperCase();
+  const unavailable = Array.isArray(decision?.completeness?.unavailable)
+    ? decision.completeness.unavailable.map((value: string) => value + "_unavailable")
+    : [];
+  const reasons = [
+    ...(Array.isArray(decision?.reasonCodes) ? decision.reasonCodes : []),
+    ...unavailable,
+  ];
+  const outcomeColor = outcome === "ALLOW" ? "text-success"
+    : outcome === "WATCH" ? "text-warning" : "text-destructive";
+  return (
+    <details className="group border border-border/60 bg-muted/10" open={outcome !== "ALLOW"}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs">
+        <span className="font-medium">Trade Decision</span>
+        <span className={"font-mono font-bold " + outcomeColor}>{outcome}</span>
+      </summary>
+      <div className="space-y-1 border-t border-border/50 px-3 py-2 text-[10px]">
+        <p className="text-muted-foreground">
+          Mode: <span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
+          {enforcement?.runtimeTarget ? " · " + String(enforcement.runtimeTarget).toUpperCase() : ""}
+        </p>
+        {reasons.length > 0 ? reasons.map((reason: string) => (
+          <p key={reason} className={outcomeColor}>{reason.replaceAll("_", " ")}</p>
+        )) : (
+          <p className="text-muted-foreground">No blocking authority reason recorded.</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
   const [newsClock, setNewsClock] = useState(() => Date.now());
@@ -2055,6 +2090,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             formatGateReason={(reason) => formatNewsGateCountdown(reason, newsClock, d.scanned_at)}
             compact
           />
+          <TradeDecisionPanel detail={d} />
           {/* Rejection Reasons */}
           {d.rejectionReasons && d.rejectionReasons.length > 0 && (
             <div className="space-y-0.5">
@@ -2262,6 +2298,7 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
         ownershipDiagnostics={d.legacyGateDiagnostics}
         compact
       />
+      <TradeDecisionPanel detail={d} />
 
       {/* 6. Regime Detection */}
       {d.regimeData && (

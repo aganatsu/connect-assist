@@ -52,6 +52,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
@@ -7304,6 +7305,10 @@ async function runScanForUser(
         decision: (detail as any).singleOwnershipDecision,
       });
       (detail as any).singleOwnershipEnforcement = singleOwnershipEnforcement;
+      const singleOwnershipScanOutcome = resolveSingleOwnershipScanOutcome({
+        enforcement: singleOwnershipEnforcement,
+        decision: (detail as any).singleOwnershipDecision,
+      });
       if (singleOwnershipEnforcement.effectiveMode === "enforce") {
         // In ownership enforcement, named authorities replace all legacy market-quality
         // scores and gates. Operational safety is already owned by the decision.
@@ -7541,6 +7546,14 @@ async function runScanForUser(
           );
         return (detail as any).goldenReplaySnapshot;
       };
+
+      if (singleOwnershipScanOutcome.disposition === "wait") {
+        detail.status = singleOwnershipScanOutcome.status;
+        detail.reason = singleOwnershipScanOutcome.reasons.join("; ");
+        detail.waitingReasons = singleOwnershipScanOutcome.reasons;
+        scanDetails.push(detail);
+        continue;
+      }
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs
@@ -9754,7 +9767,19 @@ async function runScanForUser(
         rejectedCount++;
         detail.status = "rejected";
         const failedGates = gates.filter(g => !g.passed);
-        detail.rejectionReasons = failedGates.map(g => g.reason);
+        const authorityReasons = singleOwnershipScanOutcome.disposition === "reject"
+          ? singleOwnershipScanOutcome.reasons
+          : [];
+        if (!analysis.stopLoss || !analysis.takeProfit) {
+          authorityReasons.push("Valid stop loss and take profit are required");
+        }
+        detail.rejectionReasons = [...new Set([
+          ...failedGates.map(g => g.reason),
+          ...authorityReasons,
+        ])];
+        if (detail.rejectionReasons.length === 0) {
+          detail.rejectionReasons = ["Trade entry was not authorized; no blocking reason was recorded"];
+        }
         // ── Rejected Setup Logging: gate-blocked setup ──
         try {
           const _rsCurrencies = parsePairCurrencies(pair);
@@ -9765,7 +9790,7 @@ async function runScanForUser(
             symbol: pair,
             direction: analysis.direction as "long" | "short",
             rejectionType: "gate_blocked",
-            failedGates: failedGates.map(g => g.reason),
+            failedGates: detail.rejectionReasons,
             confluenceScore: effectiveScore,
             tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
             tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
@@ -9784,6 +9809,8 @@ async function runScanForUser(
             priceAtRejection: analysis.lastPrice,
             rawDetail: {
               scanCycleId,
+              singleOwnershipEnforcement:
+                (detail as any).singleOwnershipEnforcement || null,
               gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
               thesisConviction: (detail as any).thesisConviction || null,
               directionVerdict: (detail as any).directionVerdict || null,
