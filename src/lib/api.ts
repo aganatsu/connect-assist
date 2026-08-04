@@ -269,8 +269,9 @@ export async function invokeFunction<T = any>(
 }
 
 // ── Market Data ──
-export type CandleSource = "metaapi" | "oanda" | "twelvedata" | "polygon" | "none" | "unknown";
+export type CandleSource = "metaapi" | "oanda" | "twelvedata" | "polygon" | "kv_cache" | "scan_cache" | "none" | "unknown";
 export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
+export interface BotEvidenceCandles extends CandlesWithMeta { scanCycleId: string | null; observedAt: string | null; completedCandleCutoff: string | null; }
 
 // Low-level fetch so we can read the x-data-source response header
 // (the supabase-js invoke() helper doesn't expose response headers).
@@ -298,6 +299,14 @@ export const marketApi = {
     invokeFunction("market-data", { action: "candles", symbol, interval, outputsize }),
   // Returns candles plus the source ("metaapi" | "oanda" | "twelvedata" | "polygon") so the UI
   // can surface where prices are actually coming from.
+  botEvidenceCandles: async (symbol: string, interval: string): Promise<BotEvidenceCandles> => {
+    const { data, source } = await fetchMarketData({ action: "bot_evidence_candles", symbol, interval });
+    return {
+      candles: Array.isArray(data?.candles) ? data.candles : [], source,
+      scanCycleId: data?.scan_cycle_id ?? null, observedAt: data?.observed_at ?? null,
+      completedCandleCutoff: data?.completed_candle_cutoff ?? null,
+    };
+  },
   candlesWithMeta: async (symbol: string, interval: string, outputsize = 200): Promise<CandlesWithMeta> => {
     const { data, source } = await fetchMarketData({ action: "candles", symbol, interval, outputsize });
     return { candles: Array.isArray(data) ? data : [], source };

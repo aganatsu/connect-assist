@@ -51,6 +51,7 @@ const OVERLAY_TOGGLES = [
 export default function TradeReplay() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState("4h");
+  const [chartMode, setChartMode] = useState<"evidence" | "live">("evidence");
   const [overlays, setOverlays] = useState<Record<string, boolean>>({
     ob: true, fvg: true, sr: true, liquidity: true, breaker: true, fib: true, bslssl: true,
   });
@@ -162,10 +163,12 @@ export default function TradeReplay() {
 
   /* ─── Fetch candles for selected trade ─── */
   const { data: candleData, isLoading: candlesLoading } = useQuery({
-    queryKey: ["replay-candles", selectedTrade?.symbol, timeframe],
+    queryKey: ["replay-candles", chartMode, selectedTrade?.symbol, timeframe],
     queryFn: async () => {
       if (!selectedTrade?.symbol) return { candles: [], source: "unknown" as CandleSource };
-      return marketApi.candlesWithMeta(selectedTrade.symbol, timeframe, 300);
+      return chartMode === "evidence"
+        ? marketApi.botEvidenceCandles(selectedTrade.symbol, timeframe)
+        : marketApi.candlesWithMeta(selectedTrade.symbol, timeframe, 300);
     },
     enabled: !!selectedTrade?.symbol,
     staleTime: 60000,
@@ -400,6 +403,10 @@ export default function TradeReplay() {
         </div>
 
         <div className="flex items-center gap-2">
+          <div className="inline-flex border border-border rounded-sm overflow-hidden">
+            <button onClick={() => setChartMode("evidence")} className={cn("px-2 py-1 text-[10px]", chartMode === "evidence" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>Bot Evidence</button>
+            <button onClick={() => setChartMode("live")} className={cn("px-2 py-1 text-[10px]", chartMode === "live" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>Live Broker</button>
+          </div>
           <DataSourceBadge source={candleData?.source} />
 
           {/* Timeframe selector */}
@@ -495,8 +502,8 @@ export default function TradeReplay() {
               <TradeReplayChart
                 candles={chartCandles}
                 markers={markers}
-                zones={zones}
-                levels={levels}
+                zones={chartMode === "evidence" ? zones : []}
+                levels={chartMode === "evidence" ? levels : null}
                 overlayToggles={{
                   ...overlays,
                   // Map bslssl toggle to both bsl and ssl types in the chart

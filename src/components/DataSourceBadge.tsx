@@ -12,6 +12,8 @@ const SOURCE_META: Record<CandleSource, { label: string; cls: string; tip: strin
   oanda:      { label: "OANDA",        cls: "text-success bg-success/10 border-success/40",         tip: "Direct OANDA midpoint candles" },
   twelvedata: { label: "Twelve Data",  cls: "text-warning bg-warning/10 border-warning/40",         tip: "Real-time third-party feed" },
   polygon:    { label: "Polygon",      cls: "text-blue-400 bg-badge-info border-blue-400/40",      tip: "Polygon.io paid data feed" },
+  kv_cache:   { label: "Bot Cache",     cls: "text-primary bg-primary/10 border-primary/40",         tip: "Exact candles reused by the bot from its persistent cache" },
+  scan_cache: { label: "Scan Feed",     cls: "text-primary bg-primary/10 border-primary/40",         tip: "Exact candles captured from the bot scan" },
   none:       { label: "No Data",      cls: "text-muted-foreground bg-muted/20 border-border",      tip: "No source returned candles" },
   unknown:    { label: "—",            cls: "text-muted-foreground bg-muted/20 border-border",      tip: "Source not reported yet" },
 };

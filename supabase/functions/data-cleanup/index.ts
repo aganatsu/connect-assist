@@ -38,6 +38,13 @@ Deno.serve(async (req) => {
     if (slErr) console.error("[data-cleanup] scan_logs error:", slErr.message);
     results.scan_logs_deleted = scanLogsDeleted || 0;
 
+    const { count: candleSnapshotsDeleted, error: candleSnapshotErr } = await supabase
+      .from("scan_candle_snapshots")
+      .delete({ count: "exact" })
+      .lt("created_at", thirtyDaysAgo);
+    if (candleSnapshotErr) console.error("[data-cleanup] scan_candle_snapshots error:", candleSnapshotErr.message);
+    results.scan_candle_snapshots_deleted = candleSnapshotsDeleted || 0;
+
     // 2. Delete close_audit_log older than 30 days
     const { count: auditDeleted, error: alErr } = await supabase
       .from("close_audit_log")

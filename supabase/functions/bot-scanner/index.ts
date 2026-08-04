@@ -537,6 +537,7 @@ function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zon
 // Tries: MetaAPI (broker feed) → Twelve Data → Polygon.io
 // Module-scoped reference set per-scan so the loop below can stay terse.
 let _scanBrokerConn: BrokerConn | null = null;
+const _scanCandleSources = new Map<string, string>();
 async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Promise<Candle[]> {
   const result = await fetchCandlesWithFallback({
     symbol,
@@ -545,6 +546,7 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
     brokerConn: _scanBrokerConn,
     skipBroker: true,
   });
+  _scanCandleSources.set(`|`, result.source);
   return result.candles;
 }
 
@@ -1410,6 +1412,8 @@ async function runScanForUser(
   const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const scanCycleId = opts?.scanCycleId ?? crypto.randomUUID();
+  const scanStartedAt = new Date().toISOString();
+  _scanCandleSources.clear();
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
@@ -3810,6 +3814,7 @@ async function runScanForUser(
   // Observation-only Phase 1 per-timeframe evidence for this scan cycle.
   // Collected per pair, written in bounded awaited chunks after the loop.
   const zoneEvidenceRows: EvidenceRow[] = [];
+  const candleSnapshotRows: any[] = [];
   for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) continue;
     cacheableRequests.push({ symbol: pair, interval: "1d" });
@@ -3962,6 +3967,19 @@ async function runScanForUser(
     requestEntries.forEach(([interval], index) => {
       fetchedByInterval.set(interval, fetched[index] || []);
     });
+
+    for (const [timeframe, timeframeCandles] of fetchedByInterval.entries()) {
+      const bounded = timeframeCandles.slice(-500);
+      if (bounded.length === 0) continue;
+      candleSnapshotRows.push({
+        user_id: userId, bot_id: BOT_ID, scan_cycle_id: scanCycleId, symbol: pair, timeframe,
+        provider: _scanCandleSources.get(`|`) || (persistentCache.has(`:`) ? "kv_cache" : "scan_cache"),
+        observed_at: scanStartedAt,
+        completed_candle_cutoff: bounded[bounded.length - 1]?.datetime || null,
+        candle_count: bounded.length,
+        candles: bounded.map((c: Candle) => ({ datetime: c.datetime, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? null })),
+      });
+    }
 
     const candles = fetchedByInterval.get(entryInterval) || [];
     const dailyCandles = fetchedByInterval.get("1d") || [];
@@ -10558,7 +10576,14 @@ async function runScanForUser(
     console.log(`[scan ${scanCycleId}] Persistent candle cache: wrote ${freshlyFetchedCandles.length} entries to DB`);
   }
 
+  if (candleSnapshotRows.length > 0) {
+    for (let i = 0; i < candleSnapshotRows.length; i += 20) {
+      const { error } = await supabase.from("scan_candle_snapshots").upsert(candleSnapshotRows.slice(i, i + 20), { onConflict: "user_id,bot_id,scan_cycle_id,symbol,timeframe", ignoreDuplicates: true });
+      if (error) console.warn(`[scan ] candle snapshot chunk failed (non-fatal): `);
+    }
+  }
   scanCache.clear();
+  _scanCandleSources.clear();
   // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──
   if (zoneEvidenceRows.length > 0) {
     // Retention annotations are derived only after the pair has completed. They
@@ -10669,9 +10694,11 @@ async function runScanForUser(
   const detailsWithMeta = [
     {
       __meta: true,
-      candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "polygon" | "none"
+      scanCycleId,
+      candleSource: sourceTally.primary,
       sourceBreakdown: {
         metaapi: sourceTally.metaapi,
+        oanda: sourceTally.oanda,
         twelvedata: sourceTally.twelvedata,
         polygon: sourceTally.polygon,
         none: sourceTally.none,
@@ -10702,6 +10729,14 @@ async function runScanForUser(
     trades_placed: tradesPlaced,
     details_json: detailsWithMeta,
   });
+
+  // Publish exact candle inputs only after the completed scan log exists.
+  if (candleSnapshotRows.length > 0) {
+    for (let i = 0; i < candleSnapshotRows.length; i += 20) {
+      const { error } = await supabase.from("scan_candle_snapshots").upsert(candleSnapshotRows.slice(i, i + 20), { onConflict: "user_id,bot_id,scan_cycle_id,symbol,timeframe", ignoreDuplicates: true });
+      if (error) console.warn(`[scan ] candle snapshot chunk failed (non-fatal): `);
+    }
+  }
 
   await completeScannerOperation(supabase, opts?.operationRunId, "scan", {
     scan_cycle_id: scanCycleId,

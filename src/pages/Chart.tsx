@@ -28,6 +28,7 @@ function getRefreshInterval(tf: Timeframe): number {
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('4h');
+  const [chartMode, setChartMode] = useState<'evidence' | 'live'>('evidence');
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelMode, setPanelMode] = useState<'context' | 'detail'>('context');
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
@@ -84,22 +85,27 @@ export default function Chart() {
   });
 
   const { data: candleData } = useQuery({
-    queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
-    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 500),
+    queryKey: ['chart-candles', chartMode, selectedSymbol, selectedTimeframe],
+    queryFn: () => chartMode === 'evidence'
+      ? marketApi.botEvidenceCandles(selectedSymbol, selectedTimeframe)
+      : marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 500),
     staleTime: refreshInterval / 2,
     refetchInterval: refreshInterval,
   });
   const candles = candleData?.candles;
   const candleSource: CandleSource = candleData?.source ?? "unknown";
+  const candleScanCycleId = (candleData as any)?.scanCycleId as string | null | undefined;
 
   const { data: dailyCandles } = useQuery({
-    queryKey: ['chart-daily', selectedSymbol],
-    queryFn: () => marketApi.candles(selectedSymbol, '1day', 30),
+    queryKey: ['chart-daily', chartMode, selectedSymbol],
+    queryFn: async () => chartMode === 'evidence'
+      ? (await marketApi.botEvidenceCandles(selectedSymbol, '1day')).candles
+      : marketApi.candles(selectedSymbol, '1day', 30),
     staleTime: 300000,
   });
 
   const { data: analysis } = useQuery({
-    queryKey: ['chart-smc', selectedSymbol, candles?.length],
+    queryKey: ['chart-smc', chartMode, selectedSymbol, candles?.length],
     queryFn: () => smcApi.fullAnalysis(candles!, dailyCandles),
     enabled: !!candles && candles.length > 0,
     staleTime: refreshInterval / 2,
@@ -124,8 +130,9 @@ export default function Chart() {
         .maybeSingle();
       if (error) throw error;
       const details = Array.isArray(data?.details_json) ? data.details_json : [];
+      const meta = (details as any[]).find((d) => d?.__meta);
       const match = (details as any[]).find((d) => d?.pair === selectedSymbol);
-      return match ? { signal: match, scannedAt: data?.scanned_at as string } : null;
+      return match ? { signal: match, scannedAt: data?.scanned_at as string, scanCycleId: meta?.scanCycleId ?? null } : null;
     },
     refetchInterval: 30000,
     staleTime: 25000,
@@ -156,7 +163,8 @@ export default function Chart() {
 
     // Build impulse zone from bot scan signal if available
     let impulseZone: SMCOverlays["impulseZone"] = undefined;
-    const sig = botScanSignal?.signal;
+    const evidenceMatchesScan = chartMode !== "evidence" || !candleScanCycleId || candleScanCycleId === botScanSignal?.scanCycleId;
+    const sig = evidenceMatchesScan ? botScanSignal?.signal : null;
     if (sig?.impulseZone?.hasZone && sig.impulseZone.impulse) {
       const iz = sig.impulseZone;
       impulseZone = {
@@ -173,7 +181,7 @@ export default function Chart() {
       };
     }
 
-    const htfPOIs = botScanSignal?.signal?.htfPOIs?.map((p: any) => ({
+    const htfPOIs = sig?.htfPOIs?.map((p: any) => ({
       timeframe: p.timeframe, type: p.type, high: p.high, low: p.low, direction: p.direction,
     })) ?? [];
 
@@ -294,7 +302,7 @@ export default function Chart() {
         high: bb.high, low: bb.low, datetime: bb.datetime, direction: bb.type, state: bb.state,
       })),
     };
-  }, [analysis, botScanSignal, overlayVisibility, candles]);
+  }, [analysis, botScanSignal, candleData, candleScanCycleId, chartMode, overlayVisibility, candles]);
 
   // Layer detail tooltips
   const layerDetails = useMemo(() => ({
@@ -346,6 +354,10 @@ export default function Chart() {
               ))}
             </div>
             <div className="ml-auto flex items-center gap-2 text-[10px] flex-wrap">
+              <div className="inline-flex border border-border rounded-sm overflow-hidden">
+                <button onClick={() => setChartMode("evidence")} className={chartMode === "evidence" ? "px-2 py-1 bg-primary text-primary-foreground" : "px-2 py-1 bg-card text-muted-foreground"}>Bot Evidence</button>
+                <button onClick={() => setChartMode("live")} className={chartMode === "live" ? "px-2 py-1 bg-primary text-primary-foreground" : "px-2 py-1 bg-card text-muted-foreground"}>Live Broker</button>
+              </div>
               <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
@@ -367,19 +379,20 @@ export default function Chart() {
             <SMCChart
               candles={(candles as any[]) ?? []}
               symbol={selectedSymbol}
-              overlays={chartOverlays}
+              overlays={chartMode === "evidence" ? chartOverlays : undefined}
               loading={!candles}
               hideToolbar
               visibleLayers={smcVisibleLayers}
             />
+            {chartMode === "evidence" && candles?.length === 0 && <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground pointer-events-none">No Bot Evidence snapshot yet. Run a complete scan for this pair and timeframe.</div>}
             {/* Floating HUD */}
-            <ChartOverlayHUD
+            {chartMode === "evidence" ? <ChartOverlayHUD
               visibility={overlayVisibility}
               onToggle={toggleOverlay}
               confluenceScore={unified?.total}
               direction={unified?.direction === 'BUY' ? 'bullish' : unified?.direction === 'SELL' ? 'bearish' : 'neutral'}
               layerDetails={layerDetails}
-            />
+            /> : <div className="absolute top-3 left-3 px-2 py-1 bg-card/90 border border-border text-[10px] text-muted-foreground">Live broker candles · bot evidence overlays hidden</div>}
           </div>
         </div>
 
