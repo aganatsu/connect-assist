@@ -1296,13 +1296,13 @@ Deno.serve(async (req) => {
           entry_price: actualFillPrice,
           stop_loss: pending.stop_loss,
           position_id: positionId,
-          position_status: "open",
+          position_status: liveMode ? "pending" : "open",
         });
 
         // ── Telegram notification ──
         if (telegramChatIds.length > 0) {
           const emoji = pending.direction === "long" ? "🟢" : "🔴";
-          const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+          const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
           const _spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
           const _decimals = Math.max(2, Math.round(-Math.log10(_spec.pipSize)) + 1);
           const fmt = (v: any) => {
@@ -1491,6 +1491,12 @@ Deno.serve(async (req) => {
             await supabase.from("paper_positions").update({ mirrored_connection_ids: mirroredConnIds })
               .eq("position_id", positionId).eq("user_id", userId);
           }
+        }
+        if (account.execution_mode === "live") {
+          const { data: brokerLifecycle } = await supabase.rpc("finalize_live_broker_position", {
+            p_user_id: userId, p_bot_id: BOT_ID, p_position_id: positionId,
+          });
+          console.log("[zone-confirm] Broker lifecycle " + pending.symbol + ": " + (brokerLifecycle?.state || "unknown"));
         }
 
       } catch (e: any) {

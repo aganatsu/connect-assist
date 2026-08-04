@@ -3139,7 +3139,7 @@ async function runScanForUser(
             stop_loss: pending.stop_loss.toString(),
             direction: pending.direction,
             position_id: positionId,
-            position_status: "open",
+            position_status: account.execution_mode === "live" ? "pending" : "open",
             order_id: orderId,
             open_time: nowStr,
             signal_score: pending.signal_score?.toString() || "0",
@@ -3148,7 +3148,7 @@ async function runScanForUser(
           // Send Telegram notification for confirmed entry
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
-            const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
             const confTierLabel = confirmedSignal.tier ? ` T${confirmedSignal.tier}` : "";
             const confSupporting = Array.isArray(confirmedSignal.supportingSignals) && confirmedSignal.supportingSignals.length > 0
               ? `\n<b>Supporting:</b> ${confirmedSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
@@ -3323,6 +3323,10 @@ async function runScanForUser(
                 await supabase.from("paper_positions").update({ mirrored_connection_ids: mirroredConnIds }).eq("position_id", positionId).eq("user_id", userId);
               }
             }
+            const { data: brokerLifecycle } = await supabase.rpc("finalize_live_broker_position", {
+              p_user_id: userId, p_bot_id: BOT_ID, p_position_id: positionId,
+            });
+            console.log("[pending] Broker lifecycle " + pending.symbol + ": " + (brokerLifecycle?.state || "unknown"));
           }
         }
       } catch (e: any) {
@@ -8983,6 +8987,7 @@ async function runScanForUser(
           if (!pairConfig.closeOnReverse) return;
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
+          const closedOppositeIds: string[] = [];
           for (const opp of oppositePositions) {
             const oppEntry = parseFloat(opp.entry_price);
             const oppSize = parseFloat(opp.size);
@@ -8991,8 +8996,72 @@ async function runScanForUser(
             const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
             const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
             const oppPnlPips = oppDiff / oppSpec.pipSize;
+            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
+
+            if (account.execution_mode === "live") {
+              let confirmedBrokerCloses = 0;
+              if (oppMirroredIds.length > 0) {
+                const { data: closeConns } = await supabase.from("broker_connections")
+                  .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
+                  .eq("is_active", true).in("id", oppMirroredIds);
+                for (const conn of closeConns || []) {
+                  try {
+                    if (conn.broker_type === "oanda") {
+                      const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+                      const openRes = await fetch(baseUrl + "/v3/accounts/" + conn.account_id + "/openTrades", {
+                        headers: { Authorization: "Bearer " + conn.api_key },
+                      });
+                      if (!openRes.ok) continue;
+                      const openTrades = (await openRes.json()).trades || [];
+                      const commentTag = "paper:" + opp.position_id;
+                      const brokerTrade = openTrades.find((trade: any) =>
+                        trade.clientExtensions?.id === opp.position_id ||
+                        trade.clientExtensions?.comment?.includes(commentTag)
+                      );
+                      if (!brokerTrade) continue;
+                      const closeRes = await fetch(baseUrl + "/v3/accounts/" + conn.account_id + "/trades/" + brokerTrade.id + "/close", {
+                        method: "PUT",
+                        headers: { Authorization: "Bearer " + conn.api_key, "Content-Type": "application/json" },
+                        body: "{}",
+                      });
+                      if (closeRes.ok) confirmedBrokerCloses++;
+                      continue;
+                    }
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && typeof authToken === "string" && authToken.length === 36) {
+                      authToken = conn.account_id; metaAccountId = conn.api_key;
+                    }
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => base + "/positions");
+                    if (!posRes.ok) continue;
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = "paper:" + opp.position_id;
+                    const shortTag = commentTag.slice(0, 28);
+                    const brokerPos = brokerPositions.find((p: any) => p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag)));
+                    if (!brokerPos) continue;
+                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => base + "/trade", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
+                    });
+                    if (closeRes.ok) confirmedBrokerCloses++;
+                  } catch (e: any) {
+                    console.warn("Reverse close [" + conn.display_name + "] error: " + e?.message);
+                  }
+                }
+              }
+              if (confirmedBrokerCloses !== oppMirroredIds.length || oppMirroredIds.length === 0) {
+                const closeError = "Reverse close requires reconciliation (" + confirmedBrokerCloses + "/" + oppMirroredIds.length + " confirmed)";
+                await supabase.from("paper_positions").update({ broker_close_state: "reconciliation_required", broker_close_error: closeError })
+                  .eq("position_id", opp.position_id).eq("user_id", userId);
+                console.warn("[close] " + opp.position_id + ": " + closeError + "; internal position remains open");
+                continue;
+              }
+              await supabase.from("paper_positions").update({ broker_close_state: "confirmed", broker_close_error: null })
+                .eq("position_id", opp.position_id).eq("user_id", userId);
+            }
 
             await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
+            closedOppositeIds.push(opp.position_id);
             await supabase.from("paper_trade_history").insert({
               user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
               symbol: pair, direction: opp.direction, size: opp.size,
@@ -9013,7 +9082,6 @@ async function runScanForUser(
             await balUpdate;;
 
             // Audit log entry for the reverse-signal close
-            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
             console.log("[close]", JSON.stringify({
               position_id: opp.position_id, symbol: pair, direction: opp.direction,
               broker_connection_ids: oppMirroredIds, pnl: oppPnl, exit_price: analysis.lastPrice,
@@ -9032,46 +9100,10 @@ async function runScanForUser(
               console.warn(`[close] audit insert failed for reverse ${opp.position_id}: ${e?.message}`);
             }
 
-            // Mirror close ONLY to the broker connections this position was actually mirrored to.
-            if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
-              const { data: closeConns } = await supabase.from("broker_connections")
-                .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
-                .eq("is_active", true).in("id", oppMirroredIds);
-              if (closeConns && closeConns.length > 0) {
-                for (const conn of closeConns) {
-                  try {
-                    let authToken = conn.api_key;
-                    let metaAccountId = conn.account_id;
-                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                      authToken = conn.account_id;
-                      metaAccountId = conn.api_key;
-                    }
-                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-                    if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
-                    const brokerPositions: any[] = JSON.parse(posBody);
-                    const commentTag = `paper:${opp.position_id}`;
-                    const shortTag = commentTag.slice(0, 28);
-                    const brokerPos = brokerPositions.find((p: any) =>
-                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-                    );
-                    if (!brokerPos) {
-                      console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
-                      continue;
-                    }
-                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
-                    console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
-                  } catch (e: any) {
-                    console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
-                  }
-                }
-              }
-            } else if (account.execution_mode === "live") {
-              console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
-            }
           }
           // Remove closed opposite positions from the in-memory array so subsequent
           // gate checks in this scan cycle don't over-count.
-          const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
+          const closedIds = new Set(closedOppositeIds);
           openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
         };
         // GUARD: reject trades whose SL/TP orientation doesn't match direction.
@@ -9346,7 +9378,9 @@ async function runScanForUser(
 
         // Only the scanner that won the atomic market-entry claim may replace
         // the opposite position, notify, or send an order to a broker.
-        await closeOppositePositionsAfterEntry();
+        if (account.execution_mode !== "live") {
+          await closeOppositePositionsAfterEntry();
+        }
 
         // Store trade reasoning
         await supabase.from("trade_reasonings").insert({
@@ -9381,7 +9415,7 @@ async function runScanForUser(
         // Send Telegram notification to all configured chat IDs
         if (telegramChatIds.length > 0 && shouldNotify("trade_opened")) {
           const emoji = analysis.direction === "long" ? "🟢" : "🔴";
-          const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+          const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
           // TP method label for notification
           const openTpMethod = pairConfig.tpMethod || "rr_ratio";
           const openTpLabel = openTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : openTpMethod === "next_level" ? "Next Structure Level" : openTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR ×${pairConfig.tpATRMultiple || 2.0}`;
@@ -9827,9 +9861,25 @@ async function runScanForUser(
           console.warn(`MT5 mirror error: ${e?.message || e}`);
           detail.mt5Mirror = "error";
         }
+        if (account.execution_mode === "live") {
+          const { data: brokerLifecycle } = await supabase.rpc("finalize_live_broker_position", {
+            p_user_id: userId, p_bot_id: BOT_ID, p_position_id: positionId,
+          });
+          detail.brokerExecutionState = brokerLifecycle?.state || "unknown";
+          if (brokerLifecycle?.open === true) {
+            await closeOppositePositionsAfterEntry();
+          } else {
+            detail.status = brokerLifecycle?.state === "reconciliation_required"
+              ? "broker_reconciliation_required" : "broker_entry_rejected";
+            detail.skipReason = brokerLifecycle?.reason || "No broker confirmed the live order";
+            tradesPlaced = Math.max(0, tradesPlaced - 1);
+          }
+        }
 
-        // Add to virtual open positions for subsequent gates
-        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
+        // Only paper positions or broker-confirmed live positions participate in later gates.
+        if (account.execution_mode !== "live" || detail.brokerExecutionState === "confirmed") {
+          openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
+        }
       } else {
         rejectedCount++;
         detail.status = "rejected";

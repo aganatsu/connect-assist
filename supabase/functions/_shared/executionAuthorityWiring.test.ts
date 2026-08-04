@@ -178,6 +178,27 @@ Deno.test("all live entry routes claim durable broker execution before sending",
   );
 });
 
+Deno.test("all live entry routes finalize internal state from broker ledger", async () => {
+  const fastSource = await Deno.readTextFile(fastScannerUrl.pathname);
+  const botSource = await Deno.readTextFile(botScannerUrl.pathname);
+  assertStringIncludes(fastSource, 'supabase.rpc("finalize_live_broker_position"');
+  assertEquals(botSource.split('supabase.rpc("finalize_live_broker_position"').length - 1, 2);
+  assertStringIncludes(botSource, 'account.execution_mode !== "live"');
+  assertStringIncludes(botSource, 'brokerLifecycle?.open === true');
+});
+
+Deno.test("reverse close preserves internal position until broker closes confirm", async () => {
+  const source = await Deno.readTextFile(botScannerUrl.pathname);
+  const start = source.indexOf("const closeOppositePositionsAfterEntry");
+  const end = source.indexOf("// GUARD: reject trades", start);
+  const closeSection = source.slice(start, end);
+  const brokerConfirmation = closeSection.indexOf("confirmedBrokerCloses");
+  const internalDelete = closeSection.indexOf("supabase.from(\"paper_positions\").delete()");
+  assert(brokerConfirmation >= 0 && internalDelete > brokerConfirmation);
+  assertStringIncludes(closeSection, "broker_close_state: \"reconciliation_required\"");
+  assertStringIncludes(closeSection, "internal position remains open");
+});
+
 Deno.test("broker-execute carries local position identity to both brokers", async () => {
   const source = await Deno.readTextFile(brokerExecuteUrl.pathname);
   assertStringIncludes(
