@@ -27,7 +27,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         scannerApi.allPending(),
       ]);
       setOrders(activeRes || []);
-      setHistory((allRes || []).filter((o: PendingOrder) => o.status !== "pending" && o.status !== "awaiting_confirmation"));
+      setHistory((allRes || []).filter((o: PendingOrder) => o.status !== "pending" && o.status !== "awaiting_confirmation" && o.status !== "reconciliation_required"));
     } catch (err) {
       console.error("Failed to fetch zone setups:", err);
     } finally {
@@ -85,6 +85,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       case "filled": return <TrendingUp className="w-3 h-3 text-profit" />;
       case "expired": return <Clock className="w-3 h-3 text-highlight" />;
       case "invalidated": return <AlertTriangle className="w-3 h-3 text-loss" />;
+      case "reconciliation_required": return <AlertTriangle className="w-3 h-3 text-warn" />;
+      case "broker_rejected": return <X className="w-3 h-3 text-loss" />;
       case "cancelled": return <X className="w-3 h-3 text-loss" />;
       default: return <Target className="w-3 h-3 text-info-c" />;
     }
@@ -95,6 +97,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       case "filled": return "text-profit";
       case "expired": return "text-highlight";
       case "invalidated": return "text-loss";
+      case "broker_rejected": return "text-loss";
+      case "reconciliation_required": return "text-warn";
       case "cancelled": return "text-loss";
       default: return "text-info-c";
     }
@@ -103,6 +107,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   // Separate orders into watching (pending) and hunting (awaiting_confirmation)
   const watchingOrders = orders.filter(o => o.status === "pending");
   const huntingOrders = orders.filter(o => o.status === "awaiting_confirmation");
+  const reconciliationOrders = orders.filter(o => o.status === "reconciliation_required");
 
   const renderOrderCard = (order: PendingOrder, isHunting: boolean) => {
     const expiryPct = getExpiryPercent(order.placed_at, order.expires_at);
@@ -372,6 +377,16 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         </div>
       ) : (
         <div className="space-y-3">
+          {reconciliationOrders.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
+                <AlertTriangle className="w-3 h-3" />
+                Broker Reconciliation ({reconciliationOrders.length})
+              </div>
+              {reconciliationOrders.map((order) => renderOrderCard(order, true))}
+            </div>
+          )}
+
           {/* Hunting section (higher priority) */}
           {huntingOrders.length > 0 && (
             <div className="space-y-2">
