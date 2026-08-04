@@ -773,6 +773,11 @@ export type Database = {
       paper_positions: {
         Row: {
           bot_id: string | null
+          broker_close_error: string | null
+          broker_close_state: string
+          broker_execution_error: string | null
+          broker_execution_state: string
+          broker_execution_updated_at: string | null
           candidate_id: string | null
           canonical_dealing_range: Json | null
           canonical_dealing_range_impulse_id: string | null
@@ -839,6 +844,11 @@ export type Database = {
         }
         Insert: {
           bot_id?: string | null
+          broker_close_error?: string | null
+          broker_close_state?: string
+          broker_execution_error?: string | null
+          broker_execution_state?: string
+          broker_execution_updated_at?: string | null
           candidate_id?: string | null
           canonical_dealing_range?: Json | null
           canonical_dealing_range_impulse_id?: string | null
@@ -905,6 +915,11 @@ export type Database = {
         }
         Update: {
           bot_id?: string | null
+          broker_close_error?: string | null
+          broker_close_state?: string
+          broker_execution_error?: string | null
+          broker_execution_state?: string
+          broker_execution_updated_at?: string | null
           candidate_id?: string | null
           canonical_dealing_range?: Json | null
           canonical_dealing_range_impulse_id?: string | null
@@ -3474,6 +3489,10 @@ export type Database = {
         Returns: Json
       }
       evaluate_scanner_operational_health: { Args: never; Returns: Json }
+      finalize_live_broker_position: {
+        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
+        Returns: Json
+      }
       finalize_market_entry: {
         Args: {
           p_allow_same_direction: boolean
