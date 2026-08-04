@@ -1,0 +1,21 @@
+import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+
+const scanner = await Deno.readTextFile("./supabase/functions/bot-scanner/index.ts");
+const ui = await Deno.readTextFile("./src/pages/BotView.tsx");
+
+Deno.test("ownership watch exits before generic rejection logging", () => {
+  const waitBranch = scanner.indexOf('singleOwnershipScanOutcome.disposition === "wait"');
+  const genericRejection = scanner.indexOf('detail.status = "rejected"', waitBranch);
+  assert(waitBranch >= 0);
+  assert(genericRejection > waitBranch);
+  assertStringIncludes(scanner.slice(waitBranch, genericRejection), "scanDetails.push(detail)");
+  assertStringIncludes(scanner.slice(waitBranch, genericRejection), "continue");
+});
+
+Deno.test("true ownership rejections persist authority reasons and enforcement", () => {
+  assertStringIncludes(scanner, "...authorityReasons");
+  assertStringIncludes(scanner, "failedGates: detail.rejectionReasons");
+  assertStringIncludes(scanner, "singleOwnershipEnforcement:");
+  assertStringIncludes(ui, "Trade Decision");
+  assertStringIncludes(ui, "singleOwnershipDecision");
+});
