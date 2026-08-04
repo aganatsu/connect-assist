@@ -4,10 +4,10 @@ import {
 import {
   resolveCrossTimeframeAuthority,
   type CrossTimeframeActivationSnapshot,
-} from "./crossTimeframeAuthority.ts";
+} from "../../functions/_shared/crossTimeframeAuthority.ts";
 import {
   evaluateCrossTimeframeEntryAuthority,
-} from "./crossTimeframeEntryAuthority.ts";
+} from "../../functions/_shared/crossTimeframeEntryAuthority.ts";
 
 const activation: CrossTimeframeActivationSnapshot = {
   authorityStage: "hard_block",

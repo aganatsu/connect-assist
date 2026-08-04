@@ -13,8 +13,8 @@ import {
   assertEquals,
   assert,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
-import type { SessionGamePlan } from "../_shared/gamePlan.ts";
+import { evaluateGamePlanGate } from "../../functions/_shared/gamePlanGate.ts";
+import type { SessionGamePlan } from "../../functions/_shared/gamePlan.ts";
 
 const gamePlan = {
   plans: [

@@ -7,7 +7,7 @@ import {
   checkMarketFreshness,
   checkPortfolioHeatAtExecution,
   checkSessionAtExecution,
-} from "./finalRuntimeGates.ts";
+} from "../../functions/_shared/finalRuntimeGates.ts";
 
 Deno.test("execution mode must be explicitly paper or live", () => {
   assertEquals(checkExecutionMode("paper").passed, true);

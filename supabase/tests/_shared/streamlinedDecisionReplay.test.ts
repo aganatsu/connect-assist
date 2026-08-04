@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildStreamlinedReplay } from "./streamlinedDecisionReplay.ts";
+import { buildStreamlinedReplay } from "../../functions/_shared/streamlinedDecisionReplay.ts";
 
 const base = {
   contractVersion: "streamlined-trade-decision.v1",

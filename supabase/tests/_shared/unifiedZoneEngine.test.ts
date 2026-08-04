@@ -13,8 +13,8 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { Candle, LiquidityPool } from "./smcAnalysis.ts";
-import { findUnifiedZone, type UnifiedZoneResult } from "./unifiedZoneEngine.ts";
+import type { Candle, LiquidityPool } from "../../functions/_shared/smcAnalysis.ts";
+import { findUnifiedZone, type UnifiedZoneResult } from "../../functions/_shared/unifiedZoneEngine.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 

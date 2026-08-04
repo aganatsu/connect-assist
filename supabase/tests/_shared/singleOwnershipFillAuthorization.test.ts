@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateSingleOwnershipFillAuthorization } from "./singleOwnershipFillAuthorization.ts";
-import type { SingleOwnershipDecisionResult } from "./singleOwnershipDecision.ts";
+import { evaluateSingleOwnershipFillAuthorization } from "../../functions/_shared/singleOwnershipFillAuthorization.ts";
+import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
 
 const frozen = {
   authorities: {

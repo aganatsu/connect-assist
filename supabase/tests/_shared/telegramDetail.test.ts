@@ -14,7 +14,7 @@ import {
   tradeAuthorityLines,
   watchlistOriginLines,
   zoneEvidenceLines,
-} from "./telegramDetail.ts";
+} from "../../functions/_shared/telegramDetail.ts";
 
 Deno.test("parseSignalReason handles text, object and garbage", () => {
   assertEquals(parseSignalReason('{"a":1}').a, 1);

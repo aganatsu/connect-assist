@@ -11,7 +11,7 @@ import {
   resolveSizingVolatilityContext,
   type SizingInput,
   type VolatilityContext,
-} from "./unifiedPositionSizing.ts";
+} from "../../functions/_shared/unifiedPositionSizing.ts";
 
 // ─── Base Sizing Tests ───────────────────────────────────────────────
 

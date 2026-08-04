@@ -13,8 +13,8 @@
  */
 
 import { assertEquals, assertNotEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { calculateIPDARanges, ipdaRangesToKeyLevels } from "../../functions/_shared/ipdaRanges.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

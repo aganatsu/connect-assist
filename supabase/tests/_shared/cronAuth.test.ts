@@ -6,8 +6,8 @@
  *    cryptographically validated user JWT. A bare Bearer token is NOT enough.
  */
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { verifyCronCaller, verifyCronOrUserCaller } from "./cronAuth.ts";
-import type { ClaimsVerifier } from "./callerAuth.ts";
+import { verifyCronCaller, verifyCronOrUserCaller } from "../../functions/_shared/cronAuth.ts";
+import type { ClaimsVerifier } from "../../functions/_shared/callerAuth.ts";
 
 function makeRequest(headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/functions/v1/test", {

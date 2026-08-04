@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { checkATRVolatility } from "./gateATRVolatility.ts";
+import { checkATRVolatility } from "../../functions/_shared/gateATRVolatility.ts";
 
 // ─── Unit Tests ─────────────────────────────────────────────────────────────
 

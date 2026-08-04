@@ -72,13 +72,13 @@ Deno.test("every runtime surface imports a canonical configuration authority", (
   ) {
     assertStringIncludes(
       source,
-      'from "../_shared/runtimeConfigStore.ts"',
+      'from "../../functions/_shared/runtimeConfigStore.ts"',
       `${surface} must use the fail-closed runtime config store`,
     );
   }
   assertStringIncludes(
     backtest,
-    'from "../_shared/runtimeConfigResolver.ts"',
+    'from "../../functions/_shared/runtimeConfigResolver.ts"',
     "backtest must use the canonical resolver",
   );
 });

@@ -10,8 +10,8 @@ import {
   checkCascadingContainment,
   type DailyDisplacementLeg,
   type DailyOB,
-} from "./dailyImpulseOB.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/dailyImpulseOB.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

@@ -31,7 +31,7 @@ import {
   calcPnl,
   calculatePositionSize,
   detectSession,
-} from "../_shared/smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 
 import { assertEquals, assertAlmostEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 

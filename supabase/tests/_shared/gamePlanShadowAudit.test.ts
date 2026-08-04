@@ -1,7 +1,7 @@
 import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
-} from "./gamePlanShadowAudit.ts";
+} from "../../functions/_shared/gamePlanShadowAudit.ts";
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const tradeablePlan = {

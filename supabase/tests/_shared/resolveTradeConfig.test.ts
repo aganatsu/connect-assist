@@ -4,7 +4,7 @@ import {
   parseTradeOverrides,
   resolveTradeConfig,
   type ResolvedTradeConfig,
-} from "./resolveTradeConfig.ts";
+} from "../../functions/_shared/resolveTradeConfig.ts";
 
 // ─── extractGlobalExitConfig ────────────────────────────────────────
 

@@ -13,7 +13,7 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { calculateSLTP, Candle, SwingPoint, OrderBlock, LiquidityPool } from "./smcAnalysis.ts";
+import { calculateSLTP, Candle, SwingPoint, OrderBlock, LiquidityPool } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Minimal fixtures for SL/TP calculation ─────────────────────────────
 

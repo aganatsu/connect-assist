@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   type BrokerConnection,
   findOandaBrokerPosition,
-} from "./reconcileBrokerState.ts";
+} from "../../functions/_shared/reconcileBrokerState.ts";
 
 const connection: BrokerConnection = {
   id: "connection-1",

@@ -11,8 +11,8 @@
  * Run: deno test --no-check supabase/functions/_shared/rangingDirectionFixes.test.ts
  */
 
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assert,

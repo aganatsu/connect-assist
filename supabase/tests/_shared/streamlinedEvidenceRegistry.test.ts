@@ -8,7 +8,7 @@ import {
   mapLegacyFactorsToPillars,
   PROMOTION_EVIDENCE_OWNERSHIP,
   STREAMLINED_EVIDENCE_REGISTRY_VERSION,
-} from "./streamlinedEvidenceRegistry.ts";
+} from "../../functions/_shared/streamlinedEvidenceRegistry.ts";
 
 const evaluatedAt = "2026-08-03T16:00:00.000Z";
 

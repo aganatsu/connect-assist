@@ -6,8 +6,8 @@ import {
   DEFAULT_FVG_INVALIDATION_CONFIG,
   type FVGInvalidationConfig,
   type FVGForValidation,
-} from "./ictFVGInvalidation.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/ictFVGInvalidation.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────
 

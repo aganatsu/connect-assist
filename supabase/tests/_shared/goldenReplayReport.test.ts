@@ -7,16 +7,16 @@ import {
   buildGoldenReplaySnapshot,
   finalizeGoldenReplaySnapshot,
   type GoldenReplayInput,
-} from "./goldenReplay.ts";
+} from "../../functions/_shared/goldenReplay.ts";
 import {
   buildGoldenReplayInputFingerprint,
   buildGoldenReplayReport,
   buildGoldenReplayRuntimeInputFingerprint,
   runGoldenReplayDecisionFixture,
-} from "./goldenReplayReport.ts";
-import { RUNTIME_DEFAULTS } from "./configMapper.ts";
-import { buildResolvedStylePolicy } from "./stylePolicy.ts";
-import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
+} from "../../functions/_shared/goldenReplayReport.ts";
+import { RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
+import { buildResolvedStylePolicy } from "../../functions/_shared/stylePolicy.ts";
+import { applyTradingStyleProfile } from "../../functions/_shared/tradingStyleConfig.ts";
 
 function candidate(): Omit<GoldenReplayInput, "surface" | "provenance"> {
   return {

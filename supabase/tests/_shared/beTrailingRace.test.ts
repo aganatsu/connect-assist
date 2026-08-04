@@ -18,7 +18,7 @@ import {
   assertAlmostEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-import { manageOpenPositions } from "./scannerManagement.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
 
 // ─── Mock Supabase Client ──────────────────────────────────────────────────
 function createMockSupabase(positions: any[] = []) {

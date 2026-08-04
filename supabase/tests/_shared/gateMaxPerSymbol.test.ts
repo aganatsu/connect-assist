@@ -14,7 +14,7 @@
  * the count-check path produces identical results across engines.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkMaxPerSymbol } from "./gateMaxPerSymbol.ts";
+import { checkMaxPerSymbol } from "../../functions/_shared/gateMaxPerSymbol.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

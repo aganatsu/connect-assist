@@ -10,7 +10,7 @@
  * Run: deno test --allow-all supabase/functions/outcome-tracker/simulateOutcome.test.ts
  */
 import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { simulateOutcome } from "../_shared/outcomeSimulation.ts";
+import { simulateOutcome } from "../../functions/_shared/outcomeSimulation.ts";
 
 // ── Helper: generate candle data ──
 function makeCandle(datetime: string, open: number, high: number, low: number, close: number) {

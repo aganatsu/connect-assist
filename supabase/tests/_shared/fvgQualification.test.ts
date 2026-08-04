@@ -8,8 +8,8 @@
  *
  * Run: deno test --allow-read --allow-env --allow-net supabase/functions/_shared/fvgQualification.test.ts
  */
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assert,
   assertEquals,

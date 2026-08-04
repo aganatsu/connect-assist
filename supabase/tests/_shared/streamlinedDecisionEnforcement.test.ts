@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateStreamlinedEnforcement } from "./streamlinedDecisionEnforcement.ts";
+import { evaluateStreamlinedEnforcement } from "../../functions/_shared/streamlinedDecisionEnforcement.ts";
 
 Deno.test("requested enforcement downgrades without a certificate", () => {
   const result = evaluateStreamlinedEnforcement({ requestedMode: "enforce", runtimeTarget: "paper", style: "day_trader", now: "2026-08-03T12:00:00Z" });

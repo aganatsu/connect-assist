@@ -12,8 +12,8 @@
  *
  * Run: deno test --allow-all --no-check supabase/functions/_shared/pdFibBelow50.test.ts
  */
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ─── Helper: Generate candles where price is at a specific Fib retracement ───

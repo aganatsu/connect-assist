@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { generateGamePlansWithRetry } from "./gamePlanGeneration.ts";
+import { generateGamePlansWithRetry } from "../../functions/_shared/gamePlanGeneration.ts";
 
 Deno.test("retries missing symbols sequentially and preserves instrument order", async () => {
   const attempts = new Map<string, number>();

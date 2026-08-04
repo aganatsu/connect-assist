@@ -3,11 +3,11 @@ import {
   evaluateZoneLocalEnforcement,
   resolveZoneLocalMode,
   type ZoneLocalActivationSnapshot,
-} from "./zoneLocalEnforcement.ts";
-import { loadZoneLocalActivation } from "./zoneLocalActivationStore.ts";
+} from "../../functions/_shared/zoneLocalEnforcement.ts";
+import { loadZoneLocalActivation } from "../../functions/_shared/zoneLocalActivationStore.ts";
 import type {
   ZoneCandidateShadowRanking,
-} from "./zoneCandidateShadowRanking.ts";
+} from "../../functions/_shared/zoneCandidateShadowRanking.ts";
 
 const softActivation: ZoneLocalActivationSnapshot = {
   authorityStage: "soft_adjustment",

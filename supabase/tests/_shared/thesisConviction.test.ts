@@ -22,7 +22,7 @@ import {
   evaluateEvidence,
   type ThesisConvictionState,
   updateConviction,
-} from "./thesisConviction.ts";
+} from "../../functions/_shared/thesisConviction.ts";
 
 // ─── Helper: build a ConvictionInput with defaults ───────────────────
 

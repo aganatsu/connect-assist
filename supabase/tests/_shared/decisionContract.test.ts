@@ -6,7 +6,7 @@ import {
   buildTradeDecisionContext,
   type DecisionHierarchyInput,
   evaluateDecisionHierarchy,
-} from "./decisionContract.ts";
+} from "../../functions/_shared/decisionContract.ts";
 
 const gamePlan = {
   planVersion: "11111111-1111-4111-8111-111111111111",

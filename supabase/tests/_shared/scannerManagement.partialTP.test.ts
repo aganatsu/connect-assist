@@ -9,7 +9,7 @@
  *
  * Run: deno test --allow-all supabase/functions/_shared/scannerManagement.partialTP.test.ts
  */
-import { manageOpenPositions } from "./scannerManagement.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
 import {
   assertEquals,
   assertAlmostEquals,

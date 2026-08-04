@@ -13,7 +13,7 @@
  * a correct replacement for both engines' inline logic.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkDuplicateDirection } from "./gateDuplicateDirection.ts";
+import { checkDuplicateDirection } from "../../functions/_shared/gateDuplicateDirection.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

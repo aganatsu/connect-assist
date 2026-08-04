@@ -13,7 +13,7 @@ import {
   calcPnl,
   getQuoteToUSDRate,
   SPECS,
-} from "./smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assertAlmostEquals,

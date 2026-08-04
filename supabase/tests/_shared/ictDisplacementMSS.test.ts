@@ -4,8 +4,8 @@ import {
   validateRecentMSS,
   DEFAULT_DISPLACEMENT_MSS_CONFIG,
   type DisplacementMSSConfig,
-} from "./ictDisplacementMSS.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/ictDisplacementMSS.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────
 

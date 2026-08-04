@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateCandlestickConfirmation } from "./candlestickConfirmation.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { evaluateCandlestickConfirmation } from "../../functions/_shared/candlestickConfirmation.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 const c = (open: number, high: number, low: number, close: number): Candle => ({
   open, high, low, close, volume: 100, datetime: "2026-08-03T12:00:00Z",

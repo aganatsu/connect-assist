@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildCrossTimeframeZoneLineage,
   type CrossTimeframeZoneCandidate,
-} from "./crossTimeframeZoneLineage.ts";
+} from "../../functions/_shared/crossTimeframeZoneLineage.ts";
 
 const hierarchy = { top: "1h", mid: "15min", low: "5min" };
 

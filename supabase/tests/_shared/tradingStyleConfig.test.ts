@@ -2,12 +2,12 @@ import {
   assertEquals,
   assertNotEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
 import {
   applyTradingStyleProfile,
   resolveTradingStyle,
   TRADING_STYLE_PROFILES,
-} from "./tradingStyleConfig.ts";
+} from "../../functions/_shared/tradingStyleConfig.ts";
 
 Deno.test("trading style profiles retain validated execution values", () => {
   assertEquals(TRADING_STYLE_PROFILES.scalper.tpRatio, 2);
@@ -101,11 +101,11 @@ Deno.test("live and backtest engines both use the shared runtime-config authorit
   ]);
 
   assertEquals(
-    scanner.includes('from "../_shared/runtimeConfigStore.ts"'),
+    scanner.includes('from "../../functions/_shared/runtimeConfigStore.ts"'),
     true,
   );
   assertEquals(
-    backtest.includes('from "../_shared/runtimeConfigResolver.ts"'),
+    backtest.includes('from "../../functions/_shared/runtimeConfigResolver.ts"'),
     true,
   );
   assertEquals(analysis.includes("export const STYLE_OVERRIDES"), false);

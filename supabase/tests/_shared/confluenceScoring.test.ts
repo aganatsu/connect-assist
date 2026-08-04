@@ -7,8 +7,8 @@
  * Run: deno test --allow-all supabase/functions/_shared/confluenceScoring.test.ts
  */
 
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assertAlmostEquals,

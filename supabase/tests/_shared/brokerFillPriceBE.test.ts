@@ -7,7 +7,7 @@
  * This test would have FAILED before the fix because entryPrice was always pos.entry_price.
  */
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { manageOpenPositions } from "./scannerManagement.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function makePosition(overrides: Partial<{

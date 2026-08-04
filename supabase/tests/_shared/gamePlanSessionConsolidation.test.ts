@@ -9,8 +9,8 @@
  * compare the new (shared-based) implementation against it at every point.
  */
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { getCurrentSession, getUpcomingSession, type SessionName } from "./gamePlan.ts";
-import { detectSession, SESSION_WINDOWS, toNYTime } from "./sessions.ts";
+import { getCurrentSession, getUpcomingSession, type SessionName } from "../../functions/_shared/gamePlan.ts";
+import { detectSession, SESSION_WINDOWS, toNYTime } from "../../functions/_shared/sessions.ts";
 
 // ─── Reference (pre-consolidation) implementations ──────────────────────────
 // NOTE: These values were verified byte-for-byte against the actual deleted code
@@ -218,7 +218,7 @@ Deno.test("No hardcoded session hours remain in gamePlan.ts", () => {
 // confirming the re-export resolves correctly and session detection remains
 // consistent across the DST transition moments.
 
-import { toNYTime as smcToNYTime } from "./smcAnalysis.ts";
+import { toNYTime as smcToNYTime } from "../../functions/_shared/smcAnalysis.ts";
 
 /**
  * Create a UTC Date at a specific NY local time, accounting for DST.

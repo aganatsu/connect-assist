@@ -4,7 +4,7 @@ import {
 import {
   buildStreamlinedTradeDecisionObservation,
   type Phase1StreamlinedObservationInput,
-} from "./streamlinedTradeDecisionObservation.ts";
+} from "../../functions/_shared/streamlinedTradeDecisionObservation.ts";
 
 function observationInput(): Phase1StreamlinedObservationInput {
   return {

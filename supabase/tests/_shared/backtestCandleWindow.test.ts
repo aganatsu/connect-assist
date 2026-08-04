@@ -3,7 +3,7 @@ import {
   boundedCandlesBefore,
   outcomeCandlesAfter,
   utcDayStart,
-} from "./backtestCandleWindow.ts";
+} from "../../functions/_shared/backtestCandleWindow.ts";
 
 const candles = Array.from({ length: 12 }, (_, index) => ({
   datetime: new Date(

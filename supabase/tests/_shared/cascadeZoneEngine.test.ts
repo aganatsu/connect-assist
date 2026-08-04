@@ -11,7 +11,7 @@
  */
 
 import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   findDailyZone,
   checkPriceAtDailyZone,
@@ -19,8 +19,8 @@ import {
   detect1HConfirmation,
   findEntryZoneWithinDailyZone,
   findCascadeZone,
-} from "./cascadeZoneEngine.ts";
-import type { DailyZone, CascadeResult, CascadeState } from "./cascadeZoneEngine.ts";
+} from "../../functions/_shared/cascadeZoneEngine.ts";
+import type { DailyZone, CascadeResult, CascadeState } from "../../functions/_shared/cascadeZoneEngine.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

@@ -7,7 +7,7 @@ import {
   assessRisk,
   DEFAULT_ICT_RISK_CONFIG,
   type ICTRiskConfig,
-} from "./ictRiskManagement.ts";
+} from "../../functions/_shared/ictRiskManagement.ts";
 
 // ─── Tests: Drawdown Halving ──────────────────────────────────────────
 

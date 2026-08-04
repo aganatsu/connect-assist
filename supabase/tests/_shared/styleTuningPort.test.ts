@@ -5,7 +5,7 @@
  * 3. Regression: day_trader parameters unchanged
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { TRADING_STYLE_PROFILES } from "./tradingStyleConfig.ts";
+import { TRADING_STYLE_PROFILES } from "../../functions/_shared/tradingStyleConfig.ts";
 
 // ── Test 1: Read style profile from bot-scanner to verify tuned parameters ──
 const scannerSource = await Deno.readTextFile("./supabase/functions/bot-scanner/index.ts");
@@ -62,7 +62,7 @@ Deno.test("swing_trader style profile: impulseSlCapMultiplier is 6 (wider for sw
 Deno.test("bot-scanner imports findCascadeZone from cascadeZoneEngine", () => {
   assertEquals(
     scannerSource.includes("findCascadeZone") &&
-      scannerSource.includes('from "../_shared/cascadeZoneEngine.ts"'),
+      scannerSource.includes('from "../../functions/_shared/cascadeZoneEngine.ts"'),
     true,
     "Cascade zone engine import should exist"
   );

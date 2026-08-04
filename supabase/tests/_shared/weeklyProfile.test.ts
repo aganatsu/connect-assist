@@ -16,8 +16,8 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { detectWeeklyProfile } from "./weeklyProfile.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { detectWeeklyProfile } from "../../functions/_shared/weeklyProfile.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

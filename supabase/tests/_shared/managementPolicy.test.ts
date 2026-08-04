@@ -2,8 +2,8 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   resolveBacktestManagementPolicy,
   resolvePositionManagementPolicy,
-} from "./managementPolicy.ts";
-import type { ResolvedStylePolicy } from "./stylePolicy.ts";
+} from "../../functions/_shared/managementPolicy.ts";
+import type { ResolvedStylePolicy } from "../../functions/_shared/stylePolicy.ts";
 
 const FROZEN_STYLE_POLICY: ResolvedStylePolicy = {
   contractVersion: "style-policy.v1.3",

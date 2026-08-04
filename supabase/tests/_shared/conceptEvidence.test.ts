@@ -9,7 +9,7 @@ import {
   buildEvidenceId,
   distanceToBounds,
   overlapMetrics,
-} from "./conceptEvidence.ts";
+} from "../../functions/_shared/conceptEvidence.ts";
 
 const base = {
   concept: "fvg" as const,

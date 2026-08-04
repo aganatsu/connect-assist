@@ -11,10 +11,10 @@
  * Run: deno test --no-check --allow-all supabase/functions/_shared/liquiditySweepGate.test.ts
  */
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { Candle, LiquidityPool } from "./smcAnalysis.ts";
-import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
-import { findUnifiedZone, type UnifiedZoneResult } from "./unifiedZoneEngine.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
+import type { Candle, LiquidityPool } from "../../functions/_shared/smcAnalysis.ts";
+import { findZoneLiquidity, type ZoneLiquidityResult } from "../../functions/_shared/zoneLiquidity.ts";
+import { findUnifiedZone, type UnifiedZoneResult } from "../../functions/_shared/unifiedZoneEngine.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 

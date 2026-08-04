@@ -2,14 +2,14 @@ import {
   assertEquals,
   assertExists,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildConceptEvidence } from "./conceptEvidence.ts";
+import { buildConceptEvidence } from "../../functions/_shared/conceptEvidence.ts";
 import {
   createZoneLocalConfluenceObservation,
   observeContextOnly,
   observeZoneLocalPoint,
   observeZoneLocalRange,
-} from "./zoneLocalConfluence.ts";
-import { rankZoneCandidatesShadow } from "./zoneCandidateShadowRanking.ts";
+} from "../../functions/_shared/zoneLocalConfluence.ts";
+import { rankZoneCandidatesShadow } from "../../functions/_shared/zoneCandidateShadowRanking.ts";
 
 function fibEvidence(
   detector: string,

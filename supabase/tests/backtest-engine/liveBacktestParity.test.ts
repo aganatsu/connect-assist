@@ -12,17 +12,17 @@
  * Run: deno test --no-check --allow-all supabase/functions/backtest-engine/liveBacktestParity.test.ts
  */
 
-import { SPECS } from "../_shared/smcAnalysis.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../_shared/configMapper.ts";
+import { SPECS } from "../../functions/_shared/smcAnalysis.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
 import {
   resolveEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigResolver.ts";
-import { normalizeSessionFilter } from "../_shared/sessions.ts";
+} from "../../functions/_shared/runtimeConfigResolver.ts";
+import { normalizeSessionFilter } from "../../functions/_shared/sessions.ts";
 import {
   DEFAULT_FACTOR_WEIGHTS,
   resolveWeightScale,
   applyWeightScale,
-} from "../_shared/confluenceScoring.ts";
+} from "../../functions/_shared/confluenceScoring.ts";
 import {
   assertEquals,
   assertAlmostEquals,

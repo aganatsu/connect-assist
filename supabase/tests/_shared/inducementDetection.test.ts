@@ -3,8 +3,8 @@ import {
   detectInducements,
   findSupportingInducement,
   type Inducement,
-} from "./inducementDetection.ts";
-import { type Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/inducementDetection.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helper: Generate candle data ───────────────────────────────────
 

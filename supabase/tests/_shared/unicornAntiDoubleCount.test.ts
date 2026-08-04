@@ -13,8 +13,8 @@
  * Run: deno test --allow-all supabase/functions/_shared/unicornAntiDoubleCount.test.ts
  */
 
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assert,
   assertExists,

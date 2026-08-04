@@ -13,7 +13,7 @@
  *   2. Must contain colon for backtest-engine's reason.split(":")[0] diagnostics
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkCooldown } from "./gateCooldown.ts";
+import { checkCooldown } from "../../functions/_shared/gateCooldown.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

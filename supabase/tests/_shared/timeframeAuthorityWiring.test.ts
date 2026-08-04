@@ -63,7 +63,7 @@ Deno.test("scalper backtest fetches real 15m structure candles", () => {
 Deno.test("direction labels derive from the style-policy role contract", () => {
   assertStringIncludes(
     directionEngine,
-    'import { STYLE_TIMEFRAME_ROLES } from "./stylePolicy.ts"',
+    'import { STYLE_TIMEFRAME_ROLES } from "../../functions/_shared/stylePolicy.ts"',
   );
   assertStringIncludes(
     directionEngine,

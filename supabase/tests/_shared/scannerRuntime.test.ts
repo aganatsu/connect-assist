@@ -6,7 +6,7 @@ import {
   runTaskKey,
   type ScannerRuntimeRun,
   taskKey,
-} from "./scannerRuntime.ts";
+} from "../../functions/_shared/scannerRuntime.ts";
 
 function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) {

@@ -11,7 +11,7 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkTier1Minimum, type Tier1MinimumInput } from "./gateTier1Minimum.ts";
+import { checkTier1Minimum, type Tier1MinimumInput } from "../../functions/_shared/gateTier1Minimum.ts";
 
 // ─── Old inline logic replicas ─────────────────────────────────────────────
 

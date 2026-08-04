@@ -9,8 +9,8 @@ import {
   normalizeAnalysisTimeframe,
   resolveTimeframeAuthority,
   zoneTimeframeLabels,
-} from "./timeframeAuthority.ts";
-import type { ResolvedStylePolicy } from "./stylePolicy.ts";
+} from "../../functions/_shared/timeframeAuthority.ts";
+import type { ResolvedStylePolicy } from "../../functions/_shared/stylePolicy.ts";
 
 function policy(
   style: ResolvedStylePolicy["style"],

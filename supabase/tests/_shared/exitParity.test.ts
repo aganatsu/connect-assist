@@ -5,8 +5,8 @@ import {
 import {
   buildStructureInvalidationEvidence,
   computePartialCloseDecision,
-} from "./exitParity.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/exitParity.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 function partialInput(
   overrides: Partial<

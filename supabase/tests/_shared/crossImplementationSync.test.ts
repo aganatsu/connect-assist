@@ -107,18 +107,18 @@ Deno.test("GUARD: detectSession/detectSilverBullet/detectMacroWindow are only in
 
 Deno.test("GUARD: bot-scanner imports resolveSymbol from brokerSymbols (not local)", () => {
   const src = readSource("bot-scanner/index.ts");
-  const hasImport = src.includes('from "../_shared/brokerSymbols.ts"') || src.includes("from '../_shared/brokerSymbols.ts'");
+  const hasImport = src.includes('from "../../functions/_shared/brokerSymbols.ts"') || src.includes("from '../_shared/brokerSymbols.ts'");
   assertEquals(hasImport, true, "bot-scanner must import resolveSymbol from _shared/brokerSymbols.ts");
 });
 
 Deno.test("GUARD: bot-scanner imports metaFetch from metaApiClient (not local)", () => {
   const src = readSource("bot-scanner/index.ts");
-  const hasImport = src.includes('from "../_shared/metaApiClient.ts"') || src.includes("from '../_shared/metaApiClient.ts'");
+  const hasImport = src.includes('from "../../functions/_shared/metaApiClient.ts"') || src.includes("from '../_shared/metaApiClient.ts'");
   assertEquals(hasImport, true, "bot-scanner must import metaFetch from _shared/metaApiClient.ts");
 });
 
 Deno.test("GUARD: zone-confirmation-scanner imports resolveSymbol from brokerSymbols", () => {
   const src = readSource("zone-confirmation-scanner/index.ts");
-  const hasImport = src.includes('from "../_shared/brokerSymbols.ts"') || src.includes("from '../_shared/brokerSymbols.ts'");
+  const hasImport = src.includes('from "../../functions/_shared/brokerSymbols.ts"') || src.includes("from '../_shared/brokerSymbols.ts'");
   assertEquals(hasImport, true, "zone-confirmation-scanner must import resolveSymbol from _shared/brokerSymbols.ts");
 });

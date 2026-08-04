@@ -16,8 +16,8 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 

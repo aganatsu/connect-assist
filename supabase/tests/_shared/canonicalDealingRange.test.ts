@@ -9,7 +9,7 @@ import {
   resolveCanonicalDealingRange,
   readFrozenCanonicalDealingRange,
   selectCanonicalDealingRange,
-} from "./canonicalDealingRange.ts";
+} from "../../functions/_shared/canonicalDealingRange.ts";
 
 const parent = {
   impulseId: "impulse-1h",

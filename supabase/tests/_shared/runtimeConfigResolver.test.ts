@@ -6,7 +6,7 @@ import {
 import {
   resolveEffectiveRuntimeConfig,
   resolveEffectiveTradingStyle,
-} from "./runtimeConfigResolver.ts";
+} from "../../functions/_shared/runtimeConfigResolver.ts";
 
 Deno.test("canonical resolver maps fields before applying the selected style", () => {
   const result = resolveEffectiveRuntimeConfig({

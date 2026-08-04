@@ -13,7 +13,7 @@ import {
   formatGatePerformancePrompt,
   type ResolvedRejection,
   type ClosedTrade,
-} from "./gatePerformanceEngine.ts";
+} from "../../functions/_shared/gatePerformanceEngine.ts";
 
 // ─── Test Helpers ───
 

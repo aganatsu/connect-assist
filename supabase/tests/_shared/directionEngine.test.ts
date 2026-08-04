@@ -2,9 +2,9 @@
  * directionEngine.test.ts — Tests for the simplified multi-TF direction engine
  */
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { determineDirection, type DirectionResult } from "./directionEngine.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { determineDirection, type DirectionResult } from "../../functions/_shared/directionEngine.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ── Helper: generate synthetic candles with a trend ──
 
@@ -690,7 +690,7 @@ Deno.test("4H TREND BLOCK: source code contains the trend opposition check", () 
 
 // ─── confirmedTrend tests ───────────────────────────────────────────
 
-import { confirmedTrend, type ConfirmedTrendResult } from "./directionEngine.ts";
+import { confirmedTrend, type ConfirmedTrendResult } from "../../functions/_shared/directionEngine.ts";
 
 // ── Helper: generate candles with explicit swing points for confirmedTrend testing ──
 // Creates a series with controlled HH/HL or LH/LL with specific extension amounts

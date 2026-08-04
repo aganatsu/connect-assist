@@ -12,8 +12,8 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { filterTradeByGamePlan } from "./gamePlan.ts";
-import type { SessionGamePlan, InstrumentGamePlan } from "./gamePlan.ts";
+import { filterTradeByGamePlan } from "../../functions/_shared/gamePlan.ts";
+import type { SessionGamePlan, InstrumentGamePlan } from "../../functions/_shared/gamePlan.ts";
 
 function makeGamePlan(plans: Partial<InstrumentGamePlan>[]): SessionGamePlan {
   return {

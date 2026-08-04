@@ -11,8 +11,8 @@
  * Run: deno test --no-check --allow-all supabase/functions/_shared/crossEngineEquivalence.test.ts
  */
 
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS, resolveWeightScale, applyWeightScale } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS, resolveWeightScale, applyWeightScale } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assertAlmostEquals,

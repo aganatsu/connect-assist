@@ -16,12 +16,12 @@
  * "main gate pattern" and asserts they agree on every condition.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkMaxPositions } from "./gateMaxPositions.ts";
-import { checkMaxPerSymbol } from "./gateMaxPerSymbol.ts";
-import { checkMaxDrawdown } from "./gateMaxDrawdown.ts";
-import { checkDailyLossLimit } from "./gateDailyLossLimit.ts";
-import { checkCooldown } from "./gateCooldown.ts";
-import { checkConsecutiveLosses } from "./gateConsecutiveLosses.ts";
+import { checkMaxPositions } from "../../functions/_shared/gateMaxPositions.ts";
+import { checkMaxPerSymbol } from "../../functions/_shared/gateMaxPerSymbol.ts";
+import { checkMaxDrawdown } from "../../functions/_shared/gateMaxDrawdown.ts";
+import { checkDailyLossLimit } from "../../functions/_shared/gateDailyLossLimit.ts";
+import { checkCooldown } from "../../functions/_shared/gateCooldown.ts";
+import { checkConsecutiveLosses } from "../../functions/_shared/gateConsecutiveLosses.ts";
 
 // ─── Simulate pre-gate pattern (returns category string or null) ─────
 

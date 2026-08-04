@@ -6,7 +6,7 @@ import {
   normalizeCrossTimeframeAuthorityConfig,
   resolveCrossTimeframeAuthority,
   type CrossTimeframeActivationSnapshot,
-} from "./crossTimeframeAuthority.ts";
+} from "../../functions/_shared/crossTimeframeAuthority.ts";
 
 const hardLiveActivation: CrossTimeframeActivationSnapshot = {
   authorityStage: "hard_block",

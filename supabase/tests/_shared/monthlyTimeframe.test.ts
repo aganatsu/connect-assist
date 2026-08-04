@@ -7,8 +7,8 @@ import {
   synthesizeMonthlyCandles,
   analyzeMonthlyStructure,
   checkMonthlyContainment,
-} from "./monthlyTimeframe.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/monthlyTimeframe.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 function makeCandle(o: number, h: number, l: number, c: number, dateStr: string): Candle {
   return { open: o, high: h, low: l, close: c, volume: 100, datetime: dateStr };

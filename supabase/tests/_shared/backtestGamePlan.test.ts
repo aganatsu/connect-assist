@@ -16,8 +16,8 @@ import {
   type InstrumentGamePlan,
   type SessionGamePlan,
   type SessionName as GPSessionName,
-} from "./gamePlan.ts";
-import { type Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/gamePlan.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helper: generate synthetic candles ───
 function makeCandles(count: number, basePrice: number, direction: "up" | "down" | "flat" = "flat"): Candle[] {

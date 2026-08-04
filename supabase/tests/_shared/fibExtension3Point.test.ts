@@ -7,7 +7,7 @@ import {
   calculateFibExtension3Point,
   compareFibTPMethods,
   DEFAULT_FIB_EXTENSION_CONFIG,
-} from "./fibExtension3Point.ts";
+} from "../../functions/_shared/fibExtension3Point.ts";
 
 // ─── Basic Calculation Tests ──────────────────────────────────────────────────
 

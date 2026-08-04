@@ -7,7 +7,7 @@ import {
   checkIndicatorConfirmation,
   DEFAULT_INDICATOR_CONFIG,
   type Candle,
-} from "./indicatorConfirmation.ts";
+} from "../../functions/_shared/indicatorConfirmation.ts";
 
 // ─── Helper: Generate synthetic candles ─────────────────────────────────────
 

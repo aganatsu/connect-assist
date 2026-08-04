@@ -18,8 +18,8 @@ import {
   DEFAULT_PHASE_CONFIG,
   type MarketPhase,
   type PhaseResult,
-} from "./priceActionPhase.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/priceActionPhase.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Data Generators ─────────────────────────────────────────────────────
 

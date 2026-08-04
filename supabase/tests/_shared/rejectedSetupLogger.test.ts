@@ -16,7 +16,7 @@ import {
   normalizeRejectedGate,
   buildRejectedOpportunityKey,
   type RejectedSetupParams,
-} from "./rejectedSetupLogger.ts";
+} from "../../functions/_shared/rejectedSetupLogger.ts";
 
 // ── Mock Supabase client ──
 

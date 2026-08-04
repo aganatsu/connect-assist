@@ -11,7 +11,7 @@
  * Run: deno test --no-check --allow-all supabase/functions/backtest-engine/scoreParity.test.ts
  */
 
-import { type Candle } from "../_shared/smcAnalysis.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assertAlmostEquals,
@@ -19,32 +19,32 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ─── Import the modules under test ─────────────────────────────────────────
-import { computeDirectionVerdict, type DirectionVerdictInput } from "../_shared/directionVerdict.ts";
-import { runICTHTFAnalysis, type ICTHTFResult } from "../_shared/ictHTFIntegration.ts";
+import { computeDirectionVerdict, type DirectionVerdictInput } from "../../functions/_shared/directionVerdict.ts";
+import { runICTHTFAnalysis, type ICTHTFResult } from "../../functions/_shared/ictHTFIntegration.ts";
 import {
   validateRecentMSS,
   type MSSValidationResult,
   type DisplacementMSSConfig,
   DEFAULT_DISPLACEMENT_MSS_CONFIG,
-} from "../_shared/ictDisplacementMSS.ts";
+} from "../../functions/_shared/ictDisplacementMSS.ts";
 import {
   detectJudasSwing,
   type JudasSwingResult,
   type JudasSwingConfig,
   DEFAULT_JUDAS_SWING_CONFIG,
-} from "../_shared/ictJudasSwing.ts";
+} from "../../functions/_shared/ictJudasSwing.ts";
 import {
   validateFVGBatch,
   type FVGInvalidationConfig,
   DEFAULT_FVG_INVALIDATION_CONFIG,
   type FVGForValidation,
-} from "../_shared/ictFVGInvalidation.ts";
+} from "../../functions/_shared/ictFVGInvalidation.ts";
 import {
   evaluateICTKillZone,
   type ICTKillZoneResult,
   type ICTKillZoneConfig,
   DEFAULT_ICT_KILLZONE_CONFIG,
-} from "../_shared/ictKillZones.ts";
+} from "../../functions/_shared/ictKillZones.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

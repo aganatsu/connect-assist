@@ -13,8 +13,8 @@ import {
   assertEquals,
   assertStrictEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createScanCache } from "./dataCache.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { createScanCache } from "../../functions/_shared/dataCache.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

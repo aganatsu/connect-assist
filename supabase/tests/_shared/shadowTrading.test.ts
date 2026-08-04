@@ -8,7 +8,7 @@ import {
   type ShadowTrade,
   type ShadowTradeInput,
   type PriceUpdate,
-} from "./shadowTrading.ts";
+} from "../../functions/_shared/shadowTrading.ts";
 
 // ─── createShadowTrade Tests ─────────────────────────────────────────
 

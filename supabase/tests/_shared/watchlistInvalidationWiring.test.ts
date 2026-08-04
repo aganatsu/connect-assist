@@ -11,7 +11,7 @@ const scannerSource = await Deno.readTextFile(
 Deno.test("bot scanner uses the canonical Watchlist invalidation contract", () => {
   assertStringIncludes(
     scannerSource,
-    'from "../_shared/watchlistInvalidation.ts"',
+    'from "../../functions/_shared/watchlistInvalidation.ts"',
   );
   assertStringIncludes(scannerSource, "watchlistInvalidationFor(");
   assertStringIncludes(

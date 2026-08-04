@@ -11,7 +11,7 @@ import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.t
 import {
   runPropFirmGate,
   propFirmEmergencyClose,
-} from "./propFirmGate.ts";
+} from "../../functions/_shared/propFirmGate.ts";
 
 // ─── Mock Supabase Client ────────────────────────────────────────────────────
 

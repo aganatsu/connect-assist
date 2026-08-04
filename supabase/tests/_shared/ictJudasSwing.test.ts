@@ -3,8 +3,8 @@ import {
   detectJudasSwing,
   DEFAULT_JUDAS_SWING_CONFIG,
   type JudasSwingConfig,
-} from "./ictJudasSwing.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/ictJudasSwing.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────
 

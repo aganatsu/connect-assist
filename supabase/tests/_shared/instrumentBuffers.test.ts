@@ -13,7 +13,7 @@ import {
   assertEquals,
   assert,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { SPECS, ASSET_PROFILES, getAssetProfile } from "./smcAnalysis.ts";
+import { SPECS, ASSET_PROFILES, getAssetProfile } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Replicate the buffer resolution logic from bot-scanner/index.ts ──
 // This is the exact logic we added — extracted here for unit testing.

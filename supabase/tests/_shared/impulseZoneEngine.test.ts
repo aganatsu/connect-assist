@@ -12,7 +12,7 @@
  */
 
 import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   findImpulseLeg,
   mapImpulsePOIs,
@@ -29,12 +29,12 @@ import {
   type ImpulsePOI,
   type RankedPOI,
   type HTFConfluenceData,
-} from "./impulseZoneEngine.ts";
-import { buildConceptEvidence } from "./conceptEvidence.ts";
+} from "../../functions/_shared/impulseZoneEngine.ts";
+import { buildConceptEvidence } from "../../functions/_shared/conceptEvidence.ts";
 import {
   canonicalImpulseMatchesLegacy,
   detectCanonicalImpulse,
-} from "./canonicalImpulseDetector.ts";
+} from "../../functions/_shared/canonicalImpulseDetector.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -942,7 +942,7 @@ Deno.test("checkHistoricalSR — handles short lookback gracefully", () => {
 import {
   findBestEntryZoneMultiTF,
   type MultiTFZoneResult,
-} from "./impulseZoneEngine.ts";
+} from "../../functions/_shared/impulseZoneEngine.ts";
 
 Deno.test("findBestEntryZoneMultiTF — returns combined reason when neither TF has zone", () => {
   // Flat candles — no impulse on either TF
@@ -1364,7 +1364,7 @@ Deno.test("findImpulseLeg — ETH-like bearish impulse with wave structure is fo
 });
 
 // ─── ZoneEngineOptions Tests (configurable strictATRMult) ─────────────────────
-import { type ZoneEngineOptions } from "./impulseZoneEngine.ts";
+import { type ZoneEngineOptions } from "../../functions/_shared/impulseZoneEngine.ts";
 
 Deno.test("findBestEntryZone — options.strictATRMult=undefined uses default 0.3", () => {
   const htfCandles = generateBullishImpulseCandles(50);

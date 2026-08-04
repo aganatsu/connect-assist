@@ -1,6 +1,6 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateStreamlinedTradeDecision } from "./streamlinedTradeDecision.ts";
-import { freezeStreamlinedDecision, lifecycleProjection } from "./streamlinedDecisionLifecycle.ts";
+import { evaluateStreamlinedTradeDecision } from "../../functions/_shared/streamlinedTradeDecision.ts";
+import { freezeStreamlinedDecision, lifecycleProjection } from "../../functions/_shared/streamlinedDecisionLifecycle.ts";
 
 function summary() {
   return evaluateStreamlinedTradeDecision({

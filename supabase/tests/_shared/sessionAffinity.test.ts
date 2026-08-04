@@ -22,7 +22,7 @@ import {
   affinityToScoringPoints,
   isInLondonNYOverlap,
   SESSION_AFFINITY_MAP,
-} from "./sessionAffinity.ts";
+} from "../../functions/_shared/sessionAffinity.ts";
 
 // ─── Helper: Create a fixed UTC timestamp for a specific NY time ──────
 // We need to account for EDT/EST. For simplicity, use a date in EDT (summer).

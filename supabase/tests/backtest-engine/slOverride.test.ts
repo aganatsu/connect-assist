@@ -152,7 +152,7 @@ Deno.test("Impulse SL Override: XAU/USD with larger pip size", () => {
 // ─── Regime-Adaptive TP Tests ───────────────────────────────────────────────
 
 // These test the integration with adjustTPForRegime from exitEngine.ts
-import { adjustTPForRegime, type RegimeInfo } from "../_shared/exitEngine.ts";
+import { adjustTPForRegime, type RegimeInfo } from "../../functions/_shared/exitEngine.ts";
 
 Deno.test("Regime TP: trending regime extends TP (long)", () => {
   const result = adjustTPForRegime({

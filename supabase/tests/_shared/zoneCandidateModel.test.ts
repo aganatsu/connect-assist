@@ -2,12 +2,12 @@ import {
   assertEquals,
   assertGreater,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   classifyZoneCandidateLifecycle,
   rankZoneCandidateModels,
   type ZoneCandidateModelInput,
-} from "./zoneCandidateModel.ts";
+} from "../../functions/_shared/zoneCandidateModel.ts";
 
 function candle(
   open: number,

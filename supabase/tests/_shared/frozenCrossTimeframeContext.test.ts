@@ -2,8 +2,8 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildFrozenCrossTimeframeContext,
   FROZEN_CROSS_TF_CONTEXT_VERSION,
-} from "./frozenCrossTimeframeContext.ts";
-import { resolveCrossTimeframeAuthority } from "./crossTimeframeAuthority.ts";
+} from "../../functions/_shared/frozenCrossTimeframeContext.ts";
+import { resolveCrossTimeframeAuthority } from "../../functions/_shared/crossTimeframeAuthority.ts";
 
 const stylePolicy = {
   contractVersion: "style-policy.v1.3",

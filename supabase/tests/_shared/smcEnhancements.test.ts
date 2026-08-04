@@ -6,8 +6,8 @@ import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.t
 import {
   runSMCEnhancements,
   DEFAULT_SMC_ENHANCEMENTS_CONFIG,
-} from "./smcEnhancements.ts";
-import type { Candle, OrderBlock } from "./smcAnalysis.ts";
+} from "../../functions/_shared/smcEnhancements.ts";
+import type { Candle, OrderBlock } from "../../functions/_shared/smcAnalysis.ts";
 
 function makeCandle(o: number, h: number, l: number, c: number, t: number): Candle {
   return { open: o, high: h, low: l, close: c, volume: 100, datetime: new Date(t * 1000).toISOString() };

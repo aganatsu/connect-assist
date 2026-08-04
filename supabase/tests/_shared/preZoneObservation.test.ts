@@ -3,7 +3,7 @@ import {
   classifyUnifiedWatch,
   isPreZoneObservation,
   requiresFreshCandidateHandoff,
-} from "./preZoneObservation.ts";
+} from "../../functions/_shared/preZoneObservation.ts";
 
 const base = {
   requireUnifiedZone: true,

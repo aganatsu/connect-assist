@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateSingleOwnershipDecision } from "./singleOwnershipDecision.ts";
+import { evaluateSingleOwnershipDecision } from "../../functions/_shared/singleOwnershipDecision.ts";
 
 function input() {
   return {

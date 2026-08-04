@@ -8,8 +8,8 @@ import {
   isZoneNearTrendlineTrap,
   isZoneBelowBrokenTrendline,
   DEFAULT_TRENDLINE_CONFIG,
-} from "./trendlineLiquidity.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/trendlineLiquidity.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 function makeCandle(o: number, h: number, l: number, c: number, t: number): Candle {
   return { open: o, high: h, low: l, close: c, volume: 100, datetime: new Date(t * 1000).toISOString() };

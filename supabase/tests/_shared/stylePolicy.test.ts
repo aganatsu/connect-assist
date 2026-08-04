@@ -3,13 +3,13 @@ import {
   assertNotEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mapNestedToFlat } from "./configMapper.ts";
-import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
+import { mapNestedToFlat } from "../../functions/_shared/configMapper.ts";
+import { applyTradingStyleProfile } from "../../functions/_shared/tradingStyleConfig.ts";
 import {
   buildResolvedStylePolicy,
   STYLE_POLICY_CONTRACT_VERSION,
   STYLE_TIMEFRAME_ROLES,
-} from "./stylePolicy.ts";
+} from "../../functions/_shared/stylePolicy.ts";
 
 Deno.test("style policy records the intended timeframe hierarchy for each style", () => {
   assertEquals(STYLE_TIMEFRAME_ROLES.scalper, {

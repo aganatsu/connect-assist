@@ -8,9 +8,9 @@
  * 4. Style-aware direction engine uses weekly for swing_trader
  */
 import { assertEquals, assertNotEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "./weeklyBiasDOL.ts";
-import { determineDirectionStyleAware, STYLE_TF_LABELS } from "./directionEngine.ts";
-import type { Candle } from "./smcAnalysis.ts";
+import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../../functions/_shared/weeklyBiasDOL.ts";
+import { determineDirectionStyleAware, STYLE_TF_LABELS } from "../../functions/_shared/directionEngine.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ── Helper: Generate synthetic weekly candles with a trend ──
 function generateWeeklyCandles(count: number, trend: "bullish" | "bearish" | "ranging"): Candle[] {

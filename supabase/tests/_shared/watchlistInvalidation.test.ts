@@ -6,7 +6,7 @@ import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
   normalizePriceBounds,
-} from "./watchlistInvalidation.ts";
+} from "../../functions/_shared/watchlistInvalidation.ts";
 
 Deno.test("BTC short Watchlist boundary is outside the frozen zone", () => {
   const result = deriveWatchlistInvalidation({

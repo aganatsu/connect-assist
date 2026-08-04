@@ -15,7 +15,7 @@ import {
   type ConvictionInput,
   type ConvictionConfig,
   type ThesisConvictionState,
-} from "./thesisConviction.ts";
+} from "../../functions/_shared/thesisConviction.ts";
 
 // ─── Test 1: Conviction accumulates across multiple bars ───
 Deno.test("Conviction accumulates evidence across multiple bars", () => {

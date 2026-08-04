@@ -8,7 +8,7 @@ import {
   applyFinalCandidateSizeAdjustments,
   computePositionSize,
   resolveSizingVolatilityContext,
-} from "./unifiedPositionSizing.ts";
+} from "../../functions/_shared/unifiedPositionSizing.ts";
 
 const liveScanner = await Deno.readTextFile(
   new URL("../bot-scanner/index.ts", import.meta.url),

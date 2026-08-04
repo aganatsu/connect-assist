@@ -15,8 +15,8 @@
  * Run: deno test --allow-all --no-check supabase/functions/_shared/bidirectionalScoring.test.ts
  */
 import { assertEquals, assert, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
-import { type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "../../functions/_shared/confluenceScoring.ts";
+import { type Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Fixture: Bullish candles with bearish displacement ──────────────
 // Creates a scenario where the overall trend is bullish but the last few candles

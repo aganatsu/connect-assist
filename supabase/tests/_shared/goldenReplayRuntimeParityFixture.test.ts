@@ -3,20 +3,20 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { RUNTIME_DEFAULTS } from "./configMapper.ts";
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
+import { RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
 import {
   buildGoldenReplayRuntimeInputFingerprint,
   runGoldenReplayDecisionFixture,
-} from "./goldenReplayReport.ts";
-import { buildResolvedStylePolicy } from "./stylePolicy.ts";
-import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
+} from "../../functions/_shared/goldenReplayReport.ts";
+import { buildResolvedStylePolicy } from "../../functions/_shared/stylePolicy.ts";
+import { applyTradingStyleProfile } from "../../functions/_shared/tradingStyleConfig.ts";
 import {
   applyFinalCandidateSizeAdjustments,
   computePositionSize,
   resolveSizingVolatilityContext,
-} from "./unifiedPositionSizing.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/unifiedPositionSizing.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 const SYMBOL = "EUR/USD";
 const EVALUATED_AT = "2026-07-22T09:45:00.000Z";

@@ -4,7 +4,7 @@ import {
   classifyAuthorityGates,
   evaluateAuthorityGateDisposition,
   isLegacyDiagnosticGate,
-} from "./authorityGateOwnership.ts";
+} from "../../functions/_shared/authorityGateOwnership.ts";
 
 Deno.test("duplicate market-quality gates are legacy diagnostics", () => {
   for (const code of [

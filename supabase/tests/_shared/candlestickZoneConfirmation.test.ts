@@ -2,8 +2,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import {
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
   detectZoneConfirmation,
-} from "./zoneConfirmation.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/zoneConfirmation.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 const c = (open: number, high: number, low: number, close: number, i: number): Candle => ({
   open, high, low, close, volume: 100,

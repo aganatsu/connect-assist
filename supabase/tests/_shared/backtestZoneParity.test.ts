@@ -16,12 +16,12 @@
  * unifiedGateWiring.test.ts.
  */
 import { assertEquals, assert, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { STYLE_TIMEFRAME_ROLES } from "./stylePolicy.ts";
+import { STYLE_TIMEFRAME_ROLES } from "../../functions/_shared/stylePolicy.ts";
 import {
   resolveTimeframeAuthority,
   zoneTimeframeLabels,
-} from "./timeframeAuthority.ts";
-import type { TradingStyleMode } from "./tradingStyleConfig.ts";
+} from "../../functions/_shared/timeframeAuthority.ts";
+import type { TradingStyleMode } from "../../functions/_shared/tradingStyleConfig.ts";
 
 // ─── Extracted: Three-Tier Gate Decision (mirrors backtest-engine inline) ───
 interface UnifiedResult {

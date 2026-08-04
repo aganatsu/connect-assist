@@ -15,8 +15,8 @@ import {
   STYLE_TF_LABELS,
   type StyleDirectionResult,
   type DirectionResult,
-} from "./directionEngine.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/directionEngine.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ── Reusable candle generators (same as directionEngine.test.ts) ──
 

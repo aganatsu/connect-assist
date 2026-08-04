@@ -8,7 +8,7 @@
  * Falls through to the next viable target, or rr_ratio fallback if none qualify.
  */
 import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { calculateSLTP } from "./smcAnalysis.ts";
+import { calculateSLTP } from "../../functions/_shared/smcAnalysis.ts";
 
 // Minimal fixtures — include all required SwingPoint fields
 const baseSwings = [

@@ -3,7 +3,7 @@ import {
   areNonCryptoMarketsClosed,
   gamePlanSymbolsMatchScope,
   resolveGamePlanMarketScope,
-} from "./gamePlanMarketScope.ts";
+} from "../../functions/_shared/gamePlanMarketScope.ts";
 
 const enabled = ["EUR/USD", "US30", "XAU/USD", "BTC/USD", "ETH/USD"];
 

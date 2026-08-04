@@ -9,7 +9,7 @@ import {
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
   validateFrozenSetupIdentity,
-} from "./setupLifecycle.ts";
+} from "../../functions/_shared/setupLifecycle.ts";
 
 function stylePolicy(
   style: "scalper" | "day_trader" = "scalper",

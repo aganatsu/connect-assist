@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildConfirmationAuthorityObservation,
   confirmationLevelFromLegacySignal,
-} from "./confirmationAuthority.ts";
+} from "../../functions/_shared/confirmationAuthority.ts";
 
 Deno.test("confirmation observation is deterministic and non-authoritative", () => {
   const result = buildConfirmationAuthorityObservation({

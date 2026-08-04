@@ -9,8 +9,8 @@
  */
 
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "./impulseZoneEngine.ts";
-import { findUnifiedZone, type UnifiedZoneResult } from "./unifiedZoneEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "../../functions/_shared/impulseZoneEngine.ts";
+import { findUnifiedZone, type UnifiedZoneResult } from "../../functions/_shared/unifiedZoneEngine.ts";
 
 // ─── Shared test data ────────────────────────────────────────────────
 

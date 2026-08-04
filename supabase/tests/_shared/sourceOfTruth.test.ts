@@ -20,7 +20,7 @@ import {
   calculatePositionSize,
   getQuoteToUSDRate,
   SPECS,
-} from "./smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ═══════════════════════════════════════════════════════════════════════

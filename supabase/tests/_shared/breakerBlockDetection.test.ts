@@ -7,8 +7,8 @@ import {
   detectBreakerBlocks,
   isAtBreakerRetest,
   DEFAULT_BREAKER_CONFIG,
-} from "./breakerBlockDetection.ts";
-import type { Candle, OrderBlock } from "./smcAnalysis.ts";
+} from "../../functions/_shared/breakerBlockDetection.ts";
+import type { Candle, OrderBlock } from "../../functions/_shared/smcAnalysis.ts";
 
 function makeCandle(o: number, h: number, l: number, c: number, t: number): Candle {
   return { open: o, high: h, low: l, close: c, volume: 100, datetime: new Date(t * 1000).toISOString() };

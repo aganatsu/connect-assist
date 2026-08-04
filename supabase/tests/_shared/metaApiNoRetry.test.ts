@@ -2,7 +2,7 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { metaFetch, regionCache } from "./metaApiClient.ts";
+import { metaFetch, regionCache } from "../../functions/_shared/metaApiClient.ts";
 
 Deno.test("MetaAPI non-idempotent mode does not fail over after a region error", async () => {
   const originalFetch = globalThis.fetch;

@@ -14,9 +14,9 @@ import {
   type FactorLift,
   type SymbolStats,
   type RegimeAnalysis,
-} from "./advisorCore.ts";
-import type { ResolvedRejection } from "./gatePerformanceEngine.ts";
-import { DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
+} from "../../functions/_shared/advisorCore.ts";
+import type { ResolvedRejection } from "../../functions/_shared/gatePerformanceEngine.ts";
+import { DEFAULT_FACTOR_WEIGHTS } from "../../functions/_shared/confluenceScoring.ts";
 
 // ─── Test Helpers ───────────────────────────────────────────
 function makeTrade(overrides: Partial<TradeRecord> = {}): TradeRecord {

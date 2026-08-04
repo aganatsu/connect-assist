@@ -21,13 +21,13 @@
  *  17. Regression: zones without HTF data keep htfConfluenceScore = 0
  */
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { OrderBlock, FairValueGap, BreakerBlock, FibLevel, FibLevels } from "./smcAnalysis.ts";
+import type { OrderBlock, FairValueGap, BreakerBlock, FibLevel, FibLevels } from "../../functions/_shared/smcAnalysis.ts";
 import {
   checkHTFConfluence,
   type RankedPOI,
   type HTFConfluenceData,
   type ImpulsePOI,
-} from "./impulseZoneEngine.ts";
+} from "../../functions/_shared/impulseZoneEngine.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

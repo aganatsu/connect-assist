@@ -8,11 +8,11 @@
  * Each test would have FAILED before the fix (accessing undefined fields).
  */
 import { assertEquals, assertNotEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { validateRecentMSS, type MSSValidationResult, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
-import { detectJudasSwing, type JudasSwingResult, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
-import { evaluateICTKillZone, type ICTKillZoneResult, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
-import { validateFVGBatch, type BatchFVGValidationResult, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
-import type { Candle } from "../_shared/smcAnalysis.ts";
+import { validateRecentMSS, type MSSValidationResult, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../../functions/_shared/ictDisplacementMSS.ts";
+import { detectJudasSwing, type JudasSwingResult, DEFAULT_JUDAS_SWING_CONFIG } from "../../functions/_shared/ictJudasSwing.ts";
+import { evaluateICTKillZone, type ICTKillZoneResult, DEFAULT_ICT_KILLZONE_CONFIG } from "../../functions/_shared/ictKillZones.ts";
+import { validateFVGBatch, type BatchFVGValidationResult, DEFAULT_FVG_INVALIDATION_CONFIG } from "../../functions/_shared/ictFVGInvalidation.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 

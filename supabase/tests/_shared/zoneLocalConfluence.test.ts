@@ -6,7 +6,7 @@ import {
   measurePointAgainstZone,
   measureRangeAgainstZone,
   permittedZoneBuffer,
-} from "./zoneLocalConfluence.ts";
+} from "../../functions/_shared/zoneLocalConfluence.ts";
 
 const zone = { low: 1.274, high: 1.275 }; // 10 pips on GBP/USD
 

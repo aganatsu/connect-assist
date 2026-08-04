@@ -10,8 +10,8 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import type { Candle, LiquidityPool } from "./smcAnalysis.ts";
-import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
+import type { Candle, LiquidityPool } from "../../functions/_shared/smcAnalysis.ts";
+import { findZoneLiquidity, type ZoneLiquidityResult } from "../../functions/_shared/zoneLiquidity.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 

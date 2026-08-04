@@ -10,7 +10,7 @@ import {
   STATIC_CORRELATIONS,
   type OpenPosition,
   type CandidateTrade,
-} from "./portfolioCorrelation.ts";
+} from "../../functions/_shared/portfolioCorrelation.ts";
 
 // ─── Pearson Correlation Tests ───────────────────────────────────────
 

@@ -7,7 +7,7 @@
  *   Fix 5: Reaction confirmation required in ranging markets
  */
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
 
 // ── Helper: generate candles with specific structure characteristics ──
 function generateRangingCandles(count: number, basePrice: number, range: number): any[] {

@@ -14,8 +14,8 @@ import {
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
   type ConfirmationSignal,
   type ZoneConfirmationConfig,
-} from "./zoneConfirmation.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/zoneConfirmation.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helper: Generate candles with a specific pattern ────────────────────────
 

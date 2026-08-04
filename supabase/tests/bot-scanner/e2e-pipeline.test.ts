@@ -16,10 +16,10 @@
  * Analysis functions run with REAL logic against synthetic candles.
  */
 import { assertEquals, assert, assertNotEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { runConfluenceAnalysis } from "../_shared/confluenceScoring.ts";
-import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
-import { detectSession } from "../_shared/sessions.ts";
-import { classifySetupType } from "../_shared/scannerManagement.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { determineDirection, type DirectionResult } from "../../functions/_shared/directionEngine.ts";
+import { detectSession } from "../../functions/_shared/sessions.ts";
+import { classifySetupType } from "../../functions/_shared/scannerManagement.ts";
 import {
   analyzeMarketStructure,
   calculatePositionSize,
@@ -28,8 +28,8 @@ import {
   SPECS,
   type Candle,
   type SwingPoint,
-} from "../_shared/smcAnalysis.ts";
-import { detectZoneConfirmation, isPriceInZone, DEFAULT_ZONE_CONFIRMATION_CONFIG } from "../_shared/zoneConfirmation.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
+import { detectZoneConfirmation, isPriceInZone, DEFAULT_ZONE_CONFIRMATION_CONFIG } from "../../functions/_shared/zoneConfirmation.ts";
 
 // ─── Candle Generators ──────────────────────────────────────────────────────
 

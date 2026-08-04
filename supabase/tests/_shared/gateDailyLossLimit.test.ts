@@ -19,7 +19,7 @@
  * substring "Daily loss" — both old and new formats contain this.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkDailyLossLimit } from "./gateDailyLossLimit.ts";
+import { checkDailyLossLimit } from "../../functions/_shared/gateDailyLossLimit.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

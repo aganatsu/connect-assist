@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   evaluateCrossTimeframeShadowCandidate,
   summarizeCrossTimeframeShadowOutcomes,
-} from "./crossTimeframeShadowValidation.ts";
+} from "../../functions/_shared/crossTimeframeShadowValidation.ts";
 
 function candidate(input: {
   legacyRank?: number;

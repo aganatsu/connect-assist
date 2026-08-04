@@ -6,7 +6,7 @@ import {
   STREAMLINED_TRADE_DECISION_VERSION,
   type SetupQualityPillar,
   type StreamlinedTradeDecisionInput,
-} from "./streamlinedTradeDecision.ts";
+} from "../../functions/_shared/streamlinedTradeDecision.ts";
 
 const completePillars = Object.fromEntries(
   (["structure", "location", "confirmation", "timing"] as SetupQualityPillar[])

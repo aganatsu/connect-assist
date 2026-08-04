@@ -8,8 +8,8 @@ import {
   assertEquals,
   assertFalse,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
-import { resolveEffectiveRuntimeConfig } from "./runtimeConfigResolver.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
+import { resolveEffectiveRuntimeConfig } from "../../functions/_shared/runtimeConfigResolver.ts";
 
 const scannerSource = await Deno.readTextFile(
   "./supabase/functions/bot-scanner/index.ts",
@@ -21,7 +21,7 @@ Deno.test("bot-scanner has no local runtime-default object", () => {
     "Runtime defaults must only be declared in _shared/configMapper.ts",
   );
   assert(
-    scannerSource.includes('from "../_shared/runtimeConfigStore.ts"'),
+    scannerSource.includes('from "../../functions/_shared/runtimeConfigStore.ts"'),
     "Scanner must import the shared runtime-config authority",
   );
 });

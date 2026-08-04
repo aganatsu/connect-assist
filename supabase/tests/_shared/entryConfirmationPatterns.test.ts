@@ -10,7 +10,7 @@
  *
  * Run: deno test --no-check --allow-all supabase/functions/_shared/entryConfirmationPatterns.test.ts
  */
-import { detectReversalCandle, type Candle } from "./smcAnalysis.ts";
+import { detectReversalCandle, type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assert,

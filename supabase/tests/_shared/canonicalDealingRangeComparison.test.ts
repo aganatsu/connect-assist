@@ -3,7 +3,7 @@ import {
   buildLast100Comparison,
   comparisonRecordFromClosed,
   comparisonRecordFromRejected,
-} from "./canonicalDealingRangeComparison.ts";
+} from "../../functions/_shared/canonicalDealingRangeComparison.ts";
 
 const canonical = { available: true, allowed: false, percent: 32.4, explanation: "Short rejected" };
 

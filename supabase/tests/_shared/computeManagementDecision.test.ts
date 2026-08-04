@@ -23,7 +23,7 @@ import {
   type ManagementInput,
   type ManagementDecisionConfig,
   type StructureCheckResult,
-} from "./computeManagementDecision.ts";
+} from "../../functions/_shared/computeManagementDecision.ts";
 
 // ─── Fixture Builders ────────────────────────────────────────────────
 

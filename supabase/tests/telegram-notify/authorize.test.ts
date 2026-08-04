@@ -2,8 +2,8 @@
  * Tests for the telegram-notify relay authorization.
  */
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { authorizeTelegramSend, chatIdsFromPreferences } from "./authorize.ts";
-import type { ClaimsVerifier } from "../_shared/callerAuth.ts";
+import { authorizeTelegramSend, chatIdsFromPreferences } from "../../functions/telegram-notify/authorize.ts";
+import type { ClaimsVerifier } from "../../functions/_shared/callerAuth.ts";
 
 const VALID_JWT = "valid.user.jwt";
 const verifier: ClaimsVerifier = (token) =>

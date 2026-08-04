@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { shouldCreatePendingZoneOrder } from "./botConfigBehavior.ts";
+import { shouldCreatePendingZoneOrder } from "../../functions/_shared/botConfigBehavior.ts";
 
 Deno.test("Pending Zone Orders: disabled cannot be overridden by hard-zone routing", () => {
   assertEquals(

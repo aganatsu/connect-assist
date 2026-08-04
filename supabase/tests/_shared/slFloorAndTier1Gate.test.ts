@@ -6,9 +6,9 @@
  * Run: deno test --allow-all supabase/functions/_shared/slFloorAndTier1Gate.test.ts
  */
 
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { manageOpenPositions } from "./scannerManagement.ts";
-import { SPECS, type Candle } from "./smcAnalysis.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
+import { SPECS, type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assert,

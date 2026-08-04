@@ -12,7 +12,7 @@ import {
   type ExecutionResult,
   type ExpectedPosition,
   type BrokerPosition,
-} from "./multiBrokerFailover.ts";
+} from "../../functions/_shared/multiBrokerFailover.ts";
 
 // ─── Test Fixtures ───────────────────────────────────────────────────
 

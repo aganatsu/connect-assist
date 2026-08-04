@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildStrategyEvidenceSource } from "./strategyEvidenceSource.ts";
+import { buildStrategyEvidenceSource } from "../../functions/_shared/strategyEvidenceSource.ts";
 
 Deno.test("evidence source collapses repeated rejections and partial trade rows", () => {
   const rawDetail = {

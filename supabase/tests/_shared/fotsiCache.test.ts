@@ -10,8 +10,8 @@ import {
   getFOTSIWithCache,
   isNearDailyClose,
   type CachedFOTSI,
-} from "./fotsiCache.ts";
-import type { FOTSIResult } from "./fotsi.ts";
+} from "../../functions/_shared/fotsiCache.ts";
+import type { FOTSIResult } from "../../functions/_shared/fotsi.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

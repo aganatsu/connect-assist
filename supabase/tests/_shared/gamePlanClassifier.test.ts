@@ -5,7 +5,7 @@ import {
 import {
   classifyGamePlan,
   type BiasEvidence,
-} from "./gamePlanClassifier.ts";
+} from "../../functions/_shared/gamePlanClassifier.ts";
 
 function evidence(overrides: Partial<Record<string, "bullish" | "bearish" | "neutral">> = {}): BiasEvidence[] {
   const rows: Array<[string, string, number, "bullish" | "bearish" | "neutral"]> = [

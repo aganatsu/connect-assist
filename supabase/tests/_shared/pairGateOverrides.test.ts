@@ -12,7 +12,7 @@
  * Run: deno test --no-check --allow-all supabase/functions/_shared/pairGateOverrides.test.ts
  */
 
-import { mapNestedToFlat, applyPairOverrides, RUNTIME_DEFAULTS } from "./configMapper.ts";
+import { mapNestedToFlat, applyPairOverrides, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ─── Test 1: No overrides → config unchanged ──────────────────────────

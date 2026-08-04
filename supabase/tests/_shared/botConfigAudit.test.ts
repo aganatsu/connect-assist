@@ -9,9 +9,9 @@
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { DEFAULT_FACTOR_WEIGHTS, runConfluenceAnalysis } from "./confluenceScoring.ts";
-import { generateInstrumentGamePlan } from "./gamePlan.ts";
-import { Candle, SPECS } from "./smcAnalysis.ts";
+import { DEFAULT_FACTOR_WEIGHTS, runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
+import { generateInstrumentGamePlan } from "../../functions/_shared/gamePlan.ts";
+import { Candle, SPECS } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

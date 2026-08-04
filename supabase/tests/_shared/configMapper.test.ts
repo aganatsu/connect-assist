@@ -22,7 +22,7 @@
  * Run: deno test --no-check --allow-all supabase/functions/_shared/configMapper.test.ts
  */
 
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../../functions/_shared/configMapper.ts";
 import {
   assertEquals,
   assertAlmostEquals,

@@ -3,12 +3,12 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { deriveWatchlistInvalidation } from "./watchlistInvalidation.ts";
+import { deriveWatchlistInvalidation } from "../../functions/_shared/watchlistInvalidation.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
   WATCHLIST_LIFECYCLE_EVIDENCE_VERSION,
-} from "./watchlistLifecycleEvidence.ts";
+} from "../../functions/_shared/watchlistLifecycleEvidence.ts";
 
 const root = new URL("../../../", import.meta.url);
 const scanner = Deno.readTextFileSync(

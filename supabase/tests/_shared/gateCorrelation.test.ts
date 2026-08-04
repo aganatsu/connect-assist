@@ -16,10 +16,10 @@
  */
 
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { getCorrelation, getDirectionalCorrelation } from "./portfolioCorrelation.ts";
-import { SMT_PAIRS } from "./smcAnalysis.ts";
-import { parsePairCurrencies } from "./fotsi.ts";
-import { checkCorrelationExposure } from "./gateCorrelation.ts";
+import { getCorrelation, getDirectionalCorrelation } from "../../functions/_shared/portfolioCorrelation.ts";
+import { SMT_PAIRS } from "../../functions/_shared/smcAnalysis.ts";
+import { parsePairCurrencies } from "../../functions/_shared/fotsi.ts";
+import { checkCorrelationExposure } from "../../functions/_shared/gateCorrelation.ts";
 
 // ─── Replicate bot-scanner Gate 22 logic as reference ────────────────────────
 // This is the LITERAL logic from bot-scanner/index.ts lines 1421-1519,
@@ -610,7 +610,7 @@ Deno.test("Correlation gate — DIVERGENCE: opposite direction now detected as h
 //   configMapper: correlationFilterEnabled=true,  maxCorrelatedPositions=2
 // After the fix, both resolve to: false / 1 / 0.8
 
-import { RUNTIME_DEFAULTS, mapNestedToFlat } from "./configMapper.ts";
+import { RUNTIME_DEFAULTS, mapNestedToFlat } from "../../functions/_shared/configMapper.ts";
 
 Deno.test("Default-path agreement — RUNTIME_DEFAULTS match bot-scanner inline defaults", () => {
   // bot-scanner inline defaults (line 900-902):

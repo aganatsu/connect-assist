@@ -5,7 +5,7 @@ import {
 import {
   buildStrategyEvidenceCertificate,
   type StrategyEvidenceObservation,
-} from "./strategyEvidenceCertificate.ts";
+} from "../../functions/_shared/strategyEvidenceCertificate.ts";
 
 function observation(
   index: number,

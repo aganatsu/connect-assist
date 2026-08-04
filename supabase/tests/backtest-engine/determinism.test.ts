@@ -16,7 +16,7 @@ import {
   SPECS,
   calcPnl,
   calculatePositionSize,
-} from "../_shared/smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assertAlmostEquals,

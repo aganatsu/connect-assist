@@ -15,7 +15,7 @@ import {
   computeTrailRatchet,
   computeAdaptiveTrail,
   type TrailRatchetInput,
-} from "./exitEngine.ts";
+} from "../../functions/_shared/exitEngine.ts";
 import {
   assertEquals,
   assert,

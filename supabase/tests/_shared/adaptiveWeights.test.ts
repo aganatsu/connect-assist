@@ -7,8 +7,8 @@ import {
   DEFAULT_ADAPTIVE_CONFIG,
   type TradeRecord,
   type AdaptiveWeightsConfig,
-} from "./adaptiveWeights.ts";
-import { DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
+} from "../../functions/_shared/adaptiveWeights.ts";
+import { DEFAULT_FACTOR_WEIGHTS } from "../../functions/_shared/confluenceScoring.ts";
 
 // ─── Helper: Generate synthetic trade records ────────────────────────
 

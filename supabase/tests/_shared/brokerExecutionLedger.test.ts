@@ -4,7 +4,7 @@ import {
   classifyBrokerExecutionResponse,
   completeBrokerExecution,
   executeBrokerOrderWithLedger,
-} from "./brokerExecutionLedger.ts";
+} from "../../functions/_shared/brokerExecutionLedger.ts";
 
 Deno.test("broker execution claim maps RPC response", async () => {
   const calls: any[] = [];

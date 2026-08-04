@@ -4,7 +4,7 @@ import {
   evaluateICTKillZone,
   DEFAULT_ICT_KILLZONE_CONFIG,
   type ICTKillZoneConfig,
-} from "./ictKillZones.ts";
+} from "../../functions/_shared/ictKillZones.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────
 

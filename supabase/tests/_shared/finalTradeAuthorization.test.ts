@@ -5,7 +5,7 @@ import {
 import {
   evaluateFinalTradeAuthorization,
   type FinalTradeAuthorizationInput,
-} from "./finalTradeAuthorization.ts";
+} from "../../functions/_shared/finalTradeAuthorization.ts";
 
 const validThesis = {
   valid: true,

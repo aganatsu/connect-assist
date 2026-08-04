@@ -4,8 +4,8 @@
  * and when enabled, it fires as before.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { manageOpenPositions } from "./scannerManagement.ts";
-import { SPECS } from "./smcAnalysis.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
+import { SPECS } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────
 const SYMBOL = "EUR/USD";

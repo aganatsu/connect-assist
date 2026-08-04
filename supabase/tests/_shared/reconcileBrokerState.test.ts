@@ -18,7 +18,7 @@ import {
   type ReconcilePosition,
   type BrokerConnection,
   type ReconcileOptions,
-} from "./reconcileBrokerState.ts";
+} from "../../functions/_shared/reconcileBrokerState.ts";
 import {
   assertEquals,
   assert,

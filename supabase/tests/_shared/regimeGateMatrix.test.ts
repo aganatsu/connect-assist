@@ -16,8 +16,8 @@
  * daily candles for regime classification.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { manageOpenPositions } from "./scannerManagement.ts";
-import { SPECS } from "./smcAnalysis.ts";
+import { manageOpenPositions } from "../../functions/_shared/scannerManagement.ts";
+import { SPECS } from "../../functions/_shared/smcAnalysis.ts";
 
 const SYMBOL = "EUR/USD";
 const ENTRY_PRICE = 1.08500;

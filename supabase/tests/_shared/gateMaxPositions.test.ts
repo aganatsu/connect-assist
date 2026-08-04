@@ -9,7 +9,7 @@
  *   openPositionCount <  maxOpenPositions → PASS (room for one more)
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkMaxPositions } from "./gateMaxPositions.ts";
+import { checkMaxPositions } from "../../functions/_shared/gateMaxPositions.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { SingleOwnershipDecisionResult } from "./singleOwnershipDecision.ts";
-import type { SingleOwnershipEnforcementResult } from "./singleOwnershipEnforcement.ts";
-import { resolveSingleOwnershipScanOutcome } from "./singleOwnershipScanOutcome.ts";
+import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
+import type { SingleOwnershipEnforcementResult } from "../../functions/_shared/singleOwnershipEnforcement.ts";
+import { resolveSingleOwnershipScanOutcome } from "../../functions/_shared/singleOwnershipScanOutcome.ts";
 
 function decision(
   value: "allow" | "watch" | "block" | "unavailable",

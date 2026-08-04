@@ -11,7 +11,7 @@
  */
 
 import { assertEquals, assert, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { detectLiquidityPools, calculateATR, type Candle } from "./smcAnalysis.ts";
+import { detectLiquidityPools, calculateATR, type Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 

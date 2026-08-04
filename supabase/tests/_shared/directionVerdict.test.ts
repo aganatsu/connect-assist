@@ -8,7 +8,7 @@ import {
   type DirectionVerdictInput,
   type DirectionVerdictResult,
   DEFAULT_VERDICT_CONFIG,
-} from "./directionVerdict.ts";
+} from "../../functions/_shared/directionVerdict.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 

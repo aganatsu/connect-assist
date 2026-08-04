@@ -14,7 +14,7 @@ import {
   ATR_SL_FLOOR_MULTIPLIER,
   calculateATR,
   calculatePositionSize,
-} from "../_shared/smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 import { assertEquals, assert, assertAlmostEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────

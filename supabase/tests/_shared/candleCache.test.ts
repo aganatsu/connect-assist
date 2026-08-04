@@ -2,7 +2,7 @@
  * candleCache.test.ts — Tests for persistent candle cache (kv_cache backed).
  */
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { getCachedCandles, setCachedCandles, batchGetCachedCandles, batchSetCachedCandles } from "./candleCache.ts";
+import { getCachedCandles, setCachedCandles, batchGetCachedCandles, batchSetCachedCandles } from "../../functions/_shared/candleCache.ts";
 
 // ── Mock Supabase client ──
 function createMockSupabase() {

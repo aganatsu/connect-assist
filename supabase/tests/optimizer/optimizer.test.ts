@@ -15,7 +15,7 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { TPEOptimizer, ParameterSpec, Trial } from "./lib/tpe.ts";
+import { TPEOptimizer, ParameterSpec, Trial } from "../../functions/optimizer/lib/tpe.ts";
 import {
   getFullParameterSpace,
   getCoreParameterSpace,
@@ -24,13 +24,13 @@ import {
   validateParams,
   enforceMaxDelta,
   FACTOR_WEIGHT_DEFAULTS,
-} from "./lib/parameterSpace.ts";
+} from "../../functions/optimizer/lib/parameterSpace.ts";
 import {
   computeCompositeScore,
   OptimizationLoop,
   BacktestResult,
-} from "./lib/optimizationLoop.ts";
-import { extractBacktestResult } from "./lib/backtestRunner.ts";
+} from "../../functions/optimizer/lib/optimizationLoop.ts";
+import { extractBacktestResult } from "../../functions/optimizer/lib/backtestRunner.ts";
 
 // ═══════════════════════════════════════════════════
 // TPE Algorithm Tests

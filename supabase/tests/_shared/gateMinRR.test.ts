@@ -8,7 +8,7 @@
  * Also tests edge cases and the commission-aware path.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkMinRR, type MinRRGateInput } from "./gateMinRR.ts";
+import { checkMinRR, type MinRRGateInput } from "../../functions/_shared/gateMinRR.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@
  * Run: deno test --allow-all supabase/functions/bot-scanner/standaloneSweepGate.test.ts
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
+import { evaluateStandaloneSweepGate } from "../../functions/_shared/standaloneSweepGate.ts";
 
 Deno.test("bot-scanner uses canonical standalone sweep authority, not nearby-pool count", () => {
   const scanner = Deno.readTextFileSync(

@@ -2,7 +2,7 @@ import {
   assertEquals,
   assertRejects,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { SessionGamePlan } from "./gamePlan.ts";
+import type { SessionGamePlan } from "../../functions/_shared/gamePlan.ts";
 import {
   type ActiveGamePlanRow,
   applyGamePlanValidityWindow,
@@ -11,7 +11,7 @@ import {
   gamePlanToScanLogDetails,
   persistActiveGamePlan,
   rowsToSessionGamePlan,
-} from "./gamePlanStore.ts";
+} from "../../functions/_shared/gamePlanStore.ts";
 
 function makePlan(): SessionGamePlan {
   return {

@@ -6,8 +6,8 @@ import {
   runICTHTFAnalysis,
   DEFAULT_ICT_HTF_CONFIG,
   type ICTHTFResult,
-} from "./ictHTFIntegration.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/ictHTFIntegration.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

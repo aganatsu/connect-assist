@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { SingleOwnershipDecisionResult } from "./singleOwnershipDecision.ts";
-import { evaluateSingleOwnershipEnforcement } from "./singleOwnershipEnforcement.ts";
+import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
+import { evaluateSingleOwnershipEnforcement } from "../../functions/_shared/singleOwnershipEnforcement.ts";
 
 const decision = (value: "allow" | "block" | "watch" | "unavailable") => ({
   decision: value,

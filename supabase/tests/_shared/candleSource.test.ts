@@ -17,7 +17,7 @@ import {
   endScanSourceTally,
   resetThrottleStats,
   type SourceTally,
-} from "./candleSource.ts";
+} from "../../functions/_shared/candleSource.ts";
 import {
   assert,
   assertEquals,

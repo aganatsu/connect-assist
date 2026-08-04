@@ -9,7 +9,7 @@ import {
   resolveAuthenticatedUserId,
   resolveCallerScopedUserId,
   secretsMatch,
-} from "./callerAuth.ts";
+} from "../../functions/_shared/callerAuth.ts";
 
 const SERVICE_ROLE_KEY = "service-role-key-value";
 const VALID_JWT = "valid.user.jwt";

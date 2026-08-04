@@ -7,7 +7,7 @@ import {
   directionVerdictRowToDecision,
   loadActiveDirectionVerdicts,
   persistActiveDirectionVerdict,
-} from "./directionVerdictStore.ts";
+} from "../../functions/_shared/directionVerdictStore.ts";
 
 const row = {
   id: "33333333-3333-4333-8333-333333333333",

@@ -5,8 +5,8 @@ import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.
 import {
   analyzeWeeklyBiasAndDOL,
   type WeeklyBiasResult,
-} from "./weeklyBiasDOL.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/weeklyBiasDOL.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

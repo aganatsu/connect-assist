@@ -2,7 +2,7 @@
  * exitEngine.test.ts — Unit tests for regime-adaptive TP and momentum-fade trailing
  */
 import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { adjustTPForRegime, computeAdaptiveTrail, type RegimeInfo } from "./exitEngine.ts";
+import { adjustTPForRegime, computeAdaptiveTrail, type RegimeInfo } from "../../functions/_shared/exitEngine.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────
 

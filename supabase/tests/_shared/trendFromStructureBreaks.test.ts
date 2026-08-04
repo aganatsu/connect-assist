@@ -18,7 +18,7 @@
  *
  * Run: deno test --allow-all supabase/functions/_shared/trendFromStructureBreaks.test.ts
  */
-import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
+import { analyzeMarketStructure, type Candle } from "../../functions/_shared/smcAnalysis.ts";
 import {
   assertEquals,
   assert,

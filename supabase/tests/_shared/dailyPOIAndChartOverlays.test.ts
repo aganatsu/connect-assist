@@ -11,11 +11,11 @@
  */
 
 import { assertEquals, assert, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { runConfluenceAnalysis } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "../../functions/_shared/confluenceScoring.ts";
 import {
   analyzeMarketStructure, detectFVGs, detectOrderBlocks, detectBreakerBlocks,
   type Candle,
-} from "./smcAnalysis.ts";
+} from "../../functions/_shared/smcAnalysis.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 

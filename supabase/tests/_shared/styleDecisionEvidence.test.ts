@@ -2,15 +2,15 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { generateInstrumentGamePlan } from "./gamePlan.ts";
+import { generateInstrumentGamePlan } from "../../functions/_shared/gamePlan.ts";
 import {
   bindTimeframeCandles,
   buildTimeframeCandleMap,
   resolveTimeframeAuthority,
-} from "./timeframeAuthority.ts";
-import { buildStyleDecisionEvidence } from "./styleDecisionEvidence.ts";
-import { STYLE_TIMEFRAME_ROLES } from "./stylePolicy.ts";
-import type { Candle } from "./smcAnalysis.ts";
+} from "../../functions/_shared/timeframeAuthority.ts";
+import { buildStyleDecisionEvidence } from "../../functions/_shared/styleDecisionEvidence.ts";
+import { STYLE_TIMEFRAME_ROLES } from "../../functions/_shared/stylePolicy.ts";
+import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 function candles(
   count: number,

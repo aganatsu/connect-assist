@@ -24,7 +24,7 @@ import {
   FTMO_1STEP_DEFAULTS,
   type PropFirmConfig,
   type PropFirmDailyState,
-} from "./propFirmRisk.ts";
+} from "../../functions/_shared/propFirmRisk.ts";
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 

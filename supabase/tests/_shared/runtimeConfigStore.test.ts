@@ -5,7 +5,7 @@ import {
 import {
   buildFrozenRuntimeConfigSnapshot,
   loadEffectiveRuntimeConfig,
-} from "./runtimeConfigStore.ts";
+} from "../../functions/_shared/runtimeConfigStore.ts";
 
 type ConfigRow = {
   id: string;

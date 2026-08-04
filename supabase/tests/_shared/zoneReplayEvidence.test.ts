@@ -7,7 +7,7 @@ import {
   deterministicReplayScanCycleId,
   persistZoneReplayEvidence,
   ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
-} from "./zoneReplayEvidence.ts";
+} from "../../functions/_shared/zoneReplayEvidence.ts";
 
 function candidate(
   candidateId: string,

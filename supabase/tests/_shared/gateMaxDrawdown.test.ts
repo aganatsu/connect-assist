@@ -16,7 +16,7 @@
  *   compatibility with backtest-engine's `reason.split(":")[0]` diagnostics aggregation.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { checkMaxDrawdown } from "./gateMaxDrawdown.ts";
+import { checkMaxDrawdown } from "../../functions/_shared/gateMaxDrawdown.ts";
 
 // ─── Helper: simulate the OLD inline logic from each engine ──────────
 

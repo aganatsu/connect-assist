@@ -8,7 +8,7 @@ import {
   compareGoldenReplaySnapshots,
   finalizeGoldenReplaySnapshot,
   type GoldenReplayInput,
-} from "./goldenReplay.ts";
+} from "../../functions/_shared/goldenReplay.ts";
 
 function fixture(
   surface: GoldenReplayInput["surface"],
