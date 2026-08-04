@@ -240,13 +240,17 @@ import {
 } from "../_shared/styleDecisionEvidence.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import {
+  confirmationEvidenceLines,
+  confirmationMethodLabel,
   crossTimeframeAuthorityLine,
+  diagnosticScoreLine,
   directionVerdictLines,
   durationLabel,
   parseSignalReason,
   rMultiple,
   styleLadderLines,
   tgLine,
+  tradeAuthorityLines,
   watchlistOriginLines,
   zoneEvidenceLines,
 } from "../_shared/telegramDetail.ts";
@@ -2360,12 +2364,10 @@ async function runScanForUser(
           pending,
           config,
         );
-        const pendingConfirmationLabel =
-          pendingConfirmationMethod === "indicators"
-            ? "indicator consensus"
-            : pendingConfirmationMethod === "choch_and_indicators"
-            ? "CHoCH + indicator consensus"
-            : "CHoCH/BOS";
+        const pendingConfirmationLabel = confirmationMethodLabel(
+          pendingConfirmationMethod,
+          (pending as any).indicator_min_count || (config as any).indicatorMinCount || 3,
+        );
 
         // Check expiry first
         if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
@@ -2539,14 +2541,15 @@ async function runScanForUser(
                 tgLine("Planned SL", fmtPx(pending.stop_loss, pending.symbol)) +
                 tgLine("Planned TP", fmtPx(pending.take_profit, pending.symbol)) +
                 tgLine("Size", pending.size ? `${pending.size} lots` : null) +
-                tgLine("Score", pending.signal_score) +
-                tgLine("Waiting for", `${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}`) +
+                tgLine("Waiting for", (pending.direction === "short" ? "Bearish " : "Bullish ") + pendingConfirmationLabel) +
                 tgLine("Waited in Zone Setup", durationLabel(pending.created_at)) +
                 "\n" +
+                tradeAuthorityLines(touchSR) +
                 zoneEvidenceLines(touchSR) +
                 directionVerdictLines(touchSR.directionVerdict) +
                 styleLadderLines(touchSR) +
-                watchlistOriginLines(touchSR);
+                watchlistOriginLines(touchSR) +
+                diagnosticScoreLine(pending.signal_score);
               await Promise.all(telegramChatIds.map(async (chatId: string) => {
                 try {
                   await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -3149,31 +3152,23 @@ async function runScanForUser(
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
-            const confTierLabel = confirmedSignal.tier ? ` T${confirmedSignal.tier}` : "";
-            const confSupporting = Array.isArray(confirmedSignal.supportingSignals) && confirmedSignal.supportingSignals.length > 0
-              ? `\n<b>Supporting:</b> ${confirmedSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
-              : "";
             const confAttempts = (pending.confirmation_attempts || 0) > 0
               ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
               : "";
             // Build specific confirmation method label
             const confMethodUsed = confMethod;
-            const confMethodLabel = confMethodUsed === "choch" ? "CHoCH/BOS" : confMethodUsed === "indicators" ? "Indicator Consensus" : "CHoCH + Indicators";
-            const confMethodDetail = confMethodUsed === "indicators"
-              ? `\n<b>Mode:</b> ${confMethodLabel} (${confirmationIndicatorMinimum}/4 indicators required)`
-              : confMethodUsed === "choch_and_indicators"
-              ? `\n<b>Mode:</b> ${confMethodLabel} (CHoCH + ${confirmationIndicatorMinimum}/4 indicators)`
-              : `\n<b>Mode:</b> ${confMethodLabel}`;
+            const confMethodLabel = confirmationMethodLabel(confMethodUsed, confirmationIndicatorMinimum);
+            const confMethodDetail = "\n<b>Method:</b> " + confMethodLabel;
             // Build TP method label
             const tpMethodUsed = config.tpMethod || "rr_ratio";
             const tpMethodLabel = tpMethodUsed === "rr_ratio" ? `R:R (${config.tpRatio || 2.0}:1)` : tpMethodUsed === "next_level" ? "Next Structure Level" : tpMethodUsed === "fixed_pips" ? "Fixed Pips" : `ATR ×${config.tpATRMultiple || 2.0}`;
-            const fillSR = parseSignalReason(pending.signal_reason);
+            const fillSR = signalReason;
             const fillRR = (() => {
               const e = Number(actualFillPrice), s = Number(pending.stop_loss), t = Number(pending.take_profit);
               if (![e, s, t].every(Number.isFinite) || Math.abs(e - s) <= 0) return null;
               return (Math.abs(t - e) / Math.abs(e - s)).toFixed(2);
             })();
-            const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
+            const msg = emoji + " <b>" + mode + " CONFIRMED Entry</b>\n\n" +
               tgLine("Symbol", pending.symbol) +
               tgLine("Direction", String(pending.direction).toUpperCase()) +
               tgLine("Size", `${pending.size} lots`) +
@@ -3182,16 +3177,17 @@ async function runScanForUser(
               tgLine("SL", fmtPx(pending.stop_loss, pending.symbol)) +
               tgLine("TP", `${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})`) +
               (fillRR ? tgLine("Planned R:R", `${fillRR}:1`) : "") +
-              tgLine("Score", pending.signal_score) +
               tgLine("Time in Zone", durationLabel(pending.zone_touch_time)) +
               "\n" +
+              tradeAuthorityLines(fillSR) +
               zoneEvidenceLines(fillSR) +
               directionVerdictLines(fillSR.directionVerdict) +
               styleLadderLines(fillSR) +
               "\n" +
               `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
-              `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
-              confSupporting + `\n` +
+              confirmationEvidenceLines(confirmedSignal) +
+              tgLine("Attempts", confAttempts ? confAttempts.replace(" | ", "") : null) +
+              diagnosticScoreLine(pending.signal_score) +
               `<b>Zone:</b> ${pending.entry_zone_type} [${fmtPx(pending.entry_zone_low || "0", pending.symbol)} – ${fmtPx(pending.entry_zone_high || "0", pending.symbol)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
@@ -8433,7 +8429,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -8536,11 +8532,11 @@ async function runScanForUser(
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
             // Confirmation method label for zone setup notification
             const zoneConfMethod = pairConfig.confirmationMethod || "choch";
-            const zoneConfLabel = zoneConfMethod === "choch" ? "CHoCH/BOS" : zoneConfMethod === "indicators" ? `Indicator Consensus (${pairConfig.indicatorMinCount || 3}/4)` : `CHoCH + Indicators (${pairConfig.indicatorMinCount || 3}/4)`;
+            const zoneConfLabel = confirmationMethodLabel(zoneConfMethod, pairConfig.indicatorMinCount || 3);
             // TP method label
             const zoneTpMethod = pairConfig.tpMethod || "rr_ratio";
             const zoneTpLabel = zoneTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : zoneTpMethod === "next_level" ? "Next Structure Level" : zoneTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR \u00d7${pairConfig.tpATRMultiple || 2.0}`;
-            const zoneSR = { impulseZone: (detail as any).impulseZone || null };
+            const zoneSR = detail as any;
             const zoneRR = (() => {
               const risk = Math.abs(limitEntry.price - limitSL);
               return risk > 0 ? (Math.abs(limitTP - limitEntry.price) / risk).toFixed(2) : null;
@@ -8556,9 +8552,9 @@ async function runScanForUser(
               tgLine("SL", fmtPx(limitSL, pair)) +
               tgLine("TP", `${fmtPx(limitTP, pair)} (${zoneTpLabel})`) +
               (zoneRR ? tgLine("Planned R:R", `${zoneRR}:1`) : "") +
-              tgLine("Score", analysis.score.toFixed(1)) +
               tgLine("Session", analysis.session?.name) +
               "\n" +
+              tradeAuthorityLines(zoneSR) +
               zoneEvidenceLines(zoneSR) +
               directionVerdictLines((detail as any).directionVerdict) +
               styleLadderLines({}, timeframeAuthority?.roles) +
@@ -8566,7 +8562,8 @@ async function runScanForUser(
               "\n" +
               tgLine("Confirm Mode", zoneConfLabel) +
               tgLine("Confirmation", unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone") +
-              tgLine("Expires", `${expiryMinutes}min`) +
+              tgLine("Expires", expiryMinutes + "min") +
+              diagnosticScoreLine(analysis.score) +
               (isPromotedFromStaging && existingStaged ? `
 
 📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
@@ -9259,7 +9256,7 @@ async function runScanForUser(
           impulseZone: (detail as any).impulseZone || null,
           directionVerdict: (detail as any).directionVerdict || null,
           gamePlanShadowAudit:
-            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
+            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
           signalSource: (detail as any).signalSource || null,
           timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
           unifiedZone: (detail as any).unifiedZone || null,
@@ -9428,7 +9425,7 @@ async function runScanForUser(
             const risk = Math.abs(marketEntryPrice - sl);
             return risk > 0 ? (Math.abs(tp - marketEntryPrice) / risk).toFixed(2) : null;
           })();
-          const openSR = { impulseZone: (detail as any).impulseZone || null };
+          const openSR = detail as any;
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
             tgLine("Symbol", pair) +
             tgLine("Direction", analysis.direction.toUpperCase()) +
@@ -9437,19 +9434,22 @@ async function runScanForUser(
             tgLine("SL", fmtPx(sl, pair)) +
             tgLine("TP", `${fmtPx(tp, pair)} (${openTpLabel})`) +
             (openRR ? tgLine("Planned R:R", `${openRR}:1`) : "") +
-            tgLine("Score", analysis.score.toFixed(1)) +
             tgLine("Session", analysis.session.name) +
-            tgLine("Setup", `${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)`) +
+            tgLine("Setup", setupClassification.setupType.toUpperCase()) +
             "\n" +
+            tradeAuthorityLines(openSR) +
             zoneEvidenceLines(openSR) +
             directionVerdictLines((detail as any).directionVerdict) +
             styleLadderLines({}, timeframeAuthority?.roles) +
             crossTimeframeAuthorityLine(crossTimeframeAuthority) +
             "\n" +
             tgLine("Summary", analysis.summary || "—") +
+            diagnosticScoreLine(analysis.score) +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "") +
-            (unifiedZoneData?.confirmation ? `\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> ${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " ✓" : ""}\n<b>Detail:</b> ${unifiedZoneData.confirmation.detail}${unifiedZoneData.confirmation.score > 0 ? `\n<b>Score:</b> +${unifiedZoneData.confirmation.score.toFixed(1)}` : ""}` : "");
+            (unifiedZoneData?.confirmation
+              ? "\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> " + unifiedZoneData.confirmation.type.replace(/_/g, " ") + (unifiedZoneData.confirmation.entryReady ? " ✓" : "") + "\n<b>Detail:</b> " + unifiedZoneData.confirmation.detail
+              : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -10324,7 +10324,7 @@ async function runScanForUser(
               priceAtRejection: analysis.lastPrice,
               rawDetail: {
                 scanCycleId,
-                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
+                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
                 thesisConviction: (detail as any).thesisConviction || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 impulseZone: (detail as any).impulseZone || null,
