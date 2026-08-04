@@ -9,7 +9,7 @@ const policy = await Deno.readTextFile("./supabase/functions/_shared/singleOwner
 Deno.test("enforcement follows the selected account while legacy live values remain compatible", () => {
   assertStringIncludes(endpoint, '"observe", "enforce", "enforce_live"');
   assertStringIncludes(ui, '<SelectItem value="enforce">Enforce</SelectItem>');
-  assertStringIncludes(ui, 'singleOwnershipMode === "enforce_live" ? "enforce"');
+  assertStringIncludes(ui, 'config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"');
   assertStringIncludes(policy, 'requestedMode === "enforce" || requestedMode === "enforce_live"');
 });
 

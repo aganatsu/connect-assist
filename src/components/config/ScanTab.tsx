@@ -362,22 +362,22 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
-          <FieldGroup label="Single-Ownership Scanner" description="Observe decisions or enforce them on the selected account">
-            <Select value={config.strategy?.singleOwnershipMode === "enforce_live" ? "enforce" : (config.strategy?.singleOwnershipMode ?? "observe")} onValueChange={v => updateField("strategy", "singleOwnershipMode", v)}>
+          <FieldGroup label="Decision Authority" description="Observe decisions or enforce the unified authority on the selected account">
+            <Select
+              value={config.strategy?.singleOwnershipMode === "enforce" || config.strategy?.singleOwnershipMode === "enforce_live" || config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"}
+              onValueChange={v => setConfig((previous: any) => ({
+                ...previous,
+                strategy: {
+                  ...(previous.strategy || {}),
+                  singleOwnershipMode: v,
+                  streamlinedDecisionMode: "observe",
+                },
+              }))}
+            >
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="observe">Observe</SelectItem>
                 <SelectItem value="enforce">Enforce</SelectItem>
-              </SelectContent>
-            </Select>
-          </FieldGroup>
-          <FieldGroup label="Streamlined Decision" description="Off, observe, or evidence-certified enforcement">
-            <Select value={config.strategy?.streamlinedDecisionMode ?? "observe"} onValueChange={v => updateField("strategy", "streamlinedDecisionMode", v)}>
-              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">Off</SelectItem>
-                <SelectItem value="observe">Observe</SelectItem>
-                <SelectItem value="enforce">Enforce (Certificate Required)</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>
