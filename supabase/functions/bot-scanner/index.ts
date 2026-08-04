@@ -5949,7 +5949,7 @@ async function runScanForUser(
                 observedAt: new Date().toISOString(),
               },
             },
-          }).eq("id", streamlinedStagedId).eq("user_id", userId);
+          }).eq("id", existingStaged.id).eq("user_id", userId);
           if (updateError) throw new Error(updateError.message);
           detail.staging = {
             action: executionEligible
@@ -5963,6 +5963,8 @@ async function runScanForUser(
           console.warn(
             `[staging] Failed to update ${pair} unified watch: ${error?.message}`,
           );
+          detail.error = error?.message || "Watchlist update failed";
+          detail.skipReason = "Watchlist persistence failed: " + detail.error;
           return "failed";
         }
       }
@@ -6044,6 +6046,8 @@ async function runScanForUser(
         console.warn(
           `[staging] Failed to create ${setupType} for ${pair}: ${error.message}`,
         );
+        detail.error = error.message;
+        detail.skipReason = "Watchlist persistence failed: " + error.message;
         return "failed";
       }
       stagedNew++;
@@ -6107,7 +6111,8 @@ async function runScanForUser(
         ? "Unified zone remains valid, but the local sweep did not reject; a fresh trigger and confirmation are required"
         : "Unified zone is complete but its entry trigger is not ready";
       if (watchResult === "failed") {
-        detail.status = "unified_watch_insert_failed";
+        detail.status = "unified_watch_persist_failed";
+        detail.skipReason = detail.skipReason || "Watchlist persistence failed";
       }
       scanDetails.push(detail);
       continue;
@@ -6389,7 +6394,7 @@ async function runScanForUser(
                   current_score: analysis.score,
                   scan_cycles: existingStaged.scan_cycles + 1,
                   last_eval_at: new Date().toISOString(),
-                }).eq("id", streamlinedStagedId);
+                }).eq("id", existingStaged.id);
                 console.log(`[staging] Updated STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — cycle ${existingStaged.scan_cycles + 1}`);
               }
             } catch (e: any) {
@@ -6859,7 +6864,7 @@ async function runScanForUser(
             : `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
             last_eval_at: new Date().toISOString(),
             scan_cycles: existingStaged.scan_cycles + 1,
-          }).eq("id", streamlinedStagedId);
+          }).eq("id", existingStaged.id);
           console.log(`[staging] ELIGIBLE ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}%; evaluating remaining gates`);
         } catch (e: any) {
           console.warn(`[staging] Failed to update qualified ${pair}: ${e?.message}`);
@@ -6884,7 +6889,7 @@ async function runScanForUser(
               existingStaged.analysis_snapshot?.impulseZone?.impulse,
             ).level,
             tp_level: analysis.takeProfit,
-          }).eq("id", streamlinedStagedId);
+          }).eq("id", existingStaged.id);
           console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
         } catch (e: any) {
           console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
