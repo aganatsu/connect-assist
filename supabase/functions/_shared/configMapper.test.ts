@@ -1021,15 +1021,19 @@ Deno.test("single ownership mode defaults to observe and maps paper enforcement"
   }).singleOwnershipMode, "enforce");
 });
 
-Deno.test("single ownership maps explicit live enforcement", () => {
-  assertEquals(mapNestedToFlat({
+Deno.test("legacy live enforcement migrates to unified enforcement", () => {
+  const mapped = mapNestedToFlat({
     strategy: { singleOwnershipMode: "enforce_live" },
-  }).singleOwnershipMode, "enforce_live");
+  });
+  assertEquals(mapped.singleOwnershipMode, "enforce");
+  assertEquals(mapped.streamlinedDecisionMode, "observe");
 });
 
-Deno.test("streamlined decision mode defaults to observe and maps enforcement", () => {
+Deno.test("legacy streamlined enforcement migrates to the sole decision authority", () => {
   assertEquals(mapNestedToFlat({}).streamlinedDecisionMode, "observe");
-  assertEquals(mapNestedToFlat({
+  const mapped = mapNestedToFlat({
     strategy: { streamlinedDecisionMode: "enforce" },
-  }).streamlinedDecisionMode, "enforce");
+  });
+  assertEquals(mapped.singleOwnershipMode, "enforce");
+  assertEquals(mapped.streamlinedDecisionMode, "observe");
 });

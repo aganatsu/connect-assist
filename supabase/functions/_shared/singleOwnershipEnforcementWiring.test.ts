@@ -11,9 +11,10 @@ const ui = await Deno.readTextFile("./src/components/config/ScanTab.tsx");
 Deno.test("single ownership enforcement is default-observe and user visible", () => {
   assertStringIncludes(config, 'singleOwnershipMode: "observe"');
   assertStringIncludes(endpoint, "strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
-  assertStringIncludes(ui, "Single-Ownership Scanner");
+  assertStringIncludes(ui, "Decision Authority");
+  assertStringIncludes(ui, 'streamlinedDecisionMode: "observe"');
   assertStringIncludes(ui, `<SelectItem value="enforce">Enforce</SelectItem>`);
-  assertStringIncludes(ui, `singleOwnershipMode === "enforce_live" ? "enforce"`);
+  assertStringIncludes(ui, `config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"`);
 });
 
 Deno.test("single ownership bypasses legacy score only when enforcement is requested", () => {

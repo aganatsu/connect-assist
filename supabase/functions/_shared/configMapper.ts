@@ -509,10 +509,16 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     onlySellInPremium: strategy.onlySellInPremium ?? RUNTIME_DEFAULTS.onlySellInPremium,
     dealingRangeMode: strategy.dealingRangeMode ?? raw.dealingRangeMode ??
       RUNTIME_DEFAULTS.dealingRangeMode,
-    singleOwnershipMode: strategy.singleOwnershipMode ??
-      raw.singleOwnershipMode ?? RUNTIME_DEFAULTS.singleOwnershipMode,
-    streamlinedDecisionMode: strategy.streamlinedDecisionMode ??
-      raw.streamlinedDecisionMode ?? RUNTIME_DEFAULTS.streamlinedDecisionMode,
+    singleOwnershipMode: (() => {
+      const ownership = strategy.singleOwnershipMode ?? raw.singleOwnershipMode;
+      const streamlined = strategy.streamlinedDecisionMode ?? raw.streamlinedDecisionMode;
+      return ownership === "enforce" || ownership === "enforce_live" || streamlined === "enforce"
+        ? "enforce"
+        : "observe";
+    })(),
+    // Retained internally for historical comparison records only. Single Ownership
+    // is the sole execution authority after config normalization.
+    streamlinedDecisionMode: "observe",
 
     // ── P1 Tuning Fields ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? RUNTIME_DEFAULTS.obLookbackCandles,
