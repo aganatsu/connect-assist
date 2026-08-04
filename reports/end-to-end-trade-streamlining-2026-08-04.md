@@ -114,6 +114,17 @@ restore false-open behavior.
 - PR 191: Deno shared-function tests passed; Node lint, tests and build passed.
 - PR 192: Deno shared-function tests passed; Node lint, tests and build passed.
 
+## Game Plan Authority Refresh
+
+Status: Implemented on `feat/independent-game-plan-authority`; deployment pending.
+
+- Refresh is scheduled independently from scanner trade, position, and risk gates.
+- The scheduler checks every 15 minutes and regenerates at 75% of the active style-specific validity window.
+- Only a complete market-eligible plan becomes active; the previous complete plan remains preserved on failure.
+- `game_plan_refresh_status` records attempts, success, expiry, failure reason, and retry time.
+- The Game Plan panel shows an exact failed/running/next-retry state when authority is stale.
+- Required deployment: apply `20260804110000_schedule_game_plan_authority_refresh.sql`, deploy `game-plan-refresh`, then deploy the frontend.
+
 ## Resume Prompt
 
 Read this report, inspect merged PRs after 2026-08-04, verify each phase status

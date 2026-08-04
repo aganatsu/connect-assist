@@ -151,6 +151,16 @@ interface GamePlanLog {
   details_json: GamePlanData;
 }
 
+interface GamePlanRefreshStatus {
+  status: "idle" | "running" | "succeeded" | "failed" | "skipped";
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_retry_at: string | null;
+  active_plan_expires_at: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+}
+
 // ─── API ────────────────────────────────────────────────────────────
 
 async function fetchGamePlans(): Promise<GamePlanLog[]> {
@@ -200,6 +210,16 @@ async function fetchGamePlans(): Promise<GamePlanLog[]> {
       }),
     },
   }));
+}
+
+async function fetchGamePlanRefreshStatus(): Promise<GamePlanRefreshStatus | null> {
+  const { data, error } = await (supabase as any)
+    .from("game_plan_refresh_status")
+    .select("status,last_attempt_at,last_success_at,next_retry_at,active_plan_expires_at,failure_code,failure_message")
+    .eq("bot_id", "smc")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as GamePlanRefreshStatus | null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -611,11 +631,17 @@ export function GamePlanPanel() {
     refetchInterval: 60000, // refresh every minute
   });
 
+  const { data: refreshStatus, refetch: refetchRefreshStatus } = useQuery({
+    queryKey: ["game-plan-refresh-status"],
+    queryFn: fetchGamePlanRefreshStatus,
+    refetchInterval: 60000,
+  });
+
   const refreshGamePlan = useMutation({
     mutationFn: scannerApi.refreshGamePlan,
     onSuccess: async (result) => {
       setSelectedPlanIdx(0);
-      await refetch();
+      await Promise.all([refetch(), refetchRefreshStatus()]);
       toast.success(
         `Game Plan regenerated: ${result.tradeableCount} tradeable, ${result.waitCount} wait, ${result.skipCount} skip`,
       );
@@ -744,9 +770,18 @@ export function GamePlanPanel() {
             >
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
-                STALE PLAN — this version has expired and is shown only for history.
-                It is not current trading authority. The next complete market-eligible
-                refresh will replace it.
+                {refreshStatus?.status === "failed" ? (
+                  <>REFRESH FAILED — {refreshStatus.failure_message || "the scheduled refresh did not complete"}.
+                    {refreshStatus.last_attempt_at && <> Last attempt: {formatDateTime(refreshStatus.last_attempt_at)} ET.</>}
+                    {refreshStatus.next_retry_at && <> Next retry: {formatDateTime(refreshStatus.next_retry_at)} ET.</>}
+                    {" "}This expired version is history only and cannot authorize trading.</>
+                ) : refreshStatus?.status === "running" ? (
+                  <>REFRESH IN PROGRESS — this expired version is history only and cannot authorize trading.</>
+                ) : (
+                  <>STALE PLAN — this version has expired and is shown only for history. It is not current trading authority.
+                    {refreshStatus?.next_retry_at && <> Next scheduled attempt: {formatDateTime(refreshStatus.next_retry_at)} ET.</>}
+                  </>
+                )}
               </span>
             </div>
           )}
