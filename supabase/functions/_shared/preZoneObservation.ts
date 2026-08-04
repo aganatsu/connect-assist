@@ -15,6 +15,7 @@ export interface UnifiedWatchInput {
   score: number;
   watchThreshold: number;
   tier1Count: number;
+  singleOwnershipEnforced?: boolean;
 }
 
 const COMPLETE_WAITING_STATES = new Set([
@@ -59,8 +60,8 @@ export function classifyUnifiedWatch(
   if (
     (input.unifiedState === "no_zone" ||
       input.unifiedState === "no_impulse") &&
-    input.score >= input.watchThreshold &&
-    input.tier1Count >= 1
+    (input.singleOwnershipEnforced === true ||
+      (input.score >= input.watchThreshold && input.tier1Count >= 1))
   ) {
     return "pre_zone_observation";
   }

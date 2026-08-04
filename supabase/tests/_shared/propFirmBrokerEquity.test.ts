@@ -14,7 +14,7 @@ import {
 // ── Test 1: propFirmGate hasBrokerConnection flag in opts type ──
 Deno.test("propFirmGate opts interface includes hasBrokerConnection", async () => {
   const source = await Deno.readTextFile(
-    new URL("./propFirmGate.ts", import.meta.url).pathname,
+    new URL("../../functions/_shared/propFirmGate.ts", import.meta.url).pathname,
   );
   // Verify the new flag exists in the opts interface
   assertStringIncludes(source, "hasBrokerConnection?: boolean");
@@ -28,7 +28,7 @@ Deno.test("propFirmGate opts interface includes hasBrokerConnection", async () =
 // ── Test 2: propFirmGate uses broker equity when available (not just live) ──
 Deno.test("propFirmGate equity priority comment reflects broker-first approach", async () => {
   const source = await Deno.readTextFile(
-    new URL("./propFirmGate.ts", import.meta.url).pathname,
+    new URL("../../functions/_shared/propFirmGate.ts", import.meta.url).pathname,
   );
   // Verify the comment documents the new behavior
   assertStringIncludes(
@@ -41,7 +41,7 @@ Deno.test("propFirmGate equity priority comment reflects broker-first approach",
 // ── Test 3: bot-scanner scopes hasBrokerConnection to live mode ──
 Deno.test("bot-scanner passes a live-scoped hasBrokerConnection flag", async () => {
   const source = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname,
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname,
   );
   // Verify hasBrokerConnection is passed
   assertStringIncludes(
@@ -53,7 +53,7 @@ Deno.test("bot-scanner passes a live-scoped hasBrokerConnection flag", async () 
 // ── Test 4: bot-scanner fetches broker equity only for live execution ──
 Deno.test("bot-scanner fetches broker equity only in live mode", async () => {
   const source = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname,
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname,
   );
   assertStringIncludes(
     source,
@@ -73,7 +73,7 @@ Deno.test("bot-scanner fetches broker equity only in live mode", async () => {
 // ── Test 5: calcPnl NaN guard returns zero for NaN entry ──
 Deno.test("calcPnl NaN guard is present in paper-trading", async () => {
   const source = await Deno.readTextFile(
-    new URL("../paper-trading/index.ts", import.meta.url).pathname,
+    new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
   );
   assertStringIncludes(source, "Number.isFinite(entry)");
   assertStringIncludes(source, "Number.isFinite(current)");
@@ -83,7 +83,7 @@ Deno.test("calcPnl NaN guard is present in paper-trading", async () => {
 // ── Test 6: calcPnl NaN guard logic is correct ──
 Deno.test("calcPnl NaN guard catches all invalid input combinations", async () => {
   const source = await Deno.readTextFile(
-    new URL("../paper-trading/index.ts", import.meta.url).pathname,
+    new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
   );
   // Verify the guard checks all three critical inputs
   assertStringIncludes(

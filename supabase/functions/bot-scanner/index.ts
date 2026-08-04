@@ -50,12 +50,10 @@ import {
   evaluateSingleOwnershipDecision,
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
-import { evaluateStreamlinedEnforcement } from "../_shared/streamlinedDecisionEnforcement.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
-import { loadStreamlinedDecisionCertificate } from "../_shared/streamlinedDecisionCertificateStore.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -1573,8 +1571,6 @@ async function runScanForUser(
     userId,
     botId: BOT_ID,
   });
-  const streamlinedDecisionCertificate =
-    await loadStreamlinedDecisionCertificate(supabase, userId);
   const crossTimeframeActivation = await loadCrossTimeframeActivation(
     supabase,
     {
@@ -6073,6 +6069,7 @@ async function runScanForUser(
       score: analysis.score,
       watchThreshold,
       tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
+      singleOwnershipEnforced: singleOwnershipEnforcementRequested,
     });
 
     if (unifiedGatePassed) {
@@ -7460,21 +7457,8 @@ async function runScanForUser(
         analysis.lastPrice,
       );
       Object.assign(detail as any, streamlinedLifecycle);
-      const streamlinedEnforcement = evaluateStreamlinedEnforcement({
-        requestedMode: (pairConfig as any).streamlinedDecisionMode,
-        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-        style: resolvedStyle,
-        now: new Date().toISOString(),
-        certificate: streamlinedDecisionCertificate,
-        summary: (detail as any).streamlinedTradeDecision,
-      });
-      (detail as any).streamlinedDecisionEnforcement = streamlinedEnforcement;
-      if (streamlinedEnforcement.effectiveMode === "enforce" &&
-          !streamlinedEnforcement.authorized) {
-        gates.push({ passed: false, reason:
-          "[streamlined:" + streamlinedEnforcement.code + "] Streamlined decision did not authorize entry" });
-        allPassed = false;
-      }
+      // Historical Streamlined Decision remains observable. It has no runtime
+      // enforcement object because Single Ownership exclusively controls allPassed.
       const streamlinedStagedId = existingStaged?.id ||
         (detail as any).staging?.setupId || null;
       if (streamlinedStagedId) {

@@ -13,7 +13,7 @@ Deno.test("duplicate Zone Story and Confirmation waiting reasons collapse", () =
 });
 
 Deno.test("Enforce rejection output separates legacy diagnostics from owned reasons", async () => {
-  const source = await Deno.readTextFile(new URL("../bot-scanner/index.ts", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
   const start = source.indexOf("const enforcingOwnedAuthorities");
   const end = source.indexOf("// ── Rejected Setup Logging", start);
   const section = source.slice(start, end);

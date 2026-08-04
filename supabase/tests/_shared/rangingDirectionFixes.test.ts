@@ -294,7 +294,7 @@ Deno.test("Fix 3: Ranging market structure detail mentions 'capped'", () => {
 Deno.test("Fix 4: bot-scanner Gate 1 contains regime veto logic (legacy fallback)", () => {
   // Read the source file and verify the regime-aware gate logic exists in the legacy fallback path
   const source = Deno.readTextFileSync(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname
   );
 
   // Verify the Direction Verdict consolidation is active
@@ -313,7 +313,7 @@ Deno.test("Fix 4: bot-scanner Gate 1 contains regime veto logic (legacy fallback
 
 Deno.test("Fix 4: Gate 1 Direction Verdict replaces legacy regime veto", () => {
   const source = Deno.readTextFileSync(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname
   );
 
   // The Direction Verdict gate should come BEFORE the legacy fallback
@@ -379,7 +379,7 @@ Deno.test("Fix 5: Ranging + low-confidence regime → no HTF Tier 1 promotions",
 
 Deno.test("Fix 5: source contains _skipHTFPromotion guard", () => {
   const source = Deno.readTextFileSync(
-    new URL("./confluenceScoring.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/confluenceScoring.ts", import.meta.url).pathname
   );
 
   assertStringIncludes(source, "_skipHTFPromotion");

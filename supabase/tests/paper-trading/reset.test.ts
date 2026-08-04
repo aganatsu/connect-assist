@@ -13,10 +13,10 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 
 // ── Load source files ──
 const paperSource = Deno.readTextFileSync(
-  new URL("./index.ts", import.meta.url).pathname,
+  new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
 );
 const scannerSource = Deno.readTextFileSync(
-  new URL("../bot-scanner/index.ts", import.meta.url).pathname,
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname,
 );
 
 // ═══════════════════════════════════════════════════════════════════════

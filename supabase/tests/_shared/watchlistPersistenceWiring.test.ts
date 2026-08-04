@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const source = await Deno.readTextFile(new URL("../bot-scanner/index.ts", import.meta.url));
+const source = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
 
 Deno.test("Watchlist updates never reference the later streamlined persistence variable", () => {
   const declaration = source.indexOf("const streamlinedStagedId =");

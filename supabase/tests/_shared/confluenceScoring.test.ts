@@ -454,7 +454,7 @@ Deno.test("DEFAULT_FACTOR_WEIGHTS has 17 configurable factors", () => {
 // SECTION 2: Snapshot test — captures full output for drift detection
 // ═══════════════════════════════════════════════════════════════════════
 
-const SNAPSHOT_PATH = new URL("./__snapshots__/confluenceScoring.snapshot.json", import.meta.url).pathname;
+const SNAPSHOT_PATH = new URL("../../functions/_shared/__snapshots__/confluenceScoring.snapshot.json", import.meta.url).pathname;
 
 Deno.test("SNAPSHOT: bullish fixture produces stable output", async () => {
   const candles = generateBullishFixture();
@@ -502,7 +502,7 @@ Deno.test("SNAPSHOT: bearish fixture produces stable output", async () => {
   const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
   const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig, undefined, fixedTime);
 
-  const snapshotPath = new URL("./__snapshots__/confluenceScoring.bearish.snapshot.json", import.meta.url).pathname;
+  const snapshotPath = new URL("../../functions/_shared/__snapshots__/confluenceScoring.bearish.snapshot.json", import.meta.url).pathname;
   const snapshot = {
     score: result.score,
     rawScore: result.rawScore,
@@ -538,7 +538,7 @@ Deno.test("SNAPSHOT: ranging fixture produces stable output", async () => {
   const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
   const result = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
 
-  const snapshotPath = new URL("./__snapshots__/confluenceScoring.ranging.snapshot.json", import.meta.url).pathname;
+  const snapshotPath = new URL("../../functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json", import.meta.url).pathname;
   const snapshot = {
     score: result.score,
     rawScore: result.rawScore,

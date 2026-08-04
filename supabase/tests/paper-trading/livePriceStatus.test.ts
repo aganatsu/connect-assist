@@ -11,7 +11,7 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const paperSource = Deno.readTextFileSync(
-  new URL("./index.ts", import.meta.url).pathname,
+  new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
 );
 
 // ═══════════════════════════════════════════════════════════════════════

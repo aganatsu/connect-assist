@@ -44,7 +44,7 @@ Deno.test("blocks canonical location, invalid thesis, and operational safety fai
 });
 
 Deno.test("operational safety excludes market evidence and legacy score gates", async () => {
-  const { operationalSafetyChecks } = await import("./singleOwnershipDecision.ts");
+  const { operationalSafetyChecks } = await import("../../functions/_shared/singleOwnershipDecision.ts");
   assertEquals(operationalSafetyChecks([
     { code: "minimum_score", passed: false },
     { code: "tier1_minimum", passed: false },

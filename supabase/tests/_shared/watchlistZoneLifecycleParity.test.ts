@@ -4,7 +4,7 @@ const migration = await Deno.readTextFile(new URL(
   "../../migrations/20260804043000_align_watchlist_zone_live_lifecycle.sql",
   import.meta.url,
 ));
-const scanner = await Deno.readTextFile(new URL("../bot-scanner/index.ts", import.meta.url));
+const scanner = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
 
 Deno.test("live Watchlist remains pending until broker-confirmed position opens", () => {
   assertStringIncludes(migration, "CREATE TRIGGER zz_sync_staged_setup_from_live_position_state");

@@ -5,7 +5,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const repoRoot = new URL("../../../", import.meta.url);
-const functionsRoot = new URL("../", import.meta.url);
+const functionsRoot = new URL("../../functions/", import.meta.url);
 
 function repoSource(relativePath: string): string {
   return Deno.readTextFileSync(new URL(relativePath, repoRoot));

@@ -231,6 +231,7 @@ import {
   type SessionName as GPSessionName,
 } from "../_shared/gamePlan.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
+import { validatePendingOrderThesis } from "../_shared/thesisValidator.ts";
 import {
   updateConviction,
   evaluateEvidence,
@@ -3406,6 +3407,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
 
+        const backtestThesis = analysis.direction
+          ? validatePendingOrderThesis({
+            order_id: "backtest:" + runId + ":" + symbol + ":" + candle.datetime,
+            symbol,
+            direction: analysis.direction as "long" | "short",
+            entry_price: candle.close,
+            signal_reason: { directionVerdict },
+          }, {
+            fotsiResult: fotsiForDate || null,
+            lastGamePlan: activeGamePlan,
+            dailyCandles: relevantDaily.length >= 20 ? relevantDaily : null,
+            h4Candles: relevantH4.length >= 20 ? relevantH4 : null,
+            h1Candles: relevantH1.length >= 20 ? relevantH1 : null,
+            decisionEvidence: barDecisionEvidence,
+          })
+          : null;
+
         // ── Bidirectional Conflict Counter ──
         const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
         let conflictAdjustedMinConfluence = config.minConfluence;
@@ -3675,7 +3693,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             } : null,
             directionReasonCode: "backtest_direction_verdict",
             legacyScoring: { rawScore: analysis.score, effectiveScore, threshold: conflictAdjustedMinConfluence },
-            thesis: { validationRequired: false, valid: null, conviction: convictionResult?.conviction ?? null, degrading: convictionResult?.thesisDegrading ?? null, reasonCode: "backtest_thesis_evidence" },
+            thesis: { validationRequired: true, valid: backtestThesis?.valid ?? null, conviction: convictionResult?.conviction ?? null, degrading: convictionResult?.thesisDegrading ?? null, reasonCode: backtestThesis?.checkType || "thesis_valid" },
             confirmation: { required: false, passed: null, reasonCode: "backtest_confirmation_evidence" },
             gates, safetyComplete: true, factors: analysis.factors,
             locationEvidence: { source: "backtest_zone_story", observedAt: candle.datetime },
@@ -3712,7 +3730,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               authorityVersion: "confirmation-authority.v1",
               reasonCodes: backtestConfirmationSignal?.authority?.reasonCodes || (replayZone.entryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"]),
             },
-            thesis: { required: false, valid: null, reasonCodes: ["backtest_thesis_not_required"] },
+            thesis: { required: true, valid: backtestThesis?.valid ?? null, reasonCodes: [backtestThesis?.checkType || "thesis_valid"] },
             safety: {
               complete: true,
               checks: operationalSafetyChecks(gates.map((gate) => ({

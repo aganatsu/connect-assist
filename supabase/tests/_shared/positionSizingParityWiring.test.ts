@@ -11,10 +11,10 @@ import {
 } from "../../functions/_shared/unifiedPositionSizing.ts";
 
 const liveScanner = await Deno.readTextFile(
-  new URL("../bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const backtestEngine = await Deno.readTextFile(
-  new URL("../backtest-engine/index.ts", import.meta.url),
+  new URL("../../functions/backtest-engine/index.ts", import.meta.url),
 );
 
 for (

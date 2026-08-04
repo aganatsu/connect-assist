@@ -11,7 +11,9 @@ Deno.test("remaining streamlined phases are wired across lifecycle and parity su
     read("src/pages/RejectedSetups.tsx"),
     read("supabase/migrations/20260803130000_add_streamlined_decision_lifecycle.sql"),
   ]);
-  assertStringIncludes(scanner, "evaluateStreamlinedEnforcement");
+  assertStringIncludes(scanner, "buildStreamlinedTradeDecisionObservation");
+  assert(!scanner.includes("evaluateStreamlinedEnforcement"));
+  assert(!scanner.includes("streamlinedDecisionEnforcement ="));
   assertStringIncludes(scanner, "streamlined_decision_origin");
   assertStringIncludes(confirmation, "streamlinedDecisionLatest");
   assertStringIncludes(backtest, "buildStreamlinedTradeDecisionObservation");

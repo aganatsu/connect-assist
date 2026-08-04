@@ -21,7 +21,7 @@ Deno.test("bot-scanner has no local runtime-default object", () => {
     "Runtime defaults must only be declared in _shared/configMapper.ts",
   );
   assert(
-    scannerSource.includes('from "../../functions/_shared/runtimeConfigStore.ts"'),
+    scannerSource.includes('from "../_shared/runtimeConfigStore.ts"'),
     "Scanner must import the shared runtime-config authority",
   );
 });

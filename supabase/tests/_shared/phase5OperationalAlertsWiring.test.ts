@@ -3,13 +3,13 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const botScanner = await Deno.readTextFile(
-  new URL("../bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const zoneScanner = await Deno.readTextFile(
-  new URL("../zone-confirmation-scanner/index.ts", import.meta.url),
+  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
 );
 const scheduledTasks = await Deno.readTextFile(
-  new URL("../scheduled-tasks/index.ts", import.meta.url),
+  new URL("../../functions/scheduled-tasks/index.ts", import.meta.url),
 );
 const scheduledTasksPage = await Deno.readTextFile(
   new URL("../../../src/pages/ScheduledTasks.tsx", import.meta.url),

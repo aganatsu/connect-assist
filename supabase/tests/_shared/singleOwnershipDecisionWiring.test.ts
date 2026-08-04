@@ -15,6 +15,9 @@ Deno.test("live and backtest attach the same single-ownership contract", () => {
   assertStringIncludes(backtest, "evaluateSingleOwnershipDecision({");
   assertStringIncludes(scanner, "operationalSafetyChecks(");
   assertStringIncludes(backtest, "operationalSafetyChecks(");
+  assertStringIncludes(backtest, "validatePendingOrderThesis({");
+  assertStringIncludes(backtest, "thesis: { required: true");
+  assertStringIncludes(scanner, "singleOwnershipEnforced: singleOwnershipEnforcementRequested");
 });
 
 Deno.test("single-ownership evidence travels with lifecycle records", () => {
@@ -22,9 +25,8 @@ Deno.test("single-ownership evidence travels with lifecycle records", () => {
   assertStringIncludes(scanner, "(detail as any).singleOwnershipDecision || null");
 });
 
-Deno.test("single-ownership enforcement is explicit and paper-scoped", () => {
+Deno.test("single-ownership enforcement is explicit across runtime targets", () => {
   assertStringIncludes(scanner, "singleOwnershipEnforcementRequested");
-  assertStringIncludes(scanner, "account.execution_mode !== \"live\"");
   assertStringIncludes(scanner, "evaluateSingleOwnershipEnforcement({");
   assertStringIncludes(backtest, "evaluateSingleOwnershipEnforcement({");
 });

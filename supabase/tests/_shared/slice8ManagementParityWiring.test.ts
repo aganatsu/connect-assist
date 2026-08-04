@@ -4,13 +4,13 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const scannerManagement = await Deno.readTextFile(
-  new URL("./scannerManagement.ts", import.meta.url),
+  new URL("../../functions/_shared/scannerManagement.ts", import.meta.url),
 );
 const backtestEngine = await Deno.readTextFile(
-  new URL("../backtest-engine/index.ts", import.meta.url),
+  new URL("../../functions/backtest-engine/index.ts", import.meta.url),
 );
 const stylePolicy = await Deno.readTextFile(
-  new URL("./stylePolicy.ts", import.meta.url),
+  new URL("../../functions/_shared/stylePolicy.ts", import.meta.url),
 );
 
 Deno.test("live management resolves frozen policy and calls shared calculator", () => {

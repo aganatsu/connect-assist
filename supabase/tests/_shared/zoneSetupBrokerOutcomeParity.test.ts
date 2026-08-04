@@ -3,7 +3,7 @@ import { assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.t
 const migration = await Deno.readTextFile(new URL(
   "../../migrations/20260804050000_align_zone_setup_broker_outcomes.sql", import.meta.url,
 ));
-const scanner = await Deno.readTextFile(new URL("../bot-scanner/index.ts", import.meta.url));
+const scanner = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
 
 Deno.test("Zone Setup status follows confirmed broker outcome", () => {
   assertStringIncludes(migration, "$s$reconciliation_required$s$");
