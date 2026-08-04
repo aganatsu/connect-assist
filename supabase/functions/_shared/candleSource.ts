@@ -69,12 +69,12 @@ const _candleCache = new Map<string, CacheEntry>();
 const CACHE_TTL_INTRADAY_MS = 30_000;  // 30 seconds for intraday
 const CACHE_TTL_DAILY_MS = 300_000;    // 5 minutes for daily
 
-function getCacheKey(symbol: string, interval: string): string {
-  return `${symbol}:${interval}`;
+function getCacheKey(symbol: string, interval: string, scope = "public"): string {
+  return `${scope}:${symbol}:${interval}`;
 }
 
-function getCachedCandles(symbol: string, interval: string): CacheEntry | null {
-  const key = getCacheKey(symbol, interval);
+function getCachedCandles(symbol: string, interval: string, scope = "public"): CacheEntry | null {
+  const key = getCacheKey(symbol, interval, scope);
   const entry = _candleCache.get(key);
   if (!entry) return null;
   const ttl = interval.includes("d") || interval.includes("w") || interval.includes("mo") ? CACHE_TTL_DAILY_MS : CACHE_TTL_INTRADAY_MS;
@@ -85,14 +85,17 @@ function getCachedCandles(symbol: string, interval: string): CacheEntry | null {
   return entry;
 }
 
-function setCachedCandles(symbol: string, interval: string, candles: Candle[], source: string): void {
-  const key = getCacheKey(symbol, interval);
+function setCachedCandles(symbol: string, interval: string, candles: Candle[], source: string, scope = "public"): void {
+  const key = getCacheKey(symbol, interval, scope);
   _candleCache.set(key, { candles, source, timestamp: Date.now() });
 }
 
 export interface BrokerConn {
   api_key: string;
   account_id: string;
+  broker_type?: "metaapi" | "oanda";
+  is_live?: boolean;
+  display_name?: string;
   symbol_suffix?: string;
   symbol_overrides?: Record<string, string>;
   /** Optional connection row id — enables lazy auto-mapping persistence. */
@@ -202,6 +205,44 @@ function metaapiTimeframe(canon: string): string {
   };
   return m[canon] || "15m";
 }
+export function oandaGranularity(canon: string): string {
+  const m: Record<string, string> = {
+    "1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30",
+    "1h": "H1", "4h": "H4", "1d": "D", "1w": "W", "1mo": "M",
+  };
+  return m[canon] || "M15";
+}
+
+export function resolveOandaCandleSymbol(symbol: string, conn: BrokerConn): string {
+  const explicit = resolveBrokerSymbol(symbol, conn);
+  const cleaned = explicit.trim().replace(/[\s\/.-]/g, "_").toUpperCase();
+  if (cleaned.includes("_")) return cleaned;
+  return cleaned.length === 6 ? `${cleaned.slice(0, 3)}_${cleaned.slice(3)}` : cleaned;
+}
+
+async function oandaFetchCandles(conn: BrokerConn, symbol: string, canon: string, limit: number): Promise<Candle[]> {
+  const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+  const instrument = resolveOandaCandleSymbol(symbol, conn);
+  const count = Math.min(Math.max(limit, 30), 5000);
+  const url = `${baseUrl}/v3/instruments/${encodeURIComponent(instrument)}/candles?price=M&granularity=${oandaGranularity(canon)}&count=${count}`;
+  try {
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${conn.api_key}` } }, 8000);
+    const body = await res.text();
+    if (!res.ok) {
+      console.warn(`[candleSource] OANDA ${instrument} ${canon}: ${res.status} ${body.slice(0, 120)}`);
+      return [];
+    }
+    const payload = JSON.parse(body);
+    return (Array.isArray(payload?.candles) ? payload.candles : [])
+      .filter((c: any) => c?.complete !== false && c?.mid)
+      .map((c: any) => ({ datetime: c.time, open: Number(c.mid.o), high: Number(c.mid.h), low: Number(c.mid.l), close: Number(c.mid.c), volume: c.volume == null ? undefined : Number(c.volume) }))
+      .filter((c: Candle) => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+  } catch (e: any) {
+    console.warn(`[candleSource] OANDA ${instrument} ${canon} fetch error: ${e?.message}`);
+    return [];
+  }
+}
+
 // META_REGIONS and regionCache are now imported from ./metaApiClient.ts (single source of truth)
 // Cache of symbols we've already subscribed to per account (in-memory, per cold start)
 // Key: `${accountId}:${symbol}` → true
@@ -636,13 +677,13 @@ export interface FetchOptions {
   symbol: string;
   interval: string;          // any common form: "15min", "15m", "1h", "4h", "1d", "1w"
   limit?: number;            // desired number of candles (default 200)
-  brokerConn?: BrokerConn | null; // optional MetaAPI connection
+  brokerConn?: BrokerConn | null; // optional connected OANDA or MetaAPI account
   skipBroker?: boolean;      // true for request-budget-sensitive scans; use public data directly
 }
 
 export interface FetchResult {
   candles: Candle[];
-  source: "metaapi" | "twelvedata" | "polygon" | "none";
+  source: "metaapi" | "oanda" | "twelvedata" | "polygon" | "none";
 }
 
 // ─── Per-scan source tally (opt-in) ──────────────────────────────────
@@ -650,12 +691,13 @@ export interface FetchResult {
 // endScanSourceTally() at the end to learn which feeds served the candles.
 export interface SourceTally {
   metaapi: number;
+  oanda: number;
   twelvedata: number;
   polygon: number;
   none: number;
   metaapiAttempted: boolean;
   issues: CandleSourceIssue[];
-  primary: "metaapi" | "twelvedata" | "polygon" | "none";
+  primary: "metaapi" | "oanda" | "twelvedata" | "polygon" | "none";
 }
 
 export interface CandleSourceIssue {
@@ -671,6 +713,7 @@ export interface CandleSourceIssue {
 
 interface ActiveSourceTally {
   metaapi: number;
+  oanda: number;
   twelvedata: number;
   polygon: number;
   none: number;
@@ -694,6 +737,7 @@ function noteSourceIssue(issue: CandleSourceIssue): void {
 export function beginScanSourceTally(): void {
   _activeTally = {
     metaapi: 0,
+    oanda: 0,
     twelvedata: 0,
     polygon: 0,
     none: 0,
@@ -705,6 +749,7 @@ export function beginScanSourceTally(): void {
 export function endScanSourceTally(): SourceTally {
   const t = _activeTally ?? {
     metaapi: 0,
+    oanda: 0,
     twelvedata: 0,
     polygon: 0,
     none: 0,
@@ -713,8 +758,8 @@ export function endScanSourceTally(): SourceTally {
   };
   _activeTally = null;
   // "primary" = the source that served the most candle requests this cycle
-  const entries: ["metaapi" | "twelvedata" | "polygon" | "none", number][] = [
-    ["metaapi", t.metaapi], ["twelvedata", t.twelvedata], ["polygon", t.polygon], ["none", t.none],
+  const entries: ["metaapi" | "oanda" | "twelvedata" | "polygon" | "none", number][] = [
+    ["metaapi", t.metaapi], ["oanda", t.oanda], ["twelvedata", t.twelvedata], ["polygon", t.polygon], ["none", t.none],
   ];
   entries.sort((a, b) => b[1] - a[1]);
   return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
@@ -723,6 +768,7 @@ export function endScanSourceTally(): SourceTally {
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
+  const cacheScope = opts.brokerConn?.api_key ? `${opts.brokerConn.broker_type ?? "metaapi"}:${opts.brokerConn.account_id}` : "public";
 
   // Global deadline so a single request can never eat the 150s edge runtime budget.
   // MetaAPI region probing + subscribe retries can each take 30-40s; cap the whole
@@ -731,17 +777,26 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   const timeLeft = () => deadline - Date.now();
 
   // M1: Check cache first
-  const cached = getCachedCandles(opts.symbol, canon);
+  const cached = getCachedCandles(opts.symbol, canon, cacheScope);
   if (cached && cached.candles.length >= 30) {
     if (_activeTally) (_activeTally as any)[cached.source]++;
     return { candles: cached.candles.slice(-limit), source: cached.source as any };
   }
 
-  // Try MetaAPI first if we have a broker connection, unless the caller is a
+  // Try the connected broker first, unless the caller is a
   // request-budget-sensitive scan. Scanner invocations fetch many symbols and
   // timeframes; probing broker regions/subscriptions there can exceed hosted
   // runtime limits and surface as platform 503s.
-  if (!opts.skipBroker && opts.brokerConn?.api_key && opts.brokerConn?.account_id && timeLeft() > 15_000) {
+  if (!opts.skipBroker && opts.brokerConn?.broker_type === "oanda" && opts.brokerConn.api_key && timeLeft() > 10_000) {
+    const candles = await oandaFetchCandles(opts.brokerConn, opts.symbol, canon, limit);
+    if (candles.length >= 30) {
+      if (_activeTally) _activeTally.oanda++;
+      setCachedCandles(opts.symbol, canon, candles, "oanda", cacheScope);
+      return { candles: candles.slice(-limit), source: "oanda" };
+    }
+  }
+
+  if (!opts.skipBroker && opts.brokerConn?.broker_type !== "oanda" && opts.brokerConn?.api_key && opts.brokerConn?.account_id && timeLeft() > 15_000) {
     if (_activeTally) _activeTally.metaapiAttempted = true;
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
@@ -767,7 +822,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.metaapi++;
-      setCachedCandles(opts.symbol, canon, candles, "metaapi");
+      setCachedCandles(opts.symbol, canon, candles, "metaapi", cacheScope);
       return { candles: candles.slice(-limit), source: "metaapi" };
     }
   }

@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { paperApi, marketApi, scannerApi } from "@/lib/api";
+import { paperApi, marketApi, scannerApi, type CandleSource } from "@/lib/api";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 import TradeReplayChart, {
   type TradeMarker,
   type ZoneOverlay,
@@ -163,12 +164,8 @@ export default function TradeReplay() {
   const { data: candleData, isLoading: candlesLoading } = useQuery({
     queryKey: ["replay-candles", selectedTrade?.symbol, timeframe],
     queryFn: async () => {
-      if (!selectedTrade?.symbol) return [];
-      const result = await marketApi.candles(selectedTrade.symbol, timeframe, 300);
-      if (Array.isArray(result)) return result;
-      if (result?.values && Array.isArray(result.values)) return result.values;
-      if (result?.data && Array.isArray(result.data)) return result.data;
-      return [];
+      if (!selectedTrade?.symbol) return { candles: [], source: "unknown" as CandleSource };
+      return marketApi.candlesWithMeta(selectedTrade.symbol, timeframe, 300);
     },
     enabled: !!selectedTrade?.symbol,
     staleTime: 60000,
@@ -176,8 +173,8 @@ export default function TradeReplay() {
 
   /* ─── Transform candles for lightweight-charts ─── */
   const chartCandles: CandlestickData<Time>[] = useMemo(() => {
-    if (!candleData || !Array.isArray(candleData)) return [];
-    return candleData
+    if (!candleData?.candles || !Array.isArray(candleData.candles)) return [];
+    return candleData.candles
       .map((c: any) => {
         const time = c.datetime
           ? Math.floor(new Date(c.datetime.replace(" ", "T") + "Z").getTime() / 1000)
@@ -403,6 +400,8 @@ export default function TradeReplay() {
         </div>
 
         <div className="flex items-center gap-2">
+          <DataSourceBadge source={candleData?.source} />
+
           {/* Timeframe selector */}
           <ToggleGroup
             type="single"
