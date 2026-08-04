@@ -36,6 +36,24 @@ Deno.test("noise below the normal Watchlist quality floor is not staged", () => 
   );
 });
 
+Deno.test("Enforce observes directional pre-zone candidates without legacy score or tier ownership", () => {
+  assertEquals(
+    classifyUnifiedWatch({
+      ...base, score: 0, tier1Count: 0, singleOwnershipEnforced: true,
+    }),
+    "pre_zone_observation",
+  );
+});
+
+Deno.test("Observe retains the legacy diagnostic visibility floor", () => {
+  assertEquals(
+    classifyUnifiedWatch({
+      ...base, score: 0, tier1Count: 0, singleOwnershipEnforced: false,
+    }),
+    "none",
+  );
+});
+
 Deno.test("a complete zone waiting for price, confirmation or sweep is executable watch evidence", () => {
   for (
     const unifiedState of [

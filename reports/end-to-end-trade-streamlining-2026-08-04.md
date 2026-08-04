@@ -125,6 +125,15 @@ Status: Implemented on `feat/independent-game-plan-authority`; deployment pendin
 - The Game Plan panel shows an exact failed/running/next-retry state when authority is stale.
 - Required deployment: apply `20260804110000_schedule_game_plan_authority_refresh.sql`, deploy `game-plan-refresh`, then deploy the frontend.
 
+## Final Single-Ownership Cleanup
+
+Status: Implemented on `fix/complete-single-ownership-streamlining`; deployment pending.
+
+- Backtest calls the same historical thesis validator and requires thesis authority.
+- Enforce-mode pre-zone visibility no longer depends on legacy score or tier counts.
+- Historical Streamlined Decision remains observation data only; its runtime enforcement and certificate load are removed.
+- Single Ownership remains the sole execution authority across immediate, Watchlist, pending-fill, fast-fill and backtest routes.
+
 ## Resume Prompt
 
 Read this report, inspect merged PRs after 2026-08-04, verify each phase status
