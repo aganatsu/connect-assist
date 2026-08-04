@@ -614,6 +614,48 @@ export type Database = {
         }
         Relationships: []
       }
+      game_plan_refresh_status: {
+        Row: {
+          active_plan_expires_at: string | null
+          bot_id: string
+          details: Json
+          failure_code: string | null
+          failure_message: string | null
+          last_attempt_at: string | null
+          last_success_at: string | null
+          next_retry_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active_plan_expires_at?: string | null
+          bot_id?: string
+          details?: Json
+          failure_code?: string | null
+          failure_message?: string | null
+          last_attempt_at?: string | null
+          last_success_at?: string | null
+          next_retry_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active_plan_expires_at?: string | null
+          bot_id?: string
+          details?: Json
+          failure_code?: string | null
+          failure_message?: string | null
+          last_attempt_at?: string | null
+          last_success_at?: string | null
+          next_retry_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       kv_cache: {
         Row: {
           expires_at: string
