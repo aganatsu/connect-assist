@@ -1703,6 +1703,54 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_candle_snapshots: {
+        Row: {
+          bot_id: string
+          candle_count: number
+          candles: Json
+          completed_candle_cutoff: string | null
+          contract_version: string
+          created_at: string
+          id: string
+          observed_at: string
+          provider: string
+          scan_cycle_id: string
+          symbol: string
+          timeframe: string
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          candle_count: number
+          candles: Json
+          completed_candle_cutoff?: string | null
+          contract_version?: string
+          created_at?: string
+          id?: string
+          observed_at: string
+          provider: string
+          scan_cycle_id: string
+          symbol: string
+          timeframe: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          candle_count?: number
+          candles?: Json
+          completed_candle_cutoff?: string | null
+          contract_version?: string
+          created_at?: string
+          id?: string
+          observed_at?: string
+          provider?: string
+          scan_cycle_id?: string
+          symbol?: string
+          timeframe?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       scan_history: {
         Row: {
           bot_id: string | null
