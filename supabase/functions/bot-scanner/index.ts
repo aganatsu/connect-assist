@@ -8177,7 +8177,7 @@ async function runScanForUser(
             .select("order_id, entry_price, signal_score")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
-            .eq("status", "pending");
+            .in("status", ["pending", "awaiting_confirmation"]);
           if (stalePending && stalePending.length > 0) {
             const staleIds = stalePending.map((s: any) => s.order_id);
             await supabase.from("pending_orders").update({
