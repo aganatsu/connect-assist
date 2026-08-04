@@ -12,13 +12,13 @@ Deno.test("single ownership enforcement is default-observe and user visible", ()
   assertStringIncludes(config, 'singleOwnershipMode: "observe"');
   assertStringIncludes(endpoint, "strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
   assertStringIncludes(ui, "Single-Ownership Scanner");
-  assertStringIncludes(ui, "Enforce (Paper Only)");
-  assertStringIncludes(ui, "Enforce Live (Real Orders)");
+  assertStringIncludes(ui, `<SelectItem value="enforce">Enforce</SelectItem>`);
+  assertStringIncludes(ui, `singleOwnershipMode === "enforce_live" ? "enforce"`);
 });
 
 Deno.test("single ownership bypasses legacy score only when enforcement is requested", () => {
   assertStringIncludes(scanner, "legacyScannerEligible || singleOwnershipEnforcementRequested");
-  assertStringIncludes(scanner, 'singleOwnershipMode === "enforce_live"');
+  assertStringIncludes(scanner, `["enforce", "enforce_live"].includes((pairConfig as any).singleOwnershipMode)`);
   assertStringIncludes(scanner, "allPassed = singleOwnershipEnforcement.authorized");
   assertStringIncludes(backtest, '["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode)');
   assertStringIncludes(backtest, "allPassed = singleOwnershipEnforcement.authorized");

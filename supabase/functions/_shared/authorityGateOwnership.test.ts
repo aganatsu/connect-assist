@@ -30,10 +30,11 @@ Deno.test("owned authorities and operational safety remain enforcing", () => {
   }
 });
 
-Deno.test("legacy gates stop blocking only in explicit paper enforcement", () => {
+Deno.test("legacy gates stop blocking whenever ownership enforcement is active", () => {
   assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "paper" }).blocksAuthorization, false);
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "live" }).blocksAuthorization, false);
   assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "observe", runtimeTarget: "paper" }).blocksAuthorization, true);
-  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "enforce", runtimeTarget: "live" }).blocksAuthorization, true);
+  assertEquals(evaluateAuthorityGateDisposition({ code: "ict_judas", passed: false, requestedMode: "observe", runtimeTarget: "live" }).blocksAuthorization, true);
 });
 
 Deno.test("legacy gates are diagnostic under explicit live enforcement", () => {

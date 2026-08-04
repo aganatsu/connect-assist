@@ -21,8 +21,8 @@ Deno.test("both pending-fill routes recalculate canonical location at fill price
 });
 
 Deno.test("ownership enforcement removes duplicate Game Plan veto at final routes", () => {
-  assertStringIncludes(main, 'singleOwnershipMode === "enforce_live"');
-  assertStringIncludes(fast, 'singleOwnershipMode === "enforce_live"');
+  assertStringIncludes(main, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
+  assertStringIncludes(fast, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
 });
 
 Deno.test("atomic database fill remains the final writer", () => {

@@ -2933,7 +2933,7 @@ async function runScanForUser(
             directionVerdict: pendingDirectionVerdict,
             requireDirectionVerdict: true,
             gamePlan: _lastGamePlanForValidation,
-            gamePlanEnabled: config.gamePlanEnabled && !(((config as any).singleOwnershipMode === "enforce_live" || ((config as any).singleOwnershipMode === "enforce" && account.execution_mode !== "live"))),
+            gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)),
             gamePlanMode: config.gpEnforcementMode,
             gamePlanMinimumConfidence: config.gpHardBlockThreshold,
             thesisResult: pendingThesisResult,
@@ -2970,7 +2970,7 @@ async function runScanForUser(
               symbol: pending.symbol,
               direction: pending.direction as "long" | "short",
               gamePlan: _lastGamePlanForValidation,
-              gamePlanEnabled: config.gamePlanEnabled && !(((config as any).singleOwnershipMode === "enforce_live" || ((config as any).singleOwnershipMode === "enforce" && account.execution_mode !== "live"))),
+              gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)),
               gamePlanMode: config.gpEnforcementMode,
               gamePlanMinimumConfidence: config.gpHardBlockThreshold,
               directionVerdict: pendingDirectionVerdict,
@@ -3901,9 +3901,7 @@ async function runScanForUser(
     // Apply per-pair gate overrides (if configured for this symbol)
     applyPairOverrides(pairConfig, pair);
     const singleOwnershipEnforcementRequested =
-      (pairConfig as any).singleOwnershipMode === "enforce_live" ||
-      ((pairConfig as any).singleOwnershipMode === "enforce" &&
-        account.execution_mode !== "live");
+      ["enforce", "enforce_live"].includes((pairConfig as any).singleOwnershipMode);
     const pairRuntimeConfigSnapshot = await buildFrozenRuntimeConfigSnapshot(
       styleResolution,
       pairConfig,
@@ -7307,7 +7305,7 @@ async function runScanForUser(
       });
       (detail as any).singleOwnershipEnforcement = singleOwnershipEnforcement;
       if (singleOwnershipEnforcement.effectiveMode === "enforce") {
-        // In paper enforcement, named authorities replace all legacy market-quality
+        // In ownership enforcement, named authorities replace all legacy market-quality
         // scores and gates. Operational safety is already owned by the decision.
         allPassed = singleOwnershipEnforcement.authorized;
       }

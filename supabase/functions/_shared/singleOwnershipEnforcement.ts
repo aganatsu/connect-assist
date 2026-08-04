@@ -26,8 +26,7 @@ export function evaluateSingleOwnershipEnforcement(input: {
     : input.requestedMode === "enforce"
     ? "enforce"
     : "observe";
-  const canEnforce = requestedMode === "enforce_live" ||
-    (requestedMode === "enforce" && input.runtimeTarget === "paper");
+  const canEnforce = requestedMode === "enforce" || requestedMode === "enforce_live";
   const effectiveMode: SingleOwnershipMode = canEnforce ? "enforce" : "observe";
   if (effectiveMode === "observe") {
     return {
