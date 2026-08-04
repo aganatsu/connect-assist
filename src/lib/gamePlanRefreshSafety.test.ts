@@ -17,6 +17,11 @@ const scannerSource = readFileSync(
   "utf8",
 );
 
+const scheduledMigrationSource = readFileSync(
+  join(process.cwd(), "supabase/migrations/20260804110000_schedule_game_plan_authority_refresh.sql"),
+  "utf8",
+);
+
 describe("manual Game Plan refresh safety", () => {
   it("generates and stores a new plan", () => {
     expect(refreshFunctionSource).toContain("generateInstrumentGamePlan");
@@ -73,5 +78,22 @@ describe("automatic Game Plan refresh safety", () => {
     expect(scannerSource).toContain(
       "Previous complete plan remains authoritative; partial plan was not activated.",
     );
+  });
+
+  it("refreshes independently of scanner trade and position gates", () => {
+    expect(scheduledMigrationSource).toContain("game-plan-authority-refresh-15min");
+    expect(scheduledMigrationSource).toContain("/functions/v1/game-plan-refresh");
+    expect(scheduledMigrationSource).toContain("x-cron-secret");
+    expect(refreshFunctionSource).toContain("body.source === \"scheduled\"");
+    expect(refreshFunctionSource).toContain("* 0.75");
+  });
+
+  it("records refresh health and exposes exact failures in the Game Plan panel", () => {
+    expect(refreshFunctionSource).toContain("recordRefreshFailure");
+    expect(refreshFunctionSource).toContain("game_plan_refresh_status");
+    expect(gamePlanPanelSource).toContain("fetchGamePlanRefreshStatus");
+    expect(gamePlanPanelSource).toContain("REFRESH FAILED");
+    expect(gamePlanPanelSource).toContain("failure_message");
+    expect(gamePlanPanelSource).toContain("next_retry_at");
   });
 });

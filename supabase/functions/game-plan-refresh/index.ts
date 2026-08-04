@@ -45,6 +45,23 @@ function respond(payload: unknown, status = 200) {
   });
 }
 
+async function recordRefreshFailure(
+  adminClient: any,
+  userId: string,
+  code: string,
+  message: string,
+  details: Record<string, unknown> = {},
+) {
+  const failedAt = new Date();
+  await adminClient.from("game_plan_refresh_status").upsert({
+    user_id: userId, bot_id: BOT_ID, status: "failed",
+    last_attempt_at: failedAt.toISOString(),
+    next_retry_at: new Date(failedAt.getTime() + 15 * 60 * 1000).toISOString(),
+    failure_code: code, failure_message: message.slice(0, 1000),
+    details, updated_at: failedAt.toISOString(),
+  }, { onConflict: "user_id,bot_id" });
+}
+
 function getEntryInterval(entryTf: string): string {
   const map: Record<string, string> = {
     "1m": "1m",
@@ -102,6 +119,8 @@ Deno.serve(async (req) => {
   const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
 
+  let refreshAdmin: any = null;
+  let refreshUserId: string | null = null;
   try {
     const body = await req.json().catch(() => ({}));
     if (body.action !== "refresh") {
@@ -110,10 +129,45 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const userId = await getUserId(req, supabaseUrl);
+    const cronRequest = req.headers.get("x-cron-secret") === Deno.env.get("CRON_SECRET");
+    const authenticatedUserId = await getUserId(req, supabaseUrl);
+    const userId = cronRequest && body.source === "scheduled"
+      ? String(body.userId || "")
+      : authenticatedUserId;
     if (!userId) return respond({ error: "Unauthorized" }, 401);
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
+    refreshAdmin = adminClient;
+    refreshUserId = userId;
+    const attemptAt = new Date();
+    await adminClient.from("game_plan_refresh_status").upsert({
+      user_id: userId, bot_id: BOT_ID, status: "running",
+      last_attempt_at: attemptAt.toISOString(), failure_code: null,
+      failure_message: null, updated_at: attemptAt.toISOString(),
+    }, { onConflict: "user_id,bot_id" });
+
+    if (body.source === "scheduled") {
+      const { data: latestPlan } = await adminClient.from("active_game_plans")
+        .select("generated_at,expires_at").eq("user_id", userId)
+        .eq("bot_id", BOT_ID).eq("is_active", true)
+        .order("generated_at", { ascending: false }).limit(1).maybeSingle();
+      if (latestPlan?.generated_at && latestPlan?.expires_at) {
+        const generatedAt = Date.parse(latestPlan.generated_at);
+        const expiresAt = Date.parse(latestPlan.expires_at);
+        const refreshAt = generatedAt + (expiresAt - generatedAt) * 0.75;
+        if (Date.now() < refreshAt) {
+          await adminClient.from("game_plan_refresh_status").upsert({
+            user_id: userId, bot_id: BOT_ID, status: "skipped",
+            last_attempt_at: attemptAt.toISOString(),
+            next_retry_at: new Date(refreshAt).toISOString(),
+            active_plan_expires_at: latestPlan.expires_at,
+            details: { reason: "active_plan_inside_refresh_window" },
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "user_id,bot_id" });
+          return respond({ success: true, skipped: true, nextRetryAt: new Date(refreshAt).toISOString() });
+        }
+      }
+    }
     const styleResolution = await loadConfig(adminClient, userId);
     const config = styleResolution.config;
     const stylePolicy = await buildResolvedStylePolicy({
@@ -122,6 +176,7 @@ Deno.serve(async (req) => {
     });
     const timeframeAuthority = resolveTimeframeAuthority(stylePolicy);
     if (config.gamePlanEnabled === false) {
+      await recordRefreshFailure(adminClient, userId, "game_plan_disabled", "Game Plan is disabled in bot configuration");
       return respond(
         { error: "Game Plan is disabled in bot configuration" },
         409,
@@ -150,6 +205,7 @@ Deno.serve(async (req) => {
       new Date(),
     );
     if (marketScope.eligibleSymbols.length === 0) {
+      await recordRefreshFailure(adminClient, userId, "no_open_instruments", "No enabled instruments are open for Game Plan generation in the current market window", { marketScope });
       return respond({
         error:
           "No enabled instruments are open for Game Plan generation in the current market window",
@@ -259,6 +315,7 @@ Deno.serve(async (req) => {
       !unavailableSet.has(symbol)
     );
     if (blockingMissing.length > 0 || generation.plans.length === 0) {
+      await recordRefreshFailure(adminClient, userId, "incomplete_market_data", "Game Plan refresh was incomplete; the previous complete plan remains active", { missingSymbols: generation.missingSymbols, errors, marketScope });
       return respond({
         error:
           "Game Plan refresh was incomplete; the previous complete plan remains active",
@@ -330,6 +387,17 @@ Deno.serve(async (req) => {
     const skipCount = gamePlan.plans.filter((plan) =>
       plan.state === "skip"
     ).length;
+    await adminClient.from("game_plan_refresh_status").upsert({
+      user_id: userId, bot_id: BOT_ID, status: "succeeded",
+      last_attempt_at: attemptAt.toISOString(), last_success_at: new Date().toISOString(),
+      next_retry_at: gamePlan.validityPolicy?.expiresAt
+        ? new Date(Date.parse(gamePlan.generatedAt) + (Date.parse(gamePlan.validityPolicy.expiresAt) - Date.parse(gamePlan.generatedAt)) * 0.75).toISOString()
+        : null,
+      active_plan_expires_at: gamePlan.validityPolicy?.expiresAt || null,
+      failure_code: null, failure_message: null,
+      details: { source: body.source === "scheduled" ? "scheduled" : "manual", planVersion: gamePlan.planVersion },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id,bot_id" });
 
     return respond({
       success: true,
@@ -349,6 +417,9 @@ Deno.serve(async (req) => {
       marketScope,
     });
   } catch (error: any) {
+    if (refreshAdmin && refreshUserId) {
+      await recordRefreshFailure(refreshAdmin, refreshUserId, "refresh_failed", String(error?.message || error));
+    }
     console.error("[game-plan-refresh] Failed:", error?.message || error);
     return respond(
       { error: error?.message || "Game Plan refresh failed" },
