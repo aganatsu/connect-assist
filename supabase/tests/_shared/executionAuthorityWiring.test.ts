@@ -5,11 +5,11 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const fastScannerUrl = new URL(
-  "../zone-confirmation-scanner/index.ts",
+  "../../functions/zone-confirmation-scanner/index.ts",
   import.meta.url,
 );
-const botScannerUrl = new URL("../bot-scanner/index.ts", import.meta.url);
-const brokerExecuteUrl = new URL("../broker-execute/index.ts", import.meta.url);
+const botScannerUrl = new URL("../../functions/bot-scanner/index.ts", import.meta.url);
+const brokerExecuteUrl = new URL("../../functions/broker-execute/index.ts", import.meta.url);
 const phaseOneMigrationUrl = new URL(
   "../../migrations/20260728200000_complete_phase1_execution_authority.sql",
   import.meta.url,

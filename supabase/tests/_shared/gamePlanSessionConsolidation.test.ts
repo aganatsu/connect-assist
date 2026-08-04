@@ -193,7 +193,7 @@ Deno.test("SESSION_WINDOWS contains the expected session boundaries", () => {
 
 Deno.test("No hardcoded session hours remain in gamePlan.ts", () => {
   const src = Deno.readTextFileSync(
-    new URL("./gamePlan.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/gamePlan.ts", import.meta.url).pathname
   );
   // These patterns should NOT appear as session-hour declarations
   const forbidden = [

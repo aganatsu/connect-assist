@@ -4,7 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const scanner = await Deno.readTextFile(
-  new URL("../bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const watchlist = await Deno.readTextFile(
   new URL("../../../src/components/WatchlistPanel.tsx", import.meta.url),

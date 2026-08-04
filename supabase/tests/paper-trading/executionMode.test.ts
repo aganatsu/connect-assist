@@ -2,7 +2,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const paperTradingUrl = new URL("./index.ts", import.meta.url);
+const paperTradingUrl = new URL("../../functions/paper-trading/index.ts", import.meta.url);
 
 Deno.test("execution mode validates input and returns the persisted value", async () => {
   const source = await Deno.readTextFile(paperTradingUrl.pathname);

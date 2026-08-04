@@ -85,7 +85,7 @@ Deno.test("releaseScannerLock only releases the caller's lease token", async () 
 
 Deno.test("bot scanner no longer force-clears a valid manual scan lock", async () => {
   const source = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url),
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
   );
   assertEquals(source.includes(".update({ scan_lock_until: null })"), false);
   assertEquals(source.includes("claimScannerLock"), true);

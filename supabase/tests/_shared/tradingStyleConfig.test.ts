@@ -101,11 +101,11 @@ Deno.test("live and backtest engines both use the shared runtime-config authorit
   ]);
 
   assertEquals(
-    scanner.includes('from "../../functions/_shared/runtimeConfigStore.ts"'),
+    scanner.includes('from "../_shared/runtimeConfigStore.ts"'),
     true,
   );
   assertEquals(
-    backtest.includes('from "../../functions/_shared/runtimeConfigResolver.ts"'),
+    backtest.includes('from "../_shared/runtimeConfigResolver.ts"'),
     true,
   );
   assertEquals(analysis.includes("export const STYLE_OVERRIDES"), false);

@@ -15,7 +15,7 @@ import { evaluateStandaloneSweepGate } from "../../functions/_shared/standaloneS
 
 Deno.test("bot-scanner uses canonical standalone sweep authority, not nearby-pool count", () => {
   const scanner = Deno.readTextFileSync(
-    new URL("./index.ts", import.meta.url),
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
   );
   assertEquals(
     scanner.includes("evaluateStandaloneSweepGate({"),

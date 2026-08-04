@@ -5,13 +5,13 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const scannerSource = await Deno.readTextFile(
-  new URL("../bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 
 Deno.test("bot scanner uses the canonical Watchlist invalidation contract", () => {
   assertStringIncludes(
     scannerSource,
-    'from "../../functions/_shared/watchlistInvalidation.ts"',
+    'from "../_shared/watchlistInvalidation.ts"',
   );
   assertStringIncludes(scannerSource, "watchlistInvalidationFor(");
   assertStringIncludes(

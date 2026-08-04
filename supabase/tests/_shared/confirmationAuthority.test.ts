@@ -26,7 +26,7 @@ Deno.test("legacy paths map to explicit named levels", () => {
 });
 
 Deno.test("combined routing records partial failures without authorizing", async () => {
-  const { buildRoutedConfirmationObservation } = await import("./confirmationAuthority.ts");
+  const { buildRoutedConfirmationObservation } = await import("../../functions/_shared/confirmationAuthority.ts");
   const result = buildRoutedConfirmationObservation({
     method: "choch_and_indicators", direction: "short",
     structural: buildConfirmationAuthorityObservation({

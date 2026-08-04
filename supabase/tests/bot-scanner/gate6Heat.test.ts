@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 
 // ─── Read the Gate 6 source to verify the fix is present ─────────────
 const scannerSource = readFileSync(
-  new URL("../bot-scanner/index.ts", import.meta.url).pathname,
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname,
   "utf-8",
 );
 

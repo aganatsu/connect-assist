@@ -16,7 +16,7 @@ let _src: string | null = null;
 async function src(): Promise<string> {
   if (!_src) {
     _src = await Deno.readTextFile(
-      new URL("./index.ts", import.meta.url).pathname
+      new URL("../../functions/prop-firm/index.ts", import.meta.url).pathname
     );
   }
   return _src;
@@ -44,7 +44,7 @@ Deno.test("fetchBrokerEquity function exists with region-aware logic", async () 
 Deno.test("fetchBrokerEquity tries all 3 MetaAPI regions", async () => {
   const s = await src();
   // META_REGIONS is now imported from metaApiClient.ts (single source of truth)
-  assertStringIncludes(s, 'from "../../functions/_shared/metaApiClient.ts"');
+  assertStringIncludes(s, 'from "../_shared/metaApiClient.ts"');
   assertStringIncludes(s, "regionCache");
   assertStringIncludes(s, "for (const region of order)");
 });

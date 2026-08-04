@@ -14,7 +14,7 @@ import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.t
 
 Deno.test("signal_reason JSON includes signalSource field (market order path)", async () => {
   const botScanner = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url)
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url)
   );
 
   const start = botScanner.indexOf("const directSignalReason = {");
@@ -41,7 +41,7 @@ Deno.test("signal_reason JSON includes signalSource field (market order path)", 
 
 Deno.test("signal_reason JSON includes signalSource field (limit order path)", async () => {
   const botScanner = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url)
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url)
   );
 
   // Find the limit-order signal_reason line (the one with expiry_minutes nearby)
@@ -68,7 +68,7 @@ Deno.test("signal_reason JSON includes signalSource field (limit order path)", a
 
 Deno.test("signalSource is set to one of: unified, standalone, cascade", async () => {
   const botScanner = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url)
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url)
   );
 
   // Verify all three signal source assignments exist
@@ -88,7 +88,7 @@ Deno.test("signalSource is set to one of: unified, standalone, cascade", async (
 
 Deno.test("signalSource assignment happens BEFORE signal_reason construction", async () => {
   const botScanner = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url)
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url)
   );
 
   // The signalSource assignments (around line 4846-4855) must come before

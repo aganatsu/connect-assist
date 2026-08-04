@@ -7,18 +7,18 @@ import { assertStringIncludes, assert } from "https://deno.land/std@0.224.0/asse
 const read = (p: string) => Deno.readTextFileSync(new URL(p, import.meta.url));
 
 const CRON_ONLY = [
-  "../zone-confirmation-scanner/index.ts",
-  "../prop-firm-daily-reset/index.ts",
-  "../data-cleanup/index.ts",
-  "../outcome-tracker/index.ts",
+  "../../functions/zone-confirmation-scanner/index.ts",
+  "../../functions/prop-firm-daily-reset/index.ts",
+  "../../functions/data-cleanup/index.ts",
+  "../../functions/outcome-tracker/index.ts",
 ];
 const DUAL_PATH = [
-  "../bot-scanner/index.ts",
-  "../bot-daily-review/index.ts",
-  "../bot-weekly-advisor/index.ts",
-  "../advisor/index.ts",
-  "../optimizer/index.ts",
-  "../game-plan-refresh/index.ts",
+  "../../functions/bot-scanner/index.ts",
+  "../../functions/bot-daily-review/index.ts",
+  "../../functions/bot-weekly-advisor/index.ts",
+  "../../functions/advisor/index.ts",
+  "../../functions/optimizer/index.ts",
+  "../../functions/game-plan-refresh/index.ts",
 ];
 
 Deno.test("cron-only functions require an exact cron secret", () => {
@@ -40,7 +40,7 @@ Deno.test("dual-path functions await the cron-or-validated-user guard", () => {
 });
 
 Deno.test("cron auth never trusts a bare Bearer token", () => {
-  const src = read("./cronAuth.ts");
+  const src = read("../../functions/_shared/cronAuth.ts");
   assertStringIncludes(src, "resolveAuthenticatedUserId");
   assert(
     !src.includes('authHeader.startsWith("Bearer ")'),
@@ -49,7 +49,7 @@ Deno.test("cron auth never trusts a bare Bearer token", () => {
 });
 
 Deno.test("backtest-engine scopes status by owner and locks internal actions", () => {
-  const src = read("../backtest-engine/index.ts");
+  const src = read("../../functions/backtest-engine/index.ts");
   assertStringIncludes(src, 'if (action === "status")');
   assertStringIncludes(src, 'statusQuery = statusQuery.eq("user_id", ownerId)');
   const warmup = src.slice(src.indexOf('if (action === "warmup")'));
@@ -66,7 +66,7 @@ Deno.test("backtest-engine scopes status by owner and locks internal actions", (
 });
 
 Deno.test("telegram-notify authorizes every send", () => {
-  const src = read("../telegram-notify/index.ts");
+  const src = read("../../functions/telegram-notify/index.ts");
   assertStringIncludes(src, "authorizeTelegramSend(req, String(chatId)");
   assertStringIncludes(src, "status: decision.status");
 });
@@ -74,10 +74,10 @@ Deno.test("telegram-notify authorizes every send", () => {
 Deno.test("dual-path account-wide handlers scope user requests to the JWT owner", () => {
   for (
     const file of [
-      "../advisor/index.ts",
-      "../bot-daily-review/index.ts",
-      "../bot-weekly-advisor/index.ts",
-      "../optimizer/index.ts",
+      "../../functions/advisor/index.ts",
+      "../../functions/bot-daily-review/index.ts",
+      "../../functions/bot-weekly-advisor/index.ts",
+      "../../functions/optimizer/index.ts",
     ]
   ) {
     const src = read(file);
@@ -95,7 +95,7 @@ Deno.test("dual-path account-wide handlers scope user requests to the JWT owner"
 });
 
 Deno.test("optimizer protects user-owned runs and internal state-machine actions", () => {
-  const src = read("../optimizer/index.ts");
+  const src = read("../../functions/optimizer/index.ts");
   assertStringIncludes(
     src,
     '["poll-backtest", "start-trial", "finalize"].includes(action)',

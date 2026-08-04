@@ -62,7 +62,7 @@ Deno.test("swing_trader style profile: impulseSlCapMultiplier is 6 (wider for sw
 Deno.test("bot-scanner imports findCascadeZone from cascadeZoneEngine", () => {
   assertEquals(
     scannerSource.includes("findCascadeZone") &&
-      scannerSource.includes('from "../../functions/_shared/cascadeZoneEngine.ts"'),
+      scannerSource.includes('from "../_shared/cascadeZoneEngine.ts"'),
     true,
     "Cascade zone engine import should exist"
   );
@@ -109,12 +109,12 @@ Deno.test("day_trader style profile: minConfluence still 55 (unchanged)", () => 
 
 // ── Test 5: Cascade engine module exports correctly ──
 Deno.test("cascadeZoneEngine exports findCascadeZone function", async () => {
-  const mod = await import("./cascadeZoneEngine.ts");
+  const mod = await import("../../functions/_shared/cascadeZoneEngine.ts");
   assertEquals(typeof mod.findCascadeZone, "function", "findCascadeZone should be exported as a function");
 });
 
 Deno.test("cascadeZoneEngine returns correct state for empty candles", async () => {
-  const { findCascadeZone } = await import("./cascadeZoneEngine.ts");
+  const { findCascadeZone } = await import("../../functions/_shared/cascadeZoneEngine.ts");
   const result = findCascadeZone([], [], [], [], "bullish", 1.1000);
   assertEquals(result.state, "no_daily_impulse", "Empty candles should return no_daily_impulse state");
   assertEquals(result.sl, null, "Empty candles should return null SL");

@@ -3,7 +3,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const functionsRoot = new URL("../", import.meta.url);
+const functionsRoot = new URL("../../functions/", import.meta.url);
 const repoRoot = new URL("../../../", import.meta.url);
 
 function functionSource(relativePath: string): string {

@@ -478,7 +478,7 @@ Deno.test("HYSTERESIS: consecutive scans without 1H confirmation produce stable 
 Deno.test("HYSTERESIS: source code contains hysteresis check for opposing CHoCH", () => {
   // Structural guard: verify the hysteresis logic exists in the source
   const source = Deno.readTextFileSync(
-    new URL("./directionEngine.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/directionEngine.ts", import.meta.url).pathname
   );
   assertEquals(source.includes("hasOpposingSignal"), true,
     "directionEngine.ts should contain 'hasOpposingSignal' variable for hysteresis check");
@@ -678,7 +678,7 @@ Deno.test("4H TREND BLOCK: daily bearish + 4H bearish → NOT blocked (aligned)"
 Deno.test("4H TREND BLOCK: source code contains the trend opposition check", () => {
   // Structural guard: verify the fix exists in the source
   const source = Deno.readTextFileSync(
-    new URL("./directionEngine.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/directionEngine.ts", import.meta.url).pathname
   );
   assertEquals(source.includes("h4Structure.trend !== \"ranging\""), true,
     "directionEngine.ts should contain the 4H trend ranging exclusion check");
@@ -898,7 +898,7 @@ Deno.test("confirmedTrend: AUD/JPY scenario - bullish confirmed trend stays bull
 Deno.test("confirmedTrend: source code contains fib extension filter", () => {
   // Structural guard: verify the implementation exists
   const source = Deno.readTextFileSync(
-    new URL("./directionEngine.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/directionEngine.ts", import.meta.url).pathname
   );
   assertEquals(source.includes("confirmedTrend"), true,
     "directionEngine.ts should contain confirmedTrend function");
@@ -1142,7 +1142,7 @@ Deno.test("confirmedTrend ALTERNATION: consecutive same-direction swings are mer
 
 Deno.test("confirmedTrend STRUCTURAL GUARD: source code contains close-based and alternation logic", () => {
   const source = Deno.readTextFileSync(
-    new URL("./directionEngine.ts", import.meta.url).pathname
+    new URL("../../functions/_shared/directionEngine.ts", import.meta.url).pathname
   );
   // Close-based confirmation
   assertEquals(source.includes("closedAbove"), true,

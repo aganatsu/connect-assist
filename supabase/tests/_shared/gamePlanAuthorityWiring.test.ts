@@ -3,12 +3,12 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const scannerUrl = new URL("../bot-scanner/index.ts", import.meta.url);
+const scannerUrl = new URL("../../functions/bot-scanner/index.ts", import.meta.url);
 const fastScannerUrl = new URL(
-  "../zone-confirmation-scanner/index.ts",
+  "../../functions/zone-confirmation-scanner/index.ts",
   import.meta.url,
 );
-const refreshUrl = new URL("../game-plan-refresh/index.ts", import.meta.url);
+const refreshUrl = new URL("../../functions/game-plan-refresh/index.ts", import.meta.url);
 const migrationUrl = new URL(
   "../../migrations/20260729100000_create_active_game_plans.sql",
   import.meta.url,

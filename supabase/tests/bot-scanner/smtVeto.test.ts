@@ -126,7 +126,7 @@ Deno.test("Gate 9b: Detail with 'opposite' in different context → pass (no fal
 
 // ─── Structural verification: Gate 9b exists in bot-scanner source ──
 Deno.test("Gate 9b: Source code presence verification in bot-scanner/index.ts", () => {
-  const source = readFileSync(new URL("./index.ts", import.meta.url).pathname, "utf-8");
+  const source = readFileSync(new URL("../../functions/bot-scanner/index.ts", import.meta.url).pathname, "utf-8");
 
   // Verify the gate comment exists
   const hasGateComment = source.includes("Gate 9b: SMT Opposite Veto");

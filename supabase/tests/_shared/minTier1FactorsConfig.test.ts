@@ -12,7 +12,7 @@ import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.t
 
 // ─── Test 1: configMapper includes minTier1Factors ───
 Deno.test("configMapper resolves minTier1Factors from strategy", async () => {
-  const { mapNestedToFlat, RUNTIME_DEFAULTS } = await import("./configMapper.ts");
+  const { mapNestedToFlat, RUNTIME_DEFAULTS } = await import("../../functions/_shared/configMapper.ts");
 
   // Default when not set
   const defaultConfig = mapNestedToFlat({});
@@ -33,7 +33,7 @@ Deno.test("configMapper resolves minTier1Factors from strategy", async () => {
 
 // ─── Test 2: RUNTIME_DEFAULTS has correct default ───
 Deno.test("RUNTIME_DEFAULTS.minTier1Factors is 3", async () => {
-  const { RUNTIME_DEFAULTS } = await import("./configMapper.ts");
+  const { RUNTIME_DEFAULTS } = await import("../../functions/_shared/configMapper.ts");
   assertEquals(RUNTIME_DEFAULTS.minTier1Factors, 3);
 });
 

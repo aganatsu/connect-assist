@@ -208,7 +208,7 @@ Deno.test("REGRESSION: Engulfing detection logic unchanged — same inputs produ
 // ─── CHoCH appended to detail in confluenceScoring ──────────────────────────
 Deno.test("confluenceScoring: Reversal Candle factor detail includes pattern name", async () => {
   // Import confluenceScoring and run with a fixture that produces a pin bar
-  const { runConfluenceAnalysis } = await import("./confluenceScoring.ts");
+  const { runConfluenceAnalysis } = await import("../../functions/_shared/confluenceScoring.ts");
   
   // Build candles that produce a bullish pin bar
   const candles: Candle[] = [];

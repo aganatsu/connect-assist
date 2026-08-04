@@ -143,7 +143,7 @@ Deno.test("Full tally cycle: begin → end produces valid SourceTally", () => {
 
 Deno.test("Polygon symbols use C: prefix format", async () => {
   // Import the module and check POLYGON_SYMBOLS via a workaround
-  const mod = await import("./candleSource.ts");
+  const mod = await import("../../functions/_shared/candleSource.ts");
   // The POLYGON_SYMBOLS is not exported, but we can verify the module
   // doesn't crash when we try to fetch with an invalid symbol (no API key)
   // This is a structural test — the real verification is that the module loads
@@ -151,7 +151,7 @@ Deno.test("Polygon symbols use C: prefix format", async () => {
 });
 
 Deno.test("fetchCandlesWithFallback is exported and callable", async () => {
-  const mod = await import("./candleSource.ts");
+  const mod = await import("../../functions/_shared/candleSource.ts");
   assertEquals(typeof mod.fetchCandlesWithFallback, "function");
 });
 
@@ -161,7 +161,7 @@ Deno.test("fetchCandlesWithFallback is exported and callable", async () => {
 
 Deno.test("Failover: returns empty candles when no API keys are set", async () => {
   // With no API keys and no broker connection, all sources should fail gracefully
-  const mod = await import("./candleSource.ts");
+  const mod = await import("../../functions/_shared/candleSource.ts");
   // Only run this if TWELVE_DATA_API_KEY is not set (test environment)
   const hasKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (hasKey) {
@@ -183,7 +183,7 @@ Deno.test("Failover: returns empty candles when no API keys are set", async () =
 });
 
 Deno.test("Failover: unsupported symbol returns empty gracefully", async () => {
-  const mod = await import("./candleSource.ts");
+  const mod = await import("../../functions/_shared/candleSource.ts");
   const hasKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (hasKey) {
     console.log(

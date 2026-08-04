@@ -4,10 +4,10 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const scanner = await Deno.readTextFile(
-  new URL("../bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const preZone = await Deno.readTextFile(
-  new URL("./preZoneObservation.ts", import.meta.url),
+  new URL("../../functions/_shared/preZoneObservation.ts", import.meta.url),
 );
 
 Deno.test("frozen candidates are found by pair even when fresh direction changes", () => {

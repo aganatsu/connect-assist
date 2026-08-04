@@ -12,7 +12,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const root = new URL("../", import.meta.url);
+const root = new URL("../../functions/", import.meta.url);
 
 function source(relativePath: string): string {
   return Deno.readTextFileSync(new URL(relativePath, root));
