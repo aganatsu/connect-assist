@@ -437,6 +437,7 @@ export function detectZoneConfirmation(
     // Scan recent candles (within lookback window, after zone touch)
     const scanStart = Math.max(minIndex, afterZoneTouch);
     const scanEnd = candles5m.length;
+    let candlestickCandidate: ConfirmationSignal | null = null;
 
     for (let i = scanEnd - 1; i >= scanStart; i--) {
       const candle = candles5m[i];
@@ -470,7 +471,7 @@ export function detectZoneConfirmation(
         );
       }
 
-      return attachConfirmationAuthority({
+      const candidate = attachConfirmationAuthority({
         type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",
         tier: 3,
         price: candle.close,
@@ -480,7 +481,14 @@ export function detectZoneConfirmation(
         closeBased: false, // no structural break
         supportingSignals: supporting.signals,
       }, candles5m, direction, "legacy_tier", "reversal_pattern");
+
+      // Preserve the established engulfing + rejection-wick priority. A newer
+      // canonical pattern is retained only as a fallback when no such signal exists.
+      if (legacyEngulfingRejection) return candidate;
+      if (!candlestickCandidate) candlestickCandidate = candidate;
     }
+
+    if (candlestickCandidate) return candlestickCandidate;
   }
 
   // No confirmation found at any tier
