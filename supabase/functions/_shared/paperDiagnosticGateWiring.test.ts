@@ -16,11 +16,8 @@ Deno.test("scanner routes duplicate early vetoes through authority ownership", (
   assertStringIncludes(scanner, "legacyGateDiagnostics:");
 });
 
-Deno.test("ICT operational risk remains a direct hard block", () => {
-  assertStringIncludes(
-    scanner,
-    "pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade",
-  );
+Deno.test("ICT operational risk follows authority ownership", () => {
+  assertStringIncludes(scanner, 'legacyGateBlocks("ict_risk"');
   assertStringIncludes(scanner, "ICT RISK BLOCKED");
 });
 
