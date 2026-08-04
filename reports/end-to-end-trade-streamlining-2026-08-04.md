@@ -90,12 +90,29 @@ Status: Complete
 
 ### Phase 6: End-to-end verification
 
-Status: In progress
+Status: Complete
 
 - Route-parity tests across direct, Watchlist, pending and backtest paths.
 - Paper/live parity apart from broker execution.
 - Rejected/Waiting/Blocked explanation coverage.
 - Deployment and rollback checklist.
+
+## Deployment
+
+1. Apply `20260804030000_finalize_live_broker_position_lifecycle.sql`.
+2. Deploy `bot-scanner` and `zone-confirmation-scanner`.
+3. Verify a paper entry remains immediately `open`.
+4. Verify a live entry stays `pending` until a broker ledger row succeeds.
+5. Verify uncertain execution shows `reconciliation_required`.
+
+Rollback scanner functions first. Keep the migration columns and trigger in place until no
+live rows remain `pending` or `reconciliation_required`; dropping them earlier can
+restore false-open behavior.
+
+## Verification Result
+
+- PR 191: Deno shared-function tests passed; Node lint, tests and build passed.
+- PR 192: Deno shared-function tests passed; Node lint, tests and build passed.
 
 ## Resume Prompt
 
