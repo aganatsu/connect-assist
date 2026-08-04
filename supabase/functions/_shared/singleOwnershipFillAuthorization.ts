@@ -71,9 +71,17 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
   });
   const ownershipAllows = enforcement.effectiveMode !== "enforce" ||
     enforcement.authorized;
+  const retryable = decision.decision === "watch" ||
+    decision.decision === "unavailable";
+  const reason = [
+    ...decision.reasonCodes,
+    ...decision.completeness.unavailable.map((value) => value + "_unavailable"),
+  ].join(", ") || "owned_authorities_do_not_allow";
   return {
     decision,
     enforcement,
     authorized: input.rawFinalAuthorized && ownershipAllows,
+    retryable,
+    reason,
   };
 }

@@ -134,6 +134,7 @@ import {
   readFrozenCrossTimeframeAuthority,
   readFrozenSetupStrategyContext,
   resolvePendingConfirmationMethod,
+  resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
@@ -2335,6 +2336,10 @@ async function runScanForUser(
         const pendingTimeframeAuthority = resolveTimeframeAuthority(
           pendingPolicyResolution.policy,
         );
+        const pendingDealingRangeMode = resolvePendingDealingRangeMode(
+          pending,
+          (config as any).dealingRangeMode,
+        );
         const frozenIdentity = validateFrozenSetupIdentity(
           pending,
           pendingPolicyResolution.frozenContext,
@@ -2907,7 +2912,7 @@ async function runScanForUser(
             direction: pending.direction as "long" | "short",
             price: actualFillPrice,
             mode: normalizeDealingRangeMode(
-              (config as any).dealingRangeMode,
+              pendingDealingRangeMode,
               {
                 onlyBuyInDiscount: config.onlyBuyInDiscount,
                 onlySellInPremium: config.onlySellInPremium,
@@ -2996,7 +3001,7 @@ async function runScanForUser(
             direction: pending.direction as "long" | "short",
             directionVerdict: pendingDirectionVerdict,
             canonicalLocation: {
-              required: normalizeDealingRangeMode((config as any).dealingRangeMode) !== "off",
+              required: normalizeDealingRangeMode(pendingDealingRangeMode) !== "off",
               available: pendingCanonicalDealingRange.available,
               allowed: pendingCanonicalDealingRange.available ? pendingCanonicalDealingRange.allowed : null,
               rangeId: pendingCanonicalDealingRange.range?.impulseId || null,
@@ -3011,7 +3016,7 @@ async function runScanForUser(
           });
           const authorityFinalAuthorization = pendingOwnershipFill.authorized
             ? { ...rawFinalAuthorization, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement }
-            : { ...rawFinalAuthorization, authorized: false, code: "additional_gate" as const, retryable: true, reason: "Single-ownership fill authorization did not allow entry", singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement };
+            : { ...rawFinalAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingOwnershipFill.retryable, reason: "Trade Decision did not authorize entry: " + pendingOwnershipFill.reason, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement };
           const finalAuthorization = attachDecisionContext(
             authorityFinalAuthorization,
             buildTradeDecisionContext({
@@ -3925,6 +3930,14 @@ async function runScanForUser(
       if (!requiredIntervals.has(interval)) requiredIntervals.set(interval, range);
     };
     requireInterval(entryInterval, entryRange);
+    requireInterval(
+      timeframeAuthority.roles.confirmation,
+      timeframeFetchRange(timeframeAuthority.roles.confirmation),
+    );
+    requireInterval(
+      timeframeAuthority.roles.refinement,
+      timeframeFetchRange(timeframeAuthority.roles.refinement),
+    );
     requireInterval("1d", "1y");
     requireInterval("1h", "5d");
     if (
@@ -4004,6 +4017,10 @@ async function runScanForUser(
     const roleCandles = bindTimeframeCandles(
       timeframeAuthority,
       buildTimeframeCandleMap<Candle>([
+        ...requestEntries.map(([timeframe]) => ({
+          timeframe,
+          candles: fetchedByInterval.get(timeframe) || [],
+        })),
         { timeframe: entryInterval, candles },
         { timeframe: "15m", candles: m15Candles },
         { timeframe: "1h", candles: hourlyCandles },
@@ -6814,12 +6831,14 @@ async function runScanForUser(
     if (
       existingStaged &&
       existingStaged.execution_eligible !== false &&
-      effectiveScore >= conflictAdjustedMinConfluence &&
+      (singleOwnershipEnforcementRequested ||
+        effectiveScore >= conflictAdjustedMinConfluence) &&
       analysis.direction &&
       !isPaused &&
       stagingEnabled
     ) {
-      const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
+      const cyclesMet = singleOwnershipEnforcementRequested ||
+        existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
         // Eligibility is not a lifecycle transition. Keep the Watchlist row
@@ -6831,7 +6850,9 @@ async function runScanForUser(
             current_score: analysis.score,
             current_factors: presentFactors,
             missing_factors: missingFactors,
-            promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
+            promotion_reason: singleOwnershipEnforcementRequested
+            ? "Trade Decision authorized Watchlist promotion"
+            : `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
             last_eval_at: new Date().toISOString(),
             scan_cycles: existingStaged.scan_cycles + 1,
           }).eq("id", streamlinedStagedId);
@@ -7100,7 +7121,9 @@ async function runScanForUser(
       continue;
     }
     // ICT Risk hard gate: block trade if risk limits exceeded
-    if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
+    if (pairConfig.ictRiskEnabled && ictRiskResult &&
+        legacyGateBlocks("ict_risk", ictRiskResult.canTrade,
+          "ICT Risk: " + ictRiskResult.reasons.join("; "))) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reasons.join("; ")}`];
       detail.reason = ictRiskResult.reasons.join("; ");
@@ -7234,6 +7257,46 @@ async function runScanForUser(
         izData?.bestZone?.localConfluence?.candidateId ||
         (detail as any).crossTimeframeCandidateId ||
         "candidate:" + scanCycleId + ":" + pair;
+      const candidateConfirmationMethod = pairConfig.confirmationMethod || "choch";
+      const candidateSweep = (detail as any).sweepReclaim?.bestReclaim ||
+        (detail as any).sweepReclaim?.sweeps?.[0] || null;
+      const candidateSweepEvent = candidateSweep?.sweptLevel
+        ? { level: candidateSweep.sweptLevel, type: candidateSweep.type || "buy-side" }
+        : null;
+      const candidateConfirmationSignal = candidateConfirmationMethod === "indicators"
+        ? null
+        : detectZoneConfirmation(
+          roleCandles.confirmation,
+          analysis.direction as "long" | "short",
+          DEFAULT_ZONE_CONFIRMATION_CONFIG,
+          undefined,
+          pair,
+          izData?.bestZone
+            ? { zoneLow: izData.bestZone.low, zoneHigh: izData.bestZone.high }
+            : undefined,
+          roleCandles.refinement.length >= 15 ? roleCandles.refinement : undefined,
+          candidateSweepEvent,
+          (detail as any).signalSource === "cascade" ? "cascade"
+            : (detail as any).signalSource === "unified" ? "unified" : "standalone",
+        );
+      const candidateIndicatorConfirmation = candidateConfirmationMethod === "choch"
+        ? null
+        : checkIndicatorConfirmation(
+          roleCandles.confirmation,
+          analysis.direction as "long" | "short",
+          { minIndicators: pairConfig.indicatorMinCount || 3 },
+        );
+      const candidateEntryConfirmationPassed = candidateConfirmationMethod === "choch"
+        ? !!candidateConfirmationSignal
+        : candidateConfirmationMethod === "indicators"
+        ? candidateIndicatorConfirmation?.confirmed === true
+        : !!candidateConfirmationSignal && candidateIndicatorConfirmation?.confirmed === true;
+      (detail as any).entryConfirmationCandidate = {
+        method: candidateConfirmationMethod,
+        passed: candidateEntryConfirmationPassed,
+        signal: candidateConfirmationSignal,
+        indicators: candidateIndicatorConfirmation,
+      };
       const zoneStoryAvailable = cascadeResult?.state === "triggered" ||
         unifiedZoneData?.hasZone === true || izData?.hasZone === true;
       const zoneStoryEntryReady = cascadeResult?.state === "triggered"
@@ -7241,7 +7304,8 @@ async function runScanForUser(
         : unifiedZoneData?.hasZone
         ? unifiedGatePassed
         : izData?.hasZone
-        ? izData?.bestZone?.priceAtZoneStrict === true
+        ? izData?.bestZone?.priceAtZoneStrict === true &&
+          candidateEntryConfirmationPassed
         : null;
       (detail as any).singleOwnershipDecision =
         evaluateSingleOwnershipDecision({
@@ -8663,19 +8727,21 @@ async function runScanForUser(
         });
         const directEntryConfirmation: EntryConfirmationDecision = {
           required: true,
-          passed: true,
-          method: useMarketFillAtZone
-            ? "validated_zone_market"
-            : "scanner_market_signal",
-          reason: useMarketFillAtZone
-            ? "Price is inside the validated impulse zone and the market-entry timing rule passed"
-            : "The current scanner signal satisfied the configured immediate-entry timing rule",
+          passed: candidateEntryConfirmationPassed || unifiedGatePassed,
+          method: candidateConfirmationMethod,
+          reason: candidateConfirmationSignal
+            ? "Entry timing confirmed by " + candidateConfirmationSignal.type
+            : unifiedGatePassed
+            ? "Entry timing confirmed by the ICT Setup Model"
+            : "Configured Entry Confirmation is not ready",
           evidence: {
             signalSource: (detail as any).signalSource || null,
-            impulseZone: (detail as any).impulseZone || null,
-            unifiedZone: (detail as any).unifiedZone || null,
+            structural: candidateConfirmationSignal,
+            indicators: candidateIndicatorConfirmation,
+            unifiedConfirmation: unifiedZoneData?.confirmation || null,
+            confirmationTimeframe: timeframeAuthority.roles.confirmation,
             sourceCandleTimestamp:
-              candles[candles.length - 1]?.datetime || null,
+              roleCandles.confirmation[roleCandles.confirmation.length - 1]?.datetime || null,
           },
           evaluatedAt: nowStr,
         };
@@ -9184,10 +9250,11 @@ async function runScanForUser(
                 initialScore: parseFloat(existingStaged.initial_score),
                 cyclesWatched: existingStaged.scan_cycles + 1,
                 stagedAt: existingStaged.staged_at,
-                promotionReason:
-                  `Score reached ${analysis.score.toFixed(1)}% `
-                  + `(gate: ${adjustedMinConfluence}%) after `
-                  + `${existingStaged.scan_cycles + 1} cycles`,
+                promotionReason: singleOwnershipEnforcementRequested
+                  ? "Trade Decision authorized Watchlist promotion"
+                  : `Score reached ${analysis.score.toFixed(1)}% `
+                    + `(gate: ${adjustedMinConfluence}%) after `
+                    + `${existingStaged.scan_cycles + 1} cycles`,
               },
             }
             : {}),
@@ -9299,7 +9366,7 @@ async function runScanForUser(
         detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : (useMarketFillAtZone ? "trade_placed_at_zone" : "trade_placed");
         if (useMarketFillAtZone) {
           detail.entryMethod = "market_fill_at_zone";
-          detail.zoneConfirmation = "zone_touch_is_confirmation";
+          detail.zoneConfirmation = "configured_entry_confirmation";
           detail.impulseZoneEntry = { zoneLow: izData?.bestZone?.low, zoneHigh: izData?.bestZone?.high, zoneType: izData?.bestZone?.type, refinedEntry: izData?.bestZone?.refinedEntry };
         }
         if (isPromotedFromStaging && existingStaged) {

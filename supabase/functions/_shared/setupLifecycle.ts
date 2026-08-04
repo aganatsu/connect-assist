@@ -342,6 +342,14 @@ export function readFrozenSetupStrategyContext(
   return null;
 }
 
+export function resolvePendingDealingRangeMode(
+  pending: Record<string, unknown>,
+  fallback: unknown,
+): unknown {
+  return readFrozenSetupStrategyContext(pending)?.runtimeConfig
+    ?.effectiveConfig?.dealingRangeMode ?? fallback;
+}
+
 export function readFrozenCrossTimeframeAuthority(
   row: Record<string, unknown>,
 ): CrossTimeframeEntryAuthorityDecision | null {

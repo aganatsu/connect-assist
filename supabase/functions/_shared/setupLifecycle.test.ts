@@ -4,6 +4,7 @@ import {
   buildSetupLifecycleEvidence,
   canTransitionSetup,
   resolvePendingConfirmationMethod,
+  resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
@@ -75,6 +76,17 @@ Deno.test("setup lifecycle permits only canonical forward transitions", () => {
     canTransitionSetup("blocked_after_qualification", "pending"),
     false,
   );
+});
+
+Deno.test("pending Premium/Discount mode is frozen with the setup", () => {
+  assertEquals(
+    resolvePendingDealingRangeMode(
+      { signal_reason: { setupStrategyContext: { runtimeConfig: { effectiveConfig: { dealingRangeMode: "strict_value" } } } } },
+      "avoid_wrong_side",
+    ),
+    "strict_value",
+  );
+  assertEquals(resolvePendingDealingRangeMode({}, "avoid_wrong_side"), "avoid_wrong_side");
 });
 
 Deno.test("pending confirmation method is frozen on the pending row", () => {
