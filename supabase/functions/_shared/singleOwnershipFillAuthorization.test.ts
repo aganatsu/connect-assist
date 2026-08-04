@@ -41,6 +41,8 @@ Deno.test("fill authorization blocks changed canonical location", () => {
   });
   assertEquals(result.authorized, false);
   assertEquals(result.enforcement.authorized, false);
+  assertEquals(result.retryable, false);
+  assertEquals(result.reason.includes("canonical_location"), true);
 });
 
 Deno.test("fill authorization cannot override raw operational failure", () => {
@@ -57,4 +59,6 @@ Deno.test("fill enforcement fails closed without frozen Zone Story", () => {
   });
   assertEquals(result.authorized, false);
   assertEquals(result.decision.completeness.unavailable, ["zone_story"]);
+  assertEquals(result.retryable, true);
+  assertEquals(result.reason.includes("zone_story_unavailable"), true);
 });

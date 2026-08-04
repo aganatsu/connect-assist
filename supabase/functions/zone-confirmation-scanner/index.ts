@@ -106,6 +106,7 @@ import {
 } from "../_shared/brokerExecutionLedger.ts";
 import {
   resolvePendingConfirmationMethod,
+  resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
@@ -511,6 +512,10 @@ Deno.serve(async (req) => {
         );
         const pendingTimeframeAuthority = resolveTimeframeAuthority(
           pendingPolicyResolution.policy,
+        );
+        const pendingDealingRangeMode = resolvePendingDealingRangeMode(
+          pending,
+          (config as any).dealingRangeMode,
         );
         const frozenIdentity = validateFrozenSetupIdentity(
           pending,
@@ -1063,7 +1068,7 @@ Deno.serve(async (req) => {
           ),
           direction: pending.direction as "long" | "short",
           price: actualFillPrice,
-          mode: normalizeDealingRangeMode((config as any).dealingRangeMode, {
+          mode: normalizeDealingRangeMode(pendingDealingRangeMode, {
             onlyBuyInDiscount: config.onlyBuyInDiscount,
             onlySellInPremium: config.onlySellInPremium,
           }),
@@ -1143,7 +1148,7 @@ Deno.serve(async (req) => {
           direction: pending.direction as "long" | "short",
           directionVerdict,
           canonicalLocation: {
-            required: normalizeDealingRangeMode((config as any).dealingRangeMode) !== "off",
+            required: normalizeDealingRangeMode(pendingDealingRangeMode) !== "off",
             available: pendingCanonicalDealingRange.available,
             allowed: pendingCanonicalDealingRange.available ? pendingCanonicalDealingRange.allowed : null,
             rangeId: pendingCanonicalDealingRange.range?.impulseId || null,
@@ -1158,7 +1163,7 @@ Deno.serve(async (req) => {
         });
         const authorityRawAuthorization = ownershipFill.authorized
           ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange }
-          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: true, reason: "Single-ownership fill authorization did not allow entry", singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange };
+          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: ownershipFill.retryable, reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange };
         const authorization = attachDecisionContext(
           authorityRawAuthorization,
           buildTradeDecisionContext({

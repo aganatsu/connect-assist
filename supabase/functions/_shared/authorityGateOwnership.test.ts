@@ -10,7 +10,7 @@ Deno.test("duplicate market-quality gates are legacy diagnostics", () => {
   for (const code of [
     "minimum_score", "tier1_minimum", "structural_conviction",
     "reaction_confirmation", "smt_veto", "conflict_count", "ict_judas",
-    "ict_fvg_invalidation", "impulse_zone_score",
+    "ict_fvg_invalidation", "ict_risk", "impulse_zone_score",
   ]) {
     assertEquals(isLegacyDiagnosticGate(code), true, code);
   }

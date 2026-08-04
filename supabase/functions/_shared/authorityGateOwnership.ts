@@ -26,6 +26,7 @@ const OWNERS: Record<string, AuthorityGateOwner> = {
   ict_fvg_invalidation: "legacy_diagnostic",
   ict_mss: "legacy_diagnostic",
   ict_kill_zone: "legacy_diagnostic",
+  ict_risk: "legacy_diagnostic",
   impulse_zone_score: "legacy_diagnostic",
   premium_discount: "canonical_location",
   direction_verdict: "direction",
