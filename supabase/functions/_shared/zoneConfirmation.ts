@@ -308,7 +308,7 @@ export function detectZoneConfirmation(
   ltfCandles?: Candle[],
   /** Optional sweep event for Sweep+CHoCH detection (Level 1 in hierarchy) */
   sweepEvent?: { level: number; type: string } | null,
-  candlestickProfile: CandlestickConfirmationProfile = "unified",
+  candlestickProfile: CandlestickConfirmationProfile | "legacy" = "legacy",
 ): ConfirmationSignal | null {
   if (candles5m.length < 10) return null;
 
@@ -463,8 +463,9 @@ export function detectZoneConfirmation(
         supporting.hasEngulfing &&
         supporting.hasRejectionWick &&
         (candlestickProfile !== "standalone" || !!sweepEvent);
-      if (!legacyEngulfingRejection && !pattern.authorized) continue;
-      if (pattern.pattern) {
+      const patternAuthorized = candlestickProfile !== "legacy" && pattern.authorized;
+      if (!legacyEngulfingRejection && !patternAuthorized) continue;
+      if (patternAuthorized && pattern.pattern) {
         supporting.signals.push(
           "pattern:" + pattern.pattern,
           "pattern_strength:" + pattern.strength,

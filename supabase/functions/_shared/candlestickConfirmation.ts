@@ -23,6 +23,27 @@ function strengthFor(pattern: string | null) {
   return "moderate" as const;
 }
 
+function detectStarPattern(candles: Candle[]): ReturnType<typeof detectReversalCandle> | null {
+  if (candles.length < 3) return null;
+  const first = candles[candles.length - 3];
+  const middle = candles[candles.length - 2];
+  const last = candles[candles.length - 1];
+  const firstRange = first.high - first.low;
+  const firstBody = Math.abs(first.close - first.open);
+  const middleBody = Math.abs(middle.close - middle.open);
+  const lastBody = Math.abs(last.close - last.open);
+  if (firstRange <= 0 || firstBody / firstRange <= 0.4 ||
+    middleBody >= firstBody * 0.3 || lastBody <= firstBody * 0.5) return null;
+  const midpoint = (first.open + first.close) / 2;
+  if (first.close < first.open && last.close > last.open && last.close > midpoint) {
+    return { detected: true, type: "bullish", pattern: "Morning Star" };
+  }
+  if (first.close > first.open && last.close < last.open && last.close < midpoint) {
+    return { detected: true, type: "bearish", pattern: "Evening Star" };
+  }
+  return null;
+}
+
 export function evaluateCandlestickConfirmation(input: {
   candles: Candle[];
   candleIndex: number;
@@ -33,7 +54,9 @@ export function evaluateCandlestickConfirmation(input: {
 }): CandlestickConfirmationResult {
   const window = input.candles.slice(0, input.candleIndex + 1);
   const candle = input.candles[input.candleIndex];
-  const detected = detectReversalCandle(window);
+  let detected = detectReversalCandle(window);
+  const star = detectStarPattern(window);
+  if (star) detected = star;
   const expected = input.direction === "long" ? "bullish" : "bearish";
   const aligned = detected.detected && detected.type === expected;
   const range = candle ? candle.high - candle.low : 0;
