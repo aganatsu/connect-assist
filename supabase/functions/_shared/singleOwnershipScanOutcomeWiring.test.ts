@@ -13,7 +13,7 @@ Deno.test("ownership watch exits before generic rejection logging", () => {
 });
 
 Deno.test("true ownership rejections persist authority reasons and enforcement", () => {
-  assertStringIncludes(scanner, "...authorityReasons");
+  assertStringIncludes(scanner, "...consolidatedAuthorityReasons");
   assertStringIncludes(scanner, "failedGates: detail.rejectionReasons");
   assertStringIncludes(scanner, "singleOwnershipEnforcement:");
   assertStringIncludes(ui, "Trade Decision");
