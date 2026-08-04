@@ -81,7 +81,7 @@ Status: Complete
 
 ### Phase 5: Live execution reconciliation
 
-Status: Pending
+Status: Complete
 
 - Introduce durable execution states before broker submission.
 - Mark live positions open only after confirmed broker success.
@@ -90,7 +90,7 @@ Status: Pending
 
 ### Phase 6: End-to-end verification
 
-Status: Pending
+Status: In progress
 
 - Route-parity tests across direct, Watchlist, pending and backtest paths.
 - Paper/live parity apart from broker execution.
