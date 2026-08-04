@@ -14,6 +14,8 @@
 import {
   beginScanSourceTally,
   classifyMetaApiOperationalIssue,
+  oandaGranularity,
+  resolveOandaCandleSymbol,
   endScanSourceTally,
   resetThrottleStats,
   type SourceTally,
@@ -23,6 +25,13 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
+Deno.test("OANDA candle mapping uses broker instruments and granularities", () => {
+  assertEquals(oandaGranularity("15m"), "M15");
+  assertEquals(oandaGranularity("4h"), "H4");
+  assertEquals(resolveOandaCandleSymbol("EUR/USD", { api_key: "token", account_id: "account", broker_type: "oanda" }), "EUR_USD");
+  assertEquals(resolveOandaCandleSymbol("XAU/USD", { api_key: "token", account_id: "account", broker_type: "oanda", symbol_overrides: { "XAU/USD": "XAU_USD" } }), "XAU_USD");
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 1: Source Tally System
 // ═══════════════════════════════════════════════════════════════════════
@@ -31,6 +40,7 @@ Deno.test("beginScanSourceTally: initializes tally to zeros", () => {
   beginScanSourceTally();
   const result = endScanSourceTally();
   assertEquals(result.metaapi, 0);
+  assertEquals(result.oanda, 0);
   assertEquals(result.twelvedata, 0);
   assertEquals(result.polygon, 0);
   assertEquals(result.none, 0);
@@ -60,6 +70,7 @@ Deno.test("SourceTally: type has correct fields", () => {
   beginScanSourceTally();
   const result: SourceTally = endScanSourceTally();
   assert("metaapi" in result);
+  assert("oanda" in result);
   assert("twelvedata" in result);
   assert("polygon" in result);
   assert("none" in result);
@@ -125,11 +136,12 @@ Deno.test("Full tally cycle: begin → end produces valid SourceTally", () => {
   const tally = endScanSourceTally();
   // Verify shape
   assertEquals(typeof tally.metaapi, "number");
+  assertEquals(typeof tally.oanda, "number");
   assertEquals(typeof tally.twelvedata, "number");
   assertEquals(typeof tally.polygon, "number");
   assertEquals(typeof tally.none, "number");
   assert(
-    tally.primary === "metaapi" || tally.primary === "twelvedata" ||
+    tally.primary === "metaapi" || tally.primary === "oanda" || tally.primary === "twelvedata" ||
       tally.primary === "polygon" || tally.primary === "none",
   );
 });
