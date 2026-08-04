@@ -16,7 +16,7 @@
  *     (engulfing, rejection wick, FVG, or volume spike)
  * 
  *   Tier 3 — Reversal Pattern (No CHoCH Required):
- *     Engulfing pattern + rejection wick + displacement above instrument threshold
+ *     Route-aware candlestick reversal pattern with required sweep and/or displacement support
  *     This IS a reversal — it just hasn't broken structure on 5m yet.
  * 
  * Instrument-Aware Thresholds:
@@ -31,6 +31,10 @@
 
 import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
 import { evaluateConfirmation, type ConfirmationResult } from "./confirmationHierarchy.ts";
+import {
+  evaluateCandlestickConfirmation,
+  type CandlestickConfirmationProfile,
+} from "./candlestickConfirmation.ts";
 import {
   buildConfirmationAuthorityObservation,
   confirmationLevelFromLegacySignal,
@@ -85,7 +89,7 @@ function attachConfirmationAuthority(
       closeBased: signal.closeBased,
       displacement: signal.displacement,
       supportingSignals: signal.supportingSignals,
-      reasonCodes: [source, level || "legacy_tier_" + signal.tier],
+      reasonCodes: [source, level || "legacy_tier_" + signal.tier, ...signal.supportingSignals.filter((value) => value.startsWith("pattern:")).map((value) => "candlestick_" + value.toLowerCase().replace(/[^a-z0-9]+/g, "_"))],
     }),
   };
 }
@@ -304,6 +308,7 @@ export function detectZoneConfirmation(
   ltfCandles?: Candle[],
   /** Optional sweep event for Sweep+CHoCH detection (Level 1 in hierarchy) */
   sweepEvent?: { level: number; type: string } | null,
+  candlestickProfile: CandlestickConfirmationProfile = "unified",
 ): ConfirmationSignal | null {
   if (candles5m.length < 10) return null;
 
@@ -425,7 +430,7 @@ export function detectZoneConfirmation(
   // ═══════════════════════════════════════════════════════════════════════════
   // TIER 3: Reversal Pattern (no CHoCH required)
   // Strong reversal evidence without a structural break on 5m.
-  // Requires: engulfing + rejection wick + displacement above threshold.
+  // Uses engulfing, morning/evening star, hammer/shooting-star, and doji follow-through evidence.
   // This IS a reversal — it just hasn't broken the 5m swing yet.
   // ═══════════════════════════════════════════════════════════════════════════
   if (config.tier3Enabled) {
@@ -440,10 +445,6 @@ export function detectZoneConfirmation(
       if (range === 0) continue;
       const displacement = Math.abs(candle.close - candle.open) / range;
 
-      // Tier 3 requires stronger displacement than Tier 1/2 to compensate
-      // for the lack of structural break
-      if (displacement < effectiveDisplacement) continue;
-
       // Must be a candle in the correct direction
       const isBearishCandle = candle.close < candle.open;
       const isBullishCandle = candle.close > candle.open;
@@ -451,9 +452,23 @@ export function detectZoneConfirmation(
       if (direction === "long" && !isBullishCandle) continue;
 
       const supporting = detectSupportingSignals(candles5m, i, direction);
-
-      // Tier 3 requires BOTH engulfing AND rejection wick
-      if (!supporting.hasEngulfing || !supporting.hasRejectionWick) continue;
+      const pattern = evaluateCandlestickConfirmation({
+        candles: candles5m, candleIndex: i, direction,
+        profile: candlestickProfile,
+        minimumDisplacement: effectiveDisplacement,
+        hasSweep: !!sweepEvent,
+      });
+      const legacyEngulfingRejection = displacement >= effectiveDisplacement &&
+        supporting.hasEngulfing &&
+        supporting.hasRejectionWick &&
+        (candlestickProfile !== "standalone" || !!sweepEvent);
+      if (!legacyEngulfingRejection && !pattern.authorized) continue;
+      if (pattern.pattern) {
+        supporting.signals.push(
+          "pattern:" + pattern.pattern,
+          "pattern_strength:" + pattern.strength,
+        );
+      }
 
       return attachConfirmationAuthority({
         type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",

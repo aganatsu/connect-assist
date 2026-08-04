@@ -646,8 +646,11 @@ Deno.serve(async (req) => {
 
         // Extract sweep data from signal_reason (stored at order placement time)
         let sweepEventData: { level: number; type: string } | null = null;
+        let candlestickProfile: "unified" | "standalone" | "cascade" = "standalone";
         try {
           const sr = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {});
+          candlestickProfile = sr?.signalSource === "cascade" ? "cascade"
+            : sr?.signalSource === "unified" ? "unified" : "standalone";
           if (sr?.sweepReclaim?.bestReclaim?.sweptLevel) {
             sweepEventData = { level: sr.sweepReclaim.bestReclaim.sweptLevel, type: sr.sweepReclaim.bestReclaim.type || "buy-side" };
           } else if (sr?.sweepReclaim?.sweeps?.[0]?.sweptLevel) {
@@ -674,6 +677,7 @@ Deno.serve(async (req) => {
             (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
             candles1m.length >= 15 ? candles1m : undefined,
             sweepEventData,
+            candlestickProfile,
           );
         const indicatorConfirmation = confirmationMethod === "choch"
           ? null

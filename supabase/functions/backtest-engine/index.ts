@@ -211,6 +211,10 @@ import {
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import {
+  detectZoneConfirmation,
+  DEFAULT_ZONE_CONFIRMATION_CONFIG,
+} from "../_shared/zoneConfirmation.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { normalizeRejectedGate } from "../_shared/rejectedSetupLogger.ts";
 import {
@@ -2850,6 +2854,31 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           } catch { /* zone engine non-fatal */ }
         }
 
+        const backtestConfirmationProfile =
+          resolvedTradingStyle === "swing_trader" && cascadeResult?.entryZone
+            ? "cascade"
+            : unifiedResult?.hasZone ? "unified" : "standalone";
+        const backtestConfirmationZone = backtestConfirmationProfile === "cascade"
+          ? cascadeResult?.entryZone
+          : backtestConfirmationProfile === "unified"
+          ? unifiedResult?.zone
+          : izData?.bestZone;
+        const backtestSweep = (analysis.sweepReclaims || []).find((item: any) =>
+          item.reclaimed && item.sweptLevel
+        );
+        const backtestConfirmationSignal = analysis.direction && backtestConfirmationZone
+          ? detectZoneConfirmation(
+            analysisCandles, analysis.direction, DEFAULT_ZONE_CONFIRMATION_CONFIG,
+            Math.max(0, analysisCandles.length - 3), symbol,
+            { zoneHigh: backtestConfirmationZone.high, zoneLow: backtestConfirmationZone.low },
+            undefined,
+            backtestSweep ? { level: backtestSweep.sweptLevel, type: backtestSweep.type } : null,
+            backtestConfirmationProfile,
+          )
+          : null;
+        const requiresStructuralConfirmation =
+          (config.confirmationMethod || "choch") !== "indicators";
+
         // ── Three-Tier Gate Logic (cascade → unified → standalone) ──
         // Mirrors bot-scanner: cascade has priority for swing, then unified story,
         // then falls back to standalone impulse zone gate.
@@ -2858,14 +2887,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         let unifiedGatePassed = false;
 
         // Tier 1: Cascade (swing_trader only)
-        if (resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry) {
+        if (resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry &&
+            (!requiresStructuralConfirmation || !!cascadeResult.confirmation || !!backtestConfirmationSignal)) {
           unifiedGatePassed = true;
           signalSource = "cascade";
         }
         // Tier 2: Unified zone (confirmed/triggered + entryReady)
         else if (unifiedResult?.hasZone &&
             (unifiedResult.state === "triggered" || unifiedResult.state === "confirmed") &&
-            unifiedResult.confirmation?.entryReady === true) {
+            (unifiedResult.confirmation?.entryReady === true ||
+              (!requiresStructuralConfirmation || !!backtestConfirmationSignal))) {
           unifiedGatePassed = true;
           signalSource = "unified";
         }
@@ -2889,7 +2920,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             diagnostics.skippedImpulseNotAtZone++;
             continue;
           }
-          // Price IS at zone — apply bonus (standalone path)
+          if (requiresStructuralConfirmation && !backtestConfirmationSignal) {
+            diagnostics.skippedGateBlocked++;
+            diagnostics.gateBlockReasons["Confirmation Authority"] =
+              (diagnostics.gateBlockReasons["Confirmation Authority"] || 0) + 1;
+            continue;
+          }
+          // Price IS at zone and Confirmation Authority is ready.
           impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
 
           // ── Impulse Zone → Tier 1 Credit ──
@@ -3529,12 +3566,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             source: signalSource,
             state: unifiedResult.state || null,
             hasZone: true,
-            entryReady: unifiedResult.confirmation?.entryReady === true,
+            entryReady: unifiedResult.confirmation?.entryReady === true || !!backtestConfirmationSignal,
             score: unifiedResult.unifiedScore ?? null,
             timeframe: unifiedResult.selectedTF ?? null,
             low: unifiedResult.zone?.low ?? null,
             high: unifiedResult.zone?.high ?? null,
             entry: unifiedResult.entry?.entryPrice ?? null,
+            confirmationAuthority: backtestConfirmationSignal?.authority || unifiedResult.confirmation || null,
           }
           : {
             source: signalSource,
@@ -3544,12 +3582,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 : "waiting_for_price")
               : "no_zone",
             hasZone: izData?.hasZone === true,
-            entryReady: izData?.bestZone?.priceAtZone === true,
+            entryReady: izData?.bestZone?.priceAtZone === true && (!requiresStructuralConfirmation || !!backtestConfirmationSignal),
             score: izData?.bestZone?.totalScore ?? null,
             timeframe: izData?.selectedTF ?? null,
             low: izData?.bestZone?.low ?? null,
             high: izData?.bestZone?.high ?? null,
             entry: izData?.bestZone?.refinedEntry ?? null,
+            confirmationAuthority: backtestConfirmationSignal?.authority || null,
           };
         let replaySnapshot = await buildGoldenReplaySnapshot({
           surface: "backtest",
@@ -3671,7 +3710,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             confirmation: {
               required: replayZone.hasZone, passed: replayZone.entryReady,
               authorityVersion: "confirmation-authority.v1",
-              reasonCodes: replayZone.entryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
+              reasonCodes: backtestConfirmationSignal?.authority?.reasonCodes || (replayZone.entryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"]),
             },
             thesis: { required: false, valid: null, reasonCodes: ["backtest_thesis_not_required"] },
             safety: {
