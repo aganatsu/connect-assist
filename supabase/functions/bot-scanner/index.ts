@@ -1197,7 +1197,7 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const { data } = await adminClient.from("pending_orders").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID)
-        .in("status", ["pending", "awaiting_confirmation"])
+        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
         .order("placed_at", { ascending: false });
       return respond(data || []);
     }
@@ -1212,7 +1212,7 @@ Deno.serve(async (req) => {
         cancel_reason: "Manually cancelled by user",
         resolved_at: new Date().toISOString(),
       }).eq("order_id", orderId).eq("user_id", userId)
-        .in("status", ["pending", "awaiting_confirmation"]);
+        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"]);
       if (updateErr) return respond({ error: updateErr.message }, 500);
       return respond({ success: true });
     }
