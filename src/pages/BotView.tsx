@@ -1996,7 +1996,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           {enforcement?.runtimeTarget ? " · " + String(enforcement.runtimeTarget).toUpperCase() : ""}
         </p>
         {reasons.length > 0 ? reasons.map((reason: string) => (
-          <p key={reason} className={outcomeColor}>{reason.replaceAll("_", " ")}</p>
+          <p key={reason} className={outcomeColor}>{reason.replace(/_/g, " ")}</p>
         )) : (
           <p className="text-muted-foreground">No blocking authority reason recorded.</p>
         )}
