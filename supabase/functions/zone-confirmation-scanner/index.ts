@@ -39,11 +39,15 @@ import {
 import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
+  confirmationEvidenceLines,
+  confirmationMethodLabel,
+  diagnosticScoreLine,
   directionVerdictLines,
   durationLabel,
   parseSignalReason,
   styleLadderLines,
   tgLine,
+  tradeAuthorityLines,
   zoneEvidenceLines,
 } from "../_shared/telegramDetail.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
@@ -1309,17 +1313,14 @@ Deno.serve(async (req) => {
             const n = typeof v === "number" ? v : parseFloat(String(v));
             return isFinite(n) ? n.toFixed(_decimals) : String(v);
           };
-          const fastSR = parseSignalReason(pending.signal_reason);
+          const fastSR = signalReason;
           const fastRR = (() => {
             const e = Number(actualFillPrice), s = Number(pending.stop_loss), t = Number(pending.take_profit);
             if (![e, s, t].every(Number.isFinite) || Math.abs(e - s) <= 0) return null;
             return (Math.abs(t - e) / Math.abs(e - s)).toFixed(2);
           })();
-          const fastTier = (confirmedSignal as any).tier ? ` T${(confirmedSignal as any).tier}` : "";
-          const fastSupporting = Array.isArray((confirmedSignal as any).supportingSignals) && (confirmedSignal as any).supportingSignals.length > 0
-            ? (confirmedSignal as any).supportingSignals.map((s: string) => String(s).replace(/_/g, " ")).join(", ")
-            : null;
-          const msg = `${emoji} <b>${mode} CONFIRMED Entry${fastTier}</b> ⚡\n\n` +
+          const fastMethodLabel = confirmationMethodLabel(confirmationMethod, confirmationIndicatorMinimum);
+          const msg = emoji + " <b>" + mode + " CONFIRMED Entry</b> ⚡\n\n" +
             tgLine("Symbol", pending.symbol) +
             tgLine("Direction", String(pending.direction).toUpperCase()) +
             tgLine("Size", `${pending.size} lots`) +
@@ -1328,19 +1329,20 @@ Deno.serve(async (req) => {
             tgLine("SL", fmt(pending.stop_loss)) +
             tgLine("TP", fmt(pending.take_profit)) +
             (fastRR ? tgLine("Planned R:R", `${fastRR}:1`) : "") +
-            tgLine("Score", pending.signal_score) +
             tgLine("Time in Zone", durationLabel(pending.zone_touch_time)) +
             "\n" +
+            tradeAuthorityLines(fastSR) +
             zoneEvidenceLines(fastSR) +
             directionVerdictLines(fastSR.directionVerdict) +
             styleLadderLines(fastSR) +
             "\n" +
             `🎯 <b>Confirmation</b>\n` +
-            tgLine("Signal", `${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${(confirmedSignal as any).significance ? ", " + (confirmedSignal as any).significance : ""})`) +
-            tgLine("Supporting", fastSupporting) +
+            tgLine("Method", fastMethodLabel) +
+            confirmationEvidenceLines(confirmedSignal) +
             tgLine("Attempts", (pending.confirmation_attempts || 0) > 0 ? pending.confirmation_attempts : null) +
             tgLine("Scanner", "Fast-confirm (60s poll)") +
-            tgLine("Zone", `${pending.entry_zone_type} [${fmt(pending.entry_zone_low || "0")} – ${fmt(pending.entry_zone_high || "0")}]`) +
+            tgLine("Zone", pending.entry_zone_type + " [" + fmt(pending.entry_zone_low || "0") + " – " + fmt(pending.entry_zone_high || "0") + "]") +
+            diagnosticScoreLine(pending.signal_score) +
             (pending.from_watchlist ? `\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {

@@ -67,7 +67,7 @@ export function zoneEvidenceLines(sr: Json): string {
       out += tgLine("HTF Confluence", layers.map((l: any) => String(l).replace(/_/g, " ")).join(", "));
     }
     const zoneScore = num(zone.totalScore);
-    if (zoneScore !== null) out += tgLine("Zone Score", zoneScore.toFixed(1));
+    if (zoneScore !== null) out += tgLine("Zone evidence (diagnostic)", zoneScore.toFixed(1) + " · does not authorize");
     if (zone.ltfRefined) out += tgLine("LTF Refined", `yes${zone.ltfType ? ` (${zone.ltfType})` : ""}`);
   }
   const impulse = iz.impulse;
@@ -126,6 +126,54 @@ export function watchlistOriginLines(sr: Json): string {
   if (cycles !== null) bits.push(`${cycles} cycles`);
   if (initial !== null) bits.push(`from ${initial.toFixed(1)}%`);
   return bits.length > 0 ? tgLine("Watchlist", bits.join(" · ")) : "";
+}
+
+/** Human-readable entry confirmation method; reversal candles are part of the structure path. */
+export function confirmationMethodLabel(method: unknown, indicatorMinimum: unknown = 3): string {
+  const minimum = num(indicatorMinimum) ?? 3;
+  if (method === "indicators") return "Indicator consensus (" + minimum + "/4)";
+  if (method === "choch_and_indicators") return "MSS / CHoCH / reversal candle + indicators (" + minimum + "/4)";
+  return "MSS / CHoCH / reversal candle";
+}
+
+/** The actual signal that satisfied entry confirmation. */
+export function confirmationEvidenceLines(signal: any): string {
+  if (!signal) return tgLine("Entry Confirmation", "waiting");
+  const supporting = Array.isArray(signal.supportingSignals) ? signal.supportingSignals : [];
+  const pattern = supporting.find((item: unknown) => String(item).startsWith("pattern:"));
+  const name = pattern ? String(pattern).slice("pattern:".length)
+    : signal.type ? String(signal.type).replace(/_/g, " ") : "confirmed";
+  const displacement = num(signal.displacement);
+  const detail = displacement !== null ? name + " · displacement " + displacement.toFixed(2) : name;
+  return tgLine("Entry Confirmation", detail);
+}
+
+/** Named execution authorities. Legacy percentages and tiers are intentionally excluded. */
+export function tradeAuthorityLines(sr: Json): string {
+  const decision = sr?.singleOwnershipDecision;
+  const enforcement = sr?.singleOwnershipEnforcement;
+  if (!decision) return "";
+  const authorities = decision.authorities || {};
+  const enforced = enforcement?.affectsAuthorization === true;
+  let out = "🛡 <b>Trade Authority</b>\n";
+  out += tgLine("Decision", String(decision.decision || "unavailable").toUpperCase() + " · " + (enforced ? "ENFORCED" : "OBSERVE ONLY"));
+  const zone = authorities.zoneStory;
+  if (zone) out += tgLine("Zone Story", zone.valid === true ? (zone.entryReady === true ? "valid · entry ready" : "valid · waiting") : zone.valid === false ? "invalid" : "unavailable");
+  const location = authorities.canonicalLocation;
+  if (location) out += tgLine("Price Location", location.required === false ? "off" : location.allowed === true ? "allowed" : location.allowed === false ? "blocked" : "unavailable");
+  const confirmation = authorities.confirmation;
+  if (confirmation) out += tgLine("Confirmation", confirmation.required === false ? "not required" : confirmation.passed === true ? "ready" : confirmation.passed === false ? "waiting" : "unavailable");
+  const thesis = authorities.thesis;
+  if (thesis) out += tgLine("Thesis", thesis.required === false ? "not required" : thesis.valid === true ? "valid" : thesis.valid === false ? "invalid" : "unavailable");
+  const safety = authorities.safety;
+  if (safety) out += tgLine("Operational Safety", safety.complete && !(safety.checks || []).some((check: any) => !check.passed) ? "passed" : "blocked or incomplete");
+  return out;
+}
+
+/** Legacy scoring is retained for analysis, never presented as execution authority. */
+export function diagnosticScoreLine(score: unknown): string {
+  const value = num(score);
+  return value === null ? "" : tgLine("Diagnostics only", "legacy score " + value.toFixed(1) + " · does not authorize");
 }
 
 /** Realised R multiple for a closed trade. */

@@ -1,6 +1,9 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  confirmationEvidenceLines,
+  confirmationMethodLabel,
   crossTimeframeAuthorityLine,
+  diagnosticScoreLine,
   directionVerdictLines,
   durationLabel,
   impulseTimeframeLabel,
@@ -8,6 +11,7 @@ import {
   rMultiple,
   styleLadderLines,
   tgLine,
+  tradeAuthorityLines,
   watchlistOriginLines,
   zoneEvidenceLines,
 } from "./telegramDetail.ts";
@@ -45,7 +49,7 @@ Deno.test("zoneEvidenceLines renders the impulse story and degrades safely", () 
   assertStringIncludes(out, "Impulse TF:</b> 1H");
   assertStringIncludes(out, "OB @ fib 0.705");
   assertStringIncludes(out, "4H FVG");
-  assertStringIncludes(out, "Zone Score:</b> 8.3");
+  assertStringIncludes(out, "Zone evidence (diagnostic):</b> 8.3 · does not authorize");
   assertStringIncludes(out, "LTF Refined");
 });
 
@@ -75,6 +79,37 @@ Deno.test("watchlist origin lines", () => {
     watchlistOriginLines({ watchlistOrigin: { cyclesWatched: 4, initialScore: 61.2 } }),
     "4 cycles · from 61.2%",
   );
+});
+
+Deno.test("entry confirmation labels include reversal candles and actual pattern", () => {
+  assertEquals(confirmationMethodLabel("choch"), "MSS / CHoCH / reversal candle");
+  assertEquals(confirmationMethodLabel("choch_and_indicators", 3), "MSS / CHoCH / reversal candle + indicators (3/4)");
+  const out = confirmationEvidenceLines({
+    type: "bullish_reversal_pattern", displacement: 0.72,
+    supportingSignals: ["pattern:Morning Star", "pattern_strength:strong"],
+  });
+  assertStringIncludes(out, "Morning Star · displacement 0.72");
+});
+
+Deno.test("trade authority excludes legacy scores and labels diagnostics", () => {
+  const out = tradeAuthorityLines({
+    singleOwnershipDecision: {
+      decision: "allow",
+      authorities: {
+        zoneStory: { valid: true, entryReady: true },
+        canonicalLocation: { required: true, allowed: true },
+        confirmation: { required: true, passed: true },
+        thesis: { required: true, valid: true },
+        safety: { complete: true, checks: [] },
+      },
+    },
+    singleOwnershipEnforcement: { affectsAuthorization: true },
+  });
+  assertStringIncludes(out, "ALLOW · ENFORCED");
+  assertStringIncludes(out, "Zone Story:</b> valid · entry ready");
+  assertStringIncludes(out, "Operational Safety:</b> passed");
+  assertEquals(out.includes("score"), false);
+  assertStringIncludes(diagnosticScoreLine(8.5), "legacy score 8.5 · does not authorize");
 });
 
 Deno.test("rMultiple respects direction and rejects bad input", () => {
