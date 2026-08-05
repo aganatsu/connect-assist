@@ -29,14 +29,15 @@ export function selectRotatingImpulseUniverse(
   slotCount: number,
   state: RotationState | null | undefined,
   now = new Date().toISOString(),
+  excludedSymbols: Iterable<string> = [],
 ): RotationSelection {
   const unique = [...new Set(universe)];
   const slots = Math.max(1, Math.min(Math.floor(slotCount) || 8, unique.length));
   const current = state?.version === "impulse-rotation.v1" ? state : emptyRotationState(now);
-  const pinned = unique.filter((symbol) => current.pairs[symbol]?.outcome === "active_zone").slice(0, slots);
-  const pinnedSet = new Set(pinned);
+  const excluded = new Set(excludedSymbols);
+  const pinned: string[] = [];
   const discovery = unique
-    .filter((symbol) => !pinnedSet.has(symbol))
+    .filter((symbol) => !excluded.has(symbol))
     .sort((left, right) => {
       const leftTime = current.pairs[left]?.lastScannedAt;
       const rightTime = current.pairs[right]?.lastScannedAt;
@@ -45,8 +46,8 @@ export function selectRotatingImpulseUniverse(
       if (leftTime !== rightTime) return String(leftTime || "").localeCompare(String(rightTime || ""));
       return unique.indexOf(left) - unique.indexOf(right);
     })
-    .slice(0, slots - pinned.length);
-  return { selected: [...pinned, ...discovery], pinned, discovery, state: current };
+    .slice(0, slots);
+  return { selected: discovery, pinned, discovery, state: current };
 }
 
 export function updateRotatingImpulseState(
