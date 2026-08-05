@@ -26,3 +26,12 @@ Deno.test("data failures rotate but are not recorded as no impulse", () => {
   assertEquals(classifyRotationOutcome({ impulseZone: { hasZone: true } }), "active_zone");
   assertEquals(classifyRotationOutcome({ status: "skipped_no_impulse_zone" }), "no_impulse");
 });
+
+
+Deno.test("temporary data failure preserves a previously pinned zone", () => {
+  let state = emptyRotationState("2026-01-01T00:00:00Z");
+  state = updateRotatingImpulseState(state, [{ symbol: "GBP/USD", outcome: "active_zone" }], "2026-01-01T01:00:00Z");
+  state = updateRotatingImpulseState(state, [{ symbol: "GBP/USD", outcome: "data_error" }], "2026-01-01T02:00:00Z");
+  assertEquals(state.pairs["GBP/USD"].outcome, "active_zone");
+  assertEquals(selectRotatingImpulseUniverse(["GBP/USD", "EUR/USD"], 1, state).pinned, ["GBP/USD"]);
+});

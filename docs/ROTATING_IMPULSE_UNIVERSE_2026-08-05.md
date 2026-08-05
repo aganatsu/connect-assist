@@ -11,7 +11,7 @@ Cover a large configured instrument universe while limiting full Gameplan, Impul
 3. A pair with a valid Impulse Zone remains pinned and is rescanned next cycle.
 4. A pair without an Impulse Zone releases its slot after the cycle.
 5. The next cycle fills released slots with never-scanned pairs first, then the least-recently-scanned pairs.
-6. Provider and insufficient-data failures are recorded as `data_error`, never as `no_impulse`; they re-enter the fair rotation later.
+6. Provider and insufficient-data failures are recorded as `data_error`, never as `no_impulse`. A previously pinned zone remains pinned through a temporary data failure; unpinned failures re-enter the fair rotation later.
 7. Gameplan generation and deep candle fetching use only the selected batch.
 8. Rotation state is persisted per user and bot in `kv_cache` for 90 days.
 
