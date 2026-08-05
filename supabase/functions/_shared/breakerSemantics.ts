@@ -62,7 +62,7 @@ export function evaluateBreakerFillLifecycle(input: {
   if (!(input.bounds.high > input.bounds.low)) {
     return { allowed: false, code: "invalid_bounds", reason: "Breaker bounds are invalid" };
   }
-  if (!Number.isInteger(Number(input.structureBreakIndex))) {
+  if (input.structureBreakIndex === null || input.structureBreakIndex === undefined || input.structureBreakIndex === "" || !Number.isInteger(Number(input.structureBreakIndex))) {
     return {
       allowed: false,
       code: "missing_structure_ownership",
