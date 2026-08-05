@@ -23,7 +23,7 @@ Deno.test("paper polling does not force-close max hold positions", () => {
 });
 
 Deno.test("broker partial close failures are visible to the operator", () => {
-  assertStringIncludes(scanner, %q[activeActions.filter((a) => a.action === "partial_tp_executed")]);
+  assertStringIncludes(scanner, %Q[activeActions.filter((a) => a.action === "partial_tp_executed")]);
   assertStringIncludes(scanner, "partialFailures");
   assertStringIncludes(scanner, "BROKER PARTIAL CLOSE RECONCILIATION REQUIRED");
   assertStringIncludes(scanner, "Broker Reconciliation Required");
