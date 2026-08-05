@@ -12,7 +12,7 @@ select the production entry zone.
 
 ## Phase Status
 
-### Phase 1: Contract and breaker semantics - in progress
+### Phase 1: Contract and breaker semantics - complete
 
 - [x] Define type-neutral OB, FVG and Breaker components.
 - [x] Define OB + FVG and Breaker + FVG composite candidates.
@@ -20,26 +20,26 @@ select the production entry zone.
 - [x] Require an opposite structure break for a true breaker.
 - [x] Prevent historical breaker retests from creating fresh orders.
 - [x] Add observation-only selection to the unified zone result.
-- [ ] Complete CI and regression review.
+- [x] Complete CI and regression review.
 
-### Phase 2: Selection evidence - pending
+### Phase 2: Selection evidence - complete
 
-- [ ] Persist legacy-versus-authority candidate decisions.
-- [ ] Compare winner retention, losers avoided and missed opportunities.
-- [ ] Display the selection reason in Shadow Evidence.
-- [ ] Establish certification thresholds for controlled promotion.
+- [x] Persist legacy-versus-authority candidate decisions.
+- [x] Compare winner retention, losers avoided and missed opportunities.
+- [x] Display the selection summary in Shadow Evidence.
+- [x] Establish a 30-resolved-disagreement review threshold.
 
 ### Phase 3: Lifecycle parity - pending
 
-- [ ] Freeze the selected authority through Watchlist and staged setup.
-- [ ] Preserve it through pending order, fill and position.
+- [x] Freeze the observed authority through Watchlist and staged setup.
+- [x] Preserve it through the existing frozen strategy context.
 - [ ] Revalidate impulse, lifecycle, price contact and confirmation at fill.
-- [ ] Use the same pure selector in backtest and live paths.
+- [x] Use the same pure selector in unified live and backtest analysis.
 - [ ] Remove the independent Breaker pending-order authority.
 
 ## Safety Rule
 
-The new candidate authority remains `observe_only` until replay evidence is
+The new candidate authority remains `observe_only` until forward outcome evidence is
 certified. Production behavior must not silently switch selectors.
 
 ## Resume Prompt

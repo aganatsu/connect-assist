@@ -114,6 +114,7 @@ export interface AdvisorEvidenceContext {
   certificates: Array<Record<string, unknown>>;
   zoneValidation: Array<Record<string, unknown>>;
   streamlinedCertificates: Array<Record<string, unknown>>;
+  ictEntryZoneAuthority: Array<Record<string, unknown>>;
 }
 
 export interface AdvisorContext {
@@ -743,6 +744,7 @@ export function buildPromptPayload(ctx: AdvisorContext, perf: PerformanceMetrics
       certificates: ctx.evidence?.certificates || [],
       zoneAndCrossTimeframeValidation: ctx.evidence?.zoneValidation || [],
       streamlinedDecisionCertificates: ctx.evidence?.streamlinedCertificates || [],
+      ictEntryZoneAuthority: ctx.evidence?.ictEntryZoneAuthority || [],
       interpretation: "Evidence is diagnostic. Only runtime_enforced activation rows represent current authority. Certificates may support a recommendation but never activate execution.",
     },
     currentConfig: {

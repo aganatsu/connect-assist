@@ -192,6 +192,7 @@ import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZon
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
+import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -4909,6 +4910,17 @@ async function runScanForUser(
               + ` observe-only zone candidate model rows`,
             );
           }
+          await persistICTEntryZoneObservation(supabase, {
+            userId,
+            botId: BOT_ID,
+            scanCycleId,
+            symbol: pair,
+            tradingStyle: resolvedStyle,
+            observedAt: candles[candles.length - 1]?.datetime ||
+              new Date().toISOString(),
+            legacyBestZone: multiTF.bestZone,
+            authority: unifiedResult.candidateAuthorityObservation!,
+          });
         } catch (shadowStoreErr: any) {
           console.warn(
             `[scan ${scanCycleId}] ${pair} zone shadow evidence unavailable`

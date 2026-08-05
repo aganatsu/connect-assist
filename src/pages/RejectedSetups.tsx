@@ -98,6 +98,26 @@ interface RejectedSetup {
   rejected_at: string;
 }
 
+interface ICTEntryZoneAuthoritySummary {
+  user_id: string;
+  bot_id: string;
+  trading_style: string;
+  symbol: string;
+  observed_scans: number;
+  disagreement_scans: number;
+  resolved_authority_setups: number;
+  authority_winners: number;
+  authority_losers: number;
+  winners_retained: number;
+  losers_avoided: number;
+  missed_opportunities: number;
+  false_positives: number;
+  authority_avg_mfe_pips: number | null;
+  authority_avg_mae_pips: number | null;
+  minimum_sample_ready: boolean;
+  enforcement: "observe_only";
+}
+
 interface ZoneLocalValidationSummary {
   user_id: string;
   bot_id: string;
@@ -262,6 +282,19 @@ async function fetchStrategyEvidenceCertificates(
   return (data || []) as unknown as StrategyEvidenceCertificateRecord[];
 }
 
+async function fetchICTEntryZoneAuthorityValidation(
+  userId: string,
+): Promise<ICTEntryZoneAuthoritySummary[]> {
+  const { data, error } = await (supabase as any)
+    .from("ict_entry_zone_authority_validation_summary")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .order("resolved_authority_setups", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []) as ICTEntryZoneAuthoritySummary[];
+}
+
 async function fetchZoneLocalValidation(
   userId: string,
 ): Promise<ZoneLocalValidationSummary[]> {
@@ -420,6 +453,16 @@ export default function RejectedSetups() {
     queryFn: () => fetchStrategyEvidenceCertificates(user!.id),
     enabled: !!user?.id,
     refetchInterval: 60_000,
+  });
+  const {
+    data: ictEntryZoneAuthorityValidation = [],
+    isLoading: isLoadingICTEntryZoneAuthorityValidation,
+  } = useQuery({
+    queryKey: ["ict-entry-zone-authority-validation", user?.id],
+    queryFn: () => fetchICTEntryZoneAuthorityValidation(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+    retry: false,
   });
   const {
     data: zoneLocalValidation = [],
@@ -1163,7 +1206,8 @@ export default function RejectedSetups() {
             </Card>
 
             {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ||
-                isLoadingStrategyEvidenceCertificates || isLoadingZoneLocalValidation ? (
+                isLoadingStrategyEvidenceCertificates || isLoadingZoneLocalValidation ||
+                isLoadingICTEntryZoneAuthorityValidation ? (
               <Card className="border-border/50">
                 <CardContent className="py-10 text-center text-sm text-muted-foreground">
                   Loading shadow evidence…
@@ -1171,6 +1215,7 @@ export default function RejectedSetups() {
               </Card>
             ) : (
               <div className="space-y-4">
+                <ICTEntryZoneAuthorityCard rows={ictEntryZoneAuthorityValidation} />
                 <ZoneLocalValidationCard
                   rows={filteredZoneLocalValidation}
                   activation={activationByFeature.get("zone_local_confluence")}
@@ -1393,6 +1438,57 @@ function EvidenceBreakdownTable({
         </div>
       )}
     </div>
+  );
+}
+
+function ICTEntryZoneAuthorityCard({
+  rows,
+}: {
+  rows: ICTEntryZoneAuthoritySummary[];
+}) {
+  const totals = rows.reduce((sum, row) => ({
+    observed: sum.observed + Number(row.observed_scans || 0),
+    disagreements: sum.disagreements + Number(row.disagreement_scans || 0),
+    resolved: sum.resolved + Number(row.resolved_authority_setups || 0),
+    winners: sum.winners + Number(row.authority_winners || 0),
+    losers: sum.losers + Number(row.authority_losers || 0),
+    retained: sum.retained + Number(row.winners_retained || 0),
+    avoided: sum.avoided + Number(row.losers_avoided || 0),
+    missed: sum.missed + Number(row.missed_opportunities || 0),
+  }), { observed: 0, disagreements: 0, resolved: 0, winners: 0, losers: 0, retained: 0, avoided: 0, missed: 0 });
+  const ready = rows.some((row) => row.minimum_sample_ready);
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="px-4 pt-3 pb-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm font-medium">ICT Entry Zone Authority</CardTitle>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              Type-neutral OB, FVG, Breaker and overlap decisions compared with the current selector.
+            </p>
+          </div>
+          <Badge variant="outline" className="border-warning/40 text-warning text-[9px]">
+            OBSERVE ONLY
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+          <div><p className="text-[9px] text-muted-foreground">Observed</p><p className="font-mono font-bold">{totals.observed}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Different choice</p><p className="font-mono font-bold">{totals.disagreements}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Resolved</p><p className="font-mono font-bold">{totals.resolved}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Would win</p><p className="font-mono font-bold text-success">{totals.winners}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Would lose</p><p className="font-mono font-bold text-destructive">{totals.losers}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Winners kept</p><p className="font-mono font-bold text-success">{totals.retained}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Losers avoided</p><p className="font-mono font-bold text-success">{totals.avoided}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Missed</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
+          <div><p className="text-[9px] text-muted-foreground">Readiness</p><p className="font-mono font-bold">{ready ? "REVIEW" : "COLLECTING"}</p></div>
+        </div>
+        <p className="mt-2 text-[9px] text-muted-foreground">
+          This dataset cannot place or block trades. Thirty resolved disagreements are required before controlled promotion review.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

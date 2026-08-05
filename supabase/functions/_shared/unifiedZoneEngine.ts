@@ -541,6 +541,13 @@ function buildCandidateAuthorityObservation(input: {
         historicalSRScore: candidate.srConfirmed ? 1 : 0,
         proximityScore:
           candidate.candidateModel?.factors.proximityToCurrentPrice ?? 0,
+        validationTrade: candidate.validationTrade
+          ? {
+            entryPrice: candidate.validationTrade.entryPrice,
+            stopLoss: candidate.validationTrade.stopLoss,
+            takeProfit: candidate.validationTrade.takeProfit,
+          }
+          : undefined,
       };
     });
 
@@ -573,6 +580,13 @@ function buildCandidateAuthorityObservation(input: {
       htfLineageScore: 1,
       historicalSRScore: 0,
       proximityScore: 0,
+      validationTrade: {
+        entryPrice: breakerDirection === "bullish" ? breaker.low : breaker.high,
+        stopLoss: breakerDirection === "bullish"
+          ? breaker.low - (breaker.high - breaker.low) * 0.5
+          : breaker.high + (breaker.high - breaker.low) * 0.5,
+        takeProfit: h4Impulse.bosPrice,
+      },
     });
   }
   return selectICTEntryZone(components);

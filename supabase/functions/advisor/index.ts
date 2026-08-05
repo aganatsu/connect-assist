@@ -100,7 +100,7 @@ async function loadContext(
   // Compact, bounded authority evidence. Query failures intentionally degrade
   // to an empty section so a partially deployed evidence migration cannot
   // break the Advisor's core trade review.
-  const [activationResult, certificateResult, zoneResult, streamlinedResult] = await Promise.all([
+  const [activationResult, certificateResult, zoneResult, streamlinedResult, ictAuthorityResult] = await Promise.all([
     supabase.from("strategy_activation_registry")
       .select("feature_key, variant_key, authority_stage, runtime_scope, runtime_enforced, revision, evidence_hash, updated_at")
       .eq("user_id", userId).eq("bot_id", botId).limit(20),
@@ -113,6 +113,9 @@ async function loadContext(
     supabase.from("streamlined_decision_certificates")
       .select("id, certified, expires_at, runtime_targets, styles, minimum_comparable, comparable, created_at")
       .eq("user_id", userId).order("created_at", { ascending: false }).limit(5),
+    supabase.from("ict_entry_zone_authority_validation_summary")
+      .select("trading_style, symbol, observed_scans, disagreement_scans, resolved_authority_setups, authority_winners, authority_losers, winners_retained, losers_avoided, missed_opportunities, false_positives, authority_avg_mfe_pips, authority_avg_mae_pips, minimum_sample_ready, enforcement")
+      .eq("user_id", userId).eq("bot_id", botId).limit(30),
   ]);
 
   const evidence = {
@@ -120,6 +123,7 @@ async function loadContext(
     certificates: (certificateResult.data || []) as Array<Record<string, unknown>>,
     zoneValidation: (zoneResult.data || []) as Array<Record<string, unknown>>,
     streamlinedCertificates: (streamlinedResult.data || []) as Array<Record<string, unknown>>,
+    ictEntryZoneAuthority: (ictAuthorityResult.data || []) as Array<Record<string, unknown>>,
   };
 
   return {
@@ -198,6 +202,7 @@ async function persistRecommendation(
           certificates: ctx.evidence.certificates.length,
           zoneValidationRows: ctx.evidence.zoneValidation.length,
           streamlinedCertificates: ctx.evidence.streamlinedCertificates.length,
+          ictEntryZoneAuthorityRows: ctx.evidence.ictEntryZoneAuthority.length,
         },
         balance: ctx.balance,
         peakBalance: ctx.peakBalance,
@@ -281,7 +286,8 @@ async function processSingleBot(
       + ctx.evidence.certificates.length
       + ctx.evidence.zoneValidation.length
       + ctx.evidence.streamlinedCertificates.length;
-    if (ctx.trades.length < 3 && ctx.rejections.length < 3 && evidenceRows === 0) {
+    const totalEvidenceRows = evidenceRows + ctx.evidence.ictEntryZoneAuthority.length;
+    if (ctx.trades.length < 3 && ctx.rejections.length < 3 && totalEvidenceRows === 0) {
       console.log(`[advisor] Skipping ${botName} — insufficient trade and authority evidence`);
       return { success: true };
     }

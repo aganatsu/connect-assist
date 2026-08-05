@@ -26,6 +26,7 @@ export interface ICTEntryZoneComponent {
   htfLineageScore: number;
   historicalSRScore: number;
   proximityScore: number;
+  validationTrade?: { entryPrice: number; stopLoss: number; takeProfit: number };
 }
 
 export interface ICTEntryZoneCandidate {
@@ -43,6 +44,7 @@ export interface ICTEntryZoneCandidate {
   eligible: boolean;
   score: number;
   reasons: string[];
+  validationTrade: { entryPrice: number; stopLoss: number; takeProfit: number } | null;
 }
 
 export interface ICTEntryZoneSelection {
@@ -96,14 +98,29 @@ function candidateFor(
     item.lifecycle.state !== "violated"
   );
   const componentIds = components.map((item) => item.id).sort();
+  const zoneBounds = bounds ?? { low: components[0].low, high: components[0].high };
+  const validationTrades = components
+    .map((item) => item.validationTrade)
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const validationTrade = validationTrades.length > 0
+    ? {
+      entryPrice: components[0].direction === "bullish"
+        ? zoneBounds.low
+        : zoneBounds.high,
+      stopLoss: components[0].direction === "bullish"
+        ? Math.min(...validationTrades.map((item) => item.stopLoss))
+        : Math.max(...validationTrades.map((item) => item.stopLoss)),
+      takeProfit: validationTrades[0].takeProfit,
+    }
+    : null;
   return {
     contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
     enforcement: "observe_only",
     id: componentIds.join("+"),
     type,
     direction: components[0].direction,
-    low: bounds?.low ?? components[0].low,
-    high: bounds?.high ?? components[0].high,
+    low: zoneBounds.low,
+    high: zoneBounds.high,
     timeframe: components[0].timeframe,
     impulseId: components[0].impulseId,
     componentIds,
@@ -117,6 +134,7 @@ function candidateFor(
         : `${types[0]} is evaluated without a type preference`,
       `lifecycle ${components.map((item) => item.lifecycle.state).join("/")}`,
     ],
+    validationTrade,
   };
 }
 

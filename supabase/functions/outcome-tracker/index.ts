@@ -247,6 +247,64 @@ Deno.serve(async (req: Request) => {
       results.shadow_errors++;
     }
 
+    // Resolve the new type-neutral authority counterfactual with the same
+    // market-data and outcome engine used by legacy zone observations.
+    try {
+      const authorityCutoff = new Date(
+        Date.now() - SHADOW_MIN_AGE_MS,
+      ).toISOString();
+      const { data: authorityRows, error: authorityFetchErr } = await supabase
+        .from("ict_entry_zone_authority_observations")
+        .select("id, symbol, direction, entry_price, stop_loss, take_profit, observed_at")
+        .eq("outcome_status", "pending")
+        .lt("observed_at", authorityCutoff)
+        .order("observed_at", { ascending: true })
+        .limit(SHADOW_BATCH_SIZE);
+      if (authorityFetchErr) {
+        console.warn(`[outcome-tracker] ICT authority fetch unavailable: ${authorityFetchErr.message}`);
+      } else if (authorityRows && authorityRows.length > 0) {
+        const candleCache = new Map<string, any[]>();
+        for (const row of authorityRows) {
+          try {
+            let candles = candleCache.get(row.symbol);
+            if (!candles) {
+              candles = (await fetchCandlesWithFallback({
+                symbol: row.symbol,
+                interval: "1h",
+                limit: 72,
+              })).candles;
+              candleCache.set(row.symbol, candles);
+            }
+            if (candles.length < 24) continue;
+            const outcome = simulateOutcome(
+              candles,
+              row.direction as "long" | "short",
+              Number(row.entry_price),
+              Number(row.stop_loss),
+              Number(row.take_profit),
+              row.observed_at,
+            );
+            const pipSize = getPipSize(row.symbol);
+            await supabase.from("ict_entry_zone_authority_observations").update({
+              outcome_status: outcome.price_reached_entry
+                ? outcome.outcome_status
+                : "no_entry",
+              outcome_checked_at: new Date().toISOString(),
+              price_reached_entry: outcome.price_reached_entry,
+              tp_hit: outcome.tp_hit,
+              sl_hit: outcome.sl_hit,
+              mfe_pips: Number((outcome.mfe_pips / pipSize).toFixed(2)),
+              mae_pips: Number((outcome.mae_pips / pipSize).toFixed(2)),
+            }).eq("id", row.id);
+          } catch (authorityErr: any) {
+            console.warn(`[outcome-tracker] ICT authority outcome error ${row.symbol}: ${authorityErr?.message}`);
+          }
+        }
+      }
+    } catch (authorityErr: any) {
+      console.warn(`[outcome-tracker] ICT authority batch unavailable: ${authorityErr?.message}`);
+    }
+
     // ── Step 4: Check rolling 7-day winner-block rate and alert ──
     try {
       const sevenDaysAgo = new Date(Date.now() - ALERT_ROLLING_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -385,6 +443,14 @@ Deno.serve(async (req: Request) => {
         );
       } else {
         results.shadow_cleaned = shadowCleaned || 0;
+      }
+
+      const { error: authorityCleanErr } = await supabase
+        .from("ict_entry_zone_authority_observations")
+        .delete()
+        .lt("observed_at", retentionCutoff);
+      if (authorityCleanErr) {
+        console.warn(`[outcome-tracker] ICT authority cleanup unavailable: ${authorityCleanErr.message}`);
       }
     } catch (cleanErr: any) {
       console.warn(`[outcome-tracker] Cleanup error: ${cleanErr?.message}`);
