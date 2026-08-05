@@ -23,6 +23,8 @@ function entries(
 const scanLabels = [
   "Trading Style",
   "Instruments",
+  "Rotate Pair Universe",
+  "Active Scan Slots",
   "Spread Filter",
   "Max Spread (pips)",
   "ATR Filter",
