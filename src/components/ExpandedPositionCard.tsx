@@ -142,7 +142,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   let sr: any = {};
   try { sr = JSON.parse(p.signalReason || "{}"); } catch { /* ignore */ }
 
-  const ef = sr.exitFlags || {};
+  const ef = { ...(sr.exitFlags || {}), ...(p.effectiveConfig || {}) };
   const exitAttribution: any[] = sr.exitAttribution || [];
   const invalidHistory = sr.invalidationHistory || [];
 
@@ -230,7 +230,10 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     ? trailActivationR * riskPips : null;
   const trailActivationDollar = trailActivationPips != null && dollarPerPip != null
     ? trailActivationPips * dollarPerPip : null;
-  const trailDistPips = ef.trailingStopPips ?? null;
+  const configuredTrailPips = ef.trailingStopPips ?? null;
+  const trailDistPips = configuredTrailPips != null && riskPips != null
+    ? Math.max(configuredTrailPips, riskPips * 0.5)
+    : configuredTrailPips;
 
   // Break-even: trigger pips & dollar
   const beTriggerPips = ef.breakEvenPips ?? null;
@@ -569,7 +572,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                         ? `Triggers ${ef.trailingStopActivation}`
                         : `${ef.trailingStopPips ?? "?"}p step`),
                     trailDistPips != null
-                      ? `Trail: ${trailDistPips}p behind price${riskPips ? ` (${(trailDistPips / riskPips).toFixed(1)}× SL)` : ""}`
+                      ? `Effective trail: ${trailDistPips.toFixed(1)}p${configuredTrailPips != null && trailDistPips > configuredTrailPips ? ` (minimum ${configuredTrailPips}p; ${(trailDistPips / riskPips!).toFixed(1)}× SL floor)` : " behind price"}`
                       : "",
                   ].filter(Boolean)
               }

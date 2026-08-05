@@ -270,21 +270,48 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
     setHoldHours(String(newCfg.maxHoldHours));
   }, [position.effectiveConfig, position.tradeOverrides]);
 
-  // Build the overrides payload — always send the full set of values the user sees
-  // This ensures what's displayed = what's saved = what the scanner uses
+  // Persist only fields changed in this edit. The API merges this patch with
+  // existing per-trade overrides, so unrelated management features stay owned
+  // by their current global/snapshot configuration.
   const buildPayload = (): TradeOverrides => {
-    return {
-      breakEvenEnabled: beEnabled,
-      breakEvenPips: parseFloat(bePips) || 20,
-      trailingStopEnabled: trailEnabled,
-      trailingStopPips: parseFloat(trailPips) || 15,
-      trailingStopActivation: trailActivation,
-      partialTPEnabled: ptpEnabled,
-      partialTPPercent: parseFloat(ptpPercent) || 50,
-      partialTPLevel: parseFloat(ptpLevel) || 1.5,
-      maxHoldEnabled: holdEnabled,
-      maxHoldHours: parseFloat(holdHours) || 48,
-    };
+    const payload: TradeOverrides = {};
+    const bePipsValue = parseFloat(bePips);
+    const trailPipsValue = parseFloat(trailPips);
+    const ptpPercentValue = parseFloat(ptpPercent);
+    const ptpLevelValue = parseFloat(ptpLevel);
+    const holdHoursValue = parseFloat(holdHours);
+
+    if (beEnabled !== effectiveCfg.breakEvenEnabled) {
+      payload.breakEvenEnabled = beEnabled;
+    }
+    if (beEnabled && Number.isFinite(bePipsValue) && bePipsValue !== effectiveCfg.breakEvenPips) {
+      payload.breakEvenPips = bePipsValue;
+    }
+    if (trailEnabled !== effectiveCfg.trailingStopEnabled) {
+      payload.trailingStopEnabled = trailEnabled;
+    }
+    if (trailEnabled && Number.isFinite(trailPipsValue) && trailPipsValue !== effectiveCfg.trailingStopPips) {
+      payload.trailingStopPips = trailPipsValue;
+    }
+    if (trailEnabled && trailActivation !== effectiveCfg.trailingStopActivation) {
+      payload.trailingStopActivation = trailActivation;
+    }
+    if (ptpEnabled !== effectiveCfg.partialTPEnabled) {
+      payload.partialTPEnabled = ptpEnabled;
+    }
+    if (ptpEnabled && Number.isFinite(ptpPercentValue) && ptpPercentValue !== effectiveCfg.partialTPPercent) {
+      payload.partialTPPercent = ptpPercentValue;
+    }
+    if (ptpEnabled && Number.isFinite(ptpLevelValue) && ptpLevelValue !== effectiveCfg.partialTPLevel) {
+      payload.partialTPLevel = ptpLevelValue;
+    }
+    if (holdEnabled !== effectiveCfg.maxHoldEnabled) {
+      payload.maxHoldEnabled = holdEnabled;
+    }
+    if (holdEnabled && Number.isFinite(holdHoursValue) && holdHoursValue !== effectiveCfg.maxHoldHours) {
+      payload.maxHoldHours = holdHoursValue;
+    }
+    return payload;
   };
 
   // Check if any field differs from the current effective config
@@ -463,7 +490,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
           borderColor="border-l-emerald-500"
           isOverridden={trailOverridden}
         >
-          <FieldRow label="Trail Distance (pips)" tooltip="SL trails this many pips behind the best price">
+          <FieldRow label="Minimum Trail (pips)" tooltip="Requested minimum distance. Runtime may widen it to 50% of original risk for safety.">
             <Input
               type="number"
               step="1"
