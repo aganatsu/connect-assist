@@ -4774,6 +4774,8 @@ async function runScanForUser(
           selectedTF: unifiedResult.selectedTF,
           unifiedScore: unifiedResult.unifiedScore,
           scoreBreakdown: unifiedResult.scoreBreakdown,
+          candidateAuthorityObservation:
+            unifiedResult.candidateAuthorityObservation ?? null,
           impulse: unifiedResult.impulse,
           zone: unifiedResult.zone,
           price: unifiedResult.price,
@@ -4881,6 +4883,8 @@ async function runScanForUser(
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
+          candidateAuthorityObservation:
+            unifiedResult.candidateAuthorityObservation ?? null,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
 

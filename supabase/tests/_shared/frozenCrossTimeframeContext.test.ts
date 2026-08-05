@@ -38,6 +38,11 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
     stylePolicy,
     zoneStory: {
       selectedTF: "15min",
+      candidateAuthorityObservation: {
+        contractVersion: "ict-entry-zone-authority.v1",
+        enforcement: "observe_only",
+        selected: { id: "child-1+fvg-1", type: "ob_fvg" },
+      },
       impulse: {
         high: 1.72,
         low: 1.7,
@@ -104,6 +109,10 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
   assertEquals(frozen.directionVerdict.version, "verdict-v1");
   assertEquals(frozen.selectedZone?.candidateId, "child-1");
   assertEquals(
+    frozen.ictEntryZoneAuthority?.contractVersion,
+    "ict-entry-zone-authority.v1",
+  );
+  assertEquals(
     frozen.relationship?.classification,
     "qualified_nested",
   );
@@ -136,6 +145,7 @@ Deno.test("frozen cross-TF context records absence instead of inventing lineage"
     crossTimeframeAuthority,
   });
   assertEquals(frozen.selectedZone, null);
+  assertEquals(frozen.ictEntryZoneAuthority, null);
   assertEquals(frozen.relationship, null);
   assertEquals(frozen.parentImpulse, null);
   assertEquals(frozen.childImpulse, null);
