@@ -731,12 +731,64 @@ export default function RejectedSetups() {
   };
 
   const downloadAll = () => {
-    downloadSummary();
-    downloadOverview();
-    downloadGates();
-    downloadSetups();
-    downloadShadowEvidence();
-    downloadAdvisor();
+    let advisor: unknown = null;
+    try {
+      const raw = localStorage.getItem("strategyAdvisor:lastResult");
+      advisor = raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      advisor = {
+        error: error instanceof Error ? error.message : "Invalid saved advisor result",
+      };
+    }
+
+    const bundle = {
+      exportVersion: "rejected-setup-evidence.v1",
+      exportedAt: new Date().toISOString(),
+      filters: {
+        days,
+        symbol: symbolFilter,
+        outcome: outcomeFilter,
+      },
+      summary: {
+        distinctOpportunities: stats.total,
+        scannerObservations: displayedScanCount,
+        repeatedObservationsCollapsed: displayedScanCount - setups.length,
+        resolved: stats.resolved,
+        wouldHaveWon: stats.winners,
+        wouldHaveLost: stats.losers,
+        winnerBlockRatePercent: stats.winnerBlockRate,
+        averageMfePips: stats.avgMfe,
+        averageMaePips: stats.avgMae,
+        averageConfluenceScore: stats.avgScore,
+        entryReachedRatePercent: stats.entryReachedRate,
+      },
+      analytics: {
+        outcomeDistribution,
+        dailyTrend,
+        gateBreakdown,
+      },
+      datasets: {
+        rawRejectedScans: filteredRawSetups,
+        distinctOpportunities: setups,
+        closedTradeEvidence: filteredClosedTradeEvidence,
+        shadowEvidence: shadowEvidenceReport,
+        strategyEvidenceCertificates,
+        strategyActivations,
+        ictEntryZoneAuthorityValidation,
+        zoneLocalValidation,
+        tradeDecisionComparison: singleOwnershipComparison ?? null,
+        streamlinedDecisionComparison: streamlinedDecisionComparison ?? null,
+        canonicalDealingRangeComparison: dealingRangeComparison ?? null,
+        advisor,
+      },
+    };
+
+    downloadFile(
+      `rejected-evidence-bundle-${tsStamp()}.json`,
+      JSON.stringify(bundle, null, 2),
+      "application/json",
+    );
+    toast.success("Complete rejected-setup evidence downloaded as one file.");
   };
 
   // Pie chart data
