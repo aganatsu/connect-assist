@@ -9943,8 +9943,12 @@ async function runScanForUser(
           ? [...singleOwnershipScanOutcome.reasons]
           : [];
         const canonicalRejection = (detail as any).canonicalDealingRangeObservation?.canonical;
+        const hasDetailedRiskRewardReason = blockingGateReasons.some((reason) =>
+          normalizeRejectedGate(reason) === "minimum_risk_reward"
+        );
         const consolidatedAuthorityReasons = authorityReasons.filter((reason) =>
-          !reason.startsWith("Premium/Discount rule blocked entry:")
+          !reason.startsWith("Premium/Discount rule blocked entry:") &&
+          !(hasDetailedRiskRewardReason && reason.includes("expected reward is too small"))
         );
         if (canonicalRejection?.allowed === false && canonicalRejection?.explanation) {
           consolidatedAuthorityReasons.push(canonicalRejection.explanation);

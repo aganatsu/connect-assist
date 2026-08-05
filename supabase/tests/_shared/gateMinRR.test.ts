@@ -111,7 +111,7 @@ Deno.test("checkMinRR: returns failed when SL is null", () => {
     stopLoss: null,
   });
   assertEquals(result.passed, false);
-  assertEquals(result.reason, "No valid SL/TP for R:R check");
+  assertEquals(result.reason, "Trade rejected: Risk/Reward cannot be calculated because a valid stop-loss and take-profit are required");
 });
 
 Deno.test("checkMinRR: returns failed when TP is null", () => {
@@ -179,6 +179,7 @@ Deno.test("checkMinRR: very high commission can cause failure", () => {
   // effectiveRR = 0.002945 / 0.002 = 1.47 → fails min 1.5
   const result = checkMinRR(tightWithComm);
   assertEquals(result.passed, false);
+  assertEquals(result.reason, "Trade rejected: effective R:R is 1.47, below the required 1.50. Raw R:R is 1.75 before costs (spread 1p + comm $50.0/lot)");
 });
 
 // ─── XAU/USD (Gold) Cross-Engine Agreement ───────────────────────────

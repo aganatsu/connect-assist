@@ -57,7 +57,10 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
   const { lastPrice, stopLoss, takeProfit, symbol, minRiskReward } = input;
 
   if (!stopLoss || !takeProfit) {
-    return { passed: false, reason: "No valid SL/TP for R:R check" };
+    return {
+      passed: false,
+      reason: "Trade rejected: Risk/Reward cannot be calculated because a valid stop-loss and take-profit are required",
+    };
   }
 
   const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -94,12 +97,12 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
   if (effectiveRR < minRiskReward) {
     return {
       passed: false,
-      reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${minRiskReward} min`,
+      reason: `Trade rejected: effective R:R is ${effectiveRR.toFixed(2)}, below the required ${minRiskReward.toFixed(2)}. Raw R:R is ${rawRR.toFixed(2)} before costs (${costDetail})`,
     };
   }
 
   return {
     passed: true,
-    reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})`,
+    reason: `Risk/Reward passed: effective R:R ${effectiveRR.toFixed(2)} meets the required ${minRiskReward.toFixed(2)} (${rawRR.toFixed(2)} raw before ${costDetail})`,
   };
 }

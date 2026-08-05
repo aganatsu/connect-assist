@@ -115,9 +115,10 @@ Deno.test("Avoid Wrong Side rejects a discount short with canonical explanation"
   assertEquals(result.code, "wrong_side");
   assertEquals(result.zone, "discount");
   assertEquals(Number(result.percent?.toFixed(1)), 32.4);
-  assertStringIncludes(result.explanation, "Short rejected by 1H canonical bearish impulse range 1.15000-1.16000");
-  assertStringIncludes(result.explanation, "Entry 1.15324 is at 32.4%");
-  assertStringIncludes(result.explanation, "Avoid Wrong Side requires at least 45%");
+  assertStringIncludes(result.explanation, "Short rejected: entry is in Discount");
+  assertStringIncludes(result.explanation, "1H bearish impulse range 1.15000-1.16000");
+  assertStringIncludes(result.explanation, "Entry 1.15324 is at 32.4% (Discount)");
+  assertStringIncludes(result.explanation, "Avoid Wrong Side requires a Premium entry at or above 45% (1.15450)");
 });
 
 Deno.test("Avoid Wrong Side allows equilibrium boundaries", () => {
@@ -125,6 +126,30 @@ Deno.test("Avoid Wrong Side allows equilibrium boundaries", () => {
   if (!selection.available) throw new Error("expected range");
   assertEquals(evaluateCanonicalDealingRange({ range: selection.range, direction: "short", price: 1.1545, mode: "avoid_wrong_side" }).allowed, true);
   assertEquals(evaluateCanonicalDealingRange({ range: selection.range, direction: "long", price: 1.1555, mode: "avoid_wrong_side" }).allowed, true);
+});
+
+Deno.test("Strict Value names ICT Premium and shows the required Discount price", () => {
+  const bullish = selectCanonicalDealingRange({
+    parentImpulse: {
+      impulseId: "daily-bullish",
+      timeframe: "D",
+      high: 1.93633,
+      low: 1.87714,
+      direction: "bullish",
+    },
+    frozenAt: "now",
+  });
+  if (!bullish.available) throw new Error("expected range");
+  const result = evaluateCanonicalDealingRange({
+    range: bullish.range,
+    direction: "long",
+    price: 1.90874,
+    mode: "strict_value",
+  });
+  assertEquals(result.zone, "premium");
+  assertStringIncludes(result.explanation, "Long rejected: entry is in Premium");
+  assertStringIncludes(result.explanation, "Entry 1.90874 is at 53.4% (Premium)");
+  assertStringIncludes(result.explanation, "Strict Value requires a Discount entry below 45% (1.90378)");
 });
 
 Deno.test("Strict Value uses exclusive 45 and 55 percent thresholds", () => {

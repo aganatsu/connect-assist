@@ -17,7 +17,11 @@ const REASON_LABELS: Record<string, string> = {
 function explainReason(code: string): string {
   if (REASON_LABELS[code]) return REASON_LABELS[code];
   if (code.startsWith("safety_")) {
-    return `Risk check failed: ${code.slice("safety_".length).replaceAll("_", " ")}`;
+    const safetyCode = code.slice("safety_".length);
+    if (safetyCode === "minimum_risk_reward") {
+      return "Trade rejected: the expected reward is too small for the risk. See the R:R gate for the calculated and required ratios";
+    }
+    return `Risk check failed: ${safetyCode.replaceAll("_", " ")}`;
   }
   if (code.includes("canonical") || code.includes("wrong_side") || code.includes("strict_value")) {
     return `Premium/Discount rule blocked entry: ${code.replaceAll("_", " ")}`;
