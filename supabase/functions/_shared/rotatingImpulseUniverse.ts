@@ -57,9 +57,11 @@ export function updateRotatingImpulseState(
   const pairs = { ...state.pairs };
   for (const result of results) {
     const previous = pairs[result.symbol];
+    const preservePinnedZone = result.outcome === "data_error" &&
+      previous?.outcome === "active_zone";
     pairs[result.symbol] = {
       symbol: result.symbol,
-      outcome: result.outcome,
+      outcome: preservePinnedZone ? "active_zone" : result.outcome,
       lastScannedAt: now,
       consecutiveNoImpulse: result.outcome === "no_impulse"
         ? (previous?.consecutiveNoImpulse || 0) + 1
