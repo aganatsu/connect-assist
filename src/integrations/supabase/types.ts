@@ -656,6 +656,123 @@ export type Database = {
         }
         Relationships: []
       }
+      ict_entry_zone_authority_observations: {
+        Row: {
+          activation_eligible: boolean
+          authority_candidate_id: string
+          authority_observation: Json
+          authority_score: number
+          authority_zone_high: number
+          authority_zone_low: number
+          authority_zone_type: string
+          bot_id: string
+          component_ids: string[]
+          created_at: string
+          direction: string
+          disagreed: boolean
+          entry_price: number
+          evidence_source: string
+          id: string
+          legacy_candidate_id: string | null
+          legacy_outcome_status: string | null
+          legacy_zone_high: number | null
+          legacy_zone_low: number | null
+          legacy_zone_type: string | null
+          mae_pips: number | null
+          mfe_pips: number | null
+          observed_at: string
+          outcome_checked_at: string | null
+          outcome_status: string
+          price_reached_entry: boolean | null
+          replay_contract_version: string | null
+          replay_run_id: string | null
+          scan_cycle_id: string
+          sl_hit: boolean | null
+          stop_loss: number
+          symbol: string
+          take_profit: number
+          tp_hit: boolean | null
+          trading_style: string
+          user_id: string
+        }
+        Insert: {
+          activation_eligible?: boolean
+          authority_candidate_id: string
+          authority_observation: Json
+          authority_score: number
+          authority_zone_high: number
+          authority_zone_low: number
+          authority_zone_type: string
+          bot_id?: string
+          component_ids?: string[]
+          created_at?: string
+          direction: string
+          disagreed?: boolean
+          entry_price: number
+          evidence_source?: string
+          id?: string
+          legacy_candidate_id?: string | null
+          legacy_outcome_status?: string | null
+          legacy_zone_high?: number | null
+          legacy_zone_low?: number | null
+          legacy_zone_type?: string | null
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          observed_at: string
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_reached_entry?: boolean | null
+          replay_contract_version?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id: string
+          sl_hit?: boolean | null
+          stop_loss: number
+          symbol: string
+          take_profit: number
+          tp_hit?: boolean | null
+          trading_style: string
+          user_id: string
+        }
+        Update: {
+          activation_eligible?: boolean
+          authority_candidate_id?: string
+          authority_observation?: Json
+          authority_score?: number
+          authority_zone_high?: number
+          authority_zone_low?: number
+          authority_zone_type?: string
+          bot_id?: string
+          component_ids?: string[]
+          created_at?: string
+          direction?: string
+          disagreed?: boolean
+          entry_price?: number
+          evidence_source?: string
+          id?: string
+          legacy_candidate_id?: string | null
+          legacy_outcome_status?: string | null
+          legacy_zone_high?: number | null
+          legacy_zone_low?: number | null
+          legacy_zone_type?: string | null
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          observed_at?: string
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_reached_entry?: boolean | null
+          replay_contract_version?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id?: string
+          sl_hit?: boolean | null
+          stop_loss?: number
+          symbol?: string
+          take_profit?: number
+          tp_hit?: boolean | null
+          trading_style?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       kv_cache: {
         Row: {
           expires_at: string
@@ -3460,6 +3577,31 @@ export type Database = {
           row_id: string | null
           symbol: string | null
           user_id: string | null
+        }
+        Relationships: []
+      }
+      ict_entry_zone_authority_validation_summary: {
+        Row: {
+          activation_eligible: boolean | null
+          authority_avg_mae_pips: number | null
+          authority_avg_mfe_pips: number | null
+          authority_losers: number | null
+          authority_winners: number | null
+          bot_id: string | null
+          disagreement_scans: number | null
+          enforcement: string | null
+          evidence_source: string | null
+          false_positives: number | null
+          losers_avoided: number | null
+          minimum_sample_ready: boolean | null
+          missed_opportunities: number | null
+          observed_scans: number | null
+          replay_runs: number | null
+          resolved_authority_setups: number | null
+          symbol: string | null
+          trading_style: string | null
+          user_id: string | null
+          winners_retained: number | null
         }
         Relationships: []
       }
