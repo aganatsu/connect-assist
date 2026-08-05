@@ -1,5 +1,5 @@
 import { assertEquals, assertGreater } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { breakerCloseInvalidated, breakerRetestHeld, hasOppositeStructureBreak } from "../../functions/_shared/breakerSemantics.ts";
+import { breakerCloseInvalidated, breakerRetestHeld, evaluateBreakerFillLifecycle, hasOppositeStructureBreak } from "../../functions/_shared/breakerSemantics.ts";
 import { selectICTEntryZone, type ICTEntryZoneComponent } from "../../functions/_shared/ictEntryZoneAuthority.ts";
 import { classifyZoneCandidateLifecycle } from "../../functions/_shared/zoneCandidateModel.ts";
 
@@ -64,4 +64,25 @@ Deno.test("overlapping breaker and FVG form a Unicorn candidate", () => {
   ]);
   assertEquals(selection.selected?.type, "breaker_fvg");
   assertGreater(selection.selected?.score ?? 0, 0);
+});
+
+Deno.test("breaker fill lifecycle requires frozen structure and an intact far boundary", () => {
+  assertEquals(evaluateBreakerFillLifecycle({
+    direction: "short",
+    bounds: { low: 1.1, high: 1.101 },
+    currentClose: 1.1005,
+    structureBreakIndex: 20,
+  }).allowed, true);
+  assertEquals(evaluateBreakerFillLifecycle({
+    direction: "short",
+    bounds: { low: 1.1, high: 1.101 },
+    currentClose: 1.1012,
+    structureBreakIndex: 20,
+  }).code, "breaker_invalidated");
+  assertEquals(evaluateBreakerFillLifecycle({
+    direction: "short",
+    bounds: { low: 1.1, high: 1.101 },
+    currentClose: 1.1005,
+    structureBreakIndex: null,
+  }).code, "missing_structure_ownership");
 });

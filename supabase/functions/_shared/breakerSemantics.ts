@@ -46,3 +46,36 @@ export function hasOppositeStructureBreak(
     item.index <= breakIndex + confirmationWindow
   );
 }
+
+export interface BreakerFillLifecycleDecision {
+  allowed: boolean;
+  code: "valid" | "missing_structure_ownership" | "breaker_invalidated" | "invalid_bounds";
+  reason: string;
+}
+
+export function evaluateBreakerFillLifecycle(input: {
+  direction: "long" | "short";
+  bounds: BreakerBounds;
+  currentClose: number;
+  structureBreakIndex: unknown;
+}): BreakerFillLifecycleDecision {
+  if (!(input.bounds.high > input.bounds.low)) {
+    return { allowed: false, code: "invalid_bounds", reason: "Breaker bounds are invalid" };
+  }
+  if (!Number.isInteger(Number(input.structureBreakIndex))) {
+    return {
+      allowed: false,
+      code: "missing_structure_ownership",
+      reason: "Breaker has no frozen opposite-structure ownership",
+    };
+  }
+  const direction = input.direction === "long" ? "bullish" : "bearish";
+  if (breakerCloseInvalidated(direction, input.bounds, input.currentClose)) {
+    return {
+      allowed: false,
+      code: "breaker_invalidated",
+      reason: `Price ${input.currentClose} closed through the ${direction} breaker far boundary`,
+    };
+  }
+  return { allowed: true, code: "valid", reason: "Breaker structure and far boundary remain valid" };
+}

@@ -33,7 +33,7 @@ select the production entry zone.
 
 - [x] Freeze the observed authority through Watchlist and staged setup.
 - [x] Preserve it through the existing frozen strategy context.
-- [ ] Revalidate impulse, lifecycle, price contact and confirmation at fill.
+- [x] Revalidate breaker ownership, far-boundary lifecycle, thesis and confirmation at fill.
 - [x] Use the same pure selector in unified live and backtest analysis.
 - [ ] Remove the independent Breaker pending-order authority.
 

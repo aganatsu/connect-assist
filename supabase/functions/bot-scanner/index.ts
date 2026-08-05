@@ -193,6 +193,7 @@ import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneE
 import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
+import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -2338,6 +2339,7 @@ async function runScanForUser(
           pending,
           scanStylePolicy,
         );
+        const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
         const pendingTimeframeAuthority = resolveTimeframeAuthority(
           pendingPolicyResolution.policy,
         );
@@ -2923,7 +2925,7 @@ async function runScanForUser(
               },
             ),
           });
-          const rawFinalAuthorization = {
+          let rawFinalAuthorization = {
             ...evaluateFinalTradeAuthorization({
             account,
             candidate: {
@@ -2975,6 +2977,27 @@ async function runScanForUser(
           }),
             canonicalDealingRange: pendingCanonicalDealingRange,
           };
+          if (pending.entry_zone_type === "breaker_block") {
+            const breakerFill = evaluateBreakerFillLifecycle({
+              direction: pending.direction as "long" | "short",
+              bounds: {
+                low: Number(pending.entry_zone_low),
+                high: Number(pending.entry_zone_high),
+              },
+              currentClose: currentPrice,
+              structureBreakIndex:
+                parsedPendingEvidence.breakerData?.structureBreakIndex,
+            });
+            if (!breakerFill.allowed) {
+              rawFinalAuthorization = {
+                ...rawFinalAuthorization,
+                authorized: false,
+                code: "additional_gate" as const,
+                retryable: false,
+                reason: `Breaker fill rejected: ${breakerFill.reason}`,
+              };
+            }
+          }
           const pendingHierarchy = rawFinalAuthorization.decisionHierarchy ||
             evaluateDecisionHierarchy({
               symbol: pending.symbol,
@@ -2989,14 +3012,6 @@ async function runScanForUser(
               requireThesisValidation: true,
               entryConfirmation: pendingEntryConfirmation,
             });
-          let parsedPendingEvidence: any = {};
-          try {
-            parsedPendingEvidence = typeof pending.signal_reason === "string"
-              ? JSON.parse(pending.signal_reason)
-              : (pending.signal_reason || {});
-          } catch {
-            parsedPendingEvidence = {};
-          }
           const pendingOwnershipFill = evaluateSingleOwnershipFillAuthorization({
             frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
             evaluatedAt: nowStr,
@@ -10253,7 +10268,7 @@ async function runScanForUser(
                 candidateId: breakerCandidateId,
                 signalSource: "breaker",
                 summary: breaker.detail,
-                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, sizeMultiplier: breakerSizeMultiplier },
+                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, structureBreakIndex: breaker.structureBreakIndex, retestIndex: breaker.retestIndex, sizeMultiplier: breakerSizeMultiplier },
                 entryTimeframe: pairConfig.entryTimeframe,
                 originalSL: breakerSL,
                 originalTP: breakerTP,
