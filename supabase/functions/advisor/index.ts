@@ -248,14 +248,28 @@ async function processSingleBot(
   botName: string,
   balance: number,
   peakBalance: number,
-): Promise<{ success: boolean; error?: string; result?: Awaited<ReturnType<typeof runAdvisorPipeline>> }> {
+): Promise<{ success: boolean; skipped?: boolean; error?: string; result?: Awaited<ReturnType<typeof runAdvisorPipeline>> }> {
   try {
-    // Dedup check (skip for on_demand — user explicitly requested)
-    if (mode !== "on_demand") {
+    if (mode === "on_demand") {
+      const recentCutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      const { data: recentReview } = await supabase
+        .from("bot_recommendations")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("bot_id", botId)
+        .eq("review_type", "on_demand")
+        .gte("created_at", recentCutoff)
+        .limit(1)
+        .maybeSingle();
+      if (recentReview) {
+        console.log(`[advisor] Reusing fresh on-demand review for ${botName}`);
+        return { success: true, skipped: true };
+      }
+    } else {
       const hasPending = await hasPendingRecToday(supabase, userId, botId, mode);
       if (hasPending) {
         console.log(`[advisor] Skipping ${botName} — already has pending ${mode} rec today`);
-        return { success: true };
+        return { success: true, skipped: true };
       }
     }
 
