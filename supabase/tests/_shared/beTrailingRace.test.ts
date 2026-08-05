@@ -1,12 +1,12 @@
 /**
- * beTrailingRace.test.ts — Regression tests for BE/Trailing co-activation fix
+ * beTrailingRace.test.ts — Regression tests for independent BE/Trailing triggers
  * ─────────────────────────────────────────────────────────────────────────────
  * Tests the fix for the race condition where break-even fires at 1R and the
  * `continue` statement prevents trailing stop from activating in the same cycle.
  * If price retraces below 1R before the next scan, trailing never activates and
  * SL stays at entry+1 pip permanently.
  *
- * The fix co-activates trailing stop flags when BE fires, so the next cycle
+ * Break-even and trailing retain separate configured triggers. A BE action must not
  * enters Phase B (tightening) instead of Phase A (first-time activation).
  *
  * Run: deno test --allow-all supabase/functions/_shared/beTrailingRace.test.ts
@@ -112,7 +112,7 @@ const CONFIG_BE_AND_TRAILING = {
 // TEST 1: BE fires → trailing flags are co-activated (the fix)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-Deno.test("BE fires at 1R → trailing stop flags are co-activated in same update", async () => {
+Deno.test("BE fires without silently activating trailing", async () => {
   // EUR/USD long: entry 1.0800, SL 1.0760 (40 pips risk), current 1.0840 (40 pips profit = 1R)
   // TP at 1.0860 (60 pips = 1.5R)
   const pos = makePosition({
@@ -139,12 +139,10 @@ Deno.test("BE fires at 1R → trailing stop flags are co-activated in same updat
   const signalData = JSON.parse(mock.updates[0].data.signal_reason);
   const flags = signalData.exitFlags;
 
-  // Core assertion: trailing is co-activated
   assertEquals(flags.breakEvenActivated, true, "BE should be activated");
-  assertEquals(flags.trailingStopActivated, true, "Trailing should be co-activated with BE");
-  assert(flags.trailingStopLevel != null, "Trailing stop level should be set");
-  assert(flags.trailingStopPips > 0, "Trailing stop pips should be set");
-  assertEquals(flags.trailingStopActivation, "after_1r", "Trailing activation type should be stored");
+  assertEquals(flags.trailingStopActivated, undefined, "Trailing must wait for its own trigger");
+  assertEquals(flags.trailingStopLevel, undefined);
+  assertEquals(flags.trailingStopPips, undefined);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -305,7 +303,7 @@ Deno.test("BE fires when trailing already activated → no double-activation", a
 // TEST 6: Short position — BE + trailing co-activation works correctly
 // ═══════════════════════════════════════════════════════════════════════════════
 
-Deno.test("Short position: BE fires at 1R → trailing co-activated with correct direction", async () => {
+Deno.test("Short position: BE fires without activating trailing", async () => {
   // EUR/JPY short: entry 184.766, SL 185.400 (63.4 pips risk), current 184.130 (slightly > 1R)
   // Using 184.130 instead of 184.132 to avoid floating point precision issue at exact 1R boundary
   const pos = makePosition({
@@ -329,19 +327,17 @@ Deno.test("Short position: BE fires at 1R → trailing co-activated with correct
   const signalData = JSON.parse(mock.updates[0].data.signal_reason);
   const flags = signalData.exitFlags;
   assertEquals(flags.breakEvenActivated, true);
-  assertEquals(flags.trailingStopActivated, true);
+  assertEquals(flags.trailingStopActivated, undefined);
 
-  // For short: BE SL = entry - offset (3 pips for EUR/JPY = 0.03) = 184.766 - 0.03 = 184.736
-  // trailingStopLevel should be set to BE level (184.736)
   const expectedBeSL = 184.766 - 0.03;
-  assertAlmostEquals(flags.trailingStopLevel, expectedBeSL, 0.001);
+  assertAlmostEquals(parseFloat(mock.updates[0].data.stop_loss), expectedBeSL, 0.001);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEST 7: Proportional trail pips calculation is correct
 // ═══════════════════════════════════════════════════════════════════════════════
 
-Deno.test("Trail pips stored during co-activation = max(configPips, 0.5 × riskPips)", async () => {
+Deno.test("BE does not precompute or store trailing distance", async () => {
   // EUR/USD long: entry 1.0800, SL 1.0740 (60 pips risk)
   // 0.5 × 60 = 30 pips > config 15 pips → should use 30
   const pos = makePosition({
@@ -361,8 +357,7 @@ Deno.test("Trail pips stored during co-activation = max(configPips, 0.5 × riskP
 
   const signalData = JSON.parse(mock.updates[0].data.signal_reason);
   const flags = signalData.exitFlags;
-  // riskPips = 60, 0.5 × 60 = 30, config trailingPips = 15 → max(15, 30) = 30
-  assertEquals(flags.trailingStopPips, 30.0, "Trail pips should be max(15, 0.5 × 60) = 30");
+  assertEquals(flags.trailingStopPips, undefined, "Trailing distance belongs to trailing activation");
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -370,7 +365,7 @@ Deno.test("Trail pips stored during co-activation = max(configPips, 0.5 × riskP
 // (because partial TP blocking only applies to Phase A standalone activation)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-Deno.test("Partial TP enabled but not yet fired → trailing still co-activates with BE", async () => {
+Deno.test("Partial TP pending prevents BE from bypassing trailing delay", async () => {
   const pos = makePosition({
     symbol: "EUR/USD",
     direction: "long",
@@ -398,8 +393,7 @@ Deno.test("Partial TP enabled but not yet fired → trailing still co-activates 
 
   const signalData = JSON.parse(mock.updates[0].data.signal_reason);
   const flags = signalData.exitFlags;
-  // Trailing should still be co-activated — partial TP blocking is only for Phase A
-  assertEquals(flags.trailingStopActivated, true, "Trailing co-activates with BE regardless of partial TP state");
+  assertEquals(flags.trailingStopActivated, undefined, "Trailing must remain pending until partial TP fires");
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

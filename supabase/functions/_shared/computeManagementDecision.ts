@@ -48,7 +48,7 @@ export interface StructureCheckResult {
 export interface ManagementDecisionConfig {
   // Break-even
   breakEvenEnabled: boolean;
-  breakEvenPips: number;        // used to compute R-based activation threshold
+  breakEvenPips: number;        // favorable pips required before moving SL to break even
   breakEvenOffsetPips: number;  // pips above/below entry for BE SL (default 3)
 
   // Trailing
@@ -138,7 +138,7 @@ function activationToR(activation: string): number {
  *
  * Order of evaluation matches live manageOpenPositions():
  *   1. Max hold time → move to BE
- *   2. Break-even activation (R-based) + trailing co-activation
+ *   2. Break-even activation at the configured favorable-pip threshold
  *   3. Trailing stop (Phase A: first activation, Phase B: ratchet tighten)
  *   4. Structure invalidation (one-shot 50% tighten with floor)
  *   5. Session-close BE (scalpers only, off-hours)
@@ -197,38 +197,28 @@ export function computeManagementDecision(
     }
   }
 
-  // ── 2. BREAK-EVEN ACTIVATION (R-based) ──
-  // beActivationR: at least 1R, capped at 2R. Uses bestRMultiple for activation check.
-  const beActivationR = config.breakEvenPips > 0 && riskPips > 0
-    ? Math.min(2.0, Math.max(1.0, config.breakEvenPips / riskPips))
-    : 1.0;
+  // ── 2. BREAK-EVEN ACTIVATION (configured favorable pips) ──
+  const beActivationPips = Math.max(0, config.breakEvenPips);
+  const beActivationR = riskPips > 0 ? beActivationPips / riskPips : 0;
 
-  if (config.breakEvenEnabled && !exitFlags.breakEvenActivated && bestRMultiple >= beActivationR) {
+  if (
+    config.breakEvenEnabled &&
+    !exitFlags.breakEvenActivated &&
+    bestProfitPips >= beActivationPips
+  ) {
     const beSL = direction === "long"
       ? entryPrice + (spec.pipSize * config.breakEvenOffsetPips)
       : entryPrice - (spec.pipSize * config.breakEvenOffsetPips);
     const shouldMove = direction === "long" ? beSL > sl : beSL < sl;
     if (shouldMove) {
       exitFlags.breakEvenActivated = true;
-
-      // Co-activate trailing stop (prevents +1 pip wins from stale BE)
-      const proportionalTrailPips = Math.max(config.trailingStopPips, riskPips * 0.5);
-      if (config.trailingStopEnabled && !exitFlags.trailingStopActivated) {
-        exitFlags.trailingStopActivated = true;
-        exitFlags.trailingStopLevel = beSL;
-        exitFlags.trailingStopPips = Math.round(proportionalTrailPips * 10) / 10;
-        exitFlags.trailingStopActivation = config.trailingStopActivation;
-      }
-
-      const trailMsg = (config.trailingStopEnabled && !input.exitFlags.trailingStopActivated)
-        ? ` | trailing co-activated (trail: ${proportionalTrailPips.toFixed(1)} pips)`
-        : "";
-
       return {
         action: "be_activated",
         newSL: roundPrice(beSL, spec.pipSize),
         updatedExitFlags: exitFlags,
-        detail: `Break-even activated at ${bestRMultiple.toFixed(2)}R (trigger: ${beActivationR.toFixed(2)}R) — SL moved to ${roundPrice(beSL, spec.pipSize).toFixed(5)}${trailMsg}`,
+        detail: `Break-even activated after ${bestProfitPips.toFixed(1)} pips ` +
+          `(trigger: ${beActivationPips.toFixed(1)} pips / ${beActivationR.toFixed(2)}R) ` +
+          `— SL moved to ${roundPrice(beSL, spec.pipSize).toFixed(5)}`,
         rMultiple,
       };
     }

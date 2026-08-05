@@ -195,9 +195,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
   const beR = ef.breakEvenPips != null && riskDist && riskDist > 0
-    ? Math.min(2.0, Math.max(1.0, (ef.breakEvenPips * pipSize) / riskDist))
+    ? (ef.breakEvenPips * pipSize) / riskDist
     : null;
   const bePrice = beR != null && riskSl != null ? priceAtR(direction, entry, riskSl, beR) : null;
+  const beOffsetPips = ef.breakEvenOffsetPips ?? 0;
+  const beStopPrice = direction === "long"
+    ? entry + beOffsetPips * pipSize
+    : entry - beOffsetPips * pipSize;
 
   // Partial TP level
   const partialR = ef.partialTPLevel ?? null;
@@ -582,13 +586,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 : "bg-badge-warn text-highlight"
               }
               lines={ef.breakEvenActivated
-                ? [`SL moved to entry (${formatPrice(entry, p.symbol)})`]
+                ? [`SL moved to protected entry (${formatPrice(beStopPrice, p.symbol)})`]
                 : [
                     bePrice != null
-                      ? `Trigger: ${beR?.toFixed(1)}R (${fmtPipsDollar(beTriggerPips, beTriggerDollar)})`
+                      ? `Trigger: ${fmtPipsDollar(beTriggerPips, beTriggerDollar)} (${beR?.toFixed(2)}R)`
                       : `${ef.breakEvenPips} pips from entry`,
                     bePrice != null
-                      ? `SL → ${formatPrice(entry, p.symbol)} at ${formatPrice(bePrice, p.symbol)}`
+                      ? `SL → ${formatPrice(beStopPrice, p.symbol)} at ${formatPrice(bePrice, p.symbol)}`
                       : "",
                   ].filter(Boolean)
               }
