@@ -90,6 +90,41 @@ async function oandaModifySL(conn: BrokerConnection, tradeId: string, symbol: st
   }
 }
 
+async function oandaPartialClose(
+  conn: BrokerConnection,
+  tradeId: string,
+  currentUnits: number,
+  closeFraction: number,
+): Promise<{ ok: boolean; closedUnits?: number; error?: string }> {
+  if (!Number.isFinite(currentUnits) || currentUnits === 0) {
+    return { ok: false, error: "OANDA trade has no closeable units" };
+  }
+  if (!Number.isFinite(closeFraction) || closeFraction <= 0 || closeFraction >= 1) {
+    return { ok: false, error: "Partial-close fraction must be greater than 0 and less than 1" };
+  }
+  const units = Math.max(1, Math.round(Math.abs(currentUnits) * closeFraction));
+  try {
+    const res = await fetch(
+      `${getOandaBaseUrl(conn)}/v3/accounts/${conn.account_id}/trades/${tradeId}/close`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${conn.api_key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ units: String(units) }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text();
+      return { ok: false, error: `OANDA partial close failed ${res.status}: ${detail.slice(0, 200)}` };
+    }
+    return { ok: true, closedUnits: units };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────
 export interface ReconcilePosition {
   id: string;             // paper_positions.id (UUID)
@@ -532,78 +567,159 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
 // ─── Partial Close Reconciliation ───────────────────────────────────────
 // Executes partial close on broker for positions that scannerManagement flagged.
 // This replaces the fire-and-forget partial close block in bot-scanner.
+export interface PartialCloseReconciliationResult {
+  positionId: string;
+  connectionId: string;
+  ok: boolean;
+  error?: string;
+}
+
 export async function reconcilePartialClose(opts: {
   supabase: any;
   positions: ReconcilePosition[];
   connections: BrokerConnection[];
   partialActions: Array<{ positionId: string; symbol: string; closeFraction: number; direction: "long" | "short" }>;
-}): Promise<void> {
-  const { supabase, positions, connections, partialActions } = opts;
-  if (partialActions.length === 0) return;
+}): Promise<PartialCloseReconciliationResult[]> {
+  const { positions, connections, partialActions } = opts;
+  const results: PartialCloseReconciliationResult[] = [];
 
   for (const action of partialActions) {
-    const pos = positions.find(p => p.position_id === action.positionId);
+    const pos = positions.find((candidate) =>
+      candidate.position_id === action.positionId
+    );
     if (!pos) continue;
+    const connectionsToClose = connections.filter((connection) =>
+      pos.mirrored_connection_ids.includes(connection.id) &&
+      (connection.broker_type === "metaapi" || connection.broker_type === "oanda")
+    );
 
-    // B2 safety: skip if no mirrored connections
-    if (pos.mirrored_connection_ids.length === 0) {
-      console.warn(`[reconcile-partial] ${action.symbol} (${action.positionId}): no mirrored_connection_ids — skipping`);
-      continue;
-    }
-
-    const connsToClose = connections.filter(c => pos.mirrored_connection_ids.includes(c.id) && (c.broker_type === "metaapi" || c.broker_type === "oanda"));
-
-    for (const conn of connsToClose) {
+    for (const connection of connectionsToClose) {
       try {
-        let authToken = conn.api_key;
-        let metaAccountId = conn.account_id;
-        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          authToken = conn.account_id;
-          metaAccountId = conn.api_key;
+        if (connection.broker_type === "oanda") {
+          const fetched = await oandaFetchPositions(connection);
+          if (!fetched.ok) {
+            results.push({ positionId: action.positionId, connectionId: connection.id, ok: false, error: fetched.error });
+            continue;
+          }
+          const matched = findOandaBrokerPosition(fetched.positions, pos, connection);
+          if (!matched.trade) {
+            results.push({
+              positionId: action.positionId,
+              connectionId: connection.id,
+              ok: false,
+              error: `OANDA position match is ${matched.match}`,
+            });
+            continue;
+          }
+          const units = Number(
+            matched.trade.currentUnits || matched.trade.initialUnits || 0,
+          );
+          const closed = await oandaPartialClose(
+            connection,
+            matched.trade.id,
+            units,
+            action.closeFraction,
+          );
+          results.push({
+            positionId: action.positionId,
+            connectionId: connection.id,
+            ok: closed.ok,
+            error: closed.error,
+          });
+          continue;
         }
 
-        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-        if (!posRes.ok) { console.warn(`[reconcile-partial] ${conn.display_name}: positions fetch failed`); continue; }
-        const brokerPositions: any[] = JSON.parse(posBody);
-
-        // Match by comment tag
+        let authToken = connection.api_key;
+        let metaAccountId = connection.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          authToken = connection.account_id;
+          metaAccountId = connection.api_key;
+        }
+        const { res: positionsResponse, body } = await metaFetch(
+          metaAccountId,
+          authToken,
+          (base) => `${base}/positions`,
+        );
+        if (!positionsResponse.ok) {
+          results.push({ positionId: action.positionId, connectionId: connection.id, ok: false, error: "MetaAPI positions fetch failed" });
+          continue;
+        }
+        const brokerPositions: any[] = JSON.parse(body);
         const commentTag = `paper:${action.positionId}`;
         const shortTag = commentTag.slice(0, 28);
-        let brokerPos = brokerPositions.find((p: any) =>
-          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+        let brokerPosition = brokerPositions.find((candidate: any) =>
+          candidate.comment &&
+          (candidate.comment.includes(commentTag) || candidate.comment.startsWith(shortTag))
         );
-
-        // Fallback: symbol+direction match (acceptable for partial close since it's less dangerous than SL modify)
-        if (!brokerPos) {
-          const brokerSymbol = resolveSymbol(action.symbol, conn);
-          brokerPos = brokerPositions.find((p: any) =>
-            (p.symbol === brokerSymbol || p.symbol === action.symbol.replace("/", "") ||
-             p.symbol?.replace(/[._\-]/g, "").toUpperCase() === action.symbol.replace("/", "").toUpperCase()) &&
-            ((p.type === "POSITION_TYPE_BUY" && action.direction === "long") ||
-             (p.type === "POSITION_TYPE_SELL" && action.direction === "short"))
+        if (!brokerPosition) {
+          const brokerSymbol = resolveSymbol(action.symbol, connection);
+          brokerPosition = brokerPositions.find((candidate: any) =>
+            (candidate.symbol === brokerSymbol ||
+              candidate.symbol === action.symbol.replace("/", "") ||
+              candidate.symbol?.replace(/[._\\-]/g, "").toUpperCase() ===
+                action.symbol.replace("/", "").toUpperCase()) &&
+            ((candidate.type === "POSITION_TYPE_BUY" && action.direction === "long") ||
+              (candidate.type === "POSITION_TYPE_SELL" && action.direction === "short"))
           );
         }
-
-        if (!brokerPos) { console.warn(`[reconcile-partial] ${conn.display_name}: position not found for ${action.symbol}`); continue; }
-
-        const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
-        const closeVolume = Math.max(0.01, Math.round(brokerVolume * action.closeFraction * 100) / 100);
-
-        const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id, volume: closeVolume }),
-        });
-
-        if (res.ok) {
-          console.log(`[reconcile-partial] ${conn.display_name}: partial close ${closeVolume} lots for ${action.symbol}`);
-        } else {
-          console.warn(`[reconcile-partial] ${conn.display_name}: partial close failed [${res.status}]: ${resBody.slice(0, 200)}`);
+        if (!brokerPosition) {
+          results.push({ positionId: action.positionId, connectionId: connection.id, ok: false, error: "MetaAPI position not found" });
+          continue;
         }
-      } catch (e: any) {
-        console.warn(`[reconcile-partial] ${conn.display_name}: error: ${e?.message}`);
+        const brokerVolume = Number(
+          brokerPosition.volume || brokerPosition.currentVolume || 0,
+        );
+        if (!Number.isFinite(brokerVolume) || brokerVolume <= 0) {
+          results.push({ positionId: action.positionId, connectionId: connection.id, ok: false, error: "MetaAPI position has no closeable volume" });
+          continue;
+        }
+        if (!Number.isFinite(action.closeFraction) || action.closeFraction <= 0 || action.closeFraction >= 1) {
+          results.push({ positionId: action.positionId, connectionId: connection.id, ok: false, error: "Partial-close fraction must be greater than 0 and less than 1" });
+          continue;
+        }
+        const closeVolume = Math.max(
+          0.01,
+          Math.round(brokerVolume * action.closeFraction * 100) / 100,
+        );
+        const { res: closeResponse, body: closeBody } = await metaFetch(
+          metaAccountId,
+          authToken,
+          (base) => `${base}/trade`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              actionType: "POSITION_CLOSE_ID",
+              positionId: brokerPosition.id,
+              volume: closeVolume,
+            }),
+          },
+        );
+        results.push({
+          positionId: action.positionId,
+          connectionId: connection.id,
+          ok: closeResponse.ok,
+          error: closeResponse.ok
+            ? undefined
+            : `MetaAPI partial close failed ${closeResponse.status}: ${closeBody.slice(0, 200)}`,
+        });
+      } catch (error) {
+        results.push({
+          positionId: action.positionId,
+          connectionId: connection.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
+
+  for (const result of results.filter((item) => !item.ok)) {
+    console.warn(
+      `[reconcile-partial] ${result.positionId}/${result.connectionId}: ${result.error}`,
+    );
+  }
+  return results;
 }
 
 // ─── Test Helpers (exported for unit tests only) ────────────────────────

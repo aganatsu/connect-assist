@@ -533,6 +533,12 @@ export async function manageOpenPositions(
         };
         const update: Record<string, unknown> = {
           signal_reason: JSON.stringify(updatedSignal),
+          exit_flags: sharedDecision.updatedExitFlags,
+          ...(sharedDecision.action === "be_activated" ? { close_reason: "be" } : {}),
+          ...((sharedDecision.action === "trailing_activated" ||
+              sharedDecision.action === "trailing_tightened")
+            ? { close_reason: "trail" }
+            : {}),
         };
         if (sharedDecision.newSL !== null) {
           update.stop_loss = sharedDecision.newSL.toString();
@@ -642,6 +648,7 @@ export async function manageOpenPositions(
           size: partialDecision.remainingSize.toString(),
           partial_tp_fired: true,
           signal_reason: JSON.stringify(updatedSignalData),
+          exit_flags: updatedSignalData.exitFlags,
         }).eq("id", pos.id);
 
         const posBotId = pos.bot_id || "smc";

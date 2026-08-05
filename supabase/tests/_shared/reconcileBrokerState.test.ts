@@ -14,6 +14,7 @@
  */
 import {
   reconcileBrokerState,
+  reconcilePartialClose,
   _testHelpers,
   type ReconcilePosition,
   type BrokerConnection,
@@ -457,4 +458,40 @@ Deno.test("reconcileBrokerState: handles broker API failure gracefully", async (
   assertEquals(results.length, 1);
   assertEquals(results[0].status, "error");
   assert(results[0].detail?.includes("500"));
+});
+
+
+Deno.test("reconcilePartialClose: uses native OANDA trade close endpoint", async () => {
+  const supabase = createMockSupabase();
+  const pos = makePosition();
+  const conn = makeConnection({ broker_type: "oanda", account_id: "oanda-account", api_key: "oanda-token" });
+  setupFetch([
+    { ok: true, status: 200, body: JSON.stringify({ trades: [{ id: "oanda-trade-1", instrument: "EUR_USD", currentUnits: "10000", clientExtensions: { id: "POS_001" } }] }) },
+    { ok: true, status: 200, body: "{}" },
+  ]);
+  const results = await reconcilePartialClose({
+    supabase, positions: [pos], connections: [conn],
+    partialActions: [{ positionId: "POS_001", symbol: "EUR/USD", closeFraction: 0.5, direction: "long" }],
+  });
+  teardownFetch();
+  assertEquals(results, [{ positionId: "POS_001", connectionId: "conn-1", ok: true, error: undefined }]);
+  const closeCall = fetchCalls.find((call) => call.url.includes("/trades/oanda-trade-1/close"));
+  assert(closeCall, "OANDA close endpoint should be called");
+  assertEquals(closeCall.method, "PUT");
+  assertEquals(JSON.parse(closeCall.body || "{}"), { units: "5000" });
+});
+
+Deno.test("reconcilePartialClose: returns OANDA failures for reconciliation", async () => {
+  const supabase = createMockSupabase();
+  const pos = makePosition();
+  const conn = makeConnection({ broker_type: "oanda", account_id: "oanda-account", api_key: "oanda-token" });
+  setupFetch([{ ok: true, status: 200, body: JSON.stringify({ trades: [] }) }]);
+  const results = await reconcilePartialClose({
+    supabase, positions: [pos], connections: [conn],
+    partialActions: [{ positionId: "POS_001", symbol: "EUR/USD", closeFraction: 0.5, direction: "long" }],
+  });
+  teardownFetch();
+  assertEquals(results.length, 1);
+  assertEquals(results[0].ok, false);
+  assert(results[0].error?.includes("OANDA position match"));
 });
