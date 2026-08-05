@@ -38,11 +38,18 @@ import {
   rankZoneCandidateModels,
 } from "./zoneCandidateModel.ts";
 import { buildCrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
+import {
+  selectICTEntryZone,
+  type ICTEntryZoneComponent,
+  type ICTEntryZoneSelection,
+} from "./ictEntryZoneAuthority.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
 /** The full story-driven result from the unified engine */
 export interface UnifiedZoneResult {
+  /** Type-neutral OB/FVG/Breaker comparison; observation-only until certified. */
+  candidateAuthorityObservation?: ICTEntryZoneSelection;
   /** Whether a valid zone was found */
   hasZone: boolean;
 
@@ -332,9 +339,16 @@ export function findUnifiedZone(
     }
   }
 
+  const candidateAuthorityObservation = buildCandidateAuthorityObservation({
+    multiTFResult, htfData, h4Candles, labels, direction,
+  });
+
   // No zone found
   if (!multiTFResult.bestZone) {
-    return buildNoZoneResult(multiTFResult, direction, currentPrice);
+    return {
+      ...buildNoZoneResult(multiTFResult, direction, currentPrice),
+      candidateAuthorityObservation,
+    };
   }
 
   const bestZone = multiTFResult.bestZone;
@@ -478,10 +492,91 @@ export function findUnifiedZone(
     multiTFResult,
     state,
     reason: multiTFResult.reason,
+    candidateAuthorityObservation,
   };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
+
+function buildCandidateAuthorityObservation(input: {
+  multiTFResult: MultiTFZoneResult;
+  htfData?: HTFConfluenceData;
+  h4Candles: Candle[];
+  labels: TFSlotLabels;
+  direction: "bullish" | "bearish";
+}): ICTEntryZoneSelection {
+  const resultForTimeframe = (timeframe: string) =>
+    timeframe === input.labels.top
+      ? input.multiTFResult.dailyResult
+      : timeframe === input.labels.mid
+      ? input.multiTFResult.h4Result
+      : input.multiTFResult.h1Result;
+  const components: ICTEntryZoneComponent[] = input.multiTFResult.allZones
+    .filter((candidate) => candidate.candidateLifecycle)
+    .map((candidate) => {
+      const timeframe = candidate.poi.evidence?.timeframe ||
+        candidate.timeframeLineage?.candidateTimeframe || input.labels.low;
+      const impulse = resultForTimeframe(timeframe)?.impulse;
+      const id = candidate.localConfluence?.candidateId ||
+        candidate.poi.evidence?.entityId ||
+        `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
+      return {
+        id,
+        type: candidate.poi.type,
+        direction: candidate.poi.direction,
+        low: candidate.poi.low,
+        high: candidate.poi.high,
+        timeframe,
+        impulseId: impulse
+          ? `${timeframe}:${impulse.startIndex}:${impulse.endIndex}:${impulse.direction}`
+          : `${timeframe}:unknown:${candidate.poi.direction}`,
+        lifecycle: candidate.candidateLifecycle!,
+        fibDepth: candidate.fibDepth,
+        valueLocationScore: candidate.fibScore,
+        displacementScore:
+          candidate.candidateModel?.factors.displacementQuality ?? 0,
+        liquidityScore: candidate.candidateModel?.factors.sweepQuality ?? 0,
+        htfLineageScore:
+          candidate.candidateModel?.factors.structuralImportance ?? 0,
+        historicalSRScore: candidate.srConfirmed ? 1 : 0,
+        proximityScore:
+          candidate.candidateModel?.factors.proximityToCurrentPrice ?? 0,
+      };
+    });
+
+  const h4Impulse = input.multiTFResult.h4Result?.impulse;
+  for (const breaker of input.htfData?.h4Breakers || []) {
+    const breakerDirection = breaker.type === "bullish_breaker"
+      ? "bullish"
+      : "bearish";
+    if (
+      breaker.subtype !== "breaker" || breakerDirection !== input.direction ||
+      breaker.state === "broken" || !h4Impulse
+    ) continue;
+    components.push({
+      id: `breaker:4H:${breaker.mitigatedAt}:${breaker.low}:${breaker.high}`,
+      type: "breaker",
+      direction: breakerDirection,
+      low: breaker.low,
+      high: breaker.high,
+      timeframe: input.labels.mid,
+      impulseId:
+        `${input.labels.mid}:${h4Impulse.startIndex}:${h4Impulse.endIndex}:${h4Impulse.direction}`,
+      lifecycle: classifyZoneCandidateLifecycle({
+        zone: { low: breaker.low, high: breaker.high, direction: breakerDirection },
+        candlesAfterFormation: input.h4Candles.slice(breaker.mitigatedAt + 1),
+      }),
+      fibDepth: 0,
+      valueLocationScore: 0,
+      displacementScore: 0,
+      liquidityScore: 0,
+      htfLineageScore: 1,
+      historicalSRScore: 0,
+      proximityScore: 0,
+    });
+  }
+  return selectICTEntryZone(components);
+}
 
 function annotateZoneLiquidityObservations(input: {
   multiTFResult: MultiTFZoneResult;

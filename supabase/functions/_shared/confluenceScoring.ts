@@ -1277,7 +1277,9 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const atrThreshold = breakerATR * 2;
       // Find the closest aligned breaker
       // Lifecycle-aware: exclude broken breakers from scoring
-      const alignedBreakers = breakerBlocks.filter(b => b.type === wantType && b.state !== "broken");
+      const alignedBreakers = breakerBlocks.filter(b =>
+        b.type === wantType && b.subtype === "breaker" && b.state !== "broken"
+      );
       const brokenCount = breakerBlocks.filter(b => b.type === wantType && b.state === "broken").length;
       let bestBreaker: typeof alignedBreakers[0] | null = null;
       let bestDist = Infinity;

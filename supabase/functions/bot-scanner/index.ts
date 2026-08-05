@@ -9985,7 +9985,7 @@ async function runScanForUser(
         // exposure, drawdown and prop-firm checks must authorize the candidate.
         if (smcEnhResult?.breakerBlocks && smcEnhResult.breakerBlocks.length > 0 && config.smcEnhancements?.enableBreakerBlocks) {
           for (const breaker of smcEnhResult.breakerBlocks) {
-            if (!breaker.retestComplete) continue; // Only fire when retest is confirmed
+            if (!breaker.retestComplete || !breaker.retestIsCurrent) continue;
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
