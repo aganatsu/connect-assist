@@ -104,7 +104,12 @@ const assessmentConfig: Record<string, { color: string; icon: React.ReactNode; l
   losing: { color: "text-loss", icon: <TrendingDown className="w-3.5 h-3.5" />, label: "LOSING" },
   breakeven: { color: "text-highlight", icon: <Minus className="w-3.5 h-3.5" />, label: "BREAKEVEN" },
   insufficient_data: { color: "text-muted-foreground", icon: <Clock className="w-3.5 h-3.5" />, label: "INSUFFICIENT DATA" },
+  analysis: { color: "text-primary", icon: <Brain className="w-3.5 h-3.5" />, label: "ANALYSIS" },
 };
+
+function assessmentDisplay(value: string) {
+  return assessmentConfig[value] || assessmentConfig.analysis;
+}
 
 const categoryIcons: Record<string, React.ReactNode> = {
   stop_loss: <Shield className="w-3.5 h-3.5" />,
@@ -1115,17 +1120,21 @@ export function RecommendationsDashboard({
           const detailError = data?.details?.find((detail: { error?: string }) => detail.error)?.error;
           throw new Error(data.error || detailError || "Advisor review could not complete");
         }
-        if (reviewType === "on_demand" && !data?.result) {
+        if (reviewType === "on_demand" && !data?.result && !data?.skipped) {
           throw new Error("Not enough resolved trade or Shadow Evidence data for a review yet");
         }
-        return { reviewType, toastId };
+        return { reviewType, toastId, skipped: data?.skipped === true };
       } catch (err) {
         toast.dismiss(toastId);
         throw err;
       }
     },
-    onSuccess: ({ reviewType, toastId }) => {
+    onSuccess: ({ reviewType, toastId, skipped }) => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
+      if (skipped) {
+        toast.info("A fresh evidence review already exists. Showing that review instead.", { id: toastId });
+        return;
+      }
       toast.success(
         `${reviewType === "on_demand" ? "Evidence" : reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
         { id: toastId }
@@ -1324,7 +1333,7 @@ export function RecommendationsDashboard({
             Pending Review ({pending.length})
           </span>
           {pending.map(review => {
-            const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
+            const assessment = assessmentDisplay(review.overall_assessment);
             const isExpanded = expandedReview === review.id;
 
             return (
@@ -1447,7 +1456,7 @@ export function RecommendationsDashboard({
             History ({resolved.length})
           </span>
           {resolved.map(review => {
-            const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
+            const assessment = assessmentDisplay(review.overall_assessment);
             const statusBadge = review.status === "approved"
               ? { color: "bg-badge-profit text-profit border-success/30", label: "APPROVED" }
               : { color: "bg-muted text-muted-foreground border-border", label: "DISMISSED" };

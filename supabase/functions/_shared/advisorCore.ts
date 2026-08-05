@@ -788,6 +788,7 @@ CRITICAL RULES:
 9. Risk assessment must be honest — if a change could hurt performance, say so.
 10. current_value and suggested_value MUST use the exact config key names the bot uses (camelCase).
 11. You are read-only advisory authority. Never say that you applied, enforced, activated, opened, or blocked anything.
+12. Recommendation titles must begin with Review, Investigate, Consider, or Propose. Never begin a title with Activate, Enable, Disable, Enforce, Remove, or Adjust.
 
 RESPONSE SCHEMA:
 {
@@ -1019,7 +1020,16 @@ export async function runAdvisorPipeline(ctx: AdvisorContext): Promise<AdvisorRe
     }));
 
   // Combine: LLM recs + deterministic factor recs + regime recs (deduped)
-  const allRecs = diagnosis.recommendations || [];
+  const allRecs = (diagnosis.recommendations || []).map((recommendation) => ({
+    ...recommendation,
+    title: recommendation.title
+      .replace(/^Activate\s+(.+)$/i, "Review $1 for controlled promotion")
+      .replace(/^Enable\s+(.+)$/i, "Review whether $1 should be enabled")
+      .replace(/^Disable\s+(.+)$/i, "Review whether $1 should remain enabled")
+      .replace(/^Enforce\s+(.+)$/i, "Review $1 for controlled enforcement")
+      .replace(/^Remove\s+(.+)$/i, "Review whether $1 remains necessary")
+      .replace(/^Adjust\s+(.+)$/i, "Review $1 settings"),
+  }));
 
   // These remain available in factorLift/regime diagnostics. They are not
   // promoted into actionable configuration changes because the streamlined
