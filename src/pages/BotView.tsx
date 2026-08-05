@@ -706,7 +706,7 @@ export default function BotView() {
                   ["history", "All History"],
                   ["audit", "Close Audit"],
                   ["broker-log", "Broker Log"],
-                  ["ai-advisor", "AI Advisor"],
+                  ["ai-advisor", "Advisor"],
                   ["broker-live", "MT4/MT5 Live"],
                   ["watchlist", "Watchlist"],
                   ["pending-orders", "Zone Setups"],

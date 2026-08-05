@@ -109,6 +109,13 @@ export interface PerformanceMetrics {
   byDirection: Record<string, { count: number; winRate: number; pnl: number }>;
 }
 
+export interface AdvisorEvidenceContext {
+  activations: Array<Record<string, unknown>>;
+  certificates: Array<Record<string, unknown>>;
+  zoneValidation: Array<Record<string, unknown>>;
+  streamlinedCertificates: Array<Record<string, unknown>>;
+}
+
 export interface AdvisorContext {
   mode: AdvisorMode;
   userId: string;
@@ -119,6 +126,7 @@ export interface AdvisorContext {
   trades: TradeRecord[];
   reasonings: TradeReasoning[];
   rejections: ResolvedRejection[];
+  evidence: AdvisorEvidenceContext;
   pastRecommendations: Array<{ id: string; created_at: string; status: string; overall_assessment: string; recommendations: unknown[]; resolved_at: string | null }>;
   balance: number;
   peakBalance: number;
@@ -730,6 +738,13 @@ export function buildPromptPayload(ctx: AdvisorContext, perf: PerformanceMetrics
       impact: regime.regimeImpact,
     },
     gatePerformance: gateReport || "No gate performance data available",
+    authorityEvidence: {
+      activations: ctx.evidence.activations,
+      certificates: ctx.evidence.certificates,
+      zoneAndCrossTimeframeValidation: ctx.evidence.zoneValidation,
+      streamlinedDecisionCertificates: ctx.evidence.streamlinedCertificates,
+      interpretation: "Evidence is diagnostic. Only runtime_enforced activation rows represent current authority. Certificates may support a recommendation but never activate execution.",
+    },
     currentConfig: {
       slMethod: ctx.config.slMethod,
       slATRMultiple: ctx.config.slATRMultiple,
@@ -766,9 +781,13 @@ CRITICAL RULES:
 2. All factor_weights recommendations MUST use these exact camelCase keys: ${VALID_FACTOR_KEYS}
 3. All recommendation categories MUST be one of: ${VALID_CATEGORIES.join(", ")}
 4. Never hallucinate numbers — only reference data provided in the payload.
-5. Be specific and actionable. "Consider adjusting" is not actionable. "Reduce orderBlock weight from 2.0 to 1.25" is.
-6. Risk assessment must be honest — if a change could hurt performance, say so.
-7. current_value and suggested_value MUST use the exact config key names the bot uses (camelCase).
+5. Treat authorityEvidence as diagnostic. Never claim that a certificate, shadow result, score, tier, or LLM recommendation currently authorizes or blocks a trade.
+6. Cite the feature key, certificate hash (when present), sample size, and observed outcome for evidence-based recommendations.
+7. Legacy percentages, tiers, and factor weights are diagnostics. Do not recommend tuning them as execution authority; identify redundancy or removal candidates instead.
+8. Be specific and actionable. "Consider adjusting" is not actionable. "Reduce orderBlock weight from 2.0 to 1.25" is.
+9. Risk assessment must be honest — if a change could hurt performance, say so.
+10. current_value and suggested_value MUST use the exact config key names the bot uses (camelCase).
+11. You are read-only advisory authority. Never say that you applied, enforced, activated, opened, or blocked anything.
 
 RESPONSE SCHEMA:
 {
@@ -1000,11 +1019,13 @@ export async function runAdvisorPipeline(ctx: AdvisorContext): Promise<AdvisorRe
     }));
 
   // Combine: LLM recs + deterministic factor recs + regime recs (deduped)
-  const allRecs = [
-    ...(diagnosis.recommendations || []),
-    ...factorRecs.filter(fr => !diagnosis.recommendations?.some(lr => lr.title === fr.title)),
-    ...regimeRecs,
-  ];
+  const allRecs = diagnosis.recommendations || [];
+
+  // These remain available in factorLift/regime diagnostics. They are not
+  // promoted into actionable configuration changes because the streamlined
+  // ICT authority owns execution, not legacy weights or regime presets.
+  void factorRecs;
+  void regimeRecs;
 
   return {
     overall_assessment: diagnosis.overall_assessment || "",

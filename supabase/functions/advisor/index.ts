@@ -97,6 +97,31 @@ async function loadContext(
     .order("created_at", { ascending: false })
     .limit(10);
 
+  // Compact, bounded authority evidence. Query failures intentionally degrade
+  // to an empty section so a partially deployed evidence migration cannot
+  // break the Advisor's core trade review.
+  const [activationResult, certificateResult, zoneResult, streamlinedResult] = await Promise.all([
+    supabase.from("strategy_activation_registry")
+      .select("feature_key, variant_key, authority_stage, runtime_scope, runtime_enforced, revision, evidence_hash, updated_at")
+      .eq("user_id", userId).eq("bot_id", botId).limit(20),
+    supabase.from("strategy_evidence_certificates")
+      .select("feature_key, variant_key, status, certificate_hash, resolved_count, changed_count, coverage_percent, beneficial_rate_percent, expectancy_delta_r, max_drawdown_delta_percent, good_trade_retention_percent, out_of_sample_passed, walk_forward_consistent, generated_at")
+      .eq("user_id", userId).eq("bot_id", botId).eq("is_current", true).limit(20),
+    supabase.from("zone_candidate_shadow_validation_summary")
+      .select("trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, minimum_sample_ready, activation_eligible, cross_tf_disagreement_scans, cross_tf_resolved_legacy_trades, winners_retained, losers_avoided, missed_opportunities, false_positives, cross_tf_expectancy_delta_r, cross_tf_minimum_sample_ready, cross_tf_enforcement")
+      .eq("user_id", userId).eq("bot_id", botId).limit(30),
+    supabase.from("streamlined_decision_certificates")
+      .select("id, certified, expires_at, runtime_targets, styles, minimum_comparable, comparable, created_at")
+      .eq("user_id", userId).order("created_at", { ascending: false }).limit(5),
+  ]);
+
+  const evidence = {
+    activations: (activationResult.data || []) as Array<Record<string, unknown>>,
+    certificates: (certificateResult.data || []) as Array<Record<string, unknown>>,
+    zoneValidation: (zoneResult.data || []) as Array<Record<string, unknown>>,
+    streamlinedCertificates: (streamlinedResult.data || []) as Array<Record<string, unknown>>,
+  };
+
   return {
     mode,
     userId,
@@ -107,6 +132,7 @@ async function loadContext(
     trades,
     reasonings,
     rejections,
+    evidence,
     pastRecommendations: pastRecs || [],
     balance,
     peakBalance,
@@ -150,10 +176,29 @@ async function persistRecommendation(
       bot_id: ctx.botId,
       review_type: ctx.mode === "on_demand" ? "on_demand" : ctx.mode,
       performance_summary: {
+        ...result.performance,
         metrics: result.performance,
         factorLift: result.factorLift.slice(0, 15),
+        factorSuggestions: result.factorLift.slice(0, 15).map((factor) => ({
+          factorName: factor.factorKey,
+          group: factor.group,
+          currentWeight: factor.currentWeight,
+          suggestedWeight: factor.suggestedWeight,
+          winRateWhenPresent: factor.presentWinRate,
+          winRateWhenAbsent: factor.absentWinRate,
+          sampleSize: factor.presentCount,
+          confidence: factor.confidence,
+          reason: factor.reason,
+        })),
         symbolStats: result.symbolStats.slice(0, 10),
         regime: result.regime,
+        regimeAnalysis: result.regime,
+        evidenceSummary: {
+          activations: ctx.evidence.activations.length,
+          certificates: ctx.evidence.certificates.length,
+          zoneValidationRows: ctx.evidence.zoneValidation.length,
+          streamlinedCertificates: ctx.evidence.streamlinedCertificates.length,
+        },
         balance: ctx.balance,
         peakBalance: ctx.peakBalance,
         llmTokens: { prompt: result.promptTokens, completion: result.completionTokens },
@@ -218,8 +263,12 @@ async function processSingleBot(
     const ctx = await loadContext(supabase, mode, userId, botId, botName, balance, peakBalance);
 
     // Minimum data check
-    if (ctx.trades.length < 3) {
-      console.log(`[advisor] Skipping ${botName} — only ${ctx.trades.length} trades in window`);
+    const evidenceRows = ctx.evidence.activations.length
+      + ctx.evidence.certificates.length
+      + ctx.evidence.zoneValidation.length
+      + ctx.evidence.streamlinedCertificates.length;
+    if (ctx.trades.length < 3 && ctx.rejections.length < 3 && evidenceRows === 0) {
+      console.log(`[advisor] Skipping ${botName} — insufficient trade and authority evidence`);
       return { success: true };
     }
 

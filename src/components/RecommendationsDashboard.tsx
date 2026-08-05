@@ -744,9 +744,13 @@ function FactorSuggestionsTable({ suggestions }: { suggestions: PerformanceSumma
 
 interface RecommendationsDashboardProps {
   botId: string;
+  defaultReviewMode?: "on_demand" | "daily" | "weekly";
 }
 
-export function RecommendationsDashboard({ botId }: RecommendationsDashboardProps) {
+export function RecommendationsDashboard({
+  botId,
+  defaultReviewMode = "on_demand",
+}: RecommendationsDashboardProps) {
   const queryClient = useQueryClient();
   const [expandedReview, setExpandedReview] = useState<string | null>(null);
 
@@ -1095,27 +1099,24 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
   });
   // Trigger manual review
   const triggerReviewMutation = useMutation({
-    mutationFn: async (reviewType: "daily" | "weekly") => {
-      const funcName = reviewType === "daily" ? "bot-daily-review" : "bot-weekly-advisor";
+    mutationFn: async (reviewType: "on_demand" | "daily" | "weekly") => {
       const mappedBotId = botId === "fotsi" ? "fotsi_mr" : "smc";
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData.user) throw new Error("Not signed in");
       const toastId = toast.loading(
-        `Running ${reviewType} review... AI is analyzing your trades, this may take 30-60s.`
+        `Running ${reviewType === "on_demand" ? "evidence" : reviewType} review... The Advisor is analyzing your data.`
       );
       try {
-        const { data, error } = await supabase.functions.invoke(funcName, {
-          body: { bot_id: mappedBotId },
+        const { data, error } = await supabase.functions.invoke("advisor", {
+          body: { mode: reviewType, bot_id: mappedBotId, user_id: authData.user.id },
         });
         if (error) throw error;
-        // Function returns 200 even when LLM fails internally — only treat
-        // explicit error/failure statuses as failures. Values like
-        // "losing"/"winning"/"breakeven" are assessment labels, not errors.
-        const results: Array<{ status?: string }> = data?.results || [];
-        const failed = results.find(r =>
-          typeof r.status === "string" &&
-          /^(error|failed|failure|llm_error|exception)$/i.test(r.status)
-        );
-        if (failed) {
-          throw new Error(`Review could not complete: ${failed.status}`);
+        if (data?.success === false || Number(data?.failed || 0) > 0) {
+          const detailError = data?.details?.find((detail: { error?: string }) => detail.error)?.error;
+          throw new Error(data.error || detailError || "Advisor review could not complete");
+        }
+        if (reviewType === "on_demand" && !data?.result) {
+          throw new Error("Not enough resolved trade or Shadow Evidence data for a review yet");
         }
         return { reviewType, toastId };
       } catch (err) {
@@ -1126,7 +1127,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     onSuccess: ({ reviewType, toastId }) => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
       toast.success(
-        `${reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
+        `${reviewType === "on_demand" ? "Evidence" : reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
         { id: toastId }
       );
     },
@@ -1161,7 +1162,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-primary" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-foreground">
-            AI Strategy Advisor
+            Advisor
           </span>
           {pending.length > 0 && (
             <Badge variant="destructive" className="text-[9px] px-1.5 py-0 h-4">
@@ -1169,7 +1170,21 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
             </Badge>
           )}
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <Button
+            size="sm"
+            variant={defaultReviewMode === "on_demand" ? "default" : "outline"}
+            className="h-6 text-[10px] px-2"
+            onClick={() => triggerReviewMutation.mutate("on_demand")}
+            disabled={triggerReviewMutation.isPending}
+          >
+            {triggerReviewMutation.isPending ? (
+              <Clock className="w-3 h-3 mr-1 animate-spin" />
+            ) : (
+              <Brain className="w-3 h-3 mr-1" />
+            )}
+            Review Evidence
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -1286,7 +1301,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
               size="sm"
               variant="default"
               className="h-7 text-[10px]"
-              onClick={() => triggerReviewMutation.mutate("daily")}
+              onClick={() => triggerReviewMutation.mutate(defaultReviewMode)}
               disabled={triggerReviewMutation.isPending}
             >
               {triggerReviewMutation.isPending ? (
@@ -1319,7 +1334,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/30">
-                        {review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
+                        {review.review_type === "on_demand" ? "EVIDENCE" : review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
                       </Badge>
                       <span className={`flex items-center gap-1 text-[11px] font-bold ${assessment.color}`}>
                         {assessment.icon} {assessment.label}
@@ -1447,7 +1462,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                         {statusBadge.label}
                       </Badge>
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4">
-                        {review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
+                        {review.review_type === "on_demand" ? "EVIDENCE" : review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
                       </Badge>
                       <span className={`flex items-center gap-1 text-[10px] ${assessment.color}`}>
                         {assessment.icon} {assessment.label}
