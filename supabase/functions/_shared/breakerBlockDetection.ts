@@ -14,7 +14,13 @@
  */
 
 import type { Candle, OrderBlock } from "./smcAnalysis.ts";
-import { calculateATR } from "./smcAnalysis.ts";
+import { analyzeMarketStructure, calculateATR } from "./smcAnalysis.ts";
+import {
+  breakerCloseInvalidated,
+  breakerDirectionForOriginalOB,
+  breakerRetestHeld,
+  hasOppositeStructureBreak,
+} from "./breakerSemantics.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +41,10 @@ export interface BreakerBlockEntry {
   displacementStrength: number;
   /** Whether the retest has occurred (entry condition met) */
   retestComplete: boolean;
+  /** True only when the newest closed candle is the qualifying retest. */
+  retestIsCurrent?: boolean;
+  /** Opposite structure break that owns the new breaker thesis. */
+  structureBreakIndex?: number;
   /** Confidence score (0-1) */
   confidence: number;
   /** Human-readable explanation */
@@ -84,6 +94,8 @@ export function detectBreakerBlocks(
   if (atr <= 0 || candles.length < 30) return [];
 
   const breakers: BreakerBlockEntry[] = [];
+  const structure = analyzeMarketStructure(candles);
+  const structureBreaks = [...structure.bos, ...structure.choch];
 
   for (const ob of orderBlocks) {
     // Only process OBs that have been broken
@@ -109,7 +121,14 @@ export function detectBreakerBlocks(
     if (cfg.requireSweep && !hadSweep) continue;
 
     // Determine the new direction (opposite of original OB)
-    const newDirection: "bullish" | "bearish" = ob.type === "bullish" ? "bearish" : "bullish";
+    const newDirection = breakerDirectionForOriginalOB(ob.type);
+    const confirmingBreak = structureBreaks.find((item) =>
+      item.type === newDirection && item.index >= ob.index &&
+      item.index <= breakIdx + 10
+    );
+    if (!confirmingBreak || !hasOppositeStructureBreak(
+      newDirection, ob.index, breakIdx, structureBreaks,
+    )) continue;
 
     // Look for retest after the break
     const retestResult = _findRetest(ob, candles, breakIdx, cfg.maxRetestWait, newDirection);
@@ -125,6 +144,8 @@ export function detectBreakerBlocks(
       hadLiquiditySweep: hadSweep,
       displacementStrength,
       retestComplete: retestResult.found,
+      retestIsCurrent: retestResult.index === candles.length - 1 && retestResult.found,
+      structureBreakIndex: confirmingBreak.index,
       confidence,
       detail: _buildDetail(ob, newDirection, displacementStrength, hadSweep, retestResult),
     });
@@ -143,15 +164,9 @@ export function isAtBreakerRetest(
 ): boolean {
   if (breaker.retestComplete) return false; // Already retested
 
-  if (breaker.direction === "bullish") {
-    // Bullish breaker: original bearish OB broken upward, now acts as support
-    // Retest = price comes back DOWN to the zone
-    return currentCandle.low <= breaker.entryZone.high && currentCandle.close >= breaker.entryZone.low;
-  } else {
-    // Bearish breaker: original bullish OB broken downward, now acts as resistance
-    // Retest = price comes back UP to the zone
-    return currentCandle.high >= breaker.entryZone.low && currentCandle.close <= breaker.entryZone.high;
-  }
+  return breakerRetestHeld(
+    breaker.direction, breaker.entryZone, currentCandle,
+  );
 }
 
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
@@ -198,16 +213,11 @@ function _findRetest(
   for (let i = breakIdx + 1; i < searchEnd; i++) {
     const c = candles[i];
 
-    if (newDirection === "bullish") {
-      // Bullish breaker (was bearish OB broken up): retest = price comes back to zone from above
-      if (c.low <= ob.high && c.close >= ob.low) {
-        return { found: true, index: i };
-      }
-    } else {
-      // Bearish breaker (was bullish OB broken down): retest = price comes back to zone from below
-      if (c.high >= ob.low && c.close <= ob.high) {
-        return { found: true, index: i };
-      }
+    if (breakerCloseInvalidated(newDirection, ob, c.close)) {
+      return { found: false, index: null };
+    }
+    if (breakerRetestHeld(newDirection, ob, c)) {
+      return { found: true, index: i };
     }
   }
   return { found: false, index: null };

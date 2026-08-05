@@ -57,6 +57,7 @@ export interface FrozenCrossTimeframeContext {
     lifecycle: string | null;
     modelRank: number | null;
   } | null;
+  ictEntryZoneAuthority: Record<string, unknown> | null;
   relationship: {
     classification: string;
     parentCandidateId: string | null;
@@ -164,6 +165,11 @@ export function buildFrozenCrossTimeframeContext(input: {
       modelRank: finite(best.candidateModel?.rank),
     }
     : null;
+  const ictEntryZoneAuthority = Object.keys(
+    record(story.candidateAuthorityObservation),
+  ).length > 0
+    ? record(story.candidateAuthorityObservation)
+    : null;
   const shadowEvaluation = selectedZone
     ? evaluateCrossTimeframeShadowCandidate(
       best as unknown as RankedPOI,
@@ -208,6 +214,7 @@ export function buildFrozenCrossTimeframeContext(input: {
       policyHash: input.stylePolicy.policyHash,
     },
     selectedZone,
+    ictEntryZoneAuthority,
     relationship: Object.keys(lineage).length > 0
       ? {
         classification: typeof lineage.relationship === "string"

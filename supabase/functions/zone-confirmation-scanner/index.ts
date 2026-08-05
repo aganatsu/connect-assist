@@ -79,6 +79,7 @@ import {
   evaluateFinalTradeAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import {
   evaluateCanonicalDealingRange,
   normalizeDealingRangeMode,
@@ -467,6 +468,7 @@ Deno.serve(async (req) => {
       const pending = huntingOrders[pendingIndex];
       try {
         const userId = pending.user_id;
+        const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
         await markScannerOperation(
           supabase,
           operationRuns.get(userId),
@@ -1077,7 +1079,7 @@ Deno.serve(async (req) => {
             onlySellInPremium: config.onlySellInPremium,
           }),
         });
-        const rawAuthorization = evaluateFinalTradeAuthorization({
+        let rawAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
             symbol: pending.symbol,
@@ -1122,6 +1124,27 @@ Deno.serve(async (req) => {
             }),
           requireCrossTimeframeAuthority: true,
         });
+        if (pending.entry_zone_type === "breaker_block") {
+          const breakerFill = evaluateBreakerFillLifecycle({
+            direction: pending.direction as "long" | "short",
+            bounds: {
+              low: Number(pending.entry_zone_low),
+              high: Number(pending.entry_zone_high),
+            },
+            currentClose: actualFillPrice,
+            structureBreakIndex:
+              parsedPendingEvidence.breakerData?.structureBreakIndex,
+          });
+          if (!breakerFill.allowed) {
+            rawAuthorization = {
+              ...rawAuthorization,
+              authorized: false,
+              code: "additional_gate" as const,
+              retryable: false,
+              reason: `Breaker fill rejected: ${breakerFill.reason}`,
+            };
+          }
+        }
         const hierarchy = rawAuthorization.decisionHierarchy ||
           evaluateDecisionHierarchy({
             symbol: pending.symbol,
@@ -1136,14 +1159,6 @@ Deno.serve(async (req) => {
             requireThesisValidation,
             entryConfirmation,
           });
-        let parsedPendingEvidence: any = {};
-        try {
-          parsedPendingEvidence = typeof pending.signal_reason === "string"
-            ? JSON.parse(pending.signal_reason)
-            : (pending.signal_reason || {});
-        } catch {
-          parsedPendingEvidence = {};
-        }
         const ownershipFill = evaluateSingleOwnershipFillAuthorization({
           frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
           evaluatedAt: nowStr,

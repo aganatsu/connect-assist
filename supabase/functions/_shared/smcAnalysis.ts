@@ -1698,21 +1698,6 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
         b => b.type === wantBreakType && b.index >= ob.index && b.index <= mitigatedAt + 10
       );
       if (hasConfirmingBreak) subtype = "breaker";
-    } else {
-      // Without structure break data, check price action for new extreme
-      if (breakerType === "bearish_breaker") {
-        // Bearish breaker from a failed bullish OB: check if price made new HH after mitigation
-        let prevHigh = ob.high;
-        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
-          if (candles[j].high > prevHigh) { subtype = "breaker"; break; }
-        }
-      } else {
-        // Bullish breaker from a failed bearish OB: check if price made new LL after mitigation
-        let prevLow = ob.low;
-        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
-          if (candles[j].low < prevLow) { subtype = "breaker"; break; }
-        }
-      }
     }
     let isActive = true;
     let breakerState: BreakerBlock["state"] = "active";
@@ -1727,27 +1712,27 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
 
       // Check if price closed through the zone (broken)
       if (breakerType === "bearish_breaker") {
-        if (c.close < ob.low) {
-          isActive = false;
-          breakerState = "broken";
-          brokenAt = j;
-          break;
-        }
-        // Respected = entered zone but bounced (closed above zone midpoint)
-        const mid = (ob.high + ob.low) / 2;
-        if (c.close > mid) {
-          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
-          if (!respectedAt) respectedAt = j;
-        }
-      } else {
         if (c.close > ob.high) {
           isActive = false;
           breakerState = "broken";
           brokenAt = j;
           break;
         }
+        // Respected = entered resistance and rejected below its midpoint.
         const mid = (ob.high + ob.low) / 2;
         if (c.close < mid) {
+          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
+          if (!respectedAt) respectedAt = j;
+        }
+      } else {
+        if (c.close < ob.low) {
+          isActive = false;
+          breakerState = "broken";
+          brokenAt = j;
+          break;
+        }
+        const mid = (ob.high + ob.low) / 2;
+        if (c.close > mid) {
           if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
           if (!respectedAt) respectedAt = j;
         }
@@ -1766,6 +1751,7 @@ export function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairVal
   // Lifecycle-aware: use FVGs that aren't fully filled
   const viableFVGs = fvgs.filter(f => f.state !== "filled");
   for (const breaker of breakerBlocks) {
+    if (breaker.subtype !== "breaker") continue;
     // Include all breakers for detection, but mark invalidated ones
     const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
     for (const fvg of viableFVGs) {

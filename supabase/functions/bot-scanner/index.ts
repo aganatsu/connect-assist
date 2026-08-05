@@ -192,6 +192,8 @@ import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZon
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
+import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
+import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -2337,6 +2339,7 @@ async function runScanForUser(
           pending,
           scanStylePolicy,
         );
+        const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
         const pendingTimeframeAuthority = resolveTimeframeAuthority(
           pendingPolicyResolution.policy,
         );
@@ -2922,7 +2925,7 @@ async function runScanForUser(
               },
             ),
           });
-          const rawFinalAuthorization = {
+          let rawFinalAuthorization = {
             ...evaluateFinalTradeAuthorization({
             account,
             candidate: {
@@ -2974,6 +2977,27 @@ async function runScanForUser(
           }),
             canonicalDealingRange: pendingCanonicalDealingRange,
           };
+          if (pending.entry_zone_type === "breaker_block") {
+            const breakerFill = evaluateBreakerFillLifecycle({
+              direction: pending.direction as "long" | "short",
+              bounds: {
+                low: Number(pending.entry_zone_low),
+                high: Number(pending.entry_zone_high),
+              },
+              currentClose: currentPrice,
+              structureBreakIndex:
+                parsedPendingEvidence.breakerData?.structureBreakIndex,
+            });
+            if (!breakerFill.allowed) {
+              rawFinalAuthorization = {
+                ...rawFinalAuthorization,
+                authorized: false,
+                code: "additional_gate" as const,
+                retryable: false,
+                reason: `Breaker fill rejected: ${breakerFill.reason}`,
+              };
+            }
+          }
           const pendingHierarchy = rawFinalAuthorization.decisionHierarchy ||
             evaluateDecisionHierarchy({
               symbol: pending.symbol,
@@ -2988,14 +3012,6 @@ async function runScanForUser(
               requireThesisValidation: true,
               entryConfirmation: pendingEntryConfirmation,
             });
-          let parsedPendingEvidence: any = {};
-          try {
-            parsedPendingEvidence = typeof pending.signal_reason === "string"
-              ? JSON.parse(pending.signal_reason)
-              : (pending.signal_reason || {});
-          } catch {
-            parsedPendingEvidence = {};
-          }
           const pendingOwnershipFill = evaluateSingleOwnershipFillAuthorization({
             frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
             evaluatedAt: nowStr,
@@ -4774,6 +4790,8 @@ async function runScanForUser(
           selectedTF: unifiedResult.selectedTF,
           unifiedScore: unifiedResult.unifiedScore,
           scoreBreakdown: unifiedResult.scoreBreakdown,
+          candidateAuthorityObservation:
+            unifiedResult.candidateAuthorityObservation ?? null,
           impulse: unifiedResult.impulse,
           zone: unifiedResult.zone,
           price: unifiedResult.price,
@@ -4881,6 +4899,8 @@ async function runScanForUser(
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
+          candidateAuthorityObservation:
+            unifiedResult.candidateAuthorityObservation ?? null,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
 
@@ -4905,6 +4925,17 @@ async function runScanForUser(
               + ` observe-only zone candidate model rows`,
             );
           }
+          await persistICTEntryZoneObservation(supabase, {
+            userId,
+            botId: BOT_ID,
+            scanCycleId,
+            symbol: pair,
+            tradingStyle: resolvedStyle,
+            observedAt: candles[candles.length - 1]?.datetime ||
+              new Date().toISOString(),
+            legacyBestZone: multiTF.bestZone,
+            authority: unifiedResult.candidateAuthorityObservation!,
+          });
         } catch (shadowStoreErr: any) {
           console.warn(
             `[scan ${scanCycleId}] ${pair} zone shadow evidence unavailable`
@@ -9985,7 +10016,7 @@ async function runScanForUser(
         // exposure, drawdown and prop-firm checks must authorize the candidate.
         if (smcEnhResult?.breakerBlocks && smcEnhResult.breakerBlocks.length > 0 && config.smcEnhancements?.enableBreakerBlocks) {
           for (const breaker of smcEnhResult.breakerBlocks) {
-            if (!breaker.retestComplete) continue; // Only fire when retest is confirmed
+            if (!breaker.retestComplete || !breaker.retestIsCurrent) continue;
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
@@ -10237,7 +10268,7 @@ async function runScanForUser(
                 candidateId: breakerCandidateId,
                 signalSource: "breaker",
                 summary: breaker.detail,
-                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, sizeMultiplier: breakerSizeMultiplier },
+                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, structureBreakIndex: breaker.structureBreakIndex, retestIndex: breaker.retestIndex, sizeMultiplier: breakerSizeMultiplier },
                 entryTimeframe: pairConfig.entryTimeframe,
                 originalSL: breakerSL,
                 originalTP: breakerTP,
