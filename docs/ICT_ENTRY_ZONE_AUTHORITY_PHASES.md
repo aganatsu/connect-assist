@@ -27,6 +27,8 @@ select the production entry zone.
 - [x] Persist legacy-versus-authority candidate decisions.
 - [x] Compare winner retention, losers avoided and missed opportunities.
 - [x] Display the selection summary in Shadow Evidence.
+- [x] Replay the same authority on historical candles with source separation.
+- [x] Keep retrospective rows permanently ineligible for runtime activation.
 - [x] Establish a 30-resolved-disagreement review threshold.
 
 ### Phase 3: Lifecycle parity - pending

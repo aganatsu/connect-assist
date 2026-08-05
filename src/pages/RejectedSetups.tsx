@@ -116,6 +116,9 @@ interface ICTEntryZoneAuthoritySummary {
   authority_avg_mae_pips: number | null;
   minimum_sample_ready: boolean;
   enforcement: "observe_only";
+  evidence_source: "forward_observation" | "retrospective_replay";
+  activation_eligible: boolean;
+  replay_runs: number;
 }
 
 interface ZoneLocalValidationSummary {
@@ -1446,17 +1449,49 @@ function ICTEntryZoneAuthorityCard({
 }: {
   rows: ICTEntryZoneAuthoritySummary[];
 }) {
-  const totals = rows.reduce((sum, row) => ({
-    observed: sum.observed + Number(row.observed_scans || 0),
-    disagreements: sum.disagreements + Number(row.disagreement_scans || 0),
-    resolved: sum.resolved + Number(row.resolved_authority_setups || 0),
-    winners: sum.winners + Number(row.authority_winners || 0),
-    losers: sum.losers + Number(row.authority_losers || 0),
-    retained: sum.retained + Number(row.winners_retained || 0),
-    avoided: sum.avoided + Number(row.losers_avoided || 0),
-    missed: sum.missed + Number(row.missed_opportunities || 0),
-  }), { observed: 0, disagreements: 0, resolved: 0, winners: 0, losers: 0, retained: 0, avoided: 0, missed: 0 });
-  const ready = rows.some((row) => row.minimum_sample_ready);
+  const summarize = (dataset: ICTEntryZoneAuthoritySummary[]) =>
+    dataset.reduce((sum, row) => ({
+      observed: sum.observed + Number(row.observed_scans || 0),
+      disagreements: sum.disagreements + Number(row.disagreement_scans || 0),
+      resolved: sum.resolved + Number(row.resolved_authority_setups || 0),
+      winners: sum.winners + Number(row.authority_winners || 0),
+      losers: sum.losers + Number(row.authority_losers || 0),
+      retained: sum.retained + Number(row.winners_retained || 0),
+      avoided: sum.avoided + Number(row.losers_avoided || 0),
+      missed: sum.missed + Number(row.missed_opportunities || 0),
+    }), {
+      observed: 0,
+      disagreements: 0,
+      resolved: 0,
+      winners: 0,
+      losers: 0,
+      retained: 0,
+      avoided: 0,
+      missed: 0,
+    });
+  const forwardRows = rows.filter(
+    (row) => row.evidence_source === "forward_observation",
+  );
+  const replayRows = rows.filter(
+    (row) => row.evidence_source === "retrospective_replay",
+  );
+  const forward = summarize(forwardRows);
+  const replay = summarize(replayRows);
+  const ready = forwardRows.some(
+    (row) => row.activation_eligible && row.minimum_sample_ready,
+  );
+  const metrics = (totals: ReturnType<typeof summarize>) => (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+      <div><p className="text-[9px] text-muted-foreground">Observed</p><p className="font-mono font-bold">{totals.observed}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Different choice</p><p className="font-mono font-bold">{totals.disagreements}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Resolved</p><p className="font-mono font-bold">{totals.resolved}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Would win</p><p className="font-mono font-bold text-success">{totals.winners}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Would lose</p><p className="font-mono font-bold text-destructive">{totals.losers}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Winners kept</p><p className="font-mono font-bold text-success">{totals.retained}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Losers avoided</p><p className="font-mono font-bold text-success">{totals.avoided}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">Missed</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
+    </div>
+  );
   return (
     <Card className="border-border/50">
       <CardHeader className="px-4 pt-3 pb-2">
@@ -1467,25 +1502,33 @@ function ICTEntryZoneAuthorityCard({
               Type-neutral OB, FVG, Breaker and overlap decisions compared with the current selector.
             </p>
           </div>
-          <Badge variant="outline" className="border-warning/40 text-warning text-[9px]">
-            OBSERVE ONLY
-          </Badge>
+          <Button asChild size="sm" variant="outline" className="h-7 text-[10px]">
+            <Link to="/backtest?zoneLocalReplay=1">Run Historical Replay</Link>
+          </Button>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-4">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-          <div><p className="text-[9px] text-muted-foreground">Observed</p><p className="font-mono font-bold">{totals.observed}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Different choice</p><p className="font-mono font-bold">{totals.disagreements}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Resolved</p><p className="font-mono font-bold">{totals.resolved}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Would win</p><p className="font-mono font-bold text-success">{totals.winners}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Would lose</p><p className="font-mono font-bold text-destructive">{totals.losers}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Winners kept</p><p className="font-mono font-bold text-success">{totals.retained}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Losers avoided</p><p className="font-mono font-bold text-success">{totals.avoided}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Missed</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
-          <div><p className="text-[9px] text-muted-foreground">Readiness</p><p className="font-mono font-bold">{ready ? "REVIEW" : "COLLECTING"}</p></div>
+      <CardContent className="space-y-3 px-4 pb-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-medium">Forward Observation</p>
+            <Badge variant="outline" className="border-success/40 text-success text-[9px]">
+              {ready ? "READY FOR REVIEW" : "COLLECTING"}
+            </Badge>
+          </div>
+          {metrics(forward)}
         </div>
-        <p className="mt-2 text-[9px] text-muted-foreground">
-          This dataset cannot place or block trades. Thirty resolved disagreements are required before controlled promotion review.
+        <div className="space-y-2 rounded border border-cyan-500/25 bg-cyan-500/5 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-medium">Historical Replay</p>
+            <Badge variant="outline" className="border-cyan-500/40 text-cyan-500 text-[9px]">
+              RESEARCH ONLY
+            </Badge>
+          </div>
+          {metrics(replay)}
+        </div>
+        <p className="text-[9px] text-muted-foreground">
+          Replay uses only later candles for outcomes and can never satisfy the
+          30 forward-disagreement requirement or change trade execution.
         </p>
       </CardContent>
     </Card>

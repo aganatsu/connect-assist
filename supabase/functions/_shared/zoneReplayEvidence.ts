@@ -1,4 +1,5 @@
 import type { RankedPOI } from "./impulseZoneEngine.ts";
+import { cleanupICTEntryZoneReplayEvidence } from "./ictEntryZoneReplayEvidence.ts";
 import { type OutcomeCandle, simulateOutcome } from "./outcomeSimulation.ts";
 import {
   buildZoneShadowObservationRows,
@@ -162,4 +163,5 @@ export async function cleanupZoneReplayEvidence(
     .eq("replay_run_id", replayRunId)
     .eq("evidence_source", "retrospective_replay");
   if (error) throw new Error(error.message);
+  await cleanupICTEntryZoneReplayEvidence(client, replayRunId);
 }
