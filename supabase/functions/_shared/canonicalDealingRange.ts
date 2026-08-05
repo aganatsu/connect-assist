@@ -185,8 +185,8 @@ export function normalizeDealingRangeMode(
 }
 
 function zoneAt(percent: number): DealingRangeZone {
-  if (percent < 45) return "discount";
-  if (percent > 55) return "premium";
+  if (percent < 50) return "discount";
+  if (percent > 50) return "premium";
   return "equilibrium";
 }
 
@@ -255,10 +255,19 @@ export function evaluateCanonicalDealingRange(input: {
   const decimals = input.priceDecimals ?? 5;
   const side = input.direction === "long" ? "Long" : "Short";
   const impulse = input.range.direction === "bullish" ? "bullish" : "bearish";
-  const requirement = input.mode === "avoid_wrong_side"
-    ? input.direction === "long" ? "at most 55%" : "at least 45%"
-    : input.direction === "long" ? "below 45%" : "above 55%";
-  const prefix = `${side} ${blocked ? "rejected" : "allowed"} by ${input.range.timeframe.toUpperCase()} canonical ${impulse} impulse range ${formatPrice(input.range.low, decimals)}-${formatPrice(input.range.high, decimals)}. Entry ${formatPrice(input.price, decimals)} is at ${percent.toFixed(1)}%.`;
+  const thresholdPercent = input.direction === "long"
+    ? input.mode === "strict_value" ? 45 : 55
+    : input.mode === "strict_value" ? 55 : 45;
+  const thresholdPrice = input.range.low +
+    (input.range.high - input.range.low) * (thresholdPercent / 100);
+  const ictZone = zone[0].toUpperCase() + zone.slice(1);
+  const requiredZone = input.direction === "long" ? "Discount" : "Premium";
+  const comparison = input.direction === "long"
+    ? input.mode === "strict_value" ? "below" : "at or below"
+    : input.mode === "strict_value" ? "above" : "at or above";
+  const rangeLabel = `${input.range.timeframe.toUpperCase()} ${impulse} impulse range ${formatPrice(input.range.low, decimals)}-${formatPrice(input.range.high, decimals)}`;
+  const entryLabel = `Entry ${formatPrice(input.price, decimals)} is at ${percent.toFixed(1)}% (${ictZone})`;
+  const policyLabel = `${displayMode(input.mode)} requires a ${requiredZone} entry ${comparison} ${thresholdPercent}% (${formatPrice(thresholdPrice, decimals)})`;
 
   return {
     ...base,
@@ -267,7 +276,9 @@ export function evaluateCanonicalDealingRange(input: {
     percent,
     zone,
     code: wrongSide ? "wrong_side" : outsideStrictValue ? "strict_value_required" : "allowed",
-    explanation: blocked ? `${prefix} ${displayMode(input.mode)} requires ${requirement}.` : prefix,
+    explanation: blocked
+      ? `${side} rejected: entry is in ${ictZone}. ${rangeLabel}. ${entryLabel}. ${policyLabel}.`
+      : `${side} allowed: ${entryLabel} within ${rangeLabel}.`,
   };
 }
 

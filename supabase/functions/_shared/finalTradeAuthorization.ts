@@ -264,9 +264,9 @@ export function evaluateFinalTradeAuthorization(
   if (rr < input.minimumRiskReward) {
     return deny(
       "risk_reward",
-      `Risk/reward ${rr.toFixed(2)} is below ${
+      `Trade rejected: R:R is ${rr.toFixed(2)}, below the required ${
         input.minimumRiskReward.toFixed(2)
-      }`,
+      }. Increase the target or reduce the stop distance`,
       false,
       checks,
       now,

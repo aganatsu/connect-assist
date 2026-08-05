@@ -48,6 +48,15 @@ Deno.test("ownership block and unavailable decisions always explain rejection", 
   }).reasons, ["canonical location evidence is unavailable"]);
 });
 
+Deno.test("minimum R:R fallback explains the trading meaning", () => {
+  assertEquals(resolveSingleOwnershipScanOutcome({
+    enforcement: enforcement("enforce"),
+    decision: decision("block", ["safety_minimum_risk_reward"]),
+  }).reasons, [
+    "Trade rejected: the expected reward is too small for the risk. See the R:R gate for the calculated and required ratios",
+  ]);
+});
+
 Deno.test("observation leaves legacy scanner disposition unchanged", () => {
   assertEquals(resolveSingleOwnershipScanOutcome({
     enforcement: enforcement("observe"),
