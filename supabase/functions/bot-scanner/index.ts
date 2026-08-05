@@ -1944,6 +1944,88 @@ async function runScanForUser(
     pairRows.push(s);
     stagedByPair.set(s.symbol, pairRows);
   }
+
+  // Watchlist is a lifecycle lane, not discovery. Frozen executable zones get
+  // a bounded price/invalidation refresh; only near-zone setups re-enter the
+  // deeper confirmation pipeline for this cycle.
+  const lifecycleDeepScanSymbols = new Set<string>();
+  const WATCHLIST_MONITOR_LIMIT = 6;
+  const executableWatchlist = activeStagedSetups
+    .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
+    .sort((left: any, right: any) => String(left.last_eval_at || "").localeCompare(String(right.last_eval_at || "")))
+    .slice(0, WATCHLIST_MONITOR_LIMIT);
+  for (const setup of executableWatchlist) {
+    try {
+      const zone = setup.originating_zone || {};
+      const low = Number(zone.low);
+      const high = Number(zone.high);
+      if (!Number.isFinite(low) || !Number.isFinite(high)) continue;
+      const candles = await cachedFetch(
+        setup.symbol,
+        getEntryInterval(config.entryTimeframe),
+        getEntryRange(config.entryTimeframe),
+      );
+      if (candles.length === 0) continue;
+      const currentPrice = candles[candles.length - 1].close;
+      const frozenImpulse = setup.analysis_snapshot?.impulseZone?.impulse ||
+        setup.analysis_snapshot?.impulse || null;
+      const invalidation = deriveWatchlistInvalidation({
+        direction: setup.direction as WatchlistDirection,
+        zone,
+        impulse: frozenImpulse,
+        proposedLevel: setup.sl_level,
+      });
+      if (isWatchlistInvalidated(setup.direction as WatchlistDirection, currentPrice, invalidation.level)) {
+        const observedAt = new Date().toISOString();
+        await supabase.from("staged_setups").update({
+          status: "invalidated",
+          invalidation_reason: `Price ${currentPrice} breached frozen Watchlist boundary ${invalidation.level}`,
+          lifecycle_reason: "Frozen Watchlist boundary breached during lifecycle monitoring",
+          lifecycle_reason_code: "structural_boundary_breached",
+          lifecycle_phase: setup.lifecycle_phase || "zone_discovered",
+          lifecycle_evidence: buildWatchlistLifecycleEvidence({
+            reasonCode: "structural_boundary_breached",
+            phase: setup.lifecycle_phase || "zone_discovered",
+            observedAt,
+            observedPrice: currentPrice,
+            frozenDirection: setup.direction,
+            invalidation,
+          }),
+          last_eval_at: observedAt,
+          resolved_at: observedAt,
+        }).eq("id", setup.id).eq("user_id", userId);
+        stagedInvalidated++;
+        continue;
+      }
+      const zoneLow = Math.min(low, high);
+      const zoneHigh = Math.max(low, high);
+      const distance = currentPrice < zoneLow
+        ? zoneLow - currentPrice
+        : currentPrice > zoneHigh ? currentPrice - zoneHigh : 0;
+      const pipSize = (SPECS[setup.symbol] || SPECS["EUR/USD"]).pipSize;
+      const nearBuffer = Math.max((zoneHigh - zoneLow) * 2, pipSize * 20);
+      const nearZone = distance <= nearBuffer;
+      const phase = distance === 0 ? "at_zone" : nearZone ? "approaching_zone" : "zone_discovered";
+      const observedAt = new Date().toISOString();
+      await supabase.from("staged_setups").update({
+        lifecycle_phase: phase,
+        lifecycle_evidence: buildWatchlistLifecycleEvidence({
+          reasonCode: nearZone ? "waiting_for_zone_confirmation" : "qualified",
+          phase,
+          observedAt,
+          observedPrice: currentPrice,
+          frozenDirection: setup.direction,
+          invalidation,
+          detail: { distance, nearBuffer, monitorLane: "lightweight" },
+        }),
+        last_eval_at: observedAt,
+        scan_cycles: nearZone ? (setup.scan_cycles || 0) : (setup.scan_cycles || 0) + 1,
+      }).eq("id", setup.id).eq("user_id", userId);
+      if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol);
+    } catch (error: any) {
+      console.warn(`[watchlist-monitor] ${setup.symbol}: ${error?.message}`);
+    }
+  }
   // ── Thesis Conviction Tracker: in-memory state per pair+direction ──
   // Persisted to kv_cache at end of scan cycle. Loaded from kv_cache at start.
   const convictionStates = new Map<string, ThesisConvictionState>();
@@ -3598,23 +3680,37 @@ async function runScanForUser(
   const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
   const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
 
-  // Select a bounded full-analysis universe before Gameplan and candle fetching.
-  // Valid zones remain pinned; empty/error slots rotate oldest-first next cycle.
+  // Select eight discovery pairs before Gameplan and candle fetching.
+  // Lifecycle-owned pairs are monitored separately and do not consume slots.
   const fullInstrumentUniverse = [...config.instruments];
   const rotatingImpulseSlotCount = Math.max(1, Math.min(12, Number((config as any).rotatingImpulseSlotCount) || 8));
   const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && fullInstrumentUniverse.length > rotatingImpulseSlotCount;
   let rotationSelection: RotationSelection | null = null;
+  let discoveryScanUniverse = fullInstrumentUniverse;
   let scanUniverse = fullInstrumentUniverse;
   if (rotatingImpulseScanEnabled) {
+    const lifecycleOwnedSymbols = new Set<string>([
+      ...activeStagedSetups
+        .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
+        .map((setup: any) => setup.symbol),
+      ...(activePendingOrders || []).map((order: any) => order.symbol),
+      ...openPosArr.map((position: any) => position.symbol),
+    ]);
     const rotationState = await loadRotatingImpulseState(supabase, userId, BOT_ID);
     rotationSelection = selectRotatingImpulseUniverse(
       fullInstrumentUniverse,
       rotatingImpulseSlotCount,
       rotationState,
+      new Date().toISOString(),
+      lifecycleOwnedSymbols,
     );
-    scanUniverse = rotationSelection.selected;
+    discoveryScanUniverse = rotationSelection.selected;
+    scanUniverse = Array.from(new Set([
+      ...discoveryScanUniverse,
+      ...Array.from(lifecycleDeepScanSymbols),
+    ])).filter((symbol) => fullInstrumentUniverse.includes(symbol));
     console.log(
-      `[scan ${scanCycleId}] Impulse rotation: ${scanUniverse.length}/${fullInstrumentUniverse.length} pairs; pinned=[${rotationSelection.pinned.join(", ")}], discovery=[${rotationSelection.discovery.join(", ")}]`,
+      `[scan ${scanCycleId}] Two-lane Impulse scan: discovery=${discoveryScanUniverse.length}/${fullInstrumentUniverse.length}, lifecycle=${scanUniverse.length - discoveryScanUniverse.length}; discovery=[${discoveryScanUniverse.join(", ")}], near-zone=[${Array.from(lifecycleDeepScanSymbols).join(", ")}]`,
     );
   }
 
@@ -10628,7 +10724,7 @@ async function runScanForUser(
     for (const detail of scanDetails) {
       if (detail?.pair && scanUniverse.includes(detail.pair)) latestDetailByPair.set(detail.pair, detail);
     }
-    const rotationResults = scanUniverse.map((symbol) => ({
+    const rotationResults = discoveryScanUniverse.map((symbol) => ({
       symbol,
       outcome: classifyRotationOutcome(latestDetailByPair.get(symbol)),
     }));
@@ -10821,8 +10917,9 @@ async function runScanForUser(
         slotCount: rotatingImpulseSlotCount,
         universeSize: fullInstrumentUniverse.length,
         selected: scanUniverse,
-        pinned: rotationSelection.pinned,
-        discovery: rotationSelection.discovery,
+        discovery: discoveryScanUniverse,
+        lifecycleDeepScan: Array.from(lifecycleDeepScanSymbols),
+        lifecycleLightweightMonitored: executableWatchlist.length,
       } : { enabled: false, universeSize: fullInstrumentUniverse.length },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },

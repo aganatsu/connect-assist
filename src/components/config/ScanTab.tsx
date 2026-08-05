@@ -253,7 +253,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Impulse Zone Rotation</p>
           <ToggleField
             label="Rotate Pair Universe"
-            description="Deep-scan a limited batch. Valid Impulse Zones stay active; empty slots rotate to pairs not scanned recently."
+            description="Use all slots to discover new Impulse Zones. Existing Watchlist and Zone Setup records move to a separate lifecycle monitor."
             checked={config.instruments?.rotatingImpulseScanEnabled ?? true}
             onChange={v => updateField("instruments", "rotatingImpulseScanEnabled", v)}
           />

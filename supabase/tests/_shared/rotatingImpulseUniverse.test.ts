@@ -8,13 +8,13 @@ Deno.test("rotation selects eight never-scanned pairs first", () => {
   assertEquals(result.pinned, []);
 });
 
-Deno.test("valid zones stay pinned and empty slots rotate to unscanned pairs", () => {
+Deno.test("lifecycle-owned pairs leave discovery and all slots refill", () => {
   const universe = Array.from({ length: 12 }, (_, i) => `PAIR-${i + 1}`);
   let state = emptyRotationState("2026-01-01T00:00:00Z");
   state = updateRotatingImpulseState(state, universe.slice(0, 8).map((symbol, index) => ({ symbol, outcome: index < 3 ? "active_zone" as const : "no_impulse" as const })), "2026-01-01T01:00:00Z");
-  const result = selectRotatingImpulseUniverse(universe, 8, state);
-  assertEquals(result.pinned, universe.slice(0, 3));
-  assertEquals(result.discovery, universe.slice(8, 12).concat(["PAIR-4"]));
+  const result = selectRotatingImpulseUniverse(universe, 8, state, "2026-01-01T02:00:00Z", universe.slice(0, 3));
+  assertEquals(result.pinned, []);
+  assertEquals(result.discovery, universe.slice(8, 12).concat(universe.slice(3, 7)));
 });
 
 Deno.test("data failures rotate but are not recorded as no impulse", () => {
@@ -33,5 +33,16 @@ Deno.test("temporary data failure preserves a previously pinned zone", () => {
   state = updateRotatingImpulseState(state, [{ symbol: "GBP/USD", outcome: "active_zone" }], "2026-01-01T01:00:00Z");
   state = updateRotatingImpulseState(state, [{ symbol: "GBP/USD", outcome: "data_error" }], "2026-01-01T02:00:00Z");
   assertEquals(state.pairs["GBP/USD"].outcome, "active_zone");
-  assertEquals(selectRotatingImpulseUniverse(["GBP/USD", "EUR/USD"], 1, state).pinned, ["GBP/USD"]);
+});
+
+
+Deno.test("scanner separates discovery from lifecycle monitoring", async () => {
+  const scanner = await Deno.readTextFile("./supabase/functions/bot-scanner/index.ts");
+  for (const expected of [
+    "const lifecycleOwnedSymbols = new Set<string>([",
+    "lifecycleOwnedSymbols,",
+    'monitorLane: "lightweight"',
+    "if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol)",
+    "const rotationResults = discoveryScanUniverse.map",
+  ]) assertEquals(scanner.includes(expected), true);
 });
