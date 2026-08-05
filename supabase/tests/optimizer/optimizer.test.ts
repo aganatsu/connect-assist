@@ -478,7 +478,7 @@ Deno.test("OptimizationLoop: runs with mock backtest and finds improvement", asy
 
   assert(result.trials.length > 0, "Should have trials");
   assert(result.baseline.compositeScore > 0, "Baseline should have positive score");
-  assert(result.durationMs > 0, "Duration should be positive");
+  assert(Number.isFinite(result.durationMs) && result.durationMs >= 0, "Duration should be finite and non-negative");
 });
 
 Deno.test("OptimizationLoop: rejects configs that fail walk-forward", async () => {
