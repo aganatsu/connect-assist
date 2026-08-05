@@ -82,6 +82,5 @@ Deno.test("UI labels replay evidence as research only", () => {
   assertStringIncludes(rejected, "RESEARCH ONLY");
   assertStringIncludes(rejected, "ACTIVATION EVIDENCE");
   assertStringIncludes(backtest, "Collect ICT zone replay evidence");
-  assertStringIncludes(backtest, "cannot");
-  assertStringIncludes(backtest, "activate Soft or Hard enforcement");
+  assertStringIncludes(backtest, "Replay cannot activate enforcement");
 });
