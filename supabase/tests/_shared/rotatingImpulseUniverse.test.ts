@@ -41,7 +41,7 @@ Deno.test("scanner separates discovery from lifecycle monitoring", async () => {
   for (const expected of [
     "const lifecycleOwnedSymbols = new Set<string>([",
     "lifecycleOwnedSymbols,",
-    "monitorLane: \\"lightweight\\"",
+    'monitorLane: "lightweight"',
     "if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol)",
     "const rotationResults = discoveryScanUniverse.map",
   ]) assertEquals(scanner.includes(expected), true);
