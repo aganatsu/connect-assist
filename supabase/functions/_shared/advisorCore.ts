@@ -739,10 +739,10 @@ export function buildPromptPayload(ctx: AdvisorContext, perf: PerformanceMetrics
     },
     gatePerformance: gateReport || "No gate performance data available",
     authorityEvidence: {
-      activations: ctx.evidence.activations,
-      certificates: ctx.evidence.certificates,
-      zoneAndCrossTimeframeValidation: ctx.evidence.zoneValidation,
-      streamlinedDecisionCertificates: ctx.evidence.streamlinedCertificates,
+      activations: ctx.evidence?.activations || [],
+      certificates: ctx.evidence?.certificates || [],
+      zoneAndCrossTimeframeValidation: ctx.evidence?.zoneValidation || [],
+      streamlinedDecisionCertificates: ctx.evidence?.streamlinedCertificates || [],
       interpretation: "Evidence is diagnostic. Only runtime_enforced activation rows represent current authority. Certificates may support a recommendation but never activate execution.",
     },
     currentConfig: {
