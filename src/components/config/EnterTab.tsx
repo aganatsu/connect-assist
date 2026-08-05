@@ -249,7 +249,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={false}
       >
         <div className="flex items-center justify-between">
-          <SectionHeader title="Legacy Factor Weights" description="AI Advisor recommendations can auto-apply here." />
+          <SectionHeader title="Legacy Factor Weights" description="Diagnostic history only. The streamlined ICT model owns trade authority." />
           {hasWeightOverrides && (
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={resetAllWeights}>
               <RotateCcw className="h-3 w-3" /> Reset All

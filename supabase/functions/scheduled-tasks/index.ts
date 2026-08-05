@@ -69,8 +69,8 @@ const DEFAULT_TASKS = [
     category: "analytics",
   },
   {
-    function_name: "bot-daily-review",
-    action: "review",
+    function_name: "advisor",
+    action: "daily",
     display_name: "Daily Review",
     description: "AI analysis of today's trades, generates Telegram summary",
     default_interval_minutes: 1440,
@@ -78,8 +78,8 @@ const DEFAULT_TASKS = [
     category: "analytics",
   },
   {
-    function_name: "bot-weekly-advisor",
-    action: "advise",
+    function_name: "advisor",
+    action: "weekly",
     display_name: "Weekly Advisor",
     description: "Deep strategy analysis — factor weights, regime detection, recommendations",
     default_interval_minutes: 10080,
@@ -330,6 +330,10 @@ Deno.serve(async (req) => {
       const functionBody: Record<string, any> = {};
       if (task.function_name === "bot-scanner") {
         functionBody.action = task.action === "manage" ? "manage" : "manual_scan";
+      }
+      if (task.function_name === "advisor") {
+        functionBody.mode = task.action === "weekly" ? "weekly" : "daily";
+        functionBody.user_id = user.id;
       }
       functionBody.trigger_source = "manual";
 

@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { StrategyAdvisor } from "@/components/StrategyAdvisor";
+import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
 import {
   collapseRejectedOpportunities,
@@ -755,7 +755,7 @@ export default function RejectedSetups() {
                 <DropdownMenuItem onClick={downloadGates} className="text-xs">Gate Analysis (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadShadowEvidence} className="text-xs">Shadow Evidence (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadSetups} className="text-xs">Distinct Opportunities (CSV)</DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">AI Advisor (JSON)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">Advisor (JSON)</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={downloadAll} className="text-xs font-medium">Download All</DropdownMenuItem>
               </DropdownMenuContent>
@@ -1194,7 +1194,7 @@ export default function RejectedSetups() {
           {/* Table Tab */}
           {/* Strategy Advisor Tab */}
           <TabsContent value="advisor" className="mt-3">
-            <StrategyAdvisor days={days} />
+            <RecommendationsDashboard botId="smc" defaultReviewMode="on_demand" />
           </TabsContent>
 
           <TabsContent value="table" className="mt-3">
