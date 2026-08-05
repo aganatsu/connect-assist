@@ -44,6 +44,7 @@ import {
 } from "@/lib/strategyActivation";
 import {
   shortCertificateHash,
+  reviewStrategyEvidence,
   STRATEGY_EVIDENCE_STATUS,
   type StrategyEvidenceCertificateRecord,
 } from "@/lib/strategyEvidenceCertificate";
@@ -477,6 +478,10 @@ export default function RejectedSetups() {
     ),
     [strategyEvidenceCertificates],
   );
+  const shadowEvidenceReviews = useMemo(() => [
+    { summary: shadowEvidenceReport.gameplanHierarchy, certificate: certificateByFeature.get("gameplan_hierarchy") },
+    { summary: shadowEvidenceReport.thesisConviction, certificate: certificateByFeature.get("thesis_conviction") },
+  ].map((item) => ({ ...item, review: reviewStrategyEvidence(item.certificate) })), [certificateByFeature, shadowEvidenceReport]);
   const filteredZoneLocalValidation = useMemo(
     () => symbolFilter === "all"
       ? zoneLocalValidation
@@ -1035,6 +1040,28 @@ export default function RejectedSetups() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4">
+                <CardTitle className="text-sm font-medium">Evidence Review: What Happens Next</CardTitle>
+                <p className="text-[10px] text-muted-foreground mt-1">Trusted certificates convert completed Shadow Evidence into an action recommendation. No recommendation changes trade execution.</p>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-2">
+                {shadowEvidenceReviews.map(({ summary, certificate, review }) => (
+                  <div key={summary.feature} className="grid grid-cols-1 md:grid-cols-[180px_160px_1fr] gap-2 rounded border border-border/50 p-3 items-start">
+                    <div>
+                      <p className="text-xs font-semibold">{summary.label}</p>
+                      <p className="text-[9px] text-muted-foreground">{certificate ? certificate.resolved_count + " resolved · " + certificate.changed_count + " changed" : "Not certified"}</p>
+                    </div>
+                    <Badge variant="outline" className={"w-fit text-[9px] " + (review.action === "promote_log_only" ? "border-success/40 text-success" : review.action === "remove_candidate" ? "border-destructive/40 text-destructive" : "border-warning/40 text-warning")}>
+                      {review.label}
+                    </Badge>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">{review.reason}</p>
+                  </div>
+                ))}
+                <p className="text-[9px] text-muted-foreground">Promotion means Log-only review first. It does not mean soft adjustment, hard blocking, paper execution, or live execution.</p>
               </CardContent>
             </Card>
 
