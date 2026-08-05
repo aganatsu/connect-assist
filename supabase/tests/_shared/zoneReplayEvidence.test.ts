@@ -163,5 +163,7 @@ Deno.test("incomplete replay evidence can be removed by run identity", async () 
   assertEquals(calls, [
     ["replay_run_id", "40d0a10c-3055-4feb-ade2-560adf73df81"],
     ["evidence_source", "retrospective_replay"],
+    ["replay_run_id", "40d0a10c-3055-4feb-ade2-560adf73df81"],
+    ["evidence_source", "retrospective_replay"],
   ]);
 });

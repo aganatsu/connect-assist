@@ -149,6 +149,10 @@ import {
   ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
 } from "../_shared/zoneReplayEvidence.ts";
 import {
+  ICT_ENTRY_ZONE_REPLAY_CONTRACT_VERSION,
+  persistICTEntryZoneReplayEvidence,
+} from "../_shared/ictEntryZoneReplayEvidence.ts";
+import {
   boundedCandlesBefore,
   outcomeCandlesAfter,
   utcDayStart,
@@ -2781,6 +2785,41 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 );
               }
             }
+            if (
+              zoneLocalReplayEvidence === true &&
+              backtestOwner?.user_id &&
+              unifiedResult.candidateAuthorityObservation?.selected
+            ) {
+              try {
+                const authorityReplay = await persistICTEntryZoneReplayEvidence(
+                  db,
+                  {
+                    userId: backtestOwner.user_id,
+                    botId: "smc",
+                    replayRunId: runId,
+                    symbol,
+                    tradingStyle: resolvedTradingStyle,
+                    observedAt: candle.datetime,
+                    legacyBestZone: multiTF.bestZone,
+                    authority: unifiedResult.candidateAuthorityObservation,
+                    candles: outcomeCandlesAfter(entryCandles, candleMs),
+                    pipSize: spec.pipSize,
+                  },
+                );
+                if (authorityReplay.inserted) {
+                  console.log(
+                    `[backtest:${runId}] Retrospective ICT entry-zone authority` +
+                      ` evidence ${symbol}`,
+                  );
+                }
+              } catch (error) {
+                console.warn(
+                  `[backtest:${runId}] Retrospective ICT entry-zone authority` +
+                    ` evidence failed for ${symbol} (non-fatal):`,
+                  error instanceof Error ? error.message : error,
+                );
+              }
+            }
             izData = {
               hasZone: !!multiTF.bestZone,
               selectedTF: multiTF.selectedTF,
@@ -4157,6 +4196,33 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         activationEligible: false,
       };
     }
+    let ictEntryZoneReplay: {
+      contractVersion: string;
+      evidenceSource: "retrospective_replay";
+      observations: number;
+      activationEligible: false;
+    } | null = null;
+    if (zoneLocalReplayEvidence === true && backtestOwner?.user_id) {
+      const { count, error } = await db
+        .from("ict_entry_zone_authority_observations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", backtestOwner.user_id)
+        .eq("bot_id", "smc")
+        .eq("replay_run_id", runId)
+        .eq("evidence_source", "retrospective_replay");
+      if (error) {
+        console.warn(
+          `[backtest:${runId}] Could not count retrospective ICT entry-zone` +
+            ` evidence: ${error.message}`,
+        );
+      }
+      ictEntryZoneReplay = {
+        contractVersion: ICT_ENTRY_ZONE_REPLAY_CONTRACT_VERSION,
+        evidenceSource: "retrospective_replay",
+        observations: count ?? 0,
+        activationEligible: false,
+      };
+    }
     const result = {
       stats,
       trades: allTrades.slice(0, maxTradesStored),
@@ -4184,6 +4250,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         snapshots: goldenReplaySnapshots,
       },
       zoneLocalReplay,
+      ictEntryZoneReplay,
     };
 
     await db.from("backtest_runs").update({

@@ -567,7 +567,7 @@ export default function Backtest() {
                     className="scale-90"
                   />
                   <span className="text-[10px] text-muted-foreground">
-                    Collect zone-local replay evidence
+                    Collect ICT zone replay evidence
                   </span>
                 </div>
               </div>
@@ -575,9 +575,9 @@ export default function Backtest() {
               {zoneLocalReplayEvidence && (
                 <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-2">
                   <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    Historical research only. This run compares the legacy and
-                    nearby-evidence zone rankings, but its results cannot
-                    activate Soft or Hard enforcement.
+                    Historical research only. This run compares the current
+                    selector with both nearby-evidence ranking and the new ICT
+                    Entry Zone Authority. Replay cannot activate enforcement.
                   </p>
                 </div>
               )}

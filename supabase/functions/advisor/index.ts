@@ -114,7 +114,7 @@ async function loadContext(
       .select("id, certified, expires_at, runtime_targets, styles, minimum_comparable, comparable, created_at")
       .eq("user_id", userId).order("created_at", { ascending: false }).limit(5),
     supabase.from("ict_entry_zone_authority_validation_summary")
-      .select("trading_style, symbol, observed_scans, disagreement_scans, resolved_authority_setups, authority_winners, authority_losers, winners_retained, losers_avoided, missed_opportunities, false_positives, authority_avg_mfe_pips, authority_avg_mae_pips, minimum_sample_ready, enforcement")
+      .select("trading_style, symbol, observed_scans, disagreement_scans, resolved_authority_setups, authority_winners, authority_losers, winners_retained, losers_avoided, missed_opportunities, false_positives, authority_avg_mfe_pips, authority_avg_mae_pips, minimum_sample_ready, enforcement, evidence_source, activation_eligible, replay_runs")
       .eq("user_id", userId).eq("bot_id", botId).limit(30),
   ]);
 
