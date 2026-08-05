@@ -63,6 +63,14 @@ import {
 import { getFOTSIWithCache, setCachedFOTSI } from "../_shared/fotsiCache.ts";
 import { batchGetCachedCandles, batchSetCachedCandles } from "../_shared/candleCache.ts";
 import {
+  classifyRotationOutcome,
+  loadRotatingImpulseState,
+  saveRotatingImpulseState,
+  selectRotatingImpulseUniverse,
+  updateRotatingImpulseState,
+  type RotationSelection,
+} from "../_shared/rotatingImpulseUniverse.ts";
+import {
   classifyInstrumentRegime,
   // Types
   type Candle, type SwingPoint, type OrderBlock,
@@ -3590,6 +3598,26 @@ async function runScanForUser(
   const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
   const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
 
+  // Select a bounded full-analysis universe before Gameplan and candle fetching.
+  // Valid zones remain pinned; empty/error slots rotate oldest-first next cycle.
+  const fullInstrumentUniverse = [...config.instruments];
+  const rotatingImpulseSlotCount = Math.max(1, Math.min(12, Number((config as any).rotatingImpulseSlotCount) || 8));
+  const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && fullInstrumentUniverse.length > rotatingImpulseSlotCount;
+  let rotationSelection: RotationSelection | null = null;
+  let scanUniverse = fullInstrumentUniverse;
+  if (rotatingImpulseScanEnabled) {
+    const rotationState = await loadRotatingImpulseState(supabase, userId, BOT_ID);
+    rotationSelection = selectRotatingImpulseUniverse(
+      fullInstrumentUniverse,
+      rotatingImpulseSlotCount,
+      rotationState,
+    );
+    scanUniverse = rotationSelection.selected;
+    console.log(
+      `[scan ${scanCycleId}] Impulse rotation: ${scanUniverse.length}/${fullInstrumentUniverse.length} pairs; pinned=[${rotationSelection.pinned.join(", ")}], discovery=[${rotationSelection.discovery.join(", ")}]`,
+    );
+  }
+
   // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
   // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
   // Validity comes from the immutable resolved style policy.
@@ -3603,7 +3631,7 @@ async function runScanForUser(
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
-      const gamePlanMarketScope = resolveGamePlanMarketScope(config.instruments, now);
+      const gamePlanMarketScope = resolveGamePlanMarketScope(scanUniverse, now);
       const gamePlanSymbols = gamePlanMarketScope.eligibleSymbols;
       const lastGP = _lastGamePlanForValidation;
       const lastGPTime = lastGP?.generatedAt
@@ -3839,7 +3867,7 @@ async function runScanForUser(
   // Reorder instruments so game-plan focus pairs are scanned first.
   // When max positions are limited, this gives focus pairs first shot at available slots.
   // Non-focus pairs are still scanned if capacity remains.
-  let scanOrder = [...config.instruments];
+  let scanOrder = [...scanUniverse];
   if (activeGamePlan && activeGamePlan.focusPairs && activeGamePlan.focusPairs.length > 0) {
     const focusSet = new Set(activeGamePlan.focusPairs);
     const focusPairs = scanOrder.filter(p => focusSet.has(p));
@@ -10595,6 +10623,26 @@ async function runScanForUser(
     scanDetails.push(detail);
   }
 
+  if (rotationSelection) {
+    const latestDetailByPair = new Map<string, any>();
+    for (const detail of scanDetails) {
+      if (detail?.pair && scanUniverse.includes(detail.pair)) latestDetailByPair.set(detail.pair, detail);
+    }
+    const rotationResults = scanUniverse.map((symbol) => ({
+      symbol,
+      outcome: classifyRotationOutcome(latestDetailByPair.get(symbol)),
+    }));
+    const updatedRotationState = updateRotatingImpulseState(
+      rotationSelection.state,
+      rotationResults,
+    );
+    try {
+      await saveRotatingImpulseState(supabase, userId, BOT_ID, updatedRotationState);
+    } catch (error: any) {
+      console.warn(`[scan ${scanCycleId}] Impulse rotation state save failed (non-fatal): ${error?.message}`);
+    }
+  }
+
   await markScannerOperation(
     supabase,
     opts?.operationRunId,
@@ -10768,6 +10816,14 @@ async function runScanForUser(
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
+      impulseRotation: rotationSelection ? {
+        enabled: true,
+        slotCount: rotatingImpulseSlotCount,
+        universeSize: fullInstrumentUniverse.length,
+        selected: scanUniverse,
+        pinned: rotationSelection.pinned,
+        discovery: rotationSelection.discovery,
+      } : { enabled: false, universeSize: fullInstrumentUniverse.length },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
@@ -10784,7 +10840,7 @@ async function runScanForUser(
   await supabase.from("scan_logs").insert({
     user_id: userId,
     bot_id: BOT_ID,
-    pairs_scanned: config.instruments.length,
+    pairs_scanned: scanOrder.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
     details_json: detailsWithMeta,
@@ -10800,14 +10856,14 @@ async function runScanForUser(
 
   await completeScannerOperation(supabase, opts?.operationRunId, "scan", {
     scan_cycle_id: scanCycleId,
-    pairs_scanned: config.instruments.length,
+    pairs_scanned: scanOrder.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
     rejected: rejectedCount,
     candle_source: sourceTally.primary,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
+  return { pairsScanned: scanOrder.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

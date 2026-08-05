@@ -249,6 +249,28 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
           </div>
         ))}
+        <div className="border-t border-border pt-4 space-y-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Impulse Zone Rotation</p>
+          <ToggleField
+            label="Rotate Pair Universe"
+            description="Deep-scan a limited batch. Valid Impulse Zones stay active; empty slots rotate to pairs not scanned recently."
+            checked={config.instruments?.rotatingImpulseScanEnabled ?? true}
+            onChange={v => updateField("instruments", "rotatingImpulseScanEnabled", v)}
+          />
+          {(config.instruments?.rotatingImpulseScanEnabled ?? true) && (
+            <FieldGroup label="Active Scan Slots" description="Pairs receiving full Gameplan, Impulse Zone, liquidity, and confirmation analysis each cycle.">
+              <Input
+                type="number"
+                value={config.instruments?.rotatingImpulseSlotCount ?? 8}
+                onChange={e => updateField("instruments", "rotatingImpulseSlotCount", Math.max(1, Math.min(12, parseInt(e.target.value, 10) || 8)))}
+                min={1}
+                max={12}
+                step={1}
+                className="h-9 text-sm"
+              />
+            </FieldGroup>
+          )}
+        </div>
         {/* Filters */}
         <div className="border-t border-border pt-4 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Filters</p>

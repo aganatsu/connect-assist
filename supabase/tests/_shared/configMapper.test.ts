@@ -1037,3 +1037,10 @@ Deno.test("legacy streamlined enforcement migrates to the sole decision authorit
   assertEquals(mapped.singleOwnershipMode, "enforce");
   assertEquals(mapped.streamlinedDecisionMode, "observe");
 });
+
+
+Deno.test("mapNestedToFlat: maps rotating impulse universe controls", () => {
+  const result = mapNestedToFlat({ instruments: { enabled: ["EUR/USD", "GBP/USD"], rotatingImpulseScanEnabled: true, rotatingImpulseSlotCount: 8 } });
+  assertEquals(result.rotatingImpulseScanEnabled, true);
+  assertEquals(result.rotatingImpulseSlotCount, 8);
+});

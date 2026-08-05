@@ -170,6 +170,8 @@ export const RUNTIME_DEFAULTS = {
     "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
     "XAU/USD", "BTC/USD",
   ] as string[],
+  rotatingImpulseScanEnabled: true,
+  rotatingImpulseSlotCount: 8,
 
   // ── Spread Filter ──
   spreadFilterEnabled: true,
@@ -667,6 +669,14 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       : enabledInstrumentList
         ? enabledInstrumentList
         : (Array.isArray(raw.instruments) ? raw.instruments : RUNTIME_DEFAULTS.instruments),
+    rotatingImpulseScanEnabled: instruments.rotatingImpulseScanEnabled
+      ?? raw.rotatingImpulseScanEnabled
+      ?? RUNTIME_DEFAULTS.rotatingImpulseScanEnabled,
+    rotatingImpulseSlotCount: Number(
+      instruments.rotatingImpulseSlotCount
+      ?? raw.rotatingImpulseSlotCount
+      ?? RUNTIME_DEFAULTS.rotatingImpulseSlotCount
+    ),
 
     // ── Sessions ──
     enabledSessions: (
