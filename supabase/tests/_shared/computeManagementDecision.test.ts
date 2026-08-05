@@ -8,9 +8,9 @@
  *
  * Structure:
  *   1. Deterministic fixture builder
- *   2. BE activation tests (R-based, offset pips)
+ *   2. BE activation tests (configured pips, offset pips)
  *   3. Trailing stop tests (proportional, ratchet-only-forward)
- *   4. BE + trailing co-activation sequence
+ *   4. Independent BE and trailing activation sequence
  *   5. Structure invalidation (one-shot, floor enforcement)
  *   6. Max hold → BE
  *   7. Session-close BE (scalper)
@@ -89,8 +89,8 @@ Deno.test("BE activates at 1R with 3-pip offset (long)", () => {
   // BE SL = entry + 3 pips offset = 1.08500 + 0.00030 = 1.08530
   assertAlmostEquals(result.newSL!, 1.08530, 0.000001);
   assertEquals(result.updatedExitFlags.breakEvenActivated, true);
-  // Trailing co-activated
-  assertEquals(result.updatedExitFlags.trailingStopActivated, true);
+  // Break-even does not silently activate the independent trailing policy.
+  assertEquals(result.updatedExitFlags.trailingStopActivated, undefined);
 });
 
 Deno.test("BE activates at 1R with 3-pip offset (short)", () => {
@@ -111,8 +111,27 @@ Deno.test("BE activates at 1R with 3-pip offset (short)", () => {
   assertAlmostEquals(result.newSL!, 1.08470, 0.000001);
 });
 
-Deno.test("BE does NOT activate below 2R when breakEvenPips is very high (trailing disabled)", () => {
-  // breakEvenPips = 50, riskPips = 20 → beActivationR = min(2.0, max(1.0, 50/20)) = 2.0R
+Deno.test("wide-risk short honors a 20-pip BE trigger below 1R", () => {
+  const result = computeManagementDecision(
+    makeInput({
+      direction: "short",
+      entryPrice: 1.15194,
+      currentPrice: 1.14994,
+      bestPrice: 1.14994,
+      currentSL: 1.159705,
+      originalSL: 1.159705,
+      takeProfit: 1.13641,
+    }),
+    { ...BASE_CONFIG, trailingStopActivation: "after_1.5r" },
+  );
+  assertEquals(result.action, "be_activated");
+  assertAlmostEquals(result.rMultiple, 20 / 77.65, 0.0001);
+  assertAlmostEquals(result.newSL!, 1.15164, 0.000001);
+  assertEquals(result.updatedExitFlags.trailingStopActivated, undefined);
+});
+
+Deno.test("BE does not activate before its configured 50-pip threshold", () => {
+  // breakEvenPips = 50, riskPips = 20 → 50-pip threshold = 2.5R for this 20-pip risk
   // bestPrice = 1.08850 = 1.75R — below 2R threshold
   // Disable trailing to isolate BE logic
   const result = computeManagementDecision(
@@ -122,10 +141,10 @@ Deno.test("BE does NOT activate below 2R when breakEvenPips is very high (traili
   assertEquals(result.action, "no_change");
 });
 
-Deno.test("BE activates at 2R when breakEvenPips is very high", () => {
-  // breakEvenPips = 50, riskPips = 20 → beActivationR = min(2.0, max(1.0, 50/20)) = 2.0R
+Deno.test("BE activates at its configured 50-pip threshold", () => {
+  // breakEvenPips = 50, riskPips = 20 → 50-pip threshold = 2.5R for this 20-pip risk
   const result = computeManagementDecision(
-    makeInput({ currentPrice: 1.08900, bestPrice: 1.08900 }), // 2.0R
+    makeInput({ currentPrice: 1.09000, bestPrice: 1.09000 }), // 50 pips = 2.5R
     { ...BASE_CONFIG, breakEvenPips: 50 },
   );
   assertEquals(result.action, "be_activated");
@@ -338,7 +357,7 @@ Deno.test("golden path: BE → trailing activate → trailing tighten → no wid
   let exitFlags: Record<string, any> = {};
   let currentSL = 1.08300;
 
-  // Bar 1: Price reaches 1R (1.08700) → BE activates + trailing co-activates
+  // Bar 1: Price reaches the 20-pip BE threshold; trailing remains independent
   const bar1 = computeManagementDecision(
     makeInput({ currentPrice: 1.08700, bestPrice: 1.08700, currentSL, exitFlags }),
     config,
@@ -348,14 +367,14 @@ Deno.test("golden path: BE → trailing activate → trailing tighten → no wid
   currentSL = bar1.newSL!;
   exitFlags = bar1.updatedExitFlags;
   assertEquals(exitFlags.breakEvenActivated, true);
-  assertEquals(exitFlags.trailingStopActivated, true);
+  assertEquals(exitFlags.trailingStopActivated, undefined);
 
-  // Bar 2: Price continues to 1.5R (1.08800) → trailing tightens
+  // Bar 2: Price continues to 1.5R (1.08800) → trailing activates
   const bar2 = computeManagementDecision(
     makeInput({ currentPrice: 1.08800, bestPrice: 1.08800, currentSL, exitFlags }),
     config,
   );
-  assertEquals(bar2.action, "trailing_tightened");
+  assertEquals(bar2.action, "trailing_activated");
   // newSL = 1.08800 - 15 pips = 1.08650
   assertAlmostEquals(bar2.newSL!, 1.08650, 0.000001);
   currentSL = bar2.newSL!;
@@ -394,7 +413,7 @@ Deno.test("golden path: BE → trailing activate → trailing tighten → no wid
 Deno.test("golden path: XAU/USD short with proportional trailing", () => {
   // XAU/USD: pipSize = 0.01, entry = 2350.00, SL = 2355.00 (500 pips risk)
   // proportionalTrailPips = max(15, 500 * 0.5) = 250 pips
-  // beActivationR = min(2.0, max(1.0, 20/500)) = 1.0R (breakEvenPips=20 is tiny vs 500 risk)
+  // Break-even threshold is 20 favorable pips; trailing remains R-based
   const config = { ...BASE_CONFIG };
   let exitFlags: Record<string, any> = {};
   let currentSL = 2355.00;
@@ -437,7 +456,7 @@ Deno.test("golden path: XAU/USD short with proportional trailing", () => {
     }),
     config,
   );
-  assertEquals(bar2.action, "trailing_tightened");
+  assertEquals(bar2.action, "trailing_activated");
   // proportionalTrailPips = max(15, 500 * 0.5) = 250 pips
   // newSL = 2340.00 + (250 * 0.01) = 2340.00 + 2.50 = 2342.50
   assertAlmostEquals(bar2.newSL!, 2342.50, 0.01);

@@ -1744,7 +1744,7 @@ async function runScanForUser(
           }
           // Run partial close for any partial_tp_executed actions (depends on activeActions)
           if (activeActions.length > 0) {
-            const partialActions = activeActions.filter(a => a.action === "partial_tp_executed" || a.action === "partial_enabled");
+            const partialActions = activeActions.filter((a) => a.action === "partial_tp_executed");
             if (partialActions.length > 0) {
               const partialCloseActions = partialActions.map(a => {
                 const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
@@ -1757,12 +1757,37 @@ async function runScanForUser(
                   direction: (pos?.direction || "long") as "long" | "short",
                 };
               });
-              await reconcilePartialClose({
+              const partialResults = await reconcilePartialClose({
                 supabase,
                 positions: reconcilePositions,
                 connections: liveConns as BrokerConnection[],
                 partialActions: partialCloseActions,
               });
+              const partialFailures = partialResults.filter((result) => !result.ok);
+              if (partialFailures.length > 0) {
+                const failureDetail = partialFailures.map((result) =>
+                  `${result.positionId}/${result.connectionId}: ${result.error || "unknown error"}`
+                ).join("; ");
+                console.error(
+                  `[scan ${scanCycleId}] BROKER PARTIAL CLOSE RECONCILIATION REQUIRED: ${failureDetail}`,
+                );
+                if (telegramChatIds.length > 0) {
+                  const message = `⚠️ <b>Broker Reconciliation Required</b>\n\n` +
+                    tgLine("Action", "Partial take profit") +
+                    tgLine("Status", "App reduced the position, but one or more broker closes failed") +
+                    tgLine("Detail", failureDetail);
+                  await Promise.all(telegramChatIds.map((chatId) =>
+                    fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                      },
+                      body: JSON.stringify({ chat_id: chatId, message }),
+                    }).catch(() => undefined)
+                  ));
+                }
+              }
             }
           }
         }

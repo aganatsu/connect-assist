@@ -1,7 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
-import { extractGlobalExitConfig, parseTradeOverrides, resolveTradeConfig } from "../_shared/resolveTradeConfig.ts";
+import { parseTradeOverrides } from "../_shared/resolveTradeConfig.ts";
+import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 
@@ -855,10 +856,10 @@ Deno.serve(async (req) => {
       // Dashboard polling must not perform broker mirror actions.
       // Extract global exit config once — used both by engine processing (below)
       // and by the response serializer (effectiveConfig per position).
-      let globalExitConfig: any = extractGlobalExitConfig({});
+      let runtimeManagementConfig: any = {};
       try {
         const { data: cfgRowTop } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
-        globalExitConfig = extractGlobalExitConfig(cfgRowTop?.config_json || {});
+        runtimeManagementConfig = cfgRowTop?.config_json || {};
       } catch {}
       if (payload.processEngine === true && positions && positions.length > 0) {
         await updatePositionPrices(supabase, positions);
@@ -872,8 +873,7 @@ Deno.serve(async (req) => {
           const { data: cfgRow } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
           liveConfig = cfgRow?.config_json || {};
         } catch {}
-        const liveExit = liveConfig.exit || {};
-        globalExitConfig = extractGlobalExitConfig(liveConfig);
+        runtimeManagementConfig = liveConfig;
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
@@ -885,11 +885,18 @@ Deno.serve(async (req) => {
           let exitPrice = currentPrice;
 
           // Parse exit flags from signal_reason
-          let exitFlags: any = {};
+          let signalData: any = {};
           try {
-            const parsed = JSON.parse(pos.signal_reason || "{}");
-            exitFlags = parsed.exitFlags || {};
+            signalData = JSON.parse(pos.signal_reason || "{}");
           } catch {}
+          const columnExitFlags = pos.exit_flags && typeof pos.exit_flags === "object"
+            ? pos.exit_flags
+            : {};
+          const exitFlags = { ...columnExitFlags, ...(signalData.exitFlags || {}) };
+          const managementPolicy = resolvePositionManagementPolicy(
+            { ...pos, exit_flags: exitFlags },
+            runtimeManagementConfig,
+          );
 
           // Check SL hit
           // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
@@ -922,18 +929,8 @@ Deno.serve(async (req) => {
             }
           }
 
-          // Check max hold hours (only if enabled)
-          // Live config override: if user toggled maxHold off globally, respect it even for existing positions
-          const liveMaxHoldEnabled = liveExit.maxHoldEnabled ?? liveExit.timeBasedExitEnabled;
-          const perTradeMaxHold = exitFlags.maxHoldEnabled !== false && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0;
-          const maxHoldOn = liveMaxHoldEnabled !== false && perTradeMaxHold;
-          if (!closeReason && maxHoldOn) {
-            const openMs = new Date(pos.open_time).getTime();
-            const elapsedHours = (Date.now() - openMs) / 3600000;
-            if (elapsedHours >= exitFlags.maxHoldHours) {
-              closeReason = "time_exit";
-            }
-          }
+          // Max Hold is owned by scannerManagement. It moves profitable trades to
+          // protected entry; this polling path must not force-close the position.
 
           // Break-even activation: handled exclusively by scannerManagement (via bot-scanner manage cycle).
           // Paper-trading no longer independently activates BE to prevent race conditions.
@@ -943,11 +940,13 @@ Deno.serve(async (req) => {
           // Activation is handled exclusively by scannerManagement. Paper-trading only ratchets
           // the SL forward every 5s once trailingStopActivated is already true.
           // Uses computeTrailRatchet() from exitEngine.ts — single source of truth for trail formula.
-          const trailEnabled = exitFlags.trailingStopEnabled ?? exitFlags.trailingStop ?? false;
+          const trailEnabled = managementPolicy.decision.trailingStopEnabled;
           const trailAlreadyActivated = exitFlags.trailingStopActivated === true;
           if (!closeReason && trailEnabled && trailAlreadyActivated && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
-            const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
+            const originalSl = Number(signalData.originalSL);
+            const frozenRiskSl = Number.isFinite(originalSl) ? originalSl : sl;
+            const riskPips = Math.abs(entryPrice - frozenRiskSl) / spec.pipSize;
             // Use the proportional trail distance stored by scannerManagement,
             // or fall back to max(configPips, 0.5 x riskPips).
             // NOTE: The Math.max floor below is intentionally kept even though
@@ -960,9 +959,11 @@ Deno.serve(async (req) => {
             //   2. Manual-override safety: per-trade config overrides can set
             //      trailingStopPips to a dangerously small value; this floor
             //      prevents the trail from being tighter than 50% of risk distance.
-            const effectiveTrailPips = exitFlags.trailingStopPips
-              ? Math.max(exitFlags.trailingStopPips, riskPips * 0.5)
-              : riskPips * 0.5;
+            const configuredTrailPips = managementPolicy.decision.trailingStopPips;
+            const effectiveTrailPips = Math.max(
+              configuredTrailPips,
+              riskPips * 0.5,
+            );
             const ratchet = computeTrailRatchet({
               entryPrice,
               currentPrice,
@@ -975,7 +976,18 @@ Deno.serve(async (req) => {
               adaptiveTrailingEnabled: false,
             });
             if (ratchet.shouldTighten) {
-              await supabase.from("paper_positions").update({ stop_loss: ratchet.newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
+              const ratchetedFlags = {
+                ...exitFlags,
+                trailingStopActivated: true,
+                trailingStopLevel: ratchet.newSL,
+                trailingStopPips: effectiveTrailPips,
+              };
+              await supabase.from("paper_positions").update({
+                stop_loss: ratchet.newSL.toString(),
+                close_reason: "trail",
+                exit_flags: ratchetedFlags,
+                signal_reason: JSON.stringify({ ...signalData, exitFlags: ratchetedFlags }),
+              }).eq("id", pos.id);
               sl = ratchet.newSL;
               pos.close_reason = "trail";
               // Broker push removed: reconcileBrokerState() in bot-scanner's manage cycle
@@ -989,7 +1001,7 @@ Deno.serve(async (req) => {
           // and pushes a "partial_tp_executed" action for bot-scanner to fire the broker partial close.
           // Paper-trading no longer independently activates partial-TP to prevent race conditions.
 
-          // Close position if SL/TP/time triggered
+          // Close position if SL or TP triggered
           if (closeReason) {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
             const closeBotId = pos.bot_id || "smc";
@@ -1077,7 +1089,14 @@ Deno.serve(async (req) => {
           mirroredConnectionIds: mirroredIds,
           mirrorStatus,
           tradeOverrides: parseTradeOverrides(p.trade_overrides),
-          effectiveConfig: resolveTradeConfig(globalExitConfig, parseTradeOverrides(p.trade_overrides)),
+          effectiveConfig: (() => {
+            const policy = resolvePositionManagementPolicy(p, runtimeManagementConfig);
+            return {
+              ...policy.decision,
+              partialTPPercent: policy.partialTPPercent,
+              partialTPLevel: policy.partialTPLevel,
+            };
+          })(),
         };
       });
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);
@@ -1295,17 +1314,47 @@ Deno.serve(async (req) => {
         if (payload.tradeOverrides === null) {
           updates.trade_overrides = null; // Clear overrides — revert to global config
         } else {
-          const allowedKeys = [
-            'breakEvenEnabled', 'breakEvenPips', 'breakEvenOffsetPips',
-            'trailingStopEnabled', 'trailingStopPips', 'trailingStopActivation',
-            'partialTPEnabled', 'partialTPPercent', 'partialTPLevel',
-            'maxHoldEnabled', 'maxHoldHours',
-          ];
+          const booleanKeys = new Set([
+            'breakEvenEnabled', 'trailingStopEnabled',
+            'partialTPEnabled', 'maxHoldEnabled',
+          ]);
+          const numericBounds: Record<string, [number, number]> = {
+            breakEvenPips: [1, 1000],
+            breakEvenOffsetPips: [0, 100],
+            trailingStopPips: [1, 1000],
+            partialTPPercent: [10, 90],
+            partialTPLevel: [0.5, 5],
+            maxHoldHours: [1, 720],
+          };
+          const activationValues = new Set([
+            'immediate', 'after_0.5r', 'after_1r', 'after_1.5r', 'after_2r',
+          ]);
+          const allowedKeys = new Set([
+            ...booleanKeys,
+            ...Object.keys(numericBounds),
+            'trailingStopActivation',
+          ]);
           const sanitized: Record<string, any> = {};
-          for (const key of allowedKeys) {
-            if (payload.tradeOverrides[key] !== undefined) {
-              sanitized[key] = payload.tradeOverrides[key];
+          for (const [key, rawValue] of Object.entries(payload.tradeOverrides)) {
+            if (!allowedKeys.has(key)) throw new Error(`Unsupported trade override: ${key}`);
+            if (booleanKeys.has(key)) {
+              if (typeof rawValue !== 'boolean') throw new Error(`${key} must be true or false`);
+              sanitized[key] = rawValue;
+              continue;
             }
+            if (key === 'trailingStopActivation') {
+              if (typeof rawValue !== 'string' || !activationValues.has(rawValue)) {
+                throw new Error('Invalid trailing stop activation');
+              }
+              sanitized[key] = rawValue;
+              continue;
+            }
+            const value = Number(rawValue);
+            const [minimum, maximum] = numericBounds[key];
+            if (!Number.isFinite(value) || value < minimum || value > maximum) {
+              throw new Error(`${key} must be between ${minimum} and ${maximum}`);
+            }
+            sanitized[key] = value;
           }
           // Merge with existing overrides (don't wipe fields not included in this update)
           const existing = pos.trade_overrides
@@ -1331,7 +1380,12 @@ Deno.serve(async (req) => {
         const { data: _cfgRow } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
         updGlobalCfg = _cfgRow?.config_json || {};
       } catch {}
-      const updEffectiveConfig = resolveTradeConfig(extractGlobalExitConfig(updGlobalCfg), updatedOverrides);
+      const updatedPolicy = resolvePositionManagementPolicy(updated, updGlobalCfg);
+      const updEffectiveConfig = {
+        ...updatedPolicy.decision,
+        partialTPPercent: updatedPolicy.partialTPPercent,
+        partialTPLevel: updatedPolicy.partialTPLevel,
+      };
       return respond({ success: true, position: updated, tradeOverrides: updatedOverrides, effectiveConfig: updEffectiveConfig });
     }
 
