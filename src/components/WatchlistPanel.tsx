@@ -4,7 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { scannerApi, type StagedSetup } from "@/lib/api";
-import { generateWatchlistNarrative } from "@/lib/narrative";
 import { getWatchlistDisplay } from "@/lib/featureState";
 import { toast } from "sonner";
 import {
@@ -89,6 +88,23 @@ function lifecyclePhaseLabel(phase: string | null | undefined): string {
     phase.replace(/_/g, " ").toUpperCase();
 }
 
+function lifecycleStatusText(setup: StagedSetup): string {
+  const phase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase;
+  const labels: Record<string, string> = {
+    monitoring_pre_zone: "Searching for a complete executable zone.",
+    zone_discovered: "Frozen zone is valid; price is still outside the approach area.",
+    approaching_zone: "Price is approaching the frozen zone; deeper monitoring is active.",
+    at_zone: "Price is inside the frozen zone; waiting for liquidity and confirmation.",
+    local_trigger_active: "A local BSL/SSL trigger is active inside the frozen setup.",
+    local_trigger_swept: "Liquidity has been swept; waiting for rejection and confirmation.",
+    sweep_rejected: "The liquidity sweep rejected; confirmation is developing.",
+    confirmation_ready: "Entry confirmation is ready for final authorization.",
+    entry_authorized: "Entry was authorized and handed to order execution.",
+    position_managing: "The resulting position is under trade management.",
+  };
+  return labels[phase || ""] || setup.lifecycle_reason || "Lifecycle status is awaiting its next monitor update.";
+}
+
 function formatEvidencePrice(value: unknown): string {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return "—";
@@ -161,36 +177,6 @@ function LifecycleEvidenceSummary({
   );
 }
 
-// ── Score bar component ──
-function ScoreBar({ current, gate, watchThreshold }: { current: number; gate: number; watchThreshold: number }) {
-  const barPct = Math.min(100, Math.max(0, current));
-  const gatePct = Math.min(100, Math.max(0, gate));
-  const watchPct = Math.min(100, Math.max(0, watchThreshold));
-  return (
-    <div className="relative h-2 bg-muted/30 rounded-full overflow-hidden">
-      {/* Score fill */}
-      <div
-        className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${
-          current >= gate ? "bg-success" : current >= gate * 0.8 ? "bg-amber-500" : "bg-muted-foreground/40"
-        }`}
-        style={{ width: `${barPct}%` }}
-      />
-      {/* Watch threshold marker */}
-      <div
-        className="absolute inset-y-0 w-px bg-muted-foreground/50"
-        style={{ left: `${watchPct}%` }}
-        title={`Watch threshold: ${watchThreshold}%`}
-      />
-      {/* Gate marker */}
-      <div
-        className="absolute inset-y-0 w-0.5 bg-primary"
-        style={{ left: `${gatePct}%` }}
-        title={`Trade gate: ${gate}%`}
-      />
-    </div>
-  );
-}
-
 // ── Factor pill ──
 function FactorPill({ name, tier, present }: { name: string; tier?: string; present: boolean }) {
   const tierColor = tier === "T1" ? "border-warn/40 text-warn"
@@ -205,9 +191,8 @@ function FactorPill({ name, tier, present }: { name: string; tier?: string; pres
 }
 
 // ── Single staged setup card ──
-function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
+function StagedSetupCard({ setup, onDismiss, isDismissing }: {
   setup: StagedSetup;
-  gate: number;
   onDismiss: (id: string) => void;
   isDismissing: boolean;
 }) {
@@ -215,13 +200,14 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
   const ttl = ttlRemaining(setup.staged_at, setup.ttl_minutes);
   const watchlistDisplay = getWatchlistDisplay(setup.execution_eligible);
   const monitoringOnly = watchlistDisplay.state === "monitoring";
-  const isNearGate = !monitoringOnly && setup.current_score >= gate * 0.85;
+  const lifecyclePhase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase;
+  const isNearZone = ["approaching_zone", "at_zone", "local_trigger_active", "local_trigger_swept", "sweep_rejected", "confirmation_ready"].includes(lifecyclePhase || "");
 
   return (
     <div className={`border rounded-md p-2 transition-all ${
       monitoringOnly
         ? "border-info-c/35 bg-info-c/5"
-        : isNearGate
+        : isNearZone
         ? "border-warn/40 bg-badge-warn"
         : "border-border/60 bg-card/50"
     }`}>
@@ -271,10 +257,8 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <span className={`font-mono font-bold text-[13px] ${
-            setup.current_score >= gate ? "text-success" : isNearGate ? "text-warn" : "text-foreground/80"
-          }`}>
-            {setup.current_score.toFixed(1)}%
+          <span className="text-[10px] text-foreground/60">
+            checked {timeAgo(setup.last_eval_at || setup.updated_at)}
           </span>
           <button
             onClick={() => onDismiss(setup.id)}
@@ -287,14 +271,22 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
         </div>
       </div>
 
-      {/* Score bar */}
-      <div className="mt-1.5">
-        <ScoreBar current={setup.current_score} gate={gate} watchThreshold={setup.watch_threshold} />
-        <div className="flex justify-between text-[10px] text-foreground/60 mt-0.5">
-          <span>Watch: {setup.watch_threshold}%</span>
-          <span className="font-mono">{setup.current_score.toFixed(1)}% / {gate}%</span>
+      {/* Frozen lifecycle authority */}
+      {!monitoringOnly && (
+        <div className="mt-1.5 rounded border border-border/40 bg-background/25 px-2 py-1.5 text-[10px] text-foreground/70">
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+            {setup.lifecycle_evidence?.boundary?.zone?.low != null && setup.lifecycle_evidence?.boundary?.zone?.high != null && (
+              <span>Frozen zone <strong className="font-mono text-foreground">{formatEvidencePrice(setup.lifecycle_evidence.boundary.zone.low)}–{formatEvidencePrice(setup.lifecycle_evidence.boundary.zone.high)}</strong></span>
+            )}
+            {setup.sl_level != null && (
+              <span>Invalidation <strong className="font-mono text-destructive">{formatEvidencePrice(setup.sl_level)}</strong></span>
+            )}
+            {setup.lifecycle_evidence?.observedPrice != null && (
+              <span>Current <strong className="font-mono text-foreground">{formatEvidencePrice(setup.lifecycle_evidence.observedPrice)}</strong></span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Meta row */}
       <div className="flex items-center justify-between mt-1.5 text-[11px] text-foreground/70">
@@ -318,25 +310,13 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
         />
       </div>
 
-      {/* Tier summary */}
-      <div className="flex items-center gap-2 mt-1.5 text-[11px]">
-        <span className="text-warn font-medium">T1: {setup.tier1_count}/4</span>
-        <span className="text-info-c font-medium">T2: {setup.tier2_count}/5</span>
-        <span className="text-foreground/60">T3: {setup.tier3_count}</span>
-        {setup.current_score > setup.initial_score && (
-          <span className="text-success text-[10px]">↑ {(setup.current_score - setup.initial_score).toFixed(1)}%</span>
-        )}
-        {setup.current_score < setup.initial_score && (
-          <span className="text-destructive text-[10px]">↓ {(setup.initial_score - setup.current_score).toFixed(1)}%</span>
-        )}
-      </div>
+
 
       {/* Narrative sentence */}
       <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
         {monitoringOnly
-          ? setup.observation_reason ||
-            watchlistDisplay.description
-          : generateWatchlistNarrative(setup)}
+          ? setup.observation_reason || watchlistDisplay.description
+          : lifecycleStatusText(setup)}
       </p>
 
       {/* Expand/collapse for factors */}
@@ -345,7 +325,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
         className="flex items-center gap-0.5 text-[11px] text-foreground/60 hover:text-foreground mt-1 transition-colors"
       >
         {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        {expanded ? "Hide factors" : "Show factors"}
+        {expanded ? "Hide legacy diagnostics" : "Show legacy diagnostics"}
       </button>
 
       {expanded && (
@@ -384,6 +364,13 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
                 {setup.observation_parent_id.slice(0, 8)}
               </div>
             )}
+          </div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Legacy scores and factors — diagnostics only; does not authorize entry</div>
+          <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+            <span>Score <strong className="text-foreground/80">{setup.current_score.toFixed(1)}%</strong></span>
+            <span>Legacy core <strong className="text-foreground/80">{setup.tier1_count}/4</strong></span>
+            <span>Supporting <strong className="text-foreground/80">{setup.tier2_count}/5</strong></span>
+            <span>Context <strong className="text-foreground/80">{setup.tier3_count}</strong></span>
           </div>
           {/* Present factors */}
           <div>
@@ -430,7 +417,8 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 }
 
 // ── Main Watchlist Panel ──
-export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
+export function WatchlistPanel({ confluenceGate: _confluenceGate }: { confluenceGate: number }) {
+  void _confluenceGate;
   const queryClient = useQueryClient();
   const [collapsed, setCollapsed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -462,9 +450,10 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
   const history = (allSetups || []).filter(
     s => s.status !== "watching" && s.status !== "qualified",
   );
-  const nearGateCount = active.filter(
-    s => s.execution_eligible !== false &&
-      s.current_score >= confluenceGate * 0.85,
+  const nearZoneCount = active.filter((setup) =>
+    ["approaching_zone", "at_zone", "local_trigger_active", "local_trigger_swept", "sweep_rejected", "confirmation_ready"].includes(
+      setup.lifecycle_phase || setup.lifecycle_evidence?.phase || "",
+    )
   ).length;
 
   return (
@@ -485,9 +474,9 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                 {active.length}
               </Badge>
             )}
-            {nearGateCount > 0 && (
+            {nearZoneCount > 0 && (
               <Badge variant="outline" className="text-[10px] h-4 px-1 border-success/30 text-success animate-pulse">
-                <Zap className="h-2 w-2 mr-0.5" /> {nearGateCount} near gate
+                <Zap className="h-2 w-2 mr-0.5" /> {nearZoneCount} near zone
               </Badge>
             )}
           </div>
@@ -511,7 +500,6 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                 <StagedSetupCard
                   key={setup.id}
                   setup={setup}
-                  gate={confluenceGate}
                   onDismiss={(id) => dismissMut.mutate(id)}
                   isDismissing={dismissMut.isPending}
                 />
