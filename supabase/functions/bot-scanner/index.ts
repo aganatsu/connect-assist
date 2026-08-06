@@ -5561,6 +5561,9 @@ async function runScanForUser(
         timeframeEvidence: zoneEvidenceRows.find((row) =>
           row.id === (detail as any).timeframeEvidenceId
         ) || null,
+        impulseEntryLifecycleMode:
+          (pairConfig as any).impulseEntryLifecycleMode || "observe",
+        confirmationMethod: pairConfig.confirmationMethod || "choch",
       });
     const currentWatchlistLifecycle = (executionEligible: boolean) => {
       const lifecycleZoneData = (detail as any).unifiedZone;

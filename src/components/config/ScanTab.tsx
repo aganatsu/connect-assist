@@ -384,6 +384,15 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <FieldGroup label="Impulse & Entry Zone Lifecycle" description="Observe how a failed entry zone advances to a deeper zone inside the same frozen impulse">
+            <Select value={config.strategy?.impulseEntryLifecycleMode ?? "observe"} onValueChange={v => updateField("strategy", "impulseEntryLifecycleMode", v)}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="observe">Observe</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
           <FieldGroup label="Trade Decision Mode" description="Observe or enforce the ICT setup workflow on the selected account">
             <Select
               value={config.strategy?.singleOwnershipMode === "enforce" || config.strategy?.singleOwnershipMode === "enforce_live" || config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"}

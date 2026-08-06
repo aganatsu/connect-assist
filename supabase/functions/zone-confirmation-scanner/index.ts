@@ -37,6 +37,7 @@ import {
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
 import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
+import { observeImpulseEntryPrice } from "../_shared/impulseEntryLifecycleStore.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   confirmationEvidenceLines,
@@ -557,6 +558,25 @@ Deno.serve(async (req) => {
 
         // Get current price from latest candle
         const currentPrice = candles5m[candles5m.length - 1].close;
+
+        let impulseLifecycleObservation = null;
+        try {
+          impulseLifecycleObservation = await observeImpulseEntryPrice(
+            supabase,
+            pending.impulse_entry_lifecycle_id,
+            currentPrice,
+            candles5m[candles5m.length - 1].datetime || new Date().toISOString(),
+          );
+          if (impulseLifecycleObservation?.event) {
+            console.log(
+              `[zone-confirm] ${pending.symbol} impulse lifecycle ${impulseLifecycleObservation.event.type}: ${impulseLifecycleObservation.after.lastTransitionReason}`,
+            );
+          }
+        } catch (lifecycleError: any) {
+          console.warn(
+            `[zone-confirm] ${pending.symbol} impulse lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
+          );
+        }
 
         // ── Check impulse invalidation ──
         let impulseData: { high: number; low: number } | null = null;
