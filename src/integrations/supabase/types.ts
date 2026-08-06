@@ -773,6 +773,113 @@ export type Database = {
         }
         Relationships: []
       }
+      impulse_entry_lifecycle_transitions: {
+        Row: {
+          created_at: string
+          event_payload: Json
+          event_type: string
+          from_candidate_id: string | null
+          from_revision: number
+          id: string
+          lifecycle_id: string
+          lifecycle_snapshot: Json
+          reason: string
+          to_candidate_id: string | null
+          to_revision: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          event_payload?: Json
+          event_type: string
+          from_candidate_id?: string | null
+          from_revision: number
+          id?: string
+          lifecycle_id: string
+          lifecycle_snapshot: Json
+          reason: string
+          to_candidate_id?: string | null
+          to_revision: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          event_payload?: Json
+          event_type?: string
+          from_candidate_id?: string | null
+          from_revision?: number
+          id?: string
+          lifecycle_id?: string
+          lifecycle_snapshot?: Json
+          reason?: string
+          to_candidate_id?: string | null
+          to_revision?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "impulse_entry_lifecycle_transitions_lifecycle_id_fkey"
+            columns: ["lifecycle_id"]
+            isOneToOne: false
+            referencedRelation: "impulse_entry_lifecycles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      impulse_entry_lifecycles: {
+        Row: {
+          active_candidate_id: string | null
+          bot_id: string
+          created_at: string
+          direction: string
+          id: string
+          impulse_id: string
+          impulse_timeframe: string
+          lifecycle: Json
+          mode: string
+          revision: number
+          setup_id: string
+          status: string
+          symbol: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active_candidate_id?: string | null
+          bot_id?: string
+          created_at?: string
+          direction: string
+          id?: string
+          impulse_id: string
+          impulse_timeframe: string
+          lifecycle: Json
+          mode?: string
+          revision?: number
+          setup_id: string
+          status?: string
+          symbol: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active_candidate_id?: string | null
+          bot_id?: string
+          created_at?: string
+          direction?: string
+          id?: string
+          impulse_id?: string
+          impulse_timeframe?: string
+          lifecycle?: Json
+          mode?: string
+          revision?: number
+          setup_id?: string
+          status?: string
+          symbol?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       kv_cache: {
         Row: {
           expires_at: string
@@ -967,6 +1074,8 @@ export type Database = {
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
+          impulse_entry_lifecycle: Json | null
+          impulse_entry_lifecycle_id: string | null
           mirrored_connection_ids: string[]
           open_time: string
           order_id: string
@@ -1038,6 +1147,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           mirrored_connection_ids?: string[]
           open_time: string
           order_id: string
@@ -1109,6 +1220,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           mirrored_connection_ids?: string[]
           open_time?: string
           order_id?: string
@@ -1156,6 +1269,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "paper_positions_impulse_entry_lifecycle_id_fkey"
+            columns: ["impulse_entry_lifecycle_id"]
+            isOneToOne: false
+            referencedRelation: "impulse_entry_lifecycles"
             referencedColumns: ["id"]
           },
           {
@@ -1301,6 +1421,8 @@ export type Database = {
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
+          impulse_entry_lifecycle: Json | null
+          impulse_entry_lifecycle_id: string | null
           last_confirmation_checked_at: string | null
           order_id: string
           order_type: string
@@ -1376,6 +1498,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
           order_id: string
           order_type?: string
@@ -1451,6 +1575,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
           order_id?: string
           order_type?: string
@@ -1499,6 +1625,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_orders_impulse_entry_lifecycle_id_fkey"
+            columns: ["impulse_entry_lifecycle_id"]
+            isOneToOne: false
+            referencedRelation: "impulse_entry_lifecycles"
             referencedColumns: ["id"]
           },
           {
@@ -2291,6 +2424,8 @@ export type Database = {
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
+          impulse_entry_lifecycle: Json | null
+          impulse_entry_lifecycle_id: string | null
           initial_factors: Json
           initial_score: number
           invalidation_reason: string | null
@@ -2364,6 +2499,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           initial_factors?: Json
           initial_score: number
           invalidation_reason?: string | null
@@ -2437,6 +2574,8 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          impulse_entry_lifecycle?: Json | null
+          impulse_entry_lifecycle_id?: string | null
           initial_factors?: Json
           initial_score?: number
           invalidation_reason?: string | null
@@ -2493,6 +2632,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staged_setups_impulse_entry_lifecycle_id_fkey"
+            columns: ["impulse_entry_lifecycle_id"]
+            isOneToOne: false
+            referencedRelation: "impulse_entry_lifecycles"
             referencedColumns: ["id"]
           },
           {
@@ -3676,6 +3822,39 @@ export type Database = {
           p_user_id: string
         }
         Returns: Json
+      }
+      advance_impulse_entry_lifecycle: {
+        Args: {
+          p_event_payload: Json
+          p_event_type: string
+          p_expected_revision: number
+          p_lifecycle_id: string
+          p_next_lifecycle: Json
+          p_reason: string
+        }
+        Returns: {
+          active_candidate_id: string | null
+          bot_id: string
+          created_at: string
+          direction: string
+          id: string
+          impulse_id: string
+          impulse_timeframe: string
+          lifecycle: Json
+          mode: string
+          revision: number
+          setup_id: string
+          status: string
+          symbol: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "impulse_entry_lifecycles"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       allocate_zone_confirmation_evidence_attempt: {
         Args: {
