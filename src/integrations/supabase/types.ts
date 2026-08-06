@@ -773,6 +773,75 @@ export type Database = {
         }
         Relationships: []
       }
+      impulse_entry_lifecycle_replays: {
+        Row: {
+          bot_id: string
+          contract_version: string
+          entered: boolean
+          evidence_source: string
+          id: string
+          lifecycle_id: string
+          mae: number | null
+          mfe: number | null
+          outcome: string
+          replayed_at: string
+          rescued_deeper_entry: boolean
+          result: Json
+          retained_winner: boolean
+          snapshot_id: string
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          contract_version?: string
+          entered: boolean
+          evidence_source?: string
+          id?: string
+          lifecycle_id: string
+          mae?: number | null
+          mfe?: number | null
+          outcome: string
+          replayed_at?: string
+          rescued_deeper_entry: boolean
+          result: Json
+          retained_winner: boolean
+          snapshot_id: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          contract_version?: string
+          entered?: boolean
+          evidence_source?: string
+          id?: string
+          lifecycle_id?: string
+          mae?: number | null
+          mfe?: number | null
+          outcome?: string
+          replayed_at?: string
+          rescued_deeper_entry?: boolean
+          result?: Json
+          retained_winner?: boolean
+          snapshot_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "impulse_entry_lifecycle_replays_lifecycle_id_fkey"
+            columns: ["lifecycle_id"]
+            isOneToOne: false
+            referencedRelation: "impulse_entry_lifecycles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "impulse_entry_lifecycle_replays_snapshot_id_fkey"
+            columns: ["snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "scan_candle_snapshots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       impulse_entry_lifecycle_transitions: {
         Row: {
           created_at: string
@@ -876,6 +945,60 @@ export type Database = {
           status?: string
           symbol?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      impulse_lifecycle_enforcement_certificates: {
+        Row: {
+          added_losses: number
+          bot_id: string
+          evidence: Json
+          evidence_hash: string
+          generated_at: string
+          id: string
+          is_current: boolean
+          minimum_sample_ready: boolean
+          replay_count: number
+          rescued_winners: number
+          resolved_count: number
+          reviewed: boolean
+          reviewed_at: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          added_losses: number
+          bot_id?: string
+          evidence: Json
+          evidence_hash: string
+          generated_at?: string
+          id?: string
+          is_current?: boolean
+          minimum_sample_ready: boolean
+          replay_count: number
+          rescued_winners: number
+          resolved_count: number
+          reviewed?: boolean
+          reviewed_at?: string | null
+          status: string
+          user_id: string
+        }
+        Update: {
+          added_losses?: number
+          bot_id?: string
+          evidence?: Json
+          evidence_hash?: string
+          generated_at?: string
+          id?: string
+          is_current?: boolean
+          minimum_sample_ready?: boolean
+          replay_count?: number
+          rescued_winners?: number
+          resolved_count?: number
+          reviewed?: boolean
+          reviewed_at?: string | null
+          status?: string
           user_id?: string
         }
         Relationships: []
@@ -3751,6 +3874,25 @@ export type Database = {
         }
         Relationships: []
       }
+      impulse_entry_lifecycle_replay_summary: {
+        Row: {
+          added_losses: number | null
+          avg_mae: number | null
+          avg_mfe: number | null
+          bot_id: string | null
+          deeper_entries: number | null
+          entries: number | null
+          evidence_source: string | null
+          losers: number | null
+          minimum_sample_ready: boolean | null
+          replay_count: number | null
+          rescued_winners: number | null
+          user_id: string | null
+          winners: number | null
+          winners_retained: number | null
+        }
+        Relationships: []
+      }
       zone_candidate_shadow_validation_summary: {
         Row: {
           activation_eligible: boolean | null
@@ -3973,6 +4115,14 @@ export type Database = {
           p_user_id: string
         }
         Returns: number
+      }
+      retarget_pending_to_impulse_candidate: {
+        Args: { p_bot_id: string; p_pending_id: string; p_user_id: string }
+        Returns: Json
+      }
+      review_impulse_lifecycle_certificate: {
+        Args: { p_evidence_hash: string }
+        Returns: Json
       }
       set_strategy_runtime_enforcement: {
         Args: {
