@@ -20,6 +20,14 @@ describe("automatic trade review journal", () => {
     expect(journal).toContain("const insightTrades");
   });
 
+  it("provides a dedicated mobile list and full-screen review surface", () => {
+    expect(journal).toContain("space-y-2 md:hidden");
+    expect(journal).toContain("hidden overflow-x-auto md:block");
+    expect(journal).toContain("fixed inset-0 z-50 overflow-y-auto");
+    expect(journal).toContain("env(safe-area-inset-bottom)");
+    expect(journal).not.toContain("Add Manual Trade");
+  });
+
   it("persists notes and review status separately from the trade ledger", () => {
     expect(api).toContain("saveReview:");
     expect(edge).toContain('.from("trade_review_notes").upsert');
