@@ -6429,8 +6429,8 @@ async function runScanForUser(
       }
       if (!izData.bestZone?.priceAtZone) {
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
-        detail.status = "watching_zone";
-        detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Watchlisted.`;
+        let zoneWatchPersisted = false;
+        let zoneWatchPersistenceError: string | null = null;
         console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
         // Stage this pair so it's ready when price arrives at the zone
         if (stagingEnabled && analysis.direction && !isPaused) {
@@ -6460,7 +6460,7 @@ async function runScanForUser(
                   : izData.impulse.high,
                 izData.impulse,
               );
-              await supabase.from("staged_setups").insert({
+              const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert({
                 user_id: userId,
                 bot_id: BOT_ID,
                 symbol: pair,
@@ -6488,11 +6488,13 @@ async function runScanForUser(
                   impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
                 },
               });
+              if (zoneWatchInsertError) throw zoneWatchInsertError;
+              zoneWatchPersisted = true;
               stagedNew++;
               console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
             } else {
               // Update existing staged with latest zone data
-              await supabase.from("staged_setups").update({
+              const { error: zoneWatchUpdateError } = await supabase.from("staged_setups").update({
                 current_score: analysis.score,
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
@@ -6505,16 +6507,35 @@ async function runScanForUser(
                     ?.impulse,
                 ).level,
               }).eq("id", existingStagedForZone.id);
+              if (zoneWatchUpdateError) throw zoneWatchUpdateError;
+              zoneWatchPersisted = true;
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
           } catch (e: any) {
             if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
+              zoneWatchPersisted = true;
               console.log(`[staging] ${pair} ${analysis.direction} already staged for zone watch`);
             } else {
+              zoneWatchPersistenceError = e?.message || "Unknown database error";
               console.warn(`[staging] Failed to stage zone watch ${pair}: ${e?.message}`);
             }
           }
           detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
+        }
+        if (zoneWatchPersisted) {
+          detail.status = "watching_zone";
+          detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
+        } else if (zoneWatchPersistenceError) {
+          detail.status = "watchlist_persistence_failed";
+          detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
+          detail.staging = {
+            action: "persistence_failed",
+            error: zoneWatchPersistenceError,
+            zoneDistance: izData.bestZone?.distanceToZone,
+          };
+        } else {
+          detail.status = "waiting_zone_untracked";
+          detail.skipReason = "Price is not at the Impulse Zone, but Watchlist staging is disabled.";
         }
         scanDetails.push(detail);
         continue;
