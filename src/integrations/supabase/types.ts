@@ -1552,6 +1552,8 @@ export type Database = {
           originating_zone: Json | null
           placed_at: string
           policy_frozen_at: string | null
+          post_confirmation_entry: Json | null
+          post_confirmation_observation: Json | null
           refined_zone_high: number | null
           refined_zone_low: number | null
           resolved_at: string | null
@@ -1629,6 +1631,8 @@ export type Database = {
           originating_zone?: Json | null
           placed_at?: string
           policy_frozen_at?: string | null
+          post_confirmation_entry?: Json | null
+          post_confirmation_observation?: Json | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -1706,6 +1710,8 @@ export type Database = {
           originating_zone?: Json | null
           placed_at?: string
           policy_frozen_at?: string | null
+          post_confirmation_entry?: Json | null
+          post_confirmation_observation?: Json | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -3236,6 +3242,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      trade_review_notes: {
+        Row: {
+          created_at: string
+          id: string
+          lesson: string | null
+          notes: string | null
+          position_id: string
+          review_status: string
+          reviewed_at: string | null
+          tags: string[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          lesson?: string | null
+          notes?: string | null
+          position_id: string
+          review_status?: string
+          reviewed_at?: string | null
+          tags?: string[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          lesson?: string | null
+          notes?: string | null
+          position_id?: string
+          review_status?: string
+          reviewed_at?: string | null
+          tags?: string[]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       trades: {
         Row: {
