@@ -42,12 +42,12 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
       {moreOpen && (
         <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm" onClick={() => setMoreOpen(false)}>
           <div
-            className="absolute bottom-14 left-0 right-0 bg-card border-t border-border p-3 shadow-lg"
+            className="absolute bottom-[calc(3.5rem+env(safe-area-inset-bottom))] left-0 right-0 max-h-[72dvh] overflow-y-auto overscroll-contain bg-card border-t border-border p-3 pb-5 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">More</span>
-              <button onClick={() => setMoreOpen(false)} className="text-muted-foreground">
+              <button onClick={() => setMoreOpen(false)} className="h-11 w-11 inline-flex items-center justify-center text-muted-foreground" aria-label="Close menu">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -59,7 +59,7 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
                     navigate(item.url);
                     setMoreOpen(false);
                   }}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-colors ${
+                  className={`min-h-16 flex flex-col items-center justify-center gap-1 p-2 rounded-md transition-colors ${
                     isActive(item.url)
                       ? "bg-primary/10 text-primary"
                       : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -76,7 +76,7 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
 
       {/* Bottom tab bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 max-w-full overflow-hidden bg-card border-t border-border safe-area-bottom">
-        <div className="grid grid-cols-5 h-14 w-full">
+        <div className="grid grid-cols-5 h-14 w-full" role="navigation" aria-label="Primary navigation">
           {PRIMARY_ITEMS.map((item) => (
             <button
               key={item.url}

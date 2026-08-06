@@ -317,32 +317,32 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
       <div className="bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 md:px-6 py-2 md:py-4 border-b border-border">
           <div className="min-w-0">
             <h2 className="text-sm md:text-base font-bold truncate">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
             {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
           </div>
-          <div className="flex items-center gap-1 md:gap-2 shrink-0">
+          <div className="flex items-center justify-end gap-1 md:gap-2 shrink-0">
             {connectionId && (
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
             )}
-            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={handleExport} title="Export config as JSON file">
-              <Download className="h-3 w-3" /> Export
+            <Button variant="ghost" size="sm" className="h-10 w-10 md:h-8 md:w-auto p-0 md:px-3 text-xs text-muted-foreground gap-1" onClick={handleExport} title="Export config as JSON file" aria-label="Export configuration">
+              <Download className="h-4 w-4 md:h-3 md:w-3" /><span className="hidden md:inline">Export</span>
             </Button>
-            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={handleImportClick} title="Import config from JSON file">
-              <Upload className="h-3 w-3" /> Import
+            <Button variant="ghost" size="sm" className="h-10 w-10 md:h-8 md:w-auto p-0 md:px-3 text-xs text-muted-foreground gap-1" onClick={handleImportClick} title="Import config from JSON file" aria-label="Import configuration">
+              <Upload className="h-4 w-4 md:h-3 md:w-3" /><span className="hidden md:inline">Import</span>
             </Button>
             <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileChange} />
-            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
-            <Button variant="outline" size="sm" className="text-xs gap-1" onClick={() => { setPresetName(""); setPresetDescription(""); setShowSavePresetDialog(true); }}>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
+            <Button variant="outline" size="sm" className="hidden md:inline-flex text-xs gap-1" onClick={() => { setPresetName(""); setPresetDescription(""); setShowSavePresetDialog(true); }}>
               <Bookmark className="h-3 w-3" /> Save as Preset
             </Button>
-            <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()}>Save Config</Button>
-            <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2"><X className="h-4 w-4" /></button>
+            <Button size="sm" className="h-10 md:h-8 text-xs" onClick={() => saveMut.mutate()}>Save</Button>
+            <button onClick={onClose} className="h-10 w-10 inline-flex items-center justify-center text-muted-foreground hover:text-foreground" aria-label="Close configuration"><X className="h-4 w-4" /></button>
           </div>
         </div>
 
-        <div className="px-4 md:px-6 py-2 border-b border-border bg-muted/20">
+        <div className="px-3 md:px-6 py-2 border-b border-border bg-muted/20 max-h-20 overflow-y-auto">
           {effectiveRuntimeError ? (
             <div className="flex items-center justify-between gap-3 text-xs">
               <span className="text-destructive">
@@ -541,7 +541,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         )}
 
         {/* Search Bar */}
-        <div className="px-6 py-2.5 border-b border-border bg-background/40">
+        <div className="px-3 md:px-6 py-2.5 border-b border-border bg-background/40">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
@@ -573,7 +573,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         {/* Body: Tab nav + content */}
         <div className="flex flex-col md:flex-row flex-1 min-h-0">
           {/* Vertical Tab Nav */}
-          <div className="md:w-44 border-b md:border-b-0 md:border-r border-border py-2 shrink-0 overflow-x-auto md:overflow-y-auto flex md:flex-col">
+          <div className="md:w-44 border-b md:border-b-0 md:border-r border-border py-1 md:py-2 shrink-0 overflow-x-auto md:overflow-y-auto flex md:flex-col">
             {filteredTabs.length === 0 && (
               <p className="px-4 py-3 text-[10px] text-muted-foreground italic">No matching tabs</p>
             )}
@@ -584,7 +584,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${isActive ? "bg-primary/10 text-primary border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-l-2 border-transparent"}`}
+                  className={`shrink-0 w-auto md:w-full min-h-11 flex items-center gap-2 px-4 py-2.5 text-xs transition-colors ${isActive ? "bg-primary/10 text-primary border-b-2 md:border-b-0 md:border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-b-2 md:border-b-0 md:border-l-2 border-transparent"}`}
                 >
                   <tab.icon className="h-3.5 w-3.5 shrink-0" />
                   <span className="flex-1 text-left">{tab.label}</span>
@@ -597,7 +597,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
           </div>
 
           {/* Tab Content */}
-          <div ref={contentRef} className="flex-1 overflow-y-auto p-3 md:p-6">
+          <div ref={contentRef} className="flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-6">
             <HighlightContext.Provider value={matchedLabels}>
               {config && filteredTabs.length > 0 && (
                 <>
