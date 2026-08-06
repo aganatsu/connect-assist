@@ -5689,6 +5689,8 @@ async function runScanForUser(
         confirmation_method: pairConfig.confirmationMethod || "choch",
         confirmation_config: {
           indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          afterChochMode: pairConfig.afterChochMode || "confirmation_close",
+          afterChochExpiryMinutes: pairConfig.afterChochExpiryMinutes || 30,
           maxConfirmationAttempts:
             pairStylePolicy.lifecycle.maxConfirmationAttempts,
         },
@@ -8663,6 +8665,10 @@ async function runScanForUser(
             confirmation_config: {
               indicatorMinCount:
                 pendingFrozenStrategyContext.confirmation.indicatorMinCount,
+              afterChochMode:
+                pairConfig.afterChochMode || "confirmation_close",
+              afterChochExpiryMinutes:
+                pairConfig.afterChochExpiryMinutes || 30,
               maxConfirmationAttempts:
                 pendingFrozenStrategyContext.confirmation.maxAttempts,
             },
@@ -10445,6 +10451,10 @@ async function runScanForUser(
                 pairConfig.confirmationMethod || "choch",
               confirmation_config: {
                 indicatorMinCount: pairConfig.indicatorMinCount || 3,
+                afterChochMode:
+                  pairConfig.afterChochMode || "confirmation_close",
+                afterChochExpiryMinutes:
+                  pairConfig.afterChochExpiryMinutes || 30,
                 maxConfirmationAttempts:
                   breakerFrozenStrategyContext.confirmation.maxAttempts,
               },

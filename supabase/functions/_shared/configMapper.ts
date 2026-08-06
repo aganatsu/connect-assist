@@ -288,6 +288,8 @@ export const RUNTIME_DEFAULTS = {
   marketFillAtZone: true,
   marketFillStrictATRMult: 0.3,
   confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",
+  afterChochMode: "confirmation_close" as "confirmation_close" | "observe_retracement" | "wait_retracement",
+  afterChochExpiryMinutes: 30,
   maxConfirmationAttempts: 3,
   indicatorMinCount: 3,
 
@@ -865,6 +867,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
     marketFillStrictATRMult: entry.zoneProximityATR ?? entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
     confirmationMethod: (entry.confirmationMethod ?? raw.confirmationMethod ?? RUNTIME_DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
+    afterChochMode: (entry.afterChochMode ?? raw.afterChochMode ?? RUNTIME_DEFAULTS.afterChochMode) as "confirmation_close" | "observe_retracement" | "wait_retracement",
+    afterChochExpiryMinutes: Math.max(5, Number(entry.afterChochExpiryMinutes ?? raw.afterChochExpiryMinutes ?? RUNTIME_DEFAULTS.afterChochExpiryMinutes)),
     maxConfirmationAttempts: entry.maxConfirmationAttempts ?? raw.maxConfirmationAttempts ?? RUNTIME_DEFAULTS.maxConfirmationAttempts,
     indicatorMinCount: entry.indicatorMinCount ?? raw.indicatorMinCount ?? RUNTIME_DEFAULTS.indicatorMinCount,
 
