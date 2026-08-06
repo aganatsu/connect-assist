@@ -46,29 +46,36 @@ inside that same impulse.
 - [x] Record the first qualifying confirmation as an immutable event.
 - [x] Show trigger level and revision history in Zone Setup details.
 
-### Phase 4: Replay and parity - pending
+### Phase 4: Replay and parity - implemented
 
-- [ ] Continue observing deeper candidates after legacy pending cancellation.
-- [ ] Replay closed and rejected setups using exact candle snapshots.
-- [ ] Add backtest parity for advancement, expiry and impulse invalidation.
-- [ ] Report winner retention, rescued deeper entries and added losses.
+- [x] Continue observing deeper candidates after legacy pending cancellation.
+- [x] Replay closed and rejected setups using exact candle snapshots.
+- [x] Add backtest parity for advancement, expiry and impulse invalidation.
+- [x] Report winner retention, rescued deeper entries and added losses.
 
-### Phase 5: Enforcement - blocked on evidence
+### Phase 5: Evidence-gated enforcement - implemented
 
-- [ ] Require a reviewed evidence certificate.
-- [ ] Expose Enforce only after certification.
-- [ ] Replace legacy refined-zone cancellation with atomic deeper advancement.
-- [ ] Reauthorize thesis, risk and broker state at the eventual fill.
+- [x] Require a current, sample-ready, beneficial, owner-reviewed evidence certificate.
+- [x] Expose Enforce only after Replay 100 certification and explicit evidence review.
+- [x] Replace legacy refined-zone cancellation with atomic deeper advancement.
+- [x] Require the frozen confirmation contract before eventual fill.
+- [x] Preserve final thesis, risk, duplicate-position and broker authorization at fill.
 
 ## Current Runtime Effect
 
-The lifecycle is `Off` or `Observe` only. It records and explains candidate
-transitions but does not change an entry, cancellation or broker action. This is
-intentional until replay and forward evidence demonstrate that deeper-zone
-advancement improves outcomes.
+The lifecycle defaults to `Observe`. Replay publishes a hashed evidence
+certificate. `Enforce` remains unavailable until the certificate has at least
+30 resolved samples, does not add more losses than winners it rescues, and the
+account owner reviews it in Rejected Setups -> Shadow Evidence. Missing, stale
+or unreviewed evidence fails closed to Observe.
+
+In Enforce, a failed candidate can atomically retarget the same pending thesis
+to the next prequalified deeper candidate. The impulse remains frozen, the new
+candidate receives its own confirmation contract, and final thesis, risk,
+position and broker checks still run before any fill.
 
 ## Resume Prompt
 
-Continue from `docs/IMPULSE_OWNED_ENTRY_LIFECYCLE_PHASES.md`. Verify the branch,
-migration and CI. Complete Phase 3 without enabling enforcement or allowing a
-confirmation event from one candidate to authorize another candidate.
+Continue from `docs/IMPULSE_OWNED_ENTRY_LIFECYCLE_PHASES.md`. Merge the stacked
+PRs in order, apply their migrations, deploy the changed Edge Functions, run
+Replay 100, review an eligible certificate, then select Enforce in Bot Config.

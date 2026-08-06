@@ -121,6 +121,21 @@ interface ICTEntryZoneAuthoritySummary {
   replay_runs: number;
 }
 
+interface ImpulseLifecycleReplaySummary {
+  evidence_source: string; replay_count: number; entries: number;
+  deeper_entries: number; rescued_winners: number; added_losses: number;
+  winners_retained: number;
+  winners: number; losers: number; avg_mfe: number | null; avg_mae: number | null;
+  minimum_sample_ready: boolean;
+}
+
+interface ImpulseLifecycleEnforcementCertificate {
+  evidence_hash: string; status: "collecting" | "eligible" | "rejected";
+  reviewed: boolean; reviewed_at: string | null; replay_count: number;
+  resolved_count: number; rescued_winners: number; added_losses: number;
+  minimum_sample_ready: boolean;
+}
+
 interface ImpulseEntryLifecycleEvidence {
   lifecycleCount: number;
   activeCount: number;
@@ -365,6 +380,27 @@ async function fetchImpulseEntryLifecycleEvidence(
     recent: transitions.slice(0, 10),
   };
 }
+async function fetchImpulseLifecycleReplaySummary(
+  userId: string,
+): Promise<ImpulseLifecycleReplaySummary | null> {
+  const { data, error } = await (supabase as any)
+    .from("impulse_entry_lifecycle_replay_summary")
+    .select("*").eq("user_id", userId).eq("bot_id", "smc")
+    .eq("evidence_source", "retrospective_replay").maybeSingle();
+  if (error) throw new Error(error.message);
+  return data || null;
+}
+
+async function fetchImpulseLifecycleCertificate(
+  userId: string,
+): Promise<ImpulseLifecycleEnforcementCertificate | null> {
+  const { data, error } = await (supabase as any)
+    .from("impulse_lifecycle_enforcement_certificates").select("*")
+    .eq("user_id", userId).eq("bot_id", "smc").eq("is_current", true).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data || null;
+}
+
 async function fetchZoneLocalValidation(
   userId: string,
 ): Promise<ZoneLocalValidationSummary[]> {
@@ -464,6 +500,8 @@ export default function RejectedSetups() {
   const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [isGeneratingCertificate, setIsGeneratingCertificate] = useState(false);
+  const [isReplayingImpulseLifecycle, setIsReplayingImpulseLifecycle] = useState(false);
+  const [isReviewingImpulseLifecycle, setIsReviewingImpulseLifecycle] = useState(false);
 
   const { data: rawSetups = [], isLoading, refetch } = useQuery({
     queryKey: ["rejected-setups", user?.id, days],
@@ -543,6 +581,22 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
     retry: false,
+  });
+  const {
+    data: impulseLifecycleReplaySummary,
+    refetch: refetchImpulseLifecycleReplaySummary,
+  } = useQuery({
+    queryKey: ["impulse-lifecycle-replay-summary", user?.id],
+    queryFn: () => fetchImpulseLifecycleReplaySummary(user!.id),
+    enabled: !!user?.id, refetchInterval: 60_000, retry: false,
+  });
+  const {
+    data: impulseLifecycleCertificate,
+    refetch: refetchImpulseLifecycleCertificate,
+  } = useQuery({
+    queryKey: ["impulse-lifecycle-enforcement-certificate", user?.id],
+    queryFn: () => fetchImpulseLifecycleCertificate(user!.id),
+    enabled: !!user?.id, refetchInterval: 60_000, retry: false,
   });
   const {
     data: zoneLocalValidation = [],
@@ -632,6 +686,46 @@ export default function RejectedSetups() {
       toast.error(`Evidence certificate failed: ${message}`);
     } finally {
       setIsGeneratingCertificate(false);
+    }
+  };
+
+  const runImpulseLifecycleReplay = async () => {
+    setIsReplayingImpulseLifecycle(true);
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "impulse-lifecycle-replay",
+        { body: { action: "replay", limit: 100 } },
+      );
+      if (error) throw error;
+      await refetchImpulseLifecycleReplaySummary();
+      await refetchImpulseLifecycleCertificate();
+      toast.success(
+        `Lifecycle replay completed: ${data?.replayed || 0} replayed, ${data?.unavailable || 0} unavailable.`,
+      );
+    } catch (error) {
+      toast.error(
+        `Lifecycle replay failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setIsReplayingImpulseLifecycle(false);
+    }
+  };
+
+  const reviewImpulseLifecycleCertificate = async () => {
+    if (!impulseLifecycleCertificate?.evidence_hash) return;
+    setIsReviewingImpulseLifecycle(true);
+    try {
+      const { error } = await (supabase as any).rpc(
+        "review_impulse_lifecycle_certificate",
+        { p_evidence_hash: impulseLifecycleCertificate.evidence_hash },
+      );
+      if (error) throw error;
+      await refetchImpulseLifecycleCertificate();
+      toast.success("Impulse lifecycle evidence reviewed. Enforce can now be selected in Bot Config.");
+    } catch (error) {
+      toast.error(`Evidence review failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsReviewingImpulseLifecycle(false);
     }
   };
 
@@ -1243,6 +1337,12 @@ export default function RejectedSetups() {
             <ImpulseEntryLifecycleEvidenceCard
               evidence={impulseEntryLifecycleEvidence}
               loading={isLoadingImpulseEntryLifecycleEvidence}
+              replay={impulseLifecycleReplaySummary}
+              certificate={impulseLifecycleCertificate}
+              replaying={isReplayingImpulseLifecycle}
+              reviewing={isReviewingImpulseLifecycle}
+              onReplay={runImpulseLifecycleReplay}
+              onReview={reviewImpulseLifecycleCertificate}
             />
 
             <Card className="border-border/50">
@@ -1579,12 +1679,17 @@ function EvidenceBreakdownTable({
 }
 
 function ImpulseEntryLifecycleEvidenceCard({
-  evidence,
-  loading,
+  evidence, loading, replay, certificate, replaying, reviewing, onReplay, onReview,
 }: {
-  evidence?: ImpulseEntryLifecycleEvidence;
-  loading: boolean;
+  evidence?: ImpulseEntryLifecycleEvidence; loading: boolean;
+  replay?: ImpulseLifecycleReplaySummary | null; replaying: boolean;
+  certificate?: ImpulseLifecycleEnforcementCertificate | null; reviewing: boolean;
+  onReplay: () => void; onReview: () => void;
 }) {
+  const unlocked = certificate?.status === "eligible" && certificate.reviewed &&
+    certificate.minimum_sample_ready;
+  const readyForReview = certificate?.status === "eligible" &&
+    certificate.minimum_sample_ready && !certificate.reviewed;
   return (
     <Card className="border-border/50">
       <CardHeader className="pb-2 pt-3 px-4">
@@ -1595,9 +1700,20 @@ function ImpulseEntryLifecycleEvidenceCard({
               Tracks whether a failed entry zone could advance deeper inside the same frozen impulse. Observation does not change execution.
             </p>
           </div>
-          <Badge variant="outline" className="text-[9px] border-warning/40 text-warning">
-            ENFORCE LOCKED
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" variant="outline" className="h-7 text-[10px]" onClick={onReplay} disabled={replaying}>
+              <RefreshCw className={`h-3 w-3 mr-1 `} />
+              {replaying ? "Replaying…" : "Replay 100"}
+            </Button>
+            {readyForReview && (
+              <Button type="button" size="sm" className="h-7 text-[10px]" onClick={onReview} disabled={reviewing}>
+                {reviewing ? "Reviewing…" : "Review & Unlock Enforce"}
+              </Button>
+            )}
+            <Badge variant="outline" className={`text-[9px] ${unlocked ? "border-success/40 text-success" : readyForReview ? "border-info-c/40 text-info-c" : "border-warning/40 text-warning"}`}>
+              {unlocked ? "ENFORCE UNLOCKED" : readyForReview ? "READY FOR REVIEW" : "ENFORCE LOCKED"}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4">
@@ -1621,6 +1737,15 @@ function ImpulseEntryLifecycleEvidenceCard({
               <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{evidence.exhaustedCount}</p></div>
               <div><span className="text-muted-foreground">Transitions</span><p className="font-mono font-bold">{evidence.transitionCount}</p></div>
             </div>
+            {replay && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-border/40 pt-2 text-xs">
+                <div><span className="text-muted-foreground">Replays</span><p className="font-mono font-bold">{replay.replay_count}</p></div>
+                <div><span className="text-muted-foreground">Winners retained</span><p className="font-mono font-bold text-success">{replay.winners_retained}</p></div>
+                <div><span className="text-muted-foreground">Rescued winners</span><p className="font-mono font-bold text-success">{replay.rescued_winners}</p></div>
+                <div><span className="text-muted-foreground">Added losses</span><p className="font-mono font-bold text-destructive">{replay.added_losses}</p></div>
+                <div><span className="text-muted-foreground">Evidence readiness</span><p className="font-mono font-bold">{replay.minimum_sample_ready ? "30+ READY" : "COLLECTING"}</p></div>
+              </div>
+            )}
             {evidence.recent.length > 0 && (
               <div className="space-y-1.5 border-t border-border/40 pt-2">
                 {evidence.recent.slice(0, 5).map((row) => (

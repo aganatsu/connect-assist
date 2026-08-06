@@ -18,8 +18,10 @@ describe("impulse entry lifecycle evidence", () => {
     expect(rejectedSetups).toContain("Impulse invalidations");
   });
 
-  it("shows Enforce but keeps it locked until execution is implemented", () => {
-    expect(scanTab).toContain('<SelectItem value="enforce" disabled>');
+  it("unlocks Enforce only after a reviewed eligible certificate", () => {
+    expect(scanTab).toContain('<SelectItem value="enforce" disabled={!lifecycleEnforceUnlocked}>');
     expect(scanTab).toContain("Enforce (locked until evidence review)");
+    expect(rejectedSetups).toContain("Review & Unlock Enforce");
+    expect(rejectedSetups).toContain("review_impulse_lifecycle_certificate");
   });
 });
