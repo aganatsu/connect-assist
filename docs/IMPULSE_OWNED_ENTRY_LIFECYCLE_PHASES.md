@@ -36,6 +36,8 @@ inside that same impulse.
 - [x] Observe candidate/impulse closes in the one-minute confirmation monitor.
 - [x] Default existing and new accounts to Observe.
 - [x] Display the active zone, deeper queue and impulse protection in Watchlist.
+- [x] Display lifecycle transitions in Rejected Setups -> Shadow Evidence.
+- [x] Show the future Enforce mode as evidence-locked in Bot Config.
 
 ### Phase 3: Controlled confirmation locking - pending
 

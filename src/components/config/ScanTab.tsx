@@ -390,6 +390,9 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               <SelectContent>
                 <SelectItem value="off">Off</SelectItem>
                 <SelectItem value="observe">Observe</SelectItem>
+                <SelectItem value="enforce" disabled>
+                  Enforce (locked until evidence review)
+                </SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

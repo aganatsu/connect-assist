@@ -121,6 +121,27 @@ interface ICTEntryZoneAuthoritySummary {
   replay_runs: number;
 }
 
+interface ImpulseEntryLifecycleEvidence {
+  lifecycleCount: number;
+  activeCount: number;
+  enteredCount: number;
+  exhaustedCount: number;
+  transitionCount: number;
+  zoneTouches: number;
+  candidateFailures: number;
+  deeperAdvances: number;
+  impulseInvalidations: number;
+  confirmations: number;
+  recent: Array<{
+    id: string;
+    event_type: string;
+    reason: string;
+    from_candidate_id: string | null;
+    to_candidate_id: string | null;
+    created_at: string;
+  }>;
+}
+
 interface ZoneLocalValidationSummary {
   user_id: string;
   bot_id: string;
@@ -298,6 +319,52 @@ async function fetchICTEntryZoneAuthorityValidation(
   return (data || []) as ICTEntryZoneAuthoritySummary[];
 }
 
+
+async function fetchImpulseEntryLifecycleEvidence(
+  userId: string,
+  days: number,
+): Promise<ImpulseEntryLifecycleEvidence> {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const [lifecycleResult, transitionResult] = await Promise.all([
+    (supabase as any)
+      .from("impulse_entry_lifecycles")
+      .select("id,status")
+      .eq("user_id", userId)
+      .eq("bot_id", "smc")
+      .gte("created_at", since),
+    (supabase as any)
+      .from("impulse_entry_lifecycle_transitions")
+      .select("id,event_type,reason,from_candidate_id,to_candidate_id,created_at")
+      .eq("user_id", userId)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(500),
+  ]);
+  if (lifecycleResult.error) throw new Error(lifecycleResult.error.message);
+  if (transitionResult.error) throw new Error(transitionResult.error.message);
+  const lifecycles = lifecycleResult.data || [];
+  const transitions = transitionResult.data || [];
+  const count = (type: string) => transitions.filter(
+    (row: any) => row.event_type === type,
+  ).length;
+  return {
+    lifecycleCount: lifecycles.length,
+    activeCount: lifecycles.filter((row: any) => row.status === "active").length,
+    enteredCount: lifecycles.filter((row: any) => row.status === "entered").length,
+    exhaustedCount: lifecycles.filter((row: any) => row.status === "exhausted").length,
+    transitionCount: transitions.length,
+    zoneTouches: count("zone_touched"),
+    candidateFailures: count("candidate_failed"),
+    deeperAdvances: transitions.filter((row: any) =>
+      row.event_type === "candidate_failed" &&
+      !!row.from_candidate_id && !!row.to_candidate_id &&
+      row.from_candidate_id !== row.to_candidate_id
+    ).length,
+    impulseInvalidations: count("impulse_invalidated"),
+    confirmations: count("confirmation_passed"),
+    recent: transitions.slice(0, 10),
+  };
+}
 async function fetchZoneLocalValidation(
   userId: string,
 ): Promise<ZoneLocalValidationSummary[]> {
@@ -463,6 +530,16 @@ export default function RejectedSetups() {
   } = useQuery({
     queryKey: ["ict-entry-zone-authority-validation", user?.id],
     queryFn: () => fetchICTEntryZoneAuthorityValidation(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const {
+    data: impulseEntryLifecycleEvidence,
+    isLoading: isLoadingImpulseEntryLifecycleEvidence,
+  } = useQuery({
+    queryKey: ["impulse-entry-lifecycle-evidence", user?.id, days],
+    queryFn: () => fetchImpulseEntryLifecycleEvidence(user!.id, days),
     enabled: !!user?.id,
     refetchInterval: 60_000,
     retry: false,
@@ -1163,6 +1240,11 @@ export default function RejectedSetups() {
               </CardContent>
             </Card>
 
+            <ImpulseEntryLifecycleEvidenceCard
+              evidence={impulseEntryLifecycleEvidence}
+              loading={isLoadingImpulseEntryLifecycleEvidence}
+            />
+
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
                 <CardTitle className="text-sm font-medium">Trade Decision Comparison</CardTitle>
@@ -1493,6 +1575,70 @@ function EvidenceBreakdownTable({
         </div>
       )}
     </div>
+  );
+}
+
+function ImpulseEntryLifecycleEvidenceCard({
+  evidence,
+  loading,
+}: {
+  evidence?: ImpulseEntryLifecycleEvidence;
+  loading: boolean;
+}) {
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-2 pt-3 px-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm font-medium">Impulse & Entry Zone Lifecycle</CardTitle>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Tracks whether a failed entry zone could advance deeper inside the same frozen impulse. Observation does not change execution.
+            </p>
+          </div>
+          <Badge variant="outline" className="text-[9px] border-warning/40 text-warning">
+            ENFORCE LOCKED
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4">
+        {loading ? (
+          <div className="py-6 text-center text-xs text-muted-foreground">Loading impulse lifecycle evidence…</div>
+        ) : !evidence ? (
+          <div className="py-6 text-center text-xs text-muted-foreground">
+            No lifecycle dataset is available. Apply the lifecycle migration and collect Observe-mode setups.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-3 text-xs">
+              <div><span className="text-muted-foreground">Lifecycles</span><p className="font-mono font-bold">{evidence.lifecycleCount}</p></div>
+              <div><span className="text-muted-foreground">Active</span><p className="font-mono font-bold">{evidence.activeCount}</p></div>
+              <div><span className="text-muted-foreground">Zone touches</span><p className="font-mono font-bold">{evidence.zoneTouches}</p></div>
+              <div><span className="text-muted-foreground">Zone failures</span><p className="font-mono font-bold">{evidence.candidateFailures}</p></div>
+              <div><span className="text-muted-foreground">Deeper advances</span><p className="font-mono font-bold text-info-c">{evidence.deeperAdvances}</p></div>
+              <div><span className="text-muted-foreground">Impulse invalidations</span><p className="font-mono font-bold text-destructive">{evidence.impulseInvalidations}</p></div>
+              <div><span className="text-muted-foreground">Confirmed entries</span><p className="font-mono font-bold text-success">{evidence.confirmations}</p></div>
+              <div><span className="text-muted-foreground">Entered</span><p className="font-mono font-bold">{evidence.enteredCount}</p></div>
+              <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{evidence.exhaustedCount}</p></div>
+              <div><span className="text-muted-foreground">Transitions</span><p className="font-mono font-bold">{evidence.transitionCount}</p></div>
+            </div>
+            {evidence.recent.length > 0 && (
+              <div className="space-y-1.5 border-t border-border/40 pt-2">
+                {evidence.recent.slice(0, 5).map((row) => (
+                  <div key={row.id} className="border-l-2 border-info-c/50 pl-2 text-[10px]">
+                    <span className="font-mono uppercase">{row.event_type.replace(/_/g, " ")}</span>
+                    <span className="text-muted-foreground"> · {formatBrokerTime(row.created_at)}</span>
+                    <p className="text-muted-foreground mt-0.5">{row.reason}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[9px] text-muted-foreground">
+              Enforce unlock requires completed confirmation locking, replay parity, and reviewed outcome evidence.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

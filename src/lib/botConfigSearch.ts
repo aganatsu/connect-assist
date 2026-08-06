@@ -284,7 +284,7 @@ const enterAliases: AliasMap = {
   "Per-Pair Gate Overrides": ["symbol overrides", "pair settings"],
   "Premium/Discount & Fib": ["premium discount weight", "fib weight"],
   "Premium/Discount Entry Rule": ["canonical range", "avoid wrong side", "strict value"],
-  "Impulse & Entry Zone Lifecycle": ["impulse", "entry zone", "deeper zone", "candidate lifecycle", "observe"],
+  "Impulse & Entry Zone Lifecycle": ["impulse", "entry zone", "deeper zone", "candidate lifecycle", "observe", "enforce", "shadow evidence"],
   "Trade Decision Mode": ["single ownership", "streamlined decision", "zone story", "enforcement", "observe", "legacy diagnostics"],
   "Fair Value Gap": ["fvg weight"],
   "Order Block": ["order block weight", "ob weight"],
