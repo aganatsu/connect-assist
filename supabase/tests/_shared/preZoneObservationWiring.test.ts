@@ -61,14 +61,12 @@ Deno.test("a complete zone creates a fresh candidate rather than rewriting the o
   );
 });
 
-Deno.test("Watchlist labels observation-only rows and excludes them from near-gate counts", () => {
+Deno.test("Watchlist labels observations and derives near-zone count from lifecycle", () => {
   assertStringIncludes(watchlist, "getWatchlistDisplay");
   assertStringIncludes(
     watchlist,
     'watchlistDisplay.state === "monitoring"',
   );
-  assertStringIncludes(
-    watchlist,
-    "s.execution_eligible !== false",
-  );
+  assertStringIncludes(watchlist, "const nearZoneCount = active.filter");
+  assertStringIncludes(watchlist, '"approaching_zone", "at_zone"');
 });
