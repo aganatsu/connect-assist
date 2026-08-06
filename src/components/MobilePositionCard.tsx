@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { OverrideBadge } from "@/components/TradeOverrideEditor";
+import { OverrideBadge, TradeOverrideEditor } from "@/components/TradeOverrideEditor";
+import { SLTPEditor } from "@/components/ExpandedPositionCard";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ChevronRight, Info } from "lucide-react";
@@ -10,9 +11,10 @@ interface MobilePositionCardProps {
   isExpanded: boolean;
   onToggle: () => void;
   onClose: (id: string) => void;
+  onSaved: () => void;
 }
 
-export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose }: MobilePositionCardProps) {
+export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose, onSaved }: MobilePositionCardProps) {
   const [detailSheet, setDetailSheet] = useState(false);
 
   const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
@@ -194,7 +196,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               className="text-[10px] font-medium text-primary border border-primary/30 px-2 py-1 hover:bg-primary/10 transition-colors flex items-center gap-1"
             >
               <Info className="h-3 w-3" />
-              View Full Details
+              Manage Trade
             </button>
           </div>
         </div>
@@ -203,7 +205,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
 
     {/* Full Detail Bottom Sheet */}
     <Sheet open={detailSheet} onOpenChange={setDetailSheet}>
-      <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto rounded-t-2xl">
+      <SheetContent side="bottom" className="h-[92dvh] max-h-[92dvh] overflow-y-auto overscroll-contain rounded-t-lg pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <SheetHeader className="pb-2 pr-8">
           <SheetTitle className="text-sm flex flex-wrap items-center gap-2">
             <span className={`w-2 h-5 rounded-full ${p.direction === "long" ? "bg-success" : "bg-destructive"}`} />
@@ -404,6 +406,12 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               </div>
             </div>
           )}
+
+          <div className="space-y-3 border-t border-border pt-3">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Adjust Protection</p>
+            <SLTPEditor position={p} onSaved={onSaved} />
+            <TradeOverrideEditor position={p} onSaved={onSaved} />
+          </div>
         </div>
       </SheetContent>
     </Sheet>
