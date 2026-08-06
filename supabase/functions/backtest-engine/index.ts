@@ -4290,6 +4290,7 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = body?.action || "start";
+
     const db = getAdminClient();
 
     // Trusted server-to-server caller (optimizer, warmup/chunk self-invocation).
@@ -4301,6 +4302,18 @@ Deno.serve(async (req: Request) => {
     async function getUserId(): Promise<string | null> {
       if (serviceCaller) return body?.userId || null;
       return await resolveAuthenticatedUserId(req);
+    }
+
+    if (action === "impulse_lifecycle_replay") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      if (!body.lifecycle || !Array.isArray(body.candles)) {
+        return respond({ error: "lifecycle and candles are required" }, 400);
+      }
+      return respond(replayImpulseEntryLifecycle({
+        lifecycle: body.lifecycle, candles: body.candles,
+        rewardRisk: Number(body.rewardRisk) || 2,
+      }));
     }
 
     // ── Action: golden_replay_report — compare supplied evidence only ──
