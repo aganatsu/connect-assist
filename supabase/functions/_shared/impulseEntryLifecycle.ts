@@ -251,6 +251,8 @@ export function transitionImpulseEntryLifecycle(
     return next;
   }
   if (!active || !next.confirmation) return current;
+  next.confirmation.revisions ||= [];
+  next.confirmation.confirmedAt ??= null;
 
   if (event.type === "zone_touched") {
     if (active.state === "confirming") return current;

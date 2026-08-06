@@ -46,12 +46,12 @@ inside that same impulse.
 - [x] Record the first qualifying confirmation as an immutable event.
 - [x] Show trigger level and revision history in Zone Setup details.
 
-### Phase 4: Replay and parity - pending
+### Phase 4: Replay and parity - implemented
 
-- [ ] Continue observing deeper candidates after legacy pending cancellation.
-- [ ] Replay closed and rejected setups using exact candle snapshots.
-- [ ] Add backtest parity for advancement, expiry and impulse invalidation.
-- [ ] Report winner retention, rescued deeper entries and added losses.
+- [x] Continue observing deeper candidates after legacy pending cancellation.
+- [x] Replay closed and rejected setups using exact candle snapshots.
+- [x] Add backtest parity for advancement, expiry and impulse invalidation.
+- [x] Report winner retention, rescued deeper entries and added losses.
 
 ### Phase 5: Enforcement - blocked on evidence
 
@@ -63,7 +63,7 @@ inside that same impulse.
 ## Current Runtime Effect
 
 The lifecycle is `Off` or `Observe` only. It records and explains candidate
-transitions but does not change an entry, cancellation or broker action. This is
+transitions, keeps deeper candidates under shadow monitoring, and supports exact-snapshot replay without changing an entry, cancellation or broker action. This is
 intentional until replay and forward evidence demonstrate that deeper-zone
 advancement improves outcomes.
 
