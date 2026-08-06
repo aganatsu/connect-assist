@@ -644,7 +644,11 @@ export interface StagedSetup {
   observation_parent_id?: string | null;
   observation_reason?: string | null;
   confirmation_method?: "choch" | "indicators" | "choch_and_indicators" | null;
-  confirmation_config?: { indicatorMinCount?: number };
+  confirmation_config?: {
+    indicatorMinCount?: number;
+    afterChochMode?: "confirmation_close" | "observe_retracement" | "wait_retracement";
+    afterChochExpiryMinutes?: number;
+  };
   authorization_result?: any;
   scan_cycles: number;
   min_cycles: number;
@@ -698,7 +702,19 @@ export interface PendingOrder {
   originating_zone?: any;
   thesis_version?: string | null;
   confirmation_method?: "choch" | "indicators" | "choch_and_indicators" | null;
-  confirmation_config?: { indicatorMinCount?: number };
+  confirmation_config?: {
+    indicatorMinCount?: number;
+    afterChochMode?: "confirmation_close" | "observe_retracement" | "wait_retracement";
+    afterChochExpiryMinutes?: number;
+  };
+  post_confirmation_entry?: {
+    state: "awaiting_retracement" | "ready" | "invalidated" | "expired";
+    zone: { type: string; low: number; high: number; midpoint: number };
+    protectedLevel: number;
+    expiresAt: string;
+    reason: string;
+  } | null;
+  post_confirmation_observation?: any;
   staged_cycles: number;
   staged_initial_score: number | null;
   exit_flags: any;

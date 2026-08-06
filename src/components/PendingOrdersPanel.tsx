@@ -134,6 +134,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       : confirmationMethod === "choch_and_indicators"
       ? "CHoCH + indicators"
       : "CHoCH/BOS";
+    const retracementPlan = order.post_confirmation_entry;
+    const waitingForRetracement =
+      retracementPlan?.state === "awaiting_retracement";
     return (
       <div
         key={order.order_id}
@@ -176,7 +179,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 className="text-[11px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
               >
                 <Crosshair className="w-2.5 h-2.5 mr-0.5" />
-                HUNTING
+                {waitingForRetracement ? "RETRACEMENT" : "HUNTING"}
               </Badge>
             )}
             {!isHunting && order.from_watchlist && (
@@ -211,7 +214,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           <div className="flex items-center justify-between text-[12px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
-              Price in zone — awaiting {order.direction === "short" ? "bearish" : "bullish"} {confirmationLabel}
+              {waitingForRetracement
+                ? `CHoCH confirmed — waiting for ${retracementPlan.zone.type.replace(/_/g, " ")} [${Number(retracementPlan.zone.low).toFixed(5)} – ${Number(retracementPlan.zone.high).toFixed(5)}]`
+                : `Price in zone — awaiting ${order.direction === "short" ? "bearish" : "bullish"} ${confirmationLabel}`}
             </span>
             <span className="text-foreground/60">
               SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>

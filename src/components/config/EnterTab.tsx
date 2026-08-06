@@ -677,6 +677,25 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          {(config.entry?.confirmationMethod ?? "choch") !== "indicators" && (
+            <>
+              <FieldGroup label="After CHoCH" description="Choose whether CHoCH fills immediately or waits for its displacement FVG/OB retracement" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+                <Select value={config.entry?.afterChochMode ?? "confirmation_close"} onValueChange={v => updateField("entry", "afterChochMode", v)}>
+                  <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="confirmation_close">Enter at CHoCH Close</SelectItem>
+                    <SelectItem value="observe_retracement">Observe FVG/OB Retracement</SelectItem>
+                    <SelectItem value="wait_retracement">Wait for FVG/OB Retracement</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FieldGroup>
+              {(config.entry?.afterChochMode === "observe_retracement" || config.entry?.afterChochMode === "wait_retracement") && (
+                <FieldGroup label="CHoCH Retracement Expiry" description="Minutes allowed for price to return to the frozen confirmation FVG/OB">
+                  <Input type="number" value={config.entry?.afterChochExpiryMinutes ?? 30} onChange={e => updateField("entry", "afterChochExpiryMinutes", Math.max(5, Number(e.target.value) || 30))} min={5} max={240} step={5} className="h-9 text-sm" />
+                </FieldGroup>
+              )}
+            </>
+          )}
         </div>
       </CollapsibleSection>
 

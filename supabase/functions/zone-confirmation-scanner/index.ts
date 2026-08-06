@@ -46,6 +46,12 @@ import {
   resolveImpulseLifecycleEnforcement,
   type ImpulseLifecycleEnforcementResolution,
 } from "../_shared/impulseLifecycleEnforcement.ts";
+import {
+  derivePostChochEntryPlan,
+  evaluatePostChochRetracement,
+  normalizeAfterChochMode,
+  type PostChochEntryPlan,
+} from "../_shared/postChochRetracement.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   confirmationEvidenceLines,
@@ -636,6 +642,41 @@ Deno.serve(async (req) => {
           }
         }
 
+        let retracementReadyPlan: PostChochEntryPlan | null = null;
+        const storedRetracementPlan = pending.post_confirmation_entry as
+          | PostChochEntryPlan
+          | null;
+        if (storedRetracementPlan?.state === "awaiting_retracement") {
+          const evaluatedPlan = evaluatePostChochRetracement(
+            storedRetracementPlan,
+            candles5m[candles5m.length - 1],
+          );
+          if (evaluatedPlan !== storedRetracementPlan) {
+            const { error: planUpdateError } = await supabase
+              .from("pending_orders")
+              .update({ post_confirmation_entry: evaluatedPlan })
+              .eq("id", pending.id).eq("user_id", userId);
+            if (planUpdateError) throw planUpdateError;
+          }
+          if (evaluatedPlan.state === "invalidated" || evaluatedPlan.state === "expired") {
+            await supabase.from("pending_orders").update({
+              status: evaluatedPlan.state === "expired" ? "cancelled" : "invalidated",
+              cancel_reason: evaluatedPlan.reason,
+              resolved_at: evaluatedPlan.resolvedAt,
+            }).eq("id", pending.id).eq("user_id", userId);
+            cancelled++;
+            continue;
+          }
+          if (evaluatedPlan.state !== "ready") {
+            stillHunting++;
+            console.log(`[zone-confirm] ${pending.symbol} waiting for post-CHoCH ${evaluatedPlan.zone.type} retracement ${evaluatedPlan.zone.low}-${evaluatedPlan.zone.high}`);
+            continue;
+          }
+          retracementReadyPlan = evaluatedPlan;
+        } else if (storedRetracementPlan?.state === "ready") {
+          retracementReadyPlan = storedRetracementPlan;
+        }
+
         // ── Check impulse invalidation ──
         let impulseData: { high: number; low: number } | null = null;
         try {
@@ -664,7 +705,7 @@ Deno.serve(async (req) => {
         const hasRefinedZone = rawRefinedLow > 0 && rawRefinedHigh > 0;
         const zoneLow = hasRefinedZone ? rawRefinedLow : parseFloat(pending.entry_zone_low || "0");
         const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
-        if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+        if (!retracementReadyPlan && zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
           const maxAttempts = resolvePendingMaxConfirmationAttempts(
             pending,
@@ -695,7 +736,7 @@ Deno.serve(async (req) => {
         // If price closes THROUGH the refined zone (not just wicks), the level has failed.
         // For longs: a 5m candle close below refined_zone_low = invalidation
         // For shorts: a 5m candle close above refined_zone_high = invalidation
-        if (hasRefinedZone && candles5m.length > 0) {
+        if (!retracementReadyPlan && hasRefinedZone && candles5m.length > 0) {
           const lastCandle = candles5m[candles5m.length - 1];
           const dir = pending.direction as "long" | "short";
           const closedThrough = dir === "long"
@@ -755,7 +796,12 @@ Deno.serve(async (req) => {
         );
         const confirmationIndicatorMinimum =
           resolvePendingIndicatorMinimum(pending, config);
-        let confirmationSignal = confirmationMethod === "indicators"
+        let confirmationSignal = retracementReadyPlan
+          ? {
+            ...retracementReadyPlan.confirmation,
+            significance: retracementReadyPlan.confirmation.significance || undefined,
+          } as any
+          : confirmationMethod === "indicators"
           ? null
           : detectZoneConfirmation(
             candles5m,
@@ -768,14 +814,16 @@ Deno.serve(async (req) => {
             sweepEventData,
             candlestickProfile,
           );
-        const indicatorConfirmation = confirmationMethod === "choch"
+        const indicatorConfirmation = retracementReadyPlan || confirmationMethod === "choch"
           ? null
           : checkIndicatorConfirmation(
             candles5m,
             pending.direction as "long" | "short",
             { minIndicators: confirmationIndicatorMinimum },
           );
-        const confirmationPassed = confirmationMethod === "choch"
+        const confirmationPassed = retracementReadyPlan
+          ? true
+          : confirmationMethod === "choch"
           ? !!confirmationSignal
           : confirmationMethod === "indicators"
           ? !!indicatorConfirmation?.confirmed
@@ -919,16 +967,83 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        const pendingConfirmationConfig =
+          pending.confirmation_config &&
+            typeof pending.confirmation_config === "object"
+            ? pending.confirmation_config
+            : {};
+        const afterChochMode = normalizeAfterChochMode(
+          pendingConfirmationConfig.afterChochMode ?? config.afterChochMode,
+        );
+        const afterChochExpiryMinutes = Math.max(
+          5,
+          Number(
+            pendingConfirmationConfig.afterChochExpiryMinutes ??
+              config.afterChochExpiryMinutes ??
+              30,
+          ),
+        );
+        const isChochSignal = confirmedSignal.type.includes("choch");
+        let observedPostChochPlan =
+          (pending.post_confirmation_observation as PostChochEntryPlan | null) ||
+          null;
+        if (
+          !retracementReadyPlan &&
+          isChochSignal &&
+          afterChochMode !== "confirmation_close"
+        ) {
+          const postChochPlan = derivePostChochEntryPlan({
+            candles: candles5m,
+            direction: pending.direction as "long" | "short",
+            signal: confirmedSignal,
+            protectedLevel: Number(
+              lifecycleAfterLock?.confirmation?.protectedLevel ??
+                pending.stop_loss,
+            ),
+            candidateId:
+              lifecycleAfterLock?.confirmation?.candidateId ??
+              pending.candidate_id ??
+              null,
+            confirmationGeneration:
+              lifecycleAfterLock?.confirmation?.generation ?? null,
+            mode: afterChochMode,
+            createdAt:
+              candles5m[candles5m.length - 1]?.datetime ||
+              new Date().toISOString(),
+            expiryMinutes: afterChochExpiryMinutes,
+          });
+          if (postChochPlan) {
+            observedPostChochPlan = postChochPlan;
+            const column = afterChochMode === "wait_retracement"
+              ? "post_confirmation_entry"
+              : "post_confirmation_observation";
+            const { error: planPersistError } = await supabase
+              .from("pending_orders").update({ [column]: postChochPlan })
+              .eq("id", pending.id).eq("user_id", userId);
+            if (planPersistError) throw planPersistError;
+            if (afterChochMode === "wait_retracement") {
+              stillHunting++;
+              console.log(`[zone-confirm] ${pending.symbol} CHoCH confirmed; waiting for ${postChochPlan.zone.type} retracement ${postChochPlan.zone.low}-${postChochPlan.zone.high}`);
+              continue;
+            }
+          } else if (afterChochMode === "wait_retracement") {
+            stillHunting++;
+            console.warn(
+              `[zone-confirm] ${pending.symbol} CHoCH passed but no deterministic retracement zone could be frozen; fill withheld`,
+            );
+            continue;
+          }
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // CONFIRMED! Enter the trade (tiered confirmation passed).
         // ═══════════════════════════════════════════════════════════════
         console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmedSignal)}`);
         console.log(`[zone-confirm] Tier: ${confirmedSignal.tier}, Type: ${confirmedSignal.type}, Method: ${confirmationMethod}`);
 
-        // Confirmation is a go/no-go signal — fill at current market price.
-        // Since we already verified price is inside the refined zone (15m OB/FVG),
-        // the current price IS the optimal entry. The confirmation just validates
-        // that the level is holding (CHoCH/reversal/rejection observed).
+        // Fill at the current market price. In retracement mode this is the
+        // first touch of the frozen post-CHoCH FVG/OB; otherwise it remains the
+        // confirmation close for backward compatibility.
         const actualFillPrice = currentPrice;
         const entryPrice = parseFloat(pending.entry_price);
         const positionId = pending.order_id;
@@ -1322,6 +1437,8 @@ Deno.serve(async (req) => {
             confirmationAttempts: pending.confirmation_attempts || 0,
             method: confirmationMethod,
           },
+          postChochEntry:
+            retracementReadyPlan || observedPostChochPlan || null,
           limitOrderOrigin: {
             orderType: pending.order_type,
             entryPrice,
