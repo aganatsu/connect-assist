@@ -12,8 +12,9 @@ function jwtHasSubject(token?: string): boolean {
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
     const claims = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")));
     if (typeof claims?.sub !== "string" || claims.sub.length === 0) return false;
-    // Treat tokens within 30s of expiry as invalid so we refresh proactively.
-    if (typeof claims?.exp === "number" && claims.exp * 1000 - Date.now() < 30_000) return false;
+    // Treat tokens within 2 minutes of expiry as invalid so we refresh proactively.
+    // Edge functions reject expired JWTs with a 500 before our retry path runs.
+    if (typeof claims?.exp === "number" && claims.exp * 1000 - Date.now() < 120_000) return false;
     return true;
   } catch {
     return false;
@@ -28,7 +29,10 @@ async function getAuthenticatedToken(): Promise<string> {
   }
   if (!jwtHasSubject(session?.access_token)) {
     await supabase.auth.signOut().catch(() => {});
-    throw new Error("Unauthorized: no valid authenticated session");
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
+    throw new Error("Session expired. Please sign in again.");
   }
   return session.access_token;
 }
