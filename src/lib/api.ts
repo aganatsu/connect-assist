@@ -383,6 +383,11 @@ export const botConfigApi = {
 
 // ── Trades (Journal) ──
 export const tradesApi = {
+  reviews: (limit = 250) => invokeFunction("trades", { action: "reviews", limit }),
+  saveReview: (review: {
+    positionId: string; reviewStatus: "pending" | "reviewed";
+    notes?: string; lesson?: string; tags?: string[];
+  }) => invokeFunction("trades", { action: "save_review", ...review }),
   list: (limit = 50, offset = 0) => invokeFunction("trades", { action: "list", limit, offset }),
   get: (id: string) => invokeFunction("trades", { action: "get", id }),
   create: (trade: any) => invokeFunction("trades", { action: "create", trade }),
