@@ -37,7 +37,10 @@ import {
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
 import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
-import { observeImpulseEntryPrice } from "../_shared/impulseEntryLifecycleStore.ts";
+import {
+  observeImpulseConfirmationLock,
+  observeImpulseEntryPrice,
+} from "../_shared/impulseEntryLifecycleStore.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   confirmationEvidenceLines,
@@ -575,6 +578,23 @@ Deno.serve(async (req) => {
         } catch (lifecycleError: any) {
           console.warn(
             `[zone-confirm] ${pending.symbol} impulse lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
+          );
+        }
+
+        try {
+          const lockObservation = await observeImpulseConfirmationLock(
+            supabase,
+            pending.impulse_entry_lifecycle_id,
+            candles5m,
+          );
+          for (const transition of lockObservation.transitions) {
+            console.log(
+              `[zone-confirm] ${pending.symbol} confirmation contract ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
+            );
+          }
+        } catch (lockError: any) {
+          console.warn(
+            `[zone-confirm] ${pending.symbol} confirmation lock observation failed (non-blocking): ${lockError?.message}`,
           );
         }
 

@@ -252,6 +252,48 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           }
         </p>
 
+        {order.impulse_entry_lifecycle?.confirmation && (
+          <details className="border-t border-border/40 pt-2 text-[11px]">
+            <summary className="cursor-pointer text-foreground/70 font-medium">
+              Confirmation contract · {order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
+            </summary>
+            <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-foreground/60">
+              <span>
+                Candidate: <strong className="font-mono text-foreground/80">
+                  {order.impulse_entry_lifecycle.confirmation.candidateId.slice(0, 10)}
+                </strong> · generation {order.impulse_entry_lifecycle.confirmation.generation}
+              </span>
+              <span>
+                Protected pivot: <strong className="font-mono text-foreground/80">
+                  {order.impulse_entry_lifecycle.confirmation.protectedLevel == null
+                    ? "Building"
+                    : Number(order.impulse_entry_lifecycle.confirmation.protectedLevel).toFixed(5)}
+                </strong>
+              </span>
+              <span>
+                CHoCH/MSS break: <strong className="font-mono text-foreground/80">
+                  {order.impulse_entry_lifecycle.confirmation.breakLevel == null
+                    ? "Building"
+                    : Number(order.impulse_entry_lifecycle.confirmation.breakLevel).toFixed(5)}
+                </strong>
+              </span>
+              <span>
+                Revisions: <strong className="font-mono text-foreground/80">
+                  {order.impulse_entry_lifecycle.confirmation.revisions?.length || 0}
+                </strong>
+              </span>
+              <p className="sm:col-span-2 text-[10px] text-muted-foreground">
+                {order.impulse_entry_lifecycle.lastTransitionReason}
+              </p>
+              {(order.impulse_entry_lifecycle.confirmation.revisions || []).slice(-3).reverse().map((revision) => (
+                <p key={revision.revision} className="sm:col-span-2 text-[9px] font-mono text-muted-foreground">
+                  r{revision.revision} · protected {Number(revision.protectedLevel).toFixed(5)} · break {Number(revision.breakLevel).toFixed(5)} · {revision.reason}
+                </p>
+              ))}
+            </div>
+          </details>
+        )}
+
         {decision && (
           <div className="border border-border/50 bg-background/30 p-2 space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">

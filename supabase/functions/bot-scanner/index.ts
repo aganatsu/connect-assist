@@ -1064,6 +1064,25 @@ async function runSafetyGates(
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
+async function hydratePendingLifecycleRows(client: any, rows: any[]): Promise<any[]> {
+  const ids = rows
+    .map((row) => row.impulse_entry_lifecycle_id)
+    .filter((id): id is string => typeof id === "string");
+  if (ids.length === 0) return rows;
+  const { data, error } = await client.from("impulse_entry_lifecycles")
+    .select("id,lifecycle").in("id", ids);
+  if (error) {
+    console.warn(`[pending] lifecycle hydration failed: ${error.message}`);
+    return rows;
+  }
+  const current = new Map((data || []).map((row: any) => [row.id, row.lifecycle]));
+  return rows.map((row) => ({
+    ...row,
+    impulse_entry_lifecycle: current.get(row.impulse_entry_lifecycle_id) ||
+      row.impulse_entry_lifecycle || null,
+  }));
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -1203,7 +1222,7 @@ Deno.serve(async (req) => {
         query = query.eq("status", statusFilter);
       }
       const { data } = await query.order("placed_at", { ascending: false }).limit(100);
-      return respond(data || []);
+      return respond(await hydratePendingLifecycleRows(adminClient, data || []));
     }
 
     // ── Pending Orders: Get only active pending orders ──
@@ -1213,7 +1232,7 @@ Deno.serve(async (req) => {
         .eq("user_id", userId).eq("bot_id", BOT_ID)
         .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
         .order("placed_at", { ascending: false });
-      return respond(data || []);
+      return respond(await hydratePendingLifecycleRows(adminClient, data || []));
     }
 
     // ── Pending Orders: Cancel a pending order ──
