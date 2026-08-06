@@ -41,6 +41,11 @@ import {
   observeImpulseConfirmationLock,
   observeImpulseEntryPrice,
 } from "../_shared/impulseEntryLifecycleStore.ts";
+import {
+  loadImpulseLifecycleCertificate,
+  resolveImpulseLifecycleEnforcement,
+  type ImpulseLifecycleEnforcementResolution,
+} from "../_shared/impulseLifecycleEnforcement.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import {
   confirmationEvidenceLines,
@@ -345,6 +350,7 @@ Deno.serve(async (req) => {
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
       crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
+      impulseLifecycleEnforcement: ImpulseLifecycleEnforcementResolution;
     }> = {};
     const configFailureUsers = new Map<string, Error>();
 
@@ -448,6 +454,16 @@ Deno.serve(async (req) => {
         runtimeTarget: account?.execution_mode === "live" ? "live" : "paper",
         activation: crossTimeframeActivation,
       });
+      let lifecycleCertificate = null;
+      try {
+        lifecycleCertificate = await loadImpulseLifecycleCertificate(supabase, userId, BOT_ID);
+      } catch (error) {
+        console.warn(`[zone-confirm] Lifecycle certificate unavailable; enforcement fails closed: ${String(error)}`);
+      }
+      const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
+        (styleResolution.config as any).impulseEntryLifecycleMode,
+        lifecycleCertificate,
+      );
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
@@ -459,6 +475,7 @@ Deno.serve(async (req) => {
         gamePlan,
         directionVerdicts,
         crossTimeframeAuthority,
+        impulseLifecycleEnforcement,
       };
     }
 
@@ -503,6 +520,7 @@ Deno.serve(async (req) => {
           gamePlan,
           directionVerdicts,
           crossTimeframeAuthority,
+          impulseLifecycleEnforcement,
         } = userData;
 
         // Avoid market-data work when execution is administratively disabled.
@@ -581,6 +599,7 @@ Deno.serve(async (req) => {
           );
         }
 
+        let lifecycleAfterLock = impulseLifecycleObservation?.after || null;
         try {
           const lockObservation = await observeImpulseConfirmationLock(
             supabase,
@@ -592,10 +611,29 @@ Deno.serve(async (req) => {
               `[zone-confirm] ${pending.symbol} confirmation contract ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
             );
           }
+          lifecycleAfterLock = lockObservation.transitions.at(-1)?.after ||
+            lockObservation.lifecycle || lifecycleAfterLock;
         } catch (lockError: any) {
           console.warn(
             `[zone-confirm] ${pending.symbol} confirmation lock observation failed (non-blocking): ${lockError?.message}`,
           );
+        }
+
+        if (
+          impulseLifecycleEnforcement.effectiveMode === "enforce" &&
+          impulseLifecycleObservation?.event?.type === "candidate_failed" &&
+          impulseLifecycleObservation.after.status === "active"
+        ) {
+          const { data: retarget, error: retargetError } = await supabase.rpc(
+            "retarget_pending_to_impulse_candidate",
+            { p_pending_id: pending.id, p_user_id: userId, p_bot_id: BOT_ID },
+          );
+          if (retargetError) throw retargetError;
+          if (retarget?.retargeted) {
+            resetToPending++;
+            console.log(`[zone-confirm] ${pending.symbol} retargeted to frozen impulse candidate ${retarget.candidate_id}`);
+            continue;
+          }
         }
 
         // ── Check impulse invalidation ──
@@ -742,6 +780,9 @@ Deno.serve(async (req) => {
           : confirmationMethod === "indicators"
           ? !!indicatorConfirmation?.confirmed
           : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
+        const lifecycleConfirmationPassed =
+          impulseLifecycleEnforcement.effectiveMode !== "enforce" ||
+          lifecycleAfterLock?.status === "entered";
         const confirmationAuthority = buildRoutedConfirmationObservation({
           method: confirmationMethod,
           direction: pending.direction as "long" | "short",
@@ -843,10 +884,10 @@ Deno.serve(async (req) => {
           );
         }
 
-        if (!confirmationPassed) {
+        if (!confirmationPassed || !lifecycleConfirmationPassed) {
           stillHunting++;
           console.log(
-            `[zone-confirm] ${pending.symbol} ${pending.direction} — no ${confirmationMethod} confirmation yet`
+            `[zone-confirm] ${pending.symbol} ${pending.direction} — ${!confirmationPassed ? `no ${confirmationMethod} confirmation yet` : "frozen confirmation contract not satisfied"}`
             + ` (CHoCH=${confirmationSignal ? `T${confirmationSignal.tier}` : "none"}, indicators=${indicatorConfirmation?.passedCount ?? 0}/4)`,
           );
           continue;
