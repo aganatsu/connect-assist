@@ -23,4 +23,11 @@ describe("mobile trade management", () => {
     expect(mobile).toContain("safe-area-inset-bottom");
     expect(mobile).toContain("Manage Trade");
   });
+
+  it("contains override actions within the mobile sheet width", () => {
+    const overrides = readFileSync("src/components/TradeOverrideEditor.tsx", "utf8");
+    expect(overrides).toContain("grid grid-cols-2 gap-2");
+    expect(overrides).toContain("col-span-2");
+    expect(overrides).toContain("w-full md:w-auto");
+  });
 });
