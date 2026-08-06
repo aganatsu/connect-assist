@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -74,7 +74,7 @@ function ManagementCard({
 
 // ─── Inline SL/TP Editor (ROW 6) ───────────────────────────────────
 
-function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void }) {
+export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void }) {
   const [sl, setSl] = useState(position.stopLoss ? String(parseFloat(position.stopLoss)) : "");
   const [tp, setTp] = useState(position.takeProfit ? String(parseFloat(position.takeProfit)) : "");
   const [saving, setSaving] = useState(false);
@@ -82,6 +82,11 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
   const initialSl = position.stopLoss ? String(parseFloat(position.stopLoss)) : "";
   const initialTp = position.takeProfit ? String(parseFloat(position.takeProfit)) : "";
   const dirty = sl !== initialSl || tp !== initialTp;
+
+  useEffect(() => {
+    setSl(initialSl);
+    setTp(initialTp);
+  }, [initialSl, initialTp]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -100,8 +105,8 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
   };
 
   return (
-    <div className="flex items-end gap-3 pt-2 border-t border-border/30">
-      <div className="space-y-1 flex-1">
+    <div className="grid grid-cols-2 md:flex md:items-end gap-2 md:gap-3 pt-2 border-t border-border/30">
+      <div className="space-y-1 min-w-0 md:flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Current SL</Label>
         <Input
           type="number" step="0.00001" value={sl}
@@ -109,7 +114,7 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
           className="h-9 text-xs font-mono px-2"
         />
       </div>
-      <div className="space-y-1 flex-1">
+      <div className="space-y-1 min-w-0 md:flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Take Profit</Label>
         <Input
           type="number" step="0.00001" value={tp}
@@ -119,14 +124,14 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
       </div>
       <Button
         size="sm"
-        className="h-9 px-6 text-xs bg-cyan-600 hover:bg-cyan-700 text-white"
+        className="h-10 md:h-9 px-4 md:px-6 text-xs bg-cyan-600 hover:bg-cyan-700 text-white"
         disabled={!dirty || saving}
         onClick={handleSave}
       >
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
       </Button>
       {dirty && !saving && (
-        <Button size="sm" variant="ghost" className="h-9 text-xs"
+        <Button size="sm" variant="ghost" className="h-10 md:h-9 text-xs"
           onClick={() => { setSl(initialSl); setTp(initialTp); }}>
           Reset
         </Button>

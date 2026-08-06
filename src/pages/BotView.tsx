@@ -762,6 +762,7 @@ export default function BotView() {
                             paperApi.closePosition(id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
                           }
                         }}
+                        onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })}
                       />
                     ))}
                   </div>
