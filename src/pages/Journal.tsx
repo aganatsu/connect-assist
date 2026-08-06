@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { tradesApi, paperApi } from "@/lib/api";
@@ -17,13 +16,11 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid, PieChart, Pie,
 } from "recharts";
-import { Filter, Plus, X, BookOpen, Download, Tag, ChevronDown } from "lucide-react";
+import { Filter, X, BookOpen, Download, Tag, ChevronDown } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 
 const ALL_SYMBOLS = ["all", ...INSTRUMENTS.map(i => i.symbol)];
-const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep + OB", "Premium/Discount + BOS", "FVG Fill + Confluence", "Manual"];
-
 // ─── Auto-Tag Extraction ─────────────────────────────────────────────
 interface AutoTags {
   setupType: string | null;
@@ -121,21 +118,10 @@ export default function JournalView() {
   const [filterSymbol, setFilterSymbol] = useState("all");
   const [filterDirection, setFilterDirection] = useState<"all" | "long" | "short">("all");
   const [filterTag, setFilterTag] = useState<string>("all");
-  const [addOpen, setAddOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<any>(null);
   const [showTagFilters, setShowTagFilters] = useState(false);
   const [reviewScope, setReviewScope] = useState<"pending" | "reviewed">("pending");
 
-  const [formSymbol, setFormSymbol] = useState("EUR/USD");
-  const [formDirection, setFormDirection] = useState<"long" | "short">("long");
-  const [formEntry, setFormEntry] = useState("");
-  const [formExit, setFormExit] = useState("");
-  const [formSetup, setFormSetup] = useState(SETUP_TYPES[0]);
-  const [formTimeframe, setFormTimeframe] = useState("1h");
-  const [formNotes, setFormNotes] = useState("");
-  const [formRisk, setFormRisk] = useState("");
-  const [formRR, setFormRR] = useState("");
-  const [formPnl, setFormPnl] = useState("");
   const { data: tradesResponse, isLoading } = useQuery({
     queryKey: ["trade-reviews"],
     queryFn: () => tradesApi.reviews(500),
@@ -147,21 +133,6 @@ export default function JournalView() {
     staleTime: 60_000,
   });
   const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : [];
-
-  const createMutation = useMutation({
-    mutationFn: (trade: any) => tradesApi.create(trade),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["trades"] }); toast.success("Trade added"); setAddOpen(false); setFormEntry(""); setFormExit(""); setFormNotes(""); setFormRisk(""); setFormRR(""); setFormPnl(""); },
-    onError: (e: any) => toast.error(e.message),
-  });
-
-  const handleAddTrade = () => {
-    createMutation.mutate({
-      symbol: formSymbol, direction: formDirection, entry_price: formEntry, entry_time: new Date().toISOString(),
-      exit_price: formExit || null, exit_time: formExit ? new Date().toISOString() : null, status: formExit ? "closed" : "open",
-      setup_type: formSetup, timeframe: formTimeframe, notes: formNotes,
-      risk_percent: formRisk || null, risk_reward: formRR || null, pnl_amount: formPnl || null,
-    });
-  };
 
   const handleExportCSV = () => {
     const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Session", "Regime", "Score", "Notes"];
@@ -306,57 +277,24 @@ export default function JournalView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row h-[calc(100dvh-7.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <div className="flex min-h-0 flex-col md:h-[calc(100vh-4.5rem)] md:flex-row">
         {/* Main content */}
         <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
-          <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold">Trade Reviews</h1>
               <p className="text-[11px] text-muted-foreground">Closed bot trades appear automatically. Review the decision story, outcome and lesson.</p>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Dialog open={addOpen} onOpenChange={setAddOpen}>
-                <DialogTrigger asChild><Button size="sm" className="h-7 text-[11px]"><Plus className="h-3 w-3 mr-1" /> Add Trade</Button></DialogTrigger>
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleExportCSV} disabled={filteredTrades.length === 0}>
-                <Download className="h-3 w-3 mr-1" /> CSV
-              </Button>
-                <DialogContent className="max-w-md">
-                  <DialogHeader><DialogTitle>Add Manual Trade</DialogTitle></DialogHeader>
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><Label className="text-[10px]">Symbol</Label>
-                        <select value={formSymbol} onChange={e => setFormSymbol(e.target.value)} className="w-full mt-1 bg-secondary border border-border px-2 py-1.5 text-xs">{INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}</select></div>
-                      <div><Label className="text-[10px]">Direction</Label>
-                        <select value={formDirection} onChange={e => setFormDirection(e.target.value as any)} className="w-full mt-1 bg-secondary border border-border px-2 py-1.5 text-xs"><option value="long">Long</option><option value="short">Short</option></select></div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><Label className="text-[10px]">Entry Price</Label><Input value={formEntry} onChange={e => setFormEntry(e.target.value)} className="mt-1 h-7 text-xs" placeholder="1.08500" /></div>
-                      <div><Label className="text-[10px]">Exit Price</Label><Input value={formExit} onChange={e => setFormExit(e.target.value)} className="mt-1 h-7 text-xs" placeholder="1.09200" /></div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><Label className="text-[10px]">Setup</Label>
-                        <select value={formSetup} onChange={e => setFormSetup(e.target.value)} className="w-full mt-1 bg-secondary border border-border px-2 py-1.5 text-xs">{SETUP_TYPES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-                      <div><Label className="text-[10px]">Timeframe</Label>
-                        <select value={formTimeframe} onChange={e => setFormTimeframe(e.target.value)} className="w-full mt-1 bg-secondary border border-border px-2 py-1.5 text-xs">{["5min","15min","1h","4h","1day"].map(t => <option key={t} value={t}>{t}</option>)}</select></div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div><Label className="text-[10px]">Risk %</Label><Input value={formRisk} onChange={e => setFormRisk(e.target.value)} className="mt-1 h-7 text-xs" /></div>
-                      <div><Label className="text-[10px]">R:R</Label><Input value={formRR} onChange={e => setFormRR(e.target.value)} className="mt-1 h-7 text-xs" /></div>
-                      <div><Label className="text-[10px]">P&L</Label><Input value={formPnl} onChange={e => setFormPnl(e.target.value)} className="mt-1 h-7 text-xs" /></div>
-                    </div>
-                    <div><Label className="text-[10px]">Notes</Label><Textarea value={formNotes} onChange={e => setFormNotes(e.target.value)} className="mt-1 text-xs" rows={2} /></div>
-                    <Button onClick={handleAddTrade} disabled={!formEntry} className="w-full h-7 text-xs">Save Trade</Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
-              <div className="flex items-center gap-1.5">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1.5 sm:flex sm:w-auto">
                 <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-                <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="bg-card border border-border px-2 py-1 text-[11px]">{ALL_SYMBOLS.map(s => <option key={s} value={s}>{s === "all" ? "All Symbols" : s}</option>)}</select>
-                <select value={filterDirection} onChange={e => setFilterDirection(e.target.value as any)} className="bg-card border border-border px-2 py-1 text-[11px]"><option value="all">All</option><option value="long">Long</option><option value="short">Short</option></select>
+                <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="min-w-0 bg-card border border-border px-2 py-2 text-[11px] sm:py-1">{ALL_SYMBOLS.map(s => <option key={s} value={s}>{s === "all" ? "All Symbols" : s}</option>)}</select>
+                <select value={filterDirection} onChange={e => setFilterDirection(e.target.value as any)} className="min-w-0 bg-card border border-border px-2 py-2 text-[11px] sm:py-1"><option value="all">All</option><option value="long">Long</option><option value="short">Short</option></select>
                 <button onClick={() => setShowTagFilters(!showTagFilters)} className={`flex items-center gap-1 px-2 py-1 text-[11px] border rounded ${showTagFilters ? 'bg-primary/10 border-primary/40 text-primary' : 'bg-card border-border text-muted-foreground'}`}>
                   <Tag className="h-3 w-3" /> Tags <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showTagFilters ? 'rotate-180' : ''}`} />
                 </button>
               </div>
+                <Button size="sm" variant="outline" className="h-9 w-9 p-0 sm:h-7 sm:w-auto sm:px-2" onClick={handleExportCSV} disabled={filteredTrades.length === 0} title="Download CSV"><Download className="h-3.5 w-3.5" /><span className="sr-only sm:not-sr-only sm:ml-1">CSV</span></Button>
             </div>
           </div>
 
@@ -401,14 +339,14 @@ export default function JournalView() {
           </div>
 
           <Tabs defaultValue="journal">
-            <TabsList className="h-7">
-              <TabsTrigger value="journal" className="text-[11px] h-6">Trade Reviews</TabsTrigger>
-              <TabsTrigger value="analytics" className="text-[11px] h-6">Model Insights</TabsTrigger>
+            <TabsList className="grid h-9 w-full grid-cols-2 sm:flex sm:h-7 sm:w-auto">
+              <TabsTrigger value="journal" className="h-8 text-[11px] sm:h-6">Trade Reviews</TabsTrigger>
+              <TabsTrigger value="analytics" className="h-8 text-[11px] sm:h-6">Model Insights</TabsTrigger>
             </TabsList>
 
             <TabsContent value="journal" className="mt-2">
               <Card>
-                <CardContent className="pt-3">
+                <CardContent className="p-2 md:px-6 md:pt-3 md:pb-6">
                   {isLoading ? <p className="text-xs text-muted-foreground py-4 text-center">Loading...</p> :
                   filteredTrades.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
@@ -417,7 +355,41 @@ export default function JournalView() {
                       <p className="text-[11px] mt-1 text-center max-w-xs">Closed bot trades appear here automatically.</p>
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <>
+                    <div className="space-y-2 md:hidden">
+                      {filteredTrades.map((t: any) => {
+                        const tags = extractAutoTags(t);
+                        const pnl = parseFloat(t.pnl_amount || "0");
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setSelectedTrade(t)}
+                            className="w-full border border-border bg-secondary/20 p-3 text-left active:bg-secondary/50"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold">{t.symbol}</span>
+                                  <span className={`text-[10px] font-semibold uppercase ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction}</span>
+                                </div>
+                                <p className="mt-1 font-mono text-[10px] text-muted-foreground">{t.entry_time?.split("T")[0]}</p>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className={`font-mono text-sm font-bold ${pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(pnl, true)}</p>
+                                <p className="mt-1 text-[10px] text-muted-foreground">Score {tags.score != null ? tags.score.toFixed(1) : "-"}</p>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {tags.session && <Badge variant="outline" className={`h-5 px-1.5 text-[9px] ${getTagColor(tags.session)}`}>{tags.session}</Badge>}
+                              {tags.setupType && <Badge variant="outline" className="h-5 max-w-full truncate px-1.5 text-[9px]">{tags.setupType.replace(/_/g, " ")}</Badge>}
+                              {tags.regime && <Badge variant="outline" className={`h-5 px-1.5 text-[9px] ${getTagColor(tags.regime)}`}>{tags.regime}</Badge>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="hidden overflow-x-auto md:block">
                     <table className="w-full min-w-[680px] text-[11px]">
                       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
@@ -453,6 +425,7 @@ export default function JournalView() {
                       </tbody>
                     </table>
                     </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -519,10 +492,10 @@ export default function JournalView() {
 
         {/* Trade Detail Panel (slide-in) */}
         {selectedTrade && (
-          <div className="flex-1 border-t md:border-t-0 md:border-l border-border pt-3 md:pt-0 md:pl-3 md:ml-3 overflow-y-auto">
-            <div className="flex items-center justify-between mb-3">
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-background px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))] md:static md:z-auto md:flex-1 md:border-l md:border-border md:bg-transparent md:py-0 md:pl-3 md:ml-3">
+            <div className="sticky top-0 z-10 -mx-4 mb-3 flex items-center justify-between border-b border-border bg-background px-4 py-3 md:static md:mx-0 md:border-0 md:bg-transparent md:px-0 md:py-0">
               <h3 className="text-sm font-bold">Trade Detail</h3>
-              <button onClick={() => setSelectedTrade(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+              <button onClick={() => setSelectedTrade(null)} className="flex h-10 w-10 items-center justify-center text-muted-foreground hover:text-foreground md:h-auto md:w-auto"><X className="h-4 w-4" /></button>
             </div>
             <TradeDetailPanel trade={selectedTrade} onReviewSaved={() => {
               queryClient.invalidateQueries({ queryKey: ["trade-reviews"] });
