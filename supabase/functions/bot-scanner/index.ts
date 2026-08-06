@@ -9,6 +9,10 @@ import {
 } from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
+import {
+  loadImpulseLifecycleCertificate,
+  resolveImpulseLifecycleEnforcement,
+} from "../_shared/impulseLifecycleEnforcement.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
   evaluateFinalTradeAuthorization,
@@ -1478,6 +1482,16 @@ async function runScanForUser(
   try {
   const styleResolution = await loadConfig(supabase, userId);
   const config = styleResolution.config;
+  let impulseLifecycleCertificate = null;
+  try {
+    impulseLifecycleCertificate = await loadImpulseLifecycleCertificate(supabase, userId, BOT_ID);
+  } catch (error) {
+    console.warn(`[bot-scanner] Lifecycle certificate unavailable; enforcement fails closed: ${String(error)}`);
+  }
+  const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
+    (config as any).impulseEntryLifecycleMode,
+    impulseLifecycleCertificate,
+  );
   const resolvedStyle = styleResolution.style;
   const runtimeConfigProvenance = styleResolution.provenance;
 
@@ -5581,7 +5595,7 @@ async function runScanForUser(
           row.id === (detail as any).timeframeEvidenceId
         ) || null,
         impulseEntryLifecycleMode:
-          (pairConfig as any).impulseEntryLifecycleMode || "observe",
+          impulseLifecycleEnforcement.effectiveMode,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
       });
     const currentWatchlistLifecycle = (executionEligible: boolean) => {

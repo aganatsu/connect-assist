@@ -15,6 +15,48 @@ const respond = (data: unknown, status = 200) => new Response(JSON.stringify(dat
   headers: { ...corsHeaders, "Content-Type": "application/json" },
 });
 
+async function publishEnforcementCertificate(client: any, userId: string) {
+  const { data: summary, error } = await client
+    .from("impulse_entry_lifecycle_replay_summary").select("*")
+    .eq("user_id", userId).eq("bot_id", BOT_ID)
+    .eq("evidence_source", "retrospective_replay").maybeSingle();
+  if (error) throw error;
+  if (!summary) return null;
+  const evidence = {
+    contract: "impulse-lifecycle-enforcement.v1",
+    replayCount: Number(summary.replay_count || 0),
+    resolvedCount: Number(summary.winners || 0) + Number(summary.losers || 0),
+    rescuedWinners: Number(summary.rescued_winners || 0),
+    addedLosses: Number(summary.added_losses || 0),
+    winnersRetained: Number(summary.winners_retained || 0),
+    minimumSampleReady: summary.minimum_sample_ready === true,
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(evidence));
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+    .map((value) => value.toString(16).padStart(2, "0")).join("");
+  const status = evidence.minimumSampleReady && evidence.rescuedWinners >= evidence.addedLosses
+    ? "eligible" : evidence.minimumSampleReady ? "rejected" : "collecting";
+  const { data: current } = await client.from("impulse_lifecycle_enforcement_certificates")
+    .select("id,evidence_hash,reviewed,reviewed_at").eq("user_id", userId)
+    .eq("bot_id", BOT_ID).eq("is_current", true).maybeSingle();
+  if (current?.evidence_hash !== hash) {
+    await client.from("impulse_lifecycle_enforcement_certificates")
+      .update({ is_current: false }).eq("user_id", userId).eq("bot_id", BOT_ID).eq("is_current", true);
+  }
+  const { data: certificate, error: certificateError } = await client
+    .from("impulse_lifecycle_enforcement_certificates").upsert({
+      user_id: userId, bot_id: BOT_ID, evidence_hash: hash, status,
+      replay_count: evidence.replayCount, resolved_count: evidence.resolvedCount,
+      rescued_winners: evidence.rescuedWinners, added_losses: evidence.addedLosses,
+      minimum_sample_ready: evidence.minimumSampleReady, is_current: true, evidence,
+      reviewed: current?.evidence_hash === hash ? current.reviewed : false,
+      reviewed_at: current?.evidence_hash === hash ? current.reviewed_at : null,
+      generated_at: new Date().toISOString(),
+    }, { onConflict: "user_id,bot_id,evidence_hash" }).select("*").single();
+  if (certificateError) throw certificateError;
+  return certificate;
+}
+
 async function monitorOrphanedLifecycles(client: any) {
   const { data: lifecycles, error } = await client
     .from("impulse_entry_lifecycles")
@@ -106,10 +148,9 @@ Deno.serve(async (req) => {
     }
     const userId = await resolveAuthenticatedUserId(req);
     if (!userId) return respond({ error: "Unauthorized" }, 401);
-    return respond({
-      success: true,
-      ...(await replayUserLifecycles(client, userId, Math.min(100, Number(body.limit) || 100))),
-    });
+    const replay = await replayUserLifecycles(client, userId, Math.min(100, Number(body.limit) || 100));
+    const certificate = await publishEnforcementCertificate(client, userId);
+    return respond({ success: true, ...replay, certificate });
   } catch (error) {
     console.error("[impulse-lifecycle-replay]", error);
     return respond({ error: error instanceof Error ? error.message : String(error) }, 500);

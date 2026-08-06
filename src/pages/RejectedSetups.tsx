@@ -129,6 +129,13 @@ interface ImpulseLifecycleReplaySummary {
   minimum_sample_ready: boolean;
 }
 
+interface ImpulseLifecycleEnforcementCertificate {
+  evidence_hash: string; status: "collecting" | "eligible" | "rejected";
+  reviewed: boolean; reviewed_at: string | null; replay_count: number;
+  resolved_count: number; rescued_winners: number; added_losses: number;
+  minimum_sample_ready: boolean;
+}
+
 interface ImpulseEntryLifecycleEvidence {
   lifecycleCount: number;
   activeCount: number;
@@ -384,6 +391,16 @@ async function fetchImpulseLifecycleReplaySummary(
   return data || null;
 }
 
+async function fetchImpulseLifecycleCertificate(
+  userId: string,
+): Promise<ImpulseLifecycleEnforcementCertificate | null> {
+  const { data, error } = await (supabase as any)
+    .from("impulse_lifecycle_enforcement_certificates").select("*")
+    .eq("user_id", userId).eq("bot_id", "smc").eq("is_current", true).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data || null;
+}
+
 async function fetchZoneLocalValidation(
   userId: string,
 ): Promise<ZoneLocalValidationSummary[]> {
@@ -484,6 +501,7 @@ export default function RejectedSetups() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [isGeneratingCertificate, setIsGeneratingCertificate] = useState(false);
   const [isReplayingImpulseLifecycle, setIsReplayingImpulseLifecycle] = useState(false);
+  const [isReviewingImpulseLifecycle, setIsReviewingImpulseLifecycle] = useState(false);
 
   const { data: rawSetups = [], isLoading, refetch } = useQuery({
     queryKey: ["rejected-setups", user?.id, days],
@@ -570,6 +588,14 @@ export default function RejectedSetups() {
   } = useQuery({
     queryKey: ["impulse-lifecycle-replay-summary", user?.id],
     queryFn: () => fetchImpulseLifecycleReplaySummary(user!.id),
+    enabled: !!user?.id, refetchInterval: 60_000, retry: false,
+  });
+  const {
+    data: impulseLifecycleCertificate,
+    refetch: refetchImpulseLifecycleCertificate,
+  } = useQuery({
+    queryKey: ["impulse-lifecycle-enforcement-certificate", user?.id],
+    queryFn: () => fetchImpulseLifecycleCertificate(user!.id),
     enabled: !!user?.id, refetchInterval: 60_000, retry: false,
   });
   const {
@@ -672,6 +698,7 @@ export default function RejectedSetups() {
       );
       if (error) throw error;
       await refetchImpulseLifecycleReplaySummary();
+      await refetchImpulseLifecycleCertificate();
       toast.success(
         `Lifecycle replay completed: ${data?.replayed || 0} replayed, ${data?.unavailable || 0} unavailable.`,
       );
@@ -681,6 +708,24 @@ export default function RejectedSetups() {
       );
     } finally {
       setIsReplayingImpulseLifecycle(false);
+    }
+  };
+
+  const reviewImpulseLifecycleCertificate = async () => {
+    if (!impulseLifecycleCertificate?.evidence_hash) return;
+    setIsReviewingImpulseLifecycle(true);
+    try {
+      const { error } = await (supabase as any).rpc(
+        "review_impulse_lifecycle_certificate",
+        { p_evidence_hash: impulseLifecycleCertificate.evidence_hash },
+      );
+      if (error) throw error;
+      await refetchImpulseLifecycleCertificate();
+      toast.success("Impulse lifecycle evidence reviewed. Enforce can now be selected in Bot Config.");
+    } catch (error) {
+      toast.error(`Evidence review failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsReviewingImpulseLifecycle(false);
     }
   };
 
@@ -1293,8 +1338,11 @@ export default function RejectedSetups() {
               evidence={impulseEntryLifecycleEvidence}
               loading={isLoadingImpulseEntryLifecycleEvidence}
               replay={impulseLifecycleReplaySummary}
+              certificate={impulseLifecycleCertificate}
               replaying={isReplayingImpulseLifecycle}
+              reviewing={isReviewingImpulseLifecycle}
               onReplay={runImpulseLifecycleReplay}
+              onReview={reviewImpulseLifecycleCertificate}
             />
 
             <Card className="border-border/50">
@@ -1631,12 +1679,17 @@ function EvidenceBreakdownTable({
 }
 
 function ImpulseEntryLifecycleEvidenceCard({
-  evidence, loading, replay, replaying, onReplay,
+  evidence, loading, replay, certificate, replaying, reviewing, onReplay, onReview,
 }: {
   evidence?: ImpulseEntryLifecycleEvidence; loading: boolean;
   replay?: ImpulseLifecycleReplaySummary | null; replaying: boolean;
-  onReplay: () => void;
+  certificate?: ImpulseLifecycleEnforcementCertificate | null; reviewing: boolean;
+  onReplay: () => void; onReview: () => void;
 }) {
+  const unlocked = certificate?.status === "eligible" && certificate.reviewed &&
+    certificate.minimum_sample_ready;
+  const readyForReview = certificate?.status === "eligible" &&
+    certificate.minimum_sample_ready && !certificate.reviewed;
   return (
     <Card className="border-border/50">
       <CardHeader className="pb-2 pt-3 px-4">
@@ -1652,7 +1705,14 @@ function ImpulseEntryLifecycleEvidenceCard({
               <RefreshCw className={`h-3 w-3 mr-1 `} />
               {replaying ? "Replaying…" : "Replay 100"}
             </Button>
-            <Badge variant="outline" className="text-[9px] border-warning/40 text-warning">ENFORCE LOCKED</Badge>
+            {readyForReview && (
+              <Button type="button" size="sm" className="h-7 text-[10px]" onClick={onReview} disabled={reviewing}>
+                {reviewing ? "Reviewing…" : "Review & Unlock Enforce"}
+              </Button>
+            )}
+            <Badge variant="outline" className={`text-[9px] ${unlocked ? "border-success/40 text-success" : readyForReview ? "border-info-c/40 text-info-c" : "border-warning/40 text-warning"}`}>
+              {unlocked ? "ENFORCE UNLOCKED" : readyForReview ? "READY FOR REVIEW" : "ENFORCE LOCKED"}
+            </Badge>
           </div>
         </div>
       </CardHeader>
