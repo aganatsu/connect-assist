@@ -222,10 +222,12 @@ export function buildFrozenCrossTimeframeContext(input: {
         impulseId: canonicalRange.impulseId,
       }))
     : [];
-  const lifecycleExpiry = new Date(
-    Date.parse(canonicalRange?.frozenAt || input.stylePolicy.resolvedAt) +
-      (input.stylePolicy.lifecycle?.limitOrderExpiryMinutes ?? 60) * 60_000,
-  ).toISOString();
+  const lifecycleExpiry = canonicalRange
+    ? new Date(
+      Date.parse(canonicalRange.frozenAt) +
+        (input.stylePolicy.lifecycle?.limitOrderExpiryMinutes ?? 60) * 60_000,
+    ).toISOString()
+    : null;
   const impulseEntryLifecycle = canonicalRange && lifecycleCandidates.length > 0
     ? buildImpulseEntryLifecycle({
       mode: input.impulseEntryLifecycleMode || "observe",
@@ -239,7 +241,7 @@ export function buildFrozenCrossTimeframeContext(input: {
         protectedLevel: canonicalRange.direction === "bullish"
           ? canonicalRange.low
           : canonicalRange.high,
-        expiresAt: lifecycleExpiry,
+        expiresAt: lifecycleExpiry!,
       },
       candidates: lifecycleCandidates,
       initialCandidateId: typeof authoritySelected.id === "string"
@@ -249,7 +251,7 @@ export function buildFrozenCrossTimeframeContext(input: {
         method: input.confirmationMethod || "choch",
         timeframe: input.stylePolicy.timeframes?.roles?.confirmation || "5m",
         refinementTimeframe: input.stylePolicy.timeframes?.roles?.refinement || "1m",
-        expiresAt: lifecycleExpiry,
+        expiresAt: lifecycleExpiry!,
       },
     })
     : null;
