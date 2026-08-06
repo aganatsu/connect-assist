@@ -17,7 +17,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid, PieChart, Pie,
 } from "recharts";
-import { Filter, Calculator, Plus, X, BookOpen, Download, Import, Tag, ChevronDown } from "lucide-react";
+import { Filter, Plus, X, BookOpen, Download, Tag, ChevronDown } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 
@@ -124,6 +124,7 @@ export default function JournalView() {
   const [addOpen, setAddOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<any>(null);
   const [showTagFilters, setShowTagFilters] = useState(false);
+  const [reviewScope, setReviewScope] = useState<"pending" | "reviewed">("pending");
 
   const [formSymbol, setFormSymbol] = useState("EUR/USD");
   const [formDirection, setFormDirection] = useState<"long" | "short">("long");
@@ -135,32 +136,21 @@ export default function JournalView() {
   const [formRisk, setFormRisk] = useState("");
   const [formRR, setFormRR] = useState("");
   const [formPnl, setFormPnl] = useState("");
-  const [journalPage, setJournalPage] = useState(0);
-  const journalPageSize = 50;
-
   const { data: tradesResponse, isLoading } = useQuery({
-    queryKey: ["trades", journalPage],
-    queryFn: () => tradesApi.list(journalPageSize, journalPage * journalPageSize),
+    queryKey: ["trade-reviews"],
+    queryFn: () => tradesApi.reviews(500),
+    refetchInterval: 60_000,
   });
   const { data: accountStatus } = useQuery({
     queryKey: ["paper-status-journal"],
     queryFn: () => paperApi.status(),
     staleTime: 60_000,
   });
-  // Support both old (array) and new (paginated object) response shapes
-  const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : (tradesResponse?.data ?? []);
-  const tradesTotalCount: number = Array.isArray(tradesResponse) ? tradesResponse.length : (tradesResponse?.total ?? trades.length);
-  const journalTotalPages = Math.max(1, Math.ceil(tradesTotalCount / journalPageSize));
+  const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : [];
 
   const createMutation = useMutation({
     mutationFn: (trade: any) => tradesApi.create(trade),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["trades"] }); toast.success("Trade added"); setAddOpen(false); setFormEntry(""); setFormExit(""); setFormNotes(""); setFormRisk(""); setFormRR(""); setFormPnl(""); },
-    onError: (e: any) => toast.error(e.message),
-  });
-
-  const importMutation = useMutation({
-    mutationFn: () => tradesApi.importFromPaper(),
-    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["trades"] }); toast.success(`Imported ${data?.imported ?? 0} bot trades`); },
     onError: (e: any) => toast.error(e.message),
   });
 
@@ -211,6 +201,7 @@ export default function JournalView() {
     return (trades as any[]).filter((t: any) => {
       if (filterSymbol !== "all" && t.symbol !== filterSymbol) return false;
       if (filterDirection !== "all" && t.direction !== filterDirection) return false;
+      if ((t.review_status || "pending") !== reviewScope) return false;
       if (filterTag !== "all") {
         const tags = extractAutoTags(t);
         const [category, value] = filterTag.split(":");
@@ -225,7 +216,15 @@ export default function JournalView() {
       }
       return true;
     });
-  }, [trades, filterSymbol, filterDirection, filterTag]);
+  }, [trades, filterSymbol, filterDirection, filterTag, reviewScope]);
+
+  const insightTrades = useMemo(() => {
+    return trades.filter((trade: any) => {
+      if (filterSymbol !== "all" && trade.symbol !== filterSymbol) return false;
+      if (filterDirection !== "all" && trade.direction !== filterDirection) return false;
+      return true;
+    });
+  }, [trades, filterSymbol, filterDirection]);
 
   const computedStats = useMemo(() => {
     const wins = filteredTrades.filter((t: any) => parseFloat(t.pnl_amount || "0") > 0);
@@ -268,7 +267,7 @@ export default function JournalView() {
 
   // ─── Analytics: Performance by Tag ─────────────────────────────────
   const tagPerformance = useMemo(() => {
-    const closedTrades = filteredTrades.filter((t: any) => t.status === "closed" && t.pnl_amount != null);
+    const closedTrades = insightTrades.filter((t: any) => t.status === "closed" && t.pnl_amount != null);
     // By session
     const bySession: Record<string, { wins: number; total: number; pnl: number }> = {};
     // By setup type
@@ -303,21 +302,21 @@ export default function JournalView() {
     });
 
     return { bySession, bySetup, byRegime };
-  }, [filteredTrades]);
+  }, [insightTrades]);
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col md:flex-row h-[calc(100dvh-7.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Main content */}
         <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <h1 className="text-xl font-bold">Trade Journal</h1>
+            <div>
+              <h1 className="text-xl font-bold">Trade Reviews</h1>
+              <p className="text-[11px] text-muted-foreground">Closed bot trades appear automatically. Review the decision story, outcome and lesson.</p>
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Dialog open={addOpen} onOpenChange={setAddOpen}>
                 <DialogTrigger asChild><Button size="sm" className="h-7 text-[11px]"><Plus className="h-3 w-3 mr-1" /> Add Trade</Button></DialogTrigger>
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
-                <Import className="h-3 w-3 mr-1" /> {importMutation.isPending ? "Importing…" : "Import Bot Trades"}
-              </Button>
               <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleExportCSV} disabled={filteredTrades.length === 0}>
                 <Download className="h-3 w-3 mr-1" /> CSV
               </Button>
@@ -379,6 +378,15 @@ export default function JournalView() {
           )}
 
           {/* Summary KPIs */}
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => setReviewScope("pending")} className={`h-10 border text-xs font-medium ${reviewScope === "pending" ? "border-warning bg-warning/10 text-warning" : "border-border text-muted-foreground"}`}>
+              Review Queue ({trades.filter((trade: any) => (trade.review_status || "pending") === "pending").length})
+            </button>
+            <button onClick={() => setReviewScope("reviewed")} className={`h-10 border text-xs font-medium ${reviewScope === "reviewed" ? "border-success bg-success/10 text-success" : "border-border text-muted-foreground"}`}>
+              Reviewed ({trades.filter((trade: any) => trade.review_status === "reviewed").length})
+            </button>
+          </div>
+
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {[
               { label: "Total", value: computedStats.total },
@@ -394,10 +402,8 @@ export default function JournalView() {
 
           <Tabs defaultValue="journal">
             <TabsList className="h-7">
-              <TabsTrigger value="journal" className="text-[11px] h-6">Trades</TabsTrigger>
-              <TabsTrigger value="analytics" className="text-[11px] h-6">Analytics</TabsTrigger>
-              <TabsTrigger value="performance" className="text-[11px] h-6">Performance</TabsTrigger>
-              <TabsTrigger value="calculator" className="text-[11px] h-6">Calculator</TabsTrigger>
+              <TabsTrigger value="journal" className="text-[11px] h-6">Trade Reviews</TabsTrigger>
+              <TabsTrigger value="analytics" className="text-[11px] h-6">Model Insights</TabsTrigger>
             </TabsList>
 
             <TabsContent value="journal" className="mt-2">
@@ -407,11 +413,12 @@ export default function JournalView() {
                   filteredTrades.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                       <BookOpen className="h-10 w-10 mb-3 opacity-20" />
-                      <p className="text-sm font-medium">No trades recorded yet</p>
-                      <p className="text-[11px] mt-1 text-center max-w-xs">Add trades manually with the "+ Add Trade" button, or they'll appear here automatically when your bot closes positions.</p>
+                      <p className="text-sm font-medium">{reviewScope === "pending" ? "Review queue is clear" : "No reviewed trades yet"}</p>
+                      <p className="text-[11px] mt-1 text-center max-w-xs">Closed bot trades appear here automatically.</p>
                     </div>
                   ) : (
-                    <table className="w-full text-[11px]">
+                    <div className="overflow-x-auto">
+                    <table className="w-full min-w-[680px] text-[11px]">
                       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
                         <th className="text-left py-1 px-1">Tags</th><th className="text-left py-1 px-1">Date</th>
@@ -445,18 +452,6 @@ export default function JournalView() {
                         })}
                       </tbody>
                     </table>
-                  )}
-                  {journalTotalPages > 1 && (
-                    <div className="flex items-center justify-between px-2 py-2 border-t border-border mt-2">
-                      <span className="text-[10px] text-muted-foreground font-mono">
-                        Page {journalPage + 1} of {journalTotalPages} ({tradesTotalCount} total)
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage === 0} onClick={() => setJournalPage(0)}>«</Button>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage === 0} onClick={() => setJournalPage(p => p - 1)}>‹ Prev</Button>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage >= journalTotalPages - 1} onClick={() => setJournalPage(p => p + 1)}>Next ›</Button>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage >= journalTotalPages - 1} onClick={() => setJournalPage(journalTotalPages - 1)}>»</Button>
-                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -474,7 +469,7 @@ export default function JournalView() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-sm">Factor Frequency (Top Factors in Winning Trades)</CardTitle></CardHeader>
                 <CardContent>
-                  <FactorHeatmap trades={filteredTrades} />
+                  <FactorHeatmap trades={insightTrades} />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -529,7 +524,10 @@ export default function JournalView() {
               <h3 className="text-sm font-bold">Trade Detail</h3>
               <button onClick={() => setSelectedTrade(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
             </div>
-            <TradeDetailPanel trade={selectedTrade} />
+            <TradeDetailPanel trade={selectedTrade} onReviewSaved={() => {
+              queryClient.invalidateQueries({ queryKey: ["trade-reviews"] });
+              setSelectedTrade(null);
+            }} />
           </div>
         )}
       </div>
@@ -538,8 +536,39 @@ export default function JournalView() {
 }
 
 // ─── Trade Detail Panel ──────────────────────────────────────────────
-function TradeDetailPanel({ trade }: { trade: any }) {
+function TradeDetailPanel({
+  trade,
+  onReviewSaved,
+}: {
+  trade: any;
+  onReviewSaved: () => void;
+}) {
   const tags = extractAutoTags(trade);
+  const [notes, setNotes] = useState(trade.review_notes || "");
+  const [lesson, setLesson] = useState(trade.review_lesson || "");
+  const [reviewTags, setReviewTags] = useState(
+    Array.isArray(trade.review_tags) ? trade.review_tags.join(", ") : "",
+  );
+  const [saving, setSaving] = useState(false);
+
+  const saveReview = async (reviewStatus: "pending" | "reviewed") => {
+    setSaving(true);
+    try {
+      await tradesApi.saveReview({
+        positionId: trade.position_id,
+        reviewStatus,
+        notes,
+        lesson,
+        tags: reviewTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      });
+      toast.success(reviewStatus === "reviewed" ? "Trade review completed" : "Review draft saved");
+      onReviewSaved();
+    } catch (error: any) {
+      toast.error(error?.message || "Could not save trade review");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-3 text-[11px]">
@@ -597,6 +626,54 @@ function TradeDetailPanel({ trade }: { trade: any }) {
           <PostMortemDisplay data={trade.post_mortem_json} />
         </div>
       )}
+
+      <div className="space-y-2 border-t border-border pt-3">
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Your Review</p>
+        <div>
+          <Label className="text-[10px]">Observation</Label>
+          <Textarea
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            placeholder="What did you notice about the setup, timing or management?"
+            className="mt-1 min-h-20 text-xs"
+          />
+        </div>
+        <div>
+          <Label className="text-[10px]">Lesson</Label>
+          <Textarea
+            value={lesson}
+            onChange={(event) => setLesson(event.target.value)}
+            placeholder="What should the bot or trader repeat, avoid or investigate?"
+            className="mt-1 min-h-16 text-xs"
+          />
+        </div>
+        <div>
+          <Label className="text-[10px]">Tags</Label>
+          <Input
+            value={reviewTags}
+            onChange={(event) => setReviewTags(event.target.value)}
+            placeholder="late entry, clean sweep, management"
+            className="mt-1 h-9 text-xs"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            className="h-10 text-xs"
+            disabled={saving}
+            onClick={() => saveReview("pending")}
+          >
+            Save Draft
+          </Button>
+          <Button
+            className="h-10 text-xs"
+            disabled={saving}
+            onClick={() => saveReview("reviewed")}
+          >
+            Mark Reviewed
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

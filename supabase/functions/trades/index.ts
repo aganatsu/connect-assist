@@ -20,6 +20,75 @@ Deno.serve(async (req) => {
 
     const { action, ...payload } = await req.json();
 
+    if (action === "reviews") {
+      const limit = Math.min(500, Math.max(1, Number(payload.limit) || 250));
+      const { data: history, error: historyError } = await supabase
+        .from("paper_trade_history").select("*").eq("user_id", user.id)
+        .order("closed_at", { ascending: false }).limit(limit);
+      if (historyError) throw historyError;
+      const positionIds = (history || []).map((row: any) => row.position_id);
+      const [mortemsResult, notesResult] = await Promise.all([
+        positionIds.length
+          ? supabase.from("trade_post_mortems").select("*")
+            .eq("user_id", user.id).in("position_id", positionIds)
+          : Promise.resolve({ data: [], error: null }),
+        positionIds.length
+          ? supabase.from("trade_review_notes").select("*")
+            .eq("user_id", user.id).in("position_id", positionIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (mortemsResult.error) throw mortemsResult.error;
+      if (notesResult.error) throw notesResult.error;
+      const mortems = new Map((mortemsResult.data || []).map((row: any) => [row.position_id, row]));
+      const notes = new Map((notesResult.data || []).map((row: any) => [row.position_id, row]));
+      return respond((history || []).map((row: any) => {
+        let reasoning: any = {};
+        try {
+          reasoning = typeof row.signal_reason === "string"
+            ? JSON.parse(row.signal_reason) : (row.signal_reason || {});
+        } catch { reasoning = { raw: row.signal_reason }; }
+        const mortem: any = mortems.get(row.position_id) || null;
+        const review: any = notes.get(row.position_id) || null;
+        return {
+          id: row.id, position_id: row.position_id, symbol: row.symbol,
+          direction: row.direction, size: Number(row.size),
+          entry_price: Number(row.entry_price), exit_price: Number(row.exit_price),
+          entry_time: row.open_time, exit_time: row.closed_at, status: "closed",
+          pnl_amount: Number(row.pnl), pnl_pips: Number(row.pnl_pips),
+          stop_loss: row.stop_loss == null ? null : Number(row.stop_loss),
+          take_profit: row.take_profit == null ? null : Number(row.take_profit),
+          close_reason: row.close_reason, order_id: row.order_id,
+          bot_id: row.bot_id || "smc", signal_score: Number(row.signal_score || 0),
+          reasoning_json: { ...reasoning, paper_position_id: row.position_id },
+          post_mortem_json: mortem?.detail_json || (mortem ? {
+            whatWorked: mortem.what_worked, whatFailed: mortem.what_failed,
+            lessonLearned: mortem.lesson_learned,
+          } : null),
+          review_status: review?.review_status || "pending",
+          review_notes: review?.notes || "",
+          review_lesson: review?.lesson || "",
+          review_tags: review?.tags || [],
+          reviewed_at: review?.reviewed_at || null,
+        };
+      }));
+    }
+
+    if (action === "save_review") {
+      if (!payload.positionId) throw new Error("positionId is required");
+      const reviewed = payload.reviewStatus === "reviewed";
+      const { data, error } = await supabase.from("trade_review_notes").upsert({
+        user_id: user.id,
+        position_id: payload.positionId,
+        review_status: reviewed ? "reviewed" : "pending",
+        notes: payload.notes || null,
+        lesson: payload.lesson || null,
+        tags: Array.isArray(payload.tags) ? payload.tags : [],
+        reviewed_at: reviewed ? new Date().toISOString() : null,
+      }, { onConflict: "user_id,position_id" }).select().single();
+      if (error) throw error;
+      return respond(data);
+    }
+
     if (action === "list") {
       const page = Math.max(1, payload.page || 1);
       const pageSize = Math.min(100, Math.max(1, payload.pageSize || payload.limit || 50));
