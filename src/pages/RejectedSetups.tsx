@@ -977,7 +977,7 @@ export default function RejectedSetups() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
+              <h1 className="text-lg sm:text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
               <Badge variant="outline" className="text-[9px] border-info-c/40 text-info-c">
                 MONITORING
               </Badge>
@@ -986,9 +986,9 @@ export default function RejectedSetups() {
               Counterfactual outcomes of blocked setups. This page measures what happened afterward; it never reopens or executes a trade.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_2.25rem_minmax(0,1fr)] sm:flex items-center gap-2 w-full sm:w-auto">
             <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-              <SelectTrigger className="w-[100px] h-8 text-xs">
+              <SelectTrigger className="w-full sm:w-[100px] h-9 sm:h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1006,13 +1006,13 @@ export default function RejectedSetups() {
                 refetchClosedTrades();
                 refetchDealingRangeComparison();
               }}
-              className="h-8 w-8 p-0"
+              className="h-9 w-9 p-0"
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+                <Button variant="outline" size="sm" className="h-9 w-full sm:w-auto gap-1.5 text-xs">
                   <Download className="h-3.5 w-3.5" /> Download
                 </Button>
               </DropdownMenuTrigger>
@@ -1033,9 +1033,9 @@ export default function RejectedSetups() {
         </div>
 
         {/* Filters */}
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-2 sm:flex gap-2">
           <Select value={symbolFilter} onValueChange={setSymbolFilter}>
-            <SelectTrigger className="w-[130px] h-8 text-xs">
+            <SelectTrigger className="w-full sm:w-[130px] h-9 sm:h-8 text-xs">
               <Filter className="h-3 w-3 mr-1" />
               <SelectValue placeholder="Symbol" />
             </SelectTrigger>
@@ -1045,7 +1045,7 @@ export default function RejectedSetups() {
             </SelectContent>
           </Select>
           <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
-            <SelectTrigger className="w-[150px] h-8 text-xs">
+            <SelectTrigger className="w-full sm:w-[150px] h-9 sm:h-8 text-xs">
               <ArrowUpDown className="h-3 w-3 mr-1" />
               <SelectValue placeholder="Outcome" />
             </SelectTrigger>
@@ -1104,15 +1104,17 @@ export default function RejectedSetups() {
 
         {/* Charts */}
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="h-8">
-            <TabsTrigger value="overview" className="text-xs h-7">Overview</TabsTrigger>
-            <TabsTrigger value="gates" className="text-xs h-7">Gate Analysis</TabsTrigger>
-            <TabsTrigger value="shadow" className="text-xs h-7">Shadow Evidence</TabsTrigger>
-            <TabsTrigger value="advisor" className="text-xs h-7 gap-1">
+          <div className="-mx-2.5 px-2.5 overflow-x-auto">
+          <TabsList className="h-10 min-w-max justify-start">
+            <TabsTrigger value="overview" className="text-xs h-9">Overview</TabsTrigger>
+            <TabsTrigger value="gates" className="text-xs h-9">Gate Analysis</TabsTrigger>
+            <TabsTrigger value="shadow" className="text-xs h-9">Shadow Evidence</TabsTrigger>
+            <TabsTrigger value="advisor" className="text-xs h-9 gap-1">
               <Sparkles className="h-3 w-3" /> Advisor
             </TabsTrigger>
-            <TabsTrigger value="table" className="text-xs h-7">Opportunities</TabsTrigger>
+            <TabsTrigger value="table" className="text-xs h-9">Opportunities</TabsTrigger>
           </TabsList>
+          </div>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-4 mt-3">

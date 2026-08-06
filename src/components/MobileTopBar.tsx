@@ -16,6 +16,7 @@ const TITLES: Record<string, string> = {
   "/brokers": "Brokers",
   "/trade-replay": "Trade Replay",
   "/prop-firm": "Prop Firm",
+  "/rejected-setups": "Rejected Setups",
   "/optimizer": "Optimizer",
   "/settings": "Settings",
 };
@@ -51,7 +52,7 @@ export function MobileTopBar() {
             <button
               onClick={() => navigate(-1)}
               aria-label="Back"
-              className="p-1.5 -ml-1.5 text-muted-foreground hover:text-foreground"
+              className="h-11 w-11 -ml-2 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
@@ -68,7 +69,7 @@ export function MobileTopBar() {
           <button
             onClick={cycleTheme}
             aria-label="Toggle theme"
-            className="p-1.5 text-muted-foreground hover:text-foreground"
+            className="h-11 w-11 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
           >
             <ThemeIcon className="h-4 w-4" />
           </button>
