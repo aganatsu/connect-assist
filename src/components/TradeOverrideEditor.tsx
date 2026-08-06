@@ -573,13 +573,13 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
       </div>
 
       {/* Action Buttons */}
-      <div className="flex items-center justify-between pt-1">
-        <div className="flex items-center gap-2">
+      <div className="grid grid-cols-2 gap-2 pt-1 md:flex md:items-center md:justify-between">
+        <div className="min-w-0 md:flex md:items-center md:gap-2">
           {hasActiveOverrides && (
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
+              className="h-10 md:h-8 w-full md:w-auto min-w-0 px-2 md:px-3 text-[10px] md:text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive/10 whitespace-normal leading-tight"
               onClick={handleReset}
               disabled={resetting || saving}
             >
@@ -588,18 +588,18 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
             </Button>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="contents md:flex md:items-center md:gap-2">
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 text-xs"
+            className="h-10 md:h-8 w-full md:w-auto text-xs order-2 md:order-none"
             onClick={() => setIsOpen(false)}
           >
             Cancel
           </Button>
           <Button
             size="sm"
-            className="h-8 px-5 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+            className="h-10 md:h-8 col-span-2 md:col-auto row-start-1 md:row-auto w-full md:w-auto min-w-0 px-3 md:px-5 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
             disabled={!hasChanges || saving}
             onClick={handleSave}
           >
