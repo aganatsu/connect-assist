@@ -95,3 +95,76 @@ export async function observeImpulseEntryPrice(
     ? persistImpulseEntryLifecycleTransition(client, lifecycleId!, lifecycle, event)
     : { before: lifecycle, after: lifecycle, event: null, persisted: false };
 }
+
+import { deriveConfirmationTriggerPlan, type ConfirmationTriggerPlan } from "./impulseConfirmationLock.ts";
+import type { Candle } from "./smcAnalysis.ts";
+
+export interface ConfirmationLockObservation {
+  plan: ConfirmationTriggerPlan | null;
+  transitions: ImpulseEntryLifecycleTransitionResult[];
+  lifecycle: ImpulseEntryLifecycle | null;
+}
+
+export async function observeImpulseConfirmationLock(
+  client: any,
+  lifecycleId: string | null | undefined,
+  candles: Candle[],
+): Promise<ConfirmationLockObservation> {
+  let lifecycle = await loadImpulseEntryLifecycle(client, lifecycleId);
+  const transitions: ImpulseEntryLifecycleTransitionResult[] = [];
+  if (!lifecycle || lifecycle.mode === "off" || lifecycle.status !== "active") {
+    return { plan: null, transitions, lifecycle };
+  }
+  let plan = deriveConfirmationTriggerPlan({ lifecycle, candles });
+  if (!plan || !lifecycleId) return { plan, transitions, lifecycle };
+
+  if (lifecycle.confirmation?.status === "building") {
+    const revised = await persistImpulseEntryLifecycleTransition(
+      client,
+      lifecycleId,
+      lifecycle,
+      {
+        type: "trigger_revised",
+        at: plan.evaluatedAt,
+        protectedLevel: plan.protectedLevel,
+        breakLevel: plan.breakLevel,
+        reason: plan.explanation,
+      },
+    );
+    if (revised.persisted) {
+      transitions.push(revised);
+      lifecycle = revised.after;
+      plan = deriveConfirmationTriggerPlan({ lifecycle, candles }) || plan;
+    }
+    if (plan.shouldLock && lifecycle.confirmation?.status === "building") {
+      const locked = await persistImpulseEntryLifecycleTransition(
+        client,
+        lifecycleId,
+        lifecycle,
+        {
+          type: "trigger_locked",
+          at: plan.evaluatedAt,
+          protectedLevel: plan.protectedLevel,
+          breakLevel: plan.breakLevel,
+        },
+      );
+      if (locked.persisted) {
+        transitions.push(locked);
+        lifecycle = locked.after;
+      }
+    }
+  } else if (lifecycle.confirmation?.status === "trigger_locked" &&
+    plan.confirmationPassed) {
+    const confirmed = await persistImpulseEntryLifecycleTransition(
+      client,
+      lifecycleId,
+      lifecycle,
+      { type: "confirmation_passed", at: plan.evaluatedAt },
+    );
+    if (confirmed.persisted) {
+      transitions.push(confirmed);
+      lifecycle = confirmed.after;
+    }
+  }
+  return { plan, transitions, lifecycle };
+}

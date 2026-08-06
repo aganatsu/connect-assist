@@ -706,6 +706,21 @@ export interface PendingOrder {
   direction_verdict?: any;
   thesis_validation?: any;
   entry_confirmation?: any;
+  impulse_entry_lifecycle_id?: string | null;
+  impulse_entry_lifecycle?: {
+    mode: "off" | "observe" | "enforce";
+    status: string;
+    activeCandidateId: string | null;
+    impulse: { timeframe: string; protectedLevel: number };
+    candidates: Array<{ id: string; type: string; low: number; high: number; timeframe: string; state: string }>;
+    confirmation: {
+      candidateId: string; generation: number; status: string;
+      protectedLevel: number | null; breakLevel: number | null;
+      lockedAt: string | null; confirmedAt: string | null;
+      revisions: Array<{ revision: number; protectedLevel: number; breakLevel: number; observedAt: string; reason: string }>;
+    } | null;
+    lastTransitionReason: string;
+  } | null;
   placed_at: string;
   created_at: string;
   updated_at: string;

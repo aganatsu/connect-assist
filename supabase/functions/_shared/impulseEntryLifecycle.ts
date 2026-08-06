@@ -36,6 +36,14 @@ export interface CandidateConfirmationContract {
   breakLevel: number | null;
   lockedAt: string | null;
   expiresAt: string;
+  revisions: Array<{
+    revision: number;
+    protectedLevel: number;
+    breakLevel: number;
+    observedAt: string;
+    reason: string;
+  }>;
+  confirmedAt: string | null;
 }
 
 export interface ImpulseEntryLifecycle {
@@ -110,6 +118,8 @@ function newConfirmation(
     breakLevel: null,
     lockedAt: null,
     expiresAt: input.expiresAt,
+    revisions: [],
+    confirmedAt: null,
   };
 }
 
@@ -186,6 +196,13 @@ export type ImpulseEntryLifecycleEvent =
   | { type: "zone_touched"; at: string }
   | { type: "candidate_failed"; at: string; reason: string }
   | {
+    type: "trigger_revised";
+    at: string;
+    protectedLevel: number;
+    breakLevel: number;
+    reason: string;
+  }
+  | {
     type: "trigger_locked";
     at: string;
     protectedLevel: number;
@@ -241,12 +258,36 @@ export function transitionImpulseEntryLifecycle(
     next.lastTransitionReason = `Price touched candidate ${active.id}; confirmation is building`;
     return next;
   }
+  if (event.type === "trigger_revised") {
+    if (next.confirmation.status !== "building") return current;
+    const last = next.confirmation.revisions.at(-1);
+    if (last?.protectedLevel === event.protectedLevel &&
+      last?.breakLevel === event.breakLevel) return current;
+    next.confirmation.protectedLevel = event.protectedLevel;
+    next.confirmation.breakLevel = event.breakLevel;
+    next.confirmation.revisions.push({
+      revision: next.confirmation.revisions.length + 1,
+      protectedLevel: event.protectedLevel,
+      breakLevel: event.breakLevel,
+      observedAt: event.at,
+      reason: event.reason,
+    });
+    next.lastTransitionReason = event.reason;
+    return next;
+  }
   if (event.type === "trigger_locked") {
     if (next.confirmation.status !== "building") return current;
     next.confirmation.status = "trigger_locked";
     next.confirmation.protectedLevel = event.protectedLevel;
     next.confirmation.breakLevel = event.breakLevel;
     next.confirmation.lockedAt = event.at;
+    if (next.confirmation.revisions.length === 0) {
+      next.confirmation.revisions.push({
+        revision: 1, protectedLevel: event.protectedLevel,
+        breakLevel: event.breakLevel, observedAt: event.at,
+        reason: "Initial trigger locked by qualified displacement",
+      });
+    }
     active.state = "confirming";
     next.lastTransitionReason = `Locked confirmation trigger ${event.breakLevel} for candidate ${active.id}`;
     return next;
@@ -254,6 +295,7 @@ export function transitionImpulseEntryLifecycle(
   if (event.type === "confirmation_passed") {
     if (next.confirmation.status !== "trigger_locked") return current;
     next.confirmation.status = "confirmed";
+    next.confirmation.confirmedAt = event.at;
     active.state = "entered";
     next.status = "entered";
     next.lastTransitionReason = `Candidate ${active.id} confirmed entry`;

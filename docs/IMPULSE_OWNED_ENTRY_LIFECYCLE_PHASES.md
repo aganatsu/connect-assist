@@ -39,12 +39,12 @@ inside that same impulse.
 - [x] Display lifecycle transitions in Rejected Setups -> Shadow Evidence.
 - [x] Show the future Enforce mode as evidence-locked in Bot Config.
 
-### Phase 3: Controlled confirmation locking - pending
+### Phase 3: Controlled confirmation locking - implemented
 
-- [ ] Persist the protected pivot and exact CHoCH/MSS break level.
-- [ ] Permit controlled trigger revisions only before displacement locks it.
-- [ ] Record the first qualifying confirmation as an immutable event.
-- [ ] Show trigger level and revision history in Zone Setup details.
+- [x] Persist the protected pivot and exact CHoCH/MSS break level.
+- [x] Permit controlled trigger revisions only before displacement locks it.
+- [x] Record the first qualifying confirmation as an immutable event.
+- [x] Show trigger level and revision history in Zone Setup details.
 
 ### Phase 4: Replay and parity - pending
 
