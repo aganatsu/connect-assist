@@ -476,6 +476,31 @@ export const backtestApi = {
 };
 
 // ── Bot Scanner (Bot #1 — SMC) ──
+async function hydrateImpulseEntryLifecycles(
+  rows: StagedSetup[],
+): Promise<StagedSetup[]> {
+  const ids = rows
+    .map((row: any) => row.impulse_entry_lifecycle_id)
+    .filter((id: unknown): id is string => typeof id === "string");
+  if (ids.length === 0) return rows;
+  const { data, error } = await (supabase as any)
+    .from("impulse_entry_lifecycles")
+    .select("id,lifecycle")
+    .in("id", ids);
+  // Preserve compatibility while a frontend deploy precedes its migration.
+  if (error) return rows;
+  const current = new Map(
+    (data || []).map((row: any) => [row.id, row.lifecycle]),
+  );
+  return rows.map((row: any) => ({
+    ...row,
+    impulse_entry_lifecycle:
+      current.get(row.impulse_entry_lifecycle_id) ||
+      row.impulse_entry_lifecycle ||
+      null,
+  }));
+}
+
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   refreshGamePlan: () => invokeFunction<{
@@ -505,7 +530,7 @@ export const scannerApi = {
       .in("status", ["watching", "qualified"])
       .order("current_score", { ascending: false });
     if (error) throw new Error(error.message);
-    return data || [];
+    return hydrateImpulseEntryLifecycles(data || []);
   },
   allStaged: async (): Promise<StagedSetup[]> => {
     const { data, error } = await (supabase as any)
@@ -515,7 +540,7 @@ export const scannerApi = {
       .order("staged_at", { ascending: false })
       .limit(50);
     if (error) throw new Error(error.message);
-    return data || [];
+    return hydrateImpulseEntryLifecycles(data || []);
   },
   dismissStaged: async (setupId: string) => {
     const { error } = await (supabase as any)
@@ -592,6 +617,15 @@ export interface StagedSetup {
     threshold?: number | null;
     sweep?: Record<string, unknown> | null;
     detail?: Record<string, unknown> | null;
+  } | null;
+  impulse_entry_lifecycle_id?: string | null;
+  impulse_entry_lifecycle?: {
+    mode: "off" | "observe" | "enforce";
+    status: "active" | "entered" | "invalidated" | "expired" | "exhausted";
+    activeCandidateId: string | null;
+    impulse: { timeframe: string; protectedLevel: number };
+    candidates: Array<{ id: string; type: string; low: number; high: number; timeframe: string; state: string }>;
+    lastTransitionReason: string;
   } | null;
   qualified_at?: string | null;
   pending_order_id?: string | null;

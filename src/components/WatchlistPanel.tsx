@@ -177,6 +177,40 @@ function LifecycleEvidenceSummary({
   );
 }
 
+function ImpulseEntryLifecycleSummary({
+  lifecycle,
+}: {
+  lifecycle: StagedSetup["impulse_entry_lifecycle"];
+}) {
+  if (!lifecycle || lifecycle.mode === "off") return null;
+  const active = lifecycle.candidates.find((candidate) =>
+    candidate.id === lifecycle.activeCandidateId
+  );
+  const deeper = lifecycle.candidates.filter((candidate) =>
+    candidate.state === "queued"
+  ).length;
+  return (
+    <div className="mt-1 border-t border-border/30 pt-1 text-[10px] text-foreground/65">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <Badge variant="outline" className="h-4 px-1 text-[8px] border-cyan-500/30 text-cyan-400">
+          IMPULSE PATH · {lifecycle.mode.toUpperCase()}
+        </Badge>
+        <span>{lifecycle.impulse.timeframe} impulse</span>
+        <span>Protected level <strong className="font-mono">{formatEvidencePrice(lifecycle.impulse.protectedLevel)}</strong></span>
+      </div>
+      {active ? (
+        <div className="mt-0.5">
+          Active {active.timeframe} {active.type.replace(/_/g, " + ").toUpperCase()} zone{" "}
+          <strong className="font-mono">{formatEvidencePrice(active.low)}–{formatEvidencePrice(active.high)}</strong>
+          {deeper > 0 && ` · ${deeper} deeper prequalified zone${deeper === 1 ? "" : "s"} queued`}
+        </div>
+      ) : (
+        <div className="mt-0.5">{lifecycle.lastTransitionReason}</div>
+      )}
+    </div>
+  );
+}
+
 // ── Factor pill ──
 function FactorPill({ name, tier, present }: { name: string; tier?: string; present: boolean }) {
   const tierColor = tier === "T1" ? "border-warn/40 text-warn"
@@ -358,6 +392,7 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
             <LifecycleEvidenceSummary
               evidence={setup.lifecycle_evidence}
             />
+            <ImpulseEntryLifecycleSummary lifecycle={setup.impulse_entry_lifecycle} />
             {setup.observation_parent_id && (
               <div className="font-sans text-foreground/55">
                 Fresh candidate from observation{" "}

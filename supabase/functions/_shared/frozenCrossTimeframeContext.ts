@@ -17,6 +17,11 @@ import {
   type CanonicalDealingRangeSelection,
 } from "./canonicalDealingRange.ts";
 import type { EvidenceRow } from "./zoneTimeframeEvidence.ts";
+import {
+  buildImpulseEntryLifecycle,
+  type ImpulseEntryLifecycle,
+  type ImpulseEntryLifecycleMode,
+} from "./impulseEntryLifecycle.ts";
 
 export const FROZEN_CROSS_TF_CONTEXT_VERSION = "frozen-cross-tf-context.v2";
 
@@ -68,6 +73,7 @@ export interface FrozenCrossTimeframeContext {
   parentImpulse: FrozenImpulseReference | null;
   childImpulse: FrozenImpulseReference | null;
   canonicalDealingRange: CanonicalDealingRangeSelection;
+  impulseEntryLifecycle: ImpulseEntryLifecycle | null;
   evidenceCertificates: EvidenceCertificateReference[];
   authority: CrossTimeframeEntryAuthorityDecision;
 }
@@ -132,6 +138,8 @@ export function buildFrozenCrossTimeframeContext(input: {
     EvidenceRow,
     "observed_at" | "selected_timeframe" | "slots"
   > | null;
+  impulseEntryLifecycleMode?: ImpulseEntryLifecycleMode;
+  confirmationMethod?: "choch" | "indicators" | "choch_and_indicators";
 }): FrozenCrossTimeframeContext {
   const story = record(input.zoneStory);
   const best = record(story.bestZone);
@@ -191,6 +199,61 @@ export function buildFrozenCrossTimeframeContext(input: {
       reason: "no_valid_impulse_range" as const,
     };
 
+  const authorityCandidates = Array.isArray(ictEntryZoneAuthority?.ranked)
+    ? ictEntryZoneAuthority.ranked.map(record)
+    : [];
+  const authoritySelected = record(ictEntryZoneAuthority?.selected);
+  const canonicalRange = canonicalDealingRange.available ? canonicalDealingRange.range : null;
+  const lifecycleCandidates = canonicalRange
+    ? authorityCandidates
+      .filter((candidate) =>
+        candidate.eligible === true &&
+        candidate.direction === canonicalRange.direction &&
+        finite(candidate.low) !== null && finite(candidate.high) !== null &&
+        Number(candidate.low) >= canonicalRange.low &&
+        Number(candidate.high) <= canonicalRange.high
+      )
+      .map((candidate) => ({
+        id: String(candidate.id),
+        type: candidate.type as "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg",
+        low: Number(candidate.low),
+        high: Number(candidate.high),
+        timeframe: String(candidate.timeframe || selectedZone?.timeframe || "unknown"),
+        impulseId: canonicalRange.impulseId,
+      }))
+    : [];
+  const lifecycleExpiry = new Date(
+    Date.parse(canonicalRange?.frozenAt || input.stylePolicy.resolvedAt) +
+      (input.stylePolicy.lifecycle?.limitOrderExpiryMinutes ?? 60) * 60_000,
+  ).toISOString();
+  const impulseEntryLifecycle = canonicalRange && lifecycleCandidates.length > 0
+    ? buildImpulseEntryLifecycle({
+      mode: input.impulseEntryLifecycleMode || "observe",
+      now: canonicalRange.frozenAt,
+      impulse: {
+        id: canonicalRange.impulseId,
+        direction: canonicalRange.direction === "bullish" ? "long" : "short",
+        timeframe: canonicalRange.timeframe,
+        rangeLow: canonicalRange.low,
+        rangeHigh: canonicalRange.high,
+        protectedLevel: canonicalRange.direction === "bullish"
+          ? canonicalRange.low
+          : canonicalRange.high,
+        expiresAt: lifecycleExpiry,
+      },
+      candidates: lifecycleCandidates,
+      initialCandidateId: typeof authoritySelected.id === "string"
+        ? authoritySelected.id
+        : selectedZone?.candidateId,
+      confirmation: {
+        method: input.confirmationMethod || "choch",
+        timeframe: input.stylePolicy.timeframes?.roles?.confirmation || "5m",
+        refinementTimeframe: input.stylePolicy.timeframes?.roles?.refinement || "1m",
+        expiresAt: lifecycleExpiry,
+      },
+    })
+    : null;
+
   return {
     contractVersion: FROZEN_CROSS_TF_CONTEXT_VERSION,
     enforcement: "observe_only",
@@ -233,6 +296,7 @@ export function buildFrozenCrossTimeframeContext(input: {
       ? impulseReference(best, record(story.impulse))
       : null,
     canonicalDealingRange,
+    impulseEntryLifecycle,
     evidenceCertificates: [...(input.evidenceCertificates || [])]
       .filter((item) => item.certificateHash.length > 0)
       .sort((a, b) =>
