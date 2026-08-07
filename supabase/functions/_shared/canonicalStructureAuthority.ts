@@ -110,22 +110,24 @@ export function buildCanonicalStructureAuthority(candles: Candle[], options: {
       const crossed = level.side === "high" ? candle.high > level.price : candle.low < level.price;
       if (!crossed) continue;
       const closedThrough = level.side === "high" ? candle.close > level.price : candle.close < level.price;
-      const direction: StructureDirection = level.side === "high" ? "bullish" : "bearish";
+      const breakDirection: StructureDirection = level.side === "high" ? "bullish" : "bearish";
       const ratio = displacement(candle);
       let type: StructureEventType = "sweep";
       if (closedThrough) {
-        const against = trend[level.significance] !== "ranging" && trend[level.significance] !== direction;
+        const against = trend[level.significance] !== "ranging" && trend[level.significance] !== breakDirection;
         type = against ? (ratio >= mssThreshold ? "mss" : "choch") : "bos";
-        trend[level.significance] = direction;
+        trend[level.significance] = breakDirection;
         level.status = "broken";
       } else {
         level.status = "swept";
       }
       events.push({
         id: `${type}:${level.id}:${candleIndex}`,
-        type, direction, significance: level.significance, levelId: level.id,
+        type,
+        direction: closedThrough ? breakDirection : breakDirection === "bullish" ? "bearish" : "bullish",
+        significance: level.significance, levelId: level.id,
         level: level.price, candleIndex, datetime: candle.datetime, close: candle.close,
-        extreme: direction === "bullish" ? candle.high : candle.low,
+        extreme: level.side === "high" ? candle.high : candle.low,
         closeDistance: Math.abs(candle.close - level.price), displacementRatio: ratio,
       });
     }

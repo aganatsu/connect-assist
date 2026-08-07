@@ -20,7 +20,7 @@ Deno.test("wick through and close back is a sweep, not BOS", () => {
     candle(3, 10, 11, 8, 9), candle(4, 9, 10, 7, 8), candle(5, 11, 13, 9, 11.5),
   ];
   const result = buildCanonicalStructureAuthority(candles, { internalLookback: 2, externalLookback: 3, internalAtrFilter: 0, externalAtrFilter: 0 });
-  assertEquals(result.events.some((event) => event.candleIndex === 5 && event.type === "sweep" && event.direction === "bullish"), true);
+  assertEquals(result.events.some((event) => event.candleIndex === 5 && event.type === "sweep" && event.direction === "bearish"), true);
   assertEquals(result.events.some((event) => event.candleIndex === 5 && event.type === "bos"), false);
 });
 
