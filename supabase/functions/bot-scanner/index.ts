@@ -56,6 +56,9 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
+import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
+import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
+import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
@@ -207,6 +210,7 @@ import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
 import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
+import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -4831,10 +4835,24 @@ async function runScanForUser(
       directionSource = "blocked";
       console.log(`[scan ${scanCycleId}] ${pair} Direction NEUTRAL (blocked): ${directionVerdict.summary}`);
     } else {
-      // No verdict computed (error or missing data) — fall back to 15m as last resort
-      effectiveDirection = analysis.direction;
-      directionSource = "15m_fallback";
-      console.log(`[scan ${scanCycleId}] ${pair} Direction: no verdict available, using 15m fallback=${effectiveDirection}`);
+      // Preserve the current fallback while recording the fail-closed comparison.
+      const directionAvailability = resolveDirectionAvailability({
+        mode: (pairConfig as any).canonicalScannerMode === "enforce"
+          ? "fail_closed" : (pairConfig as any).directionUnavailableMode,
+        verdictDirection: null,
+        legacyDirection: analysis.direction,
+      });
+      (detail as any).directionAvailabilityPolicy = directionAvailability;
+      effectiveDirection = directionAvailability.selectedDirection;
+      directionSource = effectiveDirection ? "15m_fallback" : "blocked";
+      console.log(`[scan ${scanCycleId}] ${pair} Direction authority unavailable: current=${effectiveDirection || "wait"}, fail-closed wouldWait=${directionAvailability.wouldWait}`);
+    }
+    if (directionVerdict?.verdict === "long" || directionVerdict?.verdict === "short") {
+      (detail as any).directionAvailabilityPolicy = resolveDirectionAvailability({
+        mode: (pairConfig as any).directionUnavailableMode,
+        verdictDirection: directionVerdict.verdict,
+        legacyDirection: analysis.direction,
+      });
     }
 
     // ── DIRECTION SYNC: overwrite analysis.direction with verdict direction ──
@@ -5666,6 +5684,41 @@ async function runScanForUser(
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
+        liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
+        displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
+        reversalPatternRole: "supporting",
+        afterChochEntryMode: pairConfig.afterChochMode,
+      });
+      const frozenLiquidityState = (detail as any).unifiedZone?.liquidity?.entryTriggerState || "none";
+      const watchCanonicalState = projectCanonicalScannerState({
+        evaluatedAt: new Date().toISOString(),
+        identity: { candidateId, symbol: pair, direction: analysis.direction as "long" | "short" },
+        direction: {
+          available: !!activeDirectionVerdict?.verdict,
+          allowed: activeDirectionVerdict?.shouldBlock == null ? null :
+            !activeDirectionVerdict.shouldBlock && activeDirectionVerdict.verdict === analysis.direction,
+          evidenceId: activeDirectionVerdict?.id || null,
+        },
+        zone: {
+          available: (detail as any).unifiedZone?.hasZone === true || (detail as any).impulseZone?.hasZone === true,
+          valid: true,
+          atPoi: (detail as any).unifiedZone?.price?.atZone === true || (detail as any).impulseZone?.bestZone?.priceAtZone === true,
+          evidenceId: candidateId,
+        },
+        location: {
+          required: (pairConfig.dealingRangeMode || "avoid_wrong_side") !== "off",
+          available: (detail as any).canonicalDealingRangeObservation?.canonical?.available === true,
+          allowed: (detail as any).canonicalDealingRangeObservation?.canonical?.allowed ?? null,
+          evidenceId: (detail as any).canonicalDealingRangeObservation?.canonical?.range?.impulseId || null,
+        },
+        liquidity: {
+          policy: frozenStrategyContext.liquidityActivation.role,
+          state: ["unswept", "swept_rejected", "swept_absorbed"].includes(frozenLiquidityState) ? frozenLiquidityState : "none",
+        },
+        confirmation: { required: true, passed: (detail as any).unifiedZone?.confirmation?.entryReady === true },
+        thesis: { required: false, valid: true },
+        safety: { complete: false, passed: null },
+        execution: { authorized: false },
       });
       const {
         lifecycleReasonCode,
@@ -5703,6 +5756,8 @@ async function runScanForUser(
           reason: "Setup is observational until qualification",
           stylePolicy: pairStylePolicy,
           frozenStrategyContext,
+          canonicalScannerState: watchCanonicalState,
+          tradeDecisionPresentation: buildTradeDecisionPresentation({ state: watchCanonicalState }),
         },
         style_policy_version: pairStylePolicy.contractVersion,
         style_base_policy_hash: pairStylePolicy.basePolicyHash,
@@ -7691,6 +7746,21 @@ async function runScanForUser(
         },
       });
 
+      const canonicalScannerEnforcement = evaluateCanonicalScannerEnforcement({
+        requestedMode: (pairConfig as any).canonicalScannerMode,
+        singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
+        state: (detail as any).canonicalScannerState,
+      });
+      (detail as any).canonicalScannerEnforcement = canonicalScannerEnforcement;
+      if (canonicalScannerEnforcement.effectiveMode === "enforce") {
+        allPassed = canonicalScannerEnforcement.authorized;
+      }
+
+      (detail as any).tradeDecisionPresentation = buildTradeDecisionPresentation({
+        state: (detail as any).canonicalScannerState,
+        legacyDiagnostics: (detail as any).legacyGateDiagnostics || [],
+      });
+
       (detail as any).streamlinedTradeDecision =
         buildStreamlinedTradeDecisionObservation({
           evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
@@ -8628,6 +8698,10 @@ async function runScanForUser(
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
               indicatorMinCount: pairConfig.indicatorMinCount || 3,
+              liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
+              displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
+              reversalPatternRole: "supporting",
+              afterChochEntryMode: pairConfig.afterChochMode,
             });
           (detail as any).linkedSetupId =
             pendingFrozenStrategyContext.setupId;
@@ -10289,6 +10363,32 @@ async function runScanForUser(
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
+            const breakerCanonicalRange =
+              (detail as any).canonicalDealingRangeObservation?.canonical?.range || null;
+            const breakerCandidateObservation = normalizeBreakerCandidate({
+              semantic: "sweep_displacement_retest_breaker_setup",
+              symbol: pair,
+              direction: breakerDir,
+              low: breaker.entryZone.low,
+              high: breaker.entryZone.high,
+              timeframe: timeframeAuthority.roles.setup,
+              structureBreakIndex: breaker.structureBreakIndex,
+              retestComplete: breaker.retestComplete,
+              impulse: breakerCanonicalRange ? {
+                id: breakerCanonicalRange.impulseId,
+                low: Number(breakerCanonicalRange.low),
+                high: Number(breakerCanonicalRange.high),
+                direction: breakerCanonicalRange.direction === "bullish" ? "long" : "short",
+              } : null,
+            });
+            ((detail as any).breakerCandidateComparisons ||= []).push(
+              breakerCandidateObservation,
+            );
+            if ((detail as any).canonicalScannerEnforcement?.effectiveMode === "enforce" &&
+              !breakerCandidateObservation.eligibleForUnifiedQueue) {
+              console.log(`[breaker] ${pair}: canonical scanner rejected supplemental route outside frozen impulse ownership`);
+              continue;
+            }
             const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
             // Entry at the 50% of the breaker zone (OTE within the zone)
             const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;

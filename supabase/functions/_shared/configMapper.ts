@@ -91,6 +91,8 @@ export const RUNTIME_DEFAULTS = {
   dealingRangeMode: "avoid_wrong_side",
   impulseEntryLifecycleMode: "observe",
   singleOwnershipMode: "observe",
+  directionUnavailableMode: "observe_fail_closed",
+  canonicalScannerMode: "observe",
   streamlinedDecisionMode: "observe",
   normalizedScoring: true,
 
@@ -516,6 +518,10 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       RUNTIME_DEFAULTS.dealingRangeMode,
     impulseEntryLifecycleMode: strategy.impulseEntryLifecycleMode ??
       raw.impulseEntryLifecycleMode ?? RUNTIME_DEFAULTS.impulseEntryLifecycleMode,
+    directionUnavailableMode: strategy.directionUnavailableMode ??
+      raw.directionUnavailableMode ?? RUNTIME_DEFAULTS.directionUnavailableMode,
+    canonicalScannerMode: strategy.canonicalScannerMode ??
+      raw.canonicalScannerMode ?? RUNTIME_DEFAULTS.canonicalScannerMode,
     singleOwnershipMode: (() => {
       const ownership = strategy.singleOwnershipMode ?? raw.singleOwnershipMode;
       const streamlined = strategy.streamlinedDecisionMode ?? raw.streamlinedDecisionMode;

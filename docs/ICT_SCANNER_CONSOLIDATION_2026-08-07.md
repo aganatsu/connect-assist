@@ -46,4 +46,39 @@ Terminal states: `blocked`, `invalidated`, `expired`.
 
 ## Deployment Ledger
 
-Update this section after each PR is pushed. Do not merge stacked PRs out of order.
+1. PR #229 - canonical state and authority trace. Deploy bot-scanner and zone-confirmation-scanner.
+2. PR #230 - direction availability comparison, observation default. Deploy bot-scanner.
+3. PR #231 - unified frozen confirmation policy, evidence only. Deploy bot-scanner.
+4. PR #232 - breaker semantic identity and impulse-ownership comparison. Deploy bot-scanner.
+5. PR #233 - explicit frozen liquidity activation policy. Deploy bot-scanner and zone-confirmation-scanner.
+6. PR #234 - primary decision explanation and diagnostic isolation. Deploy both scanners.
+7. PR #235 - controlled canonical enforcement and comparison. Deploy both scanners. Defaults to Observe.
+8. Workflow controls and state visibility. Deploy bot-config, bot-scanner, and frontend.
+
+Do not merge stacked PRs out of order.
+
+
+## Review And Merge Order
+
+Review and merge the stack in numeric order: #229, #230, #231, #232, #233, #234, #235, then the final UI PR. Each PR is based on the previous branch.
+
+## Effective Enforcement
+
+The final workflow remains Observe for existing accounts. To enforce after review:
+
+1. Set Trade Decision Mode to Enforce.
+2. Set ICT Scanner Workflow to Enforce.
+3. Save Bot Config.
+
+If Trade Decision Mode is not enforcing, ICT Scanner Workflow automatically remains observation-only. Rollback is immediate: set ICT Scanner Workflow to Observe.
+
+## Final Deployment
+
+After all PRs are merged in order:
+
+- Apply no database migrations; this stack adds none.
+- Deploy `bot-config`.
+- Deploy `bot-scanner`.
+- Deploy `zone-confirmation-scanner`.
+- Deploy the frontend.
+- Run a manual paper scan and confirm the stage progresses through Context, Discovery, Watching, At POI, Awaiting Liquidity/Confirmation, and Authorized as applicable.

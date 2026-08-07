@@ -432,6 +432,18 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <FieldGroup label="ICT Scanner Workflow" description="Observe the unified scanner stages, or enforce them after Trade Decision Mode is enforcing">
+            <Select
+              value={config.strategy?.canonicalScannerMode ?? "observe"}
+              onValueChange={v => updateField("strategy", "canonicalScannerMode", v)}
+            >
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="observe">Observe</SelectItem>
+                <SelectItem value="enforce" disabled={config.strategy?.singleOwnershipMode !== "enforce" && config.strategy?.singleOwnershipMode !== "enforce_live"}>Enforce</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Scoring</p>
