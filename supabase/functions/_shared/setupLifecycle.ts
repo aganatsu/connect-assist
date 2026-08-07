@@ -109,6 +109,7 @@ export interface FrozenSetupStrategyContext {
     status: "captured" | "no_directional_scenario";
     reason: string;
   };
+  liquidityActivation: LiquidityActivationPolicy;
   confirmation: {
     method: ConfirmationMethod;
     indicatorMinCount: number;
@@ -233,6 +234,7 @@ export function buildFrozenSetupStrategyContext(input: {
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
   liquiditySweepRole?: unknown;
+  noQualifiedLiquidityPoolBehavior?: unknown;
   displacementRole?: unknown;
   reversalPatternRole?: unknown;
   afterChochEntryMode?: unknown;
@@ -298,6 +300,10 @@ export function buildFrozenSetupStrategyContext(input: {
         ? "Directional Gameplan scenarios were frozen for later outcome analysis; no narrative scenario authorizes execution yet"
         : "No directional Gameplan scenario was available when the setup was frozen",
     },
+    liquidityActivation: buildLiquidityActivationPolicy({
+      role: input.liquiditySweepRole,
+      noQualifiedPoolBehavior: input.noQualifiedLiquidityPoolBehavior,
+    }),
     confirmation: {
       method: confirmationMethod,
       indicatorMinCount: normalizeIndicatorMinimum(

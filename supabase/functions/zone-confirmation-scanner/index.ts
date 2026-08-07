@@ -1379,6 +1379,8 @@ Deno.serve(async (req) => {
         });
         const pendingLiquidityState = parsedPendingEvidence?.unifiedZone?.liquidity?.entryTriggerState ||
           parsedPendingEvidence?.impulseZone?.liquidity?.entryTriggerState || "none";
+        const frozenLiquidityPolicy =
+          readFrozenSetupStrategyContext(pending)?.liquidityActivation || null;
         const pendingScannerState = projectCanonicalScannerState({
           evaluatedAt: nowStr,
           identity: ownershipFill.decision.identity,
@@ -1397,8 +1399,9 @@ Deno.serve(async (req) => {
           },
           location: ownershipFill.decision.authorities.canonicalLocation,
           liquidity: {
-            policy: config.requireLiquiditySweep === true ? "required" :
-              pendingLiquidityState === "none" ? "not_required" : "supporting",
+            policy: frozenLiquidityPolicy?.role ||
+              (config.requireLiquiditySweep === true ? "required" :
+                pendingLiquidityState === "none" ? "not_required" : "supporting"),
             state: ["unswept", "swept_rejected", "swept_absorbed"].includes(pendingLiquidityState)
               ? pendingLiquidityState : "none",
           },
