@@ -29,7 +29,7 @@ export { simulateOutcome } from "../_shared/outcomeSimulation.ts";
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation
 const SHADOW_BATCH_SIZE = 100;    // Disagreement winners only; cached by symbol
 const MIN_AGE_MS = 60 * 60 * 1000;  // 1 hour minimum age before checking
-const OUTCOME_WINDOW_HOURS = 24;     // Look 24h ahead for outcome
+const OUTCOME_WINDOW_HOURS = 24;     // Legacy fallback; new records freeze their style window
 const SHADOW_MIN_AGE_MS = OUTCOME_WINDOW_HOURS * 60 * 60 * 1000;
 const RETENTION_DAYS = 30;           // Delete records older than this
 const ALERT_THRESHOLD = 0.50;        // Alert if >50% would have won
@@ -96,11 +96,12 @@ Deno.serve(async (req: Request) => {
       for (const setup of pendingSetups) {
         results.processed++;
         try {
-          // Fetch 1H candles for the symbol (covers 24h+ after rejection)
+          const outcomeWindowHours = Number(setup.outcome_window_hours) || OUTCOME_WINDOW_HOURS;
+          // Fetch enough 1H candles for the frozen style-specific outcome window.
           const { candles } = await fetchCandlesWithFallback({
             symbol: setup.symbol,
             interval: "1h",
-            limit: 48, // 48 hours of 1H candles — plenty of coverage
+            limit: Math.max(48, outcomeWindowHours + 24),
           });
 
           if (candles.length < 5) {
@@ -117,6 +118,7 @@ Deno.serve(async (req: Request) => {
             setup.stop_loss ? parseFloat(setup.stop_loss) : null,
             setup.take_profit ? parseFloat(setup.take_profit) : null,
             setup.rejected_at,
+            outcomeWindowHours,
           );
 
           // Convert MFE/MAE from price units to pips
@@ -133,6 +135,11 @@ Deno.serve(async (req: Request) => {
               tp_hit: outcome.tp_hit,
               sl_hit: outcome.sl_hit,
               tp_hit_time_minutes: outcome.tp_hit_time_minutes,
+              sl_hit_time_minutes: outcome.sl_hit_time_minutes,
+              outcome_reason: outcome.outcome_reason,
+              mfe_r: outcome.mfe_r == null ? null : Number(outcome.mfe_r.toFixed(3)),
+              mae_r: outcome.mae_r == null ? null : Number(outcome.mae_r.toFixed(3)),
+              outcome_r: outcome.outcome_r == null ? null : Number(outcome.outcome_r.toFixed(3)),
               mfe_pips: parseFloat(mfePips.toFixed(2)),
               mae_pips: parseFloat(maePips.toFixed(2)),
             })

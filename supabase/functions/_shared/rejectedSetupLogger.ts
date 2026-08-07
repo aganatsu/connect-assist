@@ -12,6 +12,8 @@
 
 // ── Public types ──
 
+import { buildDecisionOutcomeSnapshot, DECISION_OUTCOME_CONTRACT_VERSION } from "./decisionOutcomeContract.ts";
+
 export type RejectionType = "gate_blocked" | "below_threshold_strong_t1";
 
 export interface RejectedSetupParams {
@@ -151,6 +153,7 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
     } = params;
 
     const normalizedGates = [...new Set((failedGates || []).map(normalizeRejectedGate))].sort();
+    const outcomeSnapshot = buildDecisionOutcomeSnapshot({ rawDetail, confluenceScore, tier1Count, tier1Factors });
     const row: Record<string, any> = {
       user_id: userId,
       bot_id: botId,
@@ -164,6 +167,9 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
       entry_price: entryPrice,
       price_at_rejection: priceAtRejection ?? entryPrice,
       outcome_status: "pending",
+      decision_outcome_snapshot: outcomeSnapshot,
+      outcome_contract_version: DECISION_OUTCOME_CONTRACT_VERSION,
+      outcome_window_hours: outcomeSnapshot.outcomeWindowHours,
       normalized_gates: normalizedGates,
       opportunity_key: buildRejectedOpportunityKey({
         symbol,
