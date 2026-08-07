@@ -4978,6 +4978,10 @@ async function runScanForUser(
           htfConfluenceData ?? undefined,
           {
             collectEvidence: true,
+            structureAuthorityMode: pairConfig.canonicalStructureMode === "enforce" &&
+                pairConfig.singleOwnershipMode === "enforce"
+              ? "enforce"
+              : "observe",
             strictATRMult: pairConfig.marketFillStrictATRMult,
             minQualityScore: pairConfig.zoneQualityThreshold,
             maxAgeBars: pairConfig.zoneMaxAgeBars,
