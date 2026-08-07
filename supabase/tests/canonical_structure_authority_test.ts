@@ -26,10 +26,11 @@ Deno.test("wick through and close back is a sweep, not BOS", () => {
 
 Deno.test("opposing displaced close is MSS", () => {
   const candles = [
-    candle(0, 10, 11, 9, 10), candle(1, 9, 10, 7, 8), candle(2, 8, 9, 6, 7),
-    candle(3, 7, 9, 6.5, 8), candle(4, 8, 10, 7, 9), candle(5, 9, 10, 8, 9),
-    candle(6, 9, 9.5, 7.5, 8), candle(7, 8, 11, 7.8, 10.8),
+    candle(0, 9, 10, 8, 9), candle(1, 10, 12, 9, 11),
+    candle(2, 10, 10.5, 9, 9.5), candle(3, 10, 13, 9.5, 12.8),
+    candle(4, 11, 12, 8, 9), candle(5, 9, 11, 9, 10),
+    candle(6, 10, 10.2, 7, 7.2),
   ];
   const result = buildCanonicalStructureAuthority(candles, { internalLookback: 1, externalLookback: 2, internalAtrFilter: 0, externalAtrFilter: 0, mssDisplacement: 0.6 });
-  assertEquals(result.events.some((event) => event.direction === "bullish" && event.type === "mss"), true);
+  assertEquals(result.events.some((event) => event.direction === "bearish" && event.type === "mss"), true);
 });
