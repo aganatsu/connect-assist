@@ -114,6 +114,13 @@ Deno.test("retrospective replay stores resolved non-activating evidence", async 
     pipSize: 0.0001,
     candles: [
       {
+        datetime: "2026-07-01T00:30:00Z",
+        open: 1.274,
+        high: 1.2748,
+        low: 1.2738,
+        close: 1.2745,
+      },
+      {
         datetime: "2026-07-01T01:00:00Z",
         open: 1.274,
         high: 1.2765,
