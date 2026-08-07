@@ -927,7 +927,7 @@ export default function RejectedSetups() {
     }
 
     const bundle = {
-      exportVersion: "rejected-setup-evidence.v1",
+      exportVersion: "rejected-setup-evidence.v2",
       exportedAt: new Date().toISOString(),
       filters: {
         days,
@@ -957,6 +957,24 @@ export default function RejectedSetups() {
         distinctOpportunities: setups,
         closedTradeEvidence: filteredClosedTradeEvidence,
         shadowEvidence: shadowEvidenceReport,
+        shadowEvidenceReviews,
+        ictScannerWorkflowComparison: ictScannerComparison ?? null,
+        authorityOutcomeComparison: authorityOutcomeComparison ?? null,
+        marketStructureAuthorityEvidence: filteredRawSetups.flatMap((setup) => {
+          const detail = setup.raw_detail as Record<string, any> | null;
+          return detail?.canonicalStructureDecision ? [{
+            id: setup.id, symbol: setup.symbol, direction: setup.direction,
+            outcomeStatus: setup.outcome_status,
+            structureAuthority: detail.canonicalStructureAuthority ?? null,
+            liquiditySequence: detail.canonicalLiquiditySequence ?? null,
+            structureDecision: detail.canonicalStructureDecision,
+            structureEnforcement: detail.canonicalStructureEnforcement ?? null,
+            scannerState: detail.canonicalScannerState ?? null,
+          }] : [];
+        }),
+        impulseEntryLifecycleEvidence: impulseEntryLifecycleEvidence ?? null,
+        impulseLifecycleReplaySummary: impulseLifecycleReplaySummary ?? null,
+        impulseLifecycleCertificate: impulseLifecycleCertificate ?? null,
         strategyEvidenceCertificates,
         strategyActivations,
         ictEntryZoneAuthorityValidation,
@@ -973,7 +991,7 @@ export default function RejectedSetups() {
       JSON.stringify(bundle, null, 2),
       "application/json",
     );
-    toast.success("Complete rejected-setup evidence downloaded as one file.");
+    toast.success("Complete Shadow Evidence and rejected-setup data downloaded as one file.");
   };
 
   // Pie chart data
