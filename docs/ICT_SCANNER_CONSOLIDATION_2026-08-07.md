@@ -82,3 +82,8 @@ After all PRs are merged in order:
 - Deploy `zone-confirmation-scanner`.
 - Deploy the frontend.
 - Run a manual paper scan and confirm the stage progresses through Context, Discovery, Watching, At POI, Awaiting Liquidity/Confirmation, and Authorized as applicable.
+
+
+## Shadow Evidence Dataset
+
+Rejected Setups -> Shadow Evidence includes an ICT Scanner Workflow Comparison. It reads the latest 100 completed and rejected records from existing immutable evidence, preserves Allow/Watch/Block semantics, reports outcome impact and stage coverage, and downloads the complete comparison as JSON. Historical rows created before scanner-state deployment remain Unavailable rather than being guessed.
