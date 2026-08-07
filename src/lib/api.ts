@@ -384,6 +384,7 @@ export const botConfigApi = {
       decisionsMatch: boolean | null; missingAuthorities: string[]; authorities: any[]; state: any | null;
     }>;
   }>("bot-config", { action: "ict_scanner.comparison" }),
+  getAuthorityOutcomeComparison: () => invokeFunction<import("@/components/AuthorityOutcomeResearchCard").AuthorityOutcomeReport>("bot-config", { action: "authority_outcome.comparison" }),
   getSingleOwnershipComparison: () => invokeFunction<{
     summary: { sampleSize: number; comparable: number; unavailable: number; coveragePercent: number; agreements: number; disagreements: number; winnersPreserved: number; winnersBlocked: number; poorEntriesRejected: number; poorEntriesAllowed: number; };
     rows: Array<{ id: string; source: "closed" | "rejected"; symbol: string; direction: string; observedAt: string; outcome: "won" | "lost" | "inconclusive"; legacyDecision: "allow" | "block"; proposedDecision: "allow" | "watch" | "block" | "unavailable" | null; comparable: boolean; decisionsMatch: boolean | null; reasonCodes: string[]; unavailable: string[]; legacyDiagnostics: any; }>;
