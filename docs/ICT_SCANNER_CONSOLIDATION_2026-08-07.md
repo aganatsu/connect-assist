@@ -51,6 +51,7 @@ Terminal states: `blocked`, `invalidated`, `expired`.
 3. PR #231 - unified frozen confirmation policy, evidence only. Deploy bot-scanner.
 4. PR #232 - breaker semantic identity and impulse-ownership comparison. Deploy bot-scanner.
 5. PR #233 - explicit frozen liquidity activation policy. Deploy bot-scanner and zone-confirmation-scanner.
-6. Primary decision explanation and diagnostic isolation. Deploy both scanners.
+6. PR #234 - primary decision explanation and diagnostic isolation. Deploy both scanners.
+7. Controlled canonical enforcement and comparison. Deploy both scanners. Defaults to Observe.
 
 Do not merge stacked PRs out of order.
