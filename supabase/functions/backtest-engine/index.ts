@@ -83,6 +83,8 @@ import {
 import {
   buildScanEvidenceRow,
 } from "../_shared/zoneTimeframeEvidence.ts";
+import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
+import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
 import {
   evaluateCanonicalDealingRange,
   normalizeDealingRangeMode,
@@ -2471,6 +2473,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             { timeframe: "1w", candles: relevantWeekly.slice(-60) },
           ]),
         );
+        const barCanonicalStructure = buildCanonicalStructureAuthority(
+          roleCandles.structure,
+        );
+        const barCanonicalConfirmationStructure =
+          buildCanonicalStructureAuthority(roleCandles.confirmation);
+        const barCanonicalLiquiditySequence = buildCanonicalLiquiditySequences(
+          barCanonicalConfirmationStructure,
+        );
         const barDecisionEvidence = buildStyleDecisionEvidence(
           timeframeAuthority,
           roleCandles,
@@ -2517,6 +2527,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         // ── Build config for confluenceScoring ──
         const pairConfig = { ...config };
+        (pairConfig as any)._canonicalStructureAuthority =
+          barCanonicalStructure;
+        (pairConfig as any)._canonicalConfirmationStructure =
+          barCanonicalConfirmationStructure;
+        (pairConfig as any)._canonicalLiquiditySequence =
+          barCanonicalLiquiditySequence;
         // Apply per-pair gate overrides (if configured for this symbol)
         applyPairOverrides(pairConfig, symbol);
         pairConfig._currentSymbol = symbol;
