@@ -94,6 +94,7 @@ import {
   evaluateFinalTradeAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import {
   evaluateCanonicalDealingRange,
@@ -1376,9 +1377,43 @@ Deno.serve(async (req) => {
           requestedMode: (config as any).singleOwnershipMode,
           runtimeTarget: liveMode ? "live" : "paper",
         });
+        const pendingLiquidityState = parsedPendingEvidence?.unifiedZone?.liquidity?.entryTriggerState ||
+          parsedPendingEvidence?.impulseZone?.liquidity?.entryTriggerState || "none";
+        const pendingScannerState = projectCanonicalScannerState({
+          evaluatedAt: nowStr,
+          identity: ownershipFill.decision.identity,
+          direction: {
+            available: !!ownershipFill.decision.authorities.direction.verdict,
+            allowed: ownershipFill.decision.authorities.direction.shouldBlock === null
+              ? null : !ownershipFill.decision.authorities.direction.shouldBlock &&
+                ownershipFill.decision.authorities.direction.verdict === pending.direction,
+            evidenceId: ownershipFill.decision.authorities.direction.evidenceId || null,
+          },
+          zone: {
+            available: ownershipFill.decision.authorities.zoneStory.available,
+            valid: ownershipFill.decision.authorities.zoneStory.valid,
+            atPoi: true,
+            evidenceId: ownershipFill.decision.authorities.zoneStory.candidateId || null,
+          },
+          location: ownershipFill.decision.authorities.canonicalLocation,
+          liquidity: {
+            policy: config.requireLiquiditySweep === true ? "required" :
+              pendingLiquidityState === "none" ? "not_required" : "supporting",
+            state: ["unswept", "swept_rejected", "swept_absorbed"].includes(pendingLiquidityState)
+              ? pendingLiquidityState : "none",
+          },
+          confirmation: { required: true, passed: true, evidenceId: null },
+          thesis: ownershipFill.decision.authorities.thesis,
+          safety: {
+            complete: ownershipFill.decision.authorities.safety.complete,
+            passed: ownershipFill.decision.authorities.safety.checks.every((check) => check.passed),
+            reasonCode: ownershipFill.decision.authorities.safety.checks.find((check) => !check.passed)?.code || null,
+          },
+          execution: { authorized: ownershipFill.authorized, source: "final_trade_authorization" },
+        });
         const authorityRawAuthorization = ownershipFill.authorized
-          ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange }
-          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: ownershipFill.retryable, reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange };
+          ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState }
+          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: ownershipFill.retryable, reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState };
         const authorization = attachDecisionContext(
           authorityRawAuthorization,
           buildTradeDecisionContext({
@@ -1454,6 +1489,7 @@ Deno.serve(async (req) => {
           decisionContext: authorization.decisionContext,
           singleOwnershipDecision: authorization.singleOwnershipDecision,
           singleOwnershipEnforcement: authorization.singleOwnershipEnforcement,
+          canonicalScannerState: authorization.canonicalScannerState,
           streamlinedDecisionOrigin: pending.streamlined_decision_origin || parsedPendingEvidence.streamlinedDecisionOrigin || null,
           streamlinedDecisionLatest: {
             ...(parsedPendingEvidence.streamlinedDecisionLatest || {}),

@@ -55,6 +55,7 @@ import {
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
@@ -7637,6 +7638,58 @@ async function runScanForUser(
         // scores and gates. Operational safety is already owned by the decision.
         allPassed = singleOwnershipEnforcement.authorized;
       }
+
+      const ownedDecision = (detail as any).singleOwnershipDecision;
+      const scannerLiquidityState = unifiedZoneData?.liquidity?.entryTriggerState || "none";
+      (detail as any).canonicalScannerState = projectCanonicalScannerState({
+        evaluatedAt: ownedDecision.evaluatedAt,
+        identity: ownedDecision.identity,
+        direction: {
+          available: !!ownedDecision.authorities.direction.verdict,
+          allowed: ownedDecision.authorities.direction.shouldBlock === null
+            ? null
+            : !ownedDecision.authorities.direction.shouldBlock &&
+              ownedDecision.authorities.direction.verdict === ownedDecision.identity.direction,
+          evidenceId: ownedDecision.authorities.direction.evidenceId || null,
+        },
+        zone: {
+          available: ownedDecision.authorities.zoneStory.available,
+          valid: ownedDecision.authorities.zoneStory.valid,
+          atPoi: ownedDecision.authorities.zoneStory.available &&
+            (unifiedZoneData?.price?.atZone === true ||
+              izData?.bestZone?.priceAtZone === true),
+          evidenceId: ownedDecision.authorities.zoneStory.candidateId || null,
+          reasonCode: ownedDecision.authorities.zoneStory.reasonCodes[0] || null,
+        },
+        location: ownedDecision.authorities.canonicalLocation,
+        liquidity: {
+          policy: pairConfig.requireLiquiditySweep === true
+            ? "required" : scannerLiquidityState === "none"
+            ? "not_required" : "supporting",
+          state: ["unswept", "swept_rejected", "swept_absorbed"].includes(scannerLiquidityState)
+            ? scannerLiquidityState : "none",
+          source: "zone_liquidity",
+        },
+        confirmation: {
+          required: ownedDecision.authorities.confirmation.required,
+          passed: ownedDecision.authorities.confirmation.passed,
+          awaitingRetracement:
+            (detail as any).postChochRetracement?.status === "waiting",
+          evidenceId: candidateConfirmationSignal?.evidenceId || null,
+          reasonCode: ownedDecision.authorities.confirmation.reasonCodes[0] || null,
+        },
+        thesis: ownedDecision.authorities.thesis,
+        safety: {
+          complete: ownedDecision.authorities.safety.complete,
+          passed: ownedDecision.authorities.safety.checks.every((check: any) => check.passed),
+          reasonCode: ownedDecision.authorities.safety.checks.find((check: any) => !check.passed)?.code || null,
+        },
+        execution: {
+          authorized: singleOwnershipEnforcement.effectiveMode === "enforce"
+            ? singleOwnershipEnforcement.authorized : allPassed,
+          source: "final_trade_authorization",
+        },
+      });
 
       (detail as any).streamlinedTradeDecision =
         buildStreamlinedTradeDecisionObservation({
