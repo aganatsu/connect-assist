@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
+import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResearchCard";
 import {
   collapseRejectedOpportunities,
   normalizeRejectedGate,
@@ -512,6 +513,12 @@ export default function RejectedSetups() {
   const { data: ictScannerComparison, isLoading: isLoadingICTScannerComparison } = useQuery({
     queryKey: ["ict-scanner-workflow-comparison"],
     queryFn: () => botConfigApi.getICTScannerComparison(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const { data: authorityOutcomeComparison, isLoading: isLoadingAuthorityOutcomes } = useQuery({
+    queryKey: ["authority-outcome-comparison"],
+    queryFn: () => botConfigApi.getAuthorityOutcomeComparison(),
     staleTime: 60_000,
     retry: false,
   });
@@ -1184,11 +1191,11 @@ export default function RejectedSetups() {
               </Card>
             </div>
 
+            <AuthorityOutcomeResearchCard report={authorityOutcomeComparison} loading={isLoadingAuthorityOutcomes} />
+
             {/* Score Distribution */}
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-medium">Confluence Score vs Outcome</CardTitle>
-              </CardHeader>
+            <details className="border border-border/50 bg-card">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Legacy Confluence Score vs Outcome <span className="ml-2 text-[10px] font-normal text-muted-foreground">Diagnostic only · does not authorize entry</span></summary>
               <CardContent className="px-2 pb-3">
                 {setups.length > 0 ? (
                   <ChartContainer config={{ won: { label: "Would Have Won", color: "#22c55e" }, lost: { label: "Would Have Lost", color: "#ef4444" } }} className="h-[200px] w-full">
@@ -1221,7 +1228,7 @@ export default function RejectedSetups() {
                   <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                 )}
               </CardContent>
-            </Card>
+            </details>
           </TabsContent>
 
           {/* Gate Analysis Tab */}
