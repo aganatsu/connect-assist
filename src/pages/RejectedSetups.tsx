@@ -28,6 +28,7 @@ import { Link } from "react-router-dom";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
 import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResearchCard";
+import { StructureAuthorityEvidenceCard } from "@/components/StructureAuthorityEvidenceCard";
 import {
   collapseRejectedOpportunities,
   normalizeRejectedGate,
@@ -1359,6 +1360,8 @@ export default function RejectedSetups() {
               onReplay={runImpulseLifecycleReplay}
               onReview={reviewImpulseLifecycleCertificate}
             />
+
+            <StructureAuthorityEvidenceCard setups={setups} />
 
             <Card className="border-cyan-500/25">
               <CardHeader className="pb-2 pt-3 px-4">
