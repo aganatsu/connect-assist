@@ -1223,6 +1223,54 @@ export function generateInstrumentGamePlan(
   };
 }
 
+export function formatGamePlanAuthoritySummary(gamePlan: SessionGamePlan): string {
+  const validUntil = gamePlan.validityPolicy?.expiresAt ||
+    gamePlan.plans[0]?.expiresAt || null;
+  const lines = [
+    `📋 <b>ICT Game Plan — ${gamePlan.session}</b>`,
+    `<b>Authority:</b> ${gamePlan.planVersion || "pending persistence"}`,
+    validUntil
+      ? `<b>Valid until:</b> ${new Date(validUntil).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" })}`
+      : `<b>Generated:</b> ${new Date(gamePlan.generatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" })}`,
+    "",
+  ];
+
+  for (const plan of gamePlan.plans) {
+    const state = plan.state || (plan.tradeable ? "tradeable" : "skip");
+    const icon = state === "tradeable" ? "✅" : state === "wait" ? "⏳" : "⛔";
+    const evidence = plan.decisionEvidence;
+    const biasLayer = evidence?.layers.bias;
+    const structureLayer = evidence?.layers.structure;
+    const setupLayer = evidence?.layers.setup;
+    lines.push(`${icon} <b>${plan.symbol}</b> — ${state.toUpperCase()}`);
+    lines.push(`   Thesis: ${plan.bias.toUpperCase()} · ${plan.biasConfidence}% support`);
+    if (biasLayer && structureLayer && setupLayer) {
+      lines.push(
+        `   Structure: ${biasLayer.label} ${biasLayer.trend} → ${structureLayer.label} ${structureLayer.trend} → ${setupLayer.label} ${setupLayer.trend}`,
+      );
+    }
+    lines.push(`   Location: ${plan.zone} (${plan.zonePercent.toFixed(0)}%) · Regime: ${plan.regime}`);
+    lines.push(plan.dol
+      ? `   Draw on liquidity: ${plan.dol.description} @ ${plan.dol.price.toFixed(5)}`
+      : "   Draw on liquidity: not validated");
+    if (state !== "tradeable") lines.push(`   Why: ${plan.stateReason || plan.skipReason || "More evidence required"}`);
+    lines.push("");
+  }
+
+  const highImpact = (gamePlan.newsEvents || []).filter((event) => event.impact === "high");
+  if (highImpact.length > 0) {
+    lines.push("📰 <b>High-impact events</b>");
+    for (const event of highImpact.slice(0, 4)) {
+      const time = new Date(event.time).toLocaleTimeString("en-US", {
+        hour: "2-digit", minute: "2-digit", timeZone: "America/New_York",
+      });
+      lines.push(`   ${time} ET · ${event.currency} · ${event.event}`);
+    }
+  }
+  lines.push("", "Entries still require the frozen zone, liquidity, confirmation, and safety authorities.");
+  return lines.join("\n");
+}
+
 // ─── Session Game Plan (all instruments) ────────────────────────────────────
 
 /**

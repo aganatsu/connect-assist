@@ -1,3 +1,4 @@
+import { formatGamePlanAuthoritySummary } from "./gamePlan.ts";
 import type {
   GamePlanValidityPolicy,
   InstrumentGamePlan,
@@ -353,6 +354,7 @@ export async function persistActiveGamePlan(
         [],
     })),
   };
+  versionedPlan.summary = formatGamePlanAuthoritySummary(versionedPlan);
 
   const { data, error } = await client.rpc("activate_game_plan_version", {
     p_user_id: options.userId,

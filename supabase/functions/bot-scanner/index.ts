@@ -116,7 +116,7 @@ import {
 } from "../_shared/smcAnalysis.ts";
 import {
   generateInstrumentGamePlan, buildSessionGamePlan,
-  getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews,
+  getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews, formatGamePlanAuthoritySummary,
   type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
 import {
@@ -3944,6 +3944,7 @@ async function runScanForUser(
           activeGamePlan,
           scanStylePolicy,
         );
+        activeGamePlan.summary = formatGamePlanAuthoritySummary(activeGamePlan);
         try {
           activeGamePlan = await persistActiveGamePlan(
             supabase,
