@@ -58,6 +58,8 @@ import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEn
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
 import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
+import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
+import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
@@ -4255,6 +4257,15 @@ async function runScanForUser(
           pairConfig.confirmedTrendSwingLookback,
         useConfirmedTrend: pairConfig.useConfirmedTrend,
       });
+    const canonicalStructureAuthority = buildCanonicalStructureAuthority(
+      roleCandles.structure,
+    );
+    const canonicalConfirmationStructure = buildCanonicalStructureAuthority(
+      roleCandles.confirmation,
+    );
+    const canonicalLiquiditySequence = buildCanonicalLiquiditySequences(
+      canonicalConfirmationStructure,
+    );
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
@@ -4462,6 +4473,9 @@ async function runScanForUser(
 
     const detail: any = {
       pair,
+      canonicalStructureAuthority,
+      canonicalConfirmationStructure,
+      canonicalLiquiditySequence,
       crossTimeframeAuthority,
       score: analysis.score,
       direction: analysis.direction,
