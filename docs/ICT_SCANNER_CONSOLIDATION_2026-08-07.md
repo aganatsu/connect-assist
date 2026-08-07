@@ -46,4 +46,7 @@ Terminal states: `blocked`, `invalidated`, `expired`.
 
 ## Deployment Ledger
 
-Update this section after each PR is pushed. Do not merge stacked PRs out of order.
+1. PR #229 - canonical state and authority trace. Deploy bot-scanner and zone-confirmation-scanner.
+2. Direction availability comparison - observation default; deploy bot-scanner.
+
+Do not merge stacked PRs out of order.
