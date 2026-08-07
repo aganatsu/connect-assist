@@ -260,8 +260,8 @@ export async function invokeFunction<T = any>(
 
   // If auth failed, try refreshing the session once and retry.
   if (isAuthError(error, data)) {
-    const { error: refreshErr } = await supabase.auth.refreshSession();
-    if (!refreshErr) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken) {
       ({ data, error } = await invokeSupabaseFunction(functionName, body));
     }
     if (isAuthError(error, data)) {
