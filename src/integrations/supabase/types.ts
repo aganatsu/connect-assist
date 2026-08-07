@@ -1964,6 +1964,7 @@ export type Database = {
           bot_id: string
           confluence_score: number
           created_at: string
+          decision_outcome_snapshot: Json | null
           direction: string
           entry_price: number
           failed_gates: string[] | null
@@ -1973,11 +1974,17 @@ export type Database = {
           gp_bias_confidence: number | null
           id: string
           mae_pips: number | null
+          mae_r: number | null
           mfe_pips: number | null
+          mfe_r: number | null
           normalized_gates: string[]
           opportunity_key: string | null
           outcome_checked_at: string | null
+          outcome_contract_version: string | null
+          outcome_r: number | null
+          outcome_reason: string | null
           outcome_status: string
+          outcome_window_hours: number | null
           price_at_rejection: number | null
           price_reached_entry: boolean | null
           raw_detail: Json | null
@@ -1988,6 +1995,7 @@ export type Database = {
           session_name: string | null
           shadow_decision: Json | null
           sl_hit: boolean | null
+          sl_hit_time_minutes: number | null
           stop_loss: number | null
           streamlined_decision_frozen_at: string | null
           streamlined_decision_latest: Json | null
@@ -2004,6 +2012,7 @@ export type Database = {
           bot_id?: string
           confluence_score: number
           created_at?: string
+          decision_outcome_snapshot?: Json | null
           direction: string
           entry_price: number
           failed_gates?: string[] | null
@@ -2013,11 +2022,17 @@ export type Database = {
           gp_bias_confidence?: number | null
           id?: string
           mae_pips?: number | null
+          mae_r?: number | null
           mfe_pips?: number | null
+          mfe_r?: number | null
           normalized_gates?: string[]
           opportunity_key?: string | null
           outcome_checked_at?: string | null
+          outcome_contract_version?: string | null
+          outcome_r?: number | null
+          outcome_reason?: string | null
           outcome_status?: string
+          outcome_window_hours?: number | null
           price_at_rejection?: number | null
           price_reached_entry?: boolean | null
           raw_detail?: Json | null
@@ -2028,6 +2043,7 @@ export type Database = {
           session_name?: string | null
           shadow_decision?: Json | null
           sl_hit?: boolean | null
+          sl_hit_time_minutes?: number | null
           stop_loss?: number | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
@@ -2044,6 +2060,7 @@ export type Database = {
           bot_id?: string
           confluence_score?: number
           created_at?: string
+          decision_outcome_snapshot?: Json | null
           direction?: string
           entry_price?: number
           failed_gates?: string[] | null
@@ -2053,11 +2070,17 @@ export type Database = {
           gp_bias_confidence?: number | null
           id?: string
           mae_pips?: number | null
+          mae_r?: number | null
           mfe_pips?: number | null
+          mfe_r?: number | null
           normalized_gates?: string[]
           opportunity_key?: string | null
           outcome_checked_at?: string | null
+          outcome_contract_version?: string | null
+          outcome_r?: number | null
+          outcome_reason?: string | null
           outcome_status?: string
+          outcome_window_hours?: number | null
           price_at_rejection?: number | null
           price_reached_entry?: boolean | null
           raw_detail?: Json | null
@@ -2068,6 +2091,7 @@ export type Database = {
           session_name?: string | null
           shadow_decision?: Json | null
           sl_hit?: boolean | null
+          sl_hit_time_minutes?: number | null
           stop_loss?: number | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
