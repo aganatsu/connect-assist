@@ -1975,35 +1975,44 @@ function ScanLogLine({ log }: { log: any }) {
 function TradeDecisionPanel({ detail }: { detail: any }) {
   const decision = detail?.singleOwnershipDecision;
   const enforcement = detail?.singleOwnershipEnforcement;
-  if (!decision && !enforcement) return null;
-  const outcome = String(decision?.decision || "unavailable").toUpperCase();
-  const unavailable = Array.isArray(decision?.completeness?.unavailable)
-    ? decision.completeness.unavailable.map((value: string) => value + "_unavailable")
-    : [];
-  const reasons = uniqueRejectionReasons(detail?.gates, [
-    ...(Array.isArray(decision?.reasonCodes) ? decision.reasonCodes : []),
-    ...unavailable,
-  ]);
-  const hasFailedGate = Array.isArray(detail?.gates) && detail.gates.some((gate: any) => gate?.passed === false);
-  const outcomeColor = outcome === "ALLOW" ? "text-success"
-    : outcome === "WATCH" ? "text-warning" : "text-destructive";
+  const workflow = detail?.canonicalScannerState;
+  const workflowEnforcement = detail?.canonicalScannerEnforcement;
+  const presentation = detail?.tradeDecisionPresentation;
+  if (!decision && !enforcement && !workflow) return null;
+  const outcome = String(workflow?.stage || decision?.decision || "unavailable").replaceAll("_", " ").toUpperCase();
+  const outcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) ? "text-success"
+    : outcome.includes("AWAITING") || ["WATCHING", "AT POI", "WATCH"].includes(outcome) ? "text-warning" : "text-destructive";
+  const primaryExplanation = presentation?.primary?.explanation || workflow?.explanation || null;
+  const diagnostics = Array.isArray(presentation?.diagnostics) ? presentation.diagnostics : [];
   return (
-    <details className="group border border-border/60 bg-muted/10" open={outcome !== "ALLOW"}>
+    <details className="group border border-border/60 bg-muted/10" open={!(["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome))}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs">
-        <span className="font-medium">Trade Decision</span>
+        <span className="font-medium">ICT Scanner Workflow</span>
         <span className={"font-mono font-bold " + outcomeColor}>{outcome}</span>
       </summary>
-      <div className="space-y-1 border-t border-border/50 px-3 py-2 text-[10px]">
+      <div className="space-y-2 border-t border-border/50 px-3 py-2 text-[10px]">
         <p className="text-muted-foreground">
-          Mode: <span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
-          {enforcement?.runtimeTarget ? " · " + String(enforcement.runtimeTarget).toUpperCase() : ""}
+          Workflow: <span className="font-mono text-foreground">{String(workflowEnforcement?.effectiveMode || "observe").toUpperCase()}</span>
+          {" · Trade Decision: "}<span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
         </p>
-        {reasons.length > 0 ? reasons.map((reason: string) => (
-          <p key={reason} className={outcomeColor}>{reason.replace(/_/g, " ")}</p>
-        )) : hasFailedGate ? (
-          <p className="text-muted-foreground">Blocking reason is listed under Failed Gates.</p>
-        ) : (
-          <p className="text-muted-foreground">No blocking authority reason recorded.</p>
+        {primaryExplanation ? <p className={outcomeColor}>{primaryExplanation}</p> : <p className="text-muted-foreground">No canonical scanner explanation recorded.</p>}
+        {Array.isArray(presentation?.authorityChecks) && presentation.authorityChecks.length > 0 && (
+          <div className="grid grid-cols-2 gap-1 border-t border-border/40 pt-2 sm:grid-cols-4">
+            {presentation.authorityChecks.map((check: any) => (
+              <div key={check.role} className="flex items-center justify-between gap-1 border border-border/40 px-1.5 py-1">
+                <span className="truncate text-muted-foreground">{String(check.role).replaceAll("_", " ")}</span>
+                <span className={check.passed === true ? "text-success" : check.passed === false ? "text-destructive" : "text-warning"}>{check.passed === true ? "PASS" : check.passed === false ? "BLOCK" : "WAIT"}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {diagnostics.length > 0 && (
+          <details className="border-t border-border/40 pt-2">
+            <summary className="cursor-pointer text-muted-foreground">Diagnostic scores and legacy checks ({diagnostics.length})</summary>
+            <div className="mt-1 space-y-1">
+              {diagnostics.map((item: any, index: number) => <p key={`${item.code}-${index}`} className="text-muted-foreground">{item.reason || String(item.code).replaceAll("_", " ")}</p>)}
+            </div>
+          </details>
         )}
       </div>
     </details>
