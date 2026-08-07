@@ -444,6 +444,15 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <FieldGroup label="Market Structure Authority" description="Use frozen swings, sweeps, BOS, CHoCH and MSS as one decision sequence">
+            <Select value={config.strategy?.canonicalStructureMode ?? "observe"} onValueChange={v => updateField("strategy", "canonicalStructureMode", v)}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="observe">Observe</SelectItem>
+                <SelectItem value="enforce" disabled={config.strategy?.singleOwnershipMode !== "enforce" && config.strategy?.singleOwnershipMode !== "enforce_live"}>Enforce</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Scoring</p>

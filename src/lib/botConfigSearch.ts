@@ -47,6 +47,7 @@ const scanLabels = [
   "Impulse & Entry Zone Lifecycle",
   "Trade Decision Mode",
   "ICT Scanner Workflow",
+  "Market Structure Authority",
   "Enable Regime Scoring",
   "Regime Strength",
   "Structural Conviction Gate",
