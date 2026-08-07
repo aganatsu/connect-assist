@@ -1979,7 +1979,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
   const workflowEnforcement = detail?.canonicalScannerEnforcement;
   const presentation = detail?.tradeDecisionPresentation;
   if (!decision && !enforcement && !workflow) return null;
-  const outcome = String(workflow?.stage || decision?.decision || "unavailable").replaceAll("_", " ").toUpperCase();
+  const outcome = String(workflow?.stage || decision?.decision || "unavailable").replace(/_/g, " ").toUpperCase();
   const outcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) ? "text-success"
     : outcome.includes("AWAITING") || ["WATCHING", "AT POI", "WATCH"].includes(outcome) ? "text-warning" : "text-destructive";
   const primaryExplanation = presentation?.primary?.explanation || workflow?.explanation || null;
@@ -2000,7 +2000,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           <div className="grid grid-cols-2 gap-1 border-t border-border/40 pt-2 sm:grid-cols-4">
             {presentation.authorityChecks.map((check: any) => (
               <div key={check.role} className="flex items-center justify-between gap-1 border border-border/40 px-1.5 py-1">
-                <span className="truncate text-muted-foreground">{String(check.role).replaceAll("_", " ")}</span>
+                <span className="truncate text-muted-foreground">{String(check.role).replace(/_/g, " ")}</span>
                 <span className={check.passed === true ? "text-success" : check.passed === false ? "text-destructive" : "text-warning"}>{check.passed === true ? "PASS" : check.passed === false ? "BLOCK" : "WAIT"}</span>
               </div>
             ))}
@@ -2010,7 +2010,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           <details className="border-t border-border/40 pt-2">
             <summary className="cursor-pointer text-muted-foreground">Diagnostic scores and legacy checks ({diagnostics.length})</summary>
             <div className="mt-1 space-y-1">
-              {diagnostics.map((item: any, index: number) => <p key={`${item.code}-${index}`} className="text-muted-foreground">{item.reason || String(item.code).replaceAll("_", " ")}</p>)}
+              {diagnostics.map((item: any, index: number) => <p key={`${item.code}-${index}`} className="text-muted-foreground">{item.reason || String(item.code).replace(/_/g, " ")}</p>)}
             </div>
           </details>
         )}

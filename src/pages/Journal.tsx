@@ -16,7 +16,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid, PieChart, Pie,
 } from "recharts";
-import { Filter, X, BookOpen, Download, Tag, ChevronDown } from "lucide-react";
+import { Filter, X, BookOpen, Download, Tag, ChevronDown, Calculator } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 
