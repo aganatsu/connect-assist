@@ -8,7 +8,8 @@
  */
 
 import type { Candle, StructureBreak, SwingPoint } from "./smcAnalysis.ts";
-import { analyzeMarketStructure, calculateATR } from "./smcAnalysis.ts";
+import { calculateATR } from "./smcAnalysis.ts";
+import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
 
 export const CANONICAL_IMPULSE_DETECTOR_VERSION = "canonical-impulse.v1";
 
@@ -238,14 +239,8 @@ export function detectCanonicalImpulse(
     };
   }
 
-  const structure = analyzeMarketStructure(candles);
-  const breaks = [
-    ...structure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
-    ...structure.choch.map((item) => ({
-      ...item,
-      breakType: "choch" as const,
-    })),
-  ]
+  const structure = canonicalStructureForLegacyConsumers(candles);
+  const breaks = structure.breaks
     .filter((item) => item.type === direction)
     .sort((a, b) => b.index - a.index);
 
@@ -254,7 +249,7 @@ export function detectCanonicalImpulse(
       candles,
       bos,
       direction,
-      structure.swingPoints,
+      structure.swings,
     );
     candidates.push(...result.rejected);
     if (result.selected) {

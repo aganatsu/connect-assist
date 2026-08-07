@@ -39,6 +39,7 @@ import {
   type ZoneCandidateModelObservation,
 } from "./zoneCandidateModel.ts";
 import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
+import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,14 +210,8 @@ export function findImpulseLeg(
 ): ImpulseLeg | null {
   if (candles.length < 20) return null;
 
-  const structure = analyzeMarketStructure(candles);
-  const allBreaks = [
-    ...structure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
-    ...structure.choch.map((item) => ({
-      ...item,
-      breakType: "choch" as const,
-    })),
-  ]
+  const canonicalStructure = canonicalStructureForLegacyConsumers(candles);
+  const allBreaks = canonicalStructure.breaks
     .filter(b => b.type === direction)
     .sort((a, b) => b.index - a.index); // Most recent first
 
@@ -229,7 +224,7 @@ export function findImpulseLeg(
       candles,
       bos,
       direction,
-      structure.swingPoints,
+      canonicalStructure.swings,
       (candidate) => {
         emittedCandidate = true;
         collector?.(candidate);
