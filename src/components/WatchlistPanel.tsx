@@ -235,6 +235,8 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
   const watchlistDisplay = getWatchlistDisplay(setup.execution_eligible);
   const monitoringOnly = watchlistDisplay.state === "monitoring";
   const lifecyclePhase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase;
+  const scannerState = setup.authorization_result?.canonicalScannerState ||
+    setup.analysis_snapshot?.canonicalScannerState || null;
   const isNearZone = ["approaching_zone", "at_zone", "local_trigger_active", "local_trigger_swept", "sweep_rejected", "confirmation_ready"].includes(lifecyclePhase || "");
 
   return (
@@ -277,6 +279,11 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
               className="text-[9px] h-4 px-1.5 border-emerald-500/40 text-emerald-300"
             >
               QUALIFIED
+            </Badge>
+          )}
+          {scannerState?.stage && (
+            <Badge variant="outline" className="h-4 px-1.5 text-[9px] border-cyan-500/40 text-cyan-300">
+              {String(scannerState.stage).replace(/_/g, " ").toUpperCase()}
             </Badge>
           )}
           {(setup.lifecycle_phase || setup.lifecycle_evidence?.phase) && (
@@ -348,9 +355,9 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
 
       {/* Narrative sentence */}
       <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
-        {monitoringOnly
+        {scannerState?.explanation || (monitoringOnly
           ? setup.observation_reason || watchlistDisplay.description
-          : lifecycleStatusText(setup)}
+          : lifecycleStatusText(setup))}
       </p>
 
       {/* Expand/collapse for factors */}

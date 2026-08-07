@@ -5689,6 +5689,37 @@ async function runScanForUser(
         reversalPatternRole: "supporting",
         afterChochEntryMode: pairConfig.afterChochMode,
       });
+      const frozenLiquidityState = (detail as any).unifiedZone?.liquidity?.entryTriggerState || "none";
+      const watchCanonicalState = projectCanonicalScannerState({
+        evaluatedAt: new Date().toISOString(),
+        identity: { candidateId, symbol: pair, direction: analysis.direction as "long" | "short" },
+        direction: {
+          available: !!activeDirectionVerdict?.verdict,
+          allowed: activeDirectionVerdict?.shouldBlock == null ? null :
+            !activeDirectionVerdict.shouldBlock && activeDirectionVerdict.verdict === analysis.direction,
+          evidenceId: activeDirectionVerdict?.id || null,
+        },
+        zone: {
+          available: (detail as any).unifiedZone?.hasZone === true || (detail as any).impulseZone?.hasZone === true,
+          valid: true,
+          atPoi: (detail as any).unifiedZone?.price?.atZone === true || (detail as any).impulseZone?.bestZone?.priceAtZone === true,
+          evidenceId: candidateId,
+        },
+        location: {
+          required: (pairConfig.dealingRangeMode || "avoid_wrong_side") !== "off",
+          available: (detail as any).canonicalDealingRangeObservation?.canonical?.available === true,
+          allowed: (detail as any).canonicalDealingRangeObservation?.canonical?.allowed ?? null,
+          evidenceId: (detail as any).canonicalDealingRangeObservation?.canonical?.range?.impulseId || null,
+        },
+        liquidity: {
+          policy: frozenStrategyContext.liquidityActivation.role,
+          state: ["unswept", "swept_rejected", "swept_absorbed"].includes(frozenLiquidityState) ? frozenLiquidityState : "none",
+        },
+        confirmation: { required: true, passed: (detail as any).unifiedZone?.confirmation?.entryReady === true },
+        thesis: { required: false, valid: true },
+        safety: { complete: false, passed: null },
+        execution: { authorized: false },
+      });
       const {
         lifecycleReasonCode,
         lifecycleEvidence,
@@ -5725,6 +5756,8 @@ async function runScanForUser(
           reason: "Setup is observational until qualification",
           stylePolicy: pairStylePolicy,
           frozenStrategyContext,
+          canonicalScannerState: watchCanonicalState,
+          tradeDecisionPresentation: buildTradeDecisionPresentation({ state: watchCanonicalState }),
         },
         style_policy_version: pairStylePolicy.contractVersion,
         style_base_policy_hash: pairStylePolicy.basePolicyHash,

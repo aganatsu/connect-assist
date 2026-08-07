@@ -46,6 +46,7 @@ const scanLabels = [
   "Premium/Discount Entry Rule",
   "Impulse & Entry Zone Lifecycle",
   "Trade Decision Mode",
+  "ICT Scanner Workflow",
   "Enable Regime Scoring",
   "Regime Strength",
   "Structural Conviction Gate",

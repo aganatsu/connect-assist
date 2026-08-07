@@ -338,6 +338,10 @@ function validateConfig(config: any): string[] {
       !["observe", "enforce", "enforce_live"].includes(s.singleOwnershipMode)) {
       errors.push("strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
     }
+    if (s.canonicalScannerMode !== undefined &&
+      !["observe", "enforce"].includes(s.canonicalScannerMode)) {
+      errors.push("strategy.canonicalScannerMode must be observe or enforce");
+    }
     if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
       errors.push("strategy.confluenceThreshold must be between 0 and 100");
     }
@@ -557,7 +561,7 @@ function getDefaultConfig() {
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
       liquiditySweepRequired: false, equalHighsLowsSensitivity: 3, liquidityPoolMinTouches: 2,
-      premiumDiscountEnabled: true, dealingRangeMode: "avoid_wrong_side", singleOwnershipMode: "observe", streamlinedDecisionMode: "observe", onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
+      premiumDiscountEnabled: true, dealingRangeMode: "avoid_wrong_side", singleOwnershipMode: "observe", canonicalScannerMode: "observe", streamlinedDecisionMode: "observe", onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
       // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
