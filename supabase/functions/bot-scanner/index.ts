@@ -56,6 +56,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
+import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
@@ -7708,6 +7709,11 @@ async function runScanForUser(
             ? singleOwnershipEnforcement.authorized : allPassed,
           source: "final_trade_authorization",
         },
+      });
+
+      (detail as any).tradeDecisionPresentation = buildTradeDecisionPresentation({
+        state: (detail as any).canonicalScannerState,
+        legacyDiagnostics: (detail as any).legacyGateDiagnostics || [],
       });
 
       (detail as any).streamlinedTradeDecision =
