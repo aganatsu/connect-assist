@@ -60,6 +60,7 @@ import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScanner
 import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
 import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
+import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
@@ -7620,6 +7621,13 @@ async function runScanForUser(
         : candidateConfirmationMethod === "indicators"
         ? candidateIndicatorConfirmation?.confirmed === true
         : !!candidateConfirmationSignal && candidateIndicatorConfirmation?.confirmed === true;
+      const canonicalStructureDecision = evaluateCanonicalStructureDecision({
+        direction: analysis.direction as "long" | "short" | null,
+        structure: canonicalStructureAuthority,
+        liquidity: canonicalLiquiditySequence,
+        requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
+      });
+      (detail as any).canonicalStructureDecision = canonicalStructureDecision;
       (detail as any).entryConfirmationCandidate = {
         method: candidateConfirmationMethod,
         passed: candidateEntryConfirmationPassed,
@@ -7697,6 +7705,12 @@ async function runScanForUser(
         runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
         decision: (detail as any).singleOwnershipDecision,
       });
+      const canonicalStructureEnforcement = evaluateCanonicalStructureEnforcement({
+        requestedMode: (pairConfig as any).canonicalStructureMode,
+        singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
+        decision: canonicalStructureDecision,
+      });
+      (detail as any).canonicalStructureEnforcement = canonicalStructureEnforcement;
       (detail as any).singleOwnershipEnforcement = singleOwnershipEnforcement;
       const singleOwnershipScanOutcome = resolveSingleOwnershipScanOutcome({
         enforcement: singleOwnershipEnforcement,
@@ -7706,6 +7720,9 @@ async function runScanForUser(
         // In ownership enforcement, named authorities replace all legacy market-quality
         // scores and gates. Operational safety is already owned by the decision.
         allPassed = singleOwnershipEnforcement.authorized;
+      }
+      if (canonicalStructureEnforcement.effectiveMode === "enforce") {
+        allPassed = allPassed && canonicalStructureEnforcement.authorized;
       }
 
       const ownedDecision = (detail as any).singleOwnershipDecision;
@@ -7720,6 +7737,13 @@ async function runScanForUser(
             : !ownedDecision.authorities.direction.shouldBlock &&
               ownedDecision.authorities.direction.verdict === ownedDecision.identity.direction,
           evidenceId: ownedDecision.authorities.direction.evidenceId || null,
+        },
+        structure: {
+          required: canonicalStructureEnforcement.effectiveMode === "enforce",
+          decision: canonicalStructureDecision.decision,
+          source: "canonical_structure_sequence",
+          evidenceId: canonicalStructureDecision.sequenceId,
+          reasonCode: canonicalStructureDecision.reasonCode,
         },
         zone: {
           available: ownedDecision.authorities.zoneStory.available,

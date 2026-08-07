@@ -85,6 +85,7 @@ import {
 } from "../_shared/zoneTimeframeEvidence.ts";
 import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
+import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
 import {
   evaluateCanonicalDealingRange,
   normalizeDealingRangeMode,
@@ -3806,11 +3807,35 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           runtimeTarget: "paper",
           decision: (replaySnapshot as any).singleOwnershipDecision,
         });
+        const canonicalStructureDecision = evaluateCanonicalStructureDecision({
+          direction: analysis.direction,
+          structure: barCanonicalStructure,
+          liquidity: barCanonicalLiquiditySequence,
+          requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
+        });
+        const canonicalStructureEnforcement = evaluateCanonicalStructureEnforcement({
+          requestedMode: pairConfig.canonicalStructureMode,
+          singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
+          decision: canonicalStructureDecision,
+        });
+        (replaySnapshot as any).canonicalStructureAuthority = barCanonicalStructure;
+        (replaySnapshot as any).canonicalLiquiditySequence = barCanonicalLiquiditySequence;
+        (replaySnapshot as any).canonicalStructureDecision = canonicalStructureDecision;
+        (replaySnapshot as any).canonicalStructureEnforcement = canonicalStructureEnforcement;
         (replaySnapshot as any).singleOwnershipEnforcement =
           singleOwnershipEnforcement;
         if (singleOwnershipEnforcement.effectiveMode === "enforce") {
           allPassed = singleOwnershipEnforcement.authorized;
           replaySnapshot.decision.execution.eligible = allPassed;
+        }
+        if (canonicalStructureEnforcement.effectiveMode === "enforce") {
+          allPassed = allPassed && canonicalStructureEnforcement.authorized;
+          replaySnapshot.decision.execution.eligible = allPassed;
+          if (!canonicalStructureEnforcement.authorized) {
+            const structureGate = { passed: false, reason: `Market Structure Authority: ${canonicalStructureDecision.reasonCode}` };
+            gates.push(structureGate);
+            failedGates.push(structureGate);
+          }
         }
         if (!allPassed) {
           replaySnapshot = await finalizeGoldenReplaySnapshot(
