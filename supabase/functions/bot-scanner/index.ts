@@ -56,6 +56,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
+import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
@@ -4831,10 +4832,23 @@ async function runScanForUser(
       directionSource = "blocked";
       console.log(`[scan ${scanCycleId}] ${pair} Direction NEUTRAL (blocked): ${directionVerdict.summary}`);
     } else {
-      // No verdict computed (error or missing data) — fall back to 15m as last resort
-      effectiveDirection = analysis.direction;
-      directionSource = "15m_fallback";
-      console.log(`[scan ${scanCycleId}] ${pair} Direction: no verdict available, using 15m fallback=${effectiveDirection}`);
+      // Preserve the current fallback while recording the fail-closed comparison.
+      const directionAvailability = resolveDirectionAvailability({
+        mode: (pairConfig as any).directionUnavailableMode,
+        verdictDirection: null,
+        legacyDirection: analysis.direction,
+      });
+      (detail as any).directionAvailabilityPolicy = directionAvailability;
+      effectiveDirection = directionAvailability.selectedDirection;
+      directionSource = effectiveDirection ? "15m_fallback" : "blocked";
+      console.log(`[scan ${scanCycleId}] ${pair} Direction authority unavailable: current=${effectiveDirection || "wait"}, fail-closed wouldWait=${directionAvailability.wouldWait}`);
+    }
+    if (directionVerdict?.verdict === "long" || directionVerdict?.verdict === "short") {
+      (detail as any).directionAvailabilityPolicy = resolveDirectionAvailability({
+        mode: (pairConfig as any).directionUnavailableMode,
+        verdictDirection: directionVerdict.verdict,
+        legacyDirection: analysis.direction,
+      });
     }
 
     // ── DIRECTION SYNC: overwrite analysis.direction with verdict direction ──
