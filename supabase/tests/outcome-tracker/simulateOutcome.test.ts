@@ -330,3 +330,21 @@ Deno.test("sl_hit_time_minutes is correctly calculated", () => {
   // Entry at 01:00, SL at 03:00 → 120 minutes
   assertEquals(result.sl_hit_time_minutes, 120);
 });
+
+Deno.test("entry and boundary first touched in one candle is ambiguous", () => {
+  const result = simulateOutcome([
+    makeCandle("2024-01-01T01:00:00Z", 1.1020, 1.1030, 1.0940, 1.0960),
+  ], "long", 1.1000, 1.0950, 1.1100, "2024-01-01T00:30:00Z");
+  assertEquals(result.outcome_status, "inconclusive");
+  assertEquals(result.outcome_reason, "ambiguous_entry_candle");
+});
+
+Deno.test("resolved outcome includes R-normalized excursions", () => {
+  const result = simulateOutcome([
+    makeCandle("2024-01-01T01:00:00Z", 1.1000, 1.1010, 1.0990, 1.1005),
+    makeCandle("2024-01-01T02:00:00Z", 1.1005, 1.1110, 1.1000, 1.1100),
+  ], "long", 1.1000, 1.0950, 1.1100, "2024-01-01T00:30:00Z");
+  assertEquals(result.outcome_status, "would_have_won");
+  assertAlmostEquals(result.outcome_r!, 2, 1e-10);
+  assertAlmostEquals(result.mfe_r!, 2, 1e-10);
+});
