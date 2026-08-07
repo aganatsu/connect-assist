@@ -352,6 +352,21 @@ export const botConfigApi = {
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
   reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
+  getICTScannerComparison: () => invokeFunction<{
+    summary: {
+      sampleSize: number; comparable: number; unavailable: number; coveragePercent: number;
+      agreements: number; disagreements: number; workflowAllows: number; workflowWatches: number; workflowBlocks: number;
+      winnersPreserved: number; winnersBlocked: number; poorEntriesRejected: number; poorEntriesWatched: number; poorEntriesAllowed: number;
+      stageCounts: Record<string, number>;
+    };
+    rows: Array<{
+      id: string; source: "closed" | "rejected"; symbol: string; direction: string; observedAt: string;
+      outcome: "won" | "lost" | "inconclusive"; actualDecision: "allow" | "block";
+      workflowDecision: "allow" | "watch" | "block" | null; stage: string | null;
+      reasonCode: string | null; explanation: string | null; comparable: boolean;
+      decisionsMatch: boolean | null; missingAuthorities: string[]; authorities: any[]; state: any | null;
+    }>;
+  }>("bot-config", { action: "ict_scanner.comparison" }),
   getSingleOwnershipComparison: () => invokeFunction<{
     summary: { sampleSize: number; comparable: number; unavailable: number; coveragePercent: number; agreements: number; disagreements: number; winnersPreserved: number; winnersBlocked: number; poorEntriesRejected: number; poorEntriesAllowed: number; };
     rows: Array<{ id: string; source: "closed" | "rejected"; symbol: string; direction: string; observedAt: string; outcome: "won" | "lost" | "inconclusive"; legacyDecision: "allow" | "block"; proposedDecision: "allow" | "watch" | "block" | "unavailable" | null; comparable: boolean; decisionsMatch: boolean | null; reasonCodes: string[]; unavailable: string[]; legacyDiagnostics: any; }>;

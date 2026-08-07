@@ -509,6 +509,12 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
+  const { data: ictScannerComparison, isLoading: isLoadingICTScannerComparison } = useQuery({
+    queryKey: ["ict-scanner-workflow-comparison"],
+    queryFn: () => botConfigApi.getICTScannerComparison(),
+    staleTime: 60_000,
+    retry: false,
+  });
   const { data: singleOwnershipComparison, isLoading: isLoadingSingleOwnership } = useQuery({
     queryKey: ["single-ownership-comparison"],
     queryFn: () => botConfigApi.getSingleOwnershipComparison(),
@@ -1346,6 +1352,84 @@ export default function RejectedSetups() {
               onReplay={runImpulseLifecycleReplay}
               onReview={reviewImpulseLifecycleCertificate}
             />
+
+            <Card className="border-cyan-500/25">
+              <CardHeader className="pb-2 pt-3 px-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-sm font-medium">ICT Scanner Workflow Comparison</CardTitle>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Current system outcomes compared with the observed canonical workflow stages. Watch means the setup needed more evidence; it does not mean immediate entry.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-400">
+                      {isLoadingICTScannerComparison ? "Loading" : `${ictScannerComparison?.summary.comparable ?? 0}/${ictScannerComparison?.summary.sampleSize ?? 0} comparable`}
+                    </Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      disabled={!ictScannerComparison}
+                      onClick={() => {
+                        if (!ictScannerComparison) return;
+                        const blob = new Blob([JSON.stringify(ictScannerComparison, null, 2)], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const anchor = document.createElement("a");
+                        anchor.href = url;
+                        anchor.download = `ict-scanner-workflow-${new Date().toISOString().slice(0, 10)}.json`;
+                        anchor.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      <Download className="mr-1 h-3 w-3" /> Dataset
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3 px-4 pb-4">
+                {isLoadingICTScannerComparison ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">Loading ICT Scanner Workflow evidence…</div>
+                ) : ictScannerComparison ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-4 xl:grid-cols-6">
+                      <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{ictScannerComparison.summary.coveragePercent.toFixed(1)}%</p></div>
+                      <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{ictScannerComparison.summary.agreements}</p></div>
+                      <div><span className="text-muted-foreground">Workflow watches</span><p className="font-mono font-bold text-warning">{ictScannerComparison.summary.workflowWatches}</p></div>
+                      <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{ictScannerComparison.summary.winnersPreserved}</p></div>
+                      <div><span className="text-muted-foreground">Winners blocked/watched</span><p className="font-mono font-bold text-destructive">{ictScannerComparison.summary.winnersBlocked}</p></div>
+                      <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{ictScannerComparison.summary.poorEntriesRejected}</p></div>
+                      <div><span className="text-muted-foreground">Poor entries watched</span><p className="font-mono font-bold text-warning">{ictScannerComparison.summary.poorEntriesWatched}</p></div>
+                      <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-destructive">{ictScannerComparison.summary.poorEntriesAllowed}</p></div>
+                      <div><span className="text-muted-foreground">Unavailable history</span><p className="font-mono font-bold text-muted-foreground">{ictScannerComparison.summary.unavailable}</p></div>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-medium uppercase text-muted-foreground">Stage distribution</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {Object.entries(ictScannerComparison.summary.stageCounts).sort((a, b) => b[1] - a[1]).map(([stage, count]) => (
+                          <Badge key={stage} variant="outline" className="text-[9px]">
+                            {stage.replace(/_/g, " ")} · {count}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {ictScannerComparison.rows.filter(row => row.decisionsMatch === false).slice(0, 12).map(row => (
+                        <div key={`ict-workflow:${row.source}:${row.id}`} className="border-l-2 border-warning pl-3 text-xs">
+                          <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · actual {row.actualDecision} · workflow {row.workflowDecision || "unavailable"} · {(row.stage || "unavailable").replace(/_/g, " ")}</span>
+                          <p className="mt-0.5 text-muted-foreground">{row.explanation || row.reasonCode?.replace(/_/g, " ") || "Workflow evidence unavailable"}</p>
+                          {row.missingAuthorities.length > 0 && <p className="mt-0.5 text-warning">Missing: {row.missingAuthorities.join(", ")}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    {ictScannerComparison.summary.comparable === 0 && (
+                      <p className="text-[10px] text-muted-foreground">Historical records created before deployment do not contain canonical workflow evidence. Coverage will grow automatically as new scans, rejections and trades are recorded.</p>
+                    )}
+                  </>
+                ) : (
+                  <div className="py-8 text-center text-sm text-muted-foreground">ICT Scanner Workflow comparison is unavailable.</div>
+                )}
+              </CardContent>
+            </Card>
 
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
