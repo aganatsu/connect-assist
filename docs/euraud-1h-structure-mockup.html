@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EUR/AUD 1H Structure Markup</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0d12; color: #eef2f7; font: 14px/1.4 system-ui, sans-serif; }
+    main { width: min(1500px, 100%); margin: auto; padding: 20px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; } p { margin: 4px 0 0; color: #aab3c2; }
+    button { border: 1px solid #3c4658; background: #171c25; color: #eef2f7; padding: 9px 12px; cursor: pointer; }
+    .frame { position: relative; width: 100%; aspect-ratio: 1589 / 768; overflow: hidden; border: 1px solid #30394a; background: #666a76; }
+    .frame img, .overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .overlay { pointer-events: none; }
+    .line { position: absolute; height: 0; border-top: 2px dashed; }
+    .external { border-color: #f5b942; } .internal { border-color: #39b9ff; } .bear { border-color: #ff5b62; }
+    .arrow { position: absolute; width: 3px; transform-origin: bottom center; }
+    .arrow::after { content: ""; position: absolute; top: -1px; left: -6px; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid currentColor; }
+    .bull-arrow { background: #20c985; color: #20c985; } .bear-arrow { background: #ff5b62; color: #ff5b62; }
+    .label { position: absolute; padding: 4px 7px; background: rgba(9,12,17,.92); border: 1px solid currentColor; font-size: clamp(8px, .8vw, 12px); font-weight: 750; white-space: nowrap; }
+    .gold { color: #f5b942; } .blue { color: #39b9ff; } .green { color: #20c985; } .red { color: #ff5b62; }
+    .point { position: absolute; width: 10px; height: 10px; margin: -5px; border: 2px solid #0b0d12; border-radius: 50%; background: currentColor; }
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 0; color: #b3bdcb; }
+    .legend span::before { content: ""; display: inline-block; width: 11px; height: 3px; margin: 0 6px 3px 0; background: currentColor; }
+    .notes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .note { border: 1px solid #2d3544; background: #11151c; padding: 11px; }
+    .note strong { display: block; margin-bottom: 3px; }
+    .hidden { display: none; }
+    @media (max-width: 760px) { main { padding: 10px; } header { align-items: start; flex-direction: column; } .notes { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body><main>
+  <header><div><h1>EUR/AUD 1H: My Structure Reading</h1><p>External structure is selective. Blue markings show smaller internal shifts.</p></div><button id="toggle">Hide markings</button></header>
+  <div class="frame">
+    <img src="euraud-1h-naked.png" alt="EUR/AUD one-hour naked chart" />
+    <div class="overlay" id="overlay">
+      <div class="line external" style="left:3.7%;top:31.5%;width:8.5%"></div>
+      <div class="point gold" style="left:4.2%;top:29.4%"></div><div class="label gold" style="left:4.8%;top:23%">External high</div>
+      <div class="point gold" style="left:22.6%;top:66.3%"></div><div class="label gold" style="left:17.5%;top:68%">External LL</div>
+      <div class="point gold" style="left:30.9%;top:52.4%"></div><div class="label gold" style="left:25.7%;top:46%">Meaningful LH</div>
+      <div class="point gold" style="left:50.8%;top:83.6%"></div><div class="label gold" style="left:45.5%;top:85%">External LL / SSL</div>
+
+      <div class="line internal" style="left:51%;top:65.7%;width:8.7%"></div>
+      <div class="label blue" style="left:52%;top:60%">Internal LH ~1.634</div>
+      <div class="line external" style="left:55%;top:53%;width:8%"></div>
+      <div class="label gold" style="left:55%;top:46%">Major LH ~1.640</div>
+      <div class="arrow bull-arrow" style="left:57.7%;top:45%;height:24%;transform:rotate(0deg)"></div>
+      <div class="label green" style="left:59%;top:36%">Bullish displacement</div>
+      <div class="label blue" style="left:60%;top:55%">Close above = internal CHoCH</div>
+      <div class="label green" style="left:62%;top:42%">Close above = bullish MSS</div>
+
+      <div class="line external" style="left:60.5%;top:29%;width:16%"></div>
+      <div class="point gold" style="left:60.6%;top:29%"></div><div class="point gold" style="left:70.3%;top:28.5%"></div>
+      <div class="label gold" style="left:63%;top:22%">External BSL / paired highs</div>
+      <div class="label red" style="left:70.7%;top:31%">Wick above + close back = BSL sweep</div>
+
+      <div class="line internal" style="left:71%;top:54%;width:8%"></div>
+      <div class="arrow bear-arrow" style="left:75.2%;top:57%;height:18%;transform:rotate(180deg)"></div>
+      <div class="label red" style="left:73%;top:62%">Bearish internal CHoCH</div>
+      <div class="label red" style="left:84%;top:68%">Current internal structure: bearish</div>
+      <div class="line bear" style="left:73%;top:82%;width:15%"></div>
+      <div class="label gold" style="left:70%;top:84%">External bearish continuation needs close below ~1.626</div>
+    </div>
+  </div>
+  <div class="legend"><span class="gold">External structure</span><span class="blue">Internal structure</span><span class="green">Bullish shift</span><span class="red">Sweep / bearish shift</span></div>
+  <section class="notes">
+    <div class="note"><strong>1. Bearish external leg</strong>Major LH and LL sequence controls the left half.</div>
+    <div class="note"><strong>2. Bullish MSS</strong>The sharp rally closes through meaningful bearish lower highs with displacement.</div>
+    <div class="note"><strong>3. Buy-side sweep</strong>The second right-side high takes the first high but rejects instead of establishing continuation.</div>
+    <div class="note"><strong>4. Current state</strong>Internal flow is bearish. External flow remains transitional until a major boundary closes through.</div>
+  </section>
+  <script>
+    const button = document.getElementById('toggle');
+    const overlay = document.getElementById('overlay');
+    button.addEventListener('click', () => {
+      overlay.classList.toggle('hidden');
+      button.textContent = overlay.classList.contains('hidden') ? 'Show markings' : 'Hide markings';
+    });
+  </script>
+</main></body>
+</html>
