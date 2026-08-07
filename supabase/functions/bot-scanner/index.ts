@@ -56,6 +56,7 @@ import {
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
+import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
 import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
@@ -4836,7 +4837,8 @@ async function runScanForUser(
     } else {
       // Preserve the current fallback while recording the fail-closed comparison.
       const directionAvailability = resolveDirectionAvailability({
-        mode: (pairConfig as any).directionUnavailableMode,
+        mode: (pairConfig as any).canonicalScannerMode === "enforce"
+          ? "fail_closed" : (pairConfig as any).directionUnavailableMode,
         verdictDirection: null,
         legacyDirection: analysis.direction,
       });
@@ -7711,6 +7713,16 @@ async function runScanForUser(
         },
       });
 
+      const canonicalScannerEnforcement = evaluateCanonicalScannerEnforcement({
+        requestedMode: (pairConfig as any).canonicalScannerMode,
+        singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
+        state: (detail as any).canonicalScannerState,
+      });
+      (detail as any).canonicalScannerEnforcement = canonicalScannerEnforcement;
+      if (canonicalScannerEnforcement.effectiveMode === "enforce") {
+        allPassed = canonicalScannerEnforcement.authorized;
+      }
+
       (detail as any).tradeDecisionPresentation = buildTradeDecisionPresentation({
         state: (detail as any).canonicalScannerState,
         legacyDiagnostics: (detail as any).legacyGateDiagnostics || [],
@@ -10339,6 +10351,11 @@ async function runScanForUser(
             ((detail as any).breakerCandidateComparisons ||= []).push(
               breakerCandidateObservation,
             );
+            if ((detail as any).canonicalScannerEnforcement?.effectiveMode === "enforce" &&
+              !breakerCandidateObservation.eligibleForUnifiedQueue) {
+              console.log(`[breaker] ${pair}: canonical scanner rejected supplemental route outside frozen impulse ownership`);
+              continue;
+            }
             const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
             // Entry at the 50% of the breaker zone (OTE within the zone)
             const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
