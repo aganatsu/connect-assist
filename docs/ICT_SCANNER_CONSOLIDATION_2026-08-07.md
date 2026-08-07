@@ -49,6 +49,7 @@ Terminal states: `blocked`, `invalidated`, `expired`.
 1. PR #229 - canonical state and authority trace. Deploy bot-scanner and zone-confirmation-scanner.
 2. PR #230 - direction availability comparison, observation default. Deploy bot-scanner.
 3. PR #231 - unified frozen confirmation policy, evidence only. Deploy bot-scanner.
-4. Breaker semantic identity and impulse-ownership comparison. Deploy bot-scanner.
+4. PR #232 - breaker semantic identity and impulse-ownership comparison. Deploy bot-scanner.
+5. Explicit frozen liquidity activation policy. Deploy bot-scanner and zone-confirmation-scanner.
 
 Do not merge stacked PRs out of order.
