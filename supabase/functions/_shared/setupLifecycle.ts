@@ -11,6 +11,7 @@ import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import type { ZoneLocalEnforcementDecision } from "./zoneLocalEnforcement.ts";
 import { buildICTConfirmationPolicy, type ICTConfirmationPolicy } from "./ictConfirmationPolicy.ts";
+import { buildLiquidityActivationPolicy, type LiquidityActivationPolicy } from "./liquidityActivationPolicy.ts";
 import type {
   CrossTimeframeEntryAuthorityDecision,
 } from "./crossTimeframeEntryAuthority.ts";
