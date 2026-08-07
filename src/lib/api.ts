@@ -21,20 +21,37 @@ function jwtHasSubject(token?: string): boolean {
   }
 }
 
+let refreshInFlight: Promise<string | null> | null = null;
+
+// Single-flight refresh: concurrent polling calls must not fire competing
+// refresh requests (the loser gets a revoked token and still 500s).
+async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = supabase.auth
+      .refreshSession()
+      .then(({ data }) => data.session?.access_token ?? null)
+      .catch(() => null)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
 async function getAuthenticatedToken(): Promise<string> {
   let { data: { session } } = await supabase.auth.getSession();
-  if (!jwtHasSubject(session?.access_token)) {
-    const refreshed = await supabase.auth.refreshSession();
-    session = refreshed.data.session;
+  let token = session?.access_token;
+  if (!jwtHasSubject(token)) {
+    token = (await refreshAccessToken()) ?? undefined;
   }
-  if (!jwtHasSubject(session?.access_token)) {
+  if (!jwtHasSubject(token)) {
     await supabase.auth.signOut().catch(() => {});
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
       window.location.href = "/login";
     }
     throw new Error("Session expired. Please sign in again.");
   }
-  return session.access_token;
+  return token!;
 }
 
 function functionCacheKey(functionName: string, body: Record<string, any>) {
