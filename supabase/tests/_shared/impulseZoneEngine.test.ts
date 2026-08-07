@@ -237,7 +237,7 @@ Deno.test("findImpulseLeg — returns null for wrong direction", () => {
   }
 });
 
-Deno.test("canonical detector preserves bullish and bearish legacy selection", () => {
+Deno.test("canonical structure preserves legacy selection in observe and owns selection in enforce", () => {
   for (
     const [candles, direction] of [
       [generateBullishImpulseCandles(50), "bullish"],
@@ -245,12 +245,18 @@ Deno.test("canonical detector preserves bullish and bearish legacy selection", (
     ] as const
   ) {
     const legacy = findImpulseLeg(candles, direction);
+    const observed = findImpulseLeg(candles, direction, undefined, undefined, "observe");
+    const enforced = findImpulseLeg(candles, direction, undefined, undefined, "enforce");
     const canonical = detectCanonicalImpulse(candles, direction, "1H");
     assert(
-      canonicalImpulseMatchesLegacy(canonical.impulse, legacy),
-      `${direction} canonical impulse must match the legacy-selected leg`,
+      canonicalImpulseMatchesLegacy(observed, legacy),
+      direction + " observe mode must preserve the legacy-selected leg",
     );
-    if (legacy) {
+    assert(
+      canonicalImpulseMatchesLegacy(canonical.impulse, enforced),
+      direction + " enforce mode must use the canonical-selected leg",
+    );
+    if (enforced) {
       assertExists(canonical.impulse);
       assertExists(canonical.metrics);
       assert(canonical.metrics.atrNormalizedSize !== null);

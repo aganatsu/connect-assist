@@ -39,6 +39,7 @@ import {
   type ZoneCandidateModelObservation,
 } from "./zoneCandidateModel.ts";
 import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
+import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -206,17 +207,23 @@ export function findImpulseLeg(
   direction: "bullish" | "bearish",
   timeframe?: "D" | "4H" | "1H",
   collector?: (candidate: ImpulseLegCandidate) => void,
+  structureAuthorityMode: "observe" | "enforce" = "observe",
 ): ImpulseLeg | null {
   if (candles.length < 20) return null;
 
-  const structure = analyzeMarketStructure(candles);
-  const allBreaks = [
-    ...structure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
-    ...structure.choch.map((item) => ({
-      ...item,
-      breakType: "choch" as const,
-    })),
-  ]
+  const canonicalStructure = canonicalStructureForLegacyConsumers(candles);
+  const legacyStructure = analyzeMarketStructure(candles);
+  const legacyBreaks = [
+    ...legacyStructure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
+    ...legacyStructure.choch.map((item) => ({ ...item, breakType: "choch" as const })),
+  ];
+  const activeBreaks = structureAuthorityMode === "enforce"
+    ? canonicalStructure.breaks
+    : legacyBreaks;
+  const activeSwings = structureAuthorityMode === "enforce"
+    ? canonicalStructure.swings
+    : legacyStructure.swingPoints;
+  const allBreaks = activeBreaks
     .filter(b => b.type === direction)
     .sort((a, b) => b.index - a.index); // Most recent first
 
@@ -229,7 +236,7 @@ export function findImpulseLeg(
       candles,
       bos,
       direction,
-      structure.swingPoints,
+      activeSwings,
       (candidate) => {
         emittedCandidate = true;
         collector?.(candidate);
@@ -1660,6 +1667,7 @@ export function findBestEntryZone(
     options?.collectEvidence
       ? (candidate) => collectedImpulses.push(candidate)
       : undefined,
+    options?.structureAuthorityMode ?? "observe",
   );
   if (!impulse) {
     return finish({
@@ -1897,6 +1905,8 @@ export interface ZoneEngineOptions {
    * candidates traversed by this invocation. Defaults off.
    */
   collectEvidence?: boolean;
+  /** Canonical structure is compared in observe mode and owns impulse selection only in enforce mode. */
+  structureAuthorityMode?: "observe" | "enforce";
   /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
   strictATRMult?: number;
   /** Minimum normalized zone score (0-100). 0 disables this filter. */
