@@ -24,6 +24,7 @@ import {
   buildSessionGamePlan,
   enrichGamePlanWithNews,
   fetchNewsForGamePlan,
+  formatGamePlanAuthoritySummary,
   generateInstrumentGamePlan,
   getCurrentSession,
   type InstrumentGamePlan,
@@ -362,6 +363,7 @@ Deno.serve(async (req) => {
       gamePlan,
       stylePolicy,
     );
+    gamePlan.summary = formatGamePlanAuthoritySummary(gamePlan);
     gamePlan = await persistActiveGamePlan(adminClient, gamePlan, {
       userId,
       botId: BOT_ID,
