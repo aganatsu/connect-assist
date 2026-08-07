@@ -47,6 +47,7 @@ Terminal states: `blocked`, `invalidated`, `expired`.
 ## Deployment Ledger
 
 1. PR #229 - canonical state and authority trace. Deploy bot-scanner and zone-confirmation-scanner.
-2. Direction availability comparison - observation default; deploy bot-scanner.
+2. PR #230 - direction availability comparison, observation default. Deploy bot-scanner.
+3. Unified frozen confirmation policy - evidence only. Deploy bot-scanner.
 
 Do not merge stacked PRs out of order.

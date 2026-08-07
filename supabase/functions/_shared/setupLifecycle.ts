@@ -114,6 +114,7 @@ export interface FrozenSetupStrategyContext {
     maxAttempts: number;
     timeframe: string;
     refinementTimeframe: string;
+    policy: ICTConfirmationPolicy;
   };
 }
 
@@ -230,6 +231,10 @@ export function buildFrozenSetupStrategyContext(input: {
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
+  liquiditySweepRole?: unknown;
+  displacementRole?: unknown;
+  reversalPatternRole?: unknown;
+  afterChochEntryMode?: unknown;
   frozenAt?: string;
 }): FrozenSetupStrategyContext {
   const pairPlan = input.gamePlan?.plans?.find((plan) =>
@@ -302,6 +307,17 @@ export function buildFrozenSetupStrategyContext(input: {
       ),
       timeframe: input.stylePolicy.timeframes.roles.confirmation,
       refinementTimeframe: input.stylePolicy.timeframes.roles.refinement,
+      policy: buildICTConfirmationPolicy({
+        method: confirmationMethod,
+        confirmationTimeframe: input.stylePolicy.timeframes.roles.confirmation,
+        refinementTimeframe: input.stylePolicy.timeframes.roles.refinement,
+        indicatorMinimum: input.indicatorMinCount,
+        maxAttempts: input.stylePolicy.lifecycle.maxConfirmationAttempts,
+        liquiditySweep: input.liquiditySweepRole,
+        displacement: input.displacementRole,
+        reversalPattern: input.reversalPatternRole,
+        entryMode: input.afterChochEntryMode,
+      }),
     },
   };
 }
