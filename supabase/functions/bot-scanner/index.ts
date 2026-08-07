@@ -208,6 +208,7 @@ import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
 import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
+import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -10311,6 +10312,27 @@ async function runScanForUser(
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
+            const breakerCanonicalRange =
+              (detail as any).canonicalDealingRangeObservation?.canonical?.range || null;
+            const breakerCandidateObservation = normalizeBreakerCandidate({
+              semantic: "sweep_displacement_retest_breaker_setup",
+              symbol: pair,
+              direction: breakerDir,
+              low: breaker.entryZone.low,
+              high: breaker.entryZone.high,
+              timeframe: timeframeAuthority.roles.setup,
+              structureBreakIndex: breaker.structureBreakIndex,
+              retestComplete: breaker.retestComplete,
+              impulse: breakerCanonicalRange ? {
+                id: breakerCanonicalRange.impulseId,
+                low: Number(breakerCanonicalRange.low),
+                high: Number(breakerCanonicalRange.high),
+                direction: breakerCanonicalRange.direction === "bullish" ? "long" : "short",
+              } : null,
+            });
+            ((detail as any).breakerCandidateComparisons ||= []).push(
+              breakerCandidateObservation,
+            );
             const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
             // Entry at the 50% of the breaker zone (OTE within the zone)
             const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
