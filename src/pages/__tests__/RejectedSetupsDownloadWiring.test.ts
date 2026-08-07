@@ -14,7 +14,7 @@ describe("Rejected Setups complete export", () => {
       source.indexOf("// Pie chart data"),
     );
 
-    expect(handler).toContain("rejected-setup-evidence.v1");
+    expect(handler).toContain("rejected-setup-evidence.v2");
     expect(handler).toContain("rawRejectedScans: filteredRawSetups");
     expect(handler).toContain("distinctOpportunities: setups");
     expect(handler).toContain("closedTradeEvidence: filteredClosedTradeEvidence");
