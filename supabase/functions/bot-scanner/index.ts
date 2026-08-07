@@ -5680,6 +5680,10 @@ async function runScanForUser(
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
+        liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
+        displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
+        reversalPatternRole: "supporting",
+        afterChochEntryMode: pairConfig.afterChochMode,
       });
       const {
         lifecycleReasonCode,
@@ -8642,6 +8646,10 @@ async function runScanForUser(
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
               indicatorMinCount: pairConfig.indicatorMinCount || 3,
+              liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
+              displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
+              reversalPatternRole: "supporting",
+              afterChochEntryMode: pairConfig.afterChochMode,
             });
           (detail as any).linkedSetupId =
             pendingFrozenStrategyContext.setupId;
