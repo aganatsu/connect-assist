@@ -120,6 +120,7 @@ import {
   checkOverboughtOversoldVeto,
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { aggregateMT5Candles, parseMT5History, type MT5HistoryInterval } from "../_shared/mt5History.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
 import {
@@ -508,6 +509,7 @@ async function fetchPolygonRange(
 
 async function fetchHistoricalCandles(
   symbol: string, interval: string, range: string, startDate?: string, endDate?: string,
+  importedM1?: Candle[],
 ): Promise<Candle[]> {
   const computeBufferedStart = (start: string) => {
     const startMs = new Date(start).getTime();
@@ -518,6 +520,15 @@ async function fetchHistoricalCandles(
                        7 * 24 * 3600 * 1000;
     return new Date(startMs - lookbackMs).toISOString().slice(0, 10);
   };
+  if (importedM1) {
+    const aggregated = aggregateMT5Candles(importedM1, interval as MT5HistoryInterval);
+    const from = startDate ? Date.parse(computeBufferedStart(startDate)) : -Infinity;
+    const to = endDate ? Date.parse(`${endDate}T23:59:59.999Z`) : Infinity;
+    return aggregated.filter((candle) => {
+      const timestamp = Date.parse(candle.datetime);
+      return timestamp >= from && timestamp <= to;
+    });
+  }
   if (startDate && endDate) {
     const bufferedStart = computeBufferedStart(startDate);
     const tdCandles = await fetchTwelveDataRange(symbol, interval, bufferedStart, endDate);
@@ -537,6 +548,27 @@ async function fetchHistoricalCandles(
     const result = await fetchCandlesWithFallback({ symbol, interval, limit: 5000 });
     return result.candles;
   } catch { return []; }
+}
+
+async function loadImportedMT5History(db: any, userId: string, symbols: string[]) {
+  const requestedSymbols = [...new Set([...symbols, ...symbols.map((symbol) => SMT_PAIRS[symbol]).filter(Boolean)])];
+  const { data, error } = await db.from("backtest_history_datasets")
+    .select("id,symbol,storage_path,original_filename,candle_count,start_at,end_at,validation,created_at")
+    .eq("user_id", userId).in("symbol", requestedSymbols).order("created_at", { ascending: false });
+  if (error) throw new Error(`Could not load MT5 datasets: ${error.message}`);
+  const latest = new Map<string, any>();
+  for (const row of data || []) if (!latest.has(row.symbol)) latest.set(row.symbol, row);
+  const missing = symbols.filter((symbol) => !latest.has(symbol));
+  if (missing.length) throw new Error(`No imported MT5 M1 history for: ${missing.join(", ")}`);
+  const candles: Record<string, Candle[]> = {}, datasets: Record<string, any> = {};
+  for (const [symbol, row] of latest.entries()) {
+    const { data: file, error: downloadError } = await db.storage.from("backtest-history").download(row.storage_path);
+    if (downloadError || !file) throw new Error(`Could not read ${symbol} MT5 history: ${downloadError?.message || "missing file"}`);
+    const parsed = parseMT5History(await file.text(), Number(row.validation?.timezoneOffsetMinutes) || 0);
+    candles[symbol] = parsed.candles;
+    datasets[symbol] = { ...row, parsedCandles: parsed.candles.length, rejectedRows: parsed.rejectedRows, duplicateRows: parsed.duplicateRows };
+  }
+  return { candles, datasets };
 }
 
 // ─── Safety Gates (29 gates + 2 pre-gates — mirrors bot-scanner runSafetyGates) ──
@@ -1759,6 +1791,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       zoneLocalReplayEvidence = false,
       maxTradesStored = 500,
       maxBlockedStored = 200,
+      historySource = "provider",
     } = body;
 
     const styleResolution = resolveEffectiveRuntimeConfig(
@@ -1781,6 +1814,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       .eq("id", runId)
       .maybeSingle();
     const priorPartialState = backtestOwner?.results?.partial_state || null;
+    const importedHistory = historySource === "mt5"
+      ? await loadImportedMT5History(db, backtestOwner?.user_id, instruments)
+      : { candles: {} as Record<string, Candle[]>, datasets: {} as Record<string, any> };
     const zoneLocalActivation = backtestOwner?.user_id
       ? await loadZoneLocalActivation(db, {
         userId: backtestOwner.user_id,
@@ -1947,11 +1983,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         weeklyCandles,
         dedicatedM15Candles,
       ] = await Promise.all([
-        fetchHistoricalCandles(symbol, entryInterval, range, fetchStartDate, endDate),
-        fetchHistoricalCandles(symbol, "1d", "2y", fetchStartDate, endDate),
-        fetchHistoricalCandles(symbol, "4h", range, fetchStartDate, endDate),
-        fetchHistoricalCandles(symbol, "1h", range, fetchStartDate, endDate),
-        fetchHistoricalCandles(symbol, "1w", "2y", fetchStartDate, endDate),
+        fetchHistoricalCandles(symbol, entryInterval, range, fetchStartDate, endDate, importedHistory.candles[symbol]),
+        fetchHistoricalCandles(symbol, "1d", "2y", fetchStartDate, endDate, importedHistory.candles[symbol]),
+        fetchHistoricalCandles(symbol, "4h", range, fetchStartDate, endDate, importedHistory.candles[symbol]),
+        fetchHistoricalCandles(symbol, "1h", range, fetchStartDate, endDate, importedHistory.candles[symbol]),
+        fetchHistoricalCandles(symbol, "1w", "2y", fetchStartDate, endDate, importedHistory.candles[symbol]),
         needsDedicatedM15
           ? fetchHistoricalCandles(
             symbol,
@@ -1959,6 +1995,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             range,
             fetchStartDate,
             endDate,
+            importedHistory.candles[symbol],
           )
           : Promise.resolve([] as Candle[]),
       ]);
@@ -1975,7 +2012,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       const smtPair = SMT_PAIRS[symbol];
       let smtCandles: Candle[] | undefined;
       if (smtPair && SUPPORTED_SYMBOLS[smtPair] && config.useSMT) {
-        smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, fetchStartDate, endDate);
+        smtCandles = historySource === "mt5"
+          ? (importedHistory.candles[smtPair]
+            ? await fetchHistoricalCandles(smtPair, entryInterval, range, fetchStartDate, endDate, importedHistory.candles[smtPair])
+            : undefined)
+          : await fetchHistoricalCandles(smtPair, entryInterval, range, fetchStartDate, endDate);
       }
       candleData[symbol] = {
         entry: entryCandles,
@@ -2003,7 +2044,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     if (cachedFotsi && Array.isArray(cachedFotsi)) {
       for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
       console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
-    } else try {
+    } else if (historySource !== "mt5") try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
       for (let i = 0; i < fotsiPairs.length; i += 7) {
@@ -4277,6 +4318,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
       ),
       stylePolicy,
+      dataSource: {
+        mode: historySource,
+        limitations: historySource === "mt5" ? ["FOTSI is unavailable unless a future currency-basket import is supplied"] : [],
+        datasets: Object.fromEntries(Object.entries(importedHistory.datasets).map(([symbol, value]: [string, any]) => {
+          const { storage_path: _privatePath, ...dataset } = value;
+          return [symbol, dataset];
+        })),
+      },
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
       walkForward,
       researchAnalytics: researchAnalytics ? {
@@ -4347,6 +4396,51 @@ Deno.serve(async (req: Request) => {
     async function getUserId(): Promise<string | null> {
       if (serviceCaller) return body?.userId || null;
       return await resolveAuthenticatedUserId(req);
+    }
+
+    if (action === "mt5_list") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const { data, error } = await db.from("backtest_history_datasets")
+        .select("id,symbol,source,original_filename,candle_count,start_at,end_at,validation,created_at")
+        .eq("user_id", userId).order("created_at", { ascending: false });
+      if (error) return respond({ error: error.message }, 500);
+      return respond(data || []);
+    }
+
+    if (action === "mt5_register") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const symbol = String(body.symbol || "");
+      const storagePath = String(body.storagePath || "");
+      if (!SUPPORTED_SYMBOLS[symbol]) return respond({ error: "Unsupported symbol" }, 400);
+      if (!storagePath.startsWith(userId + "/")) return respond({ error: "Invalid storage path" }, 403);
+      const { data: file, error: downloadError } = await db.storage.from("backtest-history").download(storagePath);
+      if (downloadError || !file) return respond({ error: downloadError?.message || "Upload not found" }, 400);
+      const timezoneOffsetMinutes = Number(body.timezoneOffsetMinutes) || 0;
+      if (timezoneOffsetMinutes < -720 || timezoneOffsetMinutes > 840) return respond({ error: "Broker UTC offset must be between -12 and +14 hours" }, 400);
+      const parsed = parseMT5History(await file.text(), timezoneOffsetMinutes);
+      const first = parsed.candles[0], last = parsed.candles[parsed.candles.length - 1];
+      const { data, error } = await db.from("backtest_history_datasets").insert({
+        user_id: userId, symbol, source: body.source === "mt4" ? "mt4" : "mt5",
+        base_timeframe: "1m", storage_path: storagePath,
+        original_filename: String(body.originalFilename || "history.csv"),
+        candle_count: parsed.candles.length, start_at: first.datetime, end_at: last.datetime, timezone: "UTC" + (timezoneOffsetMinutes >= 0 ? "+" : "") + String(timezoneOffsetMinutes / 60),
+        validation: { version: "mt5-history.v1", rejectedRows: parsed.rejectedRows, duplicateRows: parsed.duplicateRows, delimiter: parsed.delimiter, timezoneOffsetMinutes },
+      }).select("id,symbol,source,original_filename,candle_count,start_at,end_at,validation,created_at").single();
+      if (error) return respond({ error: error.message }, 500);
+      return respond(data);
+    }
+
+    if (action === "mt5_delete") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const { data: dataset } = await db.from("backtest_history_datasets").select("id,storage_path")
+        .eq("id", body.datasetId).eq("user_id", userId).maybeSingle();
+      if (!dataset) return respond({ error: "Dataset not found" }, 404);
+      await db.storage.from("backtest-history").remove([dataset.storage_path]);
+      await db.from("backtest_history_datasets").delete().eq("id", dataset.id).eq("user_id", userId);
+      return respond({ deleted: true });
     }
 
     if (action === "impulse_lifecycle_replay") {
@@ -4535,6 +4629,10 @@ Deno.serve(async (req: Request) => {
       if (!runId) return respond({ error: "runId is required" }, 400);
       const warmupJob = async () => {
         try {
+          if (body.historySource === "mt5") {
+            await selfInvokeNextChunk(runId, body, 0);
+            return;
+          }
           await db.from("backtest_runs").update({
             progress: 5,
             progress_message: "Warming up: fetching currency strength data...",
@@ -4651,6 +4749,7 @@ Deno.serve(async (req: Request) => {
           walkForwardFolds: body.walkForwardFolds ?? 0,
           researchMode: body.researchMode === true,
           zoneLocalReplayEvidence: body.zoneLocalReplayEvidence === true,
+          historySource: body.historySource === "mt5" ? "mt5" : "provider",
         },
       })
       .select("id")
