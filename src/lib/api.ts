@@ -503,6 +503,7 @@ export const backtestApi = {
     walkForwardFolds?: number;
     researchMode?: boolean;
     zoneLocalReplayEvidence?: boolean;
+    historySource?: "provider" | "mt5";
   }) => invokeFunction<{ runId: string; status: string; message: string }>("backtest-engine", { action: "start", ...params }),
   status: (runId: string) => invokeFunction<{
     id: string; status: string; progress: number; progress_message: string;
@@ -515,6 +516,27 @@ export const backtestApi = {
     completed_at: string | null; config: any;
   }>>("backtest-engine", { action: "list", limit }),
   cancel: (runId: string) => invokeFunction<{ status: string; message: string }>("backtest-engine", { action: "cancel", runId }),
+  listMT5: () => invokeFunction<any[]>("backtest-engine", { action: "mt5_list" }),
+  registerMT5: (params: { symbol: string; storagePath: string; originalFilename: string; source?: "mt4" | "mt5"; timezoneOffsetMinutes?: number }) =>
+    invokeFunction<any>("backtest-engine", { action: "mt5_register", ...params }),
+  deleteMT5: (datasetId: string) =>
+    invokeFunction<{ deleted: boolean }>("backtest-engine", { action: "mt5_delete", datasetId }),
+  uploadMT5: async (symbol: string, file: File, timezoneOffsetMinutes = 0) => {
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) throw new Error("Sign in before uploading history");
+    if (file.size > 75 * 1024 * 1024) throw new Error("History file exceeds the 75 MB limit");
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${auth.user.id}/${crypto.randomUUID()}-${safeName}`;
+    const { error } = await supabase.storage.from("backtest-history")
+      .upload(path, file, { contentType: file.type || "text/csv", upsert: false });
+    if (error) throw error;
+    try {
+      return await backtestApi.registerMT5({ symbol, storagePath: path, originalFilename: file.name, source: "mt5", timezoneOffsetMinutes });
+    } catch (error) {
+      await supabase.storage.from("backtest-history").remove([path]);
+      throw error;
+    }
+  },
 };
 
 // ── Bot Scanner (Bot #1 — SMC) ──

@@ -13,7 +13,7 @@ import {
   TrendingUp, TrendingDown, BarChart3, Zap, ShieldCheck, ListChecks,
   Trophy, Skull, AlertTriangle, Info, Target, Clock, Timer, XCircle,
   ArrowLeftRight, Layers, Box, Crosshair, Sparkles, Activity, Eye,
-  Shield, Gauge, CalendarDays, Globe,
+  Shield, Gauge, CalendarDays, Globe, Upload, Database, Trash2,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, Cell,
@@ -26,6 +26,7 @@ import { STYLE_META, TRADING_STYLE_MODES } from "@/lib/botStyleClassifier";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface BacktestTrade {
@@ -76,6 +77,7 @@ interface BacktestResponse {
     totalFactorCount: number;
     scoreDistribution: { below20: number; below40: number; below60: number; below80: number; above80: number };
   };
+  dataSource?: { mode: "provider" | "mt5"; datasets: Record<string, any>; limitations?: string[] };
   config?: {
     minConfluence: number;
     enabledSessions: string[];
@@ -219,6 +221,11 @@ export default function Backtest() {
     () => searchParams.get("zoneLocalReplay") === "1",
   );
   const [selectedSymbols, setSelectedSymbols] = useState(["EUR/USD", "GBP/USD", "XAU/USD"]);
+  const [historySource, setHistorySource] = useState<"provider" | "mt5">("provider");
+  const [mt5Datasets, setMt5Datasets] = useState<any[]>([]);
+  const [mt5Symbol, setMt5Symbol] = useState("EUR/USD");
+  const [mt5UtcOffsetHours, setMt5UtcOffsetHours] = useState(0);
+  const [isUploadingMT5, setIsUploadingMT5] = useState(false);
 
   // UI state
   const [showConfig, setShowConfig] = useState(true);
@@ -232,6 +239,34 @@ export default function Backtest() {
   const [expandedTrade, setExpandedTrade] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshMT5Datasets = useCallback(async () => {
+    try { setMt5Datasets(await backtestApi.listMT5()); }
+    catch { setMt5Datasets([]); }
+  }, []);
+  useEffect(() => { void refreshMT5Datasets(); }, [refreshMT5Datasets]);
+  useEffect(() => {
+    if (historySource === "mt5" && mt5Datasets.length > 0) {
+      setSelectedSymbols([...new Set(mt5Datasets.map((dataset) => String(dataset.symbol)))]);
+    }
+  }, [historySource, mt5Datasets]);
+
+  const uploadMT5History = useCallback(async (file: File) => {
+    setIsUploadingMT5(true);
+    try {
+      const dataset = await backtestApi.uploadMT5(mt5Symbol, file, mt5UtcOffsetHours * 60);
+      await refreshMT5Datasets();
+      setHistorySource("mt5");
+      setSelectedSymbols((current) => current.includes(mt5Symbol) ? current : [...current, mt5Symbol]);
+      setStartDate(String(dataset.start_at).slice(0, 10));
+      setEndDate(String(dataset.end_at).slice(0, 10));
+      toast.success(`${mt5Symbol}: ${Number(dataset.candle_count).toLocaleString()} M1 candles imported`);
+    } catch (error: any) {
+      toast.error(error?.message || "MT5 history import failed");
+    } finally {
+      setIsUploadingMT5(false);
+    }
+  }, [mt5Symbol, mt5UtcOffsetHours, refreshMT5Datasets]);
 
   // C4: Load live config + canonical defaults on mount
   useEffect(() => {
@@ -359,6 +394,11 @@ export default function Backtest() {
   // Run backtest (background mode)
   const runBacktest = useCallback(async () => {
     if (selectedSymbols.length === 0) { setError("Select at least one instrument."); return; }
+    if (historySource === "mt5") {
+      const available = new Set(mt5Datasets.map((dataset) => dataset.symbol));
+      const missing = selectedSymbols.filter((symbol) => !available.has(symbol));
+      if (missing.length) { setError("Import MT5 M1 history for: " + missing.join(", ")); return; }
+    }
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
@@ -375,7 +415,7 @@ export default function Backtest() {
     try {
       const response = await backtestApi.start({
         instruments: selectedSymbols, startDate, endDate, startingBalance,
-        config, tradingStyle, slippagePips, spreadPips, commissionPerLot,
+        config, tradingStyle, slippagePips, spreadPips, commissionPerLot, historySource,
         ...(walkForwardFolds >= 2 ? { walkForwardFolds } : {}),
         ...(zoneLocalReplayEvidence
           ? { researchMode: true, zoneLocalReplayEvidence: true }
@@ -394,7 +434,7 @@ export default function Backtest() {
       setProgressPct(0);
       setIsRunning(false);
     }
-  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, zoneLocalReplayEvidence, config, startPolling]);
+  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, zoneLocalReplayEvidence, config, startPolling, historySource, mt5Datasets]);
 
   // ── Derived Data ──
   const monthlyPnl = useMemo(() => {
@@ -454,9 +494,14 @@ export default function Backtest() {
             <FlaskConical className="h-6 w-6 text-cyan" /> BACKTEST ENGINE
           </h1>
           {results && (
-            <Badge variant={results.stats.totalPnl >= 0 ? "default" : "destructive"} className="text-sm px-3 py-1">
-              {results.stats.totalTrades} trades | {results.stats.winRate.toFixed(1)}% WR | {formatMoney(results.stats.totalPnl, true)}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-[10px]">
+                {results.dataSource?.mode === "mt5" ? "MT5 HISTORY" : "MARKET DATA PROVIDER"}
+              </Badge>
+              <Badge variant={results.stats.totalPnl >= 0 ? "default" : "destructive"} className="text-sm px-3 py-1">
+                {results.stats.totalTrades} trades | {results.stats.winRate.toFixed(1)}% WR | {formatMoney(results.stats.totalPnl, true)}
+              </Badge>
+            </div>
           )}
         </div>
 
@@ -484,6 +529,52 @@ export default function Backtest() {
                   <span className="ml-2 text-xs text-muted-foreground">Loading config...</span>
                 </div>
               ) : (<>
+              <div className="space-y-3 border-b border-border pb-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <label className="text-[10px] text-muted-foreground uppercase">Candle Source</label>
+                    <Select value={historySource} onValueChange={(value) => setHistorySource(value as "provider" | "mt5")}>
+                      <SelectTrigger className="mt-1 h-8 w-48 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="provider">Market Data Provider</SelectItem>
+                        <SelectItem value="mt5">Imported MT5 History</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground uppercase">Import Symbol</label>
+                    <Select value={mt5Symbol} onValueChange={setMt5Symbol}>
+                      <SelectTrigger className="mt-1 h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>{INSTRUMENTS.map((instrument) => <SelectItem key={instrument.symbol} value={instrument.symbol}>{instrument.symbol}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground uppercase">Broker UTC Offset</label>
+                    <input type="number" min={-12} max={14} step={0.5} value={mt5UtcOffsetHours}
+                      onChange={(event) => setMt5UtcOffsetHours(Number(event.target.value) || 0)}
+                      className="mt-1 block h-8 w-24 border border-border bg-secondary px-2 text-xs" />
+                  </div>
+                  <label className="inline-flex h-8 cursor-pointer items-center gap-2 border border-border px-3 text-xs hover:bg-secondary">
+                    {isUploadingMT5 ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                    Import MT5 M1 CSV
+                    <input type="file" accept=".csv,.txt" className="hidden" disabled={isUploadingMT5}
+                      onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadMT5History(file); event.currentTarget.value = ""; }} />
+                  </label>
+                </div>
+                {mt5Datasets.length > 0 && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {mt5Datasets.map((dataset) => <div key={dataset.id} className="flex items-center justify-between border border-border/60 p-2 text-[10px]">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-1 font-semibold"><Database className="h-3 w-3 text-cyan" /> {dataset.symbol} · {Number(dataset.candle_count).toLocaleString()} M1</p>
+                      <p className="truncate text-muted-foreground">{String(dataset.start_at).slice(0, 10)} to {String(dataset.end_at).slice(0, 10)} · {dataset.original_filename}</p>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete dataset" onClick={async () => {
+                      try { await backtestApi.deleteMT5(dataset.id); await refreshMT5Datasets(); }
+                      catch (error: any) { toast.error(error?.message || "Delete failed"); }
+                    }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>)}
+                </div>}
+              </div>
+
               {/* Row 1: Date Range + Balance + Style + Run */}
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
