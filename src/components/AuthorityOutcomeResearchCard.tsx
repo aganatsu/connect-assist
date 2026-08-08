@@ -10,7 +10,7 @@ export interface AuthorityOutcomeReport {
   rows: Array<{ id: string; source: string; symbol: string; direction: string; observedAt: string; outcome: string; outcomeR: number | null; stage: string | null; decision: string | null; explanation: string | null; evidenceQuality: string; authorities: unknown[] }>;
 }
 
-const label = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const label = (value: string) => value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 export function AuthorityOutcomeResearchCard({ report, loading }: { report?: AuthorityOutcomeReport; loading: boolean }) {
   const download = () => {
