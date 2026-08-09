@@ -226,6 +226,9 @@ import {
   operationalSafetyChecks,
 } from "../_shared/singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
+import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import { evaluateFinalTradeAuthorization } from "../_shared/finalTradeAuthorization.ts";
+import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import {
   detectZoneConfirmation,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
@@ -4050,6 +4053,236 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               analysis.takeProfit = tpAdjust.adjustedTP;
             }
           } catch { /* non-fatal */ }
+        }
+
+        // ── Final fill authorization: same shared authority as live ──
+        const entryConfirmationPassed = lifecycleMode === "enforce"
+          ? lifecycleEntryReady
+          : (!requiresStructuralConfirmation || replayZone.entryReady);
+        const finalAuthorization = evaluateFinalTradeAuthorization({
+          account: {
+            is_running: true,
+            is_paused: false,
+            kill_switch_active: false,
+            execution_mode: "paper",
+            balance,
+            peak_balance: peakBalance,
+            daily_pnl_base: balance - allTrades
+              .filter((trade) =>
+                trade.exitTime.slice(0, 10) === candle.datetime.slice(0, 10)
+              )
+              .reduce((total, trade) => total + trade.pnl, 0),
+            daily_pnl_base_date: candle.datetime.slice(0, 10),
+          },
+          candidate: {
+            symbol,
+            direction: analysis.direction,
+            entryPrice: candle.close,
+            stopLoss: analysis.stopLoss,
+            takeProfit: analysis.takeProfit,
+          },
+          openPositions: openPositions.map((position) => ({
+            symbol: position.symbol,
+            direction: position.direction,
+            entry_price: position.entryPrice,
+            stop_loss: position.currentSL,
+            size: position.size,
+          })),
+          maxOpenPositions: pairConfig.maxOpenPositions,
+          maxPerSymbol: pairConfig.maxPerSymbol,
+          allowSameDirectionStacking: pairConfig.allowSameDirectionStacking,
+          maxDailyLoss: pairConfig.maxDailyLoss,
+          maxDrawdown: pairConfig.maxDrawdown,
+          minimumRiskReward: pairConfig.minRiskReward,
+          directionVerdict,
+          requireDirectionVerdict: true,
+          gamePlan: activeGamePlan,
+          gamePlanEnabled: pairConfig.gamePlanEnabled !== false &&
+            !["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode),
+          gamePlanMode: pairConfig.gpEnforcementMode,
+          gamePlanMinimumConfidence: pairConfig.gpHardBlockThreshold,
+          thesisResult: backtestThesis,
+          requireThesisValidation: true,
+          entryConfirmation: {
+            required: true,
+            passed: entryConfirmationPassed,
+            method: pairConfig.confirmationMethod || "choch",
+            reason: entryConfirmationPassed
+              ? "Historical candle passed the frozen confirmation contract"
+              : "Frozen confirmation contract is not ready",
+            evidence: {
+              lifecycleRevision: tradeLifecycleState.lifecycle?.revision || null,
+              lifecycleCandidateId:
+                tradeLifecycleState.lifecycle?.activeCandidateId || null,
+            },
+            evaluatedAt: candle.datetime,
+          },
+          propFirm: null,
+          requirePropFirmResult: false,
+          spread: {
+            required: false,
+            available: true,
+            passed: true,
+            spreadPips,
+          },
+          runtimeGates: {
+            executionMode: { passed: true, reason: "Historical execution mode is paper" },
+            freshness: { passed: true, reason: "Current replay candle is the fill authority" },
+            session: { passed: true, reason: `${session.name} session passed historical gates` },
+            news: { passed: true, reason: "Historical news gate passed" },
+            cooldown: { passed: true, reason: "Historical cooldown gate passed" },
+            correlation: { passed: true, reason: "Historical correlation gate passed" },
+            portfolioHeat: { passed: true, reason: "Historical portfolio heat gate passed" },
+          },
+          crossTimeframeAuthority: crossTimeframeDecision,
+          requireCrossTimeframeAuthority: true,
+          additionalGates: [
+            ...gates,
+            {
+              passed: pairConfig.dealingRangeMode === "off" ||
+                (canonicalDealingRangeEvaluation?.available === true &&
+                  canonicalDealingRangeEvaluation.allowed === true),
+              reason: canonicalDealingRangeEvaluation?.explanation ||
+                "Canonical impulse-range location is unavailable",
+            },
+          ],
+          now: new Date(candle.datetime),
+        });
+        const ownershipFill = evaluateSingleOwnershipFillAuthorization({
+          frozenDecision: (replaySnapshot as any).singleOwnershipDecision,
+          evaluatedAt: candle.datetime,
+          candidateId: tradeLifecycleState.lifecycle?.activeCandidateId ||
+            `backtest:${runId}:${symbol}:${candle.datetime}`,
+          symbol,
+          direction: analysis.direction,
+          directionVerdict,
+          canonicalLocation: {
+            required: pairConfig.dealingRangeMode !== "off",
+            available: canonicalDealingRangeEvaluation?.available === true,
+            allowed: canonicalDealingRangeEvaluation?.available === true
+              ? canonicalDealingRangeEvaluation.allowed
+              : null,
+            rangeId: canonicalDealingRangeEvaluation?.range?.impulseId || null,
+            reasonCode: canonicalDealingRangeEvaluation?.code || null,
+          },
+          confirmation: {
+            passed: entryConfirmationPassed,
+            authorityVersion: "confirmation-authority.v1",
+            reasonCodes: entryConfirmationPassed
+              ? ["frozen_confirmation_ready"]
+              : ["frozen_confirmation_waiting"],
+          },
+          thesis: {
+            valid: backtestThesis?.valid ?? null,
+            reasonCodes: [backtestThesis?.checkType || "thesis_valid"],
+          },
+          finalChecks: finalAuthorization.checks,
+          rawFinalAuthorized: finalAuthorization.authorized,
+          requestedMode: pairConfig.singleOwnershipMode,
+          runtimeTarget: "paper",
+        });
+        const scannerState = projectCanonicalScannerState({
+          evaluatedAt: candle.datetime,
+          identity: ownershipFill.decision.identity,
+          lifecycle: {
+            status: ["invalidated", "expired"].includes(
+                tradeLifecycleState.lifecycle?.status || "",
+              )
+              ? tradeLifecycleState.lifecycle?.status
+              : "active",
+          },
+          direction: {
+            available: directionVerdict !== null,
+            allowed: directionVerdict
+              ? !directionVerdict.shouldBlock &&
+                directionVerdict.verdict === analysis.direction
+              : null,
+            source: "direction_verdict",
+            reasonCode: directionVerdict?.blockReason || null,
+          },
+          structure: {
+            required: pairConfig.canonicalStructureMode === "enforce",
+            decision: canonicalStructureDecision.decision,
+            source: "canonical_structure",
+            reasonCode: canonicalStructureDecision.reasonCode,
+          },
+          zone: {
+            available: replayZone.hasZone,
+            valid: replayZone.hasZone ? true : null,
+            atPoi: lifecycleEntryReady || replayZone.entryReady,
+            source: replayZone.source,
+          },
+          location: ownershipFill.decision.authorities.canonicalLocation,
+          liquidity: {
+            policy: pairConfig.requireLiquiditySweep === true
+              ? "required"
+              : "supporting",
+            state: pairConfig.requireLiquiditySweep === true
+              ? (canonicalStructureDecision.decision === "allow"
+                ? "swept_rejected"
+                : "unswept")
+              : "none",
+          },
+          confirmation: {
+            required: true,
+            passed: entryConfirmationPassed,
+            source: "frozen_confirmation_contract",
+          },
+          thesis: ownershipFill.decision.authorities.thesis,
+          safety: {
+            complete: true,
+            passed: finalAuthorization.authorized,
+            source: "final_trade_authorization",
+            reasonCode: finalAuthorization.code,
+          },
+          execution: {
+            authorized: ownershipFill.authorized,
+            source: "single_ownership_fill_authorization",
+            reasonCode: ownershipFill.authorized
+              ? "authorized"
+              : ownershipFill.reason,
+          },
+        });
+        (replaySnapshot as any).finalTradeAuthorization = finalAuthorization;
+        (replaySnapshot as any).singleOwnershipFillAuthorization = ownershipFill;
+        (replaySnapshot as any).canonicalScannerState = scannerState;
+        replaySnapshot.decision.execution.eligible = ownershipFill.authorized;
+        if (!ownershipFill.authorized) {
+          replaySnapshot = await finalizeGoldenReplaySnapshot(replaySnapshot, {
+            execution: replaySnapshot.decision.execution,
+            lifecycle: {
+              route: "candidate",
+              stage: "final_authorization",
+              outcome: "blocked",
+              reason: finalAuthorization.reason || ownershipFill.reason,
+            },
+          });
+          goldenReplaySnapshots.push(replaySnapshot);
+          if (goldenReplaySnapshots.length > 500) goldenReplaySnapshots.shift();
+          diagnostics.skippedGateBlocked++;
+          const label = `Final Authorization: ${finalAuthorization.code}`;
+          diagnostics.gateBlockReasons[label] =
+            (diagnostics.gateBlockReasons[label] || 0) + 1;
+          if (researchMode) {
+            const cf = computeCounterfactual(
+              symbol, analysis.direction, candle.close, analysis.stopLoss,
+              analysis.takeProfit, entryCandles, i + 1, 200,
+            );
+            blockedTrades.push({
+              symbol, direction: analysis.direction, time: candle.datetime,
+              score: analysis.score, effectiveScore,
+              blockedBy: [finalAuthorization.reason, ownershipFill.reason],
+              factors: analysis.factors.map((factor: any) => ({
+                name: factor.name, present: factor.present,
+                weight: factor.weight,
+              })),
+              ...cf,
+              regime: analysis.regimeInfo?.regime || "unknown",
+              session: session.name,
+              goldenReplaySnapshot: replaySnapshot,
+            });
+          }
+          continue;
         }
 
         // ── Position Sizing: same engine and adjustment order as live ──
