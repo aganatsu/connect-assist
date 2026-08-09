@@ -1809,8 +1809,9 @@ export default function Backtest() {
                               <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{fixedResult(t.entryPrice, 5, "0")}</span></div>
                               <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{fixedResult(t.exitPrice, 5, "0")}</span></div>
                               <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{fixedResult(t.size, 2, "0")} lots</span></div>
-                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
+                              <div><span className="text-muted-foreground">Diagnostic score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
                             </div>
+                            <p className="text-[8px] text-muted-foreground">Legacy diagnostics - do not authorize the trade</p>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {t.factors.filter(f => f.present).map((f, fi) => (
                                 <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{fixedResult(f.weight, 1, "0.0")}</span>
@@ -1831,7 +1832,7 @@ export default function Backtest() {
                           <th className="text-left py-2 px-1.5">Dir</th>
                           <th className="text-left py-2 px-1.5">Entry</th>
                           <th className="text-left py-2 px-1.5">Exit</th>
-                          <th className="text-right py-2 px-1.5">Score</th>
+                          <th className="text-right py-2 px-1.5">Diagnostic Score</th>
                           <th className="text-right py-2 px-1.5">P&L</th>
                           <th className="text-right py-2 px-1.5">Pips</th>
                           <th className="text-left py-2 px-1.5">Close</th>
@@ -1867,7 +1868,7 @@ export default function Backtest() {
                                     <div><span className="text-[9px] text-muted-foreground">Hold Time</span><p className="text-xs font-mono">{((new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()) / 3600000).toFixed(1)}h</p></div>
                                   </div>
                                   <div>
-                                    <span className="text-[9px] text-muted-foreground uppercase">Confluence Factors</span>
+                                    <div className="flex flex-wrap items-center gap-2"><span className="text-[9px] text-muted-foreground uppercase">Legacy Diagnostic Factors</span><span className="text-[9px] text-muted-foreground">Context only - does not authorize trades</span></div>
                                     <div className="flex flex-wrap gap-1 mt-1">
                                       {t.factors.map((f, fi) => (
                                         <Badge key={fi} variant={f.present ? "default" : "outline"} className={`text-[9px] ${f.present ? '' : 'opacity-40'}`}>
