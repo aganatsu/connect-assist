@@ -1913,6 +1913,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedNoDirection: 0,
       skippedBelowThreshold: 0,
       skippedGateBlocked: 0,
+      skippedLifecycleWaiting: 0,
       skippedNoSLTP: 0,
       skippedImpulseNoZone: 0,
       skippedImpulseNotAtZone: 0,
@@ -1926,6 +1927,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
       gateBlockReasons: {} as Record<string, number>,
+      lifecycleStageObservations: {} as Record<string, number>,
+      lifecycleTransitionCounts: {} as Record<string, number>,
     };
 
     // Compute enabledFactorCount
@@ -2150,13 +2153,24 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         symbolRuntimeState = ps.symbolRuntimeState || {};
         if (ps.diagnostics) {
           for (const k of Object.keys(ps.diagnostics)) {
-            if (typeof (ps.diagnostics as any)[k] === "number") {
-              (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
+            if (typeof (ps.diagnostics as any)[k] !== "number") continue;
+            // Data is fetched again on a resumed invocation; static metadata and
+            // fetched-bar counts describe the current dataset, not cumulative work.
+            if (["totalCandlesFetched", "enabledFactorCount", "totalFactorCount"].includes(k)) {
+              continue;
             }
+            (diagnostics as any)[k] = (ps.diagnostics as any)[k];
           }
           if (ps.diagnostics.gateBlockReasons) {
             for (const [reason, count] of Object.entries(ps.diagnostics.gateBlockReasons as Record<string, number>)) {
-              diagnostics.gateBlockReasons[reason] = (diagnostics.gateBlockReasons[reason] || 0) + count;
+              diagnostics.gateBlockReasons[reason] = count;
+            }
+          }
+          for (const field of ["lifecycleStageObservations", "lifecycleTransitionCounts"] as const) {
+            const restored = ps.diagnostics[field] as Record<string, number> | undefined;
+            if (!restored) continue;
+            for (const [code, count] of Object.entries(restored)) {
+              diagnostics[field][code] = count;
             }
           }
         }
@@ -3046,15 +3060,36 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // then falls back to standalone impulse zone gate.
         const izGateMode = config.impulseZoneGateMode || "hard";
         const lifecycleMode = pairConfig.impulseEntryLifecycleMode || "observe";
+        const lifecycle = tradeLifecycleState.lifecycle;
+        const activeLifecycleCandidate = lifecycle?.candidates.find(
+          (candidate) => candidate.id === lifecycle.activeCandidateId,
+        );
+        const lifecycleStage = tradeLifecycleState.postConfirmationEntry?.state ===
+            "awaiting_retracement"
+          ? "awaiting_retracement"
+          : lifecycle?.status === "entered" ? "authorized"
+          : lifecycle?.status === "invalidated" ? "invalidated"
+          : lifecycle?.status === "expired" ? "expired"
+          : lifecycle?.status === "exhausted" ? "exhausted"
+          : activeLifecycleCandidate?.state === "confirming"
+          ? "awaiting_confirmation"
+          : lifecycle?.status === "active" ? "watching"
+          : "discovery";
+        diagnostics.lifecycleStageObservations[lifecycleStage] =
+          (diagnostics.lifecycleStageObservations[lifecycleStage] || 0) + 1;
+        for (const event of tradeLifecycleState.lastStep?.events || []) {
+          diagnostics.lifecycleTransitionCounts[event.type] =
+            (diagnostics.lifecycleTransitionCounts[event.type] || 0) + 1;
+        }
         if (lifecycleMode === "enforce" && !lifecycleEntryReady) {
-          diagnostics.skippedGateBlocked++;
-          const lifecycleWaitReason =
-            tradeLifecycleState.postConfirmationEntry?.state ===
-                "awaiting_retracement"
-              ? "Post-CHoCH Retracement"
-              : "Frozen Entry Lifecycle";
-          diagnostics.gateBlockReasons[lifecycleWaitReason] =
-            (diagnostics.gateBlockReasons[lifecycleWaitReason] || 0) + 1;
+          if (["invalidated", "expired", "exhausted"].includes(lifecycleStage)) {
+            diagnostics.skippedGateBlocked++;
+            const terminalReason = `Lifecycle ${lifecycleStage}`;
+            diagnostics.gateBlockReasons[terminalReason] =
+              (diagnostics.gateBlockReasons[terminalReason] || 0) + 1;
+          } else {
+            diagnostics.skippedLifecycleWaiting++;
+          }
           continue;
         }
         let impulseZonePenaltyVal = 0;

@@ -10,7 +10,8 @@ Deno.test("backtest persists configured post-CHoCH retracement timing", async ()
   ]);
   assertStringIncludes(engine, "prepareBacktestPostConfirmationEntry({");
   assertStringIncludes(engine, "pairConfig.afterChochMode");
-  assertStringIncludes(engine, '"Post-CHoCH Retracement"');
+  assertStringIncludes(engine, '"awaiting_retracement"');
+  assertStringIncludes(engine, "skippedLifecycleWaiting");
   assertStringIncludes(lifecycle, "derivePostChochEntryPlan({");
   assertStringIncludes(lifecycle, "evaluatePostChochRetracement(");
   assertStringIncludes(lifecycle, 'plan.mode !== "wait_retracement"');
