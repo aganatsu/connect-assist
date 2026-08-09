@@ -214,7 +214,7 @@ function FieldRow({ label, description, children }: { label: string; description
       <div className="flex items-center justify-between">
         <div>
           <span className="text-[10px] font-medium uppercase tracking-wider">{label}</span>
-          {description && <p className="text-[9px] text-muted-foreground">{description}</p>}
+          {description && <p className="text-[11px] text-muted-foreground">{description}</p>}
         </div>
       </div>
       {children}
@@ -788,8 +788,8 @@ export default function Backtest() {
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-px bg-border sm:grid-cols-4 xl:grid-cols-7">
                   {effectiveAuthority.map(([label, value]) => <div key={label} className="min-w-0 bg-background px-2 py-2">
-                    <p className="truncate text-[8px] uppercase text-muted-foreground">{label}</p>
-                    <p className="truncate text-[10px] font-semibold capitalize">{String(value).replaceAll("_", " ")}</p>
+                    <p className="break-words text-[10px] uppercase text-muted-foreground">{label}</p>
+                    <p className="break-words text-xs font-semibold capitalize">{String(value).replaceAll("_", " ")}</p>
                   </div>)}
                 </div>
                 {!["enforce", "enforce_live"].includes(config.strategy?.singleOwnershipMode) && <div className="mt-2 border border-warning/40 bg-warning/5 px-3 py-2"><p className="text-[10px] font-semibold text-warning">Comparison mode: the canonical workflow records evidence only. Existing legacy gates still authorize and reject setups.</p><p className="mt-0.5 text-[10px] text-muted-foreground">Choose Trade Decision Authority = Enforce to make the canonical workflow own the trade decision.</p></div>}
@@ -1813,16 +1813,16 @@ export default function Backtest() {
                         </div>
                         {expandedTrade === t.id && (
                           <div className="mt-1 pt-1 border-t border-border/30 space-y-1">
-                            <div className="grid grid-cols-2 gap-2 text-[9px]">
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
                               <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{fixedResult(t.entryPrice, 5, "0")}</span></div>
                               <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{fixedResult(t.exitPrice, 5, "0")}</span></div>
                               <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{fixedResult(t.size, 2, "0")} lots</span></div>
                               <div><span className="text-muted-foreground">Diagnostic score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
                             </div>
-                            <p className="text-[8px] text-muted-foreground">Legacy diagnostics - do not authorize the trade</p>
+                            <p className="text-[10px] text-muted-foreground">Legacy diagnostics - do not authorize the trade</p>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {t.factors.filter(f => f.present).map((f, fi) => (
-                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{fixedResult(f.weight, 1, "0.0")}</span>
+                                <span key={fi} className="text-[10px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{fixedResult(f.weight, 1, "0.0")}</span>
                               ))}
                             </div>
                           </div>

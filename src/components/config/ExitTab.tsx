@@ -70,7 +70,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
               <SelectItem value="rr_ratio">R:R Ratio — Fixed risk/reward</SelectItem>
               <SelectItem value="fixed_pips">Fixed Pips — Exact distance</SelectItem>
               <SelectItem value="next_level">Next Level — Zone-to-zone TP</SelectItem>
-              <SelectItem value="fib_extension" disabled>Fib Extension — Unavailable</SelectItem>
+              <SelectItem value="fib_extension" disabled>Fib Extension — Not connected to execution yet</SelectItem>
               <SelectItem value="fib_extension_3pt">Fib Extension 3-Point — From entry</SelectItem>
               <SelectItem value="atr_multiple">ATR Multiple</SelectItem>
               <SelectItem value="structure" disabled>Structure — Use Next Level instead</SelectItem>

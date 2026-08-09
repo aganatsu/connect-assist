@@ -11,17 +11,23 @@ const PRIMARY_ITEMS = [
   { title: "Bot", url: "/bot", icon: Bot },
 ];
 
-const MORE_ITEMS = [
-  { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
-  { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
-  { title: "Journal", url: "/journal", icon: BookOpen },
-  { title: "Backtest", url: "/backtest", icon: FlaskConical },
-  { title: "Brokers", url: "/brokers", icon: Server },
-  { title: "Trade Replay", url: "/trade-replay", icon: Play },
-  { title: "Prop Firm", url: "/prop-firm", icon: Shield },
-  { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
-  { title: "Optimizer", url: "/optimizer", icon: Zap },
-  { title: "Settings", url: "/settings", icon: Settings },
+const MORE_GROUPS = [
+  { label: "Review", items: [
+    { title: "Journal", url: "/journal", icon: BookOpen },
+    { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
+    { title: "Trade Replay", url: "/trade-replay", icon: Play },
+  ] },
+  { label: "Research", items: [
+    { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
+    { title: "Backtest", url: "/backtest", icon: FlaskConical },
+    { title: "Optimizer", url: "/optimizer", icon: Zap },
+  ] },
+  { label: "System", items: [
+    { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
+    { title: "Brokers", url: "/brokers", icon: Server },
+    { title: "Prop Firm", url: "/prop-firm", icon: Shield },
+    { title: "Settings", url: "/settings", icon: Settings },
+  ] },
 ];
 
 interface MobileNavProps {
@@ -51,23 +57,30 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              {MORE_ITEMS.map((item) => (
-                <button
-                  key={item.url}
-                  onClick={() => {
-                    navigate(item.url);
-                    setMoreOpen(false);
-                  }}
-                  className={`min-h-16 flex flex-col items-center justify-center gap-1 p-2 rounded-md transition-colors ${
-                    isActive(item.url)
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                >
-                  <item.icon className="h-5 w-5" />
-                  <span className="text-[10px] font-medium">{item.title}</span>
-                </button>
+            <div className="space-y-4">
+              {MORE_GROUPS.map((group) => (
+                <section key={group.label} aria-label={group.label}>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase text-muted-foreground">{group.label}</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.url}
+                        onClick={() => {
+                          navigate(item.url);
+                          setMoreOpen(false);
+                        }}
+                        className={`min-h-16 flex flex-col items-center justify-center gap-1 p-2 rounded-md transition-colors ${
+                          isActive(item.url)
+                            ? "bg-primary/10 text-primary"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        }`}
+                      >
+                        <item.icon className="h-5 w-5" />
+                        <span className="text-[11px] font-medium">{item.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           </div>
