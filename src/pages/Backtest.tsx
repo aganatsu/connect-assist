@@ -87,10 +87,13 @@ interface BacktestResponse {
     skippedNoDirection: number;
     skippedBelowThreshold: number;
     skippedGateBlocked: number;
+    skippedLifecycleWaiting?: number;
     skippedNoSLTP: number;
     skippedImpulseNoZone?: number;
     skippedImpulseNotAtZone?: number;
     gateBlockReasons?: Record<string, number>;
+    lifecycleStageObservations?: Record<string, number>;
+    lifecycleTransitionCounts?: Record<string, number>;
     signalsGenerated: number;
     tradesOpened: number;
     // Actionable advice fields
@@ -561,7 +564,11 @@ export default function Backtest() {
         ? "blocked" : rawStage;
       counts[stage] = (counts[stage] || 0) + 1;
     }
-    return { snapshots, counts };
+    const observed = results?.diagnostics?.lifecycleStageObservations;
+    if (observed && Object.keys(observed).length > 0) {
+      for (const [stage, count] of Object.entries(observed)) counts[stage] = count;
+    }
+    return { snapshots, counts, transitionCounts: results?.diagnostics?.lifecycleTransitionCounts ?? {} };
   }, [results]);
 
   const effectiveAuthority = useMemo(() => {
@@ -1262,15 +1269,30 @@ export default function Backtest() {
             });
           }
 
+          if ((d.skippedLifecycleWaiting || 0) > 0) {
+            const stages = Object.entries(d.lifecycleStageObservations || {})
+              .sort(([, left], [, right]) => right - left)
+              .slice(0, 3)
+              .map(([stage, count]) => `${stage.replaceAll("_", " ")} (${count.toLocaleString()})`)
+              .join(", ");
+            advice.push({
+              priority: 5,
+              icon: "⏳",
+              title: `${(d.skippedLifecycleWaiting || 0).toLocaleString()} setup observations were still developing`,
+              detail: stages ? `Most observed stages: ${stages}.` : "The enforced ICT lifecycle had not reached final authorization.",
+              action: `This is not a safety rejection. Open Lifecycle to see whether setups were mostly approaching zones, building confirmation, or waiting for retracement.`,
+            });
+          }
+
           // Advice 5: Gate blocked
-          if (d.skippedGateBlocked > 0 && d.signalsGenerated > 0) {
+          if (d.skippedGateBlocked > 0) {
             const topGate = d.gateBlockReasons ? Object.entries(d.gateBlockReasons).sort(([, a], [, b]) => b - a)[0] : null;
             advice.push({
               priority: 5,
               icon: "\u{1F6E1}\uFE0F",
-              title: `${d.skippedGateBlocked} signals blocked by safety gates`,
+              title: `${d.skippedGateBlocked.toLocaleString()} candidates rejected by entry gates`,
               detail: topGate ? `Top blocker: ${topGate[0]} (${topGate[1]} times).` : `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
-              action: `Check your Risk and Protection settings. Common blockers: max concurrent trades too low, cooldown too long, or max daily drawdown too tight.`,
+              action: `Review the Gates tab before changing settings. Keep an authority enforced when it is rejecting the setups you intended it to reject.`,
             });
           }
 
@@ -1401,7 +1423,7 @@ export default function Backtest() {
                 {/* Row 1: Total candles in range */}
                 <div className="grid grid-cols-1 gap-2">
                   <div className="px-3 py-2 border rounded text-center border-border/40">
-                    <p className="text-[10px] text-muted-foreground">Total Candles In Range</p>
+                    <p className="text-[10px] text-muted-foreground">Historical Bars Loaded Across Timeframes</p>
                     <p className="text-lg font-mono font-bold">{total.toLocaleString()}</p>
                   </div>
                 </div>
@@ -1427,11 +1449,12 @@ export default function Backtest() {
                   </div>
                 </div>
                 {/* Row 4: Analysis results */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {[
                     { label: "\u2796 No Direction", value: d.skippedNoDirection, warn: noDirPct > 60 },
                     { label: "\u2796 Below Threshold", value: d.skippedBelowThreshold, warn: d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 },
-                    { label: "\u2796 Gate Blocked", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
+                    { label: "Entry Gate Rejected", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
+                    { label: "Lifecycle Waiting", value: d.skippedLifecycleWaiting || 0, warn: false },
                     { label: "\u2796 No SL/TP", value: d.skippedNoSLTP, warn: d.skippedNoSLTP > 0 },
                   ].map(item => (
                     <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
@@ -1443,7 +1466,7 @@ export default function Backtest() {
                 {/* Row 5: Final outcome */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
-                    { label: "Signals Passed", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
+                    { label: "Final Candidates", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
                     { label: "Trades Opened", value: d.tradesOpened, warn: d.tradesOpened === 0 },
                     { label: "Unsupported Symbol", value: d.skippedUnsupportedSymbol, warn: d.skippedUnsupportedSymbol > 0 },
                   ].map(item => (
@@ -1703,7 +1726,7 @@ export default function Backtest() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="flex items-center gap-2 text-sm"><Route className="h-4 w-4 text-cyan" /> Canonical Trade Lifecycle</CardTitle>
-                  <p className="text-[10px] text-muted-foreground">Stages recorded by the engine. These are separate from file-processing progress.</p>
+                  <p className="text-[10px] text-muted-foreground">Candle observations by lifecycle stage. These are separate from file-processing progress and safety rejections.</p>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
@@ -1720,6 +1743,10 @@ export default function Backtest() {
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {[["blocked", "Blocked"], ["invalidated", "Invalidated"], ["expired", "Expired"], ["unavailable", "Legacy / unavailable"]].map(([stage, label]) => <div key={stage} className="flex items-center justify-between border border-border/50 px-3 py-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono font-semibold">{lifecycleSummary.counts[stage] ?? 0}</span></div>)}
                   </div>
+                  {Object.keys(lifecycleSummary.transitionCounts).length > 0 && <div className="border-t border-border/50 pt-3">
+                    <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Lifecycle transitions</p>
+                    <div className="flex flex-wrap gap-2">{Object.entries(lifecycleSummary.transitionCounts).map(([event, count]) => <span key={event} className="border border-border/60 px-2 py-1 text-[9px]"><span className="capitalize">{event.replaceAll("_", " ")}</span> <strong className="ml-1 font-mono">{count}</strong></span>)}</div>
+                  </div>}
                 </CardContent>
               </Card>
               <Card>

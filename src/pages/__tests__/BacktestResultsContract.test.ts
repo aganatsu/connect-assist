@@ -16,5 +16,7 @@ describe("Backtest result evidence contract", () => {
     expect(source).toContain('v.outcomesAvailable === true');
     expect(source).toContain('"Not measured"');
     expect(source).toContain('outcomesAvailable ? v.wouldHaveWon : "—"');
+    expect(source).toContain("Lifecycle Waiting");
+    expect(source).toContain("lifecycleStageObservations");
   });
 });

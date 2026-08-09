@@ -12,4 +12,7 @@ Deno.test("backtest result contract derives factors and honest gate outcomes", (
   assertStringIncludes(engine, "outcomesAvailable: true");
   assertStringIncludes(engine, "factorBreakdown,");
   assertStringIncludes(engine, "gateBreakdown,");
+  assertStringIncludes(engine, "skippedLifecycleWaiting");
+  assertStringIncludes(engine, "lifecycleStageObservations");
+  assertStringIncludes(engine, '["totalCandlesFetched", "enabledFactorCount", "totalFactorCount"]');
 });
