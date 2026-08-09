@@ -68,7 +68,7 @@ export function discoverBacktestTradeLifecycle(input: {
       low: candidate.low,
       high: candidate.high,
       timeframe: candidate.timeframe,
-      impulseId: candidate.impulseId,
+      impulseId: input.range.impulseId,
     }));
   if (candidates.length === 0) return input.state;
 
