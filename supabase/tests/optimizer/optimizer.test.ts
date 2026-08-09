@@ -47,8 +47,8 @@ Deno.test("TPE: uniform sampling during startup phase", () => {
   // During startup, all samples should be uniform (within bounds)
   for (let i = 0; i < 5; i++) {
     const params = tpe.ask();
-    assert(params.x >= 0 && params.x <= 10, `x=${params.x} out of bounds`);
-    assert(params.y >= 1 && params.y <= 5, `y=${params.y} out of bounds`);
+    assert(Number(params.x) >= 0 && Number(params.x) <= 10, `x=${params.x} out of bounds`);
+    assert(Number(params.y) >= 1 && Number(params.y) <= 5, `y=${params.y} out of bounds`);
     assert(Number.isInteger(params.y), `y=${params.y} should be integer`);
     tpe.tell(params, Math.random());
   }
@@ -118,7 +118,7 @@ Deno.test("TPE: loadTrials enables warm-starting", () => {
 
   // After loading 5 trials (>= nStartupTrials), TPE should use informed sampling
   const params = tpe.ask();
-  assert(params.x >= 0 && params.x <= 1);
+  assert(Number(params.x) >= 0 && Number(params.x) <= 1);
 });
 
 Deno.test("TPE: converges toward optimum with simple quadratic", () => {

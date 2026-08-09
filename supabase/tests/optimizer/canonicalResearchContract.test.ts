@@ -6,8 +6,9 @@ const read = (path: string) => Deno.readTextFileSync(new URL(path, import.meta.u
 Deno.test("optimizer is research-only and cannot auto-apply", () => {
   const source = read("../../functions/optimizer/index.ts");
   assertEquals(source.includes("autoApplyResult"), false);
-  assertStringIncludes(source, 'const applyOutcome = autoApplied ? "recommendation_ready"');
-  assertStringIncludes(source, "dryRun: true");
+  assertStringIncludes(source, 'const applyOutcome = recommendationQualified ? "recommendation_ready"');
+  assertStringIncludes(source, "auto_applied: false");
+  assertStringIncludes(source, "researchOnly: true");
 });
 
 Deno.test("optimizer freezes the complete canonical runtime snapshot", () => {

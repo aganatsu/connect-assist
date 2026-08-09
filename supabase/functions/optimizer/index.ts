@@ -653,15 +653,15 @@ async function handleFinalize(
   const { baseline, completedTrials, bestPassingTrial, config, startTime } = state;
   const baselineScore = baseline?.compositeScore ?? 0;
 
-  // Determine auto-apply
-  let autoApplied = false;
+  // Determine whether the research produced a recommendation worth reviewing.
+  let recommendationQualified = false;
   let improvementPercent = 0;
   let rejectReason: string | undefined;
 
   if (bestPassingTrial && baselineScore > 0) {
     improvementPercent = ((bestPassingTrial.compositeScore - baselineScore) / baselineScore) * 100;
     if (improvementPercent >= config.minImprovementPercent * 100) {
-      autoApplied = true;
+      recommendationQualified = true;
     } else {
       rejectReason = `Improvement ${improvementPercent.toFixed(1)}% < required ${(config.minImprovementPercent * 100).toFixed(0)}%`;
     }
@@ -675,7 +675,7 @@ async function handleFinalize(
 
   // Research-only: never mutate bot_configs. A human-reviewed apply flow may be
   // added later, with a fresh runtime snapshot and atomic rollback transaction.
-  const applyOutcome = autoApplied ? "recommendation_ready" : "no_recommendation";
+  const applyOutcome = recommendationQualified ? "recommendation_ready" : "no_recommendation";
 
   // Record completion (clear state from result_summary)
   await db.from("optimizer_runs").update({
