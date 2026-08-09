@@ -1984,13 +1984,30 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
     : outcome.includes("AWAITING") || ["WATCHING", "AT POI", "WATCH"].includes(outcome) ? "text-warning" : "text-destructive";
   const primaryExplanation = presentation?.primary?.explanation || workflow?.explanation || null;
   const diagnostics = Array.isArray(presentation?.diagnostics) ? presentation.diagnostics : [];
+  const failedCheck = Array.isArray(presentation?.authorityChecks)
+    ? presentation.authorityChecks.find((check: any) => check.passed === false || check.passed == null)
+    : null;
+  const nextRequirement = presentation?.primary?.nextRequirement
+    || workflow?.nextRequirement
+    || failedCheck?.reason
+    || (failedCheck?.role ? `Complete ${String(failedCheck.role).replace(/_/g, " ")}.` : null);
   return (
-    <details className="group border border-border/60 bg-muted/10" open={!(["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome))}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs">
-        <span className="font-medium">ICT Scanner Workflow</span>
-        <span className={"font-mono font-bold " + outcomeColor}>{outcome}</span>
-      </summary>
-      <div className="space-y-2 border-t border-border/50 px-3 py-2 text-[10px]">
+    <section className="border border-border/70 bg-card" aria-label="Trade decision summary">
+      <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
+        <div>
+          <p className="text-xs font-semibold">Trade Decision</p>
+          <p className="text-[11px] text-muted-foreground">ICT Scanner Workflow · current canonical authority</p>
+        </div>
+        <span className={"text-xs font-mono font-bold " + outcomeColor}>{outcome}</span>
+      </div>
+      <div className="space-y-2 px-3 py-2 text-xs">
+        {primaryExplanation ? <p className={outcomeColor}>{primaryExplanation}</p> : <p className="text-muted-foreground">No canonical scanner explanation recorded.</p>}
+        {nextRequirement && !["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) && (
+          <div className="border-l-2 border-warning pl-2">
+            <p className="text-[11px] font-semibold text-warning">Next required</p>
+            <p className="text-[11px] text-foreground/90">{nextRequirement}</p>
+          </div>
+        )}
         <p className="text-muted-foreground">
           Workflow: <span className="font-mono text-foreground">{String(workflowEnforcement?.effectiveMode || "observe").toUpperCase()}</span>
           {" · Trade Decision: "}<span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
@@ -2000,7 +2017,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           <div className="grid grid-cols-2 gap-1 border-t border-border/40 pt-2 sm:grid-cols-4">
             {presentation.authorityChecks.map((check: any) => (
               <div key={check.role} className="flex items-center justify-between gap-1 border border-border/40 px-1.5 py-1">
-                <span className="truncate text-muted-foreground">{String(check.role).replace(/_/g, " ")}</span>
+                <span className="min-w-0 break-words text-muted-foreground">{String(check.role).replace(/_/g, " ")}</span>
                 <span className={check.passed === true ? "text-success" : check.passed === false ? "text-destructive" : "text-warning"}>{check.passed === true ? "PASS" : check.passed === false ? "BLOCK" : "WAIT"}</span>
               </div>
             ))}
@@ -2015,7 +2032,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           </details>
         )}
       </div>
-    </details>
+    </section>
   );
 }
 
@@ -2253,6 +2270,8 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
         </div>
       )}
 
+      <TradeDecisionPanel detail={d} />
+
       {/* 3. Narrative — plain-English thesis */}
       {d.direction && d.direction !== "none" && (
         <p className="text-[11px] text-muted-foreground/80 italic leading-tight">
@@ -2314,7 +2333,6 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
         ownershipDiagnostics={d.legacyGateDiagnostics}
         compact
       />
-      <TradeDecisionPanel detail={d} />
 
       {/* 6. Regime Detection */}
       {d.regimeData && (

@@ -1138,13 +1138,13 @@ export default function RejectedSetups() {
         <Tabs defaultValue="overview" className="w-full">
           <div className="-mx-2.5 px-2.5 overflow-x-auto">
           <TabsList className="h-10 min-w-max justify-start">
-            <TabsTrigger value="overview" className="text-xs h-9">Overview</TabsTrigger>
-            <TabsTrigger value="gates" className="text-xs h-9">Gate Analysis</TabsTrigger>
-            <TabsTrigger value="shadow" className="text-xs h-9">Shadow Evidence</TabsTrigger>
+            <TabsTrigger value="overview" className="text-xs h-9">Outcomes</TabsTrigger>
+            <TabsTrigger value="gates" className="text-xs h-9">Rejection Gates</TabsTrigger>
+            <TabsTrigger value="shadow" className="text-xs h-9">Evidence Research</TabsTrigger>
             <TabsTrigger value="advisor" className="text-xs h-9 gap-1">
               <Sparkles className="h-3 w-3" /> Advisor
             </TabsTrigger>
-            <TabsTrigger value="table" className="text-xs h-9">Opportunities</TabsTrigger>
+            <TabsTrigger value="table" className="text-xs h-9">Setup Records</TabsTrigger>
           </TabsList>
           </div>
 
@@ -2114,7 +2114,37 @@ function ZoneLocalDatasetTable({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded border border-border/40">
+        <>
+          <div className="space-y-2 md:hidden">
+            {rows.map((row) => (
+              <article key={`mobile:${row.evidence_source}:${row.trading_style}:${row.symbol}`} className="border border-border/50 bg-card p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">{row.symbol}</p>
+                    <p className="text-[11px] capitalize text-muted-foreground">{row.trading_style}</p>
+                  </div>
+                  {retrospective ? (
+                    <Badge variant="outline" className="text-[10px]">{Number(row.replay_runs || 0)} replays</Badge>
+                  ) : (
+                    <Badge variant="outline" className={`text-[10px] ${row.minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
+                      {row.minimum_sample_ready ? "Review ready" : "Collecting"}
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                  <Metric label="Resolved" value={Number(row.resolved_candidates || 0)} />
+                  <Metric label="Disagreements" value={Number(row.disagreement_scans || 0)} />
+                  <Metric label="Legacy win" value={formatValidationPercent(row.legacy_disagreement_win_rate)} />
+                  <Metric label="Local win" value={formatValidationPercent(row.shadow_disagreement_win_rate)} emphasis="primary" />
+                  <Metric label="Winners kept" value={Number(row.winners_retained || 0)} emphasis="success" />
+                  <Metric label="Losers avoided" value={Number(row.losers_avoided || 0)} emphasis="success" />
+                  <Metric label="Missed" value={Number(row.missed_opportunities || 0)} emphasis="warning" />
+                  <Metric label="False positives" value={Number(row.false_positives || 0)} emphasis="danger" />
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto rounded border border-border/40 md:block">
           <table className="w-full min-w-[1180px] text-[10px]">
             <thead className="bg-muted/30 text-muted-foreground">
               <tr>
@@ -2188,8 +2218,23 @@ function ZoneLocalDatasetTable({
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
+    </div>
+  );
+}
+
+function Metric({ label, value, emphasis }: { label: string; value: React.ReactNode; emphasis?: "primary" | "success" | "warning" | "danger" }) {
+  const valueColor = emphasis === "success" ? "text-success"
+    : emphasis === "warning" ? "text-warning"
+    : emphasis === "danger" ? "text-destructive"
+    : emphasis === "primary" ? "text-primary"
+    : "text-foreground";
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-border/30 pb-1">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-mono font-semibold ${valueColor}`}>{value}</span>
     </div>
   );
 }
