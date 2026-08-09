@@ -11,6 +11,12 @@ import {
   advanceTradeLifecycle,
   type TradeLifecycleStepResult,
 } from "./tradeLifecycleAuthority.ts";
+import {
+  derivePostChochEntryPlan,
+  evaluatePostChochRetracement,
+  type AfterChochMode,
+  type PostChochEntryPlan,
+} from "./postChochRetracement.ts";
 
 export const BACKTEST_TRADE_LIFECYCLE_VERSION =
   "backtest-trade-lifecycle.v1";
@@ -20,6 +26,7 @@ export interface BacktestTradeLifecycleState {
   lifecycle: ImpulseEntryLifecycle | null;
   terminalImpulseIds: string[];
   lastStep: TradeLifecycleStepResult | null;
+  postConfirmationEntry: PostChochEntryPlan | null;
 }
 
 export function emptyBacktestTradeLifecycleState(): BacktestTradeLifecycleState {
@@ -28,6 +35,7 @@ export function emptyBacktestTradeLifecycleState(): BacktestTradeLifecycleState 
     lifecycle: null,
     terminalImpulseIds: [],
     lastStep: null,
+    postConfirmationEntry: null,
   };
 }
 
@@ -90,6 +98,7 @@ export function discoverBacktestTradeLifecycle(input: {
       },
     }),
     lastStep: null,
+    postConfirmationEntry: null,
   };
 }
 
@@ -99,8 +108,24 @@ export function advanceBacktestTradeLifecycle(input: {
   completedCandles: Candle[];
 }): BacktestTradeLifecycleState {
   if (!input.state.lifecycle) return input.state;
+  const postConfirmationEntry = input.state.postConfirmationEntry?.state ===
+      "awaiting_retracement"
+    ? evaluatePostChochRetracement(
+      input.state.postConfirmationEntry,
+      input.candle,
+    )
+    : input.state.postConfirmationEntry;
+  const retracementTerminal = postConfirmationEntry?.state === "expired" ||
+    postConfirmationEntry?.state === "invalidated";
+  const lifecycle = retracementTerminal
+    ? {
+      ...input.state.lifecycle,
+      status: postConfirmationEntry.state as "expired" | "invalidated",
+      lastTransitionReason: postConfirmationEntry.reason,
+    }
+    : input.state.lifecycle;
   const step = advanceTradeLifecycle({
-    lifecycle: input.state.lifecycle,
+    lifecycle,
     candle: input.candle,
     completedCandles: input.completedCandles,
   });
@@ -114,7 +139,56 @@ export function advanceBacktestTradeLifecycle(input: {
     lifecycle: step.after,
     terminalImpulseIds,
     lastStep: step,
+    postConfirmationEntry,
   };
+}
+
+export function prepareBacktestPostConfirmationEntry(input: {
+  state: BacktestTradeLifecycleState;
+  completedCandles: Candle[];
+  mode: AfterChochMode;
+  expiryMinutes: number;
+}): BacktestTradeLifecycleState {
+  if (input.mode === "confirmation_close" ||
+    input.state.postConfirmationEntry ||
+    input.state.lifecycle?.status !== "entered") return input.state;
+  const trigger = input.state.lastStep?.confirmationPlan;
+  const confirmation = input.state.lifecycle.confirmation;
+  if (!trigger || !confirmation?.confirmedAt) return input.state;
+  const candleIndex = input.completedCandles.findIndex((candle) =>
+    candle.datetime === trigger.evaluatedAt
+  );
+  if (candleIndex < 0) return input.state;
+  const plan = derivePostChochEntryPlan({
+    candles: input.completedCandles,
+    direction: input.state.lifecycle.impulse.direction,
+    signal: {
+      type: "close_choch",
+      tier: 1,
+      price: trigger.breakLevel,
+      candleIndex,
+      displacement: trigger.displacementQualified ? 1 : 0,
+      significance: "internal",
+      closeBased: true,
+      supportingSignals: ["frozen_trigger", "qualified_displacement"],
+      authority: trigger,
+    },
+    protectedLevel: trigger.protectedLevel,
+    candidateId: trigger.candidateId,
+    confirmationGeneration: trigger.generation,
+    mode: input.mode,
+    createdAt: confirmation.confirmedAt,
+    expiryMinutes: input.expiryMinutes,
+  });
+  return plan ? { ...input.state, postConfirmationEntry: plan } : input.state;
+}
+
+export function isBacktestTradeLifecycleEntryReady(
+  state: BacktestTradeLifecycleState,
+): boolean {
+  if (state.lifecycle?.status !== "entered") return false;
+  const plan = state.postConfirmationEntry;
+  return !plan || plan.mode !== "wait_retracement" || plan.state === "ready";
 }
 
 export function consumeBacktestTradeLifecycleEntry(
@@ -127,5 +201,6 @@ export function consumeBacktestTradeLifecycleEntry(
     terminalImpulseIds: impulseId && !state.terminalImpulseIds.includes(impulseId)
       ? [...state.terminalImpulseIds, impulseId].slice(-100)
       : state.terminalImpulseIds,
+    postConfirmationEntry: null,
   };
 }
