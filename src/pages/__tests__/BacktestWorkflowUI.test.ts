@@ -28,6 +28,10 @@ describe("Backtest canonical workflow UI", () => {
     expect(source).toContain("Candidates Sent to Entry Gates");
     expect(source).toContain("eligible weekday bars");
     expect(source).not.toContain("Historical Bars Loaded Across Timeframes");
+    expect(source).toContain("Failure Occurrences");
+    expect(source).toContain("rows are not additive");
+    expect(source).toContain("Retained decision outcomes");
+    expect(source).toContain("lifecycleSummary.outcomeCounts");
     expect(source).toContain("wait_retracement");
   });
 });

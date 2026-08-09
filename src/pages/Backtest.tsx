@@ -555,20 +555,24 @@ export default function Backtest() {
 
   const lifecycleSummary = useMemo(() => {
     const snapshots = results?.goldenReplay?.snapshots ?? [];
-    const counts: Record<string, number> = {};
+    const observed = results?.diagnostics?.lifecycleStageObservations ?? {};
+    const stageCounts: Record<string, number> = { ...observed };
+    const outcomeCounts: Record<string, number> = {};
     for (const snapshot of snapshots) {
-      const rawStage = snapshot.canonicalScannerState?.stage ||
-        snapshot.decision?.lifecycle?.stage || "unavailable";
-      const stage = rawStage === "position" ? "entered"
+      const rawStage = snapshot.decision?.lifecycle?.stage || "unavailable";
+      const outcome = rawStage === "position" ? "entered"
         : rawStage === "gates" || rawStage === "final_authorization"
-        ? "blocked" : rawStage;
-      counts[stage] = (counts[stage] || 0) + 1;
+        ? "blocked" : ["invalidated", "expired", "exhausted"].includes(rawStage)
+        ? rawStage : null;
+      if (outcome) outcomeCounts[outcome] = (outcomeCounts[outcome] || 0) + 1;
     }
-    const observed = results?.diagnostics?.lifecycleStageObservations;
-    if (observed && Object.keys(observed).length > 0) {
-      for (const [stage, count] of Object.entries(observed)) counts[stage] = count;
+    if (Object.keys(stageCounts).length === 0) {
+      for (const snapshot of snapshots) {
+        const stage = snapshot.canonicalScannerState?.stage;
+        if (stage) stageCounts[stage] = (stageCounts[stage] || 0) + 1;
+      }
     }
-    return { snapshots, counts, transitionCounts: results?.diagnostics?.lifecycleTransitionCounts ?? {} };
+    return { snapshots, stageCounts, outcomeCounts, transitionCounts: results?.diagnostics?.lifecycleTransitionCounts ?? {} };
   }, [results]);
 
   const effectiveAuthority = useMemo(() => {
@@ -1729,22 +1733,24 @@ export default function Backtest() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="flex items-center gap-2 text-sm"><Route className="h-4 w-4 text-cyan" /> Canonical Trade Lifecycle</CardTitle>
-                  <p className="text-[10px] text-muted-foreground">Candle observations by lifecycle stage. These are separate from file-processing progress and safety rejections.</p>
+                  <p className="text-[10px] text-muted-foreground">Repeated candle observations by lifecycle stage, not unique setups. These are separate from safety-gate failure occurrences.</p>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     {[
-                      ["watching", "Watching"], ["at_poi", "At zone"],
-                      ["awaiting_liquidity", "Liquidity"], ["awaiting_confirmation", "Confirmation"],
-                      ["awaiting_retracement", "Retracement"], ["authorized", "Authorized"],
-                      ["entered", "Entered"],
+                      ["discovery", "Discovery"], ["watching", "Watching"],
+                      ["awaiting_confirmation", "Confirmation"],
+                      ["awaiting_retracement", "Retracement"], ["authorized", "Entry ready"],
                     ].map(([stage, label]) => <div key={stage} className="border border-border/60 px-3 py-3">
                       <p className="text-[9px] uppercase text-muted-foreground">{label}</p>
-                      <p className="mt-1 font-mono text-xl font-bold">{lifecycleSummary.counts[stage] ?? 0}</p>
+                      <p className="mt-1 font-mono text-xl font-bold">{lifecycleSummary.stageCounts[stage] ?? 0}</p>
                     </div>)}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {[["blocked", "Blocked"], ["invalidated", "Invalidated"], ["expired", "Expired"], ["unavailable", "Legacy / unavailable"]].map(([stage, label]) => <div key={stage} className="flex items-center justify-between border border-border/50 px-3 py-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono font-semibold">{lifecycleSummary.counts[stage] ?? 0}</span></div>)}
+                  <div>
+                    <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Retained decision outcomes (latest 500 evidence records)</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {[['blocked', 'Blocked'], ['entered', 'Entered'], ['invalidated', 'Invalidated'], ['expired', 'Expired'], ['exhausted', 'Exhausted']].map(([stage, label]) => <div key={stage} className="flex items-center justify-between border border-border/50 px-3 py-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono font-semibold">{lifecycleSummary.outcomeCounts[stage] ?? 0}</span></div>)}
+                    </div>
                   </div>
                   {Object.keys(lifecycleSummary.transitionCounts).length > 0 && <div className="border-t border-border/50 pt-3">
                     <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Lifecycle transitions</p>
@@ -1960,7 +1966,7 @@ export default function Backtest() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-cyan" /> Safety Gate Analytics</CardTitle>
-                  <p className="text-[10px] text-muted-foreground mt-1">Shows blocking frequency. Winner/loser accuracy is available only when counterfactual research was enabled for the run.</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Counts gate-failure occurrences, not unique setups. A setup may fail multiple gates or repeat across candles, so rows are not additive. Winner/loser accuracy requires counterfactual research.</p>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-y-auto max-h-[400px]">
@@ -1968,7 +1974,7 @@ export default function Backtest() {
                       <thead className="sticky top-0 bg-card">
                         <tr className="border-b border-border text-muted-foreground">
                           <th className="text-left py-2 px-1.5">Gate</th>
-                          <th className="text-right py-2 px-1.5">Blocked</th>
+                          <th className="text-right py-2 px-1.5">Failure Occurrences</th>
                           <th className="text-right py-2 px-1.5">Would Win</th>
                           <th className="text-right py-2 px-1.5">Would Lose</th>
                           <th className="text-right py-2 px-1.5">Accuracy</th>
