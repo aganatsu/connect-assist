@@ -20,9 +20,9 @@ Deno.test("both pending-fill routes recalculate canonical location at fill price
   }
 });
 
-Deno.test("ownership enforcement removes duplicate Game Plan veto at final routes", () => {
-  assertStringIncludes(main, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
-  assertStringIncludes(fast, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
+Deno.test("final hierarchy remains the single Game Plan authorization owner", () => {
+  assertStringIncludes(main, "gamePlanEnabled: config.gamePlanEnabled !== false");
+  assertStringIncludes(fast, "gamePlanEnabled: config.gamePlanEnabled !== false");
 });
 
 Deno.test("atomic database fill remains the final writer", () => {

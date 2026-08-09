@@ -64,7 +64,7 @@ import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforceme
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
-import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
+import { applyAuthorityOwnershipToGateResults, evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -1082,7 +1082,13 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
   }
 
-  return gates;
+  return applyAuthorityOwnershipToGateResults({
+    gates,
+    requestedMode: config.singleOwnershipMode,
+    runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+    canonicalRangeAvailable: analysis._canonicalDealingRangeAvailable === true,
+    normalizeCode: normalizeRejectedGate,
+  });
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -3111,7 +3117,7 @@ async function runScanForUser(
             directionVerdict: pendingDirectionVerdict,
             requireDirectionVerdict: true,
             gamePlan: _lastGamePlanForValidation,
-            gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)),
+            gamePlanEnabled: config.gamePlanEnabled !== false,
             gamePlanMode: config.gpEnforcementMode,
             gamePlanMinimumConfidence: config.gpHardBlockThreshold,
             thesisResult: pendingThesisResult,
@@ -3169,7 +3175,7 @@ async function runScanForUser(
               symbol: pending.symbol,
               direction: pending.direction as "long" | "short",
               gamePlan: _lastGamePlanForValidation,
-              gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)),
+              gamePlanEnabled: config.gamePlanEnabled !== false,
               gamePlanMode: config.gpEnforcementMode,
               gamePlanMinimumConfidence: config.gpHardBlockThreshold,
               directionVerdict: pendingDirectionVerdict,
@@ -4788,7 +4794,7 @@ async function runScanForUser(
           bias: earlyWeeklyBias.bias as "bullish" | "bearish" | "neutral",
           confidence: earlyWeeklyBias.confidence,
         } : null,
-        gamePlanBias: gpCtx ? {
+        gamePlanBias: pairConfig.gpEnforcementMode !== "off" && gpCtx ? {
           bias: gpCtx.bias,
           confidence: gpCtx.biasConfidence ?? 50,
         } : null,
@@ -5248,6 +5254,7 @@ async function runScanForUser(
             price: analysis.lastPrice,
             mode: canonicalMode,
           });
+          analysis._canonicalDealingRangeAvailable = canonicalRangeSelection.available;
           const rollingBlocked =
             (pairConfig.onlyBuyInDiscount &&
               analysis.direction === "long" &&
@@ -7065,7 +7072,7 @@ async function runScanForUser(
             score: analysis.fotsiAlignment.score,
           } : null,
           opposingFactorCount: opposingFactorCount,
-          gamePlanBias: gpCtx ? {
+          gamePlanBias: pairConfig.gpEnforcementMode !== "off" && gpCtx ? {
             bias: gpCtx.bias,
             confidence: gpCtx.biasConfidence ?? 50,
           } : null,
@@ -7504,9 +7511,12 @@ async function runScanForUser(
       if (gamePlanEnabled) {
         const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
         const gpGate = evaluateGamePlanGate(activeGamePlan, pair, analysis.direction, gpEnforcementMode, gpThreshold);
-        gates.push({ passed: gpGate.passed, reason: gpGate.reason });
+        const ownedGpGate = directionVerdict && !gpGate.passed
+          ? { passed: true, reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization` }
+          : { passed: gpGate.passed, reason: gpGate.reason };
+        gates.push(ownedGpGate);
         console.log(
-          `[scan ${scanCycleId}] ${gpGate.passed ? "ℹ️" : "❌"} ${pair}: GP gate ${gpGate.passed ? "passed" : "BLOCKED"}`
+          `[scan ${scanCycleId}] ${ownedGpGate.passed ? "ℹ️" : "❌"} ${pair}: GP gate ${directionVerdict ? "deferred to final hierarchy" : ownedGpGate.passed ? "passed" : "BLOCKED"}`
           + ` — mode=${gpEnforcementMode}, biasConf=${gpGate.biasConfidence}%, threshold=${gpThreshold}%, direction=${analysis.direction}`,
         );
       }
