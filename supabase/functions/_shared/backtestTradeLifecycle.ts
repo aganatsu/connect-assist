@@ -58,7 +58,7 @@ export function discoverBacktestTradeLifecycle(input: {
 
   const candidates = input.authority.ranked
     .filter((candidate) =>
-      candidate.eligible && candidate.impulseId === input.range.impulseId &&
+      candidate.eligible && candidate.impulseId.length > 0 &&
       candidate.direction === input.range.direction &&
       candidate.low >= input.range.low && candidate.high <= input.range.high
     )
