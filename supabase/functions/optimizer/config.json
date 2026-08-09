@@ -1,18 +1,11 @@
 {
   "maxTrials": 30,
-  "walkForwardFolds": 0,
-  "minConsistencyScore": 0.70,
+  "walkForwardFolds": 4,
+  "minConsistencyScore": 0.75,
   "minImprovementPercent": 0.15,
-  "maxDeltaPercent": 0.50,
+  "maxDeltaPercent": 0.35,
   "fullSpace": false,
-  "instruments": [
-    "EURUSD"
-  ],
-  "userId": "57c79dee-db6b-4fae-b34a-4b64ce33ca34",
+  "instruments": ["EURUSD", "GBPUSD"],
   "configId": "",
-  "historyPath": "optimizer/results/history.json",
-  "tpeConfig": {
-    "gamma": 0.25,
-    "nStartupTrials": 8
-  }
+  "tpeConfig": { "gamma": 0.25, "nStartupTrials": 8 }
 }

@@ -4,7 +4,7 @@
  * 2. Runs backtest on each candidate
  * 3. Evaluates with composite scoring + walk-forward
  * 4. Updates TPE with results
- * 5. Applies best config if it passes safety rails
+ * 5. Returns a review-only recommendation if it passes safety rails
  * 
  * Designed to run locally via Deno, calling the backtest-engine directly.
  */
@@ -64,6 +64,7 @@ export interface BacktestResult {
   expectancy: number;
   maxDrawdownPercent: number;
   netPnlPips: number;
+  avgRR?: number;
   walkForward?: {
     consistencyScore: number;
     verdict: "robust" | "moderate" | "fragile";
@@ -88,7 +89,7 @@ export interface OptimizationResult {
   bestTrial: TrialResult | null;
   /** Baseline (current config) performance */
   baseline: TrialResult;
-  /** Whether auto-apply was triggered */
+  /** Whether the result qualifies as a recommendation (never auto-applied) */
   autoApplied: boolean;
   /** Improvement percentage over baseline */
   improvementPercent: number;
@@ -111,13 +112,16 @@ export interface OptimizationResult {
  * - tradeCountBonus: penalizes configs with too few trades (<30)
  */
 export function computeCompositeScore(result: BacktestResult): number {
-  // Guard: if no trades or negative expectancy, score is 0
-  if (result.totalTrades < 5 || result.expectancy <= 0) return 0;
-  if (result.profitFactor <= 0) return 0;
+  // Optimize risk-normalized edge, never raw dollar expectancy.
+  if (result.totalTrades < 30 || !Number.isFinite(result.profitFactor) || result.profitFactor <= 0) return 0;
+  const winRate = result.winRate > 1 ? result.winRate / 100 : result.winRate;
+  const avgRR = result.avgRR ?? (winRate > 0 ? Math.min(result.profitFactor, 4) * (1 - winRate) / winRate : 0);
+  const expectancyR = winRate * avgRR - (1 - winRate);
+  if (!Number.isFinite(expectancyR) || expectancyR <= 0) return 0;
 
-  const expectancyComponent = result.expectancy;
-  const pfComponent = Math.sqrt(result.profitFactor);
-  const consistencyComponent = result.walkForward?.consistencyScore ?? 0.5;
+  const expectancyComponent = expectancyR;
+  const pfComponent = Math.sqrt(Math.min(result.profitFactor, 4));
+  const consistencyComponent = result.walkForward?.consistencyScore ?? 0;
 
   // Penalty for extreme drawdown
   const drawdownPenalty = result.maxDrawdownPercent > 15
@@ -137,6 +141,7 @@ export class OptimizationLoop {
   private tpe: TPEOptimizer;
   private paramSpace: ParameterSpec[];
   private baselineParams: Record<string, number | string | boolean>;
+  private baselineConfig: Record<string, any>;
   private results: TrialResult[] = [];
 
   constructor(
@@ -146,7 +151,11 @@ export class OptimizationLoop {
   ) {
     this.config = config;
     this.paramSpace = paramSpace ?? getFullParameterSpace();
-    this.baselineParams = configToParams(baselineConfig);
+    this.baselineConfig = { ...baselineConfig };
+    this.baselineParams = configToParams(this.baselineConfig);
+    for (const spec of this.paramSpace) {
+      if (this.baselineConfig[spec.name] !== undefined) this.baselineParams[spec.name] = this.baselineConfig[spec.name];
+    }
 
     this.tpe = new TPEOptimizer(this.paramSpace, {
       ...config.tpeConfig,
@@ -168,7 +177,7 @@ export class OptimizationLoop {
     const startTime = Date.now();
 
     // Step 1: Evaluate baseline
-    const baselineConfig = paramsToConfig(this.baselineParams, {});
+    const baselineConfig = paramsToConfig(this.baselineParams, this.baselineConfig);
     baselineConfig.walkForwardFolds = this.config.walkForwardFolds;
 
     const baselineBacktest = await runBacktest(baselineConfig);
@@ -214,7 +223,7 @@ export class OptimizationLoop {
       }
 
       // Run backtest
-      const config = paramsToConfig(candidateParams, {});
+      const config = paramsToConfig(candidateParams, this.baselineConfig);
       config.walkForwardFolds = this.config.walkForwardFolds;
       config.startDate = this.config.startDate;
       config.endDate = this.config.endDate;
@@ -261,7 +270,7 @@ export class OptimizationLoop {
       onProgress?.(i + 1, this.config.maxTrials, bestPassingTrial?.compositeScore ?? baselineScore);
     }
 
-    // Step 3: Determine if auto-apply should fire
+    // Step 3: Determine if a reviewable recommendation is ready
     let autoApplied = false;
     let improvementPercent = 0;
     let rejectReason: string | undefined;

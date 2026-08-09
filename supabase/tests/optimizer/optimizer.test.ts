@@ -47,8 +47,8 @@ Deno.test("TPE: uniform sampling during startup phase", () => {
   // During startup, all samples should be uniform (within bounds)
   for (let i = 0; i < 5; i++) {
     const params = tpe.ask();
-    assert(params.x >= 0 && params.x <= 10, `x=${params.x} out of bounds`);
-    assert(params.y >= 1 && params.y <= 5, `y=${params.y} out of bounds`);
+    assert(Number(params.x) >= 0 && Number(params.x) <= 10, `x=${params.x} out of bounds`);
+    assert(Number(params.y) >= 1 && Number(params.y) <= 5, `y=${params.y} out of bounds`);
     assert(Number.isInteger(params.y), `y=${params.y} should be integer`);
     tpe.tell(params, Math.random());
   }
@@ -118,7 +118,7 @@ Deno.test("TPE: loadTrials enables warm-starting", () => {
 
   // After loading 5 trials (>= nStartupTrials), TPE should use informed sampling
   const params = tpe.ask();
-  assert(params.x >= 0 && params.x <= 1);
+  assert(Number(params.x) >= 0 && Number(params.x) <= 1);
 });
 
 Deno.test("TPE: converges toward optimum with simple quadratic", () => {
@@ -165,17 +165,17 @@ Deno.test("TPE: deterministic with same seed", () => {
 // Parameter Space Tests
 // ═══════════════════════════════════════════════════
 
-Deno.test("ParameterSpace: full space has ~65+ parameters", () => {
+Deno.test("ParameterSpace: full space is intentionally bounded", () => {
   const space = getFullParameterSpace();
-  assert(space.length >= 60, `Expected >=60 params, got ${space.length}`);
-  assert(space.length <= 80, `Expected <=80 params, got ${space.length}`);
+  assert(space.length >= 12, `Expected >=12 params, got ${space.length}`);
+  assert(space.length <= 24, `Expected <=24 params, got ${space.length}`);
 });
 
 Deno.test("ParameterSpace: core space is smaller than full", () => {
   const full = getFullParameterSpace();
   const core = getCoreParameterSpace();
   assert(core.length < full.length, `Core (${core.length}) should be < full (${full.length})`);
-  assert(core.length >= 15, `Core should have at least 15 params, got ${core.length}`);
+  assert(core.length >= 6, `Core should have at least 6 params, got ${core.length}`);
 });
 
 Deno.test("ParameterSpace: all specs have valid bounds", () => {
@@ -193,55 +193,28 @@ Deno.test("ParameterSpace: all specs have valid bounds", () => {
   }
 });
 
-Deno.test("ParameterSpace: factor weight params have fw_ prefix", () => {
-  const space = getFullParameterSpace();
-  const fwParams = space.filter(s => s.name.startsWith("fw_"));
-  assertEquals(fwParams.length, Object.keys(FACTOR_WEIGHT_DEFAULTS).length);
+Deno.test("ParameterSpace: excludes legacy diagnostics and authority modes", () => {
+  const names = getFullParameterSpace().map(spec => spec.name);
+  assertEquals(names.some(name => name.startsWith("fw_")), false);
+  assertEquals(names.includes("minConfluence"), false);
+  assertEquals(names.includes("minTier1Factors"), false);
+  assertEquals(names.includes("singleOwnershipMode"), false);
+  assertEquals(names.includes("canonicalScannerMode"), false);
 });
 
-Deno.test("ParameterSpace: paramsToConfig correctly maps factor weights", () => {
-  const params = { fw_marketStructure: 3.0, fw_orderBlock: 1.5, minConfluence: 50 };
-  const config = paramsToConfig(params, { existingField: "keep" });
-
-  assertEquals(config.factorWeights.marketStructure, 3.0);
-  assertEquals(config.factorWeights.orderBlock, 1.5);
-  assertEquals(config.minConfluence, 50);
-  assertEquals(config.existingField, "keep");
+Deno.test("ParameterSpace: paramsToConfig preserves the complete runtime snapshot", () => {
+  const base = { singleOwnershipMode: "enforce", confirmationMethod: "choch", structureLookback: 50 };
+  const config = paramsToConfig({ structureLookback: 70 }, base);
+  assertEquals(config.structureLookback, 70);
+  assertEquals(config.singleOwnershipMode, "enforce");
+  assertEquals(config.confirmationMethod, "choch");
 });
 
-Deno.test("ParameterSpace: configToParams extracts factor weights", () => {
-  const config = {
-    factorWeights: { marketStructure: 3.0, orderBlock: 1.5 },
-    minConfluence: 50,
-    riskPerTrade: 1.0,
-  };
-
-  const params = configToParams(config);
-  assertEquals(params.fw_marketStructure, 3.0);
-  assertEquals(params.fw_orderBlock, 1.5);
-  assertEquals(params.minConfluence, 50);
-  assertEquals(params.riskPerTrade, 1.0);
-});
-
-Deno.test("ParameterSpace: paramsToConfig → configToParams roundtrip", () => {
-  const originalParams: Record<string, number | string | boolean> = {
-    fw_marketStructure: 2.5,
-    fw_orderBlock: 2.0,
-    minConfluence: 55,
-    riskPerTrade: 1.5,
-    slATRMultiple: 1.8,
-    impulseZoneGateMode: "soft",
-  };
-
-  const config = paramsToConfig(originalParams, {});
-  const recovered = configToParams(config);
-
-  assertEquals(recovered.fw_marketStructure, 2.5);
-  assertEquals(recovered.fw_orderBlock, 2.0);
-  assertEquals(recovered.minConfluence, 55);
-  assertEquals(recovered.riskPerTrade, 1.5);
-  assertEquals(recovered.slATRMultiple, 1.8);
-  assertEquals(recovered.impulseZoneGateMode, "soft");
+Deno.test("ParameterSpace: configToParams extracts canonical research fields only", () => {
+  const params = configToParams({ structureLookback: 60, slATRMultiple: 1.5, minConfluence: 55 });
+  assertEquals(params.structureLookback, 60);
+  assertEquals(params.slATRMultiple, 1.5);
+  assertEquals(params.minConfluence, undefined);
 });
 
 Deno.test("ParameterSpace: validateParams catches minRR > tpRatio", () => {
@@ -347,8 +320,9 @@ Deno.test("CompositeScore: correct formula for healthy result", () => {
     walkForward: { consistencyScore: 0.8, verdict: "robust", foldCount: 4, winRateStdDev: 0.05, pnlStdDev: 10 },
   };
 
-  const expected = 5.0 * Math.sqrt(2.0) * 0.8 * 1.0 * 1.0;
-  // expectancy * sqrt(PF) * consistency * drawdownPenalty(none) * tradeCountBonus(50/30=1)
+  const expectancyR = 0.6 * (2.0 * 0.4 / 0.6) - 0.4;
+  const expected = expectancyR * Math.sqrt(2.0) * 0.8;
+  // expectancyR * capped sqrt(PF) * consistency
   const score = computeCompositeScore(result);
   assertAlmostEquals(score, expected, 0.001);
 });
@@ -374,7 +348,7 @@ Deno.test("CompositeScore: drawdown penalty kicks in above 15%", () => {
   assertAlmostEquals(scoreHighDD / scoreNormal, 0.7, 0.001);
 });
 
-Deno.test("CompositeScore: trade count bonus penalizes few trades", () => {
+Deno.test("CompositeScore: requires at least 30 trades", () => {
   const fewTrades: BacktestResult = {
     totalTrades: 15,
     winRate: 0.6,
@@ -390,11 +364,11 @@ Deno.test("CompositeScore: trade count bonus penalizes few trades", () => {
   const scoreFew = computeCompositeScore(fewTrades);
   const scoreMany = computeCompositeScore(manyTrades);
 
-  // tradeCountBonus for 15 trades = 15/30 = 0.5
-  assertAlmostEquals(scoreFew / scoreMany, 0.5, 0.001);
+  assertEquals(scoreFew, 0);
+  assert(scoreMany > 0);
 });
 
-Deno.test("CompositeScore: uses 0.5 default when no walk-forward data", () => {
+Deno.test("CompositeScore: rejects results without walk-forward data", () => {
   const result: BacktestResult = {
     totalTrades: 50,
     winRate: 0.6,
@@ -405,9 +379,7 @@ Deno.test("CompositeScore: uses 0.5 default when no walk-forward data", () => {
     // No walkForward field
   };
 
-  const expected = 5.0 * Math.sqrt(2.0) * 0.5 * 1.0 * 1.0;
-  const score = computeCompositeScore(result);
-  assertAlmostEquals(score, expected, 0.001);
+  assertEquals(computeCompositeScore(result), 0);
 });
 
 // ═══════════════════════════════════════════════════

@@ -1,15 +1,13 @@
 /**
- * Optimizer — Autonomous TPE-based config optimization dashboard.
- * Shows run history, live progress, trigger controls, and rollback.
- * Calls the Supabase `optimizer` edge function for actions and reads
- * the `optimizer_runs` / `config_backups` tables via the Supabase client.
+ * Canonical strategy research dashboard.
+ * Runs bounded, walk-forward comparisons and produces review-only recommendations.
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Zap, Play, Square, RotateCcw, CheckCircle2, XCircle,
+  Zap, Play, Square, CheckCircle2, XCircle,
   Clock, TrendingUp, AlertTriangle, Loader2, FlaskConical, RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,15 +38,6 @@ interface OptimizerRun {
   error_message: string | null;
   started_at: string;
   completed_at: string | null;
-}
-
-interface ConfigBackup {
-  id: string;
-  config_id: string;
-  config_json: Record<string, any>;
-  reason: string;
-  optimizer_run_id: string | null;
-  created_at: string;
 }
 
 // ─── Helpers ───
@@ -103,7 +92,7 @@ function StatusBadge({ status }: { status: string }) {
 
 // ─── Run Card ───
 
-function RunCard({ run, onRollback }: { run: OptimizerRun; onRollback?: (id: string) => void }) {
+function RunCard({ run }: { run: OptimizerRun }) {
   const startedAt = run.started_at ? new Date(run.started_at).toLocaleString() : "—";
   const duration = run.completed_at && run.started_at
     ? Math.round((new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()) / 1000 / 60)
@@ -116,9 +105,9 @@ function RunCard({ run, onRollback }: { run: OptimizerRun; onRollback?: (id: str
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <StatusBadge status={run.status} />
-            {run.auto_applied && (
+            {run.result_summary?.applyOutcome === "recommendation_ready" && (
               <Badge variant="secondary" className="gap-1 text-[10px] bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-                <CheckCircle2 className="w-3 h-3" /> Applied
+                <CheckCircle2 className="w-3 h-3" /> Recommendation ready
               </Badge>
             )}
           </div>
@@ -160,6 +149,24 @@ function RunCard({ run, onRollback }: { run: OptimizerRun; onRollback?: (id: str
           </div>
         )}
 
+        {run.result_summary?.recommendedParams && (
+          <details className="border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs">
+            <summary className="cursor-pointer font-semibold text-cyan-500">Review recommended parameter changes</summary>
+            <div className="mt-2 space-y-1">
+              {Object.entries(run.result_summary.recommendedParams).map(([key, value]) => {
+                const baseline = run.result_summary?.baselineParams?.[key];
+                if (baseline === value) return null;
+                return <div key={key} className="grid grid-cols-[1fr_auto_auto] gap-2 border-t border-border/30 py-1">
+                  <span className="break-words text-muted-foreground">{key.replace(/([A-Z])/g, " $1")}</span>
+                  <span className="font-mono text-muted-foreground">{String(baseline ?? "—")}</span>
+                  <span className="font-mono text-cyan-500">→ {String(value)}</span>
+                </div>;
+              })}
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">Recommendation only. This run did not change paper or live configuration.</p>
+          </details>
+        )}
+
         {/* Reject reason */}
         {run.reject_reason && (
           <div className="flex items-start gap-2 text-[11px] text-amber-500 bg-amber-500/5 border border-amber-500/10 rounded-md px-3 py-2">
@@ -185,16 +192,6 @@ function RunCard({ run, onRollback }: { run: OptimizerRun; onRollback?: (id: str
               </span>
             )}
           </div>
-          {run.auto_applied && onRollback && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onRollback(run.id)}
-              className="h-6 px-2 text-[10px] font-mono text-amber-500 hover:text-amber-400"
-            >
-              <RotateCcw className="w-3 h-3 mr-1" /> Rollback
-            </Button>
-          )}
         </div>
       </CardContent>
     </Card>
@@ -209,8 +206,8 @@ export default function Optimizer() {
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [trials, setTrials] = useState(30);
-  const [dryRun, setDryRun] = useState(false);
-  const [coreOnly, setCoreOnly] = useState(false);
+  const [coreOnly, setCoreOnly] = useState(true);
+  const [instrumentInput, setInstrumentInput] = useState("EUR/USD, GBP/USD");
 
   // ─── Fetch runs ───
   const fetchRuns = useCallback(async () => {
@@ -253,8 +250,9 @@ export default function Optimizer() {
         action: "start",
         source: "manual",
         trials,
-        dryRun,
+        dryRun: true,
         coreOnly,
+        instruments: instrumentInput.split(",").map(symbol => symbol.trim()).filter(Boolean).slice(0, 8),
       });
       toast({
         title: "Optimization started",
@@ -283,38 +281,6 @@ export default function Optimizer() {
     }
   };
 
-  // ─── Rollback ───
-  const handleRollback = async (runId: string) => {
-    try {
-      // Find the backup for this run
-      const { data: backups } = await supabase
-        .from("config_backups")
-        .select("id,config_id,config_snapshot")
-        .eq("backup_id", runId)
-        .limit(1);
-
-      if (!backups || backups.length === 0) {
-        toast({ title: "No backup found for this run", variant: "destructive" });
-        return;
-      }
-
-      const backup = backups[0];
-
-      // Write the backup config back
-      const { error } = await supabase
-        .from("bot_configs")
-        .update({ config_json: backup.config_snapshot as any })
-        .eq("id", backup.config_id);
-
-      if (error) throw error;
-
-      toast({ title: "Config rolled back successfully" });
-      fetchRuns();
-    } catch (err: any) {
-      toast({ title: "Rollback failed", description: err.message, variant: "destructive" });
-    }
-  };
-
   const activeRun = runs.find((r) => r.status === "running");
 
   return (
@@ -327,9 +293,9 @@ export default function Optimizer() {
             <Zap className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-lg font-bold">Autonomous Optimizer</h1>
+            <h1 className="text-lg font-bold">Canonical Strategy Research</h1>
             <p className="text-xs text-muted-foreground">
-              TPE-based config optimization with walk-forward validation
+              Research-only parameter recommendations with walk-forward validation
             </p>
           </div>
         </div>
@@ -350,6 +316,12 @@ export default function Optimizer() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Research pairs (maximum 8)</Label>
+            <Input value={instrumentInput} onChange={(event) => setInstrumentInput(event.target.value)} placeholder="EUR/USD, GBP/USD" className="h-9 font-mono text-xs" />
+            <p className="text-[10px] text-muted-foreground">Each candidate is replayed on this same pair universe and six-month window.</p>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {/* Trials */}
             <div className="space-y-1.5">
@@ -363,16 +335,12 @@ export default function Optimizer() {
                 className="h-8 font-mono"
               />
             </div>
-            {/* Toggles */}
-            <div className="flex items-end gap-4">
-              <div className="flex items-center gap-2">
-                <Switch id="dry-run" checked={dryRun} onCheckedChange={setDryRun} />
-                <Label htmlFor="dry-run" className="text-xs">Dry Run</Label>
-              </div>
+            <div className="flex items-end gap-3">
               <div className="flex items-center gap-2">
                 <Switch id="core-only" checked={coreOnly} onCheckedChange={setCoreOnly} />
-                <Label htmlFor="core-only" className="text-xs">Core Only</Label>
+                <Label htmlFor="core-only" className="text-xs">Focused search</Label>
               </div>
+              <Badge variant="outline" className="border-cyan-500/40 text-[10px] text-cyan-500">RESEARCH ONLY</Badge>
             </div>
             {/* Button */}
             <div className="flex items-end">
@@ -468,14 +436,14 @@ export default function Optimizer() {
           <Card>
             <CardContent className="py-12 text-center text-muted-foreground">
               <Zap className="w-8 h-8 mx-auto mb-3 opacity-30" />
-              <p className="text-sm">No optimization runs yet</p>
-              <p className="text-[10px] font-mono mt-1">Start your first run above or wait for the weekly cron</p>
+              <p className="text-sm">No research runs yet</p>
+              <p className="text-[10px] font-mono mt-1">Start a focused walk-forward comparison above</p>
             </CardContent>
           </Card>
         )}
 
         {runs.filter((r) => r.status !== "running").map((run) => (
-          <RunCard key={run.id} run={run} onRollback={handleRollback} />
+          <RunCard key={run.id} run={run} />
         ))}
       </div>
       </div>
