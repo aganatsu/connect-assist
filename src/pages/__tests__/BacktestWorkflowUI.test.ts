@@ -17,6 +17,9 @@ describe("Backtest canonical workflow UI", () => {
     expect(source).toContain("impulseEntryLifecycleMode");
     expect(source).toContain("canonicalScannerMode");
     expect(source).toContain("canonicalStructureMode");
+    expect(source).toContain("Game Plan Alignment");
+    expect(source).toContain("gamePlan?.enforcementMode");
+    expect(source).toContain("Hard - Final Block");
     expect(source).toContain("wait_retracement");
   });
 });
