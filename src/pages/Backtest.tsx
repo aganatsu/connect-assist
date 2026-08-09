@@ -164,6 +164,25 @@ const CLOSE_REASONS: Record<string, { label: string; color: string; icon: any }>
   circuit_breaker: { label: "Circuit Breaker", color: "text-destructive", icon: Shield },
 };
 
+const finiteResultNumber = (value: unknown, fallback = 0) => {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const fixedResult = (value: unknown, digits: number, fallback = "—") => {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(digits) : fallback;
+};
+const profitFactorLabel = (value: unknown, wins = 0, losses = 0) => {
+  if (value !== null && value !== undefined && value !== "") {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(parsed)) return parsed.toFixed(2);
+  }
+  return wins > 0 && losses === 0 ? "∞" : "—";
+};
+
+
 // C4: Local defaults removed. Config is now loaded from the canonical
 // bot-config Edge Function defaults endpoint on page load.
 // This ensures the backtest page always uses the same defaults as the scanner.
@@ -545,7 +564,7 @@ export default function Backtest() {
                 {results.dataSource?.mode === "mt5" ? "MT5 HISTORY" : "MARKET DATA PROVIDER"}
               </Badge>
               <Badge variant={results.stats.totalPnl >= 0 ? "default" : "destructive"} className="text-sm px-3 py-1">
-                {results.stats.totalTrades} trades | {results.stats.winRate.toFixed(1)}% WR | {formatMoney(results.stats.totalPnl, true)}
+                {results.stats.totalTrades} trades | {fixedResult(results.stats.winRate, 1, "0.0")}% WR | {formatMoney(results.stats.totalPnl, true)}
               </Badge>
             </div>
           )}
@@ -1475,18 +1494,18 @@ export default function Backtest() {
               })()}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
                 {[
-                  { label: "Total Trades", value: results.stats.totalTrades, sub: `${results.stats.tradesPerMonth.toFixed(1)}/mo` },
-                  { label: "Win Rate", value: `${results.stats.winRate.toFixed(1)}%`, color: results.stats.winRate >= 50 ? "text-success" : "text-destructive", sub: `${results.stats.wins}W / ${results.stats.losses}L` },
-                  { label: "Net P&L", value: formatMoney(results.stats.totalPnl, true), color: results.stats.totalPnl >= 0 ? "text-success" : "text-destructive", sub: `${results.stats.totalPnlPips.toFixed(0)} pips` },
-                  { label: "Profit Factor", value: results.stats.profitFactor === Infinity ? "∞" : results.stats.profitFactor.toFixed(2), color: results.stats.profitFactor >= 1.5 ? "text-success" : results.stats.profitFactor >= 1 ? "text-warning" : "text-destructive" },
-                  { label: "Max Drawdown", value: `${results.stats.maxDrawdownPct.toFixed(1)}%`, color: "text-destructive", sub: formatMoney(-results.stats.maxDrawdown) },
-                  { label: "Sharpe Ratio", value: results.stats.sharpeRatio.toFixed(2), color: results.stats.sharpeRatio >= 1 ? "text-success" : "text-muted-foreground" },
-                  { label: "Avg RR", value: results.stats.avgRR.toFixed(2), color: results.stats.avgRR >= 1.5 ? "text-success" : "text-muted-foreground" },
+                  { label: "Total Trades", value: results.stats.totalTrades, sub: `${fixedResult(results.stats.tradesPerMonth, 1, "0.0")}/mo` },
+                  { label: "Win Rate", value: `${fixedResult(results.stats.winRate, 1, "0.0")}%`, color: results.stats.winRate >= 50 ? "text-success" : "text-destructive", sub: `${results.stats.wins}W / ${results.stats.losses}L` },
+                  { label: "Net P&L", value: formatMoney(results.stats.totalPnl, true), color: results.stats.totalPnl >= 0 ? "text-success" : "text-destructive", sub: `${fixedResult(results.stats.totalPnlPips, 0, "0")} pips` },
+                  { label: "Profit Factor", value: profitFactorLabel(results.stats.profitFactor, results.stats.wins, results.stats.losses), color: finiteResultNumber(results.stats.profitFactor) >= 1.5 ? "text-success" : finiteResultNumber(results.stats.profitFactor) >= 1 ? "text-warning" : "text-destructive" },
+                  { label: "Max Drawdown", value: `${fixedResult(results.stats.maxDrawdownPct, 1, "0.0")}%`, color: "text-destructive", sub: formatMoney(-results.stats.maxDrawdown) },
+                  { label: "Sharpe Ratio", value: fixedResult(results.stats.sharpeRatio, 2), color: results.stats.sharpeRatio >= 1 ? "text-success" : "text-muted-foreground" },
+                  { label: "Avg RR", value: fixedResult(results.stats.avgRR, 2), color: results.stats.avgRR >= 1.5 ? "text-success" : "text-muted-foreground" },
                   { label: "Expectancy", value: formatMoney(results.stats.expectancy, true), color: results.stats.expectancy >= 0 ? "text-success" : "text-destructive" },
                   { label: "Avg Win", value: formatMoney(results.stats.avgWin), color: "text-success" },
                   { label: "Avg Loss", value: formatMoney(-results.stats.avgLoss), color: "text-destructive" },
-                  { label: "Longs WR", value: `${results.stats.longsWinRate.toFixed(1)}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
-                  { label: "Shorts WR", value: `${results.stats.shortsWinRate.toFixed(1)}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
+                  { label: "Longs WR", value: `${fixedResult(results.stats.longsWinRate, 1, "0.0")}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
+                  { label: "Shorts WR", value: `${fixedResult(results.stats.shortsWinRate, 1, "0.0")}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
                   ...(results.stats.totalCommission > 0 ? [{ label: "Total Commission", value: formatMoney(-results.stats.totalCommission), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
                 ].map(s => (
                   <Card key={s.label} className="border-border/30">
@@ -1527,9 +1546,9 @@ export default function Backtest() {
                           <div className="text-[9px] text-muted-foreground">{f.startDate} → {f.endDate}</div>
                           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
                             <span>{f.trades} trades</span>
-                            <span className={f.winRate >= 50 ? 'text-success' : 'text-destructive'}>{f.winRate.toFixed(1)}% WR</span>
-                            <span>PF: {f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</span>
-                            <span>DD: {f.maxDrawdownPct.toFixed(1)}%</span>
+                            <span className={f.winRate >= 50 ? 'text-success' : 'text-destructive'}>{fixedResult(f.winRate, 1, "0.0")}% WR</span>
+                            <span>PF: {profitFactorLabel(f.profitFactor, f.wins, f.losses)}</span>
+                            <span>DD: {fixedResult(f.maxDrawdownPct, 1, "0.0")}%</span>
                           </div>
                         </div>
                       ))}
@@ -1556,12 +1575,12 @@ export default function Backtest() {
                               <td className="py-1 px-2 font-mono">{f.fold}</td>
                               <td className="py-1 px-2 text-muted-foreground">{f.startDate} → {f.endDate}</td>
                               <td className="py-1 px-2 text-right font-mono">{f.trades}</td>
-                              <td className={`py-1 px-2 text-right font-mono ${f.winRate >= 50 ? 'text-success' : 'text-destructive'}`}>{f.winRate.toFixed(1)}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.winRate >= 50 ? 'text-success' : 'text-destructive'}`}>{fixedResult(f.winRate, 1, "0.0")}%</td>
                               <td className={`py-1 px-2 text-right font-mono ${f.totalPnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(f.totalPnl, true)}</td>
-                              <td className={`py-1 px-2 text-right font-mono ${f.profitFactor >= 1.5 ? 'text-success' : f.profitFactor >= 1 ? 'text-warning' : 'text-destructive'}`}>{f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</td>
-                              <td className="py-1 px-2 text-right font-mono text-destructive">{f.maxDrawdownPct.toFixed(1)}%</td>
-                              <td className={`py-1 px-2 text-right font-mono ${f.sharpeRatio >= 1 ? 'text-success' : 'text-muted-foreground'}`}>{f.sharpeRatio.toFixed(2)}</td>
-                              <td className="py-1 px-2 text-right font-mono">{f.avgRR.toFixed(2)}</td>
+                              <td className={`py-1 px-2 text-right font-mono ${finiteResultNumber(f.profitFactor) >= 1.5 ? 'text-success' : finiteResultNumber(f.profitFactor) >= 1 ? 'text-warning' : 'text-destructive'}`}>{profitFactorLabel(f.profitFactor, f.wins, f.losses)}</td>
+                              <td className="py-1 px-2 text-right font-mono text-destructive">{fixedResult(f.maxDrawdownPct, 1, "0.0")}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.sharpeRatio >= 1 ? 'text-success' : 'text-muted-foreground'}`}>{fixedResult(f.sharpeRatio, 2)}</td>
+                              <td className="py-1 px-2 text-right font-mono">{fixedResult(f.avgRR, 2)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1725,19 +1744,19 @@ export default function Backtest() {
                         <div className="flex items-center justify-between text-[9px] text-muted-foreground">
                           <span>{t.entryTime.slice(5, 16).replace('T', ' ')}</span>
                           <span className={`${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span>
-                          <span>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)} pips</span>
+                          <span>{t.pnlPips >= 0 ? '+' : ''}{fixedResult(t.pnlPips, 1, "0")} pips</span>
                         </div>
                         {expandedTrade === t.id && (
                           <div className="mt-1 pt-1 border-t border-border/30 space-y-1">
                             <div className="grid grid-cols-2 gap-2 text-[9px]">
-                              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{t.entryPrice.toFixed(5)}</span></div>
-                              <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{t.exitPrice.toFixed(5)}</span></div>
-                              <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{t.size.toFixed(2)} lots</span></div>
-                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</span></div>
+                              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{fixedResult(t.entryPrice, 5, "0")}</span></div>
+                              <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{fixedResult(t.exitPrice, 5, "0")}</span></div>
+                              <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{fixedResult(t.size, 2, "0")} lots</span></div>
+                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
                             </div>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {t.factors.filter(f => f.present).map((f, fi) => (
-                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{f.weight.toFixed(1)}</span>
+                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{fixedResult(f.weight, 1, "0.0")}</span>
                               ))}
                             </div>
                           </div>
@@ -1775,9 +1794,9 @@ export default function Backtest() {
                               </td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.entryTime.slice(0, 16).replace('T', ' ')}</td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.exitTime.slice(0, 16).replace('T', ' ')}</td>
-                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</Badge></td>
+                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</Badge></td>
                               <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${t.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(t.pnl, true)}</td>
-                              <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)}</td>
+                              <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{fixedResult(t.pnlPips, 1, "0")}</td>
                               <td className="py-1.5 px-1.5"><span className={`text-[10px] ${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span></td>
                               <td className="py-1.5 px-1.5 text-center">{expandedTrade === t.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}</td>
                             </tr>
@@ -1785,9 +1804,9 @@ export default function Backtest() {
                               <tr key={`${t.id}-detail`}>
                                 <td colSpan={10} className="py-2 px-3 bg-secondary/10">
                                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
-                                    <div><span className="text-[9px] text-muted-foreground">Entry Price</span><p className="text-xs font-mono">{t.entryPrice.toFixed(5)}</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{t.exitPrice.toFixed(5)}</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Size</span><p className="text-xs font-mono">{t.size.toFixed(2)} lots</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Entry Price</span><p className="text-xs font-mono">{fixedResult(t.entryPrice, 5, "0")}</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{fixedResult(t.exitPrice, 5, "0")}</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Size</span><p className="text-xs font-mono">{fixedResult(t.size, 2, "0")} lots</p></div>
                                     <div><span className="text-[9px] text-muted-foreground">Hold Time</span><p className="text-xs font-mono">{((new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()) / 3600000).toFixed(1)}h</p></div>
                                   </div>
                                   <div>
@@ -1795,7 +1814,7 @@ export default function Backtest() {
                                     <div className="flex flex-wrap gap-1 mt-1">
                                       {t.factors.map((f, fi) => (
                                         <Badge key={fi} variant={f.present ? "default" : "outline"} className={`text-[9px] ${f.present ? '' : 'opacity-40'}`}>
-                                          {f.name} {f.present ? `+${f.weight.toFixed(1)}` : ''}
+                                          {f.name} {f.present ? `+${fixedResult(f.weight, 1, "0.0")}` : ''}
                                         </Badge>
                                       ))}
                                     </div>
