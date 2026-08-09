@@ -23,7 +23,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
             {config.risk?.positionSizingMethod === "fixed_lot" ? "FIXED" : config.risk?.positionSizingMethod === "volatility_adjusted" ? "VOL-ADJ" : "RISK %"}
           </Badge>
         }
-        defaultOpen={true}
+        defaultOpen={false}
       >
         <FieldGroup label="Starting Balance ($)" description="Configured paper-trading bankroll. Used as the base for all % calculations.">
           <Input
@@ -85,7 +85,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
           </FieldGroup>
         )}
 
-        <FieldGroup label="Standalone Size Multiplier" description="Position size multiplier for standalone entries (unified gate not passed). 1.0 = full size, 0.5 = half size." status={config.strategy?.requireUnifiedZone ? "unavailable" : "active"}>
+        <FieldGroup label="Standalone Size Multiplier" description={config.strategy?.requireUnifiedZone ? "Require Unified Zone is enabled, so standalone entries cannot occur and this multiplier is not used." : "Position size multiplier for standalone entries (unified gate not passed). 1.0 = full size, 0.5 = half size."} status={config.strategy?.requireUnifiedZone ? "unavailable" : "active"}>
           <div className="flex items-center gap-2">
             <Input type="number" value={config.risk?.standaloneMultiplier ?? 0.5} onChange={e => updateField('risk', 'standaloneMultiplier', Math.max(0.1, Math.min(1.0, parseFloat(e.target.value) || 0.5)))} step={0.1} min={0.1} max={1.0} className="h-9 text-sm" />
             <span className="text-[11px] text-muted-foreground font-mono">×{(config.risk?.standaloneMultiplier ?? 0.5).toFixed(1)}</span>
@@ -100,7 +100,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
         title="Risk Limits"
         subtitle="Exposure caps, concurrent trades, portfolio heat"
         icon={<AlertTriangle className="h-4 w-4" />}
-        defaultOpen={true}
+        defaultOpen={false}
       >
         <div className="grid grid-cols-2 gap-4">
           <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">

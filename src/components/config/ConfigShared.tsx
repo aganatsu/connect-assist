@@ -32,7 +32,7 @@ export interface ConfigTabProps {
   highlightedLabels?: Set<string>;
 }
 
-export function FeatureStateBadge({ state }: { state: FeatureState }) {
+export function FeatureStateBadge({ state, reason }: { state: FeatureState; reason?: string }) {
   const style = {
     active: "border-success/40 bg-success/10 text-success",
     shadow: "border-primary/40 bg-primary/10 text-primary",
@@ -40,11 +40,15 @@ export function FeatureStateBadge({ state }: { state: FeatureState }) {
     monitoring: "border-info-c/40 bg-info-c/10 text-info-c",
     inactive: "border-border bg-muted text-muted-foreground",
     disabled: "border-border bg-muted text-muted-foreground",
-    unavailable: "border-destructive/30 bg-destructive/10 text-destructive",
+    unavailable: "border-warning/40 bg-warning/10 text-warning",
   }[state];
 
   return (
-    <span className={`ml-2 inline-flex rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide ${style}`}>
+    <span
+      className={`ml-2 inline-flex rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide ${style}`}
+      title={reason || (state === "unavailable" ? "This control is not available in the current configuration." : undefined)}
+      aria-label={reason ? `${FEATURE_STATE_LABELS[state]}: ${reason}` : FEATURE_STATE_LABELS[state]}
+    >
       {FEATURE_STATE_LABELS[state]}
     </span>
   );
@@ -149,7 +153,7 @@ export function FieldGroup({
       <div>
         <label className="text-xs font-medium text-foreground">
           {label}
-          {status && <FeatureStateBadge state={status} />}
+          {status && <FeatureStateBadge state={status} reason={description} />}
         </label>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>
@@ -185,7 +189,7 @@ export function ToggleField({
       <div className="min-w-0">
         <span className="text-xs font-medium text-foreground">
           {label}
-          {status && <FeatureStateBadge state={status} />}
+          {status && <FeatureStateBadge state={status} reason={description} />}
         </span>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>

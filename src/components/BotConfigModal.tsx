@@ -352,20 +352,26 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               <Badge variant="destructive">NOT VERIFIED</Badge>
             </div>
           ) : effectiveRuntime ? (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
-                RUNTIME VERIFIED
-              </Badge>
-              <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
-              <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
-              <span>
-                Require sweep:{" "}
-                <strong className={effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "text-emerald-500" : "text-amber-500"}>
-                  {effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "ON" : "OFF"}
-                </strong>
-              </span>
-              <span>Config: {effectiveRuntime.provenance.effectiveConfigHash.slice(0, 12)}</span>
-            </div>
+            <details className="text-[11px] text-muted-foreground">
+              <summary className="flex cursor-pointer list-none items-center gap-2">
+                <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
+                  RUNTIME VERIFIED
+                </Badge>
+                <span>Saved settings are valid and ready for the scanner.</span>
+                <ChevronDown className="ml-auto h-3.5 w-3.5" />
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-border/60 pt-2">
+                <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
+                <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
+                <span>
+                  Require sweep:{" "}
+                  <strong className={effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "text-emerald-500" : "text-amber-500"}>
+                    {effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "ON" : "OFF"}
+                  </strong>
+                </span>
+                <span>Config: {effectiveRuntime.provenance.effectiveConfigHash.slice(0, 12)}</span>
+              </div>
+            </details>
           ) : (
             <div className="text-[11px] text-muted-foreground">
               {effectiveRuntimeLoading ? "Verifying runtime configuration…" : "Runtime verification pending"}
