@@ -42,6 +42,22 @@ const authority = {
   }],
 };
 
+Deno.test("nested child impulse zone can enter the frozen parent range lifecycle", () => {
+  const nestedAuthority = structuredClone(authority);
+  nestedAuthority.ranked[0].impulseId = "child-impulse-15m";
+  nestedAuthority.ranked[0].timeframe = "15m";
+  const state = discoverBacktestTradeLifecycle({
+    state: emptyBacktestTradeLifecycleState(), range,
+    authority: nestedAuthority, mode: "enforce", now: range.frozenAt,
+    expiresAt: "2026-08-08T12:00:00.000Z",
+    confirmationMethod: "choch", confirmationTimeframe: "5m",
+    refinementTimeframe: "1m",
+  });
+  assertEquals(state.lifecycle?.impulse.id, range.impulseId);
+  assertEquals(state.lifecycle?.activeCandidateId, "ob-1");
+  assertEquals(state.lifecycle?.candidates[0].timeframe, "15m");
+});
+
 Deno.test("backtest lifecycle persists and does not resurrect a terminal impulse", () => {
   let state = discoverBacktestTradeLifecycle({
     state: emptyBacktestTradeLifecycleState(), range, authority,
