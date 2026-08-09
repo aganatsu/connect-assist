@@ -39,7 +39,7 @@ export function advanceTradeLifecycle(input: {
     if (result.changed) { after = result.next; events.push(event); }
   };
   const at = input.candle.datetime;
-  if (after.status !== "active") return { contractVersion: TRADE_LIFECYCLE_AUTHORITY_VERSION, before, after, events, confirmationPlan, disposition: "terminal" };
+  if (after.status !== "active") return { contractVersion: TRADE_LIFECYCLE_AUTHORITY_VERSION, before, after, events, confirmationPlan, disposition: after.status === "entered" ? "entry_ready" : "terminal" };
   if (Date.parse(at) > Date.parse(after.impulse.expiresAt)) emit({ type: "expired", at });
   else if (impulseInvalidatedByClose(after, input.candle.close)) emit({ type: "impulse_invalidated", at, reason: `Close ${input.candle.close} failed protected impulse ${after.impulse.protectedLevel}` });
   else if (candidateFailedByClose(after, input.candle.close)) emit({ type: "candidate_failed", at, reason: `Close ${input.candle.close} failed active entry zone` });
