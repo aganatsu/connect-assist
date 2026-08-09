@@ -14,6 +14,7 @@ import {
   Trophy, Skull, AlertTriangle, Info, Target, Clock, Timer, XCircle,
   ArrowLeftRight, Layers, Box, Crosshair, Sparkles, Activity, Eye,
   Shield, Gauge, CalendarDays, Globe, Upload, Database, Trash2,
+  GitBranch, LockKeyhole, Route, CheckCircle2,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, Cell,
@@ -36,6 +37,21 @@ interface BacktestTrade {
   closeReason: string;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
+  goldenReplaySnapshot?: GoldenReplaySnapshot;
+}
+interface GoldenReplaySnapshot {
+  evaluatedAt?: string;
+  symbol?: string;
+  direction?: "long" | "short";
+  canonicalScannerState?: {
+    stage?: string;
+    reasonCode?: string;
+    explanation?: string;
+    authorities?: Array<{ role: string; passed: boolean | null; reasonCode?: string | null }>;
+  };
+  finalTradeAuthorization?: { authorized?: boolean; code?: string; reason?: string };
+  lifecycle?: { stage?: string; outcome?: string; reason?: string };
+  decision?: { execution?: { eligible?: boolean; entryPrice?: number } };
 }
 interface BacktestStats {
   totalTrades: number; wins: number; losses: number; winRate: number;
@@ -99,6 +115,11 @@ interface BacktestResponse {
       worstFold: { fold: number; pnl: number; winRate: number } | null;
       verdict: "robust" | "moderate" | "fragile";
     };
+  };
+  goldenReplay?: {
+    contractVersion: string;
+    snapshotCount: number;
+    snapshots: GoldenReplaySnapshot[];
   };
   zoneLocalReplay?: {
     contractVersion: string;
@@ -229,7 +250,7 @@ export default function Backtest() {
 
   // UI state
   const [showConfig, setShowConfig] = useState(true);
-  const [configTab, setConfigTab] = useState("strategy");
+  const [configTab, setConfigTab] = useState("workflow");
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [progressPct, setProgressPct] = useState(0);
@@ -315,11 +336,12 @@ export default function Backtest() {
 
   // Config update helper
   const updateConfig = useCallback((section: string, field: string, value: any) => {
+    if (useCurrentConfig) return;
     setConfig(prev => ({
       ...prev,
       [section]: { ...(prev as any)[section], [field]: value },
     }));
-  }, []);
+  }, [useCurrentConfig]);
 
   const toggleSymbol = useCallback((sym: string) => {
     setSelectedSymbols(prev => prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]);
@@ -484,13 +506,37 @@ export default function Backtest() {
     }));
   }, [results]);
 
+  const lifecycleSummary = useMemo(() => {
+    const snapshots = results?.goldenReplay?.snapshots ?? [];
+    const counts: Record<string, number> = {};
+    for (const snapshot of snapshots) {
+      const stage = snapshot.canonicalScannerState?.stage ||
+        snapshot.lifecycle?.stage || "unavailable";
+      counts[stage] = (counts[stage] || 0) + 1;
+    }
+    return { snapshots, counts };
+  }, [results]);
+
+  const effectiveAuthority = useMemo(() => {
+    if (!config) return [];
+    return [
+      ["Trade decision", config.strategy?.singleOwnershipMode ?? "observe"],
+      ["Scanner workflow", config.strategy?.canonicalScannerMode ?? "observe"],
+      ["Impulse & zones", config.strategy?.impulseEntryLifecycleMode ?? "observe"],
+      ["Market structure", config.strategy?.canonicalStructureMode ?? "observe"],
+      ["Premium / discount", config.strategy?.dealingRangeMode ?? "avoid_wrong_side"],
+      ["Confirmation", config.entry?.confirmationMethod ?? "choch"],
+      ["After CHoCH", config.entry?.afterChochMode ?? "confirmation_close"],
+    ];
+  }, [config]);
+
   // ─── Render ──────────────────────────────────────────────────────────
   return (
     <AppShell>
       <div className="space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold flex items-center gap-2 font-mono">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2 font-mono">
             <FlaskConical className="h-6 w-6 text-cyan" /> BACKTEST ENGINE
           </h1>
           {results && (
@@ -512,9 +558,9 @@ export default function Backtest() {
           <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowConfig(!showConfig)}>
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">
-                <Settings2 className="h-4 w-4 text-cyan" /> Configuration
+                <Settings2 className="h-4 w-4 text-cyan" /> Backtest Configuration
                 <span className="text-[10px] text-muted-foreground font-normal ml-2">
-                  {useCurrentConfig ? "(using live bot config)" : "(custom)"}
+                  {useCurrentConfig ? "Live config snapshot" : "Custom test config"}
                 </span>
               </CardTitle>
               {showConfig ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -576,7 +622,7 @@ export default function Backtest() {
               </div>
 
               {/* Row 1: Date Range + Balance + Style + Run */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <div>
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Start Date</label>
                   <input type="date" value={startDate} max={endDate} onChange={e => setStartDate(e.target.value)}
@@ -648,7 +694,7 @@ export default function Backtest() {
                 <Separator orientation="vertical" className="h-5" />
                 <div className="flex items-center gap-2">
                   <Switch checked={useCurrentConfig} onCheckedChange={setUseCurrentConfig} className="scale-90" />
-                  <span className="text-[10px] text-muted-foreground">Use live bot config</span>
+                  <span className="text-[10px] text-muted-foreground">Use live bot configuration</span>
                 </div>
                 <Separator orientation="vertical" className="h-5" />
                 <div className="flex items-center gap-2">
@@ -673,23 +719,60 @@ export default function Backtest() {
                 </div>
               )}
 
+              <div className="border border-border/70 bg-secondary/20 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="flex items-center gap-1.5 text-xs font-semibold"><LockKeyhole className="h-3.5 w-3.5 text-cyan" /> Effective Entry Authority</p>
+                    <p className="text-[10px] text-muted-foreground">Exact authority modes submitted with this run.</p>
+                  </div>
+                  {useCurrentConfig && <Badge variant="outline" className="w-fit text-[9px]">READ ONLY · LIVE SNAPSHOT</Badge>}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-px bg-border sm:grid-cols-4 xl:grid-cols-7">
+                  {effectiveAuthority.map(([label, value]) => <div key={label} className="min-w-0 bg-background px-2 py-2">
+                    <p className="truncate text-[8px] uppercase text-muted-foreground">{label}</p>
+                    <p className="truncate text-[10px] font-semibold capitalize">{String(value).replaceAll("_", " ")}</p>
+                  </div>)}
+                </div>
+                {useCurrentConfig && <p className="mt-2 text-[10px] text-muted-foreground">Turn off <strong>Use live bot configuration</strong> to edit test-only settings.</p>}
+              </div>
+
               <Separator />
 
               {/* Config Tabs */}
               <Tabs value={configTab} onValueChange={setConfigTab}>
                 <TabsList className="bg-secondary/50 border border-border flex-wrap h-auto gap-0.5 p-1">
-                  <TabsTrigger value="strategy" className="text-[10px] gap-1 h-7"><Crosshair className="h-3 w-3" /> Strategy</TabsTrigger>
+                  <TabsTrigger value="workflow" className="text-[10px] gap-1 h-7"><Route className="h-3 w-3" /> ICT Workflow</TabsTrigger>
                   <TabsTrigger value="risk" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Risk</TabsTrigger>
-                  <TabsTrigger value="entry_exit" className="text-[10px] gap-1 h-7"><Target className="h-3 w-3" /> Entry/Exit</TabsTrigger>
+                  <TabsTrigger value="entry_exit" className="text-[10px] gap-1 h-7"><Target className="h-3 w-3" /> Management</TabsTrigger>
                   <TabsTrigger value="sessions" className="text-[10px] gap-1 h-7"><Clock className="h-3 w-3" /> Sessions</TabsTrigger>
-                  <TabsTrigger value="protection" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Protection</TabsTrigger>
+                  <TabsTrigger value="protection" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Safety</TabsTrigger>
+                  <TabsTrigger value="strategy" className="text-[10px] gap-1 h-7"><Gauge className="h-3 w-3" /> Diagnostics</TabsTrigger>
                   <TabsTrigger value="opening_range" className="text-[10px] gap-1 h-7"><Activity className="h-3 w-3" /> Opening Range</TabsTrigger>
                   <TabsTrigger value="instruments" className="text-[10px] gap-1 h-7"><Globe className="h-3 w-3" /> Instruments</TabsTrigger>
                 </TabsList>
 
-                {/* ── Strategy Tab ── */}
+
+                <TabsContent value="workflow" className="mt-3 space-y-4">
+                  <SectionHeader title="ICT Trade Workflow" description="These settings own whether a historical setup can advance from discovery to entry" icon={GitBranch} />
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <SelectField label="Trade Decision Authority" value={config.strategy?.singleOwnershipMode === "enforce_live" ? "enforce" : (config.strategy?.singleOwnershipMode ?? "observe")} options={[{ value: "observe", label: "Observe" }, { value: "enforce", label: "Enforce" }]} onChange={v => updateConfig("strategy", "singleOwnershipMode", v)} />
+                    <SelectField label="ICT Scanner Workflow" value={config.strategy?.canonicalScannerMode ?? "observe"} options={[{ value: "observe", label: "Observe" }, { value: "enforce", label: "Enforce" }]} onChange={v => updateConfig("strategy", "canonicalScannerMode", v)} />
+                    <SelectField label="Impulse & Entry Zones" value={config.strategy?.impulseEntryLifecycleMode ?? "observe"} options={[{ value: "off", label: "Off" }, { value: "observe", label: "Observe" }, { value: "enforce", label: "Enforce" }]} onChange={v => updateConfig("strategy", "impulseEntryLifecycleMode", v)} />
+                    <SelectField label="Market Structure Authority" value={config.strategy?.canonicalStructureMode ?? "observe"} options={[{ value: "observe", label: "Observe" }, { value: "enforce", label: "Enforce" }]} onChange={v => updateConfig("strategy", "canonicalStructureMode", v)} />
+                    <SelectField label="Premium/Discount Entry Rule" value={config.strategy?.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Block Wrong-Side Entries" }, { value: "strict_value", label: "Require Discount Longs / Premium Shorts" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
+                    <SelectField label="Entry Confirmation" value={config.entry?.confirmationMethod ?? "choch"} options={[{ value: "choch", label: "MSS / CHoCH / Reversal Candle" }, { value: "indicators", label: "Indicator Consensus" }, { value: "choch_and_indicators", label: "Structure + Indicators" }]} onChange={v => updateConfig("entry", "confirmationMethod", v)} />
+                    <SelectField label="After CHoCH" value={config.entry?.afterChochMode ?? "confirmation_close"} options={[{ value: "confirmation_close", label: "Enter at CHoCH Close" }, { value: "observe_retracement", label: "Observe FVG / OB Retracement" }, { value: "wait_retracement", label: "Wait for FVG / OB Retracement" }]} onChange={v => updateConfig("entry", "afterChochMode", v)} />
+                    {(config.entry?.afterChochMode === "observe_retracement" || config.entry?.afterChochMode === "wait_retracement") && <FieldRow label="Retracement Expiry (minutes)"><input type="number" value={config.entry?.afterChochExpiryMinutes ?? 30} min={5} max={240} step={5} onChange={e => updateConfig("entry", "afterChochExpiryMinutes", Math.max(5, Number(e.target.value) || 30))} className="w-full border border-border bg-secondary px-2 py-1.5 text-xs" /></FieldRow>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4 xl:grid-cols-7">
+                    {["HTF bias", "Frozen impulse", "Entry zone", "Liquidity", "Confirmation", "Final safety", "Entry"].map((step, index) => <div key={step} className="bg-background px-2 py-3 text-center"><span className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded-full border border-cyan/50 text-[9px] text-cyan">{index + 1}</span><p className="text-[9px] font-medium">{step}</p></div>)}
+                  </div>
+                </TabsContent>
+
+                {/* ── Diagnostic Factors Tab ── */}
                 <TabsContent value="strategy" className="mt-3 space-y-3">
-                  <SectionHeader title="Confluence Factors" description="Toggle each SMC factor on/off to test its impact on performance" icon={Crosshair} />
+                  <div className="border border-warning/30 bg-warning/5 p-3"><p className="flex items-center gap-1.5 text-xs font-semibold text-warning"><Info className="h-3.5 w-3.5" /> Diagnostic scoring only</p><p className="mt-1 text-[10px] text-muted-foreground">Legacy percentages and factor scores explain context. They do not replace the ICT workflow authority.</p></div>
+                  <SectionHeader title="Legacy Confluence Diagnostics" description="Measure factor correlation without treating the score as entry authority" icon={Gauge} />
                   <FieldRow label="Min Confluence Score" description="Minimum percentage score to trigger a trade">
                     <div className="flex items-center gap-3">
                       <Slider value={[config.strategy.confluenceThreshold]} onValueChange={v => updateConfig("strategy", "confluenceThreshold", v[0])}
@@ -719,7 +802,6 @@ export default function Backtest() {
                   <div className="grid grid-cols-2 gap-2">
                     <Toggle label="Require HTF Bias" description="Only trade in direction of daily bias" checked={config.strategy.requireHTFBias} onChange={v => updateConfig("strategy", "requireHTFBias", v)} />
                     <Toggle label="HTF Bias Hard Veto" description="Hard block: no ranging exception" checked={config.strategy.htfBiasHardVeto} onChange={v => updateConfig("strategy", "htfBiasHardVeto", v)} />
-                    <SelectField label="Premium/Discount Entry Rule" value={config.strategy.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Block Wrong-Side Entries" }, { value: "strict_value", label: "Require Discount Longs / Premium Shorts" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
                   </div>
                 </TabsContent>
 
@@ -1008,6 +1090,7 @@ export default function Backtest() {
               <div className="flex items-center gap-3">
                 <Loader2 className="h-5 w-5 animate-spin text-cyan flex-shrink-0" />
                 <div className="flex-1">
+                  <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Historical data processing</p>
                   <p className="text-sm font-medium">{progress || "Processing..."}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {activeRunId ? `Run ID: ${activeRunId.slice(0, 8)}...` : "Submitting..."}
@@ -1035,9 +1118,9 @@ export default function Backtest() {
                   <XCircle className="h-3 w-3 mr-1" /> Cancel
                 </Button>
               </div>
-              <div className="w-full bg-secondary/50 rounded-full h-2 overflow-hidden">
+              <div className="h-2 w-full overflow-hidden bg-secondary/50">
                 <div
-                  className="h-full bg-cyan rounded-full transition-all duration-500 ease-out"
+                  className="h-full bg-cyan transition-all duration-500 ease-out"
                   style={{ width: `${Math.max(2, progressPct)}%` }}
                 />
               </div>
@@ -1357,6 +1440,7 @@ export default function Backtest() {
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="bg-secondary/50 border border-border">
               <TabsTrigger value="overview" className="text-xs gap-1"><BarChart3 className="h-3 w-3" /> Overview</TabsTrigger>
+              <TabsTrigger value="lifecycle" className="text-xs gap-1"><Route className="h-3 w-3" /> Lifecycle</TabsTrigger>
               <TabsTrigger value="trades" className="text-xs gap-1"><ListChecks className="h-3 w-3" /> Trades</TabsTrigger>
               <TabsTrigger value="factors" className="text-xs gap-1"><Zap className="h-3 w-3" /> Factors</TabsTrigger>
               <TabsTrigger value="gates" className="text-xs gap-1"><ShieldCheck className="h-3 w-3" /> Gates</TabsTrigger>
@@ -1566,6 +1650,56 @@ export default function Backtest() {
                   </CardContent>
                 </Card>
               </div>
+            </TabsContent>
+
+            <TabsContent value="lifecycle" className="mt-4 space-y-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-sm"><Route className="h-4 w-4 text-cyan" /> Canonical Trade Lifecycle</CardTitle>
+                  <p className="text-[10px] text-muted-foreground">Stages recorded by the engine. These are separate from file-processing progress.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                    {[
+                      ["watching", "Watching"], ["at_poi", "At zone"],
+                      ["awaiting_liquidity", "Liquidity"], ["awaiting_confirmation", "Confirmation"],
+                      ["awaiting_retracement", "Retracement"], ["authorized", "Authorized"],
+                      ["entered", "Entered"],
+                    ].map(([stage, label]) => <div key={stage} className="border border-border/60 px-3 py-3">
+                      <p className="text-[9px] uppercase text-muted-foreground">{label}</p>
+                      <p className="mt-1 font-mono text-xl font-bold">{lifecycleSummary.counts[stage] ?? 0}</p>
+                    </div>)}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[["blocked", "Blocked"], ["invalidated", "Invalidated"], ["expired", "Expired"], ["unavailable", "Legacy / unavailable"]].map(([stage, label]) => <div key={stage} className="flex items-center justify-between border border-border/50 px-3 py-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono font-semibold">{lifecycleSummary.counts[stage] ?? 0}</span></div>)}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Decision Evidence</CardTitle></CardHeader>
+                <CardContent>
+                  {lifecycleSummary.snapshots.length === 0 ? <div className="border border-dashed border-border py-10 text-center"><Info className="mx-auto mb-2 h-5 w-5 text-muted-foreground" /><p className="text-xs text-muted-foreground">This run contains no canonical lifecycle snapshots. Run a new backtest after deploying the updated engine.</p></div> : <div className="max-h-[520px] space-y-1.5 overflow-y-auto">
+                    {[...lifecycleSummary.snapshots].reverse().map((snapshot, index) => {
+                      const state = snapshot.canonicalScannerState;
+                      const authorization = snapshot.finalTradeAuthorization;
+                      return <div key={`${snapshot.evaluatedAt}-${index}`} className="border border-border/60 p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replaceAll("_", " ") || snapshot.lifecycle?.stage || "Recorded"}</Badge>
+                            <span className="truncate font-mono text-xs">{snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}</span>
+                          </div>
+                          <span className="text-[9px] text-muted-foreground">{snapshot.evaluatedAt ? new Date(snapshot.evaluatedAt).toLocaleString() : "Time unavailable"}</span>
+                        </div>
+                        <p className="mt-2 text-[10px]">{state?.explanation || authorization?.reason || snapshot.lifecycle?.reason || "Decision evidence recorded"}</p>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {state?.authorities?.map(authority => <span key={authority.role} className={`border px-1.5 py-0.5 text-[8px] uppercase ${authority.passed === false ? "border-destructive/40 text-destructive" : authority.passed === true ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>{authority.role.replaceAll("_", " ")}</span>)}
+                          {authorization?.code && <span className={`border px-1.5 py-0.5 text-[8px] uppercase ${authorization.authorized ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>Final: {authorization.code.replaceAll("_", " ")}</span>}
+                        </div>
+                      </div>;
+                    })}
+                  </div>}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {/* ── Trades Tab ── */}
