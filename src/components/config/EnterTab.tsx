@@ -204,7 +204,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         title="Legacy Scores and Filters"
         subtitle="Diagnostic percentages, factor groups, and legacy filters"
         icon={<Target className="h-4 w-4" />}
-        defaultOpen={true}
+        defaultOpen={false}
       >
         <FieldGroup label="Confluence Threshold (%)" description="Minimum score percentage to take a trade">
           <div className="flex items-center gap-4">
@@ -619,22 +619,22 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Quality</p>
           <div className="grid grid-cols-2 gap-3">
-            <FieldGroup label="Quality Threshold (0-100)" status={impulseZoneAvailable ? "active" : "unavailable"}>
+            <FieldGroup label="Quality Threshold (0-100)" description={impulseZoneAvailable ? undefined : "Enable Require Valid POI; this setting is not used while zones are informational."} status={impulseZoneAvailable ? "active" : "unavailable"}>
               <div className="flex items-center gap-3">
                 <Slider value={[config.strategy?.zoneQualityThreshold ?? 40]} onValueChange={v => updateField('strategy', 'zoneQualityThreshold', v[0])} min={0} max={100} step={5} className="flex-1" />
                 <span className="text-[11px] font-mono w-8 text-right">{config.strategy?.zoneQualityThreshold ?? 40}</span>
               </div>
             </FieldGroup>
-            <FieldGroup label="Max Age (bars)" status={impulseZoneAvailable ? "active" : "unavailable"}>
+            <FieldGroup label="Max Age (bars)" description={impulseZoneAvailable ? undefined : "Enable Require Valid POI; this setting is not used while zones are informational."} status={impulseZoneAvailable ? "active" : "unavailable"}>
               <Input type="number" value={config.strategy?.zoneMaxAgeBars ?? 200} onChange={e => updateField('strategy', 'zoneMaxAgeBars', parseInt(e.target.value) || 0)} min={0} max={1000} step={50} className="h-9 text-sm" />
             </FieldGroup>
-            <FieldGroup label="Min Body Ratio" status={impulseZoneAvailable ? "active" : "unavailable"}>
+            <FieldGroup label="Min Body Ratio" description={impulseZoneAvailable ? undefined : "Enable Require Valid POI; this setting is not used while zones are informational."} status={impulseZoneAvailable ? "active" : "unavailable"}>
               <div className="flex items-center gap-3">
                 <Slider value={[config.strategy?.zoneMinBodyRatio ?? 0.5]} onValueChange={v => updateField('strategy', 'zoneMinBodyRatio', v[0])} min={0.1} max={0.9} step={0.05} className="flex-1" />
                 <span className="text-[11px] font-mono w-8 text-right">{(config.strategy?.zoneMinBodyRatio ?? 0.5).toFixed(2)}</span>
               </div>
             </FieldGroup>
-            <FieldGroup label="Min Displacement (ATR)" status={impulseZoneAvailable ? "active" : "unavailable"}>
+            <FieldGroup label="Min Displacement (ATR)" description={impulseZoneAvailable ? undefined : "Enable Require Valid POI; this setting is not used while zones are informational."} status={impulseZoneAvailable ? "active" : "unavailable"}>
               <div className="flex items-center gap-3">
                 <Slider value={[config.strategy?.zoneMinDisplacementATR ?? 1.5]} onValueChange={v => updateField('strategy', 'zoneMinDisplacementATR', v[0])} min={0.5} max={5.0} step={0.25} className="flex-1" />
                 <span className="text-[11px] font-mono w-8 text-right">{config.strategy?.zoneMinDisplacementATR ?? 1.5}×</span>
@@ -654,20 +654,20 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
       >
         <ToggleField label="Pending Zone Orders" description="Place limit orders at zone instead of waiting for market fill" checked={pendingZoneOrdersEnabled} onChange={v => updateField('entry', 'pendingZoneOrders', v)} status={pendingZoneOrdersEnabled ? "active" : "disabled"} />
         <ToggleField label="Market Fill at Zone" description="Enter at market when price touches zone" checked={marketFillEnabled} onChange={v => updateField('entry', 'marketFillAtZone', v)} status={marketFillEnabled ? "active" : "disabled"} />
-        <FieldGroup label="Zone Proximity (ATR)" description="How close price must be to zone for entry" status={marketFillEnabled ? "active" : "unavailable"}>
+        <FieldGroup label="Zone Proximity (ATR)" description={marketFillEnabled ? "How close price must be to zone for entry" : "Enable Market Fill at Zone; proximity is not used when market-fill entry is off."} status={marketFillEnabled ? "active" : "unavailable"}>
           <div className="flex items-center gap-4">
             <Slider value={[config.entry?.zoneProximityATR ?? 0.30]} onValueChange={v => updateField('entry', 'zoneProximityATR', v[0])} min={0.05} max={1.0} step={0.05} className="flex-1" />
             <span className="text-sm font-mono font-bold w-12 text-right">{(config.entry?.zoneProximityATR ?? 0.30).toFixed(2)}×</span>
           </div>
         </FieldGroup>
-        <FieldGroup label="Zone Watch Expiry (hours)" description="How long a pending zone order remains eligible before expiring" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+        <FieldGroup label="Zone Watch Expiry (hours)" description={pendingZoneOrdersEnabled ? "How long a pending zone order remains eligible before expiring" : "Enable Pending Zone Orders; no pending-zone expiry exists while that route is off."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
           <Input type="number" value={config.entry?.zoneWatchExpiry ?? 4} onChange={e => updateField('entry', 'zoneWatchExpiry', parseInt(e.target.value) || 4)} min={1} max={48} step={1} className="h-9 text-sm" />
         </FieldGroup>
         <FieldGroup label="Cooldown (minutes)" description="Minimum time between trades on same pair">
           <Input type="number" value={config.entry?.cooldownMinutes ?? 60} onChange={e => updateField('entry', 'cooldownMinutes', parseInt(e.target.value) || 0)} min={0} max={480} step={15} className="h-9 text-sm" />
         </FieldGroup>
         <div className="border-t border-border pt-3 space-y-3">
-          <FieldGroup label="Entry Confirmation" description="How entry is confirmed once price reaches zone" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+          <FieldGroup label="Entry Confirmation" description={pendingZoneOrdersEnabled ? "How entry is confirmed once price reaches zone" : "Enable Pending Zone Orders to configure confirmation for that route; market entries use their active authority contract."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
             <Select value={config.entry?.confirmationMethod ?? "choch"} onValueChange={v => updateField('entry', 'confirmationMethod', v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -679,7 +679,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </FieldGroup>
           {(config.entry?.confirmationMethod ?? "choch") !== "indicators" && (
             <>
-              <FieldGroup label="After CHoCH" description="Choose whether CHoCH fills immediately or waits for its displacement FVG/OB retracement" status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+              <FieldGroup label="After CHoCH" description={pendingZoneOrdersEnabled ? "Choose whether CHoCH fills immediately or waits for its displacement FVG/OB retracement" : "Enable Pending Zone Orders; post-CHoCH retracement does not control a disabled pending route."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
                 <Select value={config.entry?.afterChochMode ?? "confirmation_close"} onValueChange={v => updateField("entry", "afterChochMode", v)}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>

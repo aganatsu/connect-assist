@@ -216,7 +216,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         subtitle="Which pairs the bot scans"
         icon={<Globe className="h-4 w-4" />}
         badge={<StatusBadge count={activePairCount} total={totalPairs} label="pairs" />}
-        defaultOpen={true}
+        defaultOpen={false}
       >
         {INSTRUMENT_GROUPS.map(group => (
           <div key={group.key} className="space-y-2">
@@ -718,7 +718,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Bias Strength <FeatureStateBadge state="unavailable" /></Label>
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Bias Strength <FeatureStateBadge state="unavailable" reason="The current HTF authority uses the resolved Trading Style policy; this saved threshold is not read by the runtime." /></Label>
                       <Slider value={[strat.ictHTFMinBias ?? 0.6]} onValueChange={() => {}} min={0.3} max={1.0} step={0.05} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictHTFMinBias ?? 0.6).toFixed(2)}</span>
                     </div>
@@ -740,7 +740,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Sweep (pips) <FeatureStateBadge state="unavailable" /></Label>
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Sweep (pips) <FeatureStateBadge state="unavailable" reason="The Judas detector currently uses its compiled qualification policy; this saved threshold is not read by the runtime." /></Label>
                       <Input type="number" value={strat.ictJudasMinSweepPips ?? 5} onChange={() => {}} step={1} min={1} max={30} className="h-7 text-xs w-20" disabled />
                     </div>
                     <p className="text-[9px] text-muted-foreground">Minimum pip distance the Judas sweep must travel past the liquidity level to count as a valid sweep.</p>
@@ -750,7 +750,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Body Ratio <FeatureStateBadge state="unavailable" /></Label>
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Body Ratio <FeatureStateBadge state="unavailable" reason="The FVG authority currently owns candle qualification; this legacy fine-tuning value is not read by the runtime." /></Label>
                       <Slider value={[strat.ictFVGMinBodyRatio ?? 0.5]} onValueChange={() => {}} min={0.2} max={0.9} step={0.05} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictFVGMinBodyRatio ?? 0.5).toFixed(2)}</span>
                     </div>
@@ -761,7 +761,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">KZ Buffer (min) <FeatureStateBadge state="unavailable" /></Label>
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">KZ Buffer (min) <FeatureStateBadge state="unavailable" reason="Kill Zone boundaries currently come from the shared session authority; a per-config buffer is not implemented." /></Label>
                       <Input type="number" value={strat.ictKZBufferMinutes ?? 5} onChange={() => {}} step={1} min={0} max={30} className="h-7 text-xs w-20" disabled />
                     </div>
                     <p className="text-[9px] text-muted-foreground">Minutes before/after Kill Zone boundaries that still count as "inside" the zone. 0 = exact boundaries only.</p>
@@ -869,7 +869,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Consolidation Threshold <FeatureStateBadge state="unavailable" /></Label>
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Consolidation Threshold <FeatureStateBadge state="unavailable" reason="This control is locked until its scale is reconciled with the engine signed regime score." /></Label>
                       <Slider value={[enhancements.consolidationThreshold ?? 4]} onValueChange={() => {}} min={2} max={8} step={1} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.consolidationThreshold ?? 4}</span>
                     </div>

@@ -15,7 +15,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         title="Stop Loss"
         subtitle="SL method, placement, and limits"
         icon={<ShieldAlert className="h-4 w-4" />}
-        defaultOpen={true}
+        defaultOpen={false}
       >
         <FieldGroup label="SL Method" description="How the stop loss is calculated">
           <Select value={config.exit?.stopLossMethod ?? config.exit?.slMethod ?? "structure"} onValueChange={v => { updateField('exit', 'stopLossMethod', v); updateField('exit', 'slMethod', v); }}>
@@ -61,7 +61,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         title="Take Profit"
         subtitle="TP method, R:R targets, multi-TP levels"
         icon={<Flag className="h-4 w-4" />}
-        defaultOpen={true}
+        defaultOpen={false}
       >
         <FieldGroup label="TP Method" description="How take profit is calculated">
           <Select value={config.exit?.takeProfitMethod ?? config.exit?.tpMethod ?? "rr_ratio"} onValueChange={v => { updateField('exit', 'takeProfitMethod', v); updateField('exit', 'tpMethod', v); }}>
