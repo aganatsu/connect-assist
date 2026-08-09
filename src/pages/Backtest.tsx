@@ -1202,11 +1202,12 @@ export default function Backtest() {
         {results && results.stats.totalTrades === 0 && results.diagnostics && (() => {
           const d = results.diagnostics!;
           const cfg = results.config;
-          const total = d.totalCandlesFetched || 0;
-          const evaluated = d.totalCandlesEvaluated;
-          const sessionPct = total > 0 ? Math.round((d.skippedSession / total) * 100) : 0;
-          const noDirPct = evaluated > 0 ? Math.round((d.skippedNoDirection / evaluated) * 100) : 0;
-          const scored = evaluated - d.skippedNoDirection; // candles that got a score
+          const processed = d.totalCandlesEvaluated || 0;
+          const weekdayBars = Math.max(0, processed - d.skippedWeekend);
+          const sessionPct = weekdayBars > 0 ? Math.round((d.skippedSession / weekdayBars) * 100) : 0;
+          const reachedAnalysis = Math.max(0, processed - d.skippedWeekend - d.skippedSession - d.skippedDay);
+          const noDirPct = reachedAnalysis > 0 ? Math.round((d.skippedNoDirection / reachedAnalysis) * 100) : 0;
+          const scored = Math.max(0, reachedAnalysis - d.skippedNoDirection); // candles that got a score
           const highScore = d.highestScoreSeen || 0;
           const threshold = cfg?.minConfluence || 55;
           const enabledFactors = d.enabledFactorCount || 0;
@@ -1243,8 +1244,8 @@ export default function Backtest() {
             advice.push({
               priority: 2,
               icon: "\u{1F570}\uFE0F",
-              title: `Session filter removed ${sessionPct}% of candles`,
-              detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${total.toLocaleString()} candles were outside these sessions.`,
+              title: `Session filter removed ${sessionPct}% of eligible weekday bars`,
+              detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${weekdayBars.toLocaleString()} weekday entry bars reaching the session filter were outside these sessions.`,
               action: `Enable more sessions to analyze more candles. Asian covers 8:00 PM–2:00 AM ET, London 2:00–8:30 AM ET, New York 8:30 AM–4:00 PM ET, Off-Hours 4:00–8:00 PM ET.`,
             });
           }
@@ -1304,7 +1305,7 @@ export default function Backtest() {
               icon: "\u{1F4CD}",
               title: "Impulse zone gate blocked entries",
               detail: `${(d.skippedImpulseNoZone || 0).toLocaleString()} candles had no valid zone; ${(d.skippedImpulseNotAtZone || 0).toLocaleString()} had a zone but price was not at it.`,
-              action: `Set Impulse Zone gate to Soft/Off for discovery runs, or keep it Hard when you only want exact zone-touch entries.`,
+              action: `Set Impulse & Entry Zones to Observe/Off for discovery runs, or keep it Enforce when you only want exact zone-touch entries.`,
             });
           }
 
@@ -1342,12 +1343,12 @@ export default function Backtest() {
           }
 
           // Advice 9: All candles filtered (nothing to analyze)
-          if (evaluated === 0 && total > 0) {
+          if (reachedAnalysis === 0 && processed > 0) {
             advice.push({
               priority: 0,
               icon: "\u26A0\uFE0F",
               title: "All candles were filtered out before analysis",
-              detail: `${total.toLocaleString()} candles were fetched but none survived the pre-analysis filters (weekend, session, day).`,
+              detail: `${processed.toLocaleString()} entry bars were processed but none survived the pre-analysis filters (weekend, session, day).`,
               action: `Your session + day filters are too restrictive. Enable more sessions or check that your date range includes weekdays.`,
             });
           }
@@ -1425,8 +1426,8 @@ export default function Backtest() {
                 {/* Row 1: Total candles in range */}
                 <div className="grid grid-cols-1 gap-2">
                   <div className="px-3 py-2 border rounded text-center border-border/40">
-                    <p className="text-[10px] text-muted-foreground">Historical Bars Loaded Across Timeframes</p>
-                    <p className="text-lg font-mono font-bold">{total.toLocaleString()}</p>
+                    <p className="text-[10px] text-muted-foreground">Entry Bars Processed</p>
+                    <p className="text-lg font-mono font-bold">{processed.toLocaleString()}</p>
                   </div>
                 </div>
                 {/* Row 2: Pre-filters */}
@@ -1445,9 +1446,9 @@ export default function Backtest() {
                 </div>
                 {/* Row 3: Candles analyzed */}
                 <div className="grid grid-cols-1 gap-2">
-                  <div className={`px-3 py-2 border rounded text-center ${evaluated === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
-                    <p className="text-[10px] text-muted-foreground">Candles Analyzed (survived filters)</p>
-                    <p className={`text-lg font-mono font-bold ${evaluated === 0 ? 'text-warning' : 'text-primary'}`}>{evaluated.toLocaleString()}</p>
+                  <div className={`px-3 py-2 border rounded text-center ${reachedAnalysis === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
+                    <p className="text-[10px] text-muted-foreground">Entry Bars Reaching Market Analysis</p>
+                    <p className={`text-lg font-mono font-bold ${reachedAnalysis === 0 ? 'text-warning' : 'text-primary'}`}>{reachedAnalysis.toLocaleString()}</p>
                   </div>
                 </div>
                 {/* Row 4: Analysis results */}
@@ -1468,7 +1469,7 @@ export default function Backtest() {
                 {/* Row 5: Final outcome */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
-                    { label: "Final Candidates", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
+                    { label: "Candidates Sent to Entry Gates", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
                     { label: "Trades Opened", value: d.tradesOpened, warn: d.tradesOpened === 0 },
                     { label: "Unsupported Symbol", value: d.skippedUnsupportedSymbol, warn: d.skippedUnsupportedSymbol > 0 },
                   ].map(item => (

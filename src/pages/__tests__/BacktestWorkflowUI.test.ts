@@ -23,6 +23,11 @@ describe("Backtest canonical workflow UI", () => {
     expect(source).toContain("Diagnostic Score");
     expect(source).toContain("Legacy Diagnostic Factors");
     expect(source).toContain("does not authorize trades");
+    expect(source).toContain("Entry Bars Processed");
+    expect(source).toContain("Entry Bars Reaching Market Analysis");
+    expect(source).toContain("Candidates Sent to Entry Gates");
+    expect(source).toContain("eligible weekday bars");
+    expect(source).not.toContain("Historical Bars Loaded Across Timeframes");
     expect(source).toContain("wait_retracement");
   });
 });

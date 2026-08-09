@@ -14,6 +14,7 @@ Deno.test("live and backtest apply the shared gate ownership boundary", async ()
     assertStringIncludes(source, "applyAuthorityOwnershipToGateResults({");
     assertStringIncludes(source, "_canonicalDealingRangeAvailable");
     assertStringIncludes(source, "final decision hierarchy owns authorization");
+    assert(!source.includes("directionVerdict && !gpGate.passed"));
   }
   for (const source of [live, backtest, pending]) {
     assertStringIncludes(source, "gamePlanEnabled:");
