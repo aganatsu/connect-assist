@@ -20,6 +20,9 @@ describe("Backtest canonical workflow UI", () => {
     expect(source).toContain("Game Plan Alignment");
     expect(source).toContain("gamePlan?.enforcementMode");
     expect(source).toContain("Hard - Final Block");
+    expect(source).toContain("Diagnostic Score");
+    expect(source).toContain("Legacy Diagnostic Factors");
+    expect(source).toContain("does not authorize trades");
     expect(source).toContain("wait_retracement");
   });
 });
