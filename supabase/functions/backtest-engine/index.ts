@@ -4614,14 +4614,61 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         activationEligible: false,
       };
     }
+    const fullResultTrades = allTrades.filter((trade) =>
+      !trade.id.includes("_partial")
+    );
+    const factorBreakdown: Record<string, {
+      appeared: number; wonWhen: number; lostWhen: number;
+    }> = {};
+    for (const trade of fullResultTrades) {
+      for (const factor of trade.factors || []) {
+        if (!factor.present) continue;
+        factorBreakdown[factor.name] ||= {
+          appeared: 0, wonWhen: 0, lostWhen: 0,
+        };
+        factorBreakdown[factor.name].appeared++;
+        if (trade.pnl > 0) factorBreakdown[factor.name].wonWhen++;
+        else factorBreakdown[factor.name].lostWhen++;
+      }
+    }
+    const gateBreakdown: Record<string, {
+      blocked: number; wouldHaveWon: number | null;
+      wouldHaveLost: number | null; outcomesAvailable: boolean;
+    }> = {};
+    for (const [reason, blocked] of Object.entries(
+      diagnostics.gateBlockReasons,
+    )) {
+      const code = normalizeRejectedGate(reason);
+      gateBreakdown[code] ||= {
+        blocked: 0, wouldHaveWon: null, wouldHaveLost: null,
+        outcomesAvailable: false,
+      };
+      gateBreakdown[code].blocked += blocked;
+    }
+    if (researchAnalytics) {
+      for (const [reason, evidence] of Object.entries(
+        researchAnalytics.gateEffectiveness,
+      )) {
+        const code = normalizeRejectedGate(reason);
+        gateBreakdown[code] ||= {
+          blocked: 0, wouldHaveWon: 0, wouldHaveLost: 0,
+          outcomesAvailable: true,
+        };
+        gateBreakdown[code].wouldHaveWon =
+          (gateBreakdown[code].wouldHaveWon || 0) + evidence.wouldHaveWon;
+        gateBreakdown[code].wouldHaveLost =
+          (gateBreakdown[code].wouldHaveLost || 0) + evidence.wouldHaveLost;
+        gateBreakdown[code].outcomesAvailable = true;
+      }
+    }
+
     const result = {
       stats,
       trades: allTrades.slice(0, maxTradesStored),
       equityCurve,
       diagnostics,
-      gateBreakdown: Object.fromEntries(
-        Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
-      ),
+      factorBreakdown,
+      gateBreakdown,
       stylePolicy,
       dataSource: {
         mode: historySource,

@@ -50,8 +50,11 @@ interface GoldenReplaySnapshot {
     authorities?: Array<{ role: string; passed: boolean | null; reasonCode?: string | null }>;
   };
   finalTradeAuthorization?: { authorized?: boolean; code?: string; reason?: string };
-  lifecycle?: { stage?: string; outcome?: string; reason?: string };
-  decision?: { execution?: { eligible?: boolean; entryPrice?: number } };
+  lifecycleEvidence?: { reason?: string | null };
+  decision?: {
+    lifecycle?: { stage?: string | null; outcome?: string | null };
+    execution?: { eligible?: boolean; entryPrice?: number };
+  };
 }
 interface BacktestStats {
   totalTrades: number; wins: number; losses: number; winRate: number;
@@ -68,7 +71,10 @@ interface BacktestResponse {
   equityCurve: { date: string; equity: number }[];
   stats: BacktestStats;
   factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }>;
-  gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>;
+  gateBreakdown: Record<string, {
+    blocked: number; wouldHaveWon: number | null; wouldHaveLost: number | null;
+    outcomesAvailable?: boolean;
+  }>;
   dataCoverage?: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }>;
   diagnostics?: {
     totalCandlesFetched: number;
@@ -488,9 +494,28 @@ export default function Backtest() {
     return Object.entries(groups).sort().map(([month, pnl]) => ({ month, pnl }));
   }, [results]);
 
+  const effectiveFactorBreakdown = useMemo(() => {
+    if (!results) return {};
+    if (Object.keys(results.factorBreakdown ?? {}).length > 0) {
+      return results.factorBreakdown;
+    }
+    const derived: BacktestResponse["factorBreakdown"] = {};
+    for (const trade of results.trades.filter((item) =>
+      !item.id.includes("_partial")
+    )) {
+      for (const factor of trade.factors ?? []) {
+        if (!factor.present) continue;
+        derived[factor.name] ||= { appeared: 0, wonWhen: 0, lostWhen: 0 };
+        derived[factor.name].appeared++;
+        if (trade.pnl > 0) derived[factor.name].wonWhen++;
+        else derived[factor.name].lostWhen++;
+      }
+    }
+    return derived;
+  }, [results]);
+
   const factorRadar = useMemo(() => {
-    if (!results?.factorBreakdown) return [];
-    return Object.entries(results.factorBreakdown)
+    return Object.entries(effectiveFactorBreakdown)
       .filter(([, v]) => v.appeared > 0)
       .map(([name, v]) => ({
         name: name.length > 15 ? name.slice(0, 14) + "…" : name,
@@ -498,7 +523,7 @@ export default function Backtest() {
         appearances: v.appeared,
       }))
       .sort((a, b) => b.appearances - a.appearances).slice(0, 12);
-  }, [results]);
+  }, [effectiveFactorBreakdown]);
 
   const equityCurveWithDD = useMemo(() => {
     if (!results?.equityCurve) return [];
@@ -529,8 +554,11 @@ export default function Backtest() {
     const snapshots = results?.goldenReplay?.snapshots ?? [];
     const counts: Record<string, number> = {};
     for (const snapshot of snapshots) {
-      const stage = snapshot.canonicalScannerState?.stage ||
-        snapshot.lifecycle?.stage || "unavailable";
+      const rawStage = snapshot.canonicalScannerState?.stage ||
+        snapshot.decision?.lifecycle?.stage || "unavailable";
+      const stage = rawStage === "position" ? "entered"
+        : rawStage === "gates" || rawStage === "final_authorization"
+        ? "blocked" : rawStage;
       counts[stage] = (counts[stage] || 0) + 1;
     }
     return { snapshots, counts };
@@ -1704,12 +1732,12 @@ export default function Backtest() {
                       return <div key={`${snapshot.evaluatedAt}-${index}`} className="border border-border/60 p-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
-                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replaceAll("_", " ") || snapshot.lifecycle?.stage || "Recorded"}</Badge>
+                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replaceAll("_", " ") || snapshot.decision?.lifecycle?.stage || "Recorded"}</Badge>
                             <span className="truncate font-mono text-xs">{snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}</span>
                           </div>
                           <span className="text-[9px] text-muted-foreground">{snapshot.evaluatedAt ? new Date(snapshot.evaluatedAt).toLocaleString() : "Time unavailable"}</span>
                         </div>
-                        <p className="mt-2 text-[10px]">{state?.explanation || authorization?.reason || snapshot.lifecycle?.reason || "Decision evidence recorded"}</p>
+                        <p className="mt-2 text-[10px]">{state?.explanation || authorization?.reason || snapshot.lifecycleEvidence?.reason || "Decision evidence recorded"}</p>
                         <div className="mt-2 flex flex-wrap gap-1">
                           {state?.authorities?.map(authority => <span key={authority.role} className={`border px-1.5 py-0.5 text-[8px] uppercase ${authority.passed === false ? "border-destructive/40 text-destructive" : authority.passed === true ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>{authority.role.replaceAll("_", " ")}</span>)}
                           {authorization?.code && <span className={`border px-1.5 py-0.5 text-[8px] uppercase ${authorization.authorized ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>Final: {authorization.code.replaceAll("_", " ")}</span>}
@@ -1876,7 +1904,7 @@ export default function Backtest() {
                           </tr>
                         </thead>
                         <tbody>
-                          {Object.entries(results.factorBreakdown ?? {}).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
+                          {Object.entries(effectiveFactorBreakdown).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
                             const wr = v.appeared > 0 ? (v.wonWhen / v.appeared) * 100 : 0;
                             return (
                               <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
@@ -1901,7 +1929,7 @@ export default function Backtest() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-cyan" /> Safety Gate Analytics</CardTitle>
-                  <p className="text-[10px] text-muted-foreground mt-1">Shows how many trades each gate blocked, and whether those blocked trades would have been winners or losers.</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Shows blocking frequency. Winner/loser accuracy is available only when counterfactual research was enabled for the run.</p>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-y-auto max-h-[400px]">
@@ -1917,14 +1945,19 @@ export default function Backtest() {
                       </thead>
                       <tbody>
                         {Object.entries(results.gateBreakdown ?? {}).sort(([, a], [, b]) => b.blocked - a.blocked).map(([name, v]) => {
-                          const accuracy = v.blocked > 0 ? (v.wouldHaveLost / v.blocked) * 100 : 0;
+                          const outcomesAvailable = v.outcomesAvailable === true &&
+                            v.wouldHaveWon !== null && v.wouldHaveLost !== null;
+                          const resolved = outcomesAvailable
+                            ? Number(v.wouldHaveWon) + Number(v.wouldHaveLost) : 0;
+                          const accuracy = resolved > 0
+                            ? (Number(v.wouldHaveLost) / resolved) * 100 : null;
                           return (
                             <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
-                              <td className="py-1.5 px-1.5">{name}</td>
+                              <td className="py-1.5 px-1.5 capitalize">{name.replaceAll("_", " ")}</td>
                               <td className="py-1.5 px-1.5 text-right font-mono">{v.blocked}</td>
-                              <td className="py-1.5 px-1.5 text-right font-mono text-warning">{v.wouldHaveWon}</td>
-                              <td className="py-1.5 px-1.5 text-right font-mono text-success">{v.wouldHaveLost}</td>
-                              <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${accuracy >= 60 ? 'text-success' : accuracy >= 40 ? 'text-warning' : 'text-destructive'}`}>{accuracy.toFixed(1)}%</td>
+                              <td className="py-1.5 px-1.5 text-right font-mono text-warning">{outcomesAvailable ? v.wouldHaveWon : "—"}</td>
+                              <td className="py-1.5 px-1.5 text-right font-mono text-success">{outcomesAvailable ? v.wouldHaveLost : "—"}</td>
+                              <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${accuracy === null ? "text-muted-foreground" : accuracy >= 60 ? "text-success" : accuracy >= 40 ? "text-warning" : "text-destructive"}`}>{accuracy === null ? "Not measured" : `${accuracy.toFixed(1)}%`}</td>
                             </tr>
                           );
                         })}
