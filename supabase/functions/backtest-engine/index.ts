@@ -235,7 +235,7 @@ import {
   detectZoneConfirmation,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
-import { evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
+import { applyAuthorityOwnershipToGateResults, evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { normalizeRejectedGate } from "../_shared/rejectedSetupLogger.ts";
 import {
   buildGoldenReplayRuntimeInputFingerprint,
@@ -1020,7 +1020,13 @@ function runBacktestSafetyGates(
     gates.push({ passed: false, reason: `ICT KZ BLOCKED: ${ictKZResult.reason}` });
   }
 
-  return gates;
+  return applyAuthorityOwnershipToGateResults({
+    gates,
+    requestedMode: config.singleOwnershipMode,
+    runtimeTarget: "paper",
+    canonicalRangeAvailable: analysis._canonicalDealingRangeAvailable === true,
+    normalizeCode: normalizeRejectedGate,
+  });
 }
 
 
@@ -2828,13 +2834,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               direction: analysis.direction as "long" | "short",
               price: analysis.lastPrice,
               mode: normalizeDealingRangeMode(
-                (config as any).dealingRangeMode,
+                pairConfig.dealingRangeMode,
                 {
-                  onlyBuyInDiscount: config.onlyBuyInDiscount,
-                  onlySellInPremium: config.onlySellInPremium,
+                  onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+                  onlySellInPremium: pairConfig.onlySellInPremium,
                 },
               ),
             });
+            analysis._canonicalDealingRangeAvailable = canonicalSelection.available;
             if (canonicalSelection.available &&
               unifiedResult.candidateAuthorityObservation) {
               const expiryMinutes = Number(
@@ -3331,7 +3338,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 }
                 : null,
             gamePlanBias: (() => {
-              if (!activeGamePlan) return null;
+              if (!activeGamePlan || pairConfig.gpEnforcementMode === "off") return null;
               const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
               return pairPlan ? { bias: pairPlan.bias, confidence: pairPlan.biasConfidence } : null;
             })(),
@@ -3591,7 +3598,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               score: analysis.fotsiAlignment.score,
             } : null,
             gamePlanBias: (() => {
-              if (!activeGamePlan) return null;
+              if (!activeGamePlan || pairConfig.gpEnforcementMode === "off") return null;
               const pp = activeGamePlan.plans.find(p => p.symbol === symbol);
               return pp ? { bias: pp.bias as "bullish" | "bearish" | "neutral", confidence: pp.biasConfidence ?? 50 } : null;
             })(),
@@ -3734,7 +3741,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           valid: ictFVGTotalCount - ictFVGInvalidatedCount - ictFVGExhaustedCount,
         } : null;
         const gates = runBacktestSafetyGates(
-          symbol, analysis.direction, analysis, config, balance,
+          symbol, analysis.direction, analysis, pairConfig, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
           allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
           roleCandles.structure.length >= 20 ? roleCandles.structure : null,
@@ -3758,10 +3765,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             activeGamePlan,
             symbol,
             analysis.direction,
-            config.gpEnforcementMode ?? "hard",
-            config.gpHardBlockThreshold ?? 75,
+            pairConfig.gpEnforcementMode ?? "hard",
+            pairConfig.gpHardBlockThreshold ?? 75,
           );
-          gates.push({ passed: gpGate.passed, reason: gpGate.reason });
+          gates.push(directionVerdict && !gpGate.passed
+            ? { passed: true, reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization` }
+            : { passed: gpGate.passed, reason: gpGate.reason });
         }
         const failedGates = gates.filter(g => !g.passed);
         let allPassed = failedGates.length === 0;
@@ -4145,8 +4154,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           directionVerdict,
           requireDirectionVerdict: true,
           gamePlan: activeGamePlan,
-          gamePlanEnabled: pairConfig.gamePlanEnabled !== false &&
-            !["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode),
+          gamePlanEnabled: pairConfig.gamePlanEnabled !== false,
           gamePlanMode: pairConfig.gpEnforcementMode,
           gamePlanMinimumConfidence: pairConfig.gpHardBlockThreshold,
           thesisResult: backtestThesis,

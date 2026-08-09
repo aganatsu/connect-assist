@@ -87,3 +87,34 @@ export function classifyAuthorityGates(
     affectsSingleOwnershipAuthorization: !isLegacyDiagnosticGate(check.code),
   }));
 }
+
+/** Apply ownership before legacy gate arrays can affect route authorization. */
+export function applyAuthorityOwnershipToGateResults(input: {
+  gates: Array<{ passed: boolean; reason: string }>;
+  requestedMode?: unknown;
+  runtimeTarget: "paper" | "live";
+  canonicalRangeAvailable: boolean;
+  normalizeCode: (reason: string) => string;
+}) {
+  return input.gates.map((gate) => {
+    const code = input.normalizeCode(gate.reason);
+    const disposition = evaluateAuthorityGateDisposition({
+      code,
+      passed: gate.passed,
+      requestedMode: input.requestedMode,
+      runtimeTarget: input.runtimeTarget,
+    });
+    const duplicateCanonicalLocation = code === "premium_discount" &&
+      input.canonicalRangeAvailable;
+    if (gate.passed || (!disposition.diagnosticOnly && !duplicateCanonicalLocation)) {
+      return gate;
+    }
+    const owner = duplicateCanonicalLocation
+      ? "canonical_location"
+      : disposition.owner;
+    return {
+      passed: true,
+      reason: `[diagnostic:${code}] ${gate.reason}; ${owner} owns authorization`,
+    };
+  });
+}
