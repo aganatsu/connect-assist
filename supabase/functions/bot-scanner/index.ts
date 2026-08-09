@@ -7505,18 +7505,18 @@ async function runScanForUser(
       );
       // ── Game Plan + Direction Verdict Alignment Gate ──
       // analysis.direction has already been synchronized to the authoritative
-      // Direction Verdict above. In hard mode, the active Game Plan authorizes
-      // whether that final direction may proceed; missing, neutral, waiting,
-      // low-confidence, and opposing plans all fail closed.
+      // Direction Verdict above. Record the early Game Plan result for diagnostics;
+      // the final hierarchy is the sole owner of Game Plan authorization.
       if (gamePlanEnabled) {
         const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
         const gpGate = evaluateGamePlanGate(activeGamePlan, pair, analysis.direction, gpEnforcementMode, gpThreshold);
-        const ownedGpGate = directionVerdict && !gpGate.passed
-          ? { passed: true, reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization` }
-          : { passed: gpGate.passed, reason: gpGate.reason };
+        const ownedGpGate = {
+          passed: true,
+          reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization`,
+        };
         gates.push(ownedGpGate);
         console.log(
-          `[scan ${scanCycleId}] ${ownedGpGate.passed ? "ℹ️" : "❌"} ${pair}: GP gate ${directionVerdict ? "deferred to final hierarchy" : ownedGpGate.passed ? "passed" : "BLOCKED"}`
+          `[scan ${scanCycleId}] ℹ️ ${pair}: GP gate deferred to final hierarchy`
           + ` — mode=${gpEnforcementMode}, biasConf=${gpGate.biasConfidence}%, threshold=${gpThreshold}%, direction=${analysis.direction}`,
         );
       }

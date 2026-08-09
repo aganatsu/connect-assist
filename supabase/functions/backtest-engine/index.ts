@@ -3758,8 +3758,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Game Plan + Direction Verdict Alignment Gate ──
-        // Shared with the live scanner so backtest results reflect the exact
-        // entry authorization policy used in production.
+        // Shared diagnostic with the live scanner. The final hierarchy below is
+        // the sole owner of Game Plan authorization.
         if (config.gamePlanEnabled !== false && analysis.direction) {
           const gpGate = evaluateGamePlanGate(
             activeGamePlan,
@@ -3768,9 +3768,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             pairConfig.gpEnforcementMode ?? "hard",
             pairConfig.gpHardBlockThreshold ?? 75,
           );
-          gates.push(directionVerdict && !gpGate.passed
-            ? { passed: true, reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization` }
-            : { passed: gpGate.passed, reason: gpGate.reason });
+          gates.push({
+            passed: true,
+            reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization`,
+          });
         }
         const failedGates = gates.filter(g => !g.passed);
         let allPassed = failedGates.length === 0;
