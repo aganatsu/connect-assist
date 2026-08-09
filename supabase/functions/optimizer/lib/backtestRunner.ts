@@ -221,8 +221,9 @@ export function extractBacktestResult(output: any): BacktestResult {
     winRate: summary.winRate ?? 0,
     profitFactor: summary.profitFactor ?? 0,
     expectancy: summary.expectancy ?? 0,
-    maxDrawdownPercent: summary.maxDrawdownPercent ?? 0,
-    netPnlPips: summary.netPnlPips ?? 0,
+    maxDrawdownPercent: summary.maxDrawdownPercent ?? summary.maxDrawdownPct ?? 0,
+    netPnlPips: summary.netPnlPips ?? summary.totalPnlPips ?? 0,
+    avgRR: summary.avgRR ?? 0,
   };
 
   // Walk-forward data may be at output.walkForward or output.walkForwardResults

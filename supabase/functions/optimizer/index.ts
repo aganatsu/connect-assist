@@ -29,9 +29,9 @@ import type { Trial, TPEConfig } from "./lib/tpe.ts";
 import {
   computeCompositeScore,
 } from "./lib/optimizationLoop.ts";
-import type { OptimizationConfig, BacktestResult, TrialResult, OptimizationResult } from "./lib/optimizationLoop.ts";
+import type { OptimizationConfig, BacktestResult, TrialResult } from "./lib/optimizationLoop.ts";
 import { fetchCurrentConfig } from "./lib/backtestRunner.ts";
-import { autoApplyResult } from "./lib/autoApply.ts";
+import { mapNestedToFlat } from "../_shared/configMapper.ts";
 import {
   getFullParameterSpace,
   getCoreParameterSpace,
@@ -76,10 +76,8 @@ interface OptimizerState {
   trialsCompleted: number;
   /** Optimization config */
   config: OptimizationConfig;
-  /** Current config row from DB */
-  currentConfig: Record<string, any>;
-  /** Dry run flag */
-  dryRun: boolean;
+  /** Immutable full runtime snapshot used by baseline and every candidate. */
+  runtimeSnapshot: Record<string, any>;
   /** Run start timestamp */
   startTime: number;
   /** Full or core param space */
@@ -158,10 +156,11 @@ async function handleStart(
   body: any,
 ): Promise<Response> {
   const {
-    dryRun = false,
+    dryRun: requestedDryRun = true,
     trials,
-    coreOnly = false,
+    coreOnly = true,
     source = "unknown",
+    instruments: requestedInstruments = [],
   } = body;
 
   // Load file config
@@ -193,18 +192,20 @@ async function handleStart(
   }
 
   // Build config
-  const maxTrials = trials ?? fileConfig.maxTrials ?? 30;
+  const maxTrials = Math.max(10, Math.min(100, Number(trials ?? fileConfig.maxTrials ?? 30)));
   const fullSpace = !coreOnly && (fileConfig.fullSpace ?? true);
   const config: OptimizationConfig = {
     maxTrials,
-    walkForwardFolds: fileConfig.walkForwardFolds ?? 3,
+    walkForwardFolds: Math.max(3, Number(fileConfig.walkForwardFolds ?? 4)),
     minConsistencyScore: fileConfig.minConsistencyScore ?? 0.75,
     minImprovementPercent: fileConfig.minImprovementPercent ?? 0.15,
     maxDeltaPercent: fileConfig.maxDeltaPercent ?? 0.50,
     fullSpace,
     startDate: fileConfig.startDate ?? getDefaultStartDate(),
     endDate: fileConfig.endDate ?? getDefaultEndDate(),
-    instruments: fileConfig.instruments ?? getDefaultInstruments(),
+    instruments: Array.isArray(requestedInstruments) && requestedInstruments.length > 0
+      ? requestedInstruments.filter((symbol: unknown) => typeof symbol === "string" && symbol.trim().length > 0).slice(0, 8)
+      : (fileConfig.instruments ?? getDefaultInstruments()),
     supabaseUrl,
     supabaseKey,
     userId: targetUserId,
@@ -212,8 +213,13 @@ async function handleStart(
     seed: fileConfig.seed,
   };
 
-  // Fetch current config
+  // Fetch and freeze the complete effective runtime config. Every candidate is
+  // a small overlay on this same snapshot, so tested and recommended behavior match.
   const currentConfig = await fetchCurrentConfig(supabaseUrl, supabaseKey, targetUserId);
+  const runtimeSnapshot = mapNestedToFlat(currentConfig.config_json || currentConfig);
+  if (!(Array.isArray(requestedInstruments) && requestedInstruments.length > 0) && runtimeSnapshot.instruments?.length) {
+    config.instruments = runtimeSnapshot.instruments.slice(0, 8);
+  }
   if (!config.configId) config.configId = currentConfig.id;
 
   // Create run record
@@ -223,7 +229,7 @@ async function handleStart(
       user_id: targetUserId,
       status: "running",
       trials_count: 0,
-      config_snapshot: { maxTrials, coreOnly, source, startDate: config.startDate, endDate: config.endDate },
+      config_snapshot: { maxTrials, coreOnly, source, requestedDryRun, researchOnly: true, startDate: config.startDate, endDate: config.endDate, instruments: config.instruments },
     })
     .select("id")
     .single();
@@ -237,7 +243,7 @@ async function handleStart(
 
   // Initialize TPE
   const paramSpace = fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
-  const baselineParams = configToParams(currentConfig.config_json || currentConfig);
+  const baselineParams = configToParams(runtimeSnapshot);
 
   const tpe = new TPEOptimizer(paramSpace, {
     ...config.tpeConfig,
@@ -246,7 +252,7 @@ async function handleStart(
   });
 
   // Start baseline backtest (non-blocking)
-  const baselineConfig = paramsToConfig(baselineParams, {});
+  const baselineConfig = paramsToConfig(baselineParams, runtimeSnapshot);
   baselineConfig.walkForwardFolds = config.walkForwardFolds;
   baselineConfig.startDate = config.startDate;
   baselineConfig.endDate = config.endDate;
@@ -275,8 +281,7 @@ async function handleStart(
     maxTrials,
     trialsCompleted: 0,
     config,
-    currentConfig,
-    dryRun,
+    runtimeSnapshot,
     startTime: Date.now(),
     fullSpace,
     pendingBacktestRunId: backtestRunId,
@@ -568,7 +573,7 @@ async function handleStartTrial(
   }
 
   // Build config for this trial
-  const candidateConfig = paramsToConfig(candidateParams, {});
+  const candidateConfig = paramsToConfig(candidateParams, state.runtimeSnapshot);
   candidateConfig.walkForwardFolds = config.walkForwardFolds;
   candidateConfig.startDate = config.startDate;
   candidateConfig.endDate = config.endDate;
@@ -645,7 +650,7 @@ async function handleFinalize(
   const state: OptimizerState = run.result_summary?.state;
   if (!state) return respond({ error: "No state found" }, 500);
 
-  const { baseline, completedTrials, bestPassingTrial, config, currentConfig, dryRun, startTime } = state;
+  const { baseline, completedTrials, bestPassingTrial, config, startTime } = state;
   const baselineScore = baseline?.compositeScore ?? 0;
 
   // Determine auto-apply
@@ -668,33 +673,9 @@ async function handleFinalize(
 
   const durationMs = Date.now() - startTime;
 
-  const result: OptimizationResult = {
-    trials: completedTrials,
-    bestTrial: bestPassingTrial,
-    baseline: baseline!,
-    autoApplied,
-    improvementPercent,
-    durationMs,
-    rejectReason,
-  };
-
-  // Auto-apply
-  let applyOutcome = "skipped";
-  if (!dryRun && autoApplied) {
-    try {
-      const applyResult = await autoApplyResult(result, currentConfig, {
-        supabaseUrl,
-        supabaseKey,
-        userId: config.userId,
-        configId: config.configId,
-      });
-      applyOutcome = applyResult.applied ? "applied" : "rejected";
-    } catch (err) {
-      applyOutcome = `error: ${(err as Error).message}`;
-    }
-  } else if (dryRun && autoApplied) {
-    applyOutcome = "dry_run_would_apply";
-  }
+  // Research-only: never mutate bot_configs. A human-reviewed apply flow may be
+  // added later, with a fresh runtime snapshot and atomic rollback transaction.
+  const applyOutcome = autoApplied ? "recommendation_ready" : "no_recommendation";
 
   // Record completion (clear state from result_summary)
   await db.from("optimizer_runs").update({
@@ -706,7 +687,7 @@ async function handleFinalize(
     baseline_score: baselineScore,
     best_score: bestPassingTrial?.compositeScore ?? null,
     improvement_percent: improvementPercent,
-    auto_applied: autoApplied && applyOutcome === "applied",
+    auto_applied: false,
     reject_reason: rejectReason ?? null,
     result_summary: {
       applyOutcome,
@@ -715,6 +696,12 @@ async function handleFinalize(
       bestTrialPF: bestPassingTrial?.backtest.profitFactor ?? null,
       bestTrialExpectancy: bestPassingTrial?.backtest.expectancy ?? null,
       walkForwardVerdict: bestPassingTrial?.backtest.walkForward?.verdict ?? null,
+      researchOnly: true,
+      testedInstruments: config.instruments,
+      testedStartDate: config.startDate,
+      testedEndDate: config.endDate,
+      recommendedParams: bestPassingTrial?.trial.params ?? null,
+      baselineParams: state.baselineParams,
     },
   }).eq("id", runId);
 
@@ -891,7 +878,7 @@ async function selfInvokeDelayed(supabaseUrl: string, supabaseKey: string, body:
 
 function getDefaultStartDate(): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - 1);
+  d.setMonth(d.getMonth() - 6);
   return d.toISOString().slice(0, 10);
 }
 
@@ -907,29 +894,32 @@ function getDefaultInstruments(): string[] {
 
 function extractBacktestResult(results: any): BacktestResult {
   if (!results) {
-    return { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 };
+    return { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0, avgRR: 0 };
   }
-
-  // Handle both array results (multi-instrument) and single result
-  const summary = Array.isArray(results)
-    ? results.reduce((acc: any, r: any) => ({
-        totalTrades: (acc.totalTrades || 0) + (r.totalTrades || 0),
-        winRate: r.winRate ?? acc.winRate ?? 0,
-        profitFactor: r.profitFactor ?? acc.profitFactor ?? 0,
-        expectancy: r.expectancy ?? acc.expectancy ?? 0,
-        maxDrawdownPercent: Math.max(acc.maxDrawdownPercent || 0, r.maxDrawdownPercent || 0),
-        netPnlPips: (acc.netPnlPips || 0) + (r.netPnlPips || 0),
-        walkForward: r.walkForward ?? acc.walkForward,
-      }), {})
-    : results;
-
+  const rawItems = Array.isArray(results) ? results : [results];
+  const items = rawItems.map((item: any) => item?.summary || item || {});
+  const totalTrades = items.reduce((sum: number, item: any) => sum + Number(item.totalTrades || 0), 0);
+  const weighted = (field: string, fallback?: string) => totalTrades > 0
+    ? items.reduce((sum: number, item: any) => sum + Number(item[field] ?? (fallback ? item[fallback] : 0) ?? 0) * Number(item.totalTrades || 0), 0) / totalTrades
+    : 0;
+  const walkForwards = rawItems.map((item: any) => item?.walkForward || item?.walkForwardResults || item?.summary?.walkForward).filter(Boolean);
+  const consistencyScore = walkForwards.length === rawItems.length
+    ? Math.min(...walkForwards.map((wf: any) => Number(wf.consistencyScore || 0)))
+    : 0;
   return {
-    totalTrades: summary.totalTrades ?? 0,
-    winRate: summary.winRate ?? 0,
-    profitFactor: summary.profitFactor ?? 0,
-    expectancy: summary.expectancy ?? 0,
-    maxDrawdownPercent: summary.maxDrawdownPercent ?? 0,
-    netPnlPips: summary.netPnlPips ?? 0,
-    walkForward: summary.walkForward,
+    totalTrades,
+    winRate: weighted("winRate"),
+    profitFactor: weighted("profitFactor"),
+    expectancy: weighted("expectancy"),
+    avgRR: weighted("avgRR"),
+    maxDrawdownPercent: Math.max(0, ...items.map((item: any) => Number(item.maxDrawdownPercent ?? item.maxDrawdownPct ?? 0))),
+    netPnlPips: items.reduce((sum: number, item: any) => sum + Number(item.netPnlPips ?? item.totalPnlPips ?? 0), 0),
+    walkForward: walkForwards.length === rawItems.length ? {
+      consistencyScore,
+      verdict: consistencyScore >= 0.75 ? "robust" : consistencyScore >= 0.5 ? "moderate" : "fragile",
+      foldCount: walkForwards.reduce((sum: number, wf: any) => sum + Number(wf.foldCount ?? wf.folds?.length ?? 0), 0),
+      winRateStdDev: Math.max(0, ...walkForwards.map((wf: any) => Number(wf.winRateStdDev || 0))),
+      pnlStdDev: Math.max(0, ...walkForwards.map((wf: any) => Number(wf.pnlStdDev || 0))),
+    } : undefined,
   };
 }
