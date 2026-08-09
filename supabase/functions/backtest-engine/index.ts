@@ -84,6 +84,13 @@ import {
   buildScanEvidenceRow,
 } from "../_shared/zoneTimeframeEvidence.ts";
 import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
+import {
+  advanceBacktestTradeLifecycle,
+  consumeBacktestTradeLifecycleEntry,
+  discoverBacktestTradeLifecycle,
+  emptyBacktestTradeLifecycleState,
+  type BacktestTradeLifecycleState,
+} from "../_shared/backtestTradeLifecycle.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
 import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
 import {
@@ -385,6 +392,7 @@ interface OpenPosition {
 }
 
 interface BacktestSymbolRuntimeState {
+  tradeLifecycleState: BacktestTradeLifecycleState;
   convictionStates: [string, ThesisConvictionState][];
   lastConvictionSession: string;
   activeGamePlan: SessionGamePlan | null;
@@ -2231,6 +2239,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
       const restoredRuntime = symbolRuntimeState[symbol];
+      let tradeLifecycleState = restoredRuntime?.tradeLifecycleState ||
+        emptyBacktestTradeLifecycleState();
       // ── Thesis Conviction: in-memory state per (direction) ──
       // Tracks conviction across bars — resets on session change or trade open
       const convictionStates = new Map<string, ThesisConvictionState>(
@@ -2303,6 +2313,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               ),
           );
           symbolRuntimeState[symbol] = {
+            tradeLifecycleState,
             convictionStates: [...convictionStates.entries()],
             lastConvictionSession,
             activeGamePlan,
@@ -2373,6 +2384,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             if (balance > peakBalance) peakBalance = balance;
           }
         }
+
+        // Pending setup authority advances on every completed market candle,
+        // independently of discovery and portfolio pre-gates.
+        const windowStart = Math.max(0, i - lookback);
+        const analysisCandles = entryCandles.slice(windowStart, i + 1);
+        tradeLifecycleState = advanceBacktestTradeLifecycle({
+          state: tradeLifecycleState, candle, completedCandles: analysisCandles,
+        });
+        let lifecycleEntryReady =
+          tradeLifecycleState.lastStep?.disposition === "entry_ready";
 
         // ── Skip weekends ──
         const candleDow = new Date(candleMs).getUTCDay();
@@ -2502,8 +2523,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const relevantH4 = boundedCandlesBefore(h4Candles, candleMs, 120);
         const relevantH1 = boundedCandlesBefore(h1Candles, candleMs, 200);
         const relevantM15 = boundedCandlesBefore(m15Candles, candleMs, 200);
-        const windowStart = Math.max(0, i - lookback);
-        const analysisCandles = entryCandles.slice(windowStart, i + 1);
         const roleCandles = bindTimeframeCandles(
           timeframeAuthority,
           buildTimeframeCandleMap<Candle>([
@@ -2797,6 +2816,36 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 },
               ),
             });
+            if (canonicalSelection.available &&
+              unifiedResult.candidateAuthorityObservation) {
+              const expiryMinutes = Number(
+                pairConfig.limitOrderExpiryMinutes ?? 60,
+              );
+              const expiresAt = new Date(
+                Date.parse(canonicalSelection.range.frozenAt) +
+                  Math.max(1, expiryMinutes) * 60_000,
+              ).toISOString();
+              tradeLifecycleState = discoverBacktestTradeLifecycle({
+                state: tradeLifecycleState,
+                range: canonicalSelection.range,
+                authority: unifiedResult.candidateAuthorityObservation,
+                mode: pairConfig.impulseEntryLifecycleMode || "observe",
+                now: candle.datetime,
+                expiresAt,
+                confirmationMethod: pairConfig.confirmationMethod || "choch",
+                confirmationTimeframe: timeframeAuthority.roles.confirmation,
+                refinementTimeframe: timeframeAuthority.roles.refinement,
+              });
+              if (!tradeLifecycleState.lastStep &&
+                tradeLifecycleState.lifecycle?.status === "active") {
+                tradeLifecycleState = advanceBacktestTradeLifecycle({
+                  state: tradeLifecycleState, candle,
+                  completedCandles: analysisCandles,
+                });
+              }
+              lifecycleEntryReady =
+                tradeLifecycleState.lastStep?.disposition === "entry_ready";
+            }
             if (
               zoneLocalReplayEvidence === true &&
               backtestOwner?.user_id &&
@@ -2985,12 +3034,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // Mirrors bot-scanner: cascade has priority for swing, then unified story,
         // then falls back to standalone impulse zone gate.
         const izGateMode = config.impulseZoneGateMode || "hard";
+        const lifecycleMode = pairConfig.impulseEntryLifecycleMode || "observe";
+        if (lifecycleMode === "enforce" && !lifecycleEntryReady) {
+          diagnostics.skippedGateBlocked++;
+          diagnostics.gateBlockReasons["Frozen Entry Lifecycle"] =
+            (diagnostics.gateBlockReasons["Frozen Entry Lifecycle"] || 0) + 1;
+          continue;
+        }
         let impulseZonePenaltyVal = 0;
         let unifiedGatePassed = false;
 
         // Tier 1: Cascade (swing_trader only)
         if (resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry &&
-            (!requiresStructuralConfirmation || !!cascadeResult.confirmation || !!backtestConfirmationSignal)) {
+            (!requiresStructuralConfirmation || lifecycleEntryReady || !!cascadeResult.confirmation || !!backtestConfirmationSignal)) {
           unifiedGatePassed = true;
           signalSource = "cascade";
         }
@@ -2998,7 +3054,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         else if (unifiedResult?.hasZone &&
             (unifiedResult.state === "triggered" || unifiedResult.state === "confirmed") &&
             (unifiedResult.confirmation?.entryReady === true ||
-              (!requiresStructuralConfirmation || !!backtestConfirmationSignal))) {
+              (!requiresStructuralConfirmation || lifecycleEntryReady || !!backtestConfirmationSignal))) {
           unifiedGatePassed = true;
           signalSource = "unified";
         }
@@ -3701,7 +3757,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 : "waiting_for_price")
               : "no_zone",
             hasZone: izData?.hasZone === true,
-            entryReady: izData?.bestZone?.priceAtZone === true && (!requiresStructuralConfirmation || !!backtestConfirmationSignal),
+            entryReady: izData?.bestZone?.priceAtZone === true && (!requiresStructuralConfirmation || lifecycleEntryReady || !!backtestConfirmationSignal),
             score: izData?.bestZone?.totalScore ?? null,
             timeframe: izData?.selectedTF ?? null,
             low: izData?.bestZone?.low ?? null,
@@ -4127,6 +4183,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         };
         openPositions.push(newPos);
         diagnostics.tradesOpened++;
+        tradeLifecycleState = consumeBacktestTradeLifecycleEntry(
+          tradeLifecycleState,
+        );
         // Reset conviction for this direction after trade opens (same as bot-scanner)
         if (analysis.direction) {
           convictionStates.delete(`${analysis.direction}`);
