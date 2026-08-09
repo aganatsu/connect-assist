@@ -255,13 +255,13 @@ export default function Optimizer() {
         instruments: instrumentInput.split(",").map(symbol => symbol.trim()).filter(Boolean).slice(0, 8),
       });
       toast({
-        title: "Optimization started",
+        title: "Research started",
         description: `Run ID: ${result.runId?.slice(0, 8) || "unknown"}...`,
       });
       fetchRuns();
     } catch (err: any) {
       toast({
-        title: "Failed to start optimization",
+        title: "Failed to start research",
         description: err.message,
         variant: "destructive",
       });
@@ -274,7 +274,7 @@ export default function Optimizer() {
   const handleCancel = async (runId: string) => {
     try {
       await invokeOptimizer({ action: "cancel", runId });
-      toast({ title: "Optimization cancelled" });
+      toast({ title: "Research cancelled" });
       fetchRuns();
     } catch (err: any) {
       toast({ title: "Cancel failed", description: err.message, variant: "destructive" });
@@ -312,7 +312,7 @@ export default function Optimizer() {
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-mono flex items-center gap-2">
             <FlaskConical className="w-4 h-4" />
-            New Optimization Run
+            New Research Run
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -328,7 +328,7 @@ export default function Optimizer() {
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">Trials</Label>
               <Input
                 type="number"
-                min={5}
+                min={10}
                 max={100}
                 value={trials}
                 onChange={(e) => setTrials(Number(e.target.value))}
@@ -365,7 +365,7 @@ export default function Optimizer() {
                   ) : (
                     <Play className="w-3.5 h-3.5 mr-1.5" />
                   )}
-                  {triggering ? "Starting..." : "Start Optimization"}
+                  {triggering ? "Starting..." : "Start Research"}
                 </Button>
               )}
             </div>
@@ -373,11 +373,11 @@ export default function Optimizer() {
 
           {/* Info */}
           <div className="text-[10px] font-mono text-muted-foreground flex flex-wrap items-center gap-2">
-            <span>Auto-runs every Sunday 22:00 UTC</span>
+            <span>Manual research only</span>
             <span className="text-border">•</span>
             <span>{trials} trials × ~5min each ≈ {Math.ceil(trials * 5 / 60)}h</span>
             <span className="text-border">•</span>
-            <span>Chunked: {Math.ceil(trials / 3)} invocations</span>
+            <span>Walk-forward validated before recommendation</span>
           </div>
         </CardContent>
       </Card>
