@@ -8,7 +8,7 @@ Deno.test("confirmation lock is shared by runtime and auditable", async () => {
     read("supabase/functions/_shared/impulseEntryLifecycleStore.ts"),
     read("supabase/migrations/20260806100000_add_impulse_confirmation_locking.sql"),
   ]);
-  assertStringIncludes(scanner, "observeImpulseConfirmationLock(");
+  assertStringIncludes(scanner, "advanceStoredTradeLifecycle(");
   assertStringIncludes(store, "advanceTradeLifecycle");
   assertStringIncludes(store, 'type: "trigger_revised"');
   assertStringIncludes(store, 'type: "trigger_locked"');
