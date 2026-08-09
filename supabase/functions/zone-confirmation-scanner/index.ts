@@ -38,8 +38,7 @@ import {
 } from "../_shared/zoneConfirmation.ts";
 import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
 import {
-  observeImpulseConfirmationLock,
-  observeImpulseEntryPrice,
+  advanceStoredTradeLifecycle,
 } from "../_shared/impulseEntryLifecycleStore.ts";
 import {
   loadImpulseLifecycleCertificate,
@@ -590,48 +589,33 @@ Deno.serve(async (req) => {
         const currentPrice = candles5m[candles5m.length - 1].close;
 
         let impulseLifecycleObservation = null;
+        let lifecycleAfterLock = null;
         try {
-          impulseLifecycleObservation = await observeImpulseEntryPrice(
+          impulseLifecycleObservation = await advanceStoredTradeLifecycle(
             supabase,
             pending.impulse_entry_lifecycle_id,
-            currentPrice,
-            candles5m[candles5m.length - 1].datetime || new Date().toISOString(),
-          );
-          if (impulseLifecycleObservation?.event) {
-            console.log(
-              `[zone-confirm] ${pending.symbol} impulse lifecycle ${impulseLifecycleObservation.event.type}: ${impulseLifecycleObservation.after.lastTransitionReason}`,
-            );
-          }
-        } catch (lifecycleError: any) {
-          console.warn(
-            `[zone-confirm] ${pending.symbol} impulse lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
-          );
-        }
-
-        let lifecycleAfterLock = impulseLifecycleObservation?.after || null;
-        try {
-          const lockObservation = await observeImpulseConfirmationLock(
-            supabase,
-            pending.impulse_entry_lifecycle_id,
+            candles5m[candles5m.length - 1],
             candles5m,
           );
-          for (const transition of lockObservation.transitions) {
+          for (const transition of impulseLifecycleObservation?.transitions || []) {
             console.log(
-              `[zone-confirm] ${pending.symbol} confirmation contract ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
+              `[zone-confirm] ${pending.symbol} lifecycle ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
             );
           }
-          lifecycleAfterLock = lockObservation.transitions.at(-1)?.after ||
-            lockObservation.lifecycle || lifecycleAfterLock;
-        } catch (lockError: any) {
+          lifecycleAfterLock = impulseLifecycleObservation?.after || null;
+        } catch (lifecycleError: any) {
           console.warn(
-            `[zone-confirm] ${pending.symbol} confirmation lock observation failed (non-blocking): ${lockError?.message}`,
+            `[zone-confirm] ${pending.symbol} shared lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
           );
         }
+        const lifecycleFailure = impulseLifecycleObservation?.transitions.find(
+          (transition) => transition.event?.type === "candidate_failed",
+        ) || null;
 
         if (
           impulseLifecycleEnforcement.effectiveMode === "enforce" &&
-          impulseLifecycleObservation?.event?.type === "candidate_failed" &&
-          impulseLifecycleObservation.after.status === "active"
+          lifecycleFailure &&
+          lifecycleFailure.after.status === "active"
         ) {
           const { data: retarget, error: retargetError } = await supabase.rpc(
             "retarget_pending_to_impulse_candidate",

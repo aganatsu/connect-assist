@@ -168,3 +168,32 @@ export async function observeImpulseConfirmationLock(
   }
   return { plan, transitions, lifecycle };
 }
+
+import { advanceTradeLifecycle, type TradeLifecycleStepResult } from "./tradeLifecycleAuthority.ts";
+
+export interface StoredTradeLifecycleStep extends TradeLifecycleStepResult {
+  transitions: ImpulseEntryLifecycleTransitionResult[];
+}
+
+/** Persist exactly the events produced by the shared candle-driven authority. */
+export async function advanceStoredTradeLifecycle(
+  client: any,
+  lifecycleId: string | null | undefined,
+  candle: Candle,
+  completedCandles: Candle[],
+): Promise<StoredTradeLifecycleStep | null> {
+  let lifecycle = await loadImpulseEntryLifecycle(client, lifecycleId);
+  if (!lifecycle || !lifecycleId || lifecycle.mode === "off") return null;
+  const projected = advanceTradeLifecycle({ lifecycle, candle, completedCandles });
+  const transitions: ImpulseEntryLifecycleTransitionResult[] = [];
+  for (const event of projected.events) {
+    const transition = await persistImpulseEntryLifecycleTransition(
+      client, lifecycleId, lifecycle, event,
+    );
+    if (transition.persisted) {
+      transitions.push(transition);
+      lifecycle = transition.after;
+    }
+  }
+  return { ...projected, after: lifecycle, transitions };
+}
