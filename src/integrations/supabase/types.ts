@@ -211,6 +211,54 @@ export type Database = {
         }
         Relationships: []
       }
+      backtest_history_datasets: {
+        Row: {
+          base_timeframe: string
+          candle_count: number
+          created_at: string
+          end_at: string
+          id: string
+          original_filename: string
+          source: string
+          start_at: string
+          storage_path: string
+          symbol: string
+          timezone: string
+          user_id: string
+          validation: Json
+        }
+        Insert: {
+          base_timeframe?: string
+          candle_count: number
+          created_at?: string
+          end_at: string
+          id?: string
+          original_filename: string
+          source?: string
+          start_at: string
+          storage_path: string
+          symbol: string
+          timezone?: string
+          user_id: string
+          validation?: Json
+        }
+        Update: {
+          base_timeframe?: string
+          candle_count?: number
+          created_at?: string
+          end_at?: string
+          id?: string
+          original_filename?: string
+          source?: string
+          start_at?: string
+          storage_path?: string
+          symbol?: string
+          timezone?: string
+          user_id?: string
+          validation?: Json
+        }
+        Relationships: []
+      }
       backtest_runs: {
         Row: {
           completed_at: string | null
