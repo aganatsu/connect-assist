@@ -89,6 +89,8 @@ import {
   consumeBacktestTradeLifecycleEntry,
   discoverBacktestTradeLifecycle,
   emptyBacktestTradeLifecycleState,
+  isBacktestTradeLifecycleEntryReady,
+  prepareBacktestPostConfirmationEntry,
   type BacktestTradeLifecycleState,
 } from "../_shared/backtestTradeLifecycle.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
@@ -2396,7 +2398,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           state: tradeLifecycleState, candle, completedCandles: analysisCandles,
         });
         let lifecycleEntryReady =
-          tradeLifecycleState.lastStep?.disposition === "entry_ready";
+          isBacktestTradeLifecycleEntryReady(tradeLifecycleState);
 
         // ── Skip weekends ──
         const candleDow = new Date(candleMs).getUTCDay();
@@ -2846,8 +2848,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                   completedCandles: analysisCandles,
                 });
               }
+              tradeLifecycleState = prepareBacktestPostConfirmationEntry({
+                state: tradeLifecycleState,
+                completedCandles: analysisCandles,
+                mode: pairConfig.afterChochMode || "confirmation_close",
+                expiryMinutes: pairConfig.afterChochExpiryMinutes ?? 30,
+              });
               lifecycleEntryReady =
-                tradeLifecycleState.lastStep?.disposition === "entry_ready";
+                isBacktestTradeLifecycleEntryReady(tradeLifecycleState);
             }
             if (
               zoneLocalReplayEvidence === true &&
@@ -3040,8 +3048,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const lifecycleMode = pairConfig.impulseEntryLifecycleMode || "observe";
         if (lifecycleMode === "enforce" && !lifecycleEntryReady) {
           diagnostics.skippedGateBlocked++;
-          diagnostics.gateBlockReasons["Frozen Entry Lifecycle"] =
-            (diagnostics.gateBlockReasons["Frozen Entry Lifecycle"] || 0) + 1;
+          const lifecycleWaitReason =
+            tradeLifecycleState.postConfirmationEntry?.state ===
+                "awaiting_retracement"
+              ? "Post-CHoCH Retracement"
+              : "Frozen Entry Lifecycle";
+          diagnostics.gateBlockReasons[lifecycleWaitReason] =
+            (diagnostics.gateBlockReasons[lifecycleWaitReason] || 0) + 1;
           continue;
         }
         let impulseZonePenaltyVal = 0;
