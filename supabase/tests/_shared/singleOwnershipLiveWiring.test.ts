@@ -17,7 +17,7 @@ Deno.test("live enforcement reaches scanner and both fill routes", () => {
   assertStringIncludes(scanner, "singleOwnershipEnforcementRequested");
   assertStringIncludes(scanner, '["enforce", "enforce_live"].includes((pairConfig as any).singleOwnershipMode)');
   assertStringIncludes(scanner, "evaluateSingleOwnershipFillAuthorization({");
-  assertStringIncludes(fast, '["enforce", "enforce_live"].includes((config as any).singleOwnershipMode)');
+  assertStringIncludes(fast, "requestedMode: (config as any).singleOwnershipMode");
   assertStringIncludes(fast, "evaluateSingleOwnershipFillAuthorization({");
 });
 
