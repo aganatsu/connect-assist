@@ -32,6 +32,9 @@ describe("Backtest canonical workflow UI", () => {
     expect(source).toContain("rows are not additive");
     expect(source).toContain("Retained decision outcomes");
     expect(source).toContain("lifecycleSummary.outcomeCounts");
+    expect(source).toContain("Comparison mode: the canonical workflow records evidence only");
+    expect(source).toContain("Observe - Compare With Legacy");
+    expect(source).toContain("Enforce - Canonical Owns Decision");
     expect(source).toContain("wait_retracement");
   });
 });
