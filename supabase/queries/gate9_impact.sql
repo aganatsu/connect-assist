@@ -138,3 +138,72 @@ cross join lateral unnest(r.failed_gates) as t(g)
 where g like 'Score %threshold%'
 order by r.created_at desc
 limit 10;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- QUERY 4 — THE ONE THAT MATTERS.
+--
+-- Gate 9's false rejections, scored against what actually happened.
+--
+-- A backtest before/after the Gate 9 fix shows nothing: run-backtest-local.ts:776
+-- already gated on effectiveScore, and backtest reads stored closed candles so
+-- the forming-bar fix is invisible there too. Backtest was never broken — both
+-- fixes moved LIVE toward it.
+--
+-- outcome-tracker back-fills real outcomes onto rejected_setups hourly, so the
+-- question "would these trades have won?" is answerable from data already held.
+--
+--   avg_r > 0  → Gate 9 was destroying edge. The fix recovers it.
+--   avg_r < 0  → Gate 9 was accidentally protecting the bot. The fix is still
+--                correct (it removed an inconsistency), but the threshold or the
+--                credit weights need re-tuning, because the credits were
+--                promoting losers.
+-- ────────────────────────────────────────────────────────────────────────────
+
+with gate9 as (
+  select
+    r.id, r.created_at, r.symbol, r.direction,
+    r.confluence_score::numeric                        as effective_score,
+    substring(g from 'Score ([0-9.]+)')::numeric       as raw_score,
+    substring(g from '< ([0-9.]+) threshold')::numeric as base_threshold,
+    r.outcome_status, r.price_reached_entry, r.tp_hit, r.sl_hit,
+    r.outcome_r, r.mfe_r, r.mae_r, r.outcome_reason
+  from rejected_setups r
+  cross join lateral unnest(r.failed_gates) as t(g)
+  where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
+)
+select
+  count(*)                                                  as gate9_rejections,
+  count(*) filter (where outcome_status <> 'pending')       as outcome_known,
+  count(*) filter (where price_reached_entry is not true)   as never_filled,
+  count(*) filter (where tp_hit)                            as would_have_won,
+  count(*) filter (where sl_hit)                            as would_have_lost,
+  round(avg(outcome_r) filter (where outcome_r is not null), 3) as avg_r,
+  round(sum(outcome_r) filter (where outcome_r is not null), 2) as total_r,
+  round(avg(mfe_r)     filter (where mfe_r is not null), 3)     as avg_mfe_r,
+  round(avg(mae_r)     filter (where mae_r is not null), 3)     as avg_mae_r
+from gate9;
+
+
+-- Per-trade detail for the same set.
+with gate9 as (
+  select
+    r.created_at, r.symbol, r.direction,
+    r.confluence_score::numeric                        as effective_score,
+    substring(g from 'Score ([0-9.]+)')::numeric       as raw_score,
+    substring(g from '< ([0-9.]+) threshold')::numeric as base_threshold,
+    r.outcome_status, r.price_reached_entry, r.tp_hit, r.sl_hit,
+    r.outcome_r, r.mfe_r, r.mae_r, r.outcome_reason
+  from rejected_setups r
+  cross join lateral unnest(r.failed_gates) as t(g)
+  where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
+)
+select
+  created_at, symbol, direction,
+  raw_score, effective_score, base_threshold,
+  round(effective_score - raw_score, 2) as credit_applied,
+  outcome_status, price_reached_entry, tp_hit, sl_hit,
+  outcome_r, mfe_r, mae_r, outcome_reason
+from gate9
+order by created_at desc
+limit 200;
