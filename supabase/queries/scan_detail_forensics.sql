@@ -25,6 +25,30 @@
 --     the code; whichever your table has will work).
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- QUERY 0 — PROBE. Run this first; it costs nothing and removes the guesswork.
+--
+-- details_json is not uniformly shaped: the main scan (bot-scanner:11199)
+-- writes an ARRAY of per-pair details, while the game-plan path
+-- (bot-scanner:3940) writes an OBJECT into the same column. Feeding an object
+-- to jsonb_array_elements raises "22023: cannot extract elements from an
+-- object", so every query below guards on jsonb_typeof.
+--
+-- This also confirms which timestamp column exists.
+-- ────────────────────────────────────────────────────────────────────────────
+
+select
+  jsonb_typeof(details_json::jsonb) as shape,
+  count(*)                          as rows
+from scan_logs
+group by 1
+order by 2 desc;
+
+-- If `created_at` errors below, this tells you what the table actually has:
+--   select column_name, data_type from information_schema.columns
+--   where table_name = 'scan_logs' order by ordinal_position;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- QUERY A — full card detail for the last 15 placed trades.
 --
 -- Returns the raw detail object. Verbose, but nothing is assumed about nested
@@ -39,7 +63,10 @@ select
   d->>'status'                                                as status,
   d                                                           as full_detail
 from scan_logs s
-cross join lateral jsonb_array_elements(s.details_json::jsonb) as d
+cross join lateral jsonb_array_elements(
+    case when jsonb_typeof(s.details_json::jsonb) = 'array'
+         then s.details_json::jsonb else '[]'::jsonb end
+  ) as d
 where d->>'__meta' is null
   and coalesce(d->>'status', '') like 'trade_placed%'
 order by (s.created_at::text)::timestamptz desc
@@ -60,7 +87,10 @@ with placed as (
     (s.created_at::text)::timestamptz as scanned_at,
     d
   from scan_logs s
-  cross join lateral jsonb_array_elements(s.details_json::jsonb) as d
+  cross join lateral jsonb_array_elements(
+    case when jsonb_typeof(s.details_json::jsonb) = 'array'
+         then s.details_json::jsonb else '[]'::jsonb end
+  ) as d
   where d->>'__meta' is null
     and coalesce(d->>'status', '') like 'trade_placed%'
 )
@@ -99,7 +129,10 @@ with placed as (
     d->'unifiedZone'->'impulse'->>'timeframe'                as impulse_tf,
     (d->'unifiedZone'->'impulse'->>'pips')::numeric          as impulse_pips
   from scan_logs s
-  cross join lateral jsonb_array_elements(s.details_json::jsonb) as d
+  cross join lateral jsonb_array_elements(
+    case when jsonb_typeof(s.details_json::jsonb) = 'array'
+         then s.details_json::jsonb else '[]'::jsonb end
+  ) as d
   where d->>'__meta' is null
     and coalesce(d->>'status', '') like 'trade_placed%'
     and (d->'unifiedZone'->'impulse'->>'pips') is not null
