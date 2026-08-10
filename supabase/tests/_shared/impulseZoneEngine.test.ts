@@ -273,7 +273,7 @@ Deno.test("structural leg without an impulse POI remains developing", () => {
   assertExists(leg);
   const result = qualifyImpulseLeg(candles, leg, [], { minDisplacementATR: 1, minBodyRatio: 0.5 });
   assertEquals(result.state, "developing");
-  assert(result.reasons.some((reason) => reason.includes("No FVG or Order Block")));
+  assert(result.reasons.some((reason) => reason.includes("No accepted FVG or Order Block")));
 });
 
 Deno.test("broken structural-leg origin is invalidated", () => {
