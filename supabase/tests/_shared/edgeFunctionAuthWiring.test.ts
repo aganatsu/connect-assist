@@ -2,7 +2,10 @@
  * Wiring tests: the security guards must remain attached to the entry points.
  * These assert on source so an accidental revert fails CI.
  */
-import { assertStringIncludes, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const read = (p: string) => Deno.readTextFileSync(new URL(p, import.meta.url));
 
@@ -24,7 +27,11 @@ const DUAL_PATH = [
 Deno.test("cron-only functions require an exact cron secret", () => {
   for (const file of CRON_ONLY) {
     const src = read(file);
-    assertStringIncludes(src, "verifyCronCaller(req)", `${file} must guard with verifyCronCaller`);
+    assertStringIncludes(
+      src,
+      "verifyCronCaller(req)",
+      `${file} must guard with verifyCronCaller`,
+    );
   }
 });
 
@@ -69,6 +76,18 @@ Deno.test("telegram-notify authorizes every send", () => {
   const src = read("../../functions/telegram-notify/index.ts");
   assertStringIncludes(src, "authorizeTelegramSend(req, String(chatId)");
   assertStringIncludes(src, "status: decision.status");
+});
+
+Deno.test("trade-management Telegram alerts use durable cooldown claims", () => {
+  const scanner = read("../../functions/bot-scanner/index.ts");
+  const relay = read("../../functions/telegram-notify/index.ts");
+  assertStringIncludes(
+    scanner,
+    "dedupe_key: `trade-management:${a.positionId}:${a.action}`",
+  );
+  assertStringIncludes(scanner, `a.action === "sl_tightened" ? 900 : 3600`);
+  assertStringIncludes(relay, "claimNotification(");
+  assertStringIncludes(relay, `reason: "duplicate"`);
 });
 
 Deno.test("dual-path account-wide handlers scope user requests to the JWT owner", () => {

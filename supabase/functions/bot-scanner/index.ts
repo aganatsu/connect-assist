@@ -1902,7 +1902,13 @@ async function runScanForUser(
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                  body: JSON.stringify({ chat_id: chatId, message: msg }),
+                  body: JSON.stringify({
+                    chat_id: chatId,
+                    message: msg,
+                    dedupe_key: `trade-management:${a.positionId}:${a.action}`,
+                    cooldown_seconds: a.action === "sl_tightened" ? 900 : 3600,
+                    drop_if_rate_limited: true,
+                  }),
                 });
               } catch (e: any) {
                 console.warn(`Telegram mgmt notify failed [${chatId}]:`, e?.message);
