@@ -293,6 +293,34 @@ Deno.test("weak displacement cannot authorize an impulse zone", () => {
   assertEquals(result.state, "developing");
   assert(result.reasons.some((reason) => reason.includes("Directional displacement")));
 });
+
+Deno.test("choppy overlapping leg cannot qualify from one strong candle", () => {
+  const candles: Candle[] = [];
+  for (let index = 0; index < 20; index++) {
+    candles.push(makeCandle(1, 1.001, 0.999, 1.0002, index));
+  }
+  candles.push(makeCandle(1, 1.006, 0.9995, 1.0055, 20));
+  candles.push(makeCandle(1.0055, 1.006, 1.0005, 1.001, 21));
+  candles.push(makeCandle(1.001, 1.0062, 1.0007, 1.0057, 22));
+  candles.push(makeCandle(1.0057, 1.0063, 1.001, 1.0012, 23));
+  candles.push(makeCandle(1.0012, 1.007, 1.001, 1.0065, 24));
+  const leg: ImpulseLeg = {
+    high: 1.007, low: 0.9995, direction: "bullish",
+    startIndex: 20, endIndex: 24, isValid: true, bosPrice: 1.006,
+    breakType: "bos", closeBased: true,
+  };
+  const result = qualifyImpulseLeg(candles, leg, [{
+    type: "fvg", high: 1.003, low: 1.002, candleIndex: 22,
+    direction: "bullish",
+  }], { minDisplacementATR: 0.5, minBodyRatio: 0.5 });
+  assertEquals(result.contractVersion, "impulse-zone-qualification.v2");
+  assertEquals(result.state, "developing");
+  assert(result.reasons.some((reason) =>
+    reason.includes("directional body dominance") ||
+    reason.includes("displacement efficiency") ||
+    reason.includes("candle overlap")
+  ));
+});
 Deno.test("mapImpulsePOIs — returns empty for invalid impulse", () => {
   const candles = generateBullishImpulseCandles(50);
   const invalidImpulse: ImpulseLeg = {

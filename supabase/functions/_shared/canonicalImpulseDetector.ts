@@ -31,6 +31,10 @@ export interface CanonicalImpulseMetrics {
   sweepOrigin: boolean;
   sweptLevel: number | null;
   structureIntact: boolean;
+  directionalCandleRatio: number | null;
+  directionalBodyDominance: number | null;
+  pathEfficiency: number | null;
+  averageCandleOverlap: number | null;
 }
 
 function percentileRank(value: number, population: number[]): number | null {
@@ -66,6 +70,43 @@ export function measureCanonicalImpulseMetrics(
       ? candle.close > candle.open
       : candle.close < candle.open
   );
+  const directionalCandleRatio = legCandles.length > 0
+    ? directional.length / legCandles.length
+    : null;
+  const signedBodies = legCandles.map((candle) =>
+    impulse.direction === "bullish"
+      ? candle.close - candle.open
+      : candle.open - candle.close
+  );
+  const absoluteBodyTotal = signedBodies.reduce(
+    (total, body) => total + Math.abs(body), 0,
+  );
+  const directionalBodyDominance = absoluteBodyTotal > 0
+    ? signedBodies.reduce((total, body) => total + body, 0) / absoluteBodyTotal
+    : null;
+  const pathLength = legCandles.reduce(
+    (total, candle) => total + Math.max(0, candle.high - candle.low), 0,
+  );
+  const first = legCandles[0];
+  const last = legCandles.at(-1);
+  const netMove = first && last ? Math.abs(last.close - first.open) : 0;
+  const pathEfficiency = pathLength > 0 ? netMove / pathLength : null;
+  const overlaps: number[] = [];
+  for (let index = 1; index < legCandles.length; index++) {
+    const previous = legCandles[index - 1];
+    const current = legCandles[index];
+    const overlap = Math.max(
+      0,
+      Math.min(previous.high, current.high) - Math.max(previous.low, current.low),
+    );
+    const narrowerRange = Math.min(
+      previous.high - previous.low, current.high - current.low,
+    );
+    overlaps.push(narrowerRange > 0 ? overlap / narrowerRange : 0);
+  }
+  const averageCandleOverlap = overlaps.length > 0
+    ? overlaps.reduce((total, value) => total + value, 0) / overlaps.length
+    : null;
   const bodyRatios = recent.map((candle) => {
     const range = candle.high - candle.low;
     return range > 0 ? Math.abs(candle.close - candle.open) / range : 0;
@@ -117,5 +158,9 @@ export function measureCanonicalImpulseMetrics(
     sweepOrigin,
     sweptLevel,
     structureIntact: impulse.isValid,
+    directionalCandleRatio: directionalCandleRatio === null ? null : Number(directionalCandleRatio.toFixed(6)),
+    directionalBodyDominance: directionalBodyDominance === null ? null : Number(directionalBodyDominance.toFixed(6)),
+    pathEfficiency: pathEfficiency === null ? null : Number(pathEfficiency.toFixed(6)),
+    averageCandleOverlap: averageCandleOverlap === null ? null : Number(averageCandleOverlap.toFixed(6)),
   };
 }

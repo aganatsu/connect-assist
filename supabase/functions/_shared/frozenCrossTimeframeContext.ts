@@ -207,6 +207,10 @@ export function buildFrozenCrossTimeframeContext(input: {
     : [];
   const authoritySelected = record(ictEntryZoneAuthority?.selected);
   const canonicalRange = canonicalDealingRange.available ? canonicalDealingRange.range : null;
+  const impulseQualification = record(story.impulseQualification);
+  const lifecycleImpulseQualified = impulseQualification.qualified === true &&
+    impulseQualification.state === "qualified" &&
+    impulseQualification.contractVersion === "impulse-zone-qualification.v2";
   const lifecycleCandidates = canonicalRange
     ? authorityCandidates
       .filter((candidate) =>
@@ -231,7 +235,7 @@ export function buildFrozenCrossTimeframeContext(input: {
         (input.stylePolicy.lifecycle?.limitOrderExpiryMinutes ?? 60) * 60_000,
     ).toISOString()
     : null;
-  const impulseEntryLifecycle = canonicalRange && lifecycleCandidates.length > 0
+  const impulseEntryLifecycle = canonicalRange && lifecycleImpulseQualified && lifecycleCandidates.length > 0
     ? buildImpulseEntryLifecycle({
       mode: input.impulseEntryLifecycleMode || "observe",
       now: canonicalRange.frozenAt,
