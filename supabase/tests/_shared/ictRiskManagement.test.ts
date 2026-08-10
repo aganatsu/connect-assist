@@ -3,7 +3,6 @@ import {
   calculateDrawdownRisk,
   checkDailyLimit,
   checkWeeklyLimit,
-  calculatePositionSize,
   assessRisk,
   DEFAULT_ICT_RISK_CONFIG,
   type ICTRiskConfig,
@@ -98,51 +97,6 @@ Deno.test("checkWeeklyLimit: weekly loss limit hit = cannot trade", () => {
 Deno.test("checkWeeklyLimit: positive PnL = can trade", () => {
   const result = checkWeeklyLimit(0.05);
   assertEquals(result.canTrade, true);
-});
-
-// ─── Tests: Position Sizing ───────────────────────────────────────────
-
-Deno.test("calculatePositionSize: standard forex pair", () => {
-  const result = calculatePositionSize(
-    10000,   // $10k account
-    1.1000,  // entry
-    1.0950,  // SL (50 pips)
-    0.01,    // 1% risk
-    10,      // $10/pip/lot
-  );
-  assertEquals(result.lots, 0.2); // $100 risk / (50 pips × $10) = 0.2 lots
-  assertEquals(result.riskAmount, 100);
-  assertEquals(Math.round(result.slDistancePips), 50);
-});
-
-Deno.test("calculatePositionSize: JPY pair (2 decimal pips)", () => {
-  const result = calculatePositionSize(
-    10000,    // $10k account
-    150.00,   // entry
-    149.50,   // SL (50 pips for JPY)
-    0.01,     // 1% risk
-    6.67,     // ~$6.67/pip/lot for USDJPY
-  );
-  assertEquals(result.slDistancePips, 50);
-  assertEquals(result.riskAmount, 100);
-  // 100 / (50 * 6.67) = 0.30
-  assertEquals(result.lots, 0.3);
-});
-
-Deno.test("calculatePositionSize: zero SL distance returns 0 lots", () => {
-  const result = calculatePositionSize(10000, 1.1000, 1.1000, 0.01, 10);
-  assertEquals(result.lots, 0);
-});
-
-Deno.test("calculatePositionSize: zero equity returns 0 lots", () => {
-  const result = calculatePositionSize(0, 1.1000, 1.0950, 0.01, 10);
-  assertEquals(result.lots, 0);
-});
-
-Deno.test("calculatePositionSize: halved risk = half the lots", () => {
-  const full = calculatePositionSize(10000, 1.1000, 1.0950, 0.01, 10);
-  const half = calculatePositionSize(10000, 1.1000, 1.0950, 0.005, 10);
-  assertEquals(half.lots, full.lots / 2);
 });
 
 // ─── Tests: Full Risk Assessment ──────────────────────────────────────

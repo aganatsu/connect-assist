@@ -90,14 +90,6 @@ export interface WeeklyLimitState {
   reason: string;
 }
 
-export interface PositionSizeResult {
-  lots: number;
-  riskAmount: number;
-  effectiveRiskPercent: number;
-  slDistancePips: number;
-  reason: string;
-}
-
 export interface ICTRiskAssessment {
   canTrade: boolean;
   effectiveRiskPercent: number;
@@ -226,48 +218,6 @@ export function checkWeeklyLimit(
   };
 }
 
-// ─── Position Sizing ──────────────────────────────────────────────────
-
-/**
- * Calculate position size using ICT's method.
- *
- * @param accountEquity - Account equity in base currency
- * @param entryPrice - Entry price
- * @param stopLossPrice - Stop loss price
- * @param effectiveRiskPercent - Risk per trade (after drawdown halving)
- * @param pipValue - Value per pip per lot (depends on pair and account currency)
- */
-export function calculatePositionSize(
-  accountEquity: number,
-  entryPrice: number,
-  stopLossPrice: number,
-  effectiveRiskPercent: number,
-  pipValue: number,
-): PositionSizeResult {
-  if (accountEquity <= 0 || pipValue <= 0 || effectiveRiskPercent <= 0) {
-    return { lots: 0, riskAmount: 0, effectiveRiskPercent, slDistancePips: 0, reason: "Invalid inputs" };
-  }
-
-  const slDistance = Math.abs(entryPrice - stopLossPrice);
-  if (slDistance <= 0) {
-    return { lots: 0, riskAmount: 0, effectiveRiskPercent, slDistancePips: 0, reason: "SL distance is zero" };
-  }
-
-  // Convert SL distance to pips (assuming 4/5 decimal places for forex)
-  const pipSize = entryPrice > 10 ? 0.01 : 0.0001; // JPY pairs vs others
-  const slDistancePips = slDistance / pipSize;
-
-  const riskAmount = accountEquity * effectiveRiskPercent;
-  const lots = riskAmount / (slDistancePips * pipValue);
-
-  return {
-    lots: Math.round(lots * 100) / 100, // Round to 2 decimal places
-    riskAmount,
-    effectiveRiskPercent,
-    slDistancePips,
-    reason: `${(effectiveRiskPercent * 100).toFixed(2)}% risk = $${riskAmount.toFixed(2)} / ${slDistancePips.toFixed(1)} pips = ${lots.toFixed(2)} lots`,
-  };
-}
 
 // ─── Full Risk Assessment ─────────────────────────────────────────────
 

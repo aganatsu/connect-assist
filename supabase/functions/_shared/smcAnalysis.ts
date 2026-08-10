@@ -1816,7 +1816,7 @@ export function detectSMTDivergence(symbol: string, candles: Candle[], correlate
   if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
     return {
       detected: true, type: "bullish", correlatedPair: corrPair,
-      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held — bullish SMT`,
+      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
     };
   }
 
@@ -1828,7 +1828,7 @@ export function detectSMTDivergence(symbol: string, candles: Candle[], correlate
   if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
     return {
       detected: true, type: "bearish", correlatedPair: corrPair,
-      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held — bearish SMT`,
+      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
     };
   }
 
