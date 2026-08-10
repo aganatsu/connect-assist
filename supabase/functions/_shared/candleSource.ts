@@ -7,6 +7,7 @@
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
 import { META_REGIONS, regionCache } from "./metaApiClient.ts";
+import { toNYTimeAt } from "./sessions.ts";
 
 export interface Candle {
   datetime: string;
@@ -15,6 +16,29 @@ export interface Candle {
   low: number;
   close: number;
   volume?: number;
+}
+
+const FX_CURRENCY_CODES = new Set(["AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD"]);
+
+export function isForexSymbol(symbol: string): boolean {
+  const [base, quote, extra] = symbol.toUpperCase().split("/");
+  return !extra && FX_CURRENCY_CODES.has(base) && FX_CURRENCY_CODES.has(quote);
+}
+
+export function isForexMarketOpenAt(datetime: string): boolean {
+  const timestamp = Date.parse(datetime);
+  if (!Number.isFinite(timestamp)) return false;
+  const { nyDay, h, m } = toNYTimeAt(timestamp);
+  const minutes = h * 60 + m;
+  if (nyDay === 6) return false;
+  if (nyDay === 0) return minutes >= 17 * 60;
+  if (nyDay === 5) return minutes < 17 * 60;
+  return true;
+}
+
+export function filterClosedMarketCandles(symbol: string, candles: Candle[]): Candle[] {
+  if (!isForexSymbol(symbol)) return candles;
+  return candles.filter((candle) => isForexMarketOpenAt(candle.datetime));
 }
 
 // ─── H8: TwelveData Rate Limiter ────────────────────────────────────
@@ -780,7 +804,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   const cached = getCachedCandles(opts.symbol, canon, cacheScope);
   if (cached && cached.candles.length >= 30) {
     if (_activeTally) (_activeTally as any)[cached.source]++;
-    return { candles: cached.candles.slice(-limit), source: cached.source as any };
+    return { candles: filterClosedMarketCandles(opts.symbol, cached.candles).slice(-limit), source: cached.source as any };
   }
 
   // Try the connected broker first, unless the caller is a
@@ -788,7 +812,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   // timeframes; probing broker regions/subscriptions there can exceed hosted
   // runtime limits and surface as platform 503s.
   if (!opts.skipBroker && opts.brokerConn?.broker_type === "oanda" && opts.brokerConn.api_key && timeLeft() > 10_000) {
-    const candles = await oandaFetchCandles(opts.brokerConn, opts.symbol, canon, limit);
+    const candles = filterClosedMarketCandles(opts.symbol, await oandaFetchCandles(opts.brokerConn, opts.symbol, canon, limit));
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.oanda++;
       setCachedCandles(opts.symbol, canon, candles, "oanda", cacheScope);
@@ -799,7 +823,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   if (!opts.skipBroker && opts.brokerConn?.broker_type !== "oanda" && opts.brokerConn?.api_key && opts.brokerConn?.account_id && timeLeft() > 15_000) {
     if (_activeTally) _activeTally.metaapiAttempted = true;
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
-    let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+    let candles = filterClosedMarketCandles(opts.symbol, await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit));
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
 
     // Lazy auto-mapping: if we got 0 candles AND there was no explicit override,
@@ -813,7 +837,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
       if (match && match.brokerSymbol !== brokerSymbol) {
         console.log(`[candleSource] auto-mapping ${opts.symbol} ${brokerSymbol} → ${match.brokerSymbol}`);
         brokerSymbol = match.brokerSymbol;
-        candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+        candles = filterClosedMarketCandles(opts.symbol, await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit));
         if (candles.length > 0) {
           await persistSymbolOverride(opts.brokerConn, opts.symbol, brokerSymbol);
         }
@@ -829,7 +853,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
 
   // Try Twelve Data
-  const td = timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : [];
+  const td = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : []);
   if (td.length >= 30) {
     if (_activeTally) _activeTally.twelvedata++;
     setCachedCandles(opts.symbol, canon, td, "twelvedata");
@@ -837,7 +861,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   }
 
   // Polygon.io fallback
-  const pg = timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : [];
+  const pg = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : []);
   if (pg.length >= 30) {
     if (_activeTally) _activeTally.polygon++;
     setCachedCandles(opts.symbol, canon, pg, "polygon");
@@ -851,14 +875,14 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
     console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
     await new Promise(r => setTimeout(r, 2000));
 
-    const tdRetry = timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : [];
+    const tdRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : []);
     if (tdRetry.length >= 30) {
       if (_activeTally) _activeTally.twelvedata++;
       setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
       return { candles: tdRetry.slice(-limit), source: "twelvedata" };
     }
 
-    const pgRetry = timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : [];
+    const pgRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : []);
     if (pgRetry.length >= 30) {
       if (_activeTally) _activeTally.polygon++;
       setCachedCandles(opts.symbol, canon, pgRetry, "polygon");

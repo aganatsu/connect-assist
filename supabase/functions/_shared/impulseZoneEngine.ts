@@ -253,10 +253,10 @@ export function findImpulseLeg(
       if (startCandle?.datetime) {
         // Keep date + time (YYYY-MM-DD HH:MM) so the impulse leg is traceable
         // on the chart down to the exact bar, not just the day.
-        impulse.startDate = startCandle.datetime.slice(0, 16);
+        impulse.startDate = startCandle.datetime;
       }
       if (endCandle?.datetime) {
-        impulse.endDate = endCandle.datetime.slice(0, 16);
+        impulse.endDate = endCandle.datetime;
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
       collector?.({ leg: impulse, selected: true, rejection: null });
@@ -274,8 +274,8 @@ export function findImpulseLeg(
           bosPrice: bos.price,
           breakType: bos.breakType,
           timeframe,
-          startDate: candles[bos.index]?.datetime?.slice(0, 16),
-          endDate: candles[bos.index]?.datetime?.slice(0, 16),
+          startDate: candles[bos.index]?.datetime,
+          endDate: candles[bos.index]?.datetime,
           spanBars: 0,
         },
         selected: false,
@@ -373,8 +373,8 @@ function validateImpulseFromBOS(
         bosPrice: bos.price,
         breakType: bos.breakType,
         timeframe: undefined,
-        startDate: candles[startIdx]?.datetime?.slice(0, 16),
-        endDate: candles[endIdx]?.datetime?.slice(0, 16),
+        startDate: candles[startIdx]?.datetime,
+        endDate: candles[endIdx]?.datetime,
         spanBars: endIdx - startIdx,
       },
       selected: false,
