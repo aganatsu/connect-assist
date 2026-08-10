@@ -789,6 +789,15 @@ function buildEntryStory(
   const rewardPips = tpPrice ? Math.abs(entryPrice - tpPrice) * pipMult : null;
   const rrRatio = (rewardPips && riskPips > 0) ? Math.round((rewardPips / riskPips) * 100) / 100 : null;
 
+  // A zero-distance stop is not a trade. When riskPips is 0 the ratio above is
+  // null, so the minimum-R:R check below never fires — the setup is waved
+  // through because its R:R is *absent* rather than *low*. Observed live: five
+  // placed trades had slPrice exactly equal to entryPrice (EUR/AUD, CAD/JPY,
+  // GBP/CAD, USD/CAD ×2), all with rrRatio null.
+  if (!(riskPips > 0)) {
+    return null; // no stop distance — nothing to risk, nothing to size
+  }
+
   // Check minimum R:R
   if (rrRatio !== null && rrRatio < minRR) {
     return null; // R:R too low
