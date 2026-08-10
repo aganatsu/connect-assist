@@ -492,6 +492,13 @@ async function runSafetyGates(
   convictionTimeframeLabel = "entry",
   directionVerdict?: DirectionVerdictResult | null,
   propFirmActive?: boolean,
+  /**
+   * The score and threshold the eligibility check at the call site used —
+   * effectiveScore and conflictAdjustedMinConfluence. Gate 9 must compare the
+   * same two numbers, or it re-decides the threshold on stale operands.
+   */
+  effectiveScore?: number,
+  effectiveMinConfluence?: number,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
@@ -703,11 +710,36 @@ async function runSafetyGates(
     gates.push(checkMaxDrawdown({ balance, peakBalance, maxDrawdown: config.maxDrawdown }));
   }
 
-  // Gate 9: Min confluence (redundant but per spec)
-  if (analysis.score < config.minConfluence) {
-    gates.push({ passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
-  } else {
-    gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
+  // Gate 9: Min confluence.
+  //
+  // Must compare the SAME two numbers the eligibility check used —
+  // effectiveScore vs conflictAdjustedMinConfluence. It previously tested the
+  // raw `analysis.score` against the base `config.minConfluence`, both of which
+  // are the wrong operands:
+  //
+  //   effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal
+  //                  + zoneLocalScoreAdj + crossTimeframeScoreAdj
+  //                  + ictTotalAdj + verdictScoreAdj
+  //
+  // Several of those adjustments are positive, so a setup could clear
+  // eligibility on its credited score and then be rejected here on the
+  // uncredited one. Measured against live data on 2026-08-10: 10 of 10 sampled
+  // Gate 9 rejections had already cleared the threshold, with credits of +1.79
+  // to +2.20 (avg +1.97). backtest-engine has no equivalent gate, so this also
+  // broke live/backtest parity — the strategy was tuned without it.
+  //
+  // Falls back to the legacy operands only when the caller does not supply the
+  // effective pair (no live caller omits them).
+  {
+    const scoreForGate = typeof effectiveScore === "number" ? effectiveScore : analysis.score;
+    const thresholdForGate = typeof effectiveMinConfluence === "number"
+      ? effectiveMinConfluence
+      : config.minConfluence;
+    if (scoreForGate < thresholdForGate) {
+      gates.push({ passed: false, reason: `Score ${scoreForGate.toFixed(1)} < ${thresholdForGate} threshold` });
+    } else {
+      gates.push({ passed: true, reason: `Score ${scoreForGate.toFixed(1)} meets threshold ${thresholdForGate}` });
+    }
   }
 
   // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
@@ -7429,6 +7461,8 @@ async function runScanForUser(
         rateMap, convictionCandles, pairDecisionEvidence.labels.structure,
         directionVerdict,
         propFirmGateResult?.enabled || false,
+        effectiveScore,
+        conflictAdjustedMinConfluence,
       );
       // ── Game Plan + Direction Verdict Alignment Gate ──
       // analysis.direction has already been synchronized to the authoritative

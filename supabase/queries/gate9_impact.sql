@@ -36,10 +36,20 @@
 --       "Score 47.2 < 55 threshold"
 --   So both numbers can be recovered without a schema change.
 --
--- NOTE
---   failed_gates is a Postgres text[] — confirmed against the live database on
---   2026-08-10 — so these queries use unnest(). If it is ever migrated to jsonb,
---   swap unnest(r.failed_gates) for jsonb_array_elements_text(r.failed_gates).
+-- NOTES (all confirmed against the live database on 2026-08-10)
+--   1. failed_gates is a Postgres text[], so these use unnest(). If it is ever
+--      migrated to jsonb, swap in jsonb_array_elements_text().
+--   2. The unnested column is aliased explicitly as t(g). A bare `as g` makes
+--      `g` ambiguous between the table alias and its single column.
+--   3. Use substring(... from '(pattern)') rather than regexp_match(...)[1] —
+--      regexp_match returned NULL in the Supabase editor for rows that the `~`
+--      operator matched, which silently produced empty score columns.
+--
+-- RESULT (2026-08-10)
+--   10 of 10 sampled Gate 9 rejections had an effective score at or above the
+--   threshold. Credits ranged +1.79 to +2.20 (avg +1.97). Confirmed bug; fixed
+--   in bot-scanner runSafetyGates, pinned by
+--   supabase/tests/_shared/gate9EffectiveScore.test.ts.
 --
 -- ────────────────────────────────────────────────────────────────────────────
 -- QUERY 1 — the summary. Run this one first and share the row.
@@ -52,10 +62,10 @@ with gate9 as (
     r.symbol,
     r.direction,
     r.confluence_score::numeric                                            as effective_score,
-    (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[1]::numeric as raw_score,
-    (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[2]::numeric as base_threshold
+    substring(g from 'Score ([0-9.]+)')::numeric          as raw_score,
+    substring(g from '< ([0-9.]+) threshold')::numeric    as base_threshold
   from rejected_setups r
-  cross join lateral unnest(r.failed_gates) as g
+  cross join lateral unnest(r.failed_gates) as t(g)
   where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
 )
 select
@@ -91,10 +101,10 @@ with gate9 as (
     r.tier1_count,
     r.session_name,
     r.confluence_score::numeric                                            as effective_score,
-    (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[1]::numeric as raw_score,
-    (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[2]::numeric as base_threshold
+    substring(g from 'Score ([0-9.]+)')::numeric          as raw_score,
+    substring(g from '< ([0-9.]+) threshold')::numeric    as base_threshold
   from rejected_setups r
-  cross join lateral unnest(r.failed_gates) as g
+  cross join lateral unnest(r.failed_gates) as t(g)
   where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
 )
 select
@@ -124,7 +134,7 @@ select
   r.symbol,
   g as gate_reason
 from rejected_setups r
-cross join lateral unnest(r.failed_gates) as g
+cross join lateral unnest(r.failed_gates) as t(g)
 where g like 'Score %threshold%'
 order by r.created_at desc
 limit 10;
