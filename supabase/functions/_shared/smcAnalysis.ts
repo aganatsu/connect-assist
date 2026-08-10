@@ -1085,7 +1085,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   };
 }
 
-export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {
+export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number, obCapOverride?: number): OrderBlock[] {
   // Volume pivot detection helper (LuxAlgo-inspired)
   // A volume pivot exists when a candle's volume is the highest within ±pivotLen bars
   const VOLUME_PIVOT_LEN = 5;
@@ -1104,7 +1104,10 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
     return true;
   }
   const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0) ? obLookbackOverride : 50;
-  const OB_CAP = 5;
+  // Callers that widen the scan window (to evaluate lifecycle against later
+  // price) must also raise the cap, or OBs formed inside their period of
+  // interest can be crowded out of the top-N by later, irrelevant ones.
+  const OB_CAP = (typeof obCapOverride === "number" && obCapOverride > 0) ? obCapOverride : 5;
   const BREAK_LOOKAHEAD = 10;
   const recencyStart = Math.max(2, candles.length - OB_RECENCY);
   const candidates: (OrderBlock & { quality: number })[] = [];
@@ -1301,10 +1304,20 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
 export function detectFVGs(
   candles: Candle[],
   structureBreaks?: { index: number; type: string }[],
+  /**
+   * How far back to scan for FVG *formation*. Mirrors `obLookbackOverride` on
+   * detectOrderBlocks. Callers that pass a window extending past the formation
+   * period (so lifecycle can be evaluated against later price) must raise this,
+   * or the older bars they added would fall outside the scan and their FVGs
+   * would never be found.
+   */
+  fvgLookbackOverride?: number,
 ): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
   // Only look at recent candles (last 50) to avoid stale FVGs from hours ago
-  const FVG_RECENCY = 50;
+  const FVG_RECENCY = (typeof fvgLookbackOverride === "number" && fvgLookbackOverride > 0)
+    ? fvgLookbackOverride
+    : 50;
   const startIdx = Math.max(2, candles.length - FVG_RECENCY);
 
   // Pre-compute ATR for quality scoring (size relative to ATR)
