@@ -214,6 +214,7 @@ import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationS
 import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
 import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
+import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -2152,19 +2153,51 @@ async function runScanForUser(
       const isLong = pos.direction === "long";
       if (!currentPrice || isNaN(currentPrice)) continue;
 
-      let hitPrice: number | null = null;
-      let closeReason: string | null = null;
-
-      // SL breach: long price <= SL, short price >= SL
-      if (sl > 0 && ((isLong && currentPrice <= sl) || (!isLong && currentPrice >= sl))) {
-        hitPrice = sl;
-        closeReason = "sl_hit";
+      // ── Build a real bar covering the position's life, not just a point ──
+      // paper-trading polls a last price every 5s and cannot see a wick that
+      // spikes through SL and recovers between polls. This path runs every ~5 min
+      // and CAN, because it reads closed candles. Aggregating every bar since
+      // open_time makes the check idempotent and catches anything the poll missed:
+      // if price ever traded through the stop, the trade is over — that is exactly
+      // what a broker-side SL would have done in live.
+      //
+      // Candles come from the per-scan cache, so the pair loop below reuses them
+      // and this costs ~nothing.
+      let exitBar = priceAsBar(currentPrice);
+      try {
+        const posCandles: Candle[] = await cachedFetch(
+          pos.symbol,
+          getEntryInterval(config.entryTimeframe),
+          getEntryRange(config.entryTimeframe),
+        );
+        const openedAt = pos.open_time ? new Date(pos.open_time).getTime() : NaN;
+        const sinceOpen = Number.isFinite(openedAt)
+          ? posCandles.filter((c) => new Date(c.datetime).getTime() >= openedAt)
+          : [];
+        if (sinceOpen.length > 0) {
+          exitBar = {
+            open: sinceOpen[0].open,
+            high: Math.max(currentPrice, ...sinceOpen.map((c) => c.high)),
+            low: Math.min(currentPrice, ...sinceOpen.map((c) => c.low)),
+            close: currentPrice,
+          };
+        }
+      } catch (barErr: any) {
+        // Fall back to the point check rather than leaving the position unmanaged.
+        console.warn(`[breach-check] ${pos.symbol}: bar fetch failed (${barErr?.message}) — using last price only`);
       }
-      // TP breach: long price >= TP, short price <= TP
-      // SL takes priority if both are breached simultaneously (shouldn't happen, but defensive)
-      if (!hitPrice && tp > 0 && ((isLong && currentPrice >= tp) || (!isLong && currentPrice <= tp))) {
-        hitPrice = tp;
-        closeReason = "tp_hit";
+
+      const breachDecision = evaluateExit(exitBar, {
+        direction: isLong ? "long" : "short",
+        stopLoss: sl > 0 ? sl : null,
+        takeProfit: tp > 0 ? tp : null,
+        pipSize: spec.pipSize,
+        slState: (pos.close_reason || "").toString(),
+      });
+      const hitPrice = breachDecision.exitPrice;
+      const closeReason = breachDecision.reason;
+      if (breachDecision.hit && breachDecision.ambiguousBar) {
+        console.log(`[breach-check] ${pos.symbol}: bar touched both SL and TP — resolved to ${closeReason}`);
       }
 
       if (hitPrice && closeReason) {
