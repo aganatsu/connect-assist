@@ -169,3 +169,34 @@ Deno.test("findUnifiedZone accepts minStopPips without disturbing a no-zone resu
   );
   assertEquals(res.hasZone, false);
 });
+
+// ── Zero-distance stops ──────────────────────────────────────────────────────
+// Five live trades were placed with slPrice exactly equal to entryPrice
+// (EUR/AUD, CAD/JPY, GBP/CAD, USD/CAD x2). riskPips was 0, so rrRatio came out
+// null, and the minimum-R:R guard `rrRatio !== null && rrRatio < minRR` never
+// fired — the setup passed because its R:R was absent rather than low.
+
+Deno.test("a zero-height zone yields no entry (riskPips = 0 must not pass)", () => {
+  // zone.high === zone.low → raw stop distance is exactly 0
+  const r = entryStop({
+    direction: "bullish",
+    zoneHigh: 1.62836, zoneLow: 1.62836,
+    impulseHigh: 1.62986, impulseLow: 1.62700,
+    pipSize: 0.0001, minStopPips: 20,
+  });
+  assertEquals(r, null, "no stop distance and no room to floor it — reject");
+});
+
+Deno.test("source guard: buildEntryStory rejects zero risk before the R:R check", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/unifiedZoneEngine.ts", import.meta.url),
+  );
+  const idxZero = src.indexOf("if (!(riskPips > 0))");
+  const idxRR = src.indexOf("if (rrRatio !== null && rrRatio < minRR)");
+  assert(idxZero > -1, "must explicitly reject riskPips <= 0");
+  assert(idxRR > -1, "minimum-R:R check must still exist");
+  assert(
+    idxZero < idxRR,
+    "the zero-risk rejection must come BEFORE the R:R check, which cannot see a null ratio",
+  );
+});
