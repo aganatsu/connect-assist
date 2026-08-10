@@ -188,6 +188,51 @@ function canonicalInterval(input: string): string {
   return m[input] || input;
 }
 
+/** Duration of one bar, per canonical interval. */
+const INTERVAL_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+  "1d": 24 * 60 * 60_000,
+  "1w": 7 * 24 * 60 * 60_000,
+};
+
+/**
+ * Drop trailing bars whose period has not finished yet.
+ *
+ * Data providers generally return the in-progress bar as the most recent
+ * element. Its high, low and close keep moving until the period closes, so any
+ * detector reading it sees values that change within a single bar: FVGs and
+ * order blocks appear and vanish intra-bar, and backtest (which only ever sees
+ * closed bars) can never reproduce live behaviour.
+ *
+ * A bar starting at T on interval I is closed only once `now >= T + I`. This
+ * makes the question "does provider X include the forming bar?" irrelevant — if
+ * it does, it is removed; if it does not, this is a no-op.
+ *
+ * Bar timestamps are treated as the bar's START time, which is the convention
+ * for every source wired here (MetaAPI, OANDA, TwelveData, Polygon).
+ */
+export function dropFormingBar(
+  candles: Candle[],
+  interval: string,
+  nowMs: number = Date.now(),
+): Candle[] {
+  const barMs = INTERVAL_MS[canonicalInterval(interval)];
+  if (!barMs || candles.length === 0) return candles;
+  let end = candles.length;
+  while (end > 0) {
+    const startedAt = new Date(candles[end - 1].datetime).getTime();
+    if (!Number.isFinite(startedAt)) break;
+    if (startedAt + barMs <= nowMs) break; // closed — and so is everything before it
+    end--;
+  }
+  return end === candles.length ? candles : candles.slice(0, end);
+}
+
 // Polygon.io uses {multiplier}/{timespan} format: e.g. 15/minute, 1/hour, 1/day
 function polygonTimespan(canon: string): { multiplier: number; timespan: string } {
   const m: Record<string, { multiplier: number; timespan: string }> = {
@@ -703,6 +748,11 @@ export interface FetchOptions {
   limit?: number;            // desired number of candles (default 200)
   brokerConn?: BrokerConn | null; // optional connected OANDA or MetaAPI account
   skipBroker?: boolean;      // true for request-budget-sensitive scans; use public data directly
+  /**
+   * Keep the in-progress bar. Display surfaces only — never detection, scoring
+   * or backtest, which require closed bars for live/backtest parity.
+   */
+  keepFormingBar?: boolean;
 }
 
 export interface FetchResult {
@@ -789,7 +839,27 @@ export function endScanSourceTally(): SourceTally {
   return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
 }
 
+/**
+ * Public entry point. Wraps the raw multi-source fetch and removes the
+ * in-progress bar so every detector downstream sees only closed candles.
+ *
+ * Set `keepFormingBar: true` only for display surfaces that genuinely want the
+ * live bar (e.g. a chart). Never for detection, scoring or backtest.
+ */
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
+  const result = await fetchCandlesRaw(opts);
+  if (opts.keepFormingBar) return result;
+  const trimmed = dropFormingBar(result.candles, opts.interval);
+  if (trimmed.length !== result.candles.length) {
+    console.log(
+      `[candles] ${opts.symbol} ${opts.interval}: dropped ${result.candles.length - trimmed.length}`
+      + ` in-progress bar(s) from ${result.source}`,
+    );
+  }
+  return { candles: trimmed, source: result.source };
+}
+
+async function fetchCandlesRaw(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
   const cacheScope = opts.brokerConn?.api_key ? `${opts.brokerConn.broker_type ?? "metaapi"}:${opts.brokerConn.account_id}` : "public";

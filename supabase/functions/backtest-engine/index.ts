@@ -217,6 +217,7 @@ import {
   type PartialCloseDecision,
   type StructureInvalidationEvidence,
 } from "../_shared/exitParity.ts";
+import { evaluateExit } from "../_shared/exitEvaluation.ts";
 import {
   buildGoldenReplaySnapshot,
   finalizeGoldenReplaySnapshot,
@@ -1165,31 +1166,18 @@ function processExits(
     }
 
     // ── Step 3: Check SL and TP hits (with same-candle disambiguation) ──
-    const slHit = pos.direction === "long" ? candle.low <= sl : candle.high >= sl;
-    const tpHit = pos.direction === "long" ? candle.high >= tp : candle.low <= tp;
-
-    if (slHit && tpHit) {
-      const slDist = Math.abs(candle.open - sl);
-      const tpDist = Math.abs(candle.open - tp);
-      if (slDist <= tpDist) {
-        closeReason = "sl_hit";
-        const gapPrice = pos.direction === "long" ? Math.min(sl, candle.low) : Math.max(sl, candle.high);
-        exitPrice = pos.direction === "long"
-          ? gapPrice - slippagePips * spec.pipSize
-          : gapPrice + slippagePips * spec.pipSize;
-      } else {
-        closeReason = "tp_hit";
-        exitPrice = tp;
-      }
-    } else if (slHit) {
-      closeReason = "sl_hit";
-      const gapPrice = pos.direction === "long" ? Math.min(sl, candle.low) : Math.max(sl, candle.high);
-      exitPrice = pos.direction === "long"
-        ? gapPrice - slippagePips * spec.pipSize
-        : gapPrice + slippagePips * spec.pipSize;
-    } else if (tpHit) {
-      closeReason = "tp_hit";
-      exitPrice = tp;
+    // Shared owner — see _shared/exitEvaluation.ts. Backtest passes a real OHLC
+    // bar, so this is the wick-accurate path.
+    const exitDecision = evaluateExit(candle, {
+      direction: pos.direction,
+      stopLoss: sl,
+      takeProfit: tp,
+      pipSize: spec.pipSize,
+      slippagePips,
+    });
+    if (exitDecision.hit) {
+      closeReason = exitDecision.reason!;
+      exitPrice = exitDecision.exitPrice!;
     }
 
     // ── Step 4: Max Hold Hours ──

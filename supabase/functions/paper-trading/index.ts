@@ -5,6 +5,7 @@ import { parseTradeOverrides } from "../_shared/resolveTradeConfig.ts";
 import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
+import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -898,35 +899,29 @@ Deno.serve(async (req) => {
             runtimeManagementConfig,
           );
 
-          // Check SL hit
-          // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
-          // If price gaps through SL, use the gap price. Then add simulated slippage.
-          // close_reason on paper_positions is reused as a "sl state" tag:
-          //   null/"" = original SL, "be" = moved to break-even, "trail" = trailing stop active
+          // ── SL / TP hit detection — shared owner, see _shared/exitEvaluation.ts ──
+          // This is the 5s poll path: it only holds a last price, so it passes a
+          // zero-width bar and cannot see a wick that spikes through SL and
+          // recovers between polls. bot-scanner re-evaluates the same positions
+          // against a real closed bar every ~5 min and catches those, closing at
+          // the correct gap-adjusted price. See PAPER_POLL_LIMITATION.
+          //
+          // close_reason on paper_positions is reused as an "sl state" tag while
+          // the position is open: null/"" = original SL, "be" = break-even,
+          // "trail" = trailing stop active.
           const slState: string = (pos.close_reason || "").toString();
-          const slHitReason = slState === "trail" ? "trail_hit" : slState === "be" ? "be_hit" : "sl_hit";
-          const slippagePips = exitFlags.slippagePips ?? 0.5; // default 0.5 pips slippage on SL
-          if (sl !== null) {
-            if (pos.direction === "long" && currentPrice <= sl) {
-              closeReason = slHitReason;
-              const gapPrice = Math.min(sl, currentPrice); // Use worse price (lower for longs)
-              const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
-              exitPrice = gapPrice - (slippagePips * spec.pipSize); // Slippage worsens the fill
-            } else if (pos.direction === "short" && currentPrice >= sl) {
-              closeReason = slHitReason;
-              const gapPrice = Math.max(sl, currentPrice); // Use worse price (higher for shorts)
-              const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
-              exitPrice = gapPrice + (slippagePips * spec.pipSize); // Slippage worsens the fill
-            }
-          }
-
-          // Check TP hit
-          if (!closeReason && tp !== null) {
-            if (pos.direction === "long" && currentPrice >= tp) {
-              closeReason = "tp_hit"; exitPrice = tp;
-            } else if (pos.direction === "short" && currentPrice <= tp) {
-              closeReason = "tp_hit"; exitPrice = tp;
-            }
+          const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+          const exitDecision = evaluateExit(priceAsBar(currentPrice), {
+            direction: pos.direction,
+            stopLoss: sl,
+            takeProfit: tp,
+            pipSize: spec.pipSize,
+            slippagePips: exitFlags.slippagePips ?? 0.5,
+            slState,
+          });
+          if (exitDecision.hit) {
+            closeReason = exitDecision.reason!;
+            exitPrice = exitDecision.exitPrice!;
           }
 
           // Max Hold is owned by scannerManagement. It moves profitable trades to
