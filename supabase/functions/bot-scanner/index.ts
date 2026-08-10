@@ -5078,6 +5078,7 @@ async function runScanForUser(
         (detail as any).impulseZone = {
           hasZone: !!multiTF.bestZone,
           selectedTF: multiTF.selectedTF,
+          impulseQualification: unifiedResult.impulse?.qualification ?? null,
           reason: multiTF.reason,
           impulse: multiTF.bestZone?.impulse ? {
             high: multiTF.bestZone.impulse.high,

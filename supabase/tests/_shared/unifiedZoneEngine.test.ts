@@ -94,7 +94,7 @@ function makePool(
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
-Deno.test("findUnifiedZone — returns no_zone when flat market (no impulse)", () => {
+Deno.test("findUnifiedZone — returns no_impulse when flat market (no impulse)", () => {
   const h1 = generateFlatCandles(50, 1.1200);
   const h4 = generateFlatCandles(30, 1.1200);
   const entry = generateFlatCandles(50, 1.1200);
@@ -104,7 +104,7 @@ Deno.test("findUnifiedZone — returns no_zone when flat market (no impulse)", (
   );
 
   assertEquals(result.hasZone, false);
-  assertEquals(result.state, "no_zone");
+  assertEquals(result.state, "no_impulse");
   assertEquals(result.selectedTF, null);
   assertEquals(result.unifiedScore, 0);
   assert(result.storySummary.includes("No valid"));

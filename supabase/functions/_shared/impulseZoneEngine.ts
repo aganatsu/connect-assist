@@ -29,9 +29,8 @@ import {
 } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import {
-  canonicalImpulseMatchesLegacy,
-  detectCanonicalImpulse,
-  type CanonicalImpulseDetection,
+  CANONICAL_IMPULSE_DETECTOR_VERSION,
+  measureCanonicalImpulseMetrics,
   type CanonicalImpulseMetrics,
 } from "./canonicalImpulseDetector.ts";
 import {
@@ -52,10 +51,36 @@ export interface ImpulseLeg {
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
   breakType?: "bos" | "choch";
+  closeBased?: boolean;
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
   endDate?: string;     // ISO date of the BOS candle
   spanBars?: number;    // Number of candles in the impulse leg
+}
+
+export type ImpulseQualificationState = "developing" | "qualified" | "invalidated";
+
+export interface ImpulseQualification {
+  contractVersion: "impulse-zone-qualification.v1";
+  state: ImpulseQualificationState;
+  qualified: boolean;
+  reasons: string[];
+  measurements: {
+    breakType: "bos" | "choch" | null;
+    closeBasedBreak: boolean;
+    originProtected: boolean;
+    impulseATRMultiple: number | null;
+    strongestDirectionalBodyRatio: number | null;
+    strongestDirectionalRangeATR: number | null;
+    recencyBars: number;
+    poiCount: number;
+  };
+  thresholds: {
+    minImpulseATR: number;
+    minBodyRatio: number;
+    minDirectionalRangeATR: number;
+    maxAgeBars: number;
+  };
 }
 
 export interface ImpulsePOI {
@@ -132,6 +157,7 @@ export interface HTFConfluenceData {
 export interface ZoneEngineResult {
   bestZone: BestZone | null;
   impulse: ImpulseLeg | null;
+  impulseQualification?: ImpulseQualification | null;
   allZones: RankedPOI[];
   reason: string;         // Human-readable explanation of outcome
   /** Present only when the observation-only collector is explicitly enabled. */
@@ -145,8 +171,9 @@ export interface ZoneEngineEvidenceSnapshot {
   mappedPOIs: ImpulsePOI[];
   qualificationMeasurements: POIQualificationMeasurement[];
   rankedZones: RankedPOI[];
-  canonicalImpulse: CanonicalImpulseDetection | null;
+  canonicalImpulse: { detectorVersion: string; timeframe: string | null; direction: "bullish" | "bearish"; impulse: ImpulseLeg; metrics: CanonicalImpulseMetrics; selectionKey: string } | null;
   canonicalMatchesLegacy: boolean | null;
+  impulseQualification: ImpulseQualification | null;
 }
 
 export interface ZoneQualificationResult {
@@ -202,7 +229,7 @@ const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
  * @param timeframe - Optional: which timeframe these candles represent (for metadata)
  * @returns ImpulseLeg or null if no valid impulse found
  */
-export function findImpulseLeg(
+export function findStructuralLeg(
   candles: Candle[],
   direction: "bullish" | "bearish",
   timeframe?: "D" | "4H" | "1H",
@@ -273,6 +300,7 @@ export function findImpulseLeg(
           isValid: false,
           bosPrice: bos.price,
           breakType: bos.breakType,
+          closeBased: bos.closeBased === true,
           timeframe,
           startDate: candles[bos.index]?.datetime,
           endDate: candles[bos.index]?.datetime,
@@ -360,6 +388,7 @@ function validateImpulseFromBOS(
         isValid: true,
         bosPrice: bos.price,
         breakType: bos.breakType,
+        closeBased: bos.closeBased === true,
       };
     }
     collector?.({
@@ -394,6 +423,76 @@ function validateImpulseFromBOS(
 // that have normal wave 2/4 corrections. Replaced with origin-not-broken
 // validation: an impulse is valid as long as price hasn't closed past the
 // swing origin that started the move.
+/** @deprecated Use findStructuralLeg. This wrapper does not implement a second selector. */
+export function findImpulseLeg(
+  candles: Candle[],
+  direction: "bullish" | "bearish",
+  timeframe?: "D" | "4H" | "1H",
+  collector?: (candidate: ImpulseLegCandidate) => void,
+  structureAuthorityMode: "observe" | "enforce" = "observe",
+): ImpulseLeg | null {
+  return findStructuralLeg(candles, direction, timeframe, collector, structureAuthorityMode);
+}
+
+export function qualifyImpulseLeg(
+  candles: Candle[],
+  leg: ImpulseLeg,
+  pois: ImpulsePOI[],
+  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
+): ImpulseQualification {
+  const metrics = measureCanonicalImpulseMetrics(candles, leg);
+  const minImpulseATR = Math.max(0.5, Number(options?.minDisplacementATR ?? 1.5));
+  const minBodyRatio = Math.max(0.1, Math.min(1, Number(options?.minBodyRatio ?? 0.5)));
+  const minDirectionalRangeATR = minImpulseATR;
+  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
+  const legCandles = candles.slice(leg.startIndex, leg.endIndex + 1);
+  const atr = metrics.atr;
+  const directionalRanges = legCandles
+    .filter((candle) => leg.direction === "bullish" ? candle.close > candle.open : candle.close < candle.open)
+    .map((candle) => candle.high - candle.low);
+  const strongestDirectionalRangeATR = atr > 0 && directionalRanges.length > 0
+    ? Math.max(...directionalRanges) / atr
+    : null;
+  const reasons: string[] = [];
+
+  if (!leg.isValid) reasons.push("Impulse origin was broken by a later candle close");
+  if (leg.breakType !== "bos") reasons.push("CHoCH detected, but a continuation BOS is still required");
+  if (leg.closeBased !== true) reasons.push("Structure break was not confirmed by a candle close");
+  if (metrics.atrNormalizedSize === null || metrics.atrNormalizedSize < minImpulseATR) {
+    reasons.push("Impulse range " + (metrics.atrNormalizedSize?.toFixed(2) ?? "unavailable") + "x ATR is below " + minImpulseATR.toFixed(2) + "x");
+  }
+  if (metrics.strongestDirectionalBodyRatio === null || metrics.strongestDirectionalBodyRatio < minBodyRatio) {
+    reasons.push("Strongest directional body ratio " + (metrics.strongestDirectionalBodyRatio?.toFixed(2) ?? "unavailable") + " is below " + minBodyRatio.toFixed(2));
+  }
+  if (strongestDirectionalRangeATR === null || strongestDirectionalRangeATR < minDirectionalRangeATR) {
+    reasons.push("Directional displacement " + (strongestDirectionalRangeATR?.toFixed(2) ?? "unavailable") + "x ATR is below " + minDirectionalRangeATR.toFixed(2) + "x");
+  }
+  if (maxAgeBars > 0 && metrics.recencyBars > maxAgeBars) {
+    reasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
+  }
+  if (pois.length === 0) reasons.push("No FVG or Order Block was created by the impulse");
+
+  const state: ImpulseQualificationState = !leg.isValid
+    ? "invalidated"
+    : reasons.length === 0 ? "qualified" : "developing";
+  return {
+    contractVersion: "impulse-zone-qualification.v1",
+    state,
+    qualified: state === "qualified",
+    reasons,
+    measurements: {
+      breakType: leg.breakType ?? null,
+      closeBasedBreak: leg.closeBased === true,
+      originProtected: leg.isValid,
+      impulseATRMultiple: metrics.atrNormalizedSize,
+      strongestDirectionalBodyRatio: metrics.strongestDirectionalBodyRatio,
+      strongestDirectionalRangeATR: strongestDirectionalRangeATR === null ? null : Number(strongestDirectionalRangeATR.toFixed(6)),
+      recencyBars: metrics.recencyBars,
+      poiCount: pois.length,
+    },
+    thresholds: { minImpulseATR, minBodyRatio, minDirectionalRangeATR, maxAgeBars },
+  };
+}
 // ─── 2. mapImpulsePOIs ────────────────────────────────────────────────────────
 
 /**
@@ -807,7 +906,7 @@ export function collectImpulseLegCandidates(
   timeframe?: string,
 ): ImpulseLegCandidate[] {
   const out: ImpulseLegCandidate[] = [];
-  findImpulseLeg(
+  findStructuralLeg(
     candles,
     direction,
     timeframe as ImpulseLeg["timeframe"],
@@ -1632,13 +1731,8 @@ export function findBestEntryZone(
   let collectedPOIs: ImpulsePOI[] = [];
   let collectedMeasurements: POIQualificationMeasurement[] = [];
   let collectedRankedZones: RankedPOI[] = [];
-  const canonicalImpulse = options?.collectEvidence
-    ? detectCanonicalImpulse(
-      htfCandles,
-      direction,
-      options.evidenceContext?.timeframe,
-    )
-    : null;
+  let canonicalImpulse: ZoneEngineEvidenceSnapshot["canonicalImpulse"] = null;
+  let impulseQualification: ImpulseQualification | null = null;
   const finish = (result: ZoneEngineResult): ZoneEngineResult => {
     if (!options?.collectEvidence) return result;
     return {
@@ -1651,30 +1745,31 @@ export function findBestEntryZone(
         qualificationMeasurements: collectedMeasurements,
         rankedZones: collectedRankedZones,
         canonicalImpulse,
-        canonicalMatchesLegacy: canonicalImpulseMatchesLegacy(
-          canonicalImpulse?.impulse ?? null,
-          result.impulse,
-        ),
+        canonicalMatchesLegacy: canonicalImpulse?.selectionKey === null ? null : true,
+        impulseQualification,
       },
     };
   };
 
   // Step 1: Find impulse leg
-  const impulse = findImpulseLeg(
+  const impulse = findStructuralLeg(
     htfCandles,
     direction,
     undefined,
-    options?.collectEvidence
-      ? (candidate) => collectedImpulses.push(candidate)
-      : undefined,
+    (candidate) => collectedImpulses.push(candidate),
     options?.structureAuthorityMode ?? "observe",
   );
   if (!impulse) {
+    const rejectedLeg = collectedImpulses.findLast((candidate) => !candidate.selected)?.leg ?? null;
+    impulseQualification = rejectedLeg ? qualifyImpulseLeg(htfCandles, rejectedLeg, [], options) : null;
     return finish({
       bestZone: null,
-      impulse: null,
+      impulse: rejectedLeg,
+      impulseQualification,
       allZones: [],
-      reason: `No valid ${direction} impulse leg found (no BOS or origin broken)`,
+      reason: impulseQualification
+        ? `Invalidated structural leg: ${impulseQualification.reasons.join("; ")}`
+        : `No ${direction} structural break and swing origin were found`,
     });
   }
 
@@ -1685,6 +1780,27 @@ export function findBestEntryZone(
     evidenceContext: options?.evidenceContext,
   });
   collectedPOIs = mappedPOIs;
+  impulseQualification = qualifyImpulseLeg(htfCandles, impulse, mappedPOIs, options);
+  if (options?.collectEvidence) {
+    const metrics = measureCanonicalImpulseMetrics(htfCandles, impulse);
+    canonicalImpulse = {
+      detectorVersion: CANONICAL_IMPULSE_DETECTOR_VERSION,
+      timeframe: options.evidenceContext?.timeframe ?? null,
+      direction,
+      impulse,
+      metrics,
+      selectionKey: [direction, impulse.startIndex, impulse.endIndex, impulse.low.toFixed(10), impulse.high.toFixed(10), impulse.bosPrice.toFixed(10)].join(":"),
+    };
+  }
+  if (!impulseQualification.qualified) {
+    return finish({
+      bestZone: null,
+      impulse,
+      impulseQualification,
+      allZones: [],
+      reason: (impulseQualification.state === "invalidated" ? "Invalidated" : "Developing") + " structural leg: " + impulseQualification.reasons.join("; "),
+    });
+  }
   const qualification = qualifyImpulsePOIs(htfCandles, impulse, mappedPOIs, options);
   if (options?.collectEvidence) {
     collectedMeasurements = measureImpulsePOIQualification(
@@ -1703,6 +1819,7 @@ export function findBestEntryZone(
     return finish({
       bestZone: null,
       impulse,
+      impulseQualification,
       allZones: [],
       reason: mappedPOIs.length === 0
         ? `Impulse found but no POIs (FVGs/OBs) detected within it`
@@ -1724,6 +1841,7 @@ export function findBestEntryZone(
     return finish({
       bestZone: null,
       impulse,
+      impulseQualification,
       allZones: [],
       reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
     });
@@ -1786,6 +1904,7 @@ export function findBestEntryZone(
     return finish({
       bestZone: null,
       impulse,
+      impulseQualification,
       allZones: rankedZones,
       reason: `Zones found but none scored high enough (need fibScore >= 1, i.e., at 50% or deeper)`,
     });
@@ -1796,6 +1915,7 @@ export function findBestEntryZone(
     return finish({
       bestZone: null,
       impulse,
+      impulseQualification,
       allZones: rankedZones,
       reason: `Best zone quality ${qualityPercent.toFixed(1)}% is below Bot Config minimum ${minQualityScore.toFixed(1)}%`,
     });
@@ -1891,6 +2011,7 @@ export function findBestEntryZone(
       distancePips,
     },
     impulse,
+    impulseQualification,
     allZones: rankedZones,
     reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/9${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
   });

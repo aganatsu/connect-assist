@@ -52,6 +52,7 @@ interface ZoneStoryData {
     startDate: string | null;
     endDate: string | null;
     spanBars: number;
+    qualification?: { state: "developing" | "qualified" | "invalidated"; reasons: string[]; measurements: Record<string, unknown> } | null;
     bosPrice: number;
   } | null;
   zone: {
@@ -442,6 +443,11 @@ export function ZoneStoryPanel({
                   </span>
                   <span className="ml-2">{fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}</span>
                   <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
+                  {unifiedData.impulse.qualification && (
+                    <span className={`ml-2 font-mono text-[10px] uppercase ${unifiedData.impulse.qualification.state === "qualified" ? "text-emerald-400" : unifiedData.impulse.qualification.state === "developing" ? "text-amber-400" : "text-red-400"}`}>
+                      {unifiedData.impulse.qualification.state}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <span className="text-zinc-400">None found</span>

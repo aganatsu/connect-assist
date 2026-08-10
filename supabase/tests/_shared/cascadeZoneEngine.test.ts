@@ -170,7 +170,7 @@ Deno.test("findDailyZone: respects minDailyFibDepth option", () => {
   const result = findDailyZone(candles, "bullish", { minDailyFibDepth: 0.786 });
   // Either finds a deep zone or returns null with appropriate reason
   if (!result.zone) {
-    assert(result.reason.includes("deep enough") || result.reason.includes("No valid") || result.reason.includes("no POIs") || result.reason.includes("none at key"));
+    assert(result.reason.includes("deep enough") || result.reason.includes("No valid") || result.reason.includes("no POIs") || result.reason.includes("none at key") || result.reason.includes("structural leg"));
   }
 });
 

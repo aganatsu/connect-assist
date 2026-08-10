@@ -43,6 +43,7 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
         enforcement: "observe_only",
         selected: { id: "child-1+fvg-1", type: "ob_fvg" },
       },
+      impulseQualification: { contractVersion: "impulse-zone-qualification.v1", state: "qualified", qualified: true },
       impulse: {
         high: 1.72,
         low: 1.7,
@@ -118,6 +119,7 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
   );
   assertEquals(frozen.parentImpulse?.candidateId, "parent-1");
   assertEquals(frozen.childImpulse?.timeframe, "15min");
+  assertEquals(frozen.childImpulse?.qualification?.state, "qualified");
   assertEquals(frozen.canonicalDealingRange.available, true);
   if (frozen.canonicalDealingRange.available) {
     assertEquals(

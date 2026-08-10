@@ -113,6 +113,7 @@ export interface ImpulseStory {
   endDate: string | null;
   spanBars: number;
   bosPrice: number;
+  qualification: import("./impulseZoneEngine.ts").ImpulseQualification | null;
 }
 
 export interface ZoneStory {
@@ -346,7 +347,7 @@ export function findUnifiedZone(
   // No zone found
   if (!multiTFResult.bestZone) {
     return {
-      ...buildNoZoneResult(multiTFResult, direction, currentPrice),
+      ...buildNoZoneResult(multiTFResult, direction, currentPrice, options?.pipSize ?? 0.0001, labels),
       candidateAuthorityObservation,
     };
   }
@@ -355,6 +356,9 @@ export function findUnifiedZone(
   const selectedTF = multiTFResult.selectedTF!;
   const impulse = bestZone.impulse;
   const zonePOI = bestZone.zone;
+  const selectedZoneResult = selectedTF === labels.top
+    ? multiTFResult.dailyResult
+    : selectedTF === labels.mid ? multiTFResult.h4Result : multiTFResult.h1Result;
 
   // ── Step 2: Build impulse story ──
   const pipSize = options?.pipSize ?? 0.0001;
@@ -369,6 +373,7 @@ export function findUnifiedZone(
     endDate: impulse.endDate ?? null,
     spanBars: impulse.spanBars ?? 0,
     bosPrice: impulse.bosPrice,
+    qualification: selectedZoneResult?.impulseQualification ?? null,
   };
 
   // ── Step 3: Build zone story ──
@@ -673,11 +678,27 @@ function buildNoZoneResult(
   multiTFResult: MultiTFZoneResult,
   direction: "bullish" | "bearish",
   currentPrice: number,
+  pipSize: number,
+  labels: TFSlotLabels,
 ): UnifiedZoneResult {
+  const developing = [
+    { result: multiTFResult.dailyResult, timeframe: labels.top },
+    { result: multiTFResult.h4Result, timeframe: labels.mid },
+    { result: multiTFResult.h1Result, timeframe: labels.low },
+  ].find((candidate) => candidate.result?.impulse && candidate.result.impulseQualification);
+  const leg = developing?.result?.impulse ?? null;
+  const qualification = developing?.result?.impulseQualification ?? null;
+  const impulse: ImpulseStory | null = leg ? {
+    direction: leg.direction, high: leg.high, low: leg.low,
+    pips: Math.round((Math.abs(leg.high - leg.low) / pipSize) * 10) / 10,
+    timeframe: developing?.timeframe ?? leg.timeframe ?? "unknown",
+    startDate: leg.startDate ?? null, endDate: leg.endDate ?? null,
+    spanBars: leg.spanBars ?? 0, bosPrice: leg.bosPrice, qualification,
+  } : null;
   return {
     hasZone: false,
-    selectedTF: null,
-    impulse: null,
+    selectedTF: developing?.timeframe ?? null,
+    impulse,
     zone: null,
     price: { currentPrice, atZone: false, atZoneStrict: false, insideZone: false, distancePips: 0, sideOk: false },
     liquidity: null,
@@ -685,9 +706,11 @@ function buildNoZoneResult(
     entry: null,
     unifiedScore: 0,
     scoreBreakdown: { baseScore: 0, liquidityBonus: 0, confirmationBonus: 0, tfBonus: 0, total: 0 },
-    storySummary: `No valid ${direction} zone found on any timeframe.`,
+    storySummary: qualification
+      ? `${qualification.state === "developing" ? "Developing structural leg" : "Invalidated structural leg"}: ${qualification.reasons.join("; ")}`
+      : `No valid ${direction} structural leg found on any timeframe.`,
     multiTFResult,
-    state: "no_zone",
+    state: impulse ? "no_zone" : "no_impulse",
     reason: multiTFResult.reason,
   };
 }
