@@ -23,6 +23,7 @@ import {
   refineLowerTF,
   rankAndSelectBestZone,
   findBestEntryZone,
+  qualifyImpulseLeg,
   qualifyImpulsePOIs,
   zoneQualityPercent,
   type ImpulseLeg,
@@ -31,10 +32,7 @@ import {
   type HTFConfluenceData,
 } from "../../functions/_shared/impulseZoneEngine.ts";
 import { buildConceptEvidence } from "../../functions/_shared/conceptEvidence.ts";
-import {
-  canonicalImpulseMatchesLegacy,
-  detectCanonicalImpulse,
-} from "../../functions/_shared/canonicalImpulseDetector.ts";
+import { measureCanonicalImpulseMetrics } from "../../functions/_shared/canonicalImpulseDetector.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -237,52 +235,64 @@ Deno.test("findImpulseLeg — returns null for wrong direction", () => {
   }
 });
 
-Deno.test("canonical structure preserves legacy selection in observe and owns selection in enforce", () => {
-  for (
-    const [candles, direction] of [
-      [generateBullishImpulseCandles(50), "bullish"],
-      [generateBearishImpulseCandles(50), "bearish"],
-    ] as const
-  ) {
-    const legacy = findImpulseLeg(candles, direction);
-    const observed = findImpulseLeg(candles, direction, undefined, undefined, "observe");
-    const enforced = findImpulseLeg(candles, direction, undefined, undefined, "enforce");
-    const canonical = detectCanonicalImpulse(candles, direction, "1H");
-    assert(
-      canonicalImpulseMatchesLegacy(observed, legacy),
-      direction + " observe mode must preserve the legacy-selected leg",
-    );
-    assert(
-      canonicalImpulseMatchesLegacy(canonical.impulse, enforced),
-      direction + " enforce mode must use the canonical-selected leg",
-    );
-    if (enforced) {
-      assertExists(canonical.impulse);
-      assertExists(canonical.metrics);
-      assert(canonical.metrics.atrNormalizedSize !== null);
-      assert(canonical.metrics.displacementPercentile !== null);
-      assert(canonical.metrics.bodyStrengthPercentile !== null);
-    }
-  }
-});
-
-Deno.test("canonical detector is deterministic and pair/timeframe relative", () => {
+Deno.test("Impulse Zone Engine is the only selector; canonical module measures its leg", () => {
   const candles = generateBullishImpulseCandles(50);
-  const first = detectCanonicalImpulse(candles, "bullish", "1H");
-  const second = detectCanonicalImpulse(candles, "bullish", "1H");
+  const selected = findImpulseLeg(candles, "bullish", undefined, undefined, "enforce");
+  assertExists(selected);
+  const first = measureCanonicalImpulseMetrics(candles, selected);
+  const second = measureCanonicalImpulseMetrics(candles, selected);
   assertEquals(first, second);
-  assertEquals(first.detectorVersion, "canonical-impulse.v1");
-  assertEquals(first.timeframe, "1H");
-  assert(
-    (first.metrics?.displacementPercentile ?? -1) >= 0 &&
-      (first.metrics?.displacementPercentile ?? 101) <= 100,
-  );
-  assert(
-    (first.metrics?.bodyStrengthPercentile ?? -1) >= 0 &&
-      (first.metrics?.bodyStrengthPercentile ?? 101) <= 100,
-  );
+  assert(first.atrNormalizedSize !== null);
+  assert(first.displacementPercentile !== null);
+  assert(first.bodyStrengthPercentile !== null);
 });
 
+Deno.test("qualified impulse requires BOS, close, displacement, body strength, and POI", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const pois = mapImpulsePOIs(candles, leg);
+  const result = qualifyImpulseLeg(candles, leg, pois, { minDisplacementATR: 1, minBodyRatio: 0.5 });
+  assertEquals(result.state, "qualified");
+  assertEquals(result.qualified, true);
+  assert(result.measurements.poiCount > 0);
+});
+
+Deno.test("CHoCH-only structural leg remains developing", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const result = qualifyImpulseLeg(candles, { ...leg, breakType: "choch" }, mapImpulsePOIs(candles, leg), { minDisplacementATR: 1, minBodyRatio: 0.5 });
+  assertEquals(result.state, "developing");
+  assert(result.reasons.some((reason) => reason.includes("continuation BOS")));
+});
+
+Deno.test("structural leg without an impulse POI remains developing", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const result = qualifyImpulseLeg(candles, leg, [], { minDisplacementATR: 1, minBodyRatio: 0.5 });
+  assertEquals(result.state, "developing");
+  assert(result.reasons.some((reason) => reason.includes("No FVG or Order Block")));
+});
+
+Deno.test("broken structural-leg origin is invalidated", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const result = qualifyImpulseLeg(candles, { ...leg, isValid: false }, mapImpulsePOIs(candles, leg), { minDisplacementATR: 1, minBodyRatio: 0.5 });
+  assertEquals(result.state, "invalidated");
+  assertEquals(result.qualified, false);
+});
+
+Deno.test("weak displacement cannot authorize an impulse zone", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const result = qualifyImpulseLeg(candles, leg, mapImpulsePOIs(candles, leg), { minDisplacementATR: 5, minBodyRatio: 0.5 });
+  assertEquals(result.state, "developing");
+  assert(result.reasons.some((reason) => reason.includes("Directional displacement")));
+});
 Deno.test("mapImpulsePOIs — returns empty for invalid impulse", () => {
   const candles = generateBullishImpulseCandles(50);
   const invalidImpulse: ImpulseLeg = {
@@ -813,7 +823,7 @@ Deno.test("findBestEntryZone — returns reason when no impulse found", () => {
   const result = findBestEntryZone(candles, candles, "bullish", 1.0);
   assertEquals(result.bestZone, null);
   assertEquals(result.impulse, null);
-  assert(result.reason.includes("No valid"), `Reason should explain failure: ${result.reason}`);
+  assert(result.reason.includes("No valid") || result.reason.includes("structural break"), `Reason should explain failure: ${result.reason}`);
 });
 
 Deno.test("findBestEntryZone — full pipeline with bullish impulse", () => {
@@ -848,7 +858,7 @@ Deno.test("findBestEntryZone — observe-only evidence does not change selection
     "bullish",
     1.03,
     undefined,
-    { evidenceContext, collectEvidence: false },
+    { evidenceContext, collectEvidence: false, minDisplacementATR: 1 },
   );
   const observed = findBestEntryZone(
     htfCandles,
@@ -859,6 +869,7 @@ Deno.test("findBestEntryZone — observe-only evidence does not change selection
     {
       evidenceContext,
       collectEvidence: true,
+      minDisplacementATR: 1,
     },
   );
   assertExists(baseline.bestZone);

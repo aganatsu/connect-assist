@@ -1,19 +1,13 @@
 /**
- * Canonical impulse detector — Phase 2.
- *
- * This module is observation-only until Phase 8. It mirrors the current
- * impulse selection contract, then attaches pair/timeframe-relative
- * measurements that can be compared across scanner, replay and UI evidence.
- * No metric in this file authorizes, scores, sizes or executes a trade.
+ * Relative impulse measurements for the single Impulse Zone Engine authority.
+ * This module deliberately does not select an impulse leg.
  */
-
-import type { Candle, StructureBreak, SwingPoint } from "./smcAnalysis.ts";
+import type { Candle } from "./smcAnalysis.ts";
 import { calculateATR } from "./smcAnalysis.ts";
-import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
 
 export const CANONICAL_IMPULSE_DETECTOR_VERSION = "canonical-impulse.v1";
 
-export interface CanonicalImpulseLeg {
+export interface MeasurableImpulseLeg {
   high: number;
   low: number;
   direction: "bullish" | "bearish";
@@ -21,20 +15,7 @@ export interface CanonicalImpulseLeg {
   endIndex: number;
   isValid: boolean;
   bosPrice: number;
-  breakType?: "bos" | "choch";
-  timeframe?: string;
-  startDate?: string;
-  endDate?: string;
   spanBars?: number;
-}
-
-export interface CanonicalImpulseCandidate {
-  leg: CanonicalImpulseLeg;
-  selected: boolean;
-  rejection: {
-    code: "origin_broken_or_invalid";
-    explanation: string;
-  } | null;
 }
 
 export interface CanonicalImpulseMetrics {
@@ -52,16 +33,6 @@ export interface CanonicalImpulseMetrics {
   structureIntact: boolean;
 }
 
-export interface CanonicalImpulseDetection {
-  detectorVersion: typeof CANONICAL_IMPULSE_DETECTOR_VERSION;
-  timeframe: string | null;
-  direction: "bullish" | "bearish";
-  impulse: CanonicalImpulseLeg | null;
-  candidates: CanonicalImpulseCandidate[];
-  metrics: CanonicalImpulseMetrics | null;
-  selectionKey: string | null;
-}
-
 function percentileRank(value: number, population: number[]): number | null {
   const valid = population.filter(Number.isFinite);
   if (!Number.isFinite(value) || valid.length === 0) return null;
@@ -69,81 +40,9 @@ function percentileRank(value: number, population: number[]): number | null {
   return Number(((atOrBelow / valid.length) * 100).toFixed(2));
 }
 
-function legKey(leg: CanonicalImpulseLeg | null): string | null {
-  if (!leg) return null;
-  return [
-    leg.direction,
-    leg.startIndex,
-    leg.endIndex,
-    leg.low.toFixed(10),
-    leg.high.toFixed(10),
-    leg.bosPrice.toFixed(10),
-  ].join(":");
-}
-
-function validateCandidate(
+export function measureCanonicalImpulseMetrics(
   candles: Candle[],
-  bos: StructureBreak & { breakType: "bos" | "choch" },
-  direction: "bullish" | "bearish",
-  swingPoints: SwingPoint[],
-): {
-  selected: CanonicalImpulseLeg | null;
-  rejected: CanonicalImpulseCandidate[];
-} {
-  const originType = direction === "bullish" ? "low" : "high";
-  const origins = swingPoints
-    .filter((point) => point.type === originType && point.index < bos.index)
-    .sort((a, b) => b.index - a.index);
-  const rejected: CanonicalImpulseCandidate[] = [];
-
-  for (const origin of origins.slice(0, 5)) {
-    if (bos.index - origin.index < 3) continue;
-    let high = -Infinity;
-    let low = Infinity;
-    for (let index = origin.index; index <= bos.index; index++) {
-      high = Math.max(high, candles[index]?.high ?? -Infinity);
-      low = Math.min(low, candles[index]?.low ?? Infinity);
-    }
-    if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) {
-      continue;
-    }
-
-    const originPrice = direction === "bullish" ? low : high;
-    const originBroken = candles.slice(bos.index + 1).some((candle) =>
-      direction === "bullish"
-        ? candle.close < originPrice
-        : candle.close > originPrice
-    );
-    const leg: CanonicalImpulseLeg = {
-      high,
-      low,
-      direction,
-      startIndex: origin.index,
-      endIndex: bos.index,
-      isValid: !originBroken,
-      bosPrice: bos.price,
-      breakType: bos.breakType,
-      startDate: candles[origin.index]?.datetime,
-      endDate: candles[bos.index]?.datetime,
-      spanBars: bos.index - origin.index,
-    };
-    if (!originBroken) return { selected: leg, rejected };
-    rejected.push({
-      leg,
-      selected: false,
-      rejection: {
-        code: "origin_broken_or_invalid",
-        explanation:
-          "Impulse origin was broken by a later candle close before evaluation",
-      },
-    });
-  }
-  return { selected: null, rejected };
-}
-
-function relativeMetrics(
-  candles: Candle[],
-  impulse: CanonicalImpulseLeg,
+  impulse: MeasurableImpulseLeg,
 ): CanonicalImpulseMetrics {
   const atr = calculateATR(candles);
   const rangeAbsolute = impulse.high - impulse.low;
@@ -219,96 +118,4 @@ function relativeMetrics(
     sweptLevel,
     structureIntact: impulse.isValid,
   };
-}
-
-export function detectCanonicalImpulse(
-  candles: Candle[],
-  direction: "bullish" | "bearish",
-  timeframe?: string,
-): CanonicalImpulseDetection {
-  const candidates: CanonicalImpulseCandidate[] = [];
-  if (candles.length < 20) {
-    return {
-      detectorVersion: CANONICAL_IMPULSE_DETECTOR_VERSION,
-      timeframe: timeframe ?? null,
-      direction,
-      impulse: null,
-      candidates,
-      metrics: null,
-      selectionKey: null,
-    };
-  }
-
-  const structure = canonicalStructureForLegacyConsumers(candles);
-  const breaks = structure.breaks
-    .filter((item) => item.type === direction)
-    .sort((a, b) => b.index - a.index);
-
-  for (const bos of breaks) {
-    const result = validateCandidate(
-      candles,
-      bos,
-      direction,
-      structure.swings,
-    );
-    candidates.push(...result.rejected);
-    if (result.selected) {
-      result.selected.timeframe = timeframe;
-      candidates.push({
-        leg: result.selected,
-        selected: true,
-        rejection: null,
-      });
-      return {
-        detectorVersion: CANONICAL_IMPULSE_DETECTOR_VERSION,
-        timeframe: timeframe ?? null,
-        direction,
-        impulse: result.selected,
-        candidates,
-        metrics: relativeMetrics(candles, result.selected),
-        selectionKey: legKey(result.selected),
-      };
-    }
-    if (result.rejected.length === 0) {
-      candidates.push({
-        leg: {
-          high: bos.price,
-          low: bos.price,
-          direction,
-          startIndex: bos.index,
-          endIndex: bos.index,
-          isValid: false,
-          bosPrice: bos.price,
-          breakType: bos.breakType,
-          timeframe,
-          startDate: candles[bos.index]?.datetime,
-          endDate: candles[bos.index]?.datetime,
-          spanBars: 0,
-        },
-        selected: false,
-        rejection: {
-          code: "origin_broken_or_invalid",
-          explanation:
-            `No valid swing origin for the ${direction} break at index ${bos.index}`,
-        },
-      });
-    }
-  }
-
-  return {
-    detectorVersion: CANONICAL_IMPULSE_DETECTOR_VERSION,
-    timeframe: timeframe ?? null,
-    direction,
-    impulse: null,
-    candidates,
-    metrics: null,
-    selectionKey: null,
-  };
-}
-
-export function canonicalImpulseMatchesLegacy(
-  canonical: CanonicalImpulseLeg | null,
-  legacy: CanonicalImpulseLeg | null,
-): boolean {
-  return legKey(canonical) === legKey(legacy);
 }

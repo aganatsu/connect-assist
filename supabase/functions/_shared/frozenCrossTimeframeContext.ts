@@ -40,6 +40,7 @@ export interface FrozenImpulseReference {
   low: number | null;
   direction: string | null;
   canonicalMetrics: Record<string, unknown> | null;
+  qualification: Record<string, unknown> | null;
 }
 
 export interface FrozenCrossTimeframeContext {
@@ -101,6 +102,7 @@ function candidateId(value: UnknownRecord): string | null {
 function impulseReference(
   candidate: UnknownRecord,
   fallback?: UnknownRecord,
+  qualification?: UnknownRecord,
 ): FrozenImpulseReference {
   const impulse = record(fallback);
   const lineage = record(candidate.timeframeLineage);
@@ -122,6 +124,7 @@ function impulseReference(
         .length > 0
       ? record(candidate.canonicalImpulseMetrics)
       : null,
+    qualification: Object.keys(record(qualification)).length > 0 ? record(qualification) : null,
   };
 }
 
@@ -295,7 +298,7 @@ export function buildFrozenCrossTimeframeContext(input: {
       : null,
     parentImpulse: parent ? impulseReference(parent) : null,
     childImpulse: selectedZone
-      ? impulseReference(best, record(story.impulse))
+      ? impulseReference(best, record(story.impulse), record(story.impulseQualification))
       : null,
     canonicalDealingRange,
     impulseEntryLifecycle,

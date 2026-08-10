@@ -2966,6 +2966,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             izData = {
               hasZone: !!multiTF.bestZone,
               selectedTF: multiTF.selectedTF,
+              impulseQualification: unifiedResult.impulse?.qualification ?? null,
               reason: multiTF.reason,
               impulse: multiTF.bestZone?.impulse ? {
                 high: multiTF.bestZone.impulse.high,

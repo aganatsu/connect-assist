@@ -27,6 +27,7 @@ const unifiedData: NonNullable<ZoneStoryProps["unifiedData"]> = {
     endDate: null,
     spanBars: 8,
     bosPrice: 1.278,
+    qualification: { state: "qualified", reasons: [], measurements: {} },
   },
   zone: {
     type: "OB",
@@ -230,6 +231,11 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText(/Requested/).textContent).toContain("Effective OBSERVE");
     expect(screen.getByText("ALLOWED")).toBeTruthy();
     expect(screen.getByText(/Observation only/)).toBeTruthy();
+  });
+
+  it("shows the engine-owned impulse qualification state", () => {
+    render(<ZoneStoryPanel unifiedData={unifiedData} gateData={gateData} symbol="GBP/USD" />);
+    expect(screen.getByText("qualified")).toBeTruthy();
   });
 
   it("keeps timeframe diagnostics available when no impulse was found", () => {
