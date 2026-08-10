@@ -52,6 +52,7 @@ export interface ImpulseLeg {
   bosPrice: number;     // Price level of the structure break
   breakType?: "bos" | "choch";
   closeBased?: boolean;
+  structureSignificance?: "internal" | "external";
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
   endDate?: string;     // ISO date of the BOS candle
@@ -61,7 +62,7 @@ export interface ImpulseLeg {
 export type ImpulseQualificationState = "developing" | "qualified" | "invalidated";
 
 export interface ImpulseQualification {
-  contractVersion: "impulse-zone-qualification.v1";
+  contractVersion: "impulse-zone-qualification.v2";
   state: ImpulseQualificationState;
   qualified: boolean;
   reasons: string[];
@@ -74,12 +75,20 @@ export interface ImpulseQualification {
     strongestDirectionalRangeATR: number | null;
     recencyBars: number;
     poiCount: number;
+    directionalCandleRatio: number | null;
+    directionalBodyDominance: number | null;
+    pathEfficiency: number | null;
+    averageCandleOverlap: number | null;
   };
   thresholds: {
     minImpulseATR: number;
     minBodyRatio: number;
     minDirectionalRangeATR: number;
     maxAgeBars: number;
+    minDirectionalCandleRatio: number;
+    minDirectionalBodyDominance: number;
+    minPathEfficiency: number;
+    maxAverageCandleOverlap: number;
   };
 }
 
@@ -256,7 +265,10 @@ export function findStructuralLeg(
 
   if (allBreaks.length === 0) return null;
 
-  // Try each BOS from most recent to oldest
+  const validCandidates: ImpulseLeg[] = [];
+
+  // Evaluate every structural break. Recency alone must not replace a cleaner
+  // authoritative impulse with a choppy internal leg.
   for (const bos of allBreaks) {
     let emittedCandidate = false;
     const impulse = validateImpulseFromBOS(
@@ -286,8 +298,9 @@ export function findStructuralLeg(
         impulse.endDate = endCandle.datetime;
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
-      collector?.({ leg: impulse, selected: true, rejection: null });
-      return impulse;
+      impulse.structureSignificance = bos.significance ?? "internal";
+      validCandidates.push(impulse);
+      continue;
     }
     if (!impulse && !emittedCandidate) {
       collector?.({
@@ -316,7 +329,37 @@ export function findStructuralLeg(
     }
   }
 
-  return null;
+  const rankedCandidates = validCandidates
+    .map((leg) => {
+      const metrics = measureCanonicalImpulseMetrics(candles, leg);
+      const quality =
+        (metrics.displacementPercentile ?? 0) +
+        (metrics.bodyStrengthPercentile ?? 0) +
+        (metrics.pathEfficiency ?? 0) * 100 +
+        (metrics.directionalBodyDominance ?? 0) * 50 -
+        (metrics.averageCandleOverlap ?? 0) * 50 +
+        (leg.structureSignificance === "external" ? 40 : 0) -
+        Math.min(metrics.recencyBars, 40) * 0.5;
+      return { leg, quality };
+    })
+    .sort((left, right) =>
+      right.quality - left.quality || right.leg.endIndex - left.leg.endIndex
+    );
+  const selected = rankedCandidates[0]?.leg ?? null;
+
+  for (const { leg } of rankedCandidates) {
+    collector?.({
+      leg,
+      selected: leg === selected,
+      rejection: leg === selected
+        ? null
+        : {
+          code: "stronger_candidate_selected",
+          explanation: "A stronger intact impulse candidate retained authority",
+        },
+    });
+  }
+  return selected;
 }
 
 /**
@@ -445,6 +488,10 @@ export function qualifyImpulseLeg(
   const minBodyRatio = Math.max(0.1, Math.min(1, Number(options?.minBodyRatio ?? 0.5)));
   const minDirectionalRangeATR = minImpulseATR;
   const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
+  const minDirectionalCandleRatio = 0.55;
+  const minDirectionalBodyDominance = 0.35;
+  const minPathEfficiency = 0.2;
+  const maxAverageCandleOverlap = 0.65;
   const legCandles = candles.slice(leg.startIndex, leg.endIndex + 1);
   const atr = metrics.atr;
   const directionalRanges = legCandles
@@ -467,16 +514,28 @@ export function qualifyImpulseLeg(
   if (strongestDirectionalRangeATR === null || strongestDirectionalRangeATR < minDirectionalRangeATR) {
     reasons.push("Directional displacement " + (strongestDirectionalRangeATR?.toFixed(2) ?? "unavailable") + "x ATR is below " + minDirectionalRangeATR.toFixed(2) + "x");
   }
+  if (metrics.directionalCandleRatio === null || metrics.directionalCandleRatio < minDirectionalCandleRatio) {
+    reasons.push("Only " + ((metrics.directionalCandleRatio ?? 0) * 100).toFixed(0) + "% of candles moved with the impulse; at least " + (minDirectionalCandleRatio * 100).toFixed(0) + "% is required");
+  }
+  if (metrics.directionalBodyDominance === null || metrics.directionalBodyDominance < minDirectionalBodyDominance) {
+    reasons.push("Whole-leg directional body dominance " + (metrics.directionalBodyDominance?.toFixed(2) ?? "unavailable") + " is below " + minDirectionalBodyDominance.toFixed(2));
+  }
+  if (metrics.pathEfficiency === null || metrics.pathEfficiency < minPathEfficiency) {
+    reasons.push("Whole-leg displacement efficiency " + (metrics.pathEfficiency?.toFixed(2) ?? "unavailable") + " is below " + minPathEfficiency.toFixed(2));
+  }
+  if (metrics.averageCandleOverlap !== null && metrics.averageCandleOverlap > maxAverageCandleOverlap) {
+    reasons.push("Average candle overlap " + (metrics.averageCandleOverlap * 100).toFixed(0) + "% exceeds " + (maxAverageCandleOverlap * 100).toFixed(0) + "%");
+  }
   if (maxAgeBars > 0 && metrics.recencyBars > maxAgeBars) {
     reasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
   }
-  if (pois.length === 0) reasons.push("No FVG or Order Block was created by the impulse");
+  if (pois.length === 0) reasons.push("No accepted FVG or Order Block was created by the impulse");
 
   const state: ImpulseQualificationState = !leg.isValid
     ? "invalidated"
     : reasons.length === 0 ? "qualified" : "developing";
   return {
-    contractVersion: "impulse-zone-qualification.v1",
+    contractVersion: "impulse-zone-qualification.v2",
     state,
     qualified: state === "qualified",
     reasons,
@@ -489,8 +548,16 @@ export function qualifyImpulseLeg(
       strongestDirectionalRangeATR: strongestDirectionalRangeATR === null ? null : Number(strongestDirectionalRangeATR.toFixed(6)),
       recencyBars: metrics.recencyBars,
       poiCount: pois.length,
+      directionalCandleRatio: metrics.directionalCandleRatio,
+      directionalBodyDominance: metrics.directionalBodyDominance,
+      pathEfficiency: metrics.pathEfficiency,
+      averageCandleOverlap: metrics.averageCandleOverlap,
     },
-    thresholds: { minImpulseATR, minBodyRatio, minDirectionalRangeATR, maxAgeBars },
+    thresholds: {
+      minImpulseATR, minBodyRatio, minDirectionalRangeATR, maxAgeBars,
+      minDirectionalCandleRatio, minDirectionalBodyDominance,
+      minPathEfficiency, maxAverageCandleOverlap,
+    },
   };
 }
 // ─── 2. mapImpulsePOIs ────────────────────────────────────────────────────────
@@ -891,7 +958,7 @@ export interface ImpulseLegCandidate {
   leg: ImpulseLeg;
   selected: boolean;
   rejection:
-    | { code: "origin_broken_or_invalid"; explanation: string }
+    | { code: "origin_broken_or_invalid" | "stronger_candidate_selected"; explanation: string }
     | null;
 }
 
@@ -1751,8 +1818,10 @@ export function findBestEntryZone(
     };
   };
 
-  // Step 1: Find impulse leg
-  const impulse = findStructuralLeg(
+  // Step 1: Rank every intact structural leg. The strongest leg is evaluated
+  // first, but a candidate without an accepted displacement POI cannot own the
+  // authoritative impulse range.
+  let impulse = findStructuralLeg(
     htfCandles,
     direction,
     undefined,
@@ -1773,14 +1842,43 @@ export function findBestEntryZone(
     });
   }
 
-  // Step 2: Map POIs within the impulse
-  const mappedPOIs = mapImpulsePOIs(htfCandles, impulse, {
-    originOBRetest: options?.originOBRetest,
-    zoneLifecycleV2: options?.zoneLifecycleV2,
-    evidenceContext: options?.evidenceContext,
-  });
+  // Step 2: A qualified impulse must own at least one accepted FVG/OB. Try
+  // lower-ranked intact candidates when the structurally strongest leg has no
+  // usable displacement zone.
+  const rankedLegs = collectedImpulses
+    .filter((candidate) => candidate.leg.isValid)
+    .map((candidate) => candidate.leg)
+    .filter((leg, index, legs) =>
+      legs.findIndex((item) =>
+        item.startIndex === leg.startIndex && item.endIndex === leg.endIndex
+      ) === index
+    );
+  if (!rankedLegs.some((leg) => leg === impulse)) rankedLegs.unshift(impulse);
+
+  let mappedPOIs: ImpulsePOI[] = [];
+  let poiQualification = qualifyImpulsePOIs(htfCandles, impulse, [], options);
+  for (const candidate of rankedLegs) {
+    const candidatePOIs = mapImpulsePOIs(htfCandles, candidate, {
+      originOBRetest: options?.originOBRetest,
+      zoneLifecycleV2: options?.zoneLifecycleV2,
+      evidenceContext: options?.evidenceContext,
+    });
+    const candidatePOIQualification = qualifyImpulsePOIs(
+      htfCandles, candidate, candidatePOIs, options,
+    );
+    const candidateQualification = qualifyImpulseLeg(
+      htfCandles, candidate, candidatePOIQualification.accepted, options,
+    );
+    impulse = candidate;
+    mappedPOIs = candidatePOIs;
+    poiQualification = candidatePOIQualification;
+    impulseQualification = candidateQualification;
+    if (candidateQualification.qualified) break;
+  }
   collectedPOIs = mappedPOIs;
-  impulseQualification = qualifyImpulseLeg(htfCandles, impulse, mappedPOIs, options);
+  if (!impulseQualification) {
+    throw new Error("Impulse candidate evaluation did not produce a qualification");
+  }
   if (options?.collectEvidence) {
     const metrics = measureCanonicalImpulseMetrics(htfCandles, impulse);
     canonicalImpulse = {
@@ -1801,7 +1899,7 @@ export function findBestEntryZone(
       reason: (impulseQualification.state === "invalidated" ? "Invalidated" : "Developing") + " structural leg: " + impulseQualification.reasons.join("; "),
     });
   }
-  const qualification = qualifyImpulsePOIs(htfCandles, impulse, mappedPOIs, options);
+  const qualification = poiQualification;
   if (options?.collectEvidence) {
     collectedMeasurements = measureImpulsePOIQualification(
       htfCandles,
