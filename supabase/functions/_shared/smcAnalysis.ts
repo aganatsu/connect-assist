@@ -1681,11 +1681,16 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
     if (!ob.mitigated) continue;
     const breakerType: "bullish_breaker" | "bearish_breaker" =
       ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
-    let mitigatedAt = ob.index;
+    // A breaker requires the OB to have been *broken* — a candle must close through
+    // the far side of the zone. `ob.mitigated` is also set at 50% penetration, which
+    // is ordinary retracement into the OB (and is the OB's own entry condition), so
+    // an unbroken OB must never be inverted into a breaker of the opposite polarity.
+    let mitigatedAt = -1;
     for (let j = ob.index + 1; j < candles.length; j++) {
       if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
       if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
     }
+    if (mitigatedAt < 0) continue; // mitigated but never broken — not a breaker
     // BB vs MB distinction (PineScript-inspired):
     // "breaker" = the MSB that broke this OB also made a new HH (bearish breaker) or LL (bullish breaker)
     // "mitigation_block" = OB was broken but no new structural extreme was confirmed
