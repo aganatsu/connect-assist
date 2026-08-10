@@ -587,30 +587,40 @@ export function mapImpulsePOIs(
 
   if (impulseCandles.length < 3) return [];
 
-  // ── FVGs: detect on impulse slice (purely geometric, no lifecycle issue) ──
-  const impulseStructure = analyzeMarketStructure(impulseCandles);
-  const impulseBreaks = [...impulseStructure.bos, ...impulseStructure.choch];
-  const fvgs = detectFVGs(impulseCandles, impulseBreaks);
-
-  // ── OBs: detect on FULL candle set to avoid lifecycle false-negatives ──
-  // The OB (last opposing candle) often sits just before the impulse starts.
-  // Running detection on only the impulse slice causes OBs to be marked as
-  // "broken" or "mitigated" by the impulse candles themselves.
-  // We include a lookback window before the impulse so the engulfing pattern
-  // and the institutional candle are both captured.
+  // ── Detection window runs to the LAST candle, not to the BOS ──
+  // POIs are only *created* inside the impulse, but they are *consumed* during
+  // the retracement that follows it — which is exactly the period we are
+  // planning to trade into. Slicing the window at impulse.endIndex froze every
+  // POI's lifecycle at the break, so a gap or order block that price had since
+  // torn straight through was still published as tradeable.
+  //
+  // Each detector keeps its own invalidation rule (FVG = wick fill, OB = 50%
+  // penetration / close-through). Only the window changes. Formation is still
+  // bounded to the impulse by the index checks below.
   const obLookback = 10; // bars before impulse to include for OB context
   const obStart = Math.max(0, start - obLookback);
-  const obCandles = candles.slice(obStart, end);
-  const obStructure = analyzeMarketStructure(obCandles);
-  const obBreaks = [...obStructure.bos, ...obStructure.choch];
-  const obs = detectOrderBlocks(obCandles, obBreaks);
+  const lifecycleCandles = candles.slice(obStart);
+  const lifecycleStructure = analyzeMarketStructure(lifecycleCandles);
+  const lifecycleBreaks = [...lifecycleStructure.bos, ...lifecycleStructure.choch];
+
+  // The default 50-bar recency/cap limits are relative to the END of the window.
+  // Now that the window extends past the impulse, they must be widened or the
+  // impulse's own POIs fall outside the scan / get crowded out of the top-N.
+  const windowLen = lifecycleCandles.length;
+  const fvgs = detectFVGs(lifecycleCandles, lifecycleBreaks, windowLen)
+    // Re-base to full-candle indices and keep only gaps formed by the impulse.
+    .map((fvg) => ({ ...fvg, index: obStart + fvg.index }))
+    .filter((fvg) => fvg.index >= start && fvg.index <= impulse.endIndex);
+
+  const obs = detectOrderBlocks(lifecycleCandles, lifecycleBreaks, windowLen, Math.max(5, windowLen))
+    .map((ob) => ({ ...ob, index: obStart + ob.index }));
 
   const pois: ImpulsePOI[] = [];
 
   // Map FVGs — only include those aligned with impulse direction
   for (const fvg of fvgs) {
     if (fvg.type === impulse.direction && fvg.state !== "filled") {
-      const candleIndex = start + fvg.index;
+      const candleIndex = fvg.index; // already re-based to full-candle indices
       const sourceStart = candles[Math.max(0, candleIndex - 1)]?.datetime ?? fvg.datetime;
       const sourceEnd = candles[Math.min(candles.length - 1, candleIndex + 1)]?.datetime ?? fvg.datetime;
       pois.push({
@@ -642,9 +652,9 @@ export function mapImpulsePOIs(
 
   // Map OBs — filter to those within or just before the impulse range,
   // aligned with direction, and not broken/mitigated.
-  // The OB index is relative to obCandles, so we convert back to full-candle index.
+  // Indices are already re-based to full-candle indices above.
   for (const ob of obs) {
-    const fullIndex = obStart + ob.index;
+    const fullIndex = ob.index;
     // OB must be within the impulse range or in the lookback zone just before it
     if (fullIndex < obStart || fullIndex > impulse.endIndex) continue;
     // OB price must be within the impulse price range
