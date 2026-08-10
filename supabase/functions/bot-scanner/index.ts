@@ -4974,7 +4974,21 @@ async function runScanForUser(
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
-          { requireLiquiditySweep: pairConfig.requireLiquiditySweep, sweptAbsorbedPenalty: pairConfig.sweptAbsorbedPenalty ?? 2.0 },
+          {
+            requireLiquiditySweep: pairConfig.requireLiquiditySweep,
+            sweptAbsorbedPenalty: pairConfig.sweptAbsorbedPenalty ?? 2.0,
+            // Same floor the scanner applies to its own SL below: the larger of
+            // the per-instrument static minimum and the ATR floor. Without it the
+            // unified entry stop is half the zone height, which on a narrow zone
+            // is smaller than the spread and inflates R:R past every gate.
+            minStopPips: Math.max(
+              MIN_SL_PIPS[pair] ?? 15,
+              ((analysis as any).atrValue ?? 0) > 0
+                ? ((analysis as any).atrValue * ATR_SL_FLOOR_MULTIPLIER) /
+                  (SPECS[pair] || SPECS["EUR/USD"]).pipSize
+                : 0,
+            ),
+          },
           zoneTFLabels,
         );
 

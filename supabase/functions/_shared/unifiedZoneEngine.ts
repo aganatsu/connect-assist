@@ -173,6 +173,14 @@ export interface UnifiedZoneConfig {
   requireLiquiditySweep: boolean;
   /** Penalty for swept_absorbed entry-trigger pools. Default: 2.0 */
   sweptAbsorbedPenalty: number;
+  /**
+   * Minimum stop distance in pips. The entry stop is derived from zone width,
+   * so a narrow zone would otherwise produce a stop smaller than the spread —
+   * and, because R:R is reward/risk, a spuriously enormous R:R that sails
+   * through the minimum-R:R gate. Callers pass max(MIN_SL_PIPS[symbol],
+   * ATR × ATR_SL_FLOOR_MULTIPLIER). Default 0 keeps the legacy behaviour.
+   */
+  minStopPips: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
@@ -180,6 +188,7 @@ export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
   requireConfirmation: true,
   requireLiquiditySweep: false,
   sweptAbsorbedPenalty: 2.0,
+  minStopPips: 0,
 };
 
 // ─── Core Function ──────────────────────────────────────────────────
@@ -474,7 +483,7 @@ export function findUnifiedZone(
   // ── Step 9: Build entry story (only when confirmed) ──
   let entry: EntryStory | null = null;
   if (state === "confirmed" || state === "triggered") {
-    entry = buildEntryStory(direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR);
+    entry = buildEntryStory(direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR, cfg.minStopPips);
   }
 
   // ── Step 10: Build story summary ──
@@ -722,6 +731,7 @@ function buildEntryStory(
   currentPrice: number,
   pipMult: number,
   minRR: number,
+  minStopPips = 0,
 ): EntryStory | null {
   const entryDirection: "long" | "short" = direction === "bullish" ? "long" : "short";
 
@@ -735,14 +745,39 @@ function buildEntryStory(
     // Sell at zone high, SL above zone
     entryPrice = zonePOI.poi.high;
     slPrice = zonePOI.poi.high + (zonePOI.poi.high - zonePOI.poi.low) * 0.5;
-    // Cap SL at impulse origin (high of bearish impulse)
-    if (slPrice > impulse.high) slPrice = impulse.high;
   } else {
     // Buy at zone low, SL below zone
     entryPrice = zonePOI.poi.low;
     slPrice = zonePOI.poi.low - (zonePOI.poi.high - zonePOI.poi.low) * 0.5;
-    // Cap SL at impulse origin (low of bullish impulse)
-    if (slPrice < impulse.low) slPrice = impulse.low;
+  }
+
+  // ── Minimum stop distance ──
+  // The stop above is half the zone's height, so a narrow zone yields a stop
+  // smaller than the spread. Because R:R is reward/risk, that also inflates R:R
+  // — the tighter (worse) the stop, the better the setup scores, and the more
+  // easily it clears the minimum-R:R gate. Observed live: a 3.1-pip zone on
+  // GBP/CHF produced a 1.55-pip stop and a "15.29:1" R:R on a pair whose spread
+  // alone is 2-3 pips.
+  const minStop = minStopPips > 0 ? minStopPips / pipMult : 0;
+  if (minStop > 0 && Math.abs(entryPrice - slPrice) < minStop) {
+    slPrice = direction === "bearish" ? entryPrice + minStop : entryPrice - minStop;
+  }
+
+  // ── Stop must still fit inside the impulse ──
+  // The stop belongs at the impulse origin at the very furthest; beyond that the
+  // premise is void. If the floored stop does not fit, the impulse is simply too
+  // small to support a tradeable stop on this instrument, so there is no valid
+  // entry — capping to the origin here would silently re-introduce the tiny stop.
+  if (direction === "bearish") {
+    if (slPrice > impulse.high) {
+      if (minStop > 0 && Math.abs(entryPrice - impulse.high) < minStop) return null;
+      slPrice = impulse.high;
+    }
+  } else {
+    if (slPrice < impulse.low) {
+      if (minStop > 0 && Math.abs(entryPrice - impulse.low) < minStop) return null;
+      slPrice = impulse.low;
+    }
   }
 
   const riskPips = Math.abs(entryPrice - slPrice) * pipMult;
