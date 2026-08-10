@@ -19,7 +19,9 @@
 --   rr_realised << rr_planned → exits are not achieving the planned target
 --
 -- NOTES
---   - Prices are stored as text; everything is cast to numeric.
+--   - Prices AND timestamps are stored as text; everything is cast explicitly.
+--     Timestamps use (col::text)::timestamptz so the query works whether the
+--     column is text or a real timestamptz.
 --   - Pip size is inferred the same way the codebase does it
 --     (price > 10 → 0.01 for JPY-quoted, else 0.0001).
 --   - min_sl_pips_expected mirrors MIN_SL_PIPS in _shared/smcAnalysis.ts.
@@ -55,11 +57,11 @@ with base as (
       else 15
     end as min_sl_pips_expected
   from paper_trade_history h
-  order by h.closed_at desc
+  order by (h.closed_at::text)::timestamptz desc
   limit 30
 )
 select
-  to_char(b.closed_at, 'MM-DD HH24:MI')                    as closed,
+  to_char((b.closed_at::text)::timestamptz, 'MM-DD HH24:MI')                    as closed,
   b.symbol,
   b.direction,
   round(abs(b.entry - b.sl) / b.pip, 1)                    as sl_pips,
@@ -81,7 +83,7 @@ select
   b.signal_reason
 from base b
 left join trade_reasonings r on r.position_id = b.position_id
-order by b.closed_at desc;
+order by (b.closed_at::text)::timestamptz desc;
 
 
 -- ────────────────────────────────────────────────────────────────────────────
@@ -91,7 +93,7 @@ order by b.closed_at desc;
 -- ────────────────────────────────────────────────────────────────────────────
 
 select
-  to_char(closed_at, 'YYYY-MM-DD HH24:MI')                                as closed,
+  to_char((closed_at::text)::timestamptz, 'YYYY-MM-DD HH24:MI')                                as closed,
   symbol,
   direction,
   round(abs(entry_price::numeric - stop_loss::numeric)
