@@ -37,10 +37,9 @@
 --   So both numbers can be recovered without a schema change.
 --
 -- NOTE
---   If failed_gates is a Postgres text[] rather than jsonb, replace
---       jsonb_array_elements_text(r.failed_gates)
---   with
---       unnest(r.failed_gates)
+--   failed_gates is a Postgres text[] — confirmed against the live database on
+--   2026-08-10 — so these queries use unnest(). If it is ever migrated to jsonb,
+--   swap unnest(r.failed_gates) for jsonb_array_elements_text(r.failed_gates).
 --
 -- ────────────────────────────────────────────────────────────────────────────
 -- QUERY 1 — the summary. Run this one first and share the row.
@@ -56,7 +55,7 @@ with gate9 as (
     (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[1]::numeric as raw_score,
     (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[2]::numeric as base_threshold
   from rejected_setups r
-  cross join lateral jsonb_array_elements_text(r.failed_gates) as g
+  cross join lateral unnest(r.failed_gates) as g
   where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
 )
 select
@@ -95,7 +94,7 @@ with gate9 as (
     (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[1]::numeric as raw_score,
     (regexp_match(g, 'Score ([0-9.]+) < ([0-9.]+) threshold'))[2]::numeric as base_threshold
   from rejected_setups r
-  cross join lateral jsonb_array_elements_text(r.failed_gates) as g
+  cross join lateral unnest(r.failed_gates) as g
   where g ~ 'Score [0-9.]+ < [0-9.]+ threshold'
 )
 select
@@ -125,7 +124,7 @@ select
   r.symbol,
   g as gate_reason
 from rejected_setups r
-cross join lateral jsonb_array_elements_text(r.failed_gates) as g
+cross join lateral unnest(r.failed_gates) as g
 where g like 'Score %threshold%'
 order by r.created_at desc
 limit 10;
