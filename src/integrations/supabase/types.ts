@@ -3140,6 +3140,24 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_notification_claims: {
+        Row: {
+          claim_key: string
+          created_at: string
+          expires_at: string
+        }
+        Insert: {
+          claim_key: string
+          created_at?: string
+          expires_at: string
+        }
+        Update: {
+          claim_key?: string
+          created_at?: string
+          expires_at?: string
+        }
+        Relationships: []
+      }
       trade_archive: {
         Row: {
           archived_at: string | null
@@ -4144,6 +4162,10 @@ export type Database = {
           p_run_id: string
           p_user_id: string
         }
+        Returns: boolean
+      }
+      claim_telegram_notification: {
+        Args: { p_claim_key: string; p_expires_at: string }
         Returns: boolean
       }
       complete_broker_execution: {
