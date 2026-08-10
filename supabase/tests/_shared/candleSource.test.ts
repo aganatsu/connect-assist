@@ -14,10 +14,13 @@
 import {
   beginScanSourceTally,
   classifyMetaApiOperationalIssue,
-  oandaGranularity,
-  resolveOandaCandleSymbol,
   endScanSourceTally,
+  filterClosedMarketCandles,
+  isForexMarketOpenAt,
+  isForexSymbol,
+  oandaGranularity,
   resetThrottleStats,
+  resolveOandaCandleSymbol,
   type SourceTally,
 } from "../../functions/_shared/candleSource.ts";
 import {
@@ -28,8 +31,50 @@ import {
 Deno.test("OANDA candle mapping uses broker instruments and granularities", () => {
   assertEquals(oandaGranularity("15m"), "M15");
   assertEquals(oandaGranularity("4h"), "H4");
-  assertEquals(resolveOandaCandleSymbol("EUR/USD", { api_key: "token", account_id: "account", broker_type: "oanda" }), "EUR_USD");
-  assertEquals(resolveOandaCandleSymbol("XAU/USD", { api_key: "token", account_id: "account", broker_type: "oanda", symbol_overrides: { "XAU/USD": "XAU_USD" } }), "XAU_USD");
+  assertEquals(
+    resolveOandaCandleSymbol("EUR/USD", {
+      api_key: "token",
+      account_id: "account",
+      broker_type: "oanda",
+    }),
+    "EUR_USD",
+  );
+  assertEquals(
+    resolveOandaCandleSymbol("XAU/USD", {
+      api_key: "token",
+      account_id: "account",
+      broker_type: "oanda",
+      symbol_overrides: { "XAU/USD": "XAU_USD" },
+    }),
+    "XAU_USD",
+  );
+});
+
+Deno.test("forex symbol classification excludes metals and crypto", () => {
+  assertEquals(isForexSymbol("GBP/AUD"), true);
+  assertEquals(isForexSymbol("XAU/USD"), false);
+  assertEquals(isForexSymbol("BTC/USD"), false);
+});
+
+Deno.test("forex market hours reject Sunday candles before 17:00 New York", () => {
+  assertEquals(isForexMarketOpenAt("2026-08-09T17:15:00Z"), false); // 13:15 ET
+  assertEquals(isForexMarketOpenAt("2026-08-09T20:59:00Z"), false); // 16:59 ET
+  assertEquals(isForexMarketOpenAt("2026-08-09T21:00:00Z"), true); // 17:00 ET
+});
+
+Deno.test("forex market hours reject Friday close and Saturday", () => {
+  assertEquals(isForexMarketOpenAt("2026-08-07T20:59:00Z"), true);
+  assertEquals(isForexMarketOpenAt("2026-08-07T21:00:00Z"), false);
+  assertEquals(isForexMarketOpenAt("2026-08-08T15:00:00Z"), false);
+});
+
+Deno.test("closed-market filtering applies only to forex", () => {
+  const candles = [
+    { datetime: "2026-08-09T17:15:00Z", open: 1, high: 2, low: 0, close: 1 },
+    { datetime: "2026-08-09T21:00:00Z", open: 1, high: 2, low: 0, close: 1 },
+  ];
+  assertEquals(filterClosedMarketCandles("GBP/AUD", candles).length, 1);
+  assertEquals(filterClosedMarketCandles("BTC/USD", candles).length, 2);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -141,7 +186,8 @@ Deno.test("Full tally cycle: begin → end produces valid SourceTally", () => {
   assertEquals(typeof tally.polygon, "number");
   assertEquals(typeof tally.none, "number");
   assert(
-    tally.primary === "metaapi" || tally.primary === "oanda" || tally.primary === "twelvedata" ||
+    tally.primary === "metaapi" || tally.primary === "oanda" ||
+      tally.primary === "twelvedata" ||
       tally.primary === "polygon" || tally.primary === "none",
   );
 });

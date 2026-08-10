@@ -123,8 +123,8 @@ function validateCandidate(
       isValid: !originBroken,
       bosPrice: bos.price,
       breakType: bos.breakType,
-      startDate: candles[origin.index]?.datetime?.slice(0, 16),
-      endDate: candles[bos.index]?.datetime?.slice(0, 16),
+      startDate: candles[origin.index]?.datetime,
+      endDate: candles[bos.index]?.datetime,
       spanBars: bos.index - origin.index,
     };
     if (!originBroken) return { selected: leg, rejected };
@@ -281,8 +281,8 @@ export function detectCanonicalImpulse(
           bosPrice: bos.price,
           breakType: bos.breakType,
           timeframe,
-          startDate: candles[bos.index]?.datetime?.slice(0, 16),
-          endDate: candles[bos.index]?.datetime?.slice(0, 16),
+          startDate: candles[bos.index]?.datetime,
+          endDate: candles[bos.index]?.datetime,
           spanBars: 0,
         },
         selected: false,
