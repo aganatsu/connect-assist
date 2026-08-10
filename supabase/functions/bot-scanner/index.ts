@@ -94,6 +94,7 @@ import {
   // Analysis functions
   calculateATR, calculateAnchoredVWAP,
   detectSwingPoints, analyzeMarketStructure,
+  detectSMTDivergence, calculatePremiumDiscount,
   detectOrderBlocks, detectFVGs, detectLiquidityPools,
   detectDisplacement, tagDisplacementQuality,
   detectBreakerBlocks, detectUnicornSetups,
@@ -451,120 +452,6 @@ function detectSession(_config?: any): SessionResult { return sharedDetectSessio
 // Local aliases — delegate to _shared/sessions.ts (single source of truth)
 function detectSilverBullet(): SilverBulletResult { return sharedDetectSilverBullet(); }
 function detectMacroWindow(): MacroWindowResult { return sharedDetectMacroWindow(); }
-// ─── ICT AMD Phase Detection (DST-aware, NY local time) ───────────
-function detectAMDPhase(candles: Candle[]): AMDResult {
-  if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
-  const nyHourOf = (c: Candle): number => {
-    const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
-    return toNYTime(utc).h;
-  };
-  const recent = candles.slice(-200);
-  const asian  = recent.filter(c => { const h = nyHourOf(c); return h >= 20 || h < 2; });
-  const london = recent.filter(c => { const h = nyHourOf(c); return h >= 2 && h < 9; });
-  const nyCandles = recent.filter(c => { const h = nyHourOf(c); return h >= 9 && h < 16; });
-  const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
-  const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
-  let sweptSide: "high" | "low" | null = null;
-  let bias: "bullish" | "bearish" | null = null;
-  if (asianHigh != null && asianLow != null && london.length > 0) {
-    const lHigh = Math.max(...london.map(c => c.high));
-    const lLow  = Math.min(...london.map(c => c.low));
-    const lClose = london[london.length - 1].close;
-    const tookHigh = lHigh > asianHigh;
-    const tookLow  = lLow  < asianLow;
-    if (tookHigh && !tookLow && lClose < asianHigh) { sweptSide = "high"; bias = "bearish"; }
-    else if (tookLow && !tookHigh && lClose > asianLow) { sweptSide = "low"; bias = "bullish"; }
-    else if (tookHigh && tookLow) {
-      const tail = london.slice(-Math.max(1, Math.floor(london.length / 3)));
-      const tailHigh = Math.max(...tail.map(c => c.high));
-      const tailLow  = Math.min(...tail.map(c => c.low));
-      if (tailHigh > asianHigh && tail[tail.length - 1].close < asianHigh) { sweptSide = "high"; bias = "bearish"; }
-      else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
-    }
-  }
-  const nowNY = toNYTime(new Date());
-  const h = nowNY.h;
-  let phase: AMDResult["phase"] = "unknown";
-  if (h >= 20 || h < 2) phase = "accumulation";
-  else if (h >= 2 && h < 9) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
-  else if (h >= 9 && h < 16) {
-    if (sweptSide && nyCandles.length > 0 && asianHigh != null && asianLow != null) {
-      const nHigh = Math.max(...nyCandles.map(c => c.high));
-      const nLow  = Math.min(...nyCandles.map(c => c.low));
-      const expandedDown = sweptSide === "high" && nLow < asianLow;
-      const expandedUp   = sweptSide === "low"  && nHigh > asianHigh;
-      phase = (expandedDown || expandedUp) ? "distribution" : "manipulation";
-    } else {
-      phase = "distribution";
-    }
-  } else if (h >= 16 && h < 20) {
-    phase = "distribution";
-  }
-  const detail = sweptSide
-    ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
-    : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
-  return { phase, bias, asianHigh, asianLow, sweptSide, detail };
-}
-
-// ─── SMT Divergence (scanner-specific, uses local detectSwingPoints) ──
-function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
-  const corrPair = SMT_PAIRS[symbol] || null;
-  if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
-  if (candles.length < 30 || correlatedCandles.length < 30) {
-    return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
-  }
-  const thisSwings = detectSwingPoints(candles, 3);
-  const corrSwings = detectSwingPoints(correlatedCandles, 3);
-  const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
-  const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
-  const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
-  const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
-  if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
-    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
-  }
-  const thisLatestLow = thisLows[thisLows.length - 1].price;
-  const thisPriorLow  = thisLows[thisLows.length - 2].price;
-  const corrLatestLow = corrLows[corrLows.length - 1].price;
-  const corrPriorLow  = corrLows[corrLows.length - 2].price;
-  if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
-    return {
-      detected: true, type: "bullish", correlatedPair: corrPair,
-      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
-    };
-  }
-  const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
-  const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
-  const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
-  const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
-  if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
-    return {
-      detected: true, type: "bearish", correlatedPair: corrPair,
-      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
-    };
-  }
-  return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
-}
-
-// ─── Premium/Discount Zone Calculation ──────────────────────────────
-function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
-  if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-  const swings = detectSwingPoints(candles);
-  const recentHighs = swings.filter(s => s.type === "high").slice(-5);
-  const recentLows = swings.filter(s => s.type === "low").slice(-5);
-  if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-  const swingHigh = Math.max(...recentHighs.map(s => s.price));
-  const swingLow = Math.min(...recentLows.map(s => s.price));
-  const range = swingHigh - swingLow;
-  if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-  const lastPrice = candles[candles.length - 1].close;
-  const zonePercent = ((lastPrice - swingLow) / range) * 100;
-  let currentZone = "equilibrium";
-  if (zonePercent > 55) currentZone = "premium";
-  else if (zonePercent < 45) currentZone = "discount";
-  const oteZone = zonePercent >= 62 && zonePercent <= 79;
-  return { currentZone, zonePercent, oteZone };
-}
-
 // ─── Fetch candles via shared multi-source helper ────────────────────
 // Tries: MetaAPI (broker feed) → Twelve Data → Polygon.io
 // Module-scoped reference set per-scan so the loop below can stay terse.

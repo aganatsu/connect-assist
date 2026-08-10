@@ -1,0 +1,272 @@
+# Concept Inventory
+
+Date: 2026-08-10
+Purpose: for every trading concept in the system, list **every implementation**, identify
+**which one is live**, and mark what must be deleted.
+
+This document exists because the same concept has repeatedly been implemented more than
+once, and the copies drift. Nine previous consolidation branches
+(`consolidate-zone-engines`, `consolidate-pre-gates`, `shared-consolidation`,
+`consolidate-decision-domains`, `consolidate-correlation`, `partial-tp-consolidation`,
+`smc-chart-consolidation`, `gameplan-session-consolidation`, `remove-cascade-engine`)
+attempted to fix this by adding an arbiter *between* the copies rather than deleting one.
+That converts 2 implementations into 3. This inventory is the prerequisite for deleting
+instead of arbitrating.
+
+## Method
+
+- Extracted all 568 `export function` declarations across `supabase/functions/`
+- Grouped by concept keyword, not by name (most duplicates have different names)
+- Traced live call sites from the three runtime entry points: `bot-scanner`,
+  `backtest-engine`, `zone-confirmation-scanner`
+- Distinguished: **duplicate** (two impls of one concept) vs **delegation** (thin wrapper,
+  correct) vs **dead** (defined, never called)
+
+---
+
+## Summary
+
+| Concept | Impls | Live owner | Status |
+|---|---|---|---|
+| **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
+| Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
+| SMT divergence | 2 | scanner-local copy | 🔴 **DUPLICATE** |
+| Min-confluence threshold | 2 | both (raw + effective) | 🔴 **DUPLICATE, drifted** |
+| Breaker block | 2 | both (distinct semantics) | 🟠 Name collision |
+| Judas swing | 2 | both (distinct semantics) | 🟠 Name collision |
+| AMD phase | 2 | shared only | 🟡 Dead local copy |
+| Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
+| Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
+| Session detection | 2 | `sessions.ts` | 🟢 Correct delegation |
+| FVG | 1 | `detectFVGs` | 🟢 Single owner |
+| Order Block | 1 | `detectOrderBlocks` | 🟢 Single owner |
+| Swing points | 1 | `detectSwingPoints` | 🟢 Single owner |
+| Market structure | 1 | `analyzeMarketStructure` | 🟢 Single owner |
+| Liquidity pools | 1 | `detectLiquidityPools` | 🟢 Single owner |
+| Zone confirmation | 1 | `detectZoneConfirmation` | 🟢 Single owner |
+| Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
+
+---
+
+## 🔴 Must fix
+
+### 1. Exit fill model — four implementations, no shared owner
+
+The single worst duplication in the system, because it silently decouples backtest results
+from paper results from live results.
+
+| Path | File | Detection | Slippage | Catches wicks |
+|---|---|---|---|---|
+| Backtest | `backtest-engine/index.ts:1168` | `candle.low <= sl` | 0.5 pips + gap-through | **Yes** |
+| Paper (5s poll) | `paper-trading/index.ts:909` | `current_price <= sl` | 0.5 pips + gap-through | **No** |
+| Paper (5m scan) | `bot-scanner/index.ts:2158` | `current_price <= sl` | **none** — fills at exactly `sl` | **No** |
+| Live | broker-side resting order | broker | real | **Yes** |
+
+Consequences:
+
+- Paper misses every stop-out caused by a wick that recovers inside the poll window.
+  Backtest and live both take those losses. **Paper equity is optimistically biased against
+  both the thing you tuned on and the thing you will run.**
+- The two paper paths disagree with each other. The same position exits at a different
+  price depending on which cron reaches it first.
+
+The backtest implementation is the correct one — it handles gap-through, applies slippage,
+and resolves the ambiguous same-candle SL+TP case by comparing distance from the open
+(`backtest-engine/index.ts:1171`). That logic should become the shared owner.
+
+**Action:** extract `evaluateExit(bar | price, position) -> ExitDecision` into `_shared/`.
+All four paths call it. Poll-based callers pass a synthetic bar
+(`{high: price, low: price, close: price}`) so the same code path runs everywhere.
+
+### 2. Premium/Discount — two byte-identical copies, both live
+
+- `_shared/smcAnalysis.ts:2044` — `export function calculatePremiumDiscount`
+- `bot-scanner/index.ts:549` — `function calculatePremiumDiscount` (private copy)
+
+The bodies are **currently identical**. The scanner calls its own copy three times
+(lines 4410, 4422, 4434) for Daily/4H/1H HTF premium-discount.
+
+This is a landmine rather than an active bug: the copies agree today. But the
+*Priority 1 item* in `UNRESOLVED_SYSTEM_AUDIT_2026-08-03.md` — replacing the rolling swing
+envelope with the frozen impulse dealing range — would have to be applied in both places,
+and fixing only one produces a system where Gate 2 and HTF P/D disagree about what
+"premium" means.
+
+**Action:** delete the scanner-local copy, import the shared one.
+
+### 3. SMT divergence — two copies, scanner uses the local one
+
+- `_shared/smcAnalysis.ts:1794` — `export function detectSMTDivergence`
+- `bot-scanner/index.ts:510` — private copy, banner comment says
+  *"scanner-specific, uses local detectSwingPoints"*
+
+Live call at `bot-scanner/index.ts:4297` resolves to the **local** copy. The shared export
+is used by other consumers. Two implementations of SMT are live simultaneously in different
+parts of the system.
+
+**Action:** verify the "uses local detectSwingPoints" justification still holds
+(`detectSwingPoints` has a single owner, so it probably does not), then delete the local copy.
+
+### 4. Min-confluence threshold — two comparisons, drifted
+
+- `bot-scanner/index.ts:7495` — `effectiveScore >= conflictAdjustedMinConfluence` ✅ correct
+- `bot-scanner/index.ts:819` (Gate 9) — `analysis.score < config.minConfluence` ❌ stale
+
+**Both operands differ.** Gate 9 tests the raw score against the base threshold, while
+eligibility tests the adjusted score against the adjusted threshold. Since several
+adjustments are positive (`verdictScoreAdj` up to `maxBonus`, killzone prime bonus,
+impulse-zone credit), a setup can clear 7495 *because of* its credits and then be rejected
+at 819 on the un-credited number.
+
+Evidence of drift: the FOTSI comment at line 1008 points at "line ~3756" for where the
+penalty is applied. That line no longer exists.
+
+**Open question — needs the author's intent.** Either this is a bug, or Gate 9 is a
+deliberate *raw quality floor* ("credits may not manufacture a signal from nothing"). If
+the latter, it needs renaming and documenting, not deleting. Counting `rejected_setups`
+rows where Gate 9 failed while `effectiveScore` cleared the bar would settle it with data.
+
+---
+
+## 🟠 Name collisions on deliberately-distinct concepts
+
+These are **not** duplicate logic. They are two genuinely different concepts that were
+given the same function name, which is how they get confused for duplicates (including by
+me, earlier in this review).
+
+### Breaker blocks
+
+| Impl | Semantic | Consumer |
+|---|---|---|
+| `smcAnalysis.ts:1678` | `base_breaker_zone` — is price at an inverted OB? | `confluenceScoring` factor (1.0 pt context) |
+| `breakerBlockDetection.ts:87` | `sweep_displacement_retest_breaker_setup` — entry trigger | `smcEnhancements`, own confidence + size multiplier |
+
+Both are correct and both are wired to the right consumer. `breakerCandidateAuthority.ts`
+names both semantics. `conceptAuthorityAudit.test.ts` asserts they remain distinct.
+
+**Action:** rename, do not merge. `detectBreakerZones` vs `detectBreakerRetestSetups`.
+
+### Judas swing
+
+| Impl | Semantic |
+|---|---|
+| `smcAnalysis.ts` | session-based Judas |
+| `ictJudasSwing.ts` | pre-MSS Judas (`mssIndex`, `sweepLookback`) |
+
+Same situation. Rename, do not merge.
+
+---
+
+## 🟡 Dead code
+
+- **`bot-scanner/index.ts:455` `detectAMDPhase`** — defined, **never called**. The shared
+  version (`smcAnalysis.ts:348`) accepts an `atMs?` parameter for backtest time injection;
+  the dead local copy does not. Delete before someone wires it up and silently breaks
+  backtest determinism.
+- **`ictRiskManagement.ts:240` `calculatePositionSize`** — never imported. Only `assessRisk`
+  is consumed from that module. Delete.
+
+---
+
+## 🟢 Already correct — do not touch
+
+Worth recording, because the codebase is in better shape than the file count suggests.
+
+**Single-owner concepts:** `detectFVGs`, `detectOrderBlocks`, `detectSwingPoints`,
+`analyzeMarketStructure`, `detectLiquidityPools`, `detectZoneConfirmation`.
+
+**Correct delegation pattern** — `bot-scanner/index.ts:449`:
+```ts
+function detectSession(_config?: any): SessionResult { return sharedDetectSession(); }
+```
+A thin local alias that delegates to the shared owner. This is the pattern the P/D and SMT
+copies should follow. `gamePlan.ts:225 getCurrentSession()` does the same, with a documented
+`Off-Hours → Asian` mapping.
+
+**Position sizing** is properly layered: `computePositionSize` (`unifiedPositionSizing.ts`)
+wraps `calculatePositionSize` (`smcAnalysis.ts`) and adds volatility scaling and prop-firm
+compliance. It is the sole entry point for `bot-scanner` and `backtest-engine`.
+
+**Max drawdown** — `gateMaxDrawdown.ts` and `propFirmRisk.ts` are both live but on mutually
+exclusive paths with an explicit delegation comment (Gate 8 hands off when
+`propFirmActive`). Correct.
+
+**Zone selection is correctly layered**, contrary to the "four competing zone engines"
+characterisation in earlier reviews:
+
+```
+findUnifiedZone  (unifiedZoneEngine)  ─┐
+findCascadeZone  (cascadeZoneEngine)  ─┴─► findBestEntryZoneMultiTF ─► findBestEntryZone
+                                                              (impulseZoneEngine)
+```
+
+One detection foundation, two competing *selection strategies* over it, resolved by an
+explicit priority waterfall at `bot-scanner/index.ts:6015`. `selectICTEntryZone` is
+observation-only (called inside `buildCandidateAuthorityObservation`). This is defensible
+architecture, not duplication.
+
+---
+
+## Enforcement — the missing ratchet
+
+`supabase/tests/_shared/conceptAuthorityAudit.test.ts` currently contains:
+
+```ts
+Deno.test("authority audit: the two Breaker contracts remain explicitly distinct", ...)
+```
+
+That is a passing test whose job is to **guarantee the duplication survives**. The mechanism
+is right; it points the wrong way.
+
+Invert it into a single-owner audit — assert that each concept has exactly one
+implementation, with an explicit allowlist for the deliberately-distinct pairs:
+
+```ts
+const SINGLE_OWNER = ["detectFVGs", "detectOrderBlocks", "detectSwingPoints",
+                      "analyzeMarketStructure", "detectLiquidityPools",
+                      "calculatePremiumDiscount", "detectSMTDivergence", "evaluateExit"];
+const ALLOWED_PAIRS = { detectBreakerZones: 1, detectBreakerRetestSetups: 1 };
+// fail if any SINGLE_OWNER name is defined in more than one file
+```
+
+Now duplication is a build failure rather than something a reviewer has to catch. That is
+the only form of consolidation that survives the next agent.
+
+## Prevention
+
+There is **no agent instructions file** in this repo — no `CLAUDE.md`, `AGENTS.md`, or
+`.cursorrules`. Branch prefixes show four different AI systems have contributed
+(202 `manus/`, 69 `codex/`, plus Lovable scaffolding and Claude), none sharing context.
+
+Every agent faces the same choice on arrival: understand 3,000 lines of existing detection
+logic, or write a clean new function that definitely works. Writing new always wins locally.
+The aggregate is this inventory.
+
+Minimum viable rule:
+
+> Before adding any detector, engine, gate, or scoring function, search for an existing one
+> and modify it. Do not add a parallel implementation. If the existing one is wrong, fix or
+> delete it — do not leave both. New `*Authority` / `*Canonical` / `*Unified` reconciliation
+> modules require explicit approval.
+
+---
+
+## Coverage
+
+**Read in full:** the three detectors, `runSafetyGates`, `directionVerdict`,
+`breakerBlockDetection`, `breakerSemantics`, `breakerCandidateAuthority`,
+`unifiedZoneEngine` core flow, entry/SL/TP/sizing paths in `bot-scanner`,
+`paper-trading` exits, `backtest-engine` fill model.
+
+**Read structurally:** `bot-scanner` (11,278 lines), `confluenceScoring`,
+`impulseZoneEngine`, `exitEngine`, `smcEnhancements`, `zone-confirmation-scanner`.
+
+**Not read:** `gamePlan` (48KB), `configMapper` (52KB), `reconcileBrokerState` (33KB),
+`advisorCore`, the AI review functions. Concepts owned solely by those files are not
+covered by this inventory.
+
+**Unresolved and blocking:** whether MetaAPI's
+`historical-market-data?limit=N` returns the in-progress candle. No trimming logic exists
+anywhere in `candleSource.ts` or `bot-scanner`. If the forming bar is included, every
+detector reads shifting values and this is a fifth live/backtest parity break. Requires one
+live API response to settle.
