@@ -789,7 +789,7 @@ export default function Backtest() {
                 <div className="mt-3 grid grid-cols-2 gap-px bg-border sm:grid-cols-4 xl:grid-cols-7">
                   {effectiveAuthority.map(([label, value]) => <div key={label} className="min-w-0 bg-background px-2 py-2">
                     <p className="break-words text-[10px] uppercase text-muted-foreground">{label}</p>
-                    <p className="break-words text-xs font-semibold capitalize">{String(value).replaceAll("_", " ")}</p>
+                    <p className="break-words text-xs font-semibold capitalize">{String(value).replace(/_/g, " ")}</p>
                   </div>)}
                 </div>
                 {!["enforce", "enforce_live"].includes(config.strategy?.singleOwnershipMode) && <div className="mt-2 border border-warning/40 bg-warning/5 px-3 py-2"><p className="text-[10px] font-semibold text-warning">Comparison mode: the canonical workflow records evidence only. Existing legacy gates still authorize and reject setups.</p><p className="mt-0.5 text-[10px] text-muted-foreground">Choose Trade Decision Authority = Enforce to make the canonical workflow own the trade decision.</p></div>}
@@ -1281,7 +1281,7 @@ export default function Backtest() {
             const stages = Object.entries(d.lifecycleStageObservations || {})
               .sort(([, left], [, right]) => right - left)
               .slice(0, 3)
-              .map(([stage, count]) => `${stage.replaceAll("_", " ")} (${count.toLocaleString()})`)
+              .map(([stage, count]) => `${stage.replace(/_/g, " ")} (${count.toLocaleString()})`)
               .join(", ");
             advice.push({
               priority: 5,
@@ -1755,7 +1755,7 @@ export default function Backtest() {
                   </div>
                   {Object.keys(lifecycleSummary.transitionCounts).length > 0 && <div className="border-t border-border/50 pt-3">
                     <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Lifecycle transitions</p>
-                    <div className="flex flex-wrap gap-2">{Object.entries(lifecycleSummary.transitionCounts).map(([event, count]) => <span key={event} className="border border-border/60 px-2 py-1 text-[9px]"><span className="capitalize">{event.replaceAll("_", " ")}</span> <strong className="ml-1 font-mono">{count}</strong></span>)}</div>
+                    <div className="flex flex-wrap gap-2">{Object.entries(lifecycleSummary.transitionCounts).map(([event, count]) => <span key={event} className="border border-border/60 px-2 py-1 text-[9px]"><span className="capitalize">{event.replace(/_/g, " ")}</span> <strong className="ml-1 font-mono">{count}</strong></span>)}</div>
                   </div>}
                 </CardContent>
               </Card>
@@ -1769,15 +1769,15 @@ export default function Backtest() {
                       return <div key={`${snapshot.evaluatedAt}-${index}`} className="border border-border/60 p-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
-                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replaceAll("_", " ") || snapshot.decision?.lifecycle?.stage || "Recorded"}</Badge>
+                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replace(/_/g, " ") || snapshot.decision?.lifecycle?.stage || "Recorded"}</Badge>
                             <span className="truncate font-mono text-xs">{snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}</span>
                           </div>
                           <span className="text-[9px] text-muted-foreground">{snapshot.evaluatedAt ? new Date(snapshot.evaluatedAt).toLocaleString() : "Time unavailable"}</span>
                         </div>
                         <p className="mt-2 text-[10px]">{state?.explanation || authorization?.reason || snapshot.lifecycleEvidence?.reason || "Decision evidence recorded"}</p>
                         <div className="mt-2 flex flex-wrap gap-1">
-                          {state?.authorities?.map(authority => <span key={authority.role} className={`border px-1.5 py-0.5 text-[8px] uppercase ${authority.passed === false ? "border-destructive/40 text-destructive" : authority.passed === true ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>{authority.role.replaceAll("_", " ")}</span>)}
-                          {authorization?.code && <span className={`border px-1.5 py-0.5 text-[8px] uppercase ${authorization.authorized ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>Final: {authorization.code.replaceAll("_", " ")}</span>}
+                          {state?.authorities?.map(authority => <span key={authority.role} className={`border px-1.5 py-0.5 text-[8px] uppercase ${authority.passed === false ? "border-destructive/40 text-destructive" : authority.passed === true ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>{authority.role.replace(/_/g, " ")}</span>)}
+                          {authorization?.code && <span className={`border px-1.5 py-0.5 text-[8px] uppercase ${authorization.authorized ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>Final: {authorization.code.replace(/_/g, " ")}</span>}
                         </div>
                       </div>;
                     })}
@@ -1991,7 +1991,7 @@ export default function Backtest() {
                             ? (Number(v.wouldHaveLost) / resolved) * 100 : null;
                           return (
                             <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
-                              <td className="py-1.5 px-1.5 capitalize">{name.replaceAll("_", " ")}</td>
+                              <td className="py-1.5 px-1.5 capitalize">{name.replace(/_/g, " ")}</td>
                               <td className="py-1.5 px-1.5 text-right font-mono">{v.blocked}</td>
                               <td className="py-1.5 px-1.5 text-right font-mono text-warning">{outcomesAvailable ? v.wouldHaveWon : "—"}</td>
                               <td className="py-1.5 px-1.5 text-right font-mono text-success">{outcomesAvailable ? v.wouldHaveLost : "—"}</td>
