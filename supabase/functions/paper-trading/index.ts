@@ -29,7 +29,29 @@ const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
 };
 
+/**
+ * Live prices are cached briefly.
+ *
+ * The status endpoint fetches one price per open symbol, and three UI
+ * components share the "paper-status" query key — React Query then refetches at
+ * the SHORTEST observer interval, which is BotView's 5s. Three positions
+ * therefore cost 36 TwelveData credits a minute from a single open tab, against
+ * a plan limit of 55. Measured 2026-08-11: 75/min average, 371/min peak, 100%
+ * of the quota, and requests failing with 429 — which surfaces as
+ * "Insufficient candles (0, need 20)" and a skipped pair.
+ *
+ * A 10s TTL collapses the 5s polling to at most one call per symbol per 10s
+ * without changing what the user sees. Exit detection is unaffected: bot-scanner
+ * re-evaluates every position against real closed bars each cycle and is the
+ * authoritative closer.
+ */
+const PRICE_CACHE_TTL_MS = 10_000;
+const priceCache: Map<string, { value: number; expiresAt: number }> = new Map();
+
 async function fetchLivePrice(symbol: string): Promise<number | null> {
+  const cached = priceCache.get(symbol);
+  if (cached && Date.now() < cached.expiresAt) return cached.value;
+
   const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (!apiKey) return null;
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
@@ -40,7 +62,10 @@ async function fetchLivePrice(symbol: string): Promise<number | null> {
     if (!res.ok) return null;
     const data = await res.json();
     if (data?.status === "error" || !data?.price) return null;
-    return Number(data.price);
+    const price = Number(data.price);
+    if (!Number.isFinite(price)) return null;
+    priceCache.set(symbol, { value: price, expiresAt: Date.now() + PRICE_CACHE_TTL_MS });
+    return price;
   } catch {
     return null;
   }

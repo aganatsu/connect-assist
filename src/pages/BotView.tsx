@@ -115,7 +115,11 @@ export default function BotView() {
   const { data: status } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
-    refetchInterval: 5000,
+    // Shared key with StatusBar and MobileTopBar; React Query refetches at the
+    // SHORTEST observer interval, so 5s here set the rate for the whole app and
+    // each poll costs one TwelveData credit per open symbol. Matched to the
+    // others at 10s.
+    refetchInterval: 10000,
   });
 
   const { data: scanLogs } = useQuery({
