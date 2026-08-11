@@ -1072,6 +1072,60 @@ export type Database = {
         }
         Relationships: []
       }
+      manual_impulses: {
+        Row: {
+          bot_id: string
+          created_at: string
+          direction: string
+          expires_at: string
+          high: number
+          id: string
+          last_resolution_detail: string | null
+          last_resolved_at: string | null
+          low: number
+          resolution_reason: string | null
+          status: string
+          symbol: string
+          timeframe: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          created_at?: string
+          direction: string
+          expires_at: string
+          high: number
+          id?: string
+          last_resolution_detail?: string | null
+          last_resolved_at?: string | null
+          low: number
+          resolution_reason?: string | null
+          status?: string
+          symbol: string
+          timeframe?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          created_at?: string
+          direction?: string
+          expires_at?: string
+          high?: number
+          id?: string
+          last_resolution_detail?: string | null
+          last_resolved_at?: string | null
+          low?: number
+          resolution_reason?: string | null
+          status?: string
+          symbol?: string
+          timeframe?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       optimizer_runs: {
         Row: {
           auto_applied: boolean | null
