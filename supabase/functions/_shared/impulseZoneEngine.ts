@@ -66,6 +66,12 @@ export interface ImpulseQualification {
   state: ImpulseQualificationState;
   qualified: boolean;
   reasons: string[];
+  /**
+   * Quality reasons that were recorded but not enforced. Non-empty only for a
+   * hand-marked leg, where "is this really an impulse?" has already been
+   * answered by the person who drew it. Structural reasons are never softened.
+   */
+  softenedReasons: string[];
   measurements: {
     breakType: "bos" | "choch" | null;
     closeBasedBreak: boolean;
@@ -481,7 +487,10 @@ export function qualifyImpulseLeg(
   candles: Candle[],
   leg: ImpulseLeg,
   pois: ImpulsePOI[],
-  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
+  options?: Pick<
+    ZoneEngineOptions,
+    "maxAgeBars" | "minBodyRatio" | "minDisplacementATR" | "softQualification"
+  >,
 ): ImpulseQualification {
   const metrics = measureCanonicalImpulseMetrics(candles, leg);
   const minImpulseATR = Math.max(0.5, Number(options?.minDisplacementATR ?? 1.5));
@@ -500,44 +509,56 @@ export function qualifyImpulseLeg(
   const strongestDirectionalRangeATR = atr > 0 && directionalRanges.length > 0
     ? Math.max(...directionalRanges) / atr
     : null;
-  const reasons: string[] = [];
 
-  if (!leg.isValid) reasons.push("Impulse origin was broken by a later candle close");
-  if (leg.breakType !== "bos") reasons.push("CHoCH detected, but a continuation BOS is still required");
-  if (leg.closeBased !== true) reasons.push("Structure break was not confirmed by a candle close");
+  // Two kinds of reason. STRUCTURAL ones say the leg cannot be traded at all —
+  // its origin is gone, or there is nowhere inside it to enter. QUALITY ones ask
+  // "is this really an impulse?", which is exactly the judgement a person makes
+  // when they draw one by hand. Only quality reasons can be softened.
+  const structuralReasons: string[] = [];
+  const qualityReasons: string[] = [];
+  const soft = options?.softQualification === true;
+
+  if (!leg.isValid) structuralReasons.push("Impulse origin was broken by a later candle close");
+  if (leg.breakType !== "bos") qualityReasons.push("CHoCH detected, but a continuation BOS is still required");
+  if (leg.closeBased !== true) qualityReasons.push("Structure break was not confirmed by a candle close");
   if (metrics.atrNormalizedSize === null || metrics.atrNormalizedSize < minImpulseATR) {
-    reasons.push("Impulse range " + (metrics.atrNormalizedSize?.toFixed(2) ?? "unavailable") + "x ATR is below " + minImpulseATR.toFixed(2) + "x");
+    qualityReasons.push("Impulse range " + (metrics.atrNormalizedSize?.toFixed(2) ?? "unavailable") + "x ATR is below " + minImpulseATR.toFixed(2) + "x");
   }
   if (metrics.strongestDirectionalBodyRatio === null || metrics.strongestDirectionalBodyRatio < minBodyRatio) {
-    reasons.push("Strongest directional body ratio " + (metrics.strongestDirectionalBodyRatio?.toFixed(2) ?? "unavailable") + " is below " + minBodyRatio.toFixed(2));
+    qualityReasons.push("Strongest directional body ratio " + (metrics.strongestDirectionalBodyRatio?.toFixed(2) ?? "unavailable") + " is below " + minBodyRatio.toFixed(2));
   }
   if (strongestDirectionalRangeATR === null || strongestDirectionalRangeATR < minDirectionalRangeATR) {
-    reasons.push("Directional displacement " + (strongestDirectionalRangeATR?.toFixed(2) ?? "unavailable") + "x ATR is below " + minDirectionalRangeATR.toFixed(2) + "x");
+    qualityReasons.push("Directional displacement " + (strongestDirectionalRangeATR?.toFixed(2) ?? "unavailable") + "x ATR is below " + minDirectionalRangeATR.toFixed(2) + "x");
   }
   if (metrics.directionalCandleRatio === null || metrics.directionalCandleRatio < minDirectionalCandleRatio) {
-    reasons.push("Only " + ((metrics.directionalCandleRatio ?? 0) * 100).toFixed(0) + "% of candles moved with the impulse; at least " + (minDirectionalCandleRatio * 100).toFixed(0) + "% is required");
+    qualityReasons.push("Only " + ((metrics.directionalCandleRatio ?? 0) * 100).toFixed(0) + "% of candles moved with the impulse; at least " + (minDirectionalCandleRatio * 100).toFixed(0) + "% is required");
   }
   if (metrics.directionalBodyDominance === null || metrics.directionalBodyDominance < minDirectionalBodyDominance) {
-    reasons.push("Whole-leg directional body dominance " + (metrics.directionalBodyDominance?.toFixed(2) ?? "unavailable") + " is below " + minDirectionalBodyDominance.toFixed(2));
+    qualityReasons.push("Whole-leg directional body dominance " + (metrics.directionalBodyDominance?.toFixed(2) ?? "unavailable") + " is below " + minDirectionalBodyDominance.toFixed(2));
   }
   if (metrics.pathEfficiency === null || metrics.pathEfficiency < minPathEfficiency) {
-    reasons.push("Whole-leg displacement efficiency " + (metrics.pathEfficiency?.toFixed(2) ?? "unavailable") + " is below " + minPathEfficiency.toFixed(2));
+    qualityReasons.push("Whole-leg displacement efficiency " + (metrics.pathEfficiency?.toFixed(2) ?? "unavailable") + " is below " + minPathEfficiency.toFixed(2));
   }
   if (metrics.averageCandleOverlap !== null && metrics.averageCandleOverlap > maxAverageCandleOverlap) {
-    reasons.push("Average candle overlap " + (metrics.averageCandleOverlap * 100).toFixed(0) + "% exceeds " + (maxAverageCandleOverlap * 100).toFixed(0) + "%");
+    qualityReasons.push("Average candle overlap " + (metrics.averageCandleOverlap * 100).toFixed(0) + "% exceeds " + (maxAverageCandleOverlap * 100).toFixed(0) + "%");
   }
   if (maxAgeBars > 0 && metrics.recencyBars > maxAgeBars) {
-    reasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
+    qualityReasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
   }
-  if (pois.length === 0) reasons.push("No accepted FVG or Order Block was created by the impulse");
+  // Structural: a leg with nowhere to enter is untradeable however good it looks.
+  if (pois.length === 0) structuralReasons.push("No accepted FVG or Order Block was created by the impulse");
 
+  const blocking = soft ? structuralReasons : [...structuralReasons, ...qualityReasons];
+  const reasons = [...structuralReasons, ...qualityReasons];
+  const softenedReasons = soft ? [...qualityReasons] : [];
   const state: ImpulseQualificationState = !leg.isValid
     ? "invalidated"
-    : reasons.length === 0 ? "qualified" : "developing";
+    : blocking.length === 0 ? "qualified" : "developing";
   return {
     contractVersion: "impulse-zone-qualification.v2",
     state,
     qualified: state === "qualified",
+    softenedReasons,
     reasons,
     measurements: {
       breakType: leg.breakType ?? null,
@@ -2146,6 +2167,14 @@ export interface ZoneEngineOptions {
    */
   manualImpulse?: ImpulseLeg | null;
   /**
+   * Record but do not enforce the "is this really an impulse?" quality checks.
+   * Set when a hand-marked leg is supplied: the person drawing it has already
+   * made that judgement, and the thresholds exist to stop AUTOMATIC detection
+   * promoting a choppy drift. Structural checks — origin intact, at least one
+   * POI to enter at — are never softened.
+   */
+  softQualification?: boolean;
+  /**
    * Attach an observation-only snapshot of the exact legs, POIs and ranked
    * candidates traversed by this invocation. Defaults off.
    */
@@ -2276,6 +2305,9 @@ export function findBestEntryZoneMultiTF(
     return {
       ...options,
       manualImpulse,
+      // Soften quality checks only for the slot actually running a marked leg.
+      // Derived here rather than set by callers so the two can never disagree.
+      softQualification: manualImpulse != null,
       ...(options.evidenceContext
         ? { evidenceContext: { ...options.evidenceContext, timeframe } }
         : {}),

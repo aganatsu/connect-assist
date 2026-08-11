@@ -224,7 +224,10 @@ export function resolveManualImpulse(
       // For a hand-marked leg the structural break is its terminal extreme.
       bosPrice: spec.direction === "bullish" ? spec_high : spec_low,
       breakType: "bos",
-      closeBased: false,
+      // There is no detected structure break to confirm — a person drew this
+      // leg. Leaving this false made every manual leg fail qualification's
+      // "structure break was not confirmed by a candle close" check.
+      closeBased: true,
       structureSignificance: "external",
       timeframe: spec.timeframe,
       startDate: candles[startIndex]?.datetime,

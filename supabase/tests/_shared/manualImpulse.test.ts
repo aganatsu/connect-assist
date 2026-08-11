@@ -268,3 +268,85 @@ Deno.test("the origin is still the closest bar, not merely a recent one", () => 
   assertEquals(r.rejection, null, r.detail);
   assertEquals(r.leg!.startIndex, 2, "bar 2 has the exact 1.0800 low; bar 3 at 1.0805 must not win");
 });
+
+// ── Soft qualification ───────────────────────────────────────────────────────
+// qualifyImpulseLeg asks "is this really an impulse?" — displacement, body
+// ratio, path efficiency, candle overlap. Those thresholds exist to stop
+// AUTOMATIC detection promoting a choppy drift. A person drawing a leg has
+// already made that judgement, so for a marked leg they are recorded, not
+// enforced. Structural reasons are never softened.
+
+Deno.test("soft qualification records quality failures without blocking", async () => {
+  const { qualifyImpulseLeg } = await import(
+    "../../functions/_shared/impulseZoneEngine.ts"
+  );
+  // A deliberately choppy leg: heavy overlap, weak directional movement.
+  clock = Date.UTC(2026, 7, 1);
+  const bars: Candle[] = [];
+  for (let i = 0; i < 30; i++) {
+    const base = 1.0800 + i * 0.0002;
+    bars.push(bar(base, base + 0.0030, base - 0.0028, base + 0.0001));
+  }
+  const leg = {
+    high: 1.0890, low: 1.0800, direction: "bullish" as const,
+    startIndex: 0, endIndex: 29, isValid: true, bosPrice: 1.0890,
+    breakType: "bos" as const, closeBased: true,
+  };
+  const poi = [{
+    type: "ob" as const, high: 1.0820, low: 1.0810,
+    candleIndex: 5, direction: "bullish" as const,
+  }];
+
+  const strict = qualifyImpulseLeg(bars, leg, poi as any);
+  const soft = qualifyImpulseLeg(bars, leg, poi as any, { softQualification: true });
+
+  assertEquals(strict.qualified, false, "a choppy leg must fail strict qualification");
+  assert(strict.reasons.length > 0);
+  assertEquals(strict.softenedReasons.length, 0, "strict mode softens nothing");
+
+  assertEquals(soft.qualified, true, "the same leg, hand-marked, proceeds");
+  assert(soft.softenedReasons.length > 0, "and says what it overlooked");
+  assertEquals(
+    soft.reasons.length, strict.reasons.length,
+    "softening must not hide the reasons, only stop them blocking",
+  );
+});
+
+Deno.test("soft qualification still blocks structural failures", async () => {
+  const { qualifyImpulseLeg } = await import(
+    "../../functions/_shared/impulseZoneEngine.ts"
+  );
+  const bars = bullishSeries();
+  const base = {
+    high: 1.0900, low: 1.0800, direction: "bullish" as const,
+    startIndex: 2, endIndex: 8, bosPrice: 1.0900,
+    breakType: "bos" as const, closeBased: true,
+  };
+
+  // No POI to enter at — untradeable however good the leg looks.
+  const noPoi = qualifyImpulseLeg(bars, { ...base, isValid: true }, [], {
+    softQualification: true,
+  });
+  assertEquals(noPoi.qualified, false, "nowhere to enter must still block");
+  assert(noPoi.reasons.some((r) => r.includes("No accepted FVG or Order Block")));
+  assert(
+    !noPoi.softenedReasons.some((r) => r.includes("No accepted FVG or Order Block")),
+    "a structural reason must never be softened",
+  );
+
+  // Origin gone — the premise of the leg is void.
+  const broken = qualifyImpulseLeg(bars, { ...base, isValid: false }, [
+    { type: "ob", high: 1.0820, low: 1.0810, candleIndex: 3, direction: "bullish" },
+  ] as any, { softQualification: true });
+  assertEquals(broken.qualified, false);
+  assertEquals(broken.state, "invalidated");
+});
+
+Deno.test("a hand-marked leg reports closeBased, so it is not failed for lacking a BOS close", () => {
+  const r = resolveManualImpulse(bullishSeries(), EURUSD);
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(
+    r.leg!.closeBased, true,
+    "there is no detected structure break to confirm on a drawn leg",
+  );
+});
