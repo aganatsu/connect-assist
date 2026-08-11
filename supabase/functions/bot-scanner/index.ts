@@ -215,6 +215,7 @@ import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationS
 import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
 import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
+import { resolveManualImpulse, type ManualImpulseSpec } from "../_shared/manualImpulse.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import {
   annotateEvidenceLifecycle,
@@ -4019,6 +4020,39 @@ async function runScanForUser(
   // Track which daily/weekly candles were freshly fetched (to persist after scan)
   const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
 
+  // ── Hand-marked impulses ──
+  // An active marking OVERRIDES automatic impulse detection for its symbol. It
+  // bypasses nothing else: every gate still runs, and the Direction Verdict may
+  // still veto. Loaded once per cycle rather than per pair.
+  const manualImpulseBySymbol = new Map<string, any>();
+  const manualImpulseRetirements: Promise<void>[] = [];
+  try {
+    const { data: markings } = await supabase.from("manual_impulses")
+      .select("id,symbol,direction,high,low,timeframe,expires_at")
+      .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "active")
+      .gt("expires_at", new Date().toISOString());
+    for (const row of markings || []) manualImpulseBySymbol.set(row.symbol, row);
+    if (manualImpulseBySymbol.size > 0) {
+      console.log(`[scan ${scanCycleId}] manual impulses active: ${[...manualImpulseBySymbol.keys()].join(", ")}`);
+    }
+  } catch (e: any) {
+    console.warn(`[scan ${scanCycleId}] manual impulse load failed (non-fatal): ${e?.message}`);
+  }
+
+  /** Retire a marking the market has moved past, so the UI can say why. */
+  const retireManualImpulse = async (id: string, reason: string, detail: string): Promise<void> => {
+    try {
+      await supabase.from("manual_impulses").update({
+        status: reason === "origin_already_broken" ? "invalidated" : "cancelled",
+        resolution_reason: reason,
+        last_resolution_detail: detail,
+        last_resolved_at: new Date().toISOString(),
+      }).eq("id", id);
+    } catch (e: any) {
+      console.warn(`[scan ${scanCycleId}] could not retire manual impulse ${id}: ${e?.message}`);
+    }
+  };
+
   await markScannerOperation(
     supabase,
     opts?.operationRunId,
@@ -4943,6 +4977,57 @@ async function runScanForUser(
           timeframeAuthority,
         );
 
+        // Resolve any hand-marked impulse for this pair against candles from the
+        // timeframe it was marked on. A marking must either drive the scan or
+        // explain why it cannot — never fail silently.
+        const manualMarking = manualImpulseBySymbol.get(pair);
+        let manualImpulseLeg = null as ReturnType<typeof resolveManualImpulse>["leg"];
+        if (manualMarking) {
+          const byTf: Record<string, Candle[]> = {
+            D: dailyCandles, "4H": h4Candles, "1H": hourlyCandles,
+          };
+          const spec: ManualImpulseSpec = {
+            symbol: pair,
+            direction: manualMarking.direction,
+            high: Number(manualMarking.high),
+            low: Number(manualMarking.low),
+            timeframe: manualMarking.timeframe,
+          };
+          const resolvedManual = resolveManualImpulse(
+            byTf[manualMarking.timeframe] || hourlyCandles,
+            spec,
+          );
+          manualImpulseLeg = resolvedManual.leg;
+          (detail as any).manualImpulse = {
+            id: manualMarking.id,
+            direction: manualMarking.direction,
+            high: Number(manualMarking.high),
+            low: Number(manualMarking.low),
+            timeframe: manualMarking.timeframe,
+            accepted: resolvedManual.leg != null,
+            rejection: resolvedManual.rejection,
+            detail: resolvedManual.detail,
+            matchErrorPips: resolvedManual.matchErrorPips ?? null,
+          };
+          if (resolvedManual.leg) {
+            console.log(`[scan ${scanCycleId}] ${pair}: MANUAL IMPULSE override — ${resolvedManual.detail}`);
+          } else {
+            console.log(`[scan ${scanCycleId}] ${pair}: manual impulse rejected — ${resolvedManual.detail}`);
+            // Retire only a permanently dead marking. A transient miss (candles
+            // not loaded yet) must not discard the user's work.
+            if (
+              resolvedManual.rejection === "origin_already_broken" ||
+              resolvedManual.rejection === "direction_mismatch" ||
+              resolvedManual.rejection === "invalid_bounds" ||
+              resolvedManual.rejection === "too_small_for_stop"
+            ) {
+              manualImpulseRetirements.push(
+                retireManualImpulse(manualMarking.id, resolvedManual.rejection, resolvedManual.detail),
+              );
+              manualImpulseBySymbol.delete(pair);
+            }
+          }
+        }
         const unifiedResult: UnifiedZoneResult = findUnifiedZone(
           zoneH1Candles,
           zoneH4Candles,
@@ -4952,6 +5037,7 @@ async function runScanForUser(
           combinedLiqPools,
           htfConfluenceData ?? undefined,
           {
+            manualImpulse: manualImpulseLeg,
             collectEvidence: true,
             structureAuthorityMode: pairConfig.canonicalStructureMode === "enforce" &&
                 pairConfig.singleOwnershipMode === "enforce"
@@ -11196,6 +11282,13 @@ async function runScanForUser(
   console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount})`);
 
   // Log the scan
+  // Retirements are fire-and-forget during the loop so a DB write never stalls a
+  // pair; settle them before the cycle ends so the UI never shows a marking the
+  // scanner has already discarded.
+  if (manualImpulseRetirements.length > 0) {
+    await Promise.allSettled(manualImpulseRetirements);
+  }
+
   await supabase.from("scan_logs").insert({
     user_id: userId,
     bot_id: BOT_ID,

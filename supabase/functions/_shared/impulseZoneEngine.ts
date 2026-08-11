@@ -2265,10 +2265,20 @@ export function findBestEntryZoneMultiTF(
 ): MultiTFZoneResult {
   const labels = tfLabels ?? DEFAULT_TF_LABELS;
   const optionsFor = (timeframe: string): ZoneEngineOptions | undefined => {
-    if (!options || !options.evidenceContext) return options;
+    if (!options) return options;
+    // A hand-marked impulse belongs to the timeframe it was marked on. The
+    // waterfall evaluates every slot, so passing it through unfiltered would
+    // silently override detection on timeframes the user never touched.
+    const manualImpulse = options.manualImpulse &&
+        options.manualImpulse.timeframe === timeframe
+      ? options.manualImpulse
+      : null;
     return {
       ...options,
-      evidenceContext: { ...options.evidenceContext, timeframe },
+      manualImpulse,
+      ...(options.evidenceContext
+        ? { evidenceContext: { ...options.evidenceContext, timeframe } }
+        : {}),
     };
   };
   // ── WATERFALL: Try Daily first (A+ setup) ──

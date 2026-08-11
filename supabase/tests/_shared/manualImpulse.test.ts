@@ -185,3 +185,49 @@ Deno.test("source guard: the engine prefers a supplied manual impulse over detec
     "ZoneEngineOptions must expose manualImpulse",
   );
 });
+
+// ── Scanner wiring ───────────────────────────────────────────────────────────
+
+Deno.test("a marking only overrides the timeframe slot it was marked on", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  const block = src.slice(
+    src.indexOf("const optionsFor ="),
+    src.indexOf("// ── WATERFALL"),
+  );
+  assert(block.length > 0, "optionsFor not found");
+  assert(
+    /options\.manualImpulse\.timeframe === timeframe/.test(block),
+    "the waterfall evaluates every slot, so a marking must be gated to its own " +
+      "timeframe or it would override detection on timeframes never touched",
+  );
+  assert(
+    /manualImpulse,/.test(block),
+    "optionsFor must pass the gated value through",
+  );
+});
+
+Deno.test("source guard: the scanner resolves, injects and retires markings", () => {
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(
+    /\.from\("manual_impulses"\)[\s\S]{0,200}\.eq\("status", "active"\)/.test(scanner),
+    "only active markings may be loaded",
+  );
+  assert(
+    /manualImpulse: manualImpulseLeg,/.test(scanner),
+    "the resolved leg must be handed to the zone engine",
+  );
+  // A transient miss must not discard the marking; only permanent failures do.
+  assert(
+    /resolvedManual\.rejection === "origin_already_broken"/.test(scanner) &&
+      !/rejection === "not_found_in_candles"[\s\S]{0,80}retireManualImpulse/.test(scanner),
+    "a marking must survive a transient resolution miss",
+  );
+  assert(
+    /await Promise\.allSettled\(manualImpulseRetirements\)/.test(scanner),
+    "retirements must be settled before the cycle ends",
+  );
+});
