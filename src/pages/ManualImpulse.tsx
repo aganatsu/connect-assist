@@ -34,6 +34,20 @@ const MIN_RR = 1.5;
  * wrong for gold (0.01), silver (0.001), oil (0.01), ETH (0.01) and BTC (1) —
  * it would overstate a BTC leg by 10,000x.
  */
+/**
+ * Turn a form value into an instant.
+ *
+ * A date-only value becomes midday rather than midnight: feeds disagree on where
+ * a daily bar starts (17:00 NY, 00:00 UTC), and midday sits comfortably inside
+ * the intended session either way.
+ */
+function toInstant(value: string): string | null {
+  if (!value) return null;
+  const withTime = value.length === 10 ? `${value}T12:00` : value;
+  const d = new Date(withTime);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
+
 const pipSizeFor = (symbol: string) =>
   INSTRUMENTS.find((i) => i.symbol === symbol)?.pipSize ??
   (symbol.includes("JPY") ? 0.01 : 0.0001);
@@ -51,9 +65,17 @@ export default function ManualImpulse() {
   const [symbol, setSymbol] = useState("EUR/USD");
   const [direction, setDirection] = useState<"bullish" | "bearish">("bullish");
   const [timeframe, setTimeframe] = useState<"D" | "4H" | "1H">("1H");
+  // Daily legs are identified by date; asking for a clock time is friction, and
+  // an incomplete datetime-local silently yields "" — which is how the times
+  // were being dropped without any error.
+  const dateOnly = timeframe === "D";
   const [high, setHigh] = useState("");
   const [low, setLow] = useState("");
-  const [validHours, setValidHours] = useState("12");
+  // Expiry follows the timeframe. A Daily leg outliving 12 hours is the normal
+  // case, not the exception — the old fixed default silently expired markings
+  // overnight and looked like the feature was broken.
+  const DEFAULT_VALID_HOURS: Record<string, string> = { D: "168", "4H": "48", "1H": "12" };
+  const [validHours, setValidHours] = useState(DEFAULT_VALID_HOURS["1H"]);
   // Optional but strongly preferred: price alone is ambiguous because price
   // revisits levels. A time picks the bar outright.
   const [highTime, setHighTime] = useState("");
@@ -76,8 +98,8 @@ export default function ManualImpulse() {
         validHours: Number(validHours),
         // datetime-local yields wall-clock with no zone; interpret it in the
         // browser's zone, which is the one the chart was read in.
-        highTime: highTime ? new Date(highTime).toISOString() : null,
-        lowTime: lowTime ? new Date(lowTime).toISOString() : null,
+        highTime: toInstant(highTime),
+        lowTime: toInstant(lowTime),
       }),
     onSuccess: () => {
       toast.success(`${symbol} impulse marked. The scanner picks it up next cycle.`);
@@ -188,7 +210,17 @@ export default function ManualImpulse() {
             </div>
             <div className="space-y-1">
               <Label className="text-[10px]">Marked on</Label>
-              <Select value={timeframe} onValueChange={(v) => setTimeframe(v as any)}>
+              <Select
+                value={timeframe}
+                onValueChange={(v) => {
+                  setTimeframe(v as any);
+                  setValidHours(DEFAULT_VALID_HOURS[v] ?? "12");
+                  // Switching between date-only and datetime invalidates the
+                  // stored strings; clearing beats silently sending a bad value.
+                  setHighTime("");
+                  setLowTime("");
+                }}
+              >
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="D">Daily</SelectItem>
@@ -229,20 +261,22 @@ export default function ManualImpulse() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-[10px]">
-                When the high printed <span className="text-muted-foreground">— optional</span>
+                {dateOnly ? "Date of the high" : "When the high printed"}{" "}
+                <span className="text-muted-foreground">— optional</span>
               </Label>
               <Input
-                type="datetime-local" value={highTime}
+                type={dateOnly ? "date" : "datetime-local"} value={highTime}
                 onChange={(e) => setHighTime(e.target.value)}
                 className="h-9 text-sm font-mono"
               />
             </div>
             <div className="space-y-1">
               <Label className="text-[10px]">
-                When the low printed <span className="text-muted-foreground">— optional</span>
+                {dateOnly ? "Date of the low" : "When the low printed"}{" "}
+                <span className="text-muted-foreground">— optional</span>
               </Label>
               <Input
-                type="datetime-local" value={lowTime}
+                type={dateOnly ? "date" : "datetime-local"} value={lowTime}
                 onChange={(e) => setLowTime(e.target.value)}
                 className="h-9 text-sm font-mono"
               />
@@ -250,8 +284,10 @@ export default function ManualImpulse() {
           </div>
           <p className="text-[10px] text-muted-foreground -mt-1">
             {bothTimes
-              ? "Times given — the exact bars will be used."
-              : "Without times the bot matches on price alone, which is ambiguous if price has visited these levels before. Adding both makes it exact."}
+              ? dateOnly
+                ? "Dates given — the exact bars will be used."
+                : "Times given — the exact bars will be used."
+              : `Without ${dateOnly ? "dates" : "times"} the bot matches on price alone, which is ambiguous if price has visited these levels before. Filling both makes it exact.`}
           </p>
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
