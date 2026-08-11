@@ -1241,7 +1241,28 @@ Deno.serve(async (req) => {
       // to avoid pg_cron's request timeout (~150s) killing us mid-loop.
       EdgeRuntime.waitUntil((async () => {
         const LOOP_BUDGET_MS = 50_000; // 50 seconds — exit before next cron at 60s
-        const LOOP_INTERVAL_MS = 8_000; // 8 seconds between iterations
+        // 20s, not 8s. Each iteration is a full runScanForUser in
+        // management-only mode, and management-only does not return early until
+        // well past the price refresh and the SL/TP breach check — both of which
+        // fetch candles per open symbol through a cache that is rebuilt every
+        // iteration. At 8s that is ~6 passes a minute; with three open positions
+        // roughly 27 TwelveData credits a minute, against a 55/min plan shared
+        // with the scanner and every other function.
+        //
+        // Measured 2026-08-11: 75 credits/min average, 371 peak, 100% of quota,
+        // requests 429ing. Downstream that reads as "Insufficient candles
+        // (0, need 20)" and the pair is skipped — 44% of scans.
+        //
+        // Caching candles ACROSS iterations was the other option, but the loop
+        // exists to notice price moving. Serving every iteration the same bars
+        // would make passes 2-6 re-evaluate identical data, so fewer real passes
+        // beats more fake ones.
+        //
+        // Trailing stops and break-even now react within ~20s instead of ~8s.
+        // Acceptable: in live mode the broker holds the real SL/TP, and since
+        // #282 bot-scanner re-checks every position against closed bars and is
+        // the authoritative closer.
+        const LOOP_INTERVAL_MS = 20_000;
         const loopStart = Date.now();
         let iteration = 0;
         const failedUsers = new Set<string>();
