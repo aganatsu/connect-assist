@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, Zap,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, Zap, Crosshair, PenLine,
   PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -14,6 +14,8 @@ const NAV_ITEMS = [
   { title: "ICT Analysis", url: "/ict-analysis", icon: Brain, shortcut: "3" },
   { title: "Fundamentals", url: "/fundamentals", icon: Calendar, shortcut: "4" },
   { title: "Bot", url: "/bot", icon: Bot, shortcut: "5" },
+  { title: "Game Plan", url: "/game-plan", icon: Crosshair },
+  { title: "Manual Impulse", url: "/manual-impulse", icon: PenLine },
   { title: "Journal", url: "/journal", icon: BookOpen, shortcut: "6" },
   { title: "Backtest", url: "/backtest", icon: FlaskConical, shortcut: "7" },
   { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
