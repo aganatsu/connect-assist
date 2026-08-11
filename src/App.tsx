@@ -23,6 +23,7 @@ import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
 import PropFirm from "./pages/PropFirm";
 import RejectedSetups from "./pages/RejectedSetups";
+import ManualImpulse from "./pages/ManualImpulse";
 import ScheduledTasks from "./pages/ScheduledTasks";
 import Optimizer from "./pages/Optimizer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -55,6 +56,7 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
                 <Route path="/rejected-setups" element={<ProtectedRoute><RejectedSetups /></ProtectedRoute>} />
+                <Route path="/manual-impulse" element={<ProtectedRoute><ManualImpulse /></ProtectedRoute>} />
                 <Route path="/scheduled-tasks" element={<ProtectedRoute><ScheduledTasks /></ProtectedRoute>} />
                 <Route path="/optimizer" element={<ProtectedRoute><ErrorBoundary><Optimizer /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />

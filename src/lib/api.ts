@@ -599,6 +599,81 @@ export interface PlanScenarioRow {
   viabilityNote: string | null;
 }
 
+/** A hand-marked impulse. You draw it on TradingView; the bot trades it. */
+export interface ManualImpulseRow {
+  id: string;
+  symbol: string;
+  direction: "bullish" | "bearish";
+  high: number;
+  low: number;
+  timeframe: "D" | "4H" | "1H";
+  status: "active" | "invalidated" | "expired" | "cancelled" | "filled";
+  resolution_reason: string | null;
+  last_resolution_detail: string | null;
+  last_resolved_at: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export const manualImpulseApi = {
+  list: async (): Promise<ManualImpulseRow[]> => {
+    const { data, error } = await (supabase as any)
+      .from("manual_impulses")
+      .select("*")
+      .eq("bot_id", "smc")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return (data || []).map((r: any) => ({
+      ...r,
+      high: Number(r.high),
+      low: Number(r.low),
+    }));
+  },
+  create: async (input: {
+    symbol: string;
+    direction: "bullish" | "bearish";
+    high: number;
+    low: number;
+    timeframe: "D" | "4H" | "1H";
+    validHours: number;
+  }): Promise<ManualImpulseRow> => {
+    const { data: auth } = await supabase.auth.getUser();
+    const userId = auth?.user?.id;
+    if (!userId) throw new Error("Not signed in.");
+    // One live marking per symbol — retire any existing one first so the
+    // partial unique index cannot reject the insert.
+    await (supabase as any)
+      .from("manual_impulses")
+      .update({ status: "cancelled", resolution_reason: "replaced_by_new_marking" })
+      .eq("user_id", userId).eq("bot_id", "smc")
+      .eq("symbol", input.symbol).eq("status", "active");
+    const { data, error } = await (supabase as any)
+      .from("manual_impulses")
+      .insert({
+        user_id: userId,
+        bot_id: "smc",
+        symbol: input.symbol,
+        direction: input.direction,
+        high: input.high,
+        low: input.low,
+        timeframe: input.timeframe,
+        expires_at: new Date(Date.now() + input.validHours * 3600_000).toISOString(),
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return { ...data, high: Number(data.high), low: Number(data.low) };
+  },
+  cancel: async (id: string): Promise<void> => {
+    const { error } = await (supabase as any)
+      .from("manual_impulses")
+      .update({ status: "cancelled", resolution_reason: "cancelled_by_user" })
+      .eq("id", id);
+    if (error) throw new Error(error.message);
+  },
+};
+
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   refreshGamePlan: () => invokeFunction<{
