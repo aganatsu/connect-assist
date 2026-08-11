@@ -1079,10 +1079,12 @@ export type Database = {
           direction: string
           expires_at: string
           high: number
+          high_time: string | null
           id: string
           last_resolution_detail: string | null
           last_resolved_at: string | null
           low: number
+          low_time: string | null
           resolution_reason: string | null
           status: string
           symbol: string
@@ -1096,10 +1098,12 @@ export type Database = {
           direction: string
           expires_at: string
           high: number
+          high_time?: string | null
           id?: string
           last_resolution_detail?: string | null
           last_resolved_at?: string | null
           low: number
+          low_time?: string | null
           resolution_reason?: string | null
           status?: string
           symbol: string
@@ -1113,10 +1117,12 @@ export type Database = {
           direction?: string
           expires_at?: string
           high?: number
+          high_time?: string | null
           id?: string
           last_resolution_detail?: string | null
           last_resolved_at?: string | null
           low?: number
+          low_time?: string | null
           resolution_reason?: string | null
           status?: string
           symbol?: string
