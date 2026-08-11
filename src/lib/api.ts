@@ -574,6 +574,31 @@ async function hydrateImpulseEntryLifecycles(
   }));
 }
 
+/** Narrow a possibly-string JSON number to a number, or null. */
+function numOrNull(v: unknown): number | null {
+  const n = typeof v === "string" ? Number(v) : v;
+  return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+/** One Gameplan scenario, flattened with its parent plan's context. */
+export interface PlanScenarioRow {
+  symbol: string;
+  bias: string | null;
+  biasConfidence: number | null;
+  state: string | null;
+  expiresAt: string | null;
+  index: number;
+  direction: string | null;
+  condition: string;
+  entryLevel: number | null;
+  targetLevel: number | null;
+  rewardPips: number | null;
+  minStopPips: number | null;
+  /** null when the scenario has no target to judge. */
+  viable: boolean | null;
+  viabilityNote: string | null;
+}
+
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   refreshGamePlan: () => invokeFunction<{
@@ -593,6 +618,50 @@ export const scannerApi = {
       .limit(100);
     if (error) throw new Error(error.message);
     return data || [];
+  },
+  /**
+   * Scenarios from the currently active Gameplan, annotated with whether their
+   * target is reachable at all.
+   *
+   * A scenario names an entry and a target; the instrument's MIN_SL_PIPS fixes
+   * the smallest legal risk, so a target closer than `minStop x minRR` can never
+   * be traded at an acceptable reward-to-risk. Observation only — nothing gates
+   * on these fields; they exist so an unviable plan cannot look tradeable.
+   */
+  activePlanScenarios: async (): Promise<PlanScenarioRow[]> => {
+    const { data, error } = await (supabase as any)
+      .from("active_game_plans")
+      .select("symbol,bias,bias_confidence,state,generated_at,expires_at,plan_json")
+      .eq("bot_id", "smc")
+      .eq("is_active", true)
+      .gt("expires_at", new Date().toISOString())
+      .order("symbol", { ascending: true });
+    if (error) throw new Error(error.message);
+    const rows: PlanScenarioRow[] = [];
+    for (const plan of data || []) {
+      const scenarios = plan?.plan_json?.scenarios;
+      if (!Array.isArray(scenarios)) continue;
+      scenarios.forEach((scenario: any, index: number) => {
+        rows.push({
+          symbol: plan.symbol,
+          bias: plan.bias ?? null,
+          biasConfidence: plan.bias_confidence ?? null,
+          state: plan.state ?? null,
+          expiresAt: plan.expires_at ?? null,
+          index,
+          direction: scenario?.direction ?? null,
+          condition: scenario?.condition ?? "",
+          entryLevel: numOrNull(scenario?.entryLevel),
+          targetLevel: numOrNull(scenario?.targetLevel),
+          rewardPips: numOrNull(scenario?.rewardPips),
+          minStopPips: numOrNull(scenario?.minStopPips),
+          // undefined means the scenario carries no target to judge
+          viable: typeof scenario?.viable === "boolean" ? scenario.viable : null,
+          viabilityNote: scenario?.viabilityNote ?? null,
+        });
+      });
+    }
+    return rows;
   },
   // Setup Staging / Watchlist
   activeStaged: async (): Promise<StagedSetup[]> => {
