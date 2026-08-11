@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
-import { botConfigApi } from "@/lib/api";
+import { botConfigApi, scannerApi } from "@/lib/api";
 import { formatPipDisplay, rawPipsToDisplay, getPipLabel } from "@/lib/pipDisplay";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -534,6 +534,16 @@ export default function RejectedSetups() {
   } = useQuery({
     queryKey: ["streamlined-decision-comparison"],
     queryFn: () => botConfigApi.getStreamlinedDecisionComparison(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const {
+    data: planScenarios = [],
+    isLoading: isLoadingPlanScenarios,
+    refetch: refetchPlanScenarios,
+  } = useQuery({
+    queryKey: ["active-plan-scenarios"],
+    queryFn: () => scannerApi.activePlanScenarios(),
     staleTime: 60_000,
     retry: false,
   });
@@ -1343,6 +1353,90 @@ export default function RejectedSetups() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-sm font-medium">Gameplan Scenario Viability</CardTitle>
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      A scenario can only be traded if its target is further away than the instrument&apos;s minimum stop &times; minimum R:R. Observation only — nothing is blocked on this.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[9px]">
+                      {planScenarios.filter((s) => s.viable === false).length} UNVIABLE / {planScenarios.length}
+                    </Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-[10px]"
+                      onClick={() => refetchPlanScenarios()}
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${isLoadingPlanScenarios ? "animate-spin" : ""}`} />
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                {isLoadingPlanScenarios ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">Loading active plans…</div>
+                ) : planScenarios.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">
+                    No active Gameplan scenarios. Plans expire — refresh the Gameplan to repopulate.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {planScenarios.map((sc) => (
+                      <div
+                        key={`${sc.symbol}-${sc.index}`}
+                        className="grid grid-cols-1 md:grid-cols-[110px_70px_1fr_auto] gap-2 rounded border border-border/50 p-2 items-start"
+                      >
+                        <div>
+                          <p className="text-xs font-semibold">{sc.symbol}</p>
+                          <p className="text-[9px] text-muted-foreground uppercase">
+                            {sc.direction || "—"} · {sc.bias || "—"} {sc.biasConfidence ?? "—"}%
+                          </p>
+                        </div>
+                        <div className="font-mono text-[10px]">
+                          <p className={sc.viable === false ? "text-destructive font-bold" : "text-foreground"}>
+                            {sc.rewardPips == null ? "—" : `${sc.rewardPips}p`}
+                          </p>
+                          <p className="text-[9px] text-muted-foreground">
+                            need {sc.minStopPips == null ? "—" : Math.round(sc.minStopPips * 1.5)}p
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-foreground">{sc.condition}</p>
+                          {sc.viabilityNote && (
+                            <p className="text-[9px] text-destructive mt-0.5">{sc.viabilityNote}</p>
+                          )}
+                          {sc.entryLevel != null && sc.targetLevel != null && (
+                            <p className="text-[9px] text-muted-foreground font-mono mt-0.5">
+                              entry {sc.entryLevel} → target {sc.targetLevel}
+                            </p>
+                          )}
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] ${
+                            sc.viable === false
+                              ? "border-destructive/50 text-destructive"
+                              : sc.viable === true
+                              ? "border-success/50 text-success"
+                              : "border-border text-muted-foreground"
+                          }`}
+                        >
+                          {sc.viable === false ? "UNVIABLE" : sc.viable === true ? "VIABLE" : "NO TARGET"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
