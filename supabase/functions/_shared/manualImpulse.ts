@@ -33,6 +33,18 @@ export interface ManualImpulseSpec {
   low: number;
   /** Timeframe the leg was marked on. */
   timeframe?: "D" | "4H" | "1H";
+  /**
+   * When each swing printed, ISO. Optional but strongly preferred: price alone
+   * is ambiguous because price revisits levels, and the matcher then has to
+   * guess which visit was meant. Given a time, the bar is chosen outright.
+   *
+   * Matched to the NEAREST bar rather than an exact timestamp, because chart
+   * feeds disagree on bar boundaries — a TradingView daily "Aug 2" can be the
+   * bot's "Aug 3". Bars are hours apart, so nearest-in-time is unambiguous in a
+   * way nearest-in-price is not.
+   */
+  highTime?: string | null;
+  lowTime?: string | null;
 }
 
 export type ManualImpulseRejection =
@@ -40,7 +52,8 @@ export type ManualImpulseRejection =
   | "direction_mismatch"
   | "not_found_in_candles"
   | "too_small_for_stop"
-  | "origin_already_broken";
+  | "origin_already_broken"
+  | "time_price_mismatch";
 
 export interface ManualImpulseResolution {
   leg: ImpulseLeg | null;
@@ -53,6 +66,27 @@ export interface ManualImpulseResolution {
 
 /** Largest acceptable gap between a marked price and the nearest bar extreme. */
 const MATCH_TOLERANCE_FRACTION = 0.25;
+
+/** Bar closest in time to an instant. Bars are hours apart, so this is exact. */
+function indexNearestTime(
+  candles: Candle[],
+  isoTime: string,
+): { index: number; driftMs: number } {
+  const target = new Date(isoTime).getTime();
+  if (!Number.isFinite(target)) return { index: -1, driftMs: Infinity };
+  let index = -1;
+  let driftMs = Infinity;
+  for (let i = 0; i < candles.length; i++) {
+    const t = new Date(candles[i].datetime).getTime();
+    if (!Number.isFinite(t)) continue;
+    const diff = Math.abs(t - target);
+    if (diff < driftMs) {
+      driftMs = diff;
+      index = i;
+    }
+  }
+  return { index, driftMs };
+}
 
 /**
  * Closest bar to a target, preferring the most recent on a tie.
@@ -130,6 +164,9 @@ export function resolveManualImpulse(
     };
   }
 
+  const tolerance = range * MATCH_TOLERANCE_FRACTION;
+  const pipsOff = (v: number) => Math.round((v / pipSize) * 10) / 10;
+
   if (candles.length < 5) {
     return {
       leg: null,
@@ -138,57 +175,114 @@ export function resolveManualImpulse(
     };
   }
 
-  const tolerance = range * MATCH_TOLERANCE_FRACTION;
-  const pipsOff = (v: number) => Math.round((v / pipSize) * 10) / 10;
+  // When times are supplied the bars are chosen outright — no search, no
+  // ambiguity from revisited levels. Price is then only a cross-check that the
+  // time and the level describe the same swing.
+  const haveTimes = !!spec.highTime && !!spec.lowTime;
+  let highIdx: number;
+  let lowIdx: number;
+  let highErr: number;
+  let lowErr: number;
 
-  // Anchor on the terminus — the extreme the move ended at — then find the
-  // origin that precedes it. This keeps the leg the tightest recent one and
-  // makes startIndex < endIndex true by construction.
-  const terminusIsHigh = spec.direction === "bullish";
-  const terminus = closestIndexPreferRecent(
-    candles,
-    (c) => (terminusIsHigh ? c.high : c.low),
-    terminusIsHigh ? spec_high : spec_low,
-  );
-  if (terminus.index < 0 || terminus.error > tolerance) {
-    return {
-      leg: null,
-      rejection: "not_found_in_candles",
-      detail:
-        `Could not find a bar at the ${terminusIsHigh ? "high" : "low"} of the marked ` +
-        `leg on the loaded ${spec.timeframe ?? "entry"} candles. Check the timeframe and prices.`,
-      matchErrorPips: {
-        high: terminusIsHigh ? pipsOff(terminus.error) : 0,
-        low: terminusIsHigh ? 0 : pipsOff(terminus.error),
-      },
-    };
+  if (haveTimes) {
+    const hi = indexNearestTime(candles, spec.highTime!);
+    const lo = indexNearestTime(candles, spec.lowTime!);
+    if (hi.index < 0 || lo.index < 0) {
+      return {
+        leg: null,
+        rejection: "not_found_in_candles",
+        detail: "Those timestamps are not readable, or no candles cover them.",
+      };
+    }
+    highIdx = hi.index;
+    lowIdx = lo.index;
+    highErr = Math.abs(candles[highIdx].high - spec_high);
+    lowErr = Math.abs(candles[lowIdx].low - spec_low);
+
+    // A time and a price that disagree means one of them is wrong — usually the
+    // wrong timeframe, or a date typed from a different chart. Better to say so
+    // than to silently trade a bar the user did not mean.
+    if (highErr > tolerance || lowErr > tolerance) {
+      return {
+        leg: null,
+        rejection: "time_price_mismatch",
+        detail:
+          `The bars at those times do not carry those prices — high is off by ` +
+          `${pipsOff(highErr)} pips, low by ${pipsOff(lowErr)}. Check the ` +
+          `timeframe and that both times come from the same chart.`,
+        matchErrorPips: { high: pipsOff(highErr), low: pipsOff(lowErr) },
+      };
+    }
+  } else {
+    // No times given: fall back to matching on price, anchoring on the terminus
+    // — the extreme the move ended at — and searching for the origin only among
+    // bars before it.
+    const terminusIsHigh = spec.direction === "bullish";
+    const terminus = closestIndexPreferRecent(
+      candles,
+      (c) => (terminusIsHigh ? c.high : c.low),
+      terminusIsHigh ? spec_high : spec_low,
+    );
+    if (terminus.index < 0 || terminus.error > tolerance) {
+      return {
+        leg: null,
+        rejection: "not_found_in_candles",
+        detail:
+          `Could not find a bar at the ${terminusIsHigh ? "high" : "low"} of the marked ` +
+          `leg on the loaded ${spec.timeframe ?? "entry"} candles. Adding the swing ` +
+          `times would make this exact.`,
+        matchErrorPips: {
+          high: terminusIsHigh ? pipsOff(terminus.error) : 0,
+          low: terminusIsHigh ? 0 : pipsOff(terminus.error),
+        },
+      };
+    }
+    const origin = closestIndexPreferRecent(
+      candles,
+      (c) => (terminusIsHigh ? c.low : c.high),
+      terminusIsHigh ? spec_low : spec_high,
+      terminus.index,
+    );
+    if (origin.index < 0 || origin.error > tolerance) {
+      return {
+        leg: null,
+        rejection: "direction_mismatch",
+        detail:
+          `Found the ${terminusIsHigh ? "high" : "low"} of the marked leg, but no ` +
+          `${terminusIsHigh ? "low" : "high"} near ${
+            terminusIsHigh ? spec_low : spec_high
+          } before it. Check the direction — a ${spec.direction} leg must run ` +
+          `${terminusIsHigh ? "low → high" : "high → low"}.`,
+        matchErrorPips: {
+          high: terminusIsHigh ? pipsOff(terminus.error) : pipsOff(origin.error),
+          low: terminusIsHigh ? pipsOff(origin.error) : pipsOff(terminus.error),
+        },
+      };
+    }
+    highIdx = terminusIsHigh ? terminus.index : origin.index;
+    lowIdx = terminusIsHigh ? origin.index : terminus.index;
+    highErr = terminusIsHigh ? terminus.error : origin.error;
+    lowErr = terminusIsHigh ? origin.error : terminus.error;
   }
 
-  const origin = closestIndexPreferRecent(
-    candles,
-    (c) => (terminusIsHigh ? c.low : c.high),
-    terminusIsHigh ? spec_low : spec_high,
-    terminus.index,
-  );
-  if (origin.index < 0 || origin.error > tolerance) {
+  // A bullish leg runs low → high; a bearish leg runs high → low.
+  const startIdx = spec.direction === "bullish" ? lowIdx : highIdx;
+  const endIdx = spec.direction === "bullish" ? highIdx : lowIdx;
+  if (startIdx >= endIdx) {
     return {
       leg: null,
       rejection: "direction_mismatch",
       detail:
-        `Found the ${terminusIsHigh ? "high" : "low"} of the marked leg, but no ` +
-        `${terminusIsHigh ? "low" : "high"} near ${
-          terminusIsHigh ? spec_low : spec_high
-        } before it. Check the direction — a ${spec.direction} leg must run ` +
-        `${terminusIsHigh ? "low → high" : "high → low"}.`,
-      matchErrorPips: {
-        high: terminusIsHigh ? pipsOff(terminus.error) : pipsOff(origin.error),
-        low: terminusIsHigh ? pipsOff(origin.error) : pipsOff(terminus.error),
-      },
+        `Marked ${spec.direction}, but on the chart the ${
+          spec.direction === "bullish" ? "high" : "low"
+        } comes first. A ${spec.direction} leg must run ${
+          spec.direction === "bullish" ? "low → high" : "high → low"
+        }.`,
     };
   }
 
-  const startIndex = origin.index;
-  const endIndex = terminus.index;
+  const startIndex = startIdx;
+  const endIndex = endIdx;
 
   // Same invalidation rule auto-detected legs use: the leg is dead once a candle
   // CLOSES past the origin that started the move.
@@ -208,10 +302,7 @@ export function resolveManualImpulse(
     }
   }
 
-  const matchErrorPips = {
-    high: terminusIsHigh ? pipsOff(terminus.error) : pipsOff(origin.error),
-    low: terminusIsHigh ? pipsOff(origin.error) : pipsOff(terminus.error),
-  };
+  const matchErrorPips = { high: pipsOff(highErr), low: pipsOff(lowErr) };
 
   return {
     leg: {

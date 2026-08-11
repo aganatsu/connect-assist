@@ -607,6 +607,8 @@ export interface ManualImpulseRow {
   high: number;
   low: number;
   timeframe: "D" | "4H" | "1H";
+  high_time: string | null;
+  low_time: string | null;
   status: "active" | "invalidated" | "expired" | "cancelled" | "filled";
   resolution_reason: string | null;
   last_resolution_detail: string | null;
@@ -637,6 +639,8 @@ export const manualImpulseApi = {
     low: number;
     timeframe: "D" | "4H" | "1H";
     validHours: number;
+    highTime?: string | null;
+    lowTime?: string | null;
   }): Promise<ManualImpulseRow> => {
     const { data: auth } = await supabase.auth.getUser();
     const userId = auth?.user?.id;
@@ -658,6 +662,8 @@ export const manualImpulseApi = {
         high: input.high,
         low: input.low,
         timeframe: input.timeframe,
+        high_time: input.highTime || null,
+        low_time: input.lowTime || null,
         expires_at: new Date(Date.now() + input.validHours * 3600_000).toISOString(),
       })
       .select()

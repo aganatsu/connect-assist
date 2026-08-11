@@ -4028,7 +4028,7 @@ async function runScanForUser(
   const manualImpulseRetirements: Promise<void>[] = [];
   try {
     const { data: markings } = await supabase.from("manual_impulses")
-      .select("id,symbol,direction,high,low,timeframe,expires_at")
+      .select("id,symbol,direction,high,low,timeframe,expires_at,high_time,low_time")
       .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "active")
       .gt("expires_at", new Date().toISOString());
     for (const row of markings || []) manualImpulseBySymbol.set(row.symbol, row);
@@ -4992,6 +4992,8 @@ async function runScanForUser(
             high: Number(manualMarking.high),
             low: Number(manualMarking.low),
             timeframe: manualMarking.timeframe,
+            highTime: manualMarking.high_time ?? null,
+            lowTime: manualMarking.low_time ?? null,
           };
           const resolvedManual = resolveManualImpulse(
             byTf[manualMarking.timeframe] || hourlyCandles,
