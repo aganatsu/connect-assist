@@ -50,9 +50,17 @@ interface BotConfigModalProps {
   defaultTab?: string;
   defaultSearch?: string;
   effectiveStylePolicy?: RuntimeStylePolicy | null;
+  /**
+   * "modal" floats over the page; "page" drops the overlay and the height cap
+   * so the same panel can fill a route. Everything inside is identical — the
+   * config is one component, rendered two ways, rather than two copies that
+   * drift apart.
+   */
+  variant?: "modal" | "page";
 }
 
-export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch, effectiveStylePolicy }: BotConfigModalProps) {
+export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch, effectiveStylePolicy, variant = "modal" }: BotConfigModalProps) {
+  const asPage = variant === "page";
   const queryClient = useQueryClient();
   const queryKey = connectionId ? ["bot-config", connectionId] : ["bot-config"];
   const effectiveQueryKey = connectionId
@@ -314,8 +322,16 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
 
   // ─── Render ─────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
-      <div className="bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+    <div
+      className={asPage
+        ? ""
+        : "fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4"}
+    >
+      <div
+        className={asPage
+          ? "bg-card border border-border w-full flex flex-col overflow-hidden"
+          : "bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"}
+      >
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 md:px-6 py-2 md:py-4 border-b border-border">
           <div className="min-w-0">
@@ -338,7 +354,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               <Bookmark className="h-3 w-3" /> Save as Preset
             </Button>
             <Button size="sm" className="h-10 md:h-8 text-xs" onClick={() => saveMut.mutate()}>Save</Button>
-            <button onClick={onClose} className="h-10 w-10 inline-flex items-center justify-center text-muted-foreground hover:text-foreground" aria-label="Close configuration"><X className="h-4 w-4" /></button>
+            {!asPage && (
+              <button onClick={onClose} className="h-10 w-10 inline-flex items-center justify-center text-muted-foreground hover:text-foreground" aria-label="Close configuration"><X className="h-4 w-4" /></button>
+            )}
           </div>
         </div>
 
