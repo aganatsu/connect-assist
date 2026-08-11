@@ -27,7 +27,15 @@ const MIN_SL_PIPS: Record<string, number> = {
 };
 const MIN_RR = 1.5;
 
-const pipSizeFor = (symbol: string) => (symbol.includes("JPY") ? 0.01 : 0.0001);
+/**
+ * Real pip size per instrument. INSTRUMENTS already carries this, so it must be
+ * read rather than guessed: a "JPY means 0.01, everything else 0.0001" rule is
+ * wrong for gold (0.01), silver (0.001), oil (0.01), ETH (0.01) and BTC (1) —
+ * it would overstate a BTC leg by 10,000x.
+ */
+const pipSizeFor = (symbol: string) =>
+  INSTRUMENTS.find((i) => i.symbol === symbol)?.pipSize ??
+  (symbol.includes("JPY") ? 0.01 : 0.0001);
 
 const STATUS_TONE: Record<string, string> = {
   active: "border-success/50 text-success",
@@ -89,6 +97,13 @@ export default function ManualImpulse() {
   const rangePips = boundsOk ? (h - l) / pipSizeFor(symbol) : 0;
   const requiredPips = (MIN_SL_PIPS[symbol] ?? 15) * MIN_RR;
   const bigEnough = rangePips >= requiredPips;
+  // A leg a thousand times the minimum stop is nearly always the wrong
+  // instrument selected — JPY-scale prices against AUD/CAD read as 54,300 pips.
+  // This only WARNS: MIN_SL_PIPS is not scaled consistently across asset
+  // classes (a real Daily gold leg is ~600x its floor), so blocking on this
+  // ratio would refuse legitimate trades. The backend rejects prices that are
+  // not on the chart anyway, with a precise reason.
+  const suspiciouslyLarge = rangePips > requiredPips * 1000;
   const canSubmit = bothPresent && boundsOk && bigEnough && !create.isPending;
 
   const problem = !bothPresent
@@ -99,6 +114,10 @@ export default function ManualImpulse() {
     ? `That leg is ${rangePips.toFixed(1)} pips. ${symbol} needs at least ` +
       `${Math.round(requiredPips)} (min stop ${MIN_SL_PIPS[symbol] ?? 15} × ${MIN_RR} R:R) ` +
       `for any entry inside it to be tradeable.`
+    : suspiciouslyLarge
+    ? `That is ${Math.round(rangePips).toLocaleString()} pips on ${symbol} — check you ` +
+      `picked the right instrument for those prices. Saving anyway is allowed; the ` +
+      `scanner will reject it if the levels are not on the chart.`
     : null;
 
   return (
