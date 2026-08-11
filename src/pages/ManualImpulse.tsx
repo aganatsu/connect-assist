@@ -54,6 +54,10 @@ export default function ManualImpulse() {
   const [high, setHigh] = useState("");
   const [low, setLow] = useState("");
   const [validHours, setValidHours] = useState("12");
+  // Optional but strongly preferred: price alone is ambiguous because price
+  // revisits levels. A time picks the bar outright.
+  const [highTime, setHighTime] = useState("");
+  const [lowTime, setLowTime] = useState("");
 
   const { data: markings = [], isLoading, refetch } = useQuery({
     queryKey: ["manual-impulses"],
@@ -70,11 +74,17 @@ export default function ManualImpulse() {
         low: Number(low),
         timeframe,
         validHours: Number(validHours),
+        // datetime-local yields wall-clock with no zone; interpret it in the
+        // browser's zone, which is the one the chart was read in.
+        highTime: highTime ? new Date(highTime).toISOString() : null,
+        lowTime: lowTime ? new Date(lowTime).toISOString() : null,
       }),
     onSuccess: () => {
       toast.success(`${symbol} impulse marked. The scanner picks it up next cycle.`);
       setHigh("");
       setLow("");
+      setHighTime("");
+      setLowTime("");
       qc.invalidateQueries({ queryKey: ["manual-impulses"] });
     },
     onError: (e: any) => toast.error(e?.message || "Could not save the marking."),
@@ -94,6 +104,7 @@ export default function ManualImpulse() {
   const h = Number(high);
   const l = Number(low);
   const bothPresent = high.trim() !== "" && low.trim() !== "";
+  const bothTimes = highTime.trim() !== "" && lowTime.trim() !== "";
   const boundsOk = Number.isFinite(h) && Number.isFinite(l) && h > l;
   const rangePips = boundsOk ? (h - l) / pipSizeFor(symbol) : 0;
   const requiredPips = (MIN_SL_PIPS[symbol] ?? 15) * MIN_RR;
@@ -215,6 +226,34 @@ export default function ManualImpulse() {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-[10px]">
+                When the high printed <span className="text-muted-foreground">— optional</span>
+              </Label>
+              <Input
+                type="datetime-local" value={highTime}
+                onChange={(e) => setHighTime(e.target.value)}
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[10px]">
+                When the low printed <span className="text-muted-foreground">— optional</span>
+              </Label>
+              <Input
+                type="datetime-local" value={lowTime}
+                onChange={(e) => setLowTime(e.target.value)}
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground -mt-1">
+            {bothTimes
+              ? "Times given — the exact bars will be used."
+              : "Without times the bot matches on price alone, which is ambiguous if price has visited these levels before. Adding both makes it exact."}
+          </p>
+
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
             <div className="text-[10px]">
               {bothPresent && boundsOk && (
@@ -269,8 +308,22 @@ export default function ManualImpulse() {
                     </p>
                   </div>
                   <div className="font-mono text-[10px]">
-                    <p>{m.high}</p>
-                    <p className="text-muted-foreground">{m.low}</p>
+                    <p>
+                      {m.high}
+                      {m.high_time && (
+                        <span className="text-muted-foreground ml-1">
+                          {new Date(m.high_time).toLocaleDateString()}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {m.low}
+                      {m.low_time && (
+                        <span className="ml-1">
+                          {new Date(m.low_time).toLocaleDateString()}
+                        </span>
+                      )}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] text-muted-foreground">

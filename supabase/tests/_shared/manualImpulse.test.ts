@@ -350,3 +350,92 @@ Deno.test("a hand-marked leg reports closeBased, so it is not failed for lacking
     "there is no detected structure break to confirm on a drawn leg",
   );
 });
+
+// ── Timestamps ───────────────────────────────────────────────────────────────
+// Price alone is ambiguous: price revisits levels, so the matcher must guess
+// which visit was meant. Given the time of each swing, the bar is chosen
+// outright and the price becomes a cross-check.
+
+const atBar = (bars: Candle[], i: number) => bars[i].datetime;
+
+Deno.test("timestamps pick the bars outright, defeating the decoy", () => {
+  clock = Date.UTC(2026, 4, 1);
+  const bars: Candle[] = [];
+  bars.push(bar(114.40, 114.661, 114.20, 114.30)); // 0 ← decoy high, months back
+  for (let i = 0; i < 20; i++) bars.push(bar(112.5, 112.8, 112.2, 112.6));
+  bars.push(bar(114.40, 114.661, 114.10, 114.20)); // 21 ← the marked high
+  bars.push(bar(114.20, 114.30, 112.00, 112.20));
+  bars.push(bar(112.20, 112.40, 110.00, 110.30));
+  bars.push(bar(110.30, 110.50, 109.231, 109.60)); // 24 ← the marked low
+
+  const r = resolveManualImpulse(bars, {
+    symbol: "AUD/JPY", direction: "bearish", high: 114.661, low: 109.231,
+    highTime: atBar(bars, 21), lowTime: atBar(bars, 24),
+  });
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.startIndex, 21);
+  assertEquals(r.leg!.endIndex, 24);
+});
+
+Deno.test("a time between bars snaps to the nearest one", () => {
+  // Feeds disagree on bar boundaries, so an approximate time must still land on
+  // the right bar. These are hourly bars, so anything inside half a bar-width
+  // resolves to the intended one.
+  const bars = bullishSeries();
+  const nudged = new Date(new Date(atBar(bars, 8)).getTime() - 20 * 60_000).toISOString();
+  const r = resolveManualImpulse(bars, {
+    ...EURUSD, highTime: nudged, lowTime: atBar(bars, 2),
+  });
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.endIndex, 8, "20 minutes early must still resolve to bar 8");
+});
+
+Deno.test("a time off by more than half a bar lands on the neighbour, and price still guards it", () => {
+  // Being an hour out on hourly bars genuinely means a different bar. The leg
+  // geometry still uses the marked prices, so only the slice edge moves — and a
+  // neighbour carrying a very different price is refused by the cross-check.
+  const bars = bullishSeries();
+  const wayOff = new Date(new Date(atBar(bars, 8)).getTime() - 6 * 3_600_000).toISOString();
+  const r = resolveManualImpulse(bars, {
+    ...EURUSD, highTime: wayOff, lowTime: atBar(bars, 2),
+  });
+  assertEquals(r.rejection, "time_price_mismatch");
+});
+
+Deno.test("a time whose bar does not carry that price is refused", () => {
+  const bars = bullishSeries();
+  // Correct high price, but pointed at a bar nowhere near it.
+  const r = resolveManualImpulse(bars, {
+    ...EURUSD, highTime: atBar(bars, 0), lowTime: atBar(bars, 2),
+  });
+  assertEquals(r.rejection, "time_price_mismatch");
+  assert(r.detail.includes("pips"), "should quantify how far off it was");
+  assert(r.matchErrorPips);
+});
+
+Deno.test("times that contradict the direction are refused", () => {
+  const bars = bullishSeries();
+  // Bullish, but the high is timed before the low.
+  const r = resolveManualImpulse(bars, {
+    ...EURUSD, direction: "bullish",
+    highTime: atBar(bars, 2), lowTime: atBar(bars, 8),
+  });
+  assert(
+    r.rejection === "time_price_mismatch" || r.rejection === "direction_mismatch",
+    `expected a coherence rejection, got ${r.rejection}`,
+  );
+});
+
+Deno.test("omitting times still works — price matching is the fallback", () => {
+  const r = resolveManualImpulse(bullishSeries(), EURUSD);
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.startIndex, 2);
+  assertEquals(r.leg!.endIndex, 8);
+});
+
+Deno.test("one time without the other falls back to price, not a half-match", () => {
+  const bars = bullishSeries();
+  const r = resolveManualImpulse(bars, { ...EURUSD, highTime: atBar(bars, 8) });
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.endIndex, 8);
+});
