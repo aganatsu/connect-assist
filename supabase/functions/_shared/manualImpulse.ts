@@ -54,14 +54,26 @@ export interface ManualImpulseResolution {
 /** Largest acceptable gap between a marked price and the nearest bar extreme. */
 const MATCH_TOLERANCE_FRACTION = 0.25;
 
-function nearestIndexBy(
+/**
+ * Closest bar to a target, preferring the most recent on a tie.
+ *
+ * Scanning forwards and keeping strict improvements means the EARLIEST bar wins
+ * a tie — and price revisits levels. A leg marked in August was anchored to an
+ * equally-close high from May, producing a 45-bar leg where the drawn one was 8.
+ * Scanning backwards keeps the same "closest wins" rule but resolves ties toward
+ * the recent move, which is what someone marking a chart means.
+ *
+ * `before` bounds the search so the origin is always found ahead of the terminus.
+ */
+function closestIndexPreferRecent(
   candles: Candle[],
   pick: (c: Candle) => number,
   target: number,
+  before = candles.length,
 ): { index: number; error: number } {
   let index = -1;
   let error = Infinity;
-  for (let i = 0; i < candles.length; i++) {
+  for (let i = Math.min(before, candles.length) - 1; i >= 0; i--) {
     const diff = Math.abs(pick(candles[i]) - target);
     if (diff < error) {
       error = diff;
@@ -126,39 +138,57 @@ export function resolveManualImpulse(
     };
   }
 
-  const highMatch = nearestIndexBy(candles, (c) => c.high, spec_high);
-  const lowMatch = nearestIndexBy(candles, (c) => c.low, spec_low);
   const tolerance = range * MATCH_TOLERANCE_FRACTION;
+  const pipsOff = (v: number) => Math.round((v / pipSize) * 10) / 10;
 
-  if (highMatch.error > tolerance || lowMatch.error > tolerance) {
+  // Anchor on the terminus — the extreme the move ended at — then find the
+  // origin that precedes it. This keeps the leg the tightest recent one and
+  // makes startIndex < endIndex true by construction.
+  const terminusIsHigh = spec.direction === "bullish";
+  const terminus = closestIndexPreferRecent(
+    candles,
+    (c) => (terminusIsHigh ? c.high : c.low),
+    terminusIsHigh ? spec_high : spec_low,
+  );
+  if (terminus.index < 0 || terminus.error > tolerance) {
     return {
       leg: null,
       rejection: "not_found_in_candles",
       detail:
-        `Could not find bars matching those levels on the loaded ${
-          spec.timeframe ?? "entry"
-        } candles. Check the timeframe and prices.`,
+        `Could not find a bar at the ${terminusIsHigh ? "high" : "low"} of the marked ` +
+        `leg on the loaded ${spec.timeframe ?? "entry"} candles. Check the timeframe and prices.`,
       matchErrorPips: {
-        high: Math.round((highMatch.error / pipSize) * 10) / 10,
-        low: Math.round((lowMatch.error / pipSize) * 10) / 10,
+        high: terminusIsHigh ? pipsOff(terminus.error) : 0,
+        low: terminusIsHigh ? 0 : pipsOff(terminus.error),
       },
     };
   }
 
-  // A bullish leg runs low → high; a bearish leg runs high → low. If the bars
-  // are ordered the other way, the marking contradicts the stated direction.
-  const startIndex = spec.direction === "bullish" ? lowMatch.index : highMatch.index;
-  const endIndex = spec.direction === "bullish" ? highMatch.index : lowMatch.index;
-  if (startIndex >= endIndex) {
+  const origin = closestIndexPreferRecent(
+    candles,
+    (c) => (terminusIsHigh ? c.low : c.high),
+    terminusIsHigh ? spec_low : spec_high,
+    terminus.index,
+  );
+  if (origin.index < 0 || origin.error > tolerance) {
     return {
       leg: null,
       rejection: "direction_mismatch",
       detail:
-        `Marked ${spec.direction}, but on the chart the ${
-          spec.direction === "bullish" ? "high" : "low"
-        } comes first. Check the direction.`,
+        `Found the ${terminusIsHigh ? "high" : "low"} of the marked leg, but no ` +
+        `${terminusIsHigh ? "low" : "high"} near ${
+          terminusIsHigh ? spec_low : spec_high
+        } before it. Check the direction — a ${spec.direction} leg must run ` +
+        `${terminusIsHigh ? "low → high" : "high → low"}.`,
+      matchErrorPips: {
+        high: terminusIsHigh ? pipsOff(terminus.error) : pipsOff(origin.error),
+        low: terminusIsHigh ? pipsOff(origin.error) : pipsOff(terminus.error),
+      },
     };
   }
+
+  const startIndex = origin.index;
+  const endIndex = terminus.index;
 
   // Same invalidation rule auto-detected legs use: the leg is dead once a candle
   // CLOSES past the origin that started the move.
@@ -179,8 +209,8 @@ export function resolveManualImpulse(
   }
 
   const matchErrorPips = {
-    high: Math.round((highMatch.error / pipSize) * 10) / 10,
-    low: Math.round((lowMatch.error / pipSize) * 10) / 10,
+    high: terminusIsHigh ? pipsOff(terminus.error) : pipsOff(origin.error),
+    low: terminusIsHigh ? pipsOff(origin.error) : pipsOff(terminus.error),
   };
 
   return {

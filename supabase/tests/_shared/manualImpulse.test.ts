@@ -231,3 +231,40 @@ Deno.test("source guard: the scanner resolves, injects and retires markings", ()
     "retirements must be settled before the cycle ends",
   );
 });
+
+// ── Revisited levels ─────────────────────────────────────────────────────────
+// Live report (AUD/JPY, 2026-08-11): a leg marked 114.661 → 109.231 in August
+// resolved to "May 31 → Aug 2, 45 D bars". Price had reached a similar high
+// months earlier, and the matcher scanned forwards keeping strict improvements,
+// so the EARLIEST equally-close bar won. The drawn leg was ~8 bars.
+
+Deno.test("an earlier visit to the same level does not steal the anchor", () => {
+  clock = Date.UTC(2026, 4, 1);
+  const bars: Candle[] = [];
+  // An old high at the same level, months back.
+  bars.push(bar(114.40, 114.661, 114.20, 114.30)); // 0 ← decoy high
+  for (let i = 0; i < 20; i++) bars.push(bar(112.5, 112.8, 112.2, 112.6));
+  // The leg actually marked: high → low.
+  bars.push(bar(114.40, 114.661, 114.10, 114.20)); // 21 ← real high
+  bars.push(bar(114.20, 114.30, 112.00, 112.20));
+  bars.push(bar(112.20, 112.40, 110.00, 110.30));
+  bars.push(bar(110.30, 110.50, 109.231, 109.60)); // 24 ← real low
+  bars.push(bar(109.60, 111.00, 109.50, 110.90));  // holds above the origin? no —
+  // origin for a bearish leg is the HIGH, so a close above 114.661 would kill it.
+
+  const r = resolveManualImpulse(bars, {
+    symbol: "AUD/JPY", direction: "bearish", high: 114.661, low: 109.231,
+  });
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.startIndex, 21, "must anchor to the recent high, not the decoy at index 0");
+  assertEquals(r.leg!.endIndex, 24);
+  assertEquals(r.leg!.spanBars, 3, "the drawn leg is short — not a months-long span");
+});
+
+Deno.test("the origin is still the closest bar, not merely a recent one", () => {
+  // Bars near but not at the marked low must not win over the exact one.
+  const bars = bullishSeries();
+  const r = resolveManualImpulse(bars, EURUSD);
+  assertEquals(r.rejection, null, r.detail);
+  assertEquals(r.leg!.startIndex, 2, "bar 2 has the exact 1.0800 low; bar 3 at 1.0805 must not win");
+});
