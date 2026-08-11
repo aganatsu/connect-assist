@@ -1686,7 +1686,16 @@ Deno.serve(async (req) => {
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    // An expired/invalid JWT surfacing from a downstream PostgREST call must be
+    // reported as 401 so the client refreshes the session instead of treating
+    // it as a server fault (which left the dashboard on a blank screen).
+    const msg = String(error?.message ?? "");
+    if (/jwt|token is expired|invalid claim/i.test(msg)) {
+      return new Response(JSON.stringify({ error: "Unauthorized", code: "invalid_jwt", details: msg }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ error: msg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
