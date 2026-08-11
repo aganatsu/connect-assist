@@ -1,4 +1,4 @@
-import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX, Zap } from "lucide-react";
+import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX, Zap, PenLine } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -12,6 +12,7 @@ const navGroups = [
     { title: "Bot", url: "/bot", icon: Bot },
     { title: "Chart", url: "/chart", icon: LineChart },
     { title: "Game Plan", url: "/game-plan", icon: Crosshair },
+    { title: "Manual Impulse", url: "/manual-impulse", icon: PenLine },
     { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
   ] },
   { label: "Review", items: [
