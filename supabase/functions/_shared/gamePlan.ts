@@ -25,6 +25,7 @@ import {
   detectLiquidityPools,
   detectOrderBlocks,
   detectSwingPoints,
+  MIN_SL_PIPS,
   SPECS,
   toNYTime,
 } from "./smcAnalysis.ts";
@@ -76,7 +77,21 @@ export interface Scenario {
   action: string;
   direction: "long" | "short";
   targetLevel?: number;
+  /** Price the scenario proposes entering at. Previously only in `condition`. */
+  entryLevel?: number;
   invalidation?: string;
+  /** Distance from the proposed entry to the target, in pips. */
+  rewardPips?: number;
+  /** Smallest stop the instrument permits (MIN_SL_PIPS). */
+  minStopPips?: number;
+  /**
+   * False when the target is too close to the entry to clear minimum R:R with
+   * a legal stop — the scenario cannot be traded however well it reads. Left
+   * undefined when there is no target to check against.
+   */
+  viable?: boolean;
+  /** Why a scenario is not viable, for display. */
+  viabilityNote?: string;
 }
 
 export interface GamePlanValidityPolicy {
@@ -808,6 +823,55 @@ function extractKeyLevels(
 
 // ─── Scenario Generation ────────────────────────────────────────────────────
 
+/**
+ * Annotate scenarios with whether their target is actually reachable.
+ *
+ * A scenario proposes an entry level and a target. The instrument imposes a
+ * minimum stop (MIN_SL_PIPS), so the smallest legal risk is fixed — which means
+ * a target closer than `minStop x minRR` cannot be traded at an acceptable
+ * reward-to-risk however good the analysis is.
+ *
+ * Observed live on GBP/AUD: the primary scenario proposed an entry at 1.91324
+ * targeting the previous day high at 1.91538 — 21.4 pips of reward on a pair
+ * whose minimum stop is 30. The plan presented it as the headline setup with
+ * 100% support while the execution layer was always going to reject it.
+ *
+ * This does not remove scenarios. A human reading the plan should still see the
+ * idea; it is simply marked so the plan cannot look tradeable when it is not.
+ */
+function annotateScenarioViability(
+  scenarios: Scenario[],
+  symbol: string,
+  pipSize: number,
+  minRR = 1.5,
+): Scenario[] {
+  const minStopPips = MIN_SL_PIPS[symbol] ?? 15;
+  return scenarios.map((scenario) => {
+    const entry = scenario.entryLevel ?? null;
+    if (
+      scenario.targetLevel == null || entry == null ||
+      !Number.isFinite(scenario.targetLevel) || !Number.isFinite(entry) ||
+      pipSize <= 0
+    ) {
+      return { ...scenario, minStopPips };
+    }
+    const rewardPips = Math.abs(scenario.targetLevel - entry) / pipSize;
+    const requiredPips = minStopPips * minRR;
+    const viable = rewardPips >= requiredPips;
+    return {
+      ...scenario,
+      rewardPips: Math.round(rewardPips * 10) / 10,
+      minStopPips,
+      viable,
+      viabilityNote: viable ? undefined : `Target is ${
+        (Math.round(rewardPips * 10) / 10)
+      } pips away; ${symbol} needs at least ${
+        Math.round(requiredPips)
+      } (min stop ${minStopPips} x ${minRR} R:R). Not tradeable as written.`,
+    };
+  });
+}
+
 function generateScenarios(
   symbol: string,
   bias: BiasDirection,
@@ -854,6 +918,7 @@ function generateScenarios(
         action:
           `Look for bullish reaction (OB/FVG entry, displacement candle) for long entry`,
         direction: "long",
+        entryLevel: entryZone.price,
         targetLevel: dol?.type === "buy-side" ? dol.price : undefined,
         invalidation: `Close below ${
           entryZone.price.toFixed(5)
@@ -870,6 +935,7 @@ function generateScenarios(
         action:
           "Wait for reclaim above Asian low, then enter long targeting Asian high and beyond",
         direction: "long",
+        entryLevel: amd.asianLow ?? undefined,
         targetLevel: amd.asianHigh ?? undefined,
         invalidation:
           "Price fails to reclaim Asian low within 30 minutes of sweep",
@@ -899,6 +965,7 @@ function generateScenarios(
         action:
           `Look for bearish reaction (OB/FVG rejection, displacement candle) for short entry`,
         direction: "short",
+        entryLevel: entryZone.price,
         targetLevel: dol?.type === "sell-side" ? dol.price : undefined,
         invalidation: `Close above ${
           entryZone.price.toFixed(5)
@@ -915,6 +982,7 @@ function generateScenarios(
         action:
           "Wait for rejection below Asian high, then enter short targeting Asian low and beyond",
         direction: "short",
+        entryLevel: amd.asianHigh ?? undefined,
         targetLevel: amd.asianLow ?? undefined,
         invalidation:
           "Price holds above Asian high for 30+ minutes after sweep",
@@ -930,7 +998,7 @@ function generateScenarios(
     });
   }
 
-  return scenarios;
+  return annotateScenarioViability(scenarios, symbol, pipSize);
 }
 
 // ─── Main Game Plan Generator ───────────────────────────────────────────────
