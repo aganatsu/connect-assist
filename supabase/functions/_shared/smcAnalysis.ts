@@ -1298,7 +1298,33 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
     }
   }
   candidates.sort((a, b) => b.quality - a.quality || b.index - a.index);
-  return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
+
+  // Collapse duplicates before capping.
+  //
+  // The scan-back deliberately looks up to OB_SCANBACK bars behind an engulfing
+  // candle for the institutional one. Several consecutive engulfing bars
+  // therefore resolve to the SAME source candle, and each pushed its own
+  // identical entry. Observed live on AUD/NZD: one order block reported three
+  // times — same index, bounds, age and distance — inflating "5 accepted POIs"
+  // to describe two real zones and feeding phantom agreement to any multi-zone
+  // confluence bonus.
+  //
+  // Previously masked by a cap of 5. Raising that cap so a widened lifecycle
+  // window could not crowd out real POIs let every duplicate through, so the
+  // dedup belongs here rather than at the cap.
+  //
+  // Keyed on source candle and bounds: the same institutional candle at the
+  // same price IS the same order block, however many engulfings pointed at it.
+  // Candidates are already sorted best-first, so the survivor is the strongest.
+  const seen = new Set<string>();
+  const unique: typeof candidates = [];
+  for (const ob of candidates) {
+    const key = `${ob.index}:${ob.type}:${ob.high.toFixed(10)}:${ob.low.toFixed(10)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(ob);
+  }
+  return unique.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
 }
 
 export function detectFVGs(
