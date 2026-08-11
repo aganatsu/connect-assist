@@ -1831,7 +1831,12 @@ export function findBestEntryZone(
   // Step 1: Rank every intact structural leg. The strongest leg is evaluated
   // first, but a candidate without an accepted displacement POI cannot own the
   // authoritative impulse range.
-  let impulse = findStructuralLeg(
+  // A hand-marked impulse OVERRIDES detection for this pair. The rest of the
+  // pipeline is unchanged — POIs, fib grid, confluence, gates and sizing all
+  // take an ImpulseLeg and do not care where it came from. See
+  // _shared/manualImpulse.ts for the marking rules and why they are enforced at
+  // marking time rather than silently here.
+  let impulse = options?.manualImpulse ?? findStructuralLeg(
     htfCandles,
     direction,
     undefined,
@@ -2129,6 +2134,17 @@ export function findBestEntryZone(
 // ─── Options ─────────────────────────────────────────────────────────────────
 /** Options to override engine constants at runtime (config-driven). */
 export interface ZoneEngineOptions {
+  /**
+   * A hand-marked impulse. When supplied it REPLACES automatic detection for
+   * this invocation — the caller has decided which leg is being traded, so no
+   * structural search runs and no candidates are ranked.
+   *
+   * Everything after selection is untouched: POIs are still mapped inside the
+   * leg, the fib grid is still overlaid, and every gate still applies. Callers
+   * must resolve and validate the marking first (see
+   * _shared/manualImpulse.ts) — an invalid leg must never reach here.
+   */
+  manualImpulse?: ImpulseLeg | null;
   /**
    * Attach an observation-only snapshot of the exact legs, POIs and ranked
    * candidates traversed by this invocation. Defaults off.
