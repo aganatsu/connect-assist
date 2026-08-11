@@ -140,7 +140,10 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
 
       <div className={`${collapsed ? "w-6" : "w-full"} border-t border-sidebar-border my-1`} />
 
-      {/* Nav items */}
+      {/* Nav items — scrollable. The rail is a fixed-height flex column, so
+          without this the tail of the list is simply clipped on a short
+          viewport with no way to reach it. It has grown to 17 entries. */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 w-full items-stretch">
       {NAV_ITEMS.map((item) => {
         const isActive =
           item.url === "/"
@@ -182,7 +185,8 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
       })}
 
       {/* Spacer */}
-      <div className="flex-1" />
+      </div>
+
 
       {/* Theme toggle */}
       <Tooltip>
