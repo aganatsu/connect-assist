@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Crosshair, RefreshCw, Trash2 } from "lucide-react";
+import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -121,6 +122,7 @@ export default function ManualImpulse() {
     : null;
 
   return (
+    <AppShell>
     <div className="p-3 sm:p-4 space-y-4 max-w-5xl">
       <div className="flex items-center gap-2">
         <Crosshair className="h-5 w-5 text-primary" />
@@ -310,5 +312,6 @@ export default function ManualImpulse() {
         </CardContent>
       </Card>
     </div>
+    </AppShell>
   );
 }
