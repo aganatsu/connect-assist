@@ -155,6 +155,34 @@ names both semantics. `conceptAuthorityAudit.test.ts` asserts they remain distin
 
 Same situation. Rename, do not merge.
 
+### Candidate ID
+
+Two different things are called `candidateId`. They are currently **disjoint** — no code
+path bridges them — which is precisely why the collision has gone unnoticed.
+
+| Impl | Semantic | Consumer |
+|---|---|---|
+| `zoneCandidateIdentity.ts:30` `buildZoneCandidateId` | **Zone evidence ID** — deterministic over detector, symbol, timeframe, source-candle timestamps, direction, bounds. Identifies a *market object*: this FVG/OB. | `zoneTimeframeEvidence.ts` only |
+| `bot-scanner.ts:5818` `crypto.randomUUID()`, persisted | **Setup lifecycle ID** — identifies *one trading opportunity's journey*. Stable by persistence, not derivation. | `staged_setups` → `pending_orders` → `paper_positions` |
+
+`breakerCandidateAuthority.ts:38` has a third, deterministic ID including
+`structureBreakIndex`. Breaker-specific, and not the lifecycle ID.
+
+The lifecycle ID being a persisted UUID rather than a content hash is **correct**: a
+derived key containing a bar index drifts as the candle window rolls, whereas a persisted
+one cannot. Stability comes from *reusing the row*, so the test that matters is "repeated
+detection updates the existing watchlist row" — not "the hash is constant". A duplicate
+watchlist row would silently fork the identity and no hash comparison would catch it.
+
+As of 2026-08-12 the lifecycle ID is largely unwired: 30 of 1,325 `pending_orders` rows
+carry a `candidate_id`. `bot-scanner:8877` falls back to a fresh UUID, and the breaker
+path at `:10780` always generates one. Wiring it is step 3 of
+`docs/PENDING_ORDER_PREARMING_PLAN.md`.
+
+**Action:** rename, do not merge. `buildZoneEvidenceId` vs `setupLifecycleId`. Merging
+them would tie a trading opportunity's identity to a market object that can be
+re-detected, re-shaped, or drift out of the window mid-journey.
+
 ---
 
 ## 🟡 Dead code
