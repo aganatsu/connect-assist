@@ -27,9 +27,13 @@ import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
 // ── Public types ──
 
 export type ThesisCheckType =
+  // Retained so historical rows carrying these labels still parse. Neither is
+  // produced any more: "gp_bias_reversal" was removed as a duplicate authority,
+  // and "direction_flip" was replaced by the frozen-verdict comparison.
   | "direction_flip"
+  | "gp_bias_reversal"
   | "fotsi_veto"
-  | "gp_bias_reversal";
+  | "direction_verdict_reversal";
 
 export interface ThesisValidationResult {
   /** Whether the pending order thesis is still valid */
@@ -44,6 +48,14 @@ export interface ThesisValidationResult {
   decisionEvidenceVersion?: string | null;
   /** Style-aware bias → structure → setup labels used for this decision. */
   timeframeLabels?: StyleDecisionEvidence["labels"] | null;
+  /**
+   * Why the directional check reached its conclusion, including the
+   * order-kept outcomes. Persisted so the distribution is queryable rather
+   * than log-only — baseline_missing quietly dominating would otherwise look
+   * identical to a healthy verdict_unchanged.
+   */
+  verdictOutcome?: VerdictComparisonOutcome;
+  verdictReason?: string;
 }
 
 export interface PendingOrderForValidation {
@@ -66,12 +78,22 @@ export interface ThesisValidationOpts {
   directionFlipMinConfidence?: number;
   /** Minimum GP bias confidence to trigger cancel (default: 60) */
   gpBiasMinConfidence?: number;
+  /** Verdict frozen with the order at placement (frozen_strategy_context.directionVerdict). */
+  frozenDirectionVerdict?: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  /** Verdict recomputed now. Null when it could not be built. */
+  currentDirectionVerdict?: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  /** True only when the current verdict used every source. Partial never cancels. */
+  currentDirectionVerdictComplete?: boolean;
+  /** Minimum confidence for a reversal to cancel. Defaults to the verdict's own minConfidence. */
+  verdictReversalMinConfidence?: number;
 }
 
 // ── Constants ──
 
 const DEFAULT_DIRECTION_FLIP_MIN_CONFIDENCE = 0.6;
-const DEFAULT_GP_BIAS_MIN_CONFIDENCE = 60;
+// Reuses the Direction Verdict's own minConfidence rather than inventing a
+// second threshold — one owner, one bar.
+const DEFAULT_VERDICT_REVERSAL_MIN_CONFIDENCE = 55;
 const MIN_CANDLES_FOR_DIRECTION = 20;
 
 // ── Helpers ──
@@ -107,6 +129,154 @@ function biasOpposesDirection(
   return false;
 }
 
+
+
+export interface VerdictSourceExpectation {
+  /** Weekly is a real source ONLY when it is the style's bias role (Swing). */
+  weeklyExpected: boolean;
+  /** Game Plan is a source only when enforcement is not "off". */
+  gamePlanExpected: boolean;
+}
+
+export interface VerdictSourcePresence {
+  confirmedTrend: boolean;
+  simpleDirection: boolean;
+  regime: boolean;
+  weeklyBias: boolean;
+  gamePlan: boolean;
+}
+
+/**
+ * Is the recomputed verdict complete?
+ *
+ * Completeness is relative to what the STYLE consults, not to all five
+ * sources. Day Trader and Scalper deliberately exclude Weekly — bot-scanner
+ * only supplies it when roles.bias === "1w" — so requiring all five would mark
+ * every Day Trader verdict partial and disable directional cancellation
+ * permanently while looking like it worked.
+ *
+ * Both spine sources are required: they determine direction, and a verdict
+ * missing one is not the verdict that was frozen.
+ */
+export function isVerdictComplete(
+  present: VerdictSourcePresence,
+  expected: VerdictSourceExpectation,
+): boolean {
+  if (!present.confirmedTrend || !present.simpleDirection) return false;
+  if (!present.regime) return false;
+  if (expected.weeklyExpected && !present.weeklyBias) return false;
+  if (expected.gamePlanExpected && !present.gamePlan) return false;
+  return true;
+}
+
+// ── Direction Verdict comparison — the sole post-placement direction authority ──
+//
+// Thesis validation must answer "has the world changed since we committed?",
+// not "would we place this trade now?". The old Check 3 compared the current
+// direction against the order direction ABSOLUTELY, so an order placed against
+// a disagreement failed on every evaluation — the same re-litigation that made
+// the Game Plan check cancel 203 orders for a bias that never moved.
+//
+// Comparison is now frozen-verdict versus current verdict, and only a genuine
+// confident reversal cancels.
+
+export type VerdictComparisonOutcome =
+  | "baseline_missing"
+  | "current_verdict_partial"
+  | "verdict_neutral"
+  | "verdict_unchanged"
+  | "confident_reversal";
+
+export interface VerdictComparisonInput {
+  /** The verdict frozen with the order at placement. */
+  frozen: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  /** The verdict recomputed now, or null when it could not be built at all. */
+  current: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  /**
+   * Whether `current` was built from ALL verdict sources.
+   *
+   * A partial verdict must never cancel, even when its confidence clears the
+   * bar. Agreement is an unweighted headcount — agreeing/directionalSources —
+   * so dropping an OPPOSING source raises agreement and removes its confidence
+   * penalty. A verdict missing Weekly and Game Plan can therefore be MORE
+   * confident than the complete one it replaces. Partial evaluation is
+   * diagnostic only.
+   */
+  complete: boolean;
+  minConfidence: number;
+}
+
+export interface VerdictComparison {
+  outcome: VerdictComparisonOutcome;
+  shouldCancel: boolean;
+  reason: string;
+}
+
+/**
+ * Single comparison used by every caller.
+ *
+ * All six thesis-validation call sites, including the one-minute confirmation
+ * scanner, route through this. A shortcut in any one of them would be a second
+ * directional authority, which is the problem being removed.
+ */
+export function compareDirectionVerdicts(
+  input: VerdictComparisonInput,
+): VerdictComparison {
+  if (!input.frozen || input.frozen.verdict === "neutral") {
+    // Orders placed before the verdict was frozen have no baseline. Treating
+    // "no baseline" as "changed" would cancel the entire open book on deploy.
+    return {
+      outcome: "baseline_missing",
+      shouldCancel: false,
+      reason: "no frozen verdict to compare against — order kept",
+    };
+  }
+  if (!input.current) {
+    return {
+      outcome: "current_verdict_partial",
+      shouldCancel: false,
+      reason: "current verdict unavailable — order kept",
+    };
+  }
+  if (!input.complete) {
+    return {
+      outcome: "current_verdict_partial",
+      shouldCancel: false,
+      reason:
+        "current verdict built from incomplete sources — diagnostic only, order kept",
+    };
+  }
+  if (input.current.verdict === "neutral") {
+    // The panel cannot agree. That is not a reversal.
+    return {
+      outcome: "verdict_neutral",
+      shouldCancel: false,
+      reason: "current verdict is neutral — no reversal, order kept",
+    };
+  }
+  if (input.current.verdict === input.frozen.verdict) {
+    return {
+      outcome: "verdict_unchanged",
+      shouldCancel: false,
+      reason: `verdict still ${input.current.verdict} — order kept`,
+    };
+  }
+  if (input.current.confidence < input.minConfidence) {
+    return {
+      outcome: "verdict_neutral",
+      shouldCancel: false,
+      reason:
+        `verdict opposes frozen but confidence ${input.current.confidence.toFixed(0)}% < ${input.minConfidence}% — order kept`,
+    };
+  }
+  return {
+    outcome: "confident_reversal",
+    shouldCancel: true,
+    reason:
+      `Direction Verdict reversed: ${input.frozen.verdict} at placement → ${input.current.verdict} now (confidence ${input.current.confidence.toFixed(0)}%)`,
+  };
+}
+
 // ── Main validation function ──
 
 /**
@@ -125,8 +295,8 @@ export function validatePendingOrderThesis(
 ): ThesisValidationResult {
   const dirFlipMinConf = opts.directionFlipMinConfidence ??
     DEFAULT_DIRECTION_FLIP_MIN_CONFIDENCE;
-  const gpBiasMinConf = opts.gpBiasMinConfidence ??
-    DEFAULT_GP_BIAS_MIN_CONFIDENCE;
+  const verdictMinConf = opts.verdictReversalMinConfidence ??
+    DEFAULT_VERDICT_REVERSAL_MIN_CONFIDENCE;
 
   const validResult: ThesisValidationResult = {
     valid: true,
@@ -188,89 +358,49 @@ export function validatePendingOrderThesis(
     }
   }
 
-  // ── Check 2: Game Plan Bias Reversal ──
-  // Uses pre-loaded game plan — zero API cost
-  if (opts.lastGamePlan && opts.lastGamePlan.plans) {
-    try {
-      const pairPlan: InstrumentGamePlan | undefined = opts.lastGamePlan.plans
-        .find(
-          (p) => p.symbol === pending.symbol,
-        );
-      if (pairPlan && pairPlan.biasConfidence >= gpBiasMinConf) {
-        if (biasOpposesDirection(pairPlan.bias, pending.direction)) {
-          return invalidResult({
-            valid: false,
-            reason:
-              `Game plan bias reversal: ${opts.lastGamePlan.session} session bias is ${pairPlan.bias} (confidence ${pairPlan.biasConfidence}%) — opposes ${pending.direction} order`,
-            checkType: "gp_bias_reversal",
-            cancelReason:
-              `thesis_invalid:gp_bias_reversal:${opts.lastGamePlan.session}:${pairPlan.bias}:${pairPlan.biasConfidence}`,
-          });
-        }
-      }
-    } catch (e) {
-      // Fail-open: GP check errored, keep order alive
-      console.warn(
-        `[thesis-validator] GP bias check error for ${pending.symbol}: ${
-          (e as Error)?.message
-        }`,
-      );
-    }
+  // ── Check 2: REMOVED — Game Plan no longer cancels independently ──
+  //
+  // Game Plan used to hard-cancel any pending order whose direction opposed the
+  // plan bias at >= 60% confidence. That killed 203 of 1,047 cancelled orders,
+  // and the data showed the bias was not flipping — the same "bullish 64%" was
+  // cancelling the same short across Asian, London and New York. The order was
+  // placed against that bias and then repeatedly killed for it. Nothing changed;
+  // the check simply re-decided the entry on every pass.
+  //
+  // Game Plan is already an input to the Direction Verdict at weight 0.08, the
+  // lowest of five and explicitly labelled advisory. Cancelling on it separately
+  // counted the same evidence twice and gave an advisory signal more authority
+  // AFTER placement than it had at placement.
+  //
+  // Its evidence is unchanged and still contributes through the verdict. Only
+  // the duplicate authority is gone. See Check 3.
+
+  // ── Check 3: Direction Verdict reversal (sole directional authority) ──
+  //
+  // Compares the frozen verdict captured at placement against the verdict now.
+  // Only a complete, confident, opposing verdict cancels. Every other outcome
+  // keeps the order and is recorded so the distribution is queryable — the
+  // 511/300/203 breakdown that found this bug came out of cancel_reason, not
+  // logs.
+  const verdictComparison = compareDirectionVerdicts({
+    frozen: opts.frozenDirectionVerdict ?? null,
+    current: opts.currentDirectionVerdict ?? null,
+    complete: opts.currentDirectionVerdictComplete === true,
+    minConfidence: verdictMinConf,
+  });
+
+  if (verdictComparison.shouldCancel) {
+    return invalidResult({
+      valid: false,
+      reason: verdictComparison.reason,
+      checkType: "direction_verdict_reversal",
+      cancelReason: `thesis_invalid:direction_verdict_reversal:${
+        opts.currentDirectionVerdict?.verdict
+      }:${(opts.currentDirectionVerdict?.confidence ?? 0).toFixed(0)}`,
+    });
   }
 
-  // ── Check 3: Direction Flip ──
-  // Prefer the shared style-aware evidence. Legacy D1/4H/1H candles remain a
-  // fail-open compatibility path for older callers.
-  const hasDaily = opts.dailyCandles &&
-    opts.dailyCandles.length >= MIN_CANDLES_FOR_DIRECTION;
-  const hasH4 = opts.h4Candles &&
-    opts.h4Candles.length >= MIN_CANDLES_FOR_DIRECTION;
-  const hasH1 = opts.h1Candles &&
-    opts.h1Candles.length >= MIN_CANDLES_FOR_DIRECTION;
-
-  if (opts.decisionEvidence?.simpleDirection || hasDaily || hasH4) {
-    try {
-      const dirResult = opts.decisionEvidence?.simpleDirection ||
-        determineDirection(
-          hasDaily ? opts.dailyCandles : null,
-          hasH4 ? opts.h4Candles : null,
-          hasH1 ? opts.h1Candles : null,
-        );
-
-      // Only invalidate if direction is determined AND it's opposite AND confidence is high enough
-      if (
-        dirResult.direction !== null &&
-        dirResult.direction !== pending.direction
-      ) {
-        const confidence = estimateDirectionConfidence(dirResult);
-        if (confidence >= dirFlipMinConf) {
-          const labels = opts.decisionEvidence?.labels;
-          const ladder = labels
-            ? ` [${labels.bias}→${labels.structure}→${labels.setup}]`
-            : "";
-          return invalidResult({
-            valid: false,
-            reason:
-              `Direction flip${ladder}: structure now indicates ${dirResult.direction} (confidence ${
-                (confidence * 100).toFixed(0)
-              }%) — opposes ${pending.direction} order. ${dirResult.reason}`,
-            checkType: "direction_flip",
-            cancelReason:
-              `thesis_invalid:direction_flip:${dirResult.direction}:${
-                (confidence * 100).toFixed(0)
-              }`,
-          });
-        }
-      }
-    } catch (e) {
-      // Fail-open: direction check errored, keep order alive
-      console.warn(
-        `[thesis-validator] Direction check error for ${pending.symbol}: ${
-          (e as Error)?.message
-        }`,
-      );
-    }
-  }
-
+  validResult.verdictOutcome = verdictComparison.outcome;
+  validResult.verdictReason = verdictComparison.reason;
   return validResult;
 }

@@ -43,9 +43,17 @@ Deno.test("Direction Verdict, thesis and conviction share one pair evidence snap
     scanner,
     "pairDecisionEvidence.labels.structure",
   );
+  // The thesis validator no longer reads simpleDirection to decide direction —
+  // that was the absolute comparison against the order direction, replaced by
+  // the frozen-verdict comparison. It still consumes the SAME shared evidence
+  // snapshot for provenance, which is what this test exists to protect.
   assertStringIncludes(
     thesis,
-    "opts.decisionEvidence?.simpleDirection",
+    "opts.decisionEvidence?.labels",
+  );
+  assertStringIncludes(
+    thesis,
+    "compareDirectionVerdicts(",
   );
   assertStringIncludes(
     conviction,
