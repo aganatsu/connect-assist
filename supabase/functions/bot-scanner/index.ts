@@ -550,23 +550,14 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: "HTF check skipped" });
   }
 
-  // Gate 2: Premium/Discount zone filter
+  // Gate 2: Premium/Discount — the frozen canonical impulse range is the
+  // sole location authority. Rolling entry-timeframe swings are diagnostic.
   {
-    const pdZone = analysis.pd.currentZone;
-    const pdPct = analysis.pd.zonePercent ?? 50;
-    const curPrice = analysis.lastPrice;
-    const fmtP = (p: number) => p > 10 ? p.toFixed(3) : p.toFixed(5);
-    // Back-calculate swing high/low from zonePercent:
-    // zonePercent = ((price - swingLow) / range) * 100
-    // range = price / (pdPct/100) when pdPct > 0 (price - swingLow = range * pdPct/100 → range = (price - swingLow)/(pdPct/100))
-    // swingLow = price - range*(pdPct/100), swingHigh = swingLow + range
-
-    if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
-      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (premium > 55%, need discount < 45% to buy)` });
-    } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
-      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (discount < 45%, need premium > 55% to sell)` });
+    const canonical = analysis._canonicalDealingRangeEvaluation;
+    if (!canonical || canonical.available !== true) {
+      gates.push({ passed: true, reason: "P/D check unavailable: no frozen canonical impulse range" });
     } else {
-      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%)` });
+      gates.push({ passed: canonical.allowed, reason: canonical.explanation });
     }
   }
 
@@ -5396,6 +5387,7 @@ async function runScanForUser(
             mode: canonicalMode,
           });
           analysis._canonicalDealingRangeAvailable = canonicalRangeSelection.available;
+          analysis._canonicalDealingRangeEvaluation = canonicalEvaluation;
           const rollingBlocked =
             (pairConfig.onlyBuyInDiscount &&
               analysis.direction === "long" &&
