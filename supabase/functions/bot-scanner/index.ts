@@ -11260,6 +11260,14 @@ async function runScanForUser(
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
+      // Non-zero unenforced means the shared credit budget failed open and we
+      // are back to per-isolate limiting — the exact condition that produced
+      // 371 credits/min while every isolate reported 0 throttles.
+      creditBudget: {
+        unenforced: throttleStats.unenforcedCount,
+        rpcFailures: throttleStats.budgetRpcFailures,
+        refused: throttleStats.budgetRefused,
+      },
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
       impulseRotation: rotationSelection ? {
@@ -11281,7 +11289,7 @@ async function runScanForUser(
     },
     ...scanDetails,
   ];
-  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount})`);
+  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount}, budgetRefused=${throttleStats.budgetRefused}, budgetUnenforced=${throttleStats.unenforcedCount})`);
 
   // Log the scan
   // Retirements are fire-and-forget during the loop so a DB write never stalls a

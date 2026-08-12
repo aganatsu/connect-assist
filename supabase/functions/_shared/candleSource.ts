@@ -8,6 +8,7 @@
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
 import { META_REGIONS, regionCache } from "./metaApiClient.ts";
 import { toNYTimeAt } from "./sessions.ts";
+import { reserveApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
 
 export interface Candle {
   datetime: string;
@@ -49,7 +50,9 @@ const _tdRequestTimestamps: number[] = [];
 const TD_RATE_LIMIT = 50;   // 50 of 55 — 5 credit safety margin
 const TD_RATE_WINDOW_MS = 60_000;
 const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Polygon
+const TD_SHARED_POLL_MS = 2_000; // Re-ask the shared budget this often while waiting
 let _tdThrottleCount = 0;      // Track how many times we throttled this invocation
+let _tdUnenforcedCount = 0;    // Fetches that bypassed the shared budget (it failed open)
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
   const now = Date.now();
@@ -71,13 +74,57 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
     await new Promise(r => setTimeout(r, waitMs));
   }
   _tdRequestTimestamps.push(Date.now());
-  return true;
+
+  // The check above only sees THIS isolate. bot-scanner, the manage loop,
+  // zone-confirmation-scanner and paper-trading each run their own, so the
+  // plan-wide spend is the sum of several separately-compliant limiters —
+  // which is how we reached 371/min against a 55/min plan with the throttle
+  // counter reading 0. The shared budget is the one that knows the real total.
+  const deadline = Date.now() + TD_MAX_WAIT_MS;
+  for (;;) {
+    const reservation = await reserveApiCredit("twelvedata", TD_RATE_LIMIT, TD_RATE_WINDOW_MS / 1000);
+    if (reservation.granted) {
+      if (!reservation.enforced) _tdUnenforcedCount++;
+      return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      _tdThrottleCount++;
+      console.warn(
+        `[candleSource] TwelveData shared budget exhausted after ${TD_MAX_WAIT_MS}ms, skipping to Polygon (throttle #${_tdThrottleCount})`,
+      );
+      return false;
+    }
+    // The window rolls continuously, so credits free up a few at a time rather
+    // than all at once. Poll rather than sleeping for a full window.
+    _tdThrottleCount++;
+    await new Promise((r) => setTimeout(r, Math.min(TD_SHARED_POLL_MS, remaining)));
+  }
 }
 
-/** Reset throttle counter — call at start of each scan cycle for clean stats */
-export function resetThrottleStats(): { throttleCount: number } {
-  const stats = { throttleCount: _tdThrottleCount };
+/**
+ * Reset throttle counters — call at start of each scan cycle for clean stats.
+ *
+ * `unenforcedCount` is the one to watch: it counts fetches that proceeded
+ * because the shared budget failed open. A non-zero value means we are back to
+ * per-isolate limiting and the plan-wide total is unguarded, which previously
+ * went unnoticed for months because nothing counted it.
+ */
+export function resetThrottleStats(): {
+  throttleCount: number;
+  unenforcedCount: number;
+  budgetRpcFailures: number;
+  budgetRefused: number;
+} {
+  const budget = resetCreditBudgetStats();
+  const stats = {
+    throttleCount: _tdThrottleCount,
+    unenforcedCount: _tdUnenforcedCount,
+    budgetRpcFailures: budget.rpcFailures,
+    budgetRefused: budget.refused,
+  };
   _tdThrottleCount = 0;
+  _tdUnenforcedCount = 0;
   return stats;
 }
 
