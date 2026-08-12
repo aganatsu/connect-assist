@@ -2067,9 +2067,39 @@ async function runScanForUser(
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
   const rateMap: Record<string, number> = {};
   try {
+    // Pre-warm from the persistent kv_cache before touching the API.
+    //
+    // These are DAILY candles for six fixed majors — they change once a day.
+    // The in-memory candle cache would cover that (5 min TTL), except
+    // manage-positions-1min gets a fresh isolate every minute, so the cache is
+    // empty on arrival and all six are re-fetched. Measured at 6 credits/min
+    // against a 50/min budget, purely to re-read yesterday's closes.
+    //
+    // The scan path already solves this at the batchGetCachedCandles call
+    // further down, but that sits AFTER the management-only return, so the
+    // manage loop — the thing that runs every minute — never reached it.
+    try {
+      const warm = await batchGetCachedCandles(
+        supabase,
+        RATE_PAIRS.map((p) => ({ symbol: p, interval: "1d" })),
+      );
+      for (const [mapKey, candles] of warm.entries()) {
+        const [sym, interval] = mapKey.split(":");
+        if (sym && interval && candles.length >= 30) scanCache.seed(sym, interval, candles, "kv_cache");
+      }
+    } catch { /* pre-warm is an optimisation — fall through to fetching */ }
+
     const rateFetches = await Promise.all(
       RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
     );
+
+    // Persist whatever had to be fetched, so the next invocation starts warm.
+    try {
+      await batchSetCachedCandles(
+        supabase,
+        RATE_PAIRS.map((p, i) => ({ symbol: p, interval: "1d", candles: rateFetches[i] })),
+      );
+    } catch { /* fire and forget */ }
     for (let i = 0; i < RATE_PAIRS.length; i++) {
       const candles = rateFetches[i];
       if (candles.length > 0) {
