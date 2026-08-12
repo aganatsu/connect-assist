@@ -159,8 +159,7 @@ import {
   THESIS_VALIDATION_VERSION,
   transitionStagedSetup,
   validateFrozenSetupIdentity,
-  type SetupLifecycleEvidence,
-} from "../_shared/setupLifecycle.ts";
+  type SetupLifecycleEvidence, resolveLifecycleCandidateId } from "../_shared/setupLifecycle.ts";
 import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
@@ -8873,8 +8872,18 @@ async function runScanForUser(
             pendingOriginatingZone,
             pendingHierarchy as unknown as Record<string, unknown>,
           );
-          const pendingCandidateId =
-            pendingLifecycleEvidence?.candidateId || crypto.randomUUID();
+          // A fresh UUID is the BIRTH of a lifecycle and is fine. Minting one
+          // while a watchlist row exists forks the identity, and the halves can
+          // never be reconciled — see docs/PENDING_ORDER_PREARMING_PLAN.md #3.
+          const pendingIdentity = resolveLifecycleCandidateId({
+            inheritedCandidateId: pendingLifecycleEvidence?.candidateId,
+            stagedCandidateId: existingStaged?.candidate_id,
+            stagedRowId: existingStaged?.id,
+          }, () => crypto.randomUUID());
+          const pendingCandidateId = pendingIdentity.candidateId;
+          if (pendingIdentity.inherited) {
+            console.log(`[pending] ${pair}: lifecycle identity inherited from ${pendingIdentity.source} (${pendingCandidateId})`);
+          }
           const pendingFrozenStrategyContext =
             pendingLifecycleEvidence?.frozenStrategyContext ||
             buildFrozenSetupStrategyContext({
@@ -10777,7 +10786,16 @@ async function runScanForUser(
             }
 
             const breakerOrderId = `brk-${crypto.randomUUID().slice(0, 6)}`;
-            const breakerCandidateId = crypto.randomUUID();
+            // Previously randomised unconditionally, even when a watchlist row
+            // for this symbol/direction already owned the lifecycle.
+            const breakerIdentity = resolveLifecycleCandidateId({
+              stagedCandidateId: existingStaged?.candidate_id,
+              stagedRowId: existingStaged?.id,
+            }, () => crypto.randomUUID());
+            const breakerCandidateId = breakerIdentity.candidateId;
+            if (breakerIdentity.inherited) {
+              console.log(`[breaker] ${pair}: lifecycle identity inherited from ${breakerIdentity.source} (${breakerCandidateId})`);
+            }
             const breakerExpiry = config.limitOrderExpiryMinutes || 60;
             const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
             const breakerOriginatingZone = {

@@ -618,3 +618,75 @@ export async function transitionStagedSetup(
   }
   return data?.row || data;
 }
+
+// ── Lifecycle candidate identity ─────────────────────────────────────
+//
+// Step 3 of docs/PENDING_ORDER_PREARMING_PLAN.md.
+//
+// A setup's lifecycle ID identifies ONE TRADING OPPORTUNITY'S JOURNEY across
+// staged_setups → pending_orders → paper_positions. It is deliberately a
+// persisted UUID rather than a content hash: a derived key drifts as the candle
+// window rolls, a persisted one cannot. Stability comes from REUSING the row.
+//
+// Do not confuse it with the zone evidence ID from zoneCandidateIdentity.ts,
+// which deterministically identifies a market object (this FVG/OB). Both are
+// called candidateId. See docs/CONCEPT_INVENTORY.md.
+//
+// Measured 2026-08-12: only 30 of 1,325 pending_orders rows carried a
+// candidate_id. bot-scanner fell back to crypto.randomUUID() whenever an order
+// was not promoted from staging, and the breaker path randomised
+// unconditionally — even when a watchlist row for that symbol/direction
+// existed. A fresh UUID is not a bug in itself; it is the birth of a lifecycle.
+// Minting a fresh one when a durable source EXISTS is the bug, because it forks
+// the identity and the two halves can never be reconciled.
+
+export type LifecycleIdentitySource =
+  | "promoted_evidence"
+  | "staged_candidate"
+  | "staged_row"
+  | "generated";
+
+export interface LifecycleIdentityInput {
+  /** candidateId carried by promoted lifecycle evidence, when the order came from staging. */
+  inheritedCandidateId?: string | null;
+  /** candidate_id column on the staged_setups row for this symbol/direction. */
+  stagedCandidateId?: string | null;
+  /** staged_setups.id — durable even when candidate_id was never populated. */
+  stagedRowId?: string | null;
+}
+
+export interface LifecycleIdentity {
+  candidateId: string;
+  source: LifecycleIdentitySource;
+  /** True when a durable source existed, i.e. nothing was minted. */
+  inherited: boolean;
+}
+
+function usable(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Resolve the lifecycle candidate ID for a pending order.
+ *
+ * Preference order, most durable first. `generate` is injected rather than
+ * calling crypto.randomUUID() directly so tests can assert that it is NOT
+ * called when a durable source exists — the actual regression being guarded.
+ */
+export function resolveLifecycleCandidateId(
+  input: LifecycleIdentityInput,
+  generate: () => string,
+): LifecycleIdentity {
+  if (usable(input.inheritedCandidateId)) {
+    return { candidateId: input.inheritedCandidateId, source: "promoted_evidence", inherited: true };
+  }
+  if (usable(input.stagedCandidateId)) {
+    return { candidateId: input.stagedCandidateId, source: "staged_candidate", inherited: true };
+  }
+  // The watchlist row's own id is durable even when candidate_id predates the
+  // column being populated. Better than minting: it still points at one row.
+  if (usable(input.stagedRowId)) {
+    return { candidateId: input.stagedRowId, source: "staged_row", inherited: true };
+  }
+  return { candidateId: generate(), source: "generated", inherited: false };
+}
