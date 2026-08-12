@@ -8715,11 +8715,16 @@ async function runScanForUser(
             if (limitSize < 0.01) limitSize = 0.01;
           }
 
+          // Set when a material change replaces one lifecycle candidate with
+          // another. An unchanged setup is not a handoff — #318 leaves it alone.
+          let supersededCandidateId: string | null = null;
+          let handoffReason: string | null = null;
+
           // ── Replace stale pending: expire any existing pending order for same symbol+direction ──
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
           // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
           const { data: stalePending } = await supabase.from("pending_orders")
-            .select("order_id, entry_price, signal_score, stop_loss, take_profit, zone_touch_time, confirmation_attempts")
+            .select("order_id, entry_price, signal_score, stop_loss, take_profit, zone_touch_time, confirmation_attempts, candidate_id")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
             .in("status", ["pending", "awaiting_confirmation"]);
@@ -8748,6 +8753,11 @@ async function runScanForUser(
               scanDetails.push(detail);
               continue;
             }
+            // Material change: this is a NEW opportunity, not the old one edited.
+            // Record the predecessor so the chain stays walkable — otherwise the
+            // old candidate just vanishes and its successor looks unrelated.
+            supersededCandidateId = existing.candidate_id ?? null;
+            handoffReason = supersedeDecision.reason;
             const staleIds = stalePending.map((s: any) => s.order_id);
             await supabase.from("pending_orders").update({
               status: "cancelled",
@@ -8875,12 +8885,34 @@ async function runScanForUser(
           // A fresh UUID is the BIRTH of a lifecycle and is fine. Minting one
           // while a watchlist row exists forks the identity, and the halves can
           // never be reconciled — see docs/PENDING_ORDER_PREARMING_PLAN.md #3.
-          const pendingIdentity = resolveLifecycleCandidateId({
-            inheritedCandidateId: pendingLifecycleEvidence?.candidateId,
-            stagedCandidateId: existingStaged?.candidate_id,
-            stagedRowId: existingStaged?.id,
-          }, () => crypto.randomUUID());
+          //
+          // A material change is the exception: inheriting there would give the
+          // successor the SAME id as the candidate it replaced, making
+          // superseded_candidate_id self-referential and the chain meaningless.
+          // A changed setup is a new opportunity, so it gets a new identity.
+          const pendingIdentity = supersededCandidateId
+            ? { candidateId: crypto.randomUUID(), source: "handoff" as const, inherited: false }
+            : resolveLifecycleCandidateId({
+              inheritedCandidateId: pendingLifecycleEvidence?.candidateId,
+              stagedCandidateId: existingStaged?.candidate_id,
+              stagedRowId: existingStaged?.id,
+            }, () => crypto.randomUUID());
           const pendingCandidateId = pendingIdentity.candidateId;
+          if (supersededCandidateId) {
+            // Carry the watchlist row onto the new identity. Leaving it on the
+            // old one would fork staged from pending — the exact break #322
+            // exists to prevent, reintroduced through the handoff path.
+            if (existingStaged?.id) {
+              try {
+                await supabase.from("staged_setups")
+                  .update({ candidate_id: pendingCandidateId })
+                  .eq("id", existingStaged.id).eq("user_id", userId);
+              } catch (e: any) {
+                console.warn(`[handoff] ${pair}: could not move watchlist row to new candidate: ${e?.message}`);
+              }
+            }
+            console.log(`[handoff] ${pair}: ${supersededCandidateId} → ${pendingCandidateId} (${handoffReason})`);
+          }
           if (pendingIdentity.inherited) {
             console.log(`[pending] ${pair}: lifecycle identity inherited from ${pendingIdentity.source} (${pendingCandidateId})`);
           }
@@ -9018,6 +9050,8 @@ async function runScanForUser(
             from_watchlist: isPromotedFromStaging || false,
             staged_setup_id: pendingLifecycleEvidence?.setupId || null,
             candidate_id: pendingCandidateId,
+            superseded_candidate_id: supersededCandidateId,
+            handoff_reason: handoffReason,
             originating_zone: pendingOriginatingZone,
             thesis_version: THESIS_VALIDATION_VERSION,
             confirmation_method: pendingLifecycleEvidence
