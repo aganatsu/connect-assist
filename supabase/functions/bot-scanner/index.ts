@@ -8,7 +8,7 @@ import {
   loadEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
-import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
+import { shouldCreatePendingZoneOrder, shouldSupersedePendingOrder } from "../_shared/botConfigBehavior.ts";
 import {
   loadImpulseLifecycleCertificate,
   resolveImpulseLifecycleEnforcement,
@@ -8720,17 +8720,41 @@ async function runScanForUser(
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
           // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
           const { data: stalePending } = await supabase.from("pending_orders")
-            .select("order_id, entry_price, signal_score")
+            .select("order_id, entry_price, signal_score, stop_loss, take_profit, zone_touch_time, confirmation_attempts")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
             .in("status", ["pending", "awaiting_confirmation"]);
           if (stalePending && stalePending.length > 0) {
+            // Only replace when the setup actually moved. Re-detecting the same
+            // setup each cycle used to cancel and reinsert it, which resets
+            // zone_touch_time and confirmation_attempts — the state
+            // zone-confirmation-scanner needs to anchor its CHoCH search. That
+            // churn is why no pending order has filled since 2026-05-15.
+            const existing = stalePending[0];
+            const supersedeDecision = shouldSupersedePendingOrder({
+              newEntry: Number(limitEntry.price),
+              newStopLoss: Number(limitSL),
+              newTakeProfit: Number(limitTP),
+              newScore: analysis.score,
+              existingEntry: Number(existing.entry_price),
+              existingStopLoss: Number(existing.stop_loss),
+              existingTakeProfit: Number(existing.take_profit),
+              existingScore: existing.signal_score != null ? Number(existing.signal_score) : null,
+              zoneWidth: Math.abs((limitEntry.zoneHigh ?? 0) - (limitEntry.zoneLow ?? 0)),
+            });
+            if (!supersedeDecision.supersede) {
+              console.log(`[pending] ${pair} ${analysis.direction}: ${supersedeDecision.reason} (entry ${existing.entry_price}, touched=${existing.zone_touch_time ?? "no"}, attempts=${existing.confirmation_attempts ?? 0}) — leaving order in place.`);
+              detail.status = "watching_zone";
+              detail.skipReason = `Existing pending order retained — ${supersedeDecision.reason}. Cancelling it would reset zone-touch and confirmation progress.`;
+              scanDetails.push(detail);
+              continue;
+            }
             const staleIds = stalePending.map((s: any) => s.order_id);
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${stalePending[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${stalePending[0].entry_price})`,
+              cancel_reason: `Superseded by new setup — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)} vs old ${existing.signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${existing.entry_price})`,
             }).in("order_id", staleIds).eq("user_id", userId);
-            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
+            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)})`);
           }
 
           // GUARD: reject pending orders whose SL/TP orientation doesn't match direction.
