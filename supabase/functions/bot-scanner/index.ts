@@ -322,6 +322,10 @@ import {
   type SessionResult,
 } from "../_shared/sessions.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("bot-scanner");
+
 declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 
 // ─── Bot Identity ────────────────────────────────────────────────────

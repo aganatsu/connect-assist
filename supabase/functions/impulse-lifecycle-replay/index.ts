@@ -9,6 +9,10 @@ import {
   observeImpulseEntryPrice,
 } from "../_shared/impulseEntryLifecycleStore.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("impulse-lifecycle-replay");
+
 const BOT_ID = "smc";
 const respond = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status,
