@@ -71,7 +71,7 @@ export function observeLiquidityConfirmation(input: {
   confirmationTime?: string | null;
   legacyContractVersion?: string | null;
 }): LiquidityConfirmationObservation {
-  const base = {
+  const base: Omit<LiquidityConfirmationObservation, "ready" | "reasonCode"> = {
     contractVersion: LIQUIDITY_CONFIRMATION_CONTRACT_VERSION,
     observationOnly: true as const,
     affectsAuthorization: false as const,
