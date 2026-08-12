@@ -1672,6 +1672,7 @@ export type Database = {
           frozen_strategy_hash: string | null
           game_plan_id: string | null
           game_plan_version: string | null
+          handoff_reason: string | null
           id: string
           impulse_entry_lifecycle: Json | null
           impulse_entry_lifecycle_id: string | null
@@ -1699,10 +1700,13 @@ export type Database = {
           streamlined_decision_frozen_at: string | null
           streamlined_decision_latest: Json | null
           streamlined_decision_origin: Json | null
+          structural_invalidation: number | null
+          structural_invalidation_source: string | null
           style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
+          superseded_candidate_id: string | null
           symbol: string
           take_profit: number
           thesis_cancel_reason: string | null
@@ -1751,6 +1755,7 @@ export type Database = {
           frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
+          handoff_reason?: string | null
           id?: string
           impulse_entry_lifecycle?: Json | null
           impulse_entry_lifecycle_id?: string | null
@@ -1778,10 +1783,13 @@ export type Database = {
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
           streamlined_decision_origin?: Json | null
+          structural_invalidation?: number | null
+          structural_invalidation_source?: string | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
+          superseded_candidate_id?: string | null
           symbol: string
           take_profit: number
           thesis_cancel_reason?: string | null
@@ -1830,6 +1838,7 @@ export type Database = {
           frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
+          handoff_reason?: string | null
           id?: string
           impulse_entry_lifecycle?: Json | null
           impulse_entry_lifecycle_id?: string | null
@@ -1857,10 +1866,13 @@ export type Database = {
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
           streamlined_decision_origin?: Json | null
+          structural_invalidation?: number | null
+          structural_invalidation_source?: string | null
           style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
+          superseded_candidate_id?: string | null
           symbol?: string
           take_profit?: number
           thesis_cancel_reason?: string | null
