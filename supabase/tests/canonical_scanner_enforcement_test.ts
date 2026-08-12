@@ -21,7 +21,7 @@ Deno.test("canonical lifecycle distinguishes waiting from terminal rejection", (
   assertEquals(canonicalScannerDisposition("blocked"), "terminal");
   assertEquals(canonicalScannerDisposition("invalidated"), "terminal");
   assertEquals(canonicalScannerDisposition("authorized"), "allow");
-  const waiting = projectCanonicalScannerState({ ...state, liquidity: { policy: "required", state: "unswept" } });
+  const waiting = { ...state, stage: "awaiting_liquidity" as const };
   const enforced = evaluateCanonicalScannerEnforcement({ requestedMode: "enforce", singleOwnershipEffectiveMode: "enforce", state: waiting });
   assertEquals(enforced.authorized, false);
   assertEquals(enforced.disposition, "wait");

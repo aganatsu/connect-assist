@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { buildCanonicalLiquiditySequences } from "../functions/_shared/canonicalLiquiditySequence.ts";
 
-const authority = (events: any[]) => ({ contractVersion: "canonical-structure.v1", observationOnly: true, affectsAuthorization: false, internalLookback: 3, externalLookback: 7, levels: [{ id: "inducement", significance: "internal", side: "low", price: 1.1, pivotIndex: 1, confirmedIndex: 4, datetime: "x", label: "HL", status: "swept" }], events, trend: { internal: "bullish", external: "ranging" } }) as any;
+const authority = (events: any[]) => ({ contractVersion: "canonical-structure.v1", observationOnly: true, affectsAuthorization: false, internalLookback: 3, externalLookback: 7, levels: [{ id: "inducement", significance: "internal", side: "low", price: 1.1, pivotIndex: 1, confirmedIndex: 4, datetime: "2026-08-12T10:00:00.000Z", label: "HL", status: "swept" }], events, trend: { internal: "bullish", external: "ranging" } }) as any;
 const event = (id: string, type: string, direction: string, candleIndex: number) => ({ id, type, direction, significance: "internal", levelId: id, level: 1, candleIndex, datetime: new Date(Date.UTC(2026, 7, 12, 10, candleIndex * 5)).toISOString(), close: 1, extreme: 1, closeDistance: 0, displacementRatio: 0.8 });
 
 Deno.test("sweep plus same-direction MSS confirms fakeout sequence", () => {

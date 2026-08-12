@@ -149,7 +149,7 @@ export function buildCanonicalStructureAuthority(candles: Candle[], options: {
           sourceCandleStart: candle.datetime,
           direction: closedThrough ? breakDirection : breakDirection === "bullish" ? "bearish" : "bullish",
           level: level.price,
-          discriminator: `${type}:${significance}:${level.durableId}`,
+          discriminator: `${type}:${level.significance}:${level.durableId}`,
         }),
         type,
         direction: closedThrough ? breakDirection : breakDirection === "bullish" ? "bearish" : "bullish",

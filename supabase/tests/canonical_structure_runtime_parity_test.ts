@@ -12,7 +12,7 @@ Deno.test("live scanner builds one structure and confirmation snapshot from role
 
 Deno.test("backtest builds the same canonical contracts from bounded role candles", () => {
   assertStringIncludes(backtest, "buildCanonicalStructureAuthority(\n          roleCandles.structure");
-  assertStringIncludes(backtest, "buildCanonicalStructureAuthority(roleCandles.confirmation)");
+  assertStringIncludes(backtest, "buildCanonicalStructureAuthority(roleCandles.confirmation, {");
   assertStringIncludes(backtest, "_canonicalLiquiditySequence");
   assertStringIncludes(backtest, "evaluateCanonicalStructureEnforcement({");
   assertStringIncludes(backtest, "Market Structure Authority:");
