@@ -115,80 +115,98 @@ export function isWatchlistInvalidated(
   return direction === "long" ? price < level : price > level;
 }
 
-// ── Phase-correct invalidation boundary ──────────────────────────────
+// ── Lifecycle-correct invalidation boundary ──────────────────────────
 //
 // Step 1 of the corrected sequence in docs/PREARM_GATE_AUDIT.md.
 //
-// bot-scanner:2588 cancelled any 'pending' row whose price breached stop_loss,
-// touched or not. A stop loss is sized for a position that EXISTS — entry minus
-// risk, floored by MIN_SL_PIPS and spread. Before entry the question is
-// different: has the ZONE or IMPULSE that produced this setup been broken?
+// bot-scanner:2588 cancelled any row with status 'pending' by comparing price
+// against stop_loss. That is the wrong LEVEL for the wrong REASON:
 //
-// Observed GBP/CHF: invalidation ~2 pips below an 11-pip zone floor, on a pair
-// with a 25-pip minimum stop. Pre-arming an order there under the position stop
-// means it dies on any overshoot before it can fill.
+//   A stop loss is sized for a position that exists — entry minus risk, floored
+//   by MIN_SL_PIPS and spread. Nothing in pending_orders has entered. Through
+//   'pending' AND 'awaiting_confirmation' there is no position, so a position
+//   stop has nothing to govern.
+//
+// The boundary that applies before entry is structural: has the ZONE or IMPULSE
+// that produced this setup broken?
+//
+// Note the direction of the difference, which is easy to get backwards. On the
+// observed GBP/CHF setup the structural boundary sits ~2 pips below the zone
+// floor while the position stop sits ~23 pips lower. Structural is TIGHTER.
+// Switching to it makes pre-entry invalidation FIRE EARLIER, not later — and
+// that is the point: a setup whose zone has broken is dead regardless of how
+// much room a hypothetical position would have had.
+//
+// Keyed on LIFECYCLE STATE, not on zone_touch_time. Touch means price arrived,
+// not that a trade exists.
 
-export type InvalidationPhase = "pre_touch" | "post_touch";
+/** Where a row sits in the lifecycle. Only 'filled' has a position. */
+export type InvalidationLifecycle = "pre_entry" | "entered";
 
-export interface PhaseInvalidationInput {
+export interface LifecycleInvalidationInput {
   direction: "long" | "short";
-  /** Zone/impulse boundary. Null on legacy rows written before the column existed. */
+  /** pending_orders.status, or the position lifecycle for an entered trade. */
+  status: string;
+  /** Zone/impulse boundary. Null on rows written before the column existed. */
   structuralInvalidation?: number | null;
-  /** Position stop loss. Always present. */
+  /** Position stop loss. Governs only once a position exists. */
   stopLoss: number;
-  /** Set once price has reached the zone. Its presence IS the phase. */
-  zoneTouchTime?: string | null;
 }
 
-export interface PhaseInvalidation {
-  phase: InvalidationPhase;
+export interface LifecycleInvalidation {
+  lifecycle: InvalidationLifecycle;
   level: number;
-  source: "structural" | "position_stop" | "position_stop_fallback";
+  source: "structural" | "position_stop" | "legacy_stop_fallback";
   reason: string;
 }
 
-/**
- * Which boundary applies right now.
- *
- * Falls back to the position stop when no structural level was recorded, since
- * every row written before this column existed has none — and an un-invalidated
- * order is worse than one invalidated slightly early. The fallback is labelled
- * so it can be counted rather than assumed absent.
- */
-export function invalidationForPhase(
-  input: PhaseInvalidationInput,
-): PhaseInvalidation {
-  const touched = typeof input.zoneTouchTime === "string" &&
-    input.zoneTouchTime.length > 0;
+/** Statuses in which no position exists yet. */
+const PRE_ENTRY_STATUSES = new Set(["pending", "awaiting_confirmation"]);
 
-  if (touched) {
+/**
+ * Which boundary applies to this row right now.
+ *
+ * `legacy_stop_fallback` covers rows written before structural_invalidation
+ * existed. It is deliberately named as legacy and MIGRATION-SHAPED: an
+ * un-invalidated order is worse than one invalidated on the wrong level, but
+ * this branch should trend to zero as old rows terminate. A persistent non-zero
+ * count on NEW rows means the zone is not reaching the insert.
+ */
+export function invalidationForLifecycle(
+  input: LifecycleInvalidationInput,
+): LifecycleInvalidation {
+  const preEntry = PRE_ENTRY_STATUSES.has(input.status);
+
+  if (!preEntry) {
     return {
-      phase: "post_touch",
+      lifecycle: "entered",
       level: input.stopLoss,
       source: "position_stop",
-      reason: "price reached the zone — the position stop governs from here",
+      reason: "a position exists — the position stop governs",
     };
   }
 
-  const structural = typeof input.structuralInvalidation === "number" &&
+  const structural =
+    typeof input.structuralInvalidation === "number" &&
       Number.isFinite(input.structuralInvalidation)
-    ? input.structuralInvalidation
-    : null;
+      ? input.structuralInvalidation
+      : null;
 
   if (structural === null) {
     return {
-      phase: "pre_touch",
+      lifecycle: "pre_entry",
       level: input.stopLoss,
-      source: "position_stop_fallback",
-      reason: "no structural level recorded (legacy row) — falling back to the position stop",
+      source: "legacy_stop_fallback",
+      reason:
+        "no structural level recorded (row predates the column) — falling back to the position stop",
     };
   }
 
   return {
-    phase: "pre_touch",
+    lifecycle: "pre_entry",
     level: structural,
     source: "structural",
-    reason: "setup has not been entered — the zone/impulse boundary governs",
+    reason: "no position exists — the zone/impulse boundary governs",
   };
 }
 

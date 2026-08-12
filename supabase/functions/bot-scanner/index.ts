@@ -163,7 +163,7 @@ import {
 import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
-  type WatchlistDirection, invalidationForPhase, invalidationBreached } from "../_shared/watchlistInvalidation.ts";
+  type WatchlistDirection, invalidationForLifecycle, invalidationBreached } from "../_shared/watchlistInvalidation.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -2584,26 +2584,31 @@ async function runScanForUser(
         const entryPrice = parseFloat(pending.entry_price);
         const slLevel = parseFloat(pending.stop_loss);
 
-        // Invalidation boundary depends on PHASE, not on which field is handy.
+        // Which boundary applies is a LIFECYCLE question, not a field-choice.
         //
-        // Before touch, the position stop is the wrong question: it is sized for
-        // a trade that exists (entry minus risk, floored by MIN_SL_PIPS and
-        // spread). The right question is whether the zone or impulse that
-        // produced the setup has broken. Observed GBP/CHF: invalidation ~2 pips
-        // below an 11-pip zone floor on a pair with a 25-pip minimum stop — a
-        // pre-armed order there dies on any overshoot before it can fill.
-        const invalidation = invalidationForPhase({
+        // Nothing in pending_orders has entered. Through both 'pending' and
+        // 'awaiting_confirmation' there is no position, so the position stop —
+        // sized as entry minus risk, floored by MIN_SL_PIPS and spread — has
+        // nothing to govern. The pre-entry question is whether the ZONE or
+        // IMPULSE that produced the setup has broken.
+        //
+        // Direction of the change, which is easy to get backwards: on the
+        // observed GBP/CHF setup structural sits ~2 pips below the zone floor
+        // and the position stop ~23 pips lower. Structural is TIGHTER, so this
+        // invalidates EARLIER than before. That is intended — a setup whose zone
+        // has broken is dead regardless of how much room a position would have had.
+        const invalidation = invalidationForLifecycle({
           direction: pending.direction as "long" | "short",
+          status: pending.status,
           structuralInvalidation: pending.structural_invalidation != null
             ? Number(pending.structural_invalidation)
             : null,
           stopLoss: slLevel,
-          zoneTouchTime: pending.zone_touch_time,
         });
         if (invalidationBreached(pending.direction as "long" | "short", currentPrice, invalidation.level)) {
           await supabase.from("pending_orders").update({
             status: "invalidated",
-            cancel_reason: `Price ${currentPrice} breached ${invalidation.source} ${invalidation.level} (${invalidation.phase})`,
+            cancel_reason: `Price ${currentPrice} breached ${invalidation.source} ${invalidation.level} (${invalidation.lifecycle})`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pendingCancelled++;

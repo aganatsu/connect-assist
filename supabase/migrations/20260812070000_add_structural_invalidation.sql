@@ -13,11 +13,19 @@
 -- MIN_SL_PIPS and spread. Using it as the boundary for a setup that has not been
 -- entered is a category error, and it gets worse the longer a setup waits.
 --
--- Observed 2026-08-12 on the GBP/CHF watchlist entry: invalidation 1.08597
--- against a zone floor of 1.08617 — about 2 pips, on a pair whose minimum stop
--- is 25 pips. A pre-armed order there dies on any overshoot before it can fill.
+-- Note the direction, which is easy to state backwards. On the observed GBP/CHF
+-- setup the structural boundary is 1.08597 against a zone floor of 1.08617
+-- (~2 pips), while the position stop sits ~23 pips lower at the pair's 25-pip
+-- MIN_SL_PIPS floor. Structural is TIGHTER. Switching to it makes pre-entry
+-- invalidation fire EARLIER, not later — which is correct: a setup whose zone
+-- has broken is dead regardless of how much room a hypothetical position would
+-- have had.
 --
--- Pre-touch, the question is "is the setup still structurally valid?" — has the
+-- Nothing in pending_orders has entered. Through BOTH 'pending' and
+-- 'awaiting_confirmation' there is no position, so the boundary is structural
+-- for the whole pending lifecycle — touch is not entry.
+--
+-- Pre-entry, the question is "is the setup still structurally valid?" — has the
 -- zone or the impulse that produced it been broken. That level already exists:
 -- deriveWatchlistInvalidation() in _shared/watchlistInvalidation.ts computes it
 -- from the zone boundary (or impulse, as fallback) plus a buffer, and
@@ -33,6 +41,6 @@ ALTER TABLE public.pending_orders
   ADD COLUMN IF NOT EXISTS structural_invalidation_source TEXT;
 
 COMMENT ON COLUMN public.pending_orders.structural_invalidation IS
-  'Pre-touch boundary: the price at which the ZONE OR IMPULSE that produced this setup is broken. Not the position stop loss, which is sized for an entered trade. Used only before zone_touch_time is set.';
+  'Pre-entry boundary: the price at which the ZONE OR IMPULSE that produced this setup is broken. Not the position stop loss, which is sized for an entered trade. Governs the whole pending lifecycle, including awaiting_confirmation — touch is not entry.';
 COMMENT ON COLUMN public.pending_orders.structural_invalidation_source IS
   'Which structure produced the level: zone_boundary, impulse_boundary, or proposed. From deriveWatchlistInvalidation().';
