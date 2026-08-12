@@ -226,7 +226,7 @@ Deno.test("a confident verdict reversal against the frozen baseline DOES cancel"
 // SECTION 2: FOTSI Veto Check
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("FOTSI veto: EUR overbought blocks long EUR/USD", () => {
+Deno.test("FOTSI exhaustion cannot independently cancel an accepted order", () => {
   // EUR TSI > 80 (overbought) should veto a long EUR/USD
   const fotsi = makeFOTSIResult({
     EUR: 85,
@@ -247,13 +247,8 @@ Deno.test("FOTSI veto: EUR overbought blocks long EUR/USD", () => {
     makePendingOrder({ direction: "long", symbol: "EUR/USD" }),
     makeDefaultOpts({ fotsiResult: fotsi }),
   );
-  // The actual veto depends on the checkOverboughtOversoldVeto implementation
-  // If EUR is at 85 TSI, it should be considered overbought for a BUY
-  // This test verifies the integration path works
-  assertEquals(
-    result.checkType === "fotsi_veto" || result.valid === true,
-    true,
-  );
+  assertEquals(result.valid, true);
+  assertEquals(result.checkType, null);
 });
 
 Deno.test("FOTSI: non-exhausted currencies → valid", () => {

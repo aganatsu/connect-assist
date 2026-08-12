@@ -2,10 +2,8 @@
  * thesisValidator.ts — Pending Order Thesis Validation
  * ─────────────────────────────────────────────────────
  * Re-checks structural conditions for active pending orders each scan cycle.
- * Three checks:
- *   1. Direction Flip (HARD cancel) — style bias/structure/setup reversed
- *   2. FOTSI Veto (HARD cancel) — currency exhaustion would block entry now
- *   3. Game Plan Bias Reversal (SOFT cancel) — session bias flipped with high confidence
+ * The complete Direction Verdict comparison is the sole post-placement direction authority.
+ * FOTSI and Game Plan remain placement inputs and cannot independently cancel
  *
  * Design principle: FAIL-OPEN. If any check errors or data is missing,
  * the order stays alive. Only cancel on confirmed invalidation.
@@ -14,12 +12,7 @@
  */
 
 import { determineDirection, type DirectionResult } from "./directionEngine.ts";
-import {
-  checkOverboughtOversoldVeto,
-  type FOTSIResult,
-  parsePairCurrencies,
-  type VetoResult,
-} from "./fotsi.ts";
+import type { FOTSIResult } from "./fotsi.ts";
 import type { Candle } from "./smcAnalysis.ts";
 import type { InstrumentGamePlan, SessionGamePlan } from "./gamePlan.ts";
 import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
@@ -67,6 +60,7 @@ export interface PendingOrderForValidation {
 }
 
 export interface ThesisValidationOpts {
+  /**  Compatibility input only. FOTSI is placement-time scoring, not a pending-order veto. */
   fotsiResult: FOTSIResult | null;
   lastGamePlan: SessionGamePlan | null;
   dailyCandles: Candle[] | null;
@@ -317,46 +311,10 @@ export function validatePendingOrderThesis(
     timeframeLabels: opts.decisionEvidence?.labels || null,
   });
 
-  // ── Check 1: FOTSI Veto ──
-  // Cheapest check — uses pre-computed FOTSI result, zero API cost
-  if (opts.fotsiResult && opts.fotsiResult.strengths) {
-    try {
-      const currencies = parsePairCurrencies(pending.symbol);
-      if (currencies) {
-        const [base, quote] = currencies;
-        const fotsiDirection = pending.direction === "long" ? "BUY" : "SELL";
-        const vetoResult: VetoResult = checkOverboughtOversoldVeto(
-          base,
-          quote,
-          fotsiDirection as "BUY" | "SELL",
-          opts.fotsiResult.strengths,
-          opts.fotsiResult.series,
-        );
-        if (vetoResult.vetoed) {
-          const baseTSI = opts.fotsiResult.strengths[base] ?? 0;
-          const exhaustionType = pending.direction === "long"
-            ? "overbought"
-            : "oversold";
-          return invalidResult({
-            valid: false,
-            reason: `FOTSI thesis invalidation: ${vetoResult.reason}`,
-            checkType: "fotsi_veto",
-            cancelReason:
-              `thesis_invalid:fotsi_veto:${base}_${exhaustionType}_${
-                baseTSI.toFixed(0)
-              }`,
-          });
-        }
-      }
-    } catch (e) {
-      // Fail-open: FOTSI check errored, keep order alive
-      console.warn(
-        `[thesis-validator] FOTSI check error for ${pending.symbol}: ${
-          (e as Error)?.message
-        }`,
-      );
-    }
-  }
+  // FOTSI HARD CANCEL REMOVED. Gate 17 deliberately treats exhaustion as a
+  // score penalty. Re-applying it here as an unconditional veto gave it more
+  // authority after placement than it had when the order was accepted. The
+  // compatibility option remains temporarily, but is intentionally not read.
 
   // ── Check 2: REMOVED — Game Plan no longer cancels independently ──
   //
