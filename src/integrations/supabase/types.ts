@@ -211,6 +211,27 @@ export type Database = {
         }
         Relationships: []
       }
+      api_credit_usage: {
+        Row: {
+          caller: string | null
+          id: number
+          provider: string
+          reserved_at: string
+        }
+        Insert: {
+          caller?: string | null
+          id?: number
+          provider: string
+          reserved_at?: string
+        }
+        Update: {
+          caller?: string | null
+          id?: number
+          provider?: string
+          reserved_at?: string
+        }
+        Relationships: []
+      }
       backtest_history_datasets: {
         Row: {
           base_timeframe: string
@@ -4306,6 +4327,24 @@ export type Database = {
         }
         Returns: boolean
       }
+      reserve_api_credit:
+        | {
+            Args: {
+              p_limit: number
+              p_provider: string
+              p_window_seconds?: number
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_caller?: string
+              p_limit: number
+              p_provider: string
+              p_window_seconds?: number
+            }
+            Returns: boolean
+          }
       resolve_scanner_operational_alert: {
         Args: {
           p_alert_type: string
