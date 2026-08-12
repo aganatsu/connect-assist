@@ -207,7 +207,7 @@ export function evaluateCanonicalDealingRange(input: {
   mode: DealingRangeMode;
   priceDecimals?: number;
 }): DealingRangeEvaluation {
-  const base = {
+  const base: Pick<DealingRangeEvaluation, "contractVersion" | "mode" | "direction" | "price" | "range"> = {
     contractVersion: CANONICAL_DEALING_RANGE_VERSION,
     mode: input.mode,
     direction: input.direction,

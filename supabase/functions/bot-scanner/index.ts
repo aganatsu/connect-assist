@@ -60,6 +60,7 @@ import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScanner
 import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
 import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
+import { buildLiquidityConfirmationId, observeLiquidityConfirmation } from "../_shared/liquidityConfirmationContract.ts";
 import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
@@ -4366,9 +4367,11 @@ async function runScanForUser(
       });
     const canonicalStructureAuthority = buildCanonicalStructureAuthority(
       roleCandles.structure,
+      { symbol: pair, timeframe: timeframeAuthority.roles.structure },
     );
     const canonicalConfirmationStructure = buildCanonicalStructureAuthority(
       roleCandles.confirmation,
+      { symbol: pair, timeframe: timeframeAuthority.roles.confirmation },
     );
     const canonicalLiquiditySequence = buildCanonicalLiquiditySequences(
       canonicalConfirmationStructure,
@@ -6546,6 +6549,8 @@ async function runScanForUser(
       return needsHandoff ? "handoff" : "created";
     };
 
+    let preparedZoneWatch: any = existingStaged || null;
+
     const unifiedWatchDisposition = classifyUnifiedWatch({
       requireUnifiedZone: !!pairConfig.requireUnifiedZone,
       unifiedGatePassed,
@@ -6681,7 +6686,9 @@ async function runScanForUser(
         scanDetails.push(detail);
         continue;
       }
-      if (!izData.bestZone?.priceAtZone) {
+      const preparePreArmLifecycle = pairConfig.preArmZoneSetups === true &&
+        config.limitOrderEnabled && !config.marketFillAtZone;
+      if (!izData.bestZone?.priceAtZone || preparePreArmLifecycle) {
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
         let zoneWatchPersistenceError: string | null = null;
@@ -6745,11 +6752,14 @@ async function runScanForUser(
                   impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
                 },
               };
-              const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert(zoneWatchRow);
-              if (zoneWatchInsertError) throw zoneWatchInsertError;
               frozenZoneWatch = zoneWatchRow;
-              zoneWatchPersisted = true;
-              stagedNew++;
+              preparedZoneWatch = zoneWatchRow;
+              if (!izData.bestZone?.priceAtZone) {
+                const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert(zoneWatchRow);
+                if (zoneWatchInsertError) throw zoneWatchInsertError;
+                zoneWatchPersisted = true;
+                stagedNew++;
+              }
               console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
             } else {
               // Update existing staged with latest zone data
@@ -6768,6 +6778,7 @@ async function runScanForUser(
               }).eq("id", existingStagedForZone.id);
               if (zoneWatchUpdateError) throw zoneWatchUpdateError;
               frozenZoneWatch = existingStagedForZone;
+              preparedZoneWatch = existingStagedForZone;
               zoneWatchPersisted = true;
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
@@ -6783,7 +6794,7 @@ async function runScanForUser(
           detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
         }
         if (
-          zoneWatchPersisted && frozenZoneWatch &&
+          !izData.bestZone?.priceAtZone && zoneWatchPersisted && frozenZoneWatch &&
           pairConfig.preArmZoneSetups === true &&
           config.limitOrderEnabled && !config.marketFillAtZone
         ) {
@@ -6805,6 +6816,33 @@ async function runScanForUser(
               : entry - Math.abs(stop - entry) * rr,
           });
           if (plan.valid) {
+            const currentCanonicalLocation = (detail as any).canonicalDealingRangeObservation?.canonical || null;
+            const frozenEntryLocation = evaluateCanonicalDealingRange({
+              range: currentCanonicalLocation?.range || null,
+              direction: analysis.direction as "long" | "short",
+              price: plan.plan.entryPrice,
+              mode: normalizeDealingRangeMode((pairConfig as any).dealingRangeMode, {
+                onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+                onlySellInPremium: pairConfig.onlySellInPremium,
+              }),
+            });
+            (detail as any).frozenExecutablePlan = {
+              contractVersion: "frozen-executable-plan.v1",
+              candidateId: frozenZoneWatch.candidate_id,
+              entryPrice: plan.plan.entryPrice,
+              stopLoss: plan.plan.stopLoss,
+              takeProfit: plan.plan.takeProfit,
+              zone: plan.plan.zone,
+              location: frozenEntryLocation,
+            };
+            if ((detail as any).canonicalDealingRangeObservation) {
+              (detail as any).canonicalDealingRangeObservation = {
+                ...(detail as any).canonicalDealingRangeObservation,
+                marketPriceObservation: currentCanonicalLocation,
+                canonical: frozenEntryLocation,
+                evaluatedPriceOwner: "frozen_executable_entry",
+              };
+            }
             const stagedAt = Date.parse(
               frozenZoneWatch.staged_at || frozenZoneWatch.created_at || new Date().toISOString(),
             );
@@ -6849,23 +6887,21 @@ async function runScanForUser(
             zoneWatchPersistenceError = `Pre-arm plan rejected: ${plan.reason}`;
           }
         }
+        if (!izData.bestZone?.priceAtZone) {
         if (zoneWatchPersisted) {
-          detail.status = "watching_zone";
-          detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
-        } else if (zoneWatchPersistenceError) {
-          detail.status = "watchlist_persistence_failed";
-          detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
-          detail.staging = {
-            action: "persistence_failed",
-            error: zoneWatchPersistenceError,
-            zoneDistance: izData.bestZone?.distanceToZone,
-          };
-        } else {
-          detail.status = "waiting_zone_untracked";
-          detail.skipReason = "Price is not at the Impulse Zone, but Watchlist staging is disabled.";
-        }
+            detail.status = "watching_zone";
+            detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
+          } else if (zoneWatchPersistenceError) {
+            detail.status = "watchlist_persistence_failed";
+            detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
+            detail.staging = { action: "persistence_failed", error: zoneWatchPersistenceError, zoneDistance: izData.bestZone?.distanceToZone };
+          } else {
+            detail.status = "waiting_zone_untracked";
+            detail.skipReason = "Price is not at the Impulse Zone, but Watchlist staging is disabled.";
+          }
         scanDetails.push(detail);
         continue;
+        }
       }
       // Price IS at zone — apply bonus and proceed
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
@@ -7839,8 +7875,43 @@ async function runScanForUser(
         null;
       const streamlinedConviction =
         streamlinedDecisionContext?.thesisConviction?.evidence;
-      const canonicalLocationObservation =
+      const currentPendingCandidate = (activePendingOrders || []).find((pending: any) =>
+        pending.symbol === pair && pending.direction === analysis.direction &&
+        ["pending", "awaiting_confirmation"].includes(pending.status)
+      );
+      const marketLocationObservation =
         (detail as any).canonicalDealingRangeObservation?.canonical || null;
+      const frozenEntryPrice = Number(currentPendingCandidate?.entry_price ??
+        (pairConfig.preArmZoneSetups === true ? preparedZoneWatch?.entry_price : Number.NaN));
+      const canonicalLocationObservation = Number.isFinite(frozenEntryPrice)
+        ? evaluateCanonicalDealingRange({
+          range: marketLocationObservation?.range || null,
+          direction: analysis.direction as "long" | "short",
+          price: frozenEntryPrice,
+          mode: normalizeDealingRangeMode((pairConfig as any).dealingRangeMode, {
+            onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+            onlySellInPremium: pairConfig.onlySellInPremium,
+          }),
+        })
+        : marketLocationObservation;
+      if (Number.isFinite(frozenEntryPrice)) {
+        const frozenStop = Number(currentPendingCandidate?.stop_loss ?? preparedZoneWatch?.sl_level);
+        const frozenTarget = Number(currentPendingCandidate?.take_profit ?? preparedZoneWatch?.tp_level);
+        (detail as any).frozenExecutablePlan = {
+          contractVersion: "frozen-executable-plan.v1",
+          candidateId: currentPendingCandidate?.candidate_id || preparedZoneWatch?.candidate_id || null,
+          entryPrice: frozenEntryPrice,
+          stopLoss: Number.isFinite(frozenStop) ? frozenStop : null,
+          takeProfit: Number.isFinite(frozenTarget) ? frozenTarget : null,
+          location: canonicalLocationObservation,
+        };
+        (detail as any).canonicalDealingRangeObservation = {
+          ...((detail as any).canonicalDealingRangeObservation || {}),
+          marketPriceObservation: marketLocationObservation,
+          canonical: canonicalLocationObservation,
+          evaluatedPriceOwner: "frozen_executable_entry",
+        };
+      }
       const singleOwnershipCandidateId =
         izData?.bestZone?.candidateModel?.candidateId ||
         izData?.bestZone?.localConfluence?.candidateId ||
@@ -7886,6 +7957,42 @@ async function runScanForUser(
         liquidity: canonicalLiquiditySequence,
         requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
       });
+      const sequenceDirection = analysis.direction === "long" ? "bullish" : "bearish";
+      const observedLiquiditySequence = [...canonicalLiquiditySequence.sequences]
+        .reverse()
+        .find((sequence) => sequence.direction === sequenceDirection && sequence.sweep) || null;
+      const confirmationTime = candidateConfirmationSignal?.authority?.candleTime || null;
+      const confirmationId = candidateConfirmationSignal && confirmationTime
+        ? buildLiquidityConfirmationId({
+          symbol: pair,
+          timeframe: timeframeAuthority.roles.confirmation,
+          direction: analysis.direction as "long" | "short",
+          candleTime: confirmationTime,
+          price: candidateConfirmationSignal.price,
+          type: candidateConfirmationSignal.type,
+        })
+        : null;
+      const liquidityConfirmationObservation = observeLiquidityConfirmation({
+        candidateId: currentPendingCandidate?.candidate_id ||
+          existingStaged?.candidate_id || singleOwnershipCandidateId,
+        stagedAt: existingStaged?.staged_at || null,
+        zoneTouchTime: currentPendingCandidate?.zone_touch_time || null,
+        sequence: observedLiquiditySequence,
+        confirmationId,
+        confirmationTime,
+      });
+      (detail as any).liquidityConfirmationObservation = liquidityConfirmationObservation;
+      if (currentPendingCandidate?.order_id) {
+        await supabase.from("pending_orders").update({
+          liquidity_confirmation_observation: liquidityConfirmationObservation,
+        }).eq("order_id", currentPendingCandidate.order_id).eq("user_id", userId)
+          .in("status", ["pending", "awaiting_confirmation"]);
+      }
+      if (existingStaged?.id) {
+        await supabase.from("staged_setups").update({
+          liquidity_confirmation_observation: liquidityConfirmationObservation,
+        }).eq("id", existingStaged.id).eq("user_id", userId);
+      }
       (detail as any).canonicalStructureDecision = canonicalStructureDecision;
       (detail as any).entryConfirmationCandidate = {
         method: candidateConfirmationMethod,
@@ -10650,6 +10757,85 @@ async function runScanForUser(
         if (account.execution_mode !== "live" || detail.brokerExecutionState === "confirmed") {
           openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
         }
+      } else if (
+        (detail as any).canonicalScannerEnforcement?.effectiveMode === "enforce" &&
+        (detail as any).canonicalScannerEnforcement?.disposition === "wait"
+      ) {
+        let waitPersistenceError: string | null = null;
+        if (!currentPendingCandidate && preparedZoneWatch &&
+            pairConfig.preArmZoneSetups === true && config.limitOrderEnabled &&
+            !config.marketFillAtZone) {
+          let stagedReady = !!existingStaged;
+          if (!stagedReady) {
+            const { error: stagedError } = await supabase.from("staged_setups").insert(preparedZoneWatch);
+            if (stagedError) {
+              waitPersistenceError = `Watchlist persistence failed: ${stagedError.message}`;
+            } else {
+              stagedReady = true;
+              stagedNew++;
+            }
+          }
+          if (stagedReady) {
+          const frozenZone = preparedZoneWatch.originating_zone;
+          const frozenEntry = Number(preparedZoneWatch.entry_price ?? frozenZone?.entry);
+          const frozenStop = Number(preparedZoneWatch.sl_level);
+          const waitPlan = buildPendingOrderPlan({
+            direction: analysis.direction as "long" | "short",
+            zone: {
+              price: frozenEntry,
+              zoneType: String(frozenZone?.type || "impulse_zone"),
+              zoneLow: Number(frozenZone?.low),
+              zoneHigh: Number(frozenZone?.high),
+            },
+            stopLoss: frozenStop,
+            takeProfitFor: (entry, stop, direction) => direction === "long"
+              ? entry + Math.abs(entry - stop) * Math.max(1, Number(pairConfig.tpRatio ?? 2))
+              : entry - Math.abs(stop - entry) * Math.max(1, Number(pairConfig.tpRatio ?? 2)),
+          });
+          if (waitPlan.valid) {
+            const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
+            const ttlMinutes = Number(preparedZoneWatch.ttl_minutes || stagingTTLMinutes);
+            const expiresAt = new Date(stagedAt + ttlMinutes * 60_000).toISOString();
+            const { error } = await supabase.from("pending_orders").insert({
+              user_id: userId, bot_id: BOT_ID, order_id: crypto.randomUUID().slice(0, 8),
+              symbol: pair, direction: analysis.direction, order_type: "limit",
+              entry_price: waitPlan.plan.entryPrice, current_price: analysis.lastPrice,
+              stop_loss: waitPlan.plan.stopLoss, take_profit: waitPlan.plan.takeProfit, size: null,
+              entry_zone_type: waitPlan.plan.zone.zoneType, entry_zone_low: waitPlan.plan.zone.zoneLow,
+              entry_zone_high: waitPlan.plan.zone.zoneHigh, status: "pending",
+              expiry_minutes: ttlMinutes, expires_at: expiresAt,
+              signal_reason: { preArmed: true, candidateId: preparedZoneWatch.candidate_id },
+              signal_score: analysis.score, from_watchlist: true, staged_setup_id: preparedZoneWatch.id,
+              candidate_id: preparedZoneWatch.candidate_id, structural_invalidation: frozenStop,
+              structural_invalidation_source: "staged_inherited", originating_zone: frozenZone,
+              frozen_strategy_context: preparedZoneWatch.frozen_strategy_context,
+              confirmation_method: preparedZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
+              confirmation_config: preparedZoneWatch.confirmation_config, placed_at: new Date().toISOString(),
+              liquidity_confirmation_observation: (detail as any).liquidityConfirmationObservation || null,
+            });
+            if (error && !/duplicate key/i.test(error.message)) waitPersistenceError = error.message;
+            (detail as any).frozenExecutablePlan = {
+              ...((detail as any).frozenExecutablePlan || {}),
+              entryPrice: waitPlan.plan.entryPrice, stopLoss: waitPlan.plan.stopLoss,
+              takeProfit: waitPlan.plan.takeProfit, zone: waitPlan.plan.zone,
+            };
+          } else {
+            waitPersistenceError = waitPlan.reason;
+          }
+          }
+        }
+        const waitingStage = (detail as any).canonicalScannerState?.stage || "watching";
+        detail.status = waitingStage === "awaiting_liquidity"
+          ? "waiting_for_sweep"
+          : waitingStage === "awaiting_confirmation"
+          ? "waiting_for_reconfirmation"
+          : waitingStage;
+        detail.skipReason = (detail as any).canonicalScannerState?.explanation ||
+          "Canonical setup remains active and is waiting for more evidence";
+        if (waitPersistenceError) detail.skipReason += `; pending persistence failed: ${waitPersistenceError}`;
+        detail.rejectionReasons = [];
+        scanDetails.push(detail);
+        continue;
       } else {
         rejectedCount++;
         detail.status = "rejected";

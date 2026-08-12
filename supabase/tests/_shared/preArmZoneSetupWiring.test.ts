@@ -17,3 +17,15 @@ Deno.test("pre-armed setup inherits lifecycle identity and has no frozen size", 
   assert(insert.includes("frozen_strategy_context: frozenZoneWatch.frozen_strategy_context"));
   assert(insert.includes("size: null"));
 });
+
+Deno.test("at-zone canonical waits remain in the pre-armed lifecycle", () => {
+  assert(scanner.includes("!izData.bestZone?.priceAtZone || preparePreArmLifecycle"));
+  assert(scanner.includes("canonicalScannerEnforcement?.disposition === \"wait\""));
+  assert(scanner.includes("detail.rejectionReasons = []"));
+});
+
+Deno.test("frozen executable entry owns planned location evidence", () => {
+  assert(scanner.includes("frozenExecutablePlan"));
+  assert(scanner.includes("price: plan.plan.entryPrice"));
+  assert(scanner.includes("evaluatedPriceOwner: \"frozen_executable_entry\""));
+});
