@@ -166,6 +166,7 @@ import {
   type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
 import { cursorAfterLatestTouchCandle, findEarliestPendingZoneTouch } from "../_shared/pendingZoneTouch.ts";
 import { buildPendingOrderPlan } from "../_shared/pendingOrderPlan.ts";
+import { calculateFinalPendingSize } from "../_shared/finalPendingSize.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -3317,6 +3318,30 @@ async function runScanForUser(
           const fillReason = `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
             + ` (method: ${confMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
             + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
+          const finalPendingSize = calculateFinalPendingSize({
+            balance: Number(account.balance),
+            riskPercent: Number(config.riskPerTrade),
+            fillPrice: actualFillPrice,
+            stopLoss: Number(pending.stop_loss),
+            symbol: pending.symbol,
+            method: (config as any).positionSizingMethod,
+            fixedLotSize: (config as any).fixedLotSize,
+            rateMap,
+            commissionPerLot: avgCommissionPerLot,
+            regimeInfo: parsedPendingEvidence.regimeData,
+            propFirmSizeMultiplier: pendingPropFirmResult?.enabled
+              ? pendingPropFirmResult.maxPositionSizeMultiplier : undefined,
+            signalSource: parsedPendingEvidence.signalSource,
+            standaloneMultiplier: (config as any).standaloneMultiplier,
+          });
+          const { error: finalSizeError } = await supabase.from("pending_orders").update({ size: finalPendingSize })
+            .eq("id", pending.id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
+          if (finalSizeError) {
+            console.warn(`[pending] Final size persistence failed ${pending.symbol}: ${finalSizeError.message}`);
+            continue;
+          }
+          pending.size = finalPendingSize;
           const { data: atomicFill, error: atomicFillError } = await supabase.rpc("finalize_pending_order_fill", {
             p_pending_id: pending.id,
             p_user_id: userId,
