@@ -8,7 +8,7 @@
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
 import { META_REGIONS, regionCache } from "./metaApiClient.ts";
 import { toNYTimeAt } from "./sessions.ts";
-import { reserveApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
+import { acquireApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
 
 export interface Candle {
   datetime: string;
@@ -52,7 +52,6 @@ const TD_RATE_WINDOW_MS = 60_000;
 const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Polygon
 const TD_SHARED_POLL_MS = 2_000; // Re-ask the shared budget this often while waiting
 let _tdThrottleCount = 0;      // Track how many times we throttled this invocation
-let _tdUnenforcedCount = 0;    // Fetches that bypassed the shared budget (it failed open)
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
   const now = Date.now();
@@ -80,26 +79,17 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
   // plan-wide spend is the sum of several separately-compliant limiters —
   // which is how we reached 371/min against a 55/min plan with the throttle
   // counter reading 0. The shared budget is the one that knows the real total.
-  const deadline = Date.now() + TD_MAX_WAIT_MS;
-  for (;;) {
-    const reservation = await reserveApiCredit("twelvedata", TD_RATE_LIMIT, TD_RATE_WINDOW_MS / 1000);
-    if (reservation.granted) {
-      if (!reservation.enforced) _tdUnenforcedCount++;
-      return true;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      _tdThrottleCount++;
-      console.warn(
-        `[candleSource] TwelveData shared budget exhausted after ${TD_MAX_WAIT_MS}ms, skipping to Polygon (throttle #${_tdThrottleCount})`,
-      );
-      return false;
-    }
-    // The window rolls continuously, so credits free up a few at a time rather
-    // than all at once. Poll rather than sleeping for a full window.
+  const granted = await acquireApiCredit("twelvedata", TD_RATE_LIMIT, {
+    windowSeconds: TD_RATE_WINDOW_MS / 1000,
+    maxWaitMs: TD_MAX_WAIT_MS,
+    pollMs: TD_SHARED_POLL_MS,
+    label: "candleSource",
+  });
+  if (!granted) {
     _tdThrottleCount++;
-    await new Promise((r) => setTimeout(r, Math.min(TD_SHARED_POLL_MS, remaining)));
+    return false;
   }
+  return true;
 }
 
 /**
@@ -119,12 +109,11 @@ export function resetThrottleStats(): {
   const budget = resetCreditBudgetStats();
   const stats = {
     throttleCount: _tdThrottleCount,
-    unenforcedCount: _tdUnenforcedCount,
+    unenforcedCount: budget.unenforced,
     budgetRpcFailures: budget.rpcFailures,
     budgetRefused: budget.refused,
   };
   _tdThrottleCount = 0;
-  _tdUnenforcedCount = 0;
   return stats;
 }
 

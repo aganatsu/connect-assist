@@ -129,6 +129,7 @@ import {
   checkOverboughtOversoldVeto,
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { acquireApiCredit } from "../_shared/apiCreditBudget.ts";
 import { aggregateMT5Candles, parseMT5History, type MT5HistoryInterval } from "../_shared/mt5History.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -427,6 +428,9 @@ const BT_TD_INTERVAL: Record<string, string> = {
   "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
 };
 
+const BT_TD_CREDIT_LIMIT = 50;
+const BT_TD_MAX_WAIT_MS = 60_000; // a full window — batch job, no deadline
+
 async function fetchTwelveDataRange(
   symbol: string, interval: string, startDate: string, endDate: string,
 ): Promise<Candle[]> {
@@ -439,6 +443,20 @@ async function fetchTwelveDataRange(
   let currentStart = startDate;
   const maxPerRequest = 5000;
   for (let page = 0; page < 20; page++) {
+    // Direct TwelveData call — does not pass through candleSource, so it must
+    // reserve from the shared budget itself. Up to 20 pages in a tight loop is
+    // the burstiest consumer in the system, and it competes with live scanning.
+    //
+    // A backtest is a batch job with no deadline, so unlike the live paths this
+    // one WAITS rather than skipping: truncating history silently would change
+    // the backtest result, which is worse than taking longer.
+    if (!await acquireApiCredit("twelvedata", BT_TD_CREDIT_LIMIT, {
+      maxWaitMs: BT_TD_MAX_WAIT_MS,
+      label: "backtest",
+    })) {
+      console.warn(`[backtest] TwelveData budget exhausted after ${BT_TD_MAX_WAIT_MS}ms — stopping at ${allCandles.length} candles for ${symbol} ${interval}`);
+      break;
+    }
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&start_date=${encodeURIComponent(currentStart)}&end_date=${encodeURIComponent(endDate)}&outputsize=${maxPerRequest}&apikey=${apiKey}&order=ASC&timezone=UTC`;
     try {
       const res = await fetch(url);
