@@ -1,0 +1,19 @@
+import { assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
+
+const scanner = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
+const mapper = await Deno.readTextFile(new URL("../../functions/_shared/configMapper.ts", import.meta.url));
+
+Deno.test("pre-arming is disabled by default and requires pending route without market fill", () => {
+  assert(mapper.includes("preArmZoneSetups: false"));
+  assert(scanner.includes("pairConfig.preArmZoneSetups === true"));
+  assert(scanner.includes("config.limitOrderEnabled && !config.marketFillAtZone"));
+});
+
+Deno.test("pre-armed setup inherits lifecycle identity and has no frozen size", () => {
+  const start = scanner.indexOf("signal_reason: { preArmed: true");
+  const insert = scanner.slice(start - 900, start + 1200);
+  assert(insert.includes("candidate_id: frozenZoneWatch.candidate_id"));
+  assert(insert.includes("staged_setup_id: frozenZoneWatch.id"));
+  assert(insert.includes("frozen_strategy_context: frozenZoneWatch.frozen_strategy_context"));
+  assert(insert.includes("size: null"));
+});
