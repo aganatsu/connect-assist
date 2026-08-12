@@ -126,6 +126,7 @@ import {
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
+import { calculateFinalPendingSize } from "../_shared/finalPendingSize.ts";
 import {
   resolvePendingConfirmationMethod,
   resolvePendingDealingRangeMode,
@@ -1510,6 +1511,18 @@ Deno.serve(async (req) => {
         const fillReason = `[fast-confirm] ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
           + ` (method: ${confirmationMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
           + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
+        const finalPendingSize = calculateFinalPendingSize({
+          balance: Number(account.balance),
+          riskPercent: Number(config.riskPerTrade),
+          fillPrice: actualFillPrice,
+          stopLoss: Number(pending.stop_loss),
+          symbol: pending.symbol,
+          method: (config as any).positionSizingMethod,
+          fixedLotSize: (config as any).fixedLotSize,
+        });
+        await supabase.from("pending_orders").update({ size: finalPendingSize })
+          .eq("id", pending.id).eq("user_id", userId)
+          .eq("status", "awaiting_confirmation");
         const { data: fillResult, error: fillError } = await supabase.rpc("finalize_pending_order_fill", {
           p_pending_id: pending.id,
           p_user_id: userId,
