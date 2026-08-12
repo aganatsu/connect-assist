@@ -164,6 +164,7 @@ import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
   type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
+import { cursorAfterLatestTouchCandle, findEarliestPendingZoneTouch } from "../_shared/pendingZoneTouch.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -2576,7 +2577,6 @@ async function runScanForUser(
         );
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
-        const lastCandle = pendingCandles[pendingCandles.length - 1];
 
         // Update current price on the pending order
         await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2711,21 +2711,28 @@ async function runScanForUser(
 
         // ── Branch A: Order is in "pending" status — check if price touched zone ──
         if (pending.status === "pending") {
-          const filled = pending.direction === "long"
-            ? lastCandle.low <= entryPrice
-            : lastCandle.high >= entryPrice;
+          const touch = findEarliestPendingZoneTouch({
+            candles: pendingCandles,
+            direction: pending.direction as "long" | "short",
+            entryPrice,
+            observedAfter: pending.last_touch_checked_at || pending.placed_at || pending.created_at,
+            interval: pendingTimeframeAuthority.runtimeEntry,
+          });
 
-          if (filled) {
-            // Price touched the zone! Transition to confirmation hunting mode.
-            const nowStr = new Date().toISOString();
-            await supabase.from("pending_orders").update({
+          if (touch.touchTime) {
+            // Preserve the first matching candle; this timestamp anchors CHoCH.
+            const { data: transitionedTouch } = await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
-              zone_touch_time: nowStr,
+              zone_touch_time: touch.touchTime,
+              last_touch_checked_at: touch.checkedAt,
               confirmation_attempts: 0,
-            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            }).eq("order_id", pending.order_id).eq("user_id", userId).eq(
+              "status",
+              "pending",
+            ).select("id").maybeSingle();
+            if (!transitionedTouch) continue;
             pendingConfirmationHunting++;
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (${pendingConfirmationLabel})`);
-
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice} on ${touch.touchTime}, entering confirmation hunt mode (${pendingConfirmationLabel})`);
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
@@ -2759,7 +2766,13 @@ async function runScanForUser(
             }
             continue;
           }
-          // Price hasn't touched zone yet — nothing to do, keep waiting
+          // Advance the durable cursor only after every overlapping candle was checked.
+          await supabase.from("pending_orders").update({
+            last_touch_checked_at: touch.checkedAt,
+          }).eq("order_id", pending.order_id).eq("user_id", userId).eq(
+            "status",
+            "pending",
+          );
           continue;
         }
 
@@ -2811,6 +2824,10 @@ async function runScanForUser(
             await supabase.from("pending_orders").update({
               status: "pending",
               zone_touch_time: null,
+              last_touch_checked_at: cursorAfterLatestTouchCandle(
+                pendingCandles,
+                pendingTimeframeAuthority.runtimeEntry,
+              ),
               confirmation_attempts: attempts,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingConfirmationHunting--;
