@@ -23,7 +23,7 @@ const migration = await Deno.readTextFile(
 
 function supersedeBlock(): string {
   const start = scanner.indexOf("Replace stale pending");
-  const end = scanner.indexOf("GUARD: reject pending orders whose SL/TP orientation", start);
+  const end = scanner.indexOf("const pendingThesisAtCreation", start);
   assert(start > 0 && end > start, "supersede block not found");
   return scanner.slice(start, end);
 }

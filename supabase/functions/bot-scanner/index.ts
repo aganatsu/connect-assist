@@ -165,6 +165,7 @@ import {
   isWatchlistInvalidated,
   type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
 import { cursorAfterLatestTouchCandle, findEarliestPendingZoneTouch } from "../_shared/pendingZoneTouch.ts";
+import { buildPendingOrderPlan } from "../_shared/pendingOrderPlan.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -8703,9 +8704,21 @@ async function runScanForUser(
           const expiryMinutes = config.limitOrderExpiryMinutes || 60;
           const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
 
-          // Recalculate SL/TP relative to the limit entry price for better R:R
-          let limitSL = sl;
-          let limitTP = computeTP(limitEntry.price, sl, analysis.direction);
+          const pendingPlanResult = buildPendingOrderPlan({
+            direction: analysis.direction as "long" | "short",
+            zone: limitEntry,
+            stopLoss: sl,
+            takeProfitFor: (entry, stop, direction) => computeTP(entry, stop, direction),
+          });
+          if (!pendingPlanResult.valid) {
+            detail.status = "zone_setup_rejected_orientation";
+            detail.skipReason = pendingPlanResult.reason;
+            scanDetails.push(detail);
+            continue;
+          }
+          const pendingPlan = pendingPlanResult.plan;
+          const limitSL = pendingPlan.stopLoss;
+          const limitTP = pendingPlan.takeProfit;
 
           // Recalculate position size based on limit entry price (unified sizing)
           const limitSizingResult = computePositionSize(
@@ -8782,41 +8795,6 @@ async function runScanForUser(
               cancel_reason: `Superseded by new setup — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)} vs old ${existing.signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${existing.entry_price})`,
             }).in("order_id", staleIds).eq("user_id", userId);
             console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)})`);
-          }
-
-          // GUARD: reject pending orders whose SL/TP orientation doesn't match direction.
-          // Long needs SL<entry<TP; short needs TP<entry<SL. Prevents inverted limit orders
-          // (root cause: direction flipped after analysis.stopLoss/takeProfit computed).
-          {
-            const eNum = Number(limitEntry.price);
-            const sNum = Number(limitSL);
-            const tNum = Number(limitTP);
-            const ok = analysis.direction === "long"
-              ? (sNum < eNum && tNum > eNum)
-              : (sNum > eNum && tNum < eNum);
-            if (!ok) {
-              console.error(`[GUARD] ${pair} ${analysis.direction} LIMIT REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
-              detail.status = "zone_setup_rejected_orientation";
-              detail.skipReason = `SL/TP orientation mismatch for ${analysis.direction} (entry=${eNum} sl=${sNum} tp=${tNum})`;
-              await finalizeDetailGoldenReplay({
-                execution: {
-                  eligible: false,
-                  entryPrice: eNum,
-                  stopLoss: sNum,
-                  takeProfit: tNum,
-                  positionSize: limitSize,
-                  orderType: "limit",
-                },
-                lifecycle: {
-                  route: "limit",
-                  stage: "protection",
-                  outcome: "blocked",
-                  reason: detail.skipReason,
-                },
-              });
-              scanDetails.push(detail);
-              continue;
-            }
           }
 
           const pendingThesisAtCreation = validatePendingOrderThesis(
