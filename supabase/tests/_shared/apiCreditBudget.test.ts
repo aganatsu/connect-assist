@@ -400,3 +400,31 @@ Deno.test("migration: the 3-arg overload survives, so a mid-deploy call still en
     "a stale deploy must be visible in the breakdown rather than writing NULL",
   );
 });
+
+const retentionMigration = await Deno.readTextFile(
+  new URL("../../migrations/20260812033000_widen_credit_usage_retention.sql", import.meta.url),
+);
+
+Deno.test("migration: retention is independent of the rate window", () => {
+  assert(
+    retentionMigration.includes("retention_seconds"),
+    "history retention and the enforcement window are different concerns and must be " +
+      "separately named — pruning at 2x the window left only ~2 minutes of history, " +
+      "which cannot distinguish continuous saturation from a burst",
+  );
+  assert(
+    !/reserved_at < now\(\) - make_interval\(secs => p_window_seconds \* 2\)/.test(
+      retentionMigration,
+    ),
+    "the prune must no longer be derived from p_window_seconds",
+  );
+});
+
+Deno.test("migration: the counting window is still p_window_seconds, not retention", () => {
+  const counting = retentionMigration.slice(retentionMigration.indexOf("SELECT count(*) INTO used"));
+  assert(
+    counting.includes("now() - make_interval(secs => p_window_seconds)"),
+    "widening retention must not widen what is enforced — the count still looks back " +
+      "exactly one window, or the limit silently becomes 50 per 30 minutes",
+  );
+});
