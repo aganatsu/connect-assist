@@ -146,3 +146,100 @@ Final authorization (immediately before entry)
 `lastCandle.low/high` against the entry, from `cachedFetch`, over
 `status IN ('pending','awaiting_confirmation')` — candle high/low, not close,
 off cached bars, exactly as specified.
+
+---
+
+## Corrections after review
+
+Four issues the first pass missed. All verified in source.
+
+### 1. Pre-touch SL cancellation — blocks pre-arming outright
+
+`bot-scanner:2588`, inside the pending-order loop, runs for **any** row with
+status `pending` — touched or not:
+
+```js
+const slLevel = parseFloat(pending.stop_loss);
+// Check SL invalidation: if price has blown past the SL, cancel the order
+if (pending.direction === "long" && currentPrice < slLevel) { ... status: "invalidated" ... }
+```
+
+For a pre-armed order this makes the **position** stop — sized for after entry —
+the pre-arrival invalidation boundary. Observed GBP/CHF watchlist entry:
+invalidation 1.08597 against a zone floor of 1.08617, ~2 pips. A pre-armed order
+there dies on any overshoot before it can fill.
+
+Pre-touch invalidation must use the **frozen impulse/zone structural boundary**,
+which is a different value with a different purpose. The two must be separate
+columns, not one reused field, or the distinction will collapse again the first
+time someone reads `stop_loss` and assumes it means one thing.
+
+### 2. Touch detection inspects only the last candle
+
+```js
+const lastCandle = pendingCandles[pendingCandles.length - 1];
+const filled = pending.direction === "long"
+  ? lastCandle.low <= entryPrice : lastCandle.high >= entryPrice;
+```
+
+Correct on shape — candle high/low, off cached bars — but it samples a single
+bar. If a scan is delayed, throttled, or the cron skips, an earlier candle can
+wick into the zone and never be seen. The tighter the zone, the likelier the
+miss.
+
+Must scan every candle since the previous check and use the **earliest** touch,
+because `zone_touch_time` anchors the CHoCH search window: a late timestamp
+silently truncates it.
+
+Revises the earlier claim that step 8 was already built. Its **shape** is right;
+its **coverage** is not.
+
+### 3. FOTSI holds two conflicting authorities
+
+| where | treatment |
+|---|---|
+| Gate 17 (placement) | "softened from hard veto to heavy score penalty" |
+| `thesisValidator` Check 1 (post-placement) | hard cancel |
+
+Same inconsistency #319 removed for Game Plan: an input deliberately downgraded
+at placement retains an unconditional veto afterwards. Classifying Gate 17 as
+"discovery" was incomplete — FOTSI is discovery **and** an active post-placement
+canceller, and pre-arming lengthens the window in which that veto can fire.
+
+Resolve the ownership before pre-arming, or a longer-lived order simply gives
+FOTSI more opportunities to kill it.
+
+### 4. Premium/Discount needs the frozen range, not just a later evaluation
+
+Moving Gate 2 after touch is necessary but not sufficient. It currently compares
+`analysis.lastPrice` against a rolling entry-TF swing envelope. At final
+authorization it should compare the **planned or fill price** against the
+**frozen canonical impulse dealing range** captured with the candidate.
+
+`CLAUDE.md` lists this as Priority 1 in
+`docs/UNRESOLVED_SYSTEM_AUDIT_2026-08-03.md` independently of pre-arming.
+
+---
+
+## Revised route composition
+
+```
+Pre-arm route (price away from zone)
+  discovery gates → order plan (entry, STRUCTURAL invalidation, target, identity)
+  → pending_orders row, status 'pending'
+  NOTE: structural invalidation ≠ position stop loss
+
+Pre-touch monitoring
+  every candle since last check, earliest touch wins
+  invalidate on FROZEN STRUCTURAL BOUNDARY only
+
+Touch → zone_touch_time → awaiting_confirmation
+
+Confirmation
+  frozen CHoCH / reversal contract, attempt limits
+
+Final authorization
+  touch gates (2 against the frozen range, 3b) + final-safety gates
+  + fresh spread for Gate 10
+  + position size from CURRENT equity, exposure, prop-firm limits
+```
