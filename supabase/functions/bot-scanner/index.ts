@@ -6710,6 +6710,7 @@ async function runScanForUser(
                 min_cycles: 1,
                 ttl_minutes: styleTTL,
                 setup_type: "impulse_zone_watch",
+                staged_at: new Date().toISOString(),
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
@@ -6779,8 +6780,11 @@ async function runScanForUser(
               : entry - Math.abs(stop - entry) * rr,
           });
           if (plan.valid) {
+            const stagedAt = Date.parse(
+              frozenZoneWatch.staged_at || frozenZoneWatch.created_at || new Date().toISOString(),
+            );
             const absoluteExpiry = new Date(
-              Date.now() + Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes) * 60_000,
+              stagedAt + Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes) * 60_000,
             ).toISOString();
             const { error: preArmError } = await supabase.from("pending_orders").insert({
               user_id: userId,
@@ -8702,7 +8706,34 @@ async function runScanForUser(
         }
         // Standalone trades MUST go through CHoCH confirmation — market fill only for unified/cascade
         const isStandaloneSignal = (detail as any).signalSource === "standalone";
-        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide && !isStandaloneSignal;
+        let useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide && !isStandaloneSignal;
+        // A user can enable Market Fill after a setup was pre-armed. Claim the
+        // market route by conditionally cancelling that candidate's active
+        // pending representation. If another scanner already moved it, market
+        // entry is blocked instead of risking two entries for one candidate.
+        if (useMarketFillAtZone && existingStaged?.candidate_id) {
+          const { data: armedRows } = await supabase.from("pending_orders")
+            .select("id,status")
+            .eq("user_id", userId).eq("bot_id", BOT_ID)
+            .eq("candidate_id", existingStaged.candidate_id)
+            .in("status", ["pending", "awaiting_confirmation"]);
+          if ((armedRows || []).length > 0) {
+            const { data: claimedRows } = await supabase.from("pending_orders")
+              .update({
+                status: "cancelled",
+                cancel_reason: "Candidate claimed by Market Fill route",
+                resolved_at: new Date().toISOString(),
+              })
+              .eq("user_id", userId).eq("bot_id", BOT_ID)
+              .eq("candidate_id", existingStaged.candidate_id)
+              .in("status", ["pending", "awaiting_confirmation"])
+              .select("id");
+            if ((claimedRows || []).length !== armedRows!.length) {
+              useMarketFillAtZone = false;
+              detail.skipReason = "Market Fill blocked: linked pending setup changed during route claim";
+            }
+          }
+        }
         if (isStandaloneSignal && priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide) {
           console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE at zone — routing to CHoCH confirmation path (market fill reserved for unified/cascade).`);
         }
