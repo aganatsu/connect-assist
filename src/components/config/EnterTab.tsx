@@ -653,6 +653,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={false}
       >
         <ToggleField label="Pending Zone Orders" description="Place limit orders at zone instead of waiting for market fill" checked={pendingZoneOrdersEnabled} onChange={v => updateField('entry', 'pendingZoneOrders', v)} status={pendingZoneOrdersEnabled ? "active" : "disabled"} />
+        <ToggleField label="Pre-arm Zone Setups" description="Create the linked zone setup before price arrives; it still waits for your configured confirmation" checked={config.entry?.preArmZoneSetups ?? false} onChange={v => updateField('entry', 'preArmZoneSetups', v)} status={pendingZoneOrdersEnabled && !marketFillEnabled ? "active" : "unavailable"} />
         <ToggleField label="Market Fill at Zone" description="Enter at market when price touches zone" checked={marketFillEnabled} onChange={v => updateField('entry', 'marketFillAtZone', v)} status={marketFillEnabled ? "active" : "disabled"} />
         <FieldGroup label="Zone Proximity (ATR)" description={marketFillEnabled ? "How close price must be to zone for entry" : "Enable Market Fill at Zone; proximity is not used when market-fill entry is off."} status={marketFillEnabled ? "active" : "unavailable"}>
           <div className="flex items-center gap-4">

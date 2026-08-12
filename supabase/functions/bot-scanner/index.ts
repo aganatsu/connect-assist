@@ -6660,6 +6660,7 @@ async function runScanForUser(
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
         let zoneWatchPersistenceError: string | null = null;
+        let frozenZoneWatch: any = existingStaged || null;
         console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
         // Stage this pair so it's ready when price arrives at the zone
         if (stagingEnabled && analysis.direction && !isPaused) {
@@ -6689,7 +6690,8 @@ async function runScanForUser(
                   : izData.impulse.high,
                 izData.impulse,
               );
-              const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert({
+              const zoneWatchDecision = stagedDecisionFields(zoneWatchOrigin);
+              const zoneWatchRow = {
                 user_id: userId,
                 bot_id: BOT_ID,
                 symbol: pair,
@@ -6703,7 +6705,7 @@ async function runScanForUser(
                 entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
                 sl_level: zoneWatchInvalidation.level,
                 tp_level: analysis.takeProfit,
-                ...stagedDecisionFields(zoneWatchOrigin),
+                ...zoneWatchDecision,
                 scan_cycles: 1,
                 min_cycles: 1,
                 ttl_minutes: styleTTL,
@@ -6716,8 +6718,10 @@ async function runScanForUser(
                   direction: analysis.direction,
                   impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
                 },
-              });
+              };
+              const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert(zoneWatchRow);
               if (zoneWatchInsertError) throw zoneWatchInsertError;
+              frozenZoneWatch = zoneWatchRow;
               zoneWatchPersisted = true;
               stagedNew++;
               console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
@@ -6737,6 +6741,7 @@ async function runScanForUser(
                 ).level,
               }).eq("id", existingStagedForZone.id);
               if (zoneWatchUpdateError) throw zoneWatchUpdateError;
+              frozenZoneWatch = existingStagedForZone;
               zoneWatchPersisted = true;
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
@@ -6750,6 +6755,70 @@ async function runScanForUser(
             }
           }
           detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
+        }
+        if (
+          zoneWatchPersisted && frozenZoneWatch &&
+          pairConfig.preArmZoneSetups === true &&
+          config.limitOrderEnabled && !config.marketFillAtZone
+        ) {
+          const zone = frozenZoneWatch.originating_zone;
+          const entryPrice = Number(frozenZoneWatch.entry_price ?? zone?.entry);
+          const structuralStop = Number(frozenZoneWatch.sl_level);
+          const rr = Math.max(1, Number(pairConfig.tpRatio ?? 2));
+          const plan = buildPendingOrderPlan({
+            direction: analysis.direction as "long" | "short",
+            zone: {
+              price: entryPrice,
+              zoneType: String(zone?.type || "impulse_zone"),
+              zoneLow: Number(zone?.low),
+              zoneHigh: Number(zone?.high),
+            },
+            stopLoss: structuralStop,
+            takeProfitFor: (entry, stop, direction) => direction === "long"
+              ? entry + Math.abs(entry - stop) * rr
+              : entry - Math.abs(stop - entry) * rr,
+          });
+          if (plan.valid) {
+            const absoluteExpiry = new Date(
+              Date.now() + Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes) * 60_000,
+            ).toISOString();
+            const { error: preArmError } = await supabase.from("pending_orders").insert({
+              user_id: userId,
+              bot_id: BOT_ID,
+              order_id: crypto.randomUUID().slice(0, 8),
+              symbol: pair,
+              direction: analysis.direction,
+              order_type: "limit",
+              entry_price: plan.plan.entryPrice,
+              current_price: analysis.lastPrice,
+              stop_loss: plan.plan.stopLoss,
+              take_profit: plan.plan.takeProfit,
+              size: null,
+              entry_zone_type: plan.plan.zone.zoneType,
+              entry_zone_low: plan.plan.zone.zoneLow,
+              entry_zone_high: plan.plan.zone.zoneHigh,
+              status: "pending",
+              expiry_minutes: Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes),
+              expires_at: absoluteExpiry,
+              signal_reason: { preArmed: true, candidateId: frozenZoneWatch.candidate_id },
+              signal_score: analysis.score,
+              from_watchlist: true,
+              staged_setup_id: frozenZoneWatch.id,
+              candidate_id: frozenZoneWatch.candidate_id,
+              structural_invalidation: structuralStop,
+              structural_invalidation_source: "staged_inherited",
+              originating_zone: zone,
+              frozen_strategy_context: frozenZoneWatch.frozen_strategy_context,
+              confirmation_method: frozenZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
+              confirmation_config: frozenZoneWatch.confirmation_config,
+              placed_at: new Date().toISOString(),
+            });
+            if (preArmError && !/duplicate key/i.test(preArmError.message)) {
+              zoneWatchPersistenceError = `Pre-arm failed: ${preArmError.message}`;
+            }
+          } else {
+            zoneWatchPersistenceError = `Pre-arm plan rejected: ${plan.reason}`;
+          }
         }
         if (zoneWatchPersisted) {
           detail.status = "watching_zone";

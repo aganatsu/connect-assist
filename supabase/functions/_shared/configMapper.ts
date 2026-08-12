@@ -283,6 +283,7 @@ export const RUNTIME_DEFAULTS = {
 
   // ── Limit Orders ──
   limitOrderEnabled: false,
+  preArmZoneSetups: false,
   limitOrderExpiryMinutes: 60,
   pendingOrderCooldownMinutes: 0, // 0 = use limitOrderExpiryMinutes as cooldown (default). Set >0 to override.
   limitOrderMaxDistancePips: 30,
@@ -866,6 +867,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── Limit Orders ──
     limitOrderEnabled: entry.pendingZoneOrders ?? entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,
+    preArmZoneSetups: entry.preArmZoneSetups ?? raw.preArmZoneSetups ?? RUNTIME_DEFAULTS.preArmZoneSetups,
     limitOrderExpiryMinutes: entry.zoneWatchExpiry !== undefined
       ? Math.max(1, Number(entry.zoneWatchExpiry)) * 60
       : entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? RUNTIME_DEFAULTS.limitOrderExpiryMinutes,
