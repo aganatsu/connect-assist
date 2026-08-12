@@ -1678,6 +1678,7 @@ export type Database = {
           impulse_entry_lifecycle_id: string | null
           last_confirmation_checked_at: string | null
           last_touch_checked_at: string | null
+          liquidity_confirmation_observation: Json | null
           order_id: string
           order_type: string
           originating_zone: Json | null
@@ -1762,6 +1763,7 @@ export type Database = {
           impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
           last_touch_checked_at?: string | null
+          liquidity_confirmation_observation?: Json | null
           order_id: string
           order_type?: string
           originating_zone?: Json | null
@@ -1846,6 +1848,7 @@ export type Database = {
           impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
           last_touch_checked_at?: string | null
+          liquidity_confirmation_observation?: Json | null
           order_id?: string
           order_type?: string
           originating_zone?: Json | null
@@ -2732,6 +2735,7 @@ export type Database = {
           lifecycle_reason: string | null
           lifecycle_reason_code: string | null
           lifecycle_version: string
+          liquidity_confirmation_observation: Json | null
           min_cycles: number
           missing_factors: Json
           observation_parent_id: string | null
@@ -2807,6 +2811,7 @@ export type Database = {
           lifecycle_reason?: string | null
           lifecycle_reason_code?: string | null
           lifecycle_version?: string
+          liquidity_confirmation_observation?: Json | null
           min_cycles?: number
           missing_factors?: Json
           observation_parent_id?: string | null
@@ -2882,6 +2887,7 @@ export type Database = {
           lifecycle_reason?: string | null
           lifecycle_reason_code?: string | null
           lifecycle_version?: string
+          liquidity_confirmation_observation?: Json | null
           min_cycles?: number
           missing_factors?: Json
           observation_parent_id?: string | null
