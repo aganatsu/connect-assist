@@ -13,7 +13,7 @@
 //      over-spending only degrades to a fallback provider.
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { reserveApiCredit, resetCreditBudgetStats } from "../../functions/_shared/apiCreditBudget.ts";
+import { acquireApiCredit, reserveApiCredit, resetCreditBudgetStats } from "../../functions/_shared/apiCreditBudget.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -171,7 +171,7 @@ const candleSource = await Deno.readTextFile(
 
 Deno.test("candleSource: the TwelveData path actually consults the shared budget", () => {
   assert(
-    candleSource.includes("reserveApiCredit("),
+    candleSource.includes("acquireApiCredit("),
     "waitForTwelveDataSlot must reserve from the shared budget, not only its per-isolate array",
   );
   const slotFn = candleSource.slice(
@@ -179,7 +179,7 @@ Deno.test("candleSource: the TwelveData path actually consults the shared budget
     candleSource.indexOf("export function resetThrottleStats"),
   );
   assert(
-    slotFn.includes("reserveApiCredit("),
+    slotFn.includes("acquireApiCredit("),
     "the reservation must happen inside waitForTwelveDataSlot, on the path every fetch takes",
   );
   assert(
@@ -194,7 +194,7 @@ Deno.test("candleSource: a refused reservation returns false so the caller falls
     candleSource.indexOf("export function resetThrottleStats"),
   );
   assert(
-    /remaining <= 0[\s\S]{0,400}return false/.test(slotFn),
+    /if \(!granted\)[\s\S]{0,200}return false/.test(slotFn),
     "exhausting the shared budget must return false (skip to fallback), never true",
   );
 });
@@ -232,5 +232,84 @@ Deno.test("migration: old rows are pruned so the table cannot grow without bound
   assert(
     /DELETE FROM public\.api_credit_usage/.test(migration),
     "one row per credit at ~55/min needs a prune, or the table grows forever",
+  );
+});
+
+// ─── acquireApiCredit ────────────────────────────────────────────────
+
+Deno.test("acquireApiCredit: returns false without waiting when maxWaitMs is 0", async () => {
+  withCredentials();
+  let calls = 0;
+  withFetch(() => {
+    calls++;
+    return new Response("false", { status: 200 });
+  });
+  try {
+    const started = Date.now();
+    const granted = await acquireApiCredit("twelvedata", 50, { maxWaitMs: 0 });
+    assertEquals(granted, false);
+    assertEquals(calls, 1, "maxWaitMs 0 means try once — live polls must not block");
+    assert(Date.now() - started < 500, "must return promptly");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("acquireApiCredit: retries while waiting and succeeds when a credit frees up", async () => {
+  withCredentials();
+  let calls = 0;
+  withFetch(() => new Response(++calls >= 3 ? "true" : "false", { status: 200 }));
+  try {
+    const granted = await acquireApiCredit("twelvedata", 50, { maxWaitMs: 5_000, pollMs: 10 });
+    assertEquals(granted, true);
+    assertEquals(calls, 3, "the rolling window frees credits gradually, so it must re-ask");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("acquireApiCredit: counts fail-open grants as unenforced", async () => {
+  withCredentials();
+  withFetch(() => new Response("boom", { status: 503 }));
+  try {
+    assertEquals(await acquireApiCredit("twelvedata", 50), true);
+    assertEquals(resetCreditBudgetStats().unenforced, 1, "a grant nobody checked must be visible");
+  } finally {
+    restore();
+  }
+});
+
+// ─── Coverage ratchet ────────────────────────────────────────────────
+// The original limiter was bypassed by two call sites that talked to
+// TwelveData directly and never imported candleSource, so the budget it
+// enforced was fictional. This fails the build if a third one appears.
+
+async function tsFilesUnder(dir: URL): Promise<URL[]> {
+  const out: URL[] = [];
+  for await (const entry of Deno.readDir(dir)) {
+    const child = new URL(`${entry.name}${entry.isDirectory ? "/" : ""}`, dir);
+    if (entry.isDirectory) out.push(...await tsFilesUnder(child));
+    else if (entry.name.endsWith(".ts")) out.push(child);
+  }
+  return out;
+}
+
+Deno.test("every TwelveData call site reserves from the shared budget", async () => {
+  const root = new URL("../../functions/", import.meta.url);
+  const offenders: string[] = [];
+
+  for (const file of await tsFilesUnder(root)) {
+    const src = await Deno.readTextFile(file);
+    if (!src.includes("api.twelvedata.com")) continue;
+    const name = file.pathname.split("/functions/")[1];
+    // candleSource owns the reservation for everything routed through it.
+    const meters = src.includes("acquireApiCredit(") || src.includes("reserveApiCredit(");
+    if (!meters) offenders.push(name);
+  }
+
+  assertEquals(
+    offenders,
+    [],
+    `these hit TwelveData without reserving a credit, so the shared budget cannot see them: ${offenders.join(", ")}`,
   );
 });

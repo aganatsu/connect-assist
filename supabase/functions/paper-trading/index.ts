@@ -6,6 +6,7 @@ import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts"
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
+import { acquireApiCredit } from "../_shared/apiCreditBudget.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -46,6 +47,17 @@ const TWELVE_DATA_SYMBOLS: Record<string, string> = {
  * authoritative closer.
  */
 const PRICE_CACHE_TTL_MS = 10_000;
+
+/**
+ * This function talks to TwelveData DIRECTLY — it does not go through
+ * candleSource, so candleSource's limiter never saw these calls. Both fetches
+ * below therefore reserve from the shared budget themselves.
+ *
+ * maxWaitMs is 0 on purpose: this is a 5-second poll of open positions. Waiting
+ * for a credit would just queue behind the next poll. Skipping is correct —
+ * the cached price stands, and bot-scanner is the authoritative closer.
+ */
+const TD_CREDIT_LIMIT = 50;
 const priceCache: Map<string, { value: number; expiresAt: number }> = new Map();
 
 async function fetchLivePrice(symbol: string): Promise<number | null> {
@@ -56,6 +68,9 @@ async function fetchLivePrice(symbol: string): Promise<number | null> {
   if (!apiKey) return null;
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return null;
+  if (!await acquireApiCredit("twelvedata", TD_CREDIT_LIMIT, { label: "paper-trading/price" })) {
+    return cached?.value ?? null;
+  }
   try {
     const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${apiKey}`;
     const res = await fetch(url);
@@ -89,6 +104,10 @@ async function fetchATR(symbol: string): Promise<number> {
   if (!apiKey) return 0;
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return 0;
+  // ATR degrades gracefully to the static floor, so a skipped fetch is safe.
+  if (!await acquireApiCredit("twelvedata", TD_CREDIT_LIMIT, { label: "paper-trading/atr" })) {
+    return 0;
+  }
   try {
     // Fetch 20 candles (need at least 15 for ATR-14)
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=15min&outputsize=20&apikey=${apiKey}&order=ASC&timezone=UTC`;

@@ -16,6 +16,7 @@ const RESERVE_TIMEOUT_MS = 2_000;
 
 let _rpcFailures = 0;
 let _reservationsRefused = 0;
+let _unenforced = 0;   // grants issued without the budget being consulted
 
 export interface CreditReservation {
   granted: boolean;
@@ -94,10 +95,58 @@ export async function reserveApiCredit(
   }
 }
 
+export interface AcquireOptions {
+  windowSeconds?: number;
+  /** Total time to keep retrying before giving up. 0 means try once. */
+  maxWaitMs?: number;
+  /** How often to re-ask while waiting. The window rolls, so credits free up
+   *  a few at a time rather than all at once. */
+  pollMs?: number;
+  /** Prefix for the throttle log line, so call sites are distinguishable. */
+  label?: string;
+}
+
+/**
+ * Reserve one credit, waiting for the rolling window if the budget is full.
+ *
+ * This is the entry point every caller should use. The reservation is only
+ * useful if it sits on the path that ALL TwelveData traffic takes — the
+ * original bug was a limiter that several call sites simply did not go
+ * through, so the budget it enforced was fictional.
+ *
+ * Returns false when the caller should skip the fetch (fall back, or degrade).
+ */
+export async function acquireApiCredit(
+  provider: string,
+  limit: number,
+  opts: AcquireOptions = {},
+): Promise<boolean> {
+  const { windowSeconds = 60, maxWaitMs = 0, pollMs = 2_000, label = provider } = opts;
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    const reservation = await reserveApiCredit(provider, limit, windowSeconds);
+    if (reservation.granted) {
+      if (!reservation.enforced) _unenforced++;
+      return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      console.warn(`[apiCreditBudget] ${label}: budget exhausted, skipping fetch`);
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, remaining)));
+  }
+}
+
 /** Read and clear the counters. Surfaced in scan diagnostics. */
-export function resetCreditBudgetStats(): { rpcFailures: number; refused: number } {
-  const stats = { rpcFailures: _rpcFailures, refused: _reservationsRefused };
+export function resetCreditBudgetStats(): {
+  rpcFailures: number;
+  refused: number;
+  unenforced: number;
+} {
+  const stats = { rpcFailures: _rpcFailures, refused: _reservationsRefused, unenforced: _unenforced };
   _rpcFailures = 0;
   _reservationsRefused = 0;
+  _unenforced = 0;
   return stats;
 }
