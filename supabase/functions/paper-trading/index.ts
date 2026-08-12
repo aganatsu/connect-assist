@@ -6,7 +6,10 @@ import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts"
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
-import { acquireApiCredit } from "../_shared/apiCreditBudget.ts";
+import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+
+setCreditCallerContext("paper-trading");
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {

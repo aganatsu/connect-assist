@@ -21,6 +21,10 @@ import {
 } from "../_shared/gatePerformanceEngine.ts";
 import { normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("bot-weekly-advisor");
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
