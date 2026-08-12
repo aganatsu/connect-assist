@@ -215,6 +215,7 @@ import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
 import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
 import { resolveManualImpulse, type ManualImpulseSpec } from "../_shared/manualImpulse.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
+import { findEarliestZoneTouch } from "../_shared/zoneTouch.ts";
 import {
   annotateEvidenceLifecycle,
   buildScanEvidenceRow,
@@ -2576,7 +2577,6 @@ async function runScanForUser(
         );
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
-        const lastCandle = pendingCandles[pendingCandles.length - 1];
 
         // Update current price on the pending order
         await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2711,13 +2711,28 @@ async function runScanForUser(
 
         // ── Branch A: Order is in "pending" status — check if price touched zone ──
         if (pending.status === "pending") {
-          const filled = pending.direction === "long"
-            ? lastCandle.low <= entryPrice
-            : lastCandle.high >= entryPrice;
+          // Every bar since the order was placed, not just the most recent one.
+          // A single sample misses a wick that happened during a delayed or
+          // skipped scan, and pre-arming makes orders live long enough for that
+          // to be routine rather than rare.
+          //
+          // The EARLIEST touch is recorded: zone_touch_time anchors the CHoCH
+          // search window, so a late timestamp silently truncates it and
+          // confirmations that did occur are never found.
+          const touch = findEarliestZoneTouch(pendingCandles, {
+            direction: pending.direction as "long" | "short",
+            entryPrice,
+            since: pending.placed_at,
+          });
 
-          if (filled) {
+          if (touch.touched) {
             // Price touched the zone! Transition to confirmation hunting mode.
-            const nowStr = new Date().toISOString();
+            // Stamp the bar that touched, not "now" — the gap between them is
+            // exactly what the old single-bar check was losing.
+            const nowStr = touch.at ?? new Date().toISOString();
+            if (touch.matchCount > 1) {
+              console.log(`[pending] ${pending.symbol} — ${touch.matchCount} bars touched since placement; anchoring on the earliest (${touch.at}). A single-bar check would have missed ${touch.matchCount - 1}.`);
+            }
             await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
               zone_touch_time: nowStr,
