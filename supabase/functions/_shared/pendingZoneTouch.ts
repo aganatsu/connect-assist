@@ -1,4 +1,5 @@
 import type { Candle } from "./smcAnalysis.ts";
+import { normalizeAnalysisTimeframe } from "./timeframeAuthority.ts";
 
 export interface PendingZoneTouchInput {
   candles: Candle[];
@@ -20,7 +21,17 @@ function finiteTime(value: string): number | null {
 }
 
 export function pendingTouchIntervalMinutes(value: string): number | null {
-  const match = /^(\d+)(m|h|d|w|M)$/.exec(value);
+  // Normalise first. runtimeEntry is config.entryTimeframe verbatim, and the
+  // stored values are long-form: configMapper defaults to "15min" and the
+  // day_trader profile sets "15min". A strict short-form regex returns null for
+  // those, which made intervalMs NaN and the guard in
+  // findEarliestPendingZoneTouch return "no touch" for every candle regardless
+  // of price — touch detection silently off, with no error and no log.
+  //
+  // normalizeAnalysisTimeframe is the existing owner of this conversion and
+  // already maps 15min/5min/30min/60min/1day/1week/monthly to the canonical
+  // short forms.
+  const match = /^(\d+)(m|h|d|w|M)$/.exec(normalizeAnalysisTimeframe(value, "15m"));
   if (!match) return null;
   const amount = Number(match[1]);
   const unit = match[2];
