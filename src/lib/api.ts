@@ -893,12 +893,12 @@ export interface PendingOrder {
   bot_id: string;
   symbol: string;
   direction: "long" | "short";
-  order_type: "limit_ob" | "limit_fvg";
+  order_type: "limit" | "limit_ob" | "limit_fvg";
   entry_price: number;
   current_price: number | null;
   stop_loss: number;
   take_profit: number;
-  size: number;
+  size: number | null;
   entry_zone_type: string;
   entry_zone_low: number;
   entry_zone_high: number;
@@ -945,6 +945,21 @@ export interface PendingOrder {
   direction_verdict?: any;
   thesis_validation?: any;
   entry_confirmation?: any;
+  liquidity_confirmation_observation?: {
+    contractVersion: "liquidity-confirmation.v2";
+    observationOnly: true;
+    affectsAuthorization: false;
+    ready: boolean;
+    reasonCode: "sequence_confirmed" | "no_qualifying_sweep" | "sweep_identity_unresolved" | "legacy_contract_requires_fresh_sequence" | "setup_activation_time_unavailable" | "zone_touch_pending" | "sweep_before_zone_touch" | "confirmation_pending" | "confirmation_not_after_sweep";
+    candidateId: string;
+    sequenceId: string | null;
+    sweepId: string | null;
+    sweepTime: string | null;
+    confirmationId: string | null;
+    confirmationTime: string | null;
+    stagedAt: string | null;
+    zoneTouchTime: string | null;
+  } | null;
   impulse_entry_lifecycle_id?: string | null;
   impulse_entry_lifecycle?: {
     mode: "off" | "observe" | "enforce";
