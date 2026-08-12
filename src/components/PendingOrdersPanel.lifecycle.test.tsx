@@ -3,9 +3,25 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync("src/components/PendingOrdersPanel.tsx", "utf8");
 describe("Zone Setup confirmation contract", () => {
   it("shows protected pivot, break level and revisions", () => {
-    expect(source).toContain("Confirmation contract");
+    expect(source).toContain("Structure confirmation plan");
     expect(source).toContain("Protected pivot");
     expect(source).toContain("CHoCH/MSS break");
     expect(source).toContain("Revisions:");
+  });
+
+  it("separates observation-only liquidity sequencing from the structure plan", () => {
+    expect(source).toContain("Liquidity → structure observation");
+    expect(source).toContain("OBSERVE ONLY");
+    expect(source).toContain("Structure confirmation plan");
+    expect(source).toContain("does not authorize or block this order");
+  });
+
+  it("does not render a null deferred size as an empty lot value", () => {
+    expect(source).toContain("Calculated at final authorization");
+  });
+
+  it("shows the real expiry while confirmation is active", () => {
+    expect(source).toContain("Confirmation active · {getTimeRemaining(order.expires_at)}");
+    expect(source).not.toContain("Confirmation active — no time limit");
   });
 });

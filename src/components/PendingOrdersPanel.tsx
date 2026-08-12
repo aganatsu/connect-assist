@@ -73,6 +73,21 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     return Math.min(100, Math.max(0, (elapsed / total) * 100));
   };
 
+  const liquidityReason = (reason?: string): string => {
+    switch (reason) {
+      case "sequence_confirmed": return "Fresh sweep followed by later structure confirmation observed";
+      case "zone_touch_pending": return "Waiting for price to touch the frozen entry zone";
+      case "no_qualifying_sweep": return "Zone touched; no fresh qualifying liquidity sweep yet";
+      case "sweep_before_zone_touch": return "Only a pre-touch sweep is available; a fresh sequence is required";
+      case "confirmation_pending": return "Fresh sweep observed; waiting for later structure confirmation";
+      case "confirmation_not_after_sweep": return "Structure confirmation is not later than the sweep";
+      case "sweep_identity_unresolved": return "Sweep identity could not be resolved";
+      case "legacy_contract_requires_fresh_sequence": return "Legacy evidence cannot authorize this sequence";
+      case "setup_activation_time_unavailable": return "Setup activation time is unavailable";
+      default: return "No sequence observation recorded yet";
+    }
+  };
+
   const getDistanceDisplay = (order: PendingOrder): string => {
     if (!order.current_price) return "—";
     const pipSize = getPipSize(order.symbol);
@@ -244,7 +259,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           Zone: <span className={isHunting ? "text-warn" : "text-info-c"}>{order.entry_zone_type}</span>
           {" "}[{Number(order.entry_zone_low).toFixed(5)} – {Number(order.entry_zone_high).toFixed(5)}]
           {" · "}
-          Size: <span className="text-foreground">{order.size} lots</span>
+          Size: <span className="text-foreground">
+            {order.size == null ? "Calculated at final authorization" : `${order.size} lots`}
+          </span>
           {" · "}
           Score: <span className="text-foreground">{Number(order.signal_score).toFixed(1)}%</span>
         </div>
@@ -257,10 +274,30 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           }
         </p>
 
+        {order.liquidity_confirmation_observation && (
+          <details className="border-t border-border/40 pt-2 text-[11px]">
+            <summary className="cursor-pointer text-foreground/70 font-medium">
+              Liquidity → structure observation · {order.liquidity_confirmation_observation.ready ? "SEQUENCE SEEN" : "WAITING"}
+              <span className="ml-2 text-[9px] text-highlight">OBSERVE ONLY</span>
+            </summary>
+            <div className="mt-1.5 space-y-1 text-foreground/60">
+              <p>{liquidityReason(order.liquidity_confirmation_observation.reasonCode)}</p>
+              <p className="text-[10px] text-muted-foreground">
+                This v2 observation records evidence only. It does not authorize or block this order.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3 gap-y-1 font-mono text-[9px]">
+                <span>Touch: {order.liquidity_confirmation_observation.zoneTouchTime ? new Date(order.liquidity_confirmation_observation.zoneTouchTime).toLocaleString() : "pending"}</span>
+                <span>Sweep: {order.liquidity_confirmation_observation.sweepTime ? new Date(order.liquidity_confirmation_observation.sweepTime).toLocaleString() : "pending"}</span>
+                <span>Confirmation: {order.liquidity_confirmation_observation.confirmationTime ? new Date(order.liquidity_confirmation_observation.confirmationTime).toLocaleString() : "pending"}</span>
+              </div>
+            </div>
+          </details>
+        )}
+
         {order.impulse_entry_lifecycle?.confirmation && (
           <details className="border-t border-border/40 pt-2 text-[11px]">
             <summary className="cursor-pointer text-foreground/70 font-medium">
-              Confirmation contract · {order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
+              Structure confirmation plan · {order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
             </summary>
             <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-foreground/60">
               <span>
@@ -359,6 +396,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 {new Date(order.placed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
+            {order.from_watchlist && (
+              <p className="text-[10px] text-foreground/45">
+                Expiry is inherited from the original Watchlist setup and does not restart when this zone is pre-armed.
+              </p>
+            )}
             <div className="h-1.5 bg-muted/30 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
@@ -376,7 +418,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <div className="flex items-center gap-1">
               <Crosshair className="w-3 h-3 text-warn animate-pulse" />
               <span className="text-warn">
-                Confirmation active — no time limit
+                Confirmation active · {getTimeRemaining(order.expires_at)}
               </span>
             </div>
             <span className="text-foreground/40">
