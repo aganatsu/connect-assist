@@ -3327,10 +3327,21 @@ async function runScanForUser(
             method: (config as any).positionSizingMethod,
             fixedLotSize: (config as any).fixedLotSize,
             rateMap,
+            commissionPerLot: avgCommissionPerLot,
+            regimeInfo: parsedPendingEvidence.regimeData,
+            propFirmSizeMultiplier: pendingPropFirmResult?.enabled
+              ? pendingPropFirmResult.maxPositionSizeMultiplier : undefined,
+            signalSource: parsedPendingEvidence.signalSource,
+            standaloneMultiplier: (config as any).standaloneMultiplier,
           });
-          await supabase.from("pending_orders").update({ size: finalPendingSize })
+          const { error: finalSizeError } = await supabase.from("pending_orders").update({ size: finalPendingSize })
             .eq("id", pending.id).eq("user_id", userId)
             .eq("status", "awaiting_confirmation");
+          if (finalSizeError) {
+            console.warn(`[pending] Final size persistence failed ${pending.symbol}: ${finalSizeError.message}`);
+            continue;
+          }
+          pending.size = finalPendingSize;
           const { data: atomicFill, error: atomicFillError } = await supabase.rpc("finalize_pending_order_fill", {
             p_pending_id: pending.id,
             p_user_id: userId,

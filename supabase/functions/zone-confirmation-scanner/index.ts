@@ -126,7 +126,7 @@ import {
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
-import { calculateFinalPendingSize } from "../_shared/finalPendingSize.ts";
+import { calculateFinalPendingSize, loadAverageRoundTripCommission, loadCachedSizingRateMap } from "../_shared/finalPendingSize.ts";
 import {
   resolvePendingConfirmationMethod,
   resolvePendingDealingRangeMode,
@@ -1519,10 +1519,26 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           method: (config as any).positionSizingMethod,
           fixedLotSize: (config as any).fixedLotSize,
+          rateMap: await loadCachedSizingRateMap(supabase),
+          commissionPerLot: await loadAverageRoundTripCommission(
+            supabase,
+            userId,
+            account.execution_mode === "live",
+          ),
+          regimeInfo: parsedPendingEvidence.regimeData,
+          propFirmSizeMultiplier: propFirmResult?.enabled
+            ? propFirmResult.maxPositionSizeMultiplier : undefined,
+          signalSource: parsedPendingEvidence.signalSource,
+          standaloneMultiplier: (config as any).standaloneMultiplier,
         });
-        await supabase.from("pending_orders").update({ size: finalPendingSize })
+        const { error: finalSizeError } = await supabase.from("pending_orders").update({ size: finalPendingSize })
           .eq("id", pending.id).eq("user_id", userId)
           .eq("status", "awaiting_confirmation");
+        if (finalSizeError) {
+          console.warn(`[zone-confirm] Final size persistence failed ${pending.symbol}: ${finalSizeError.message}`);
+          continue;
+        }
+        pending.size = finalPendingSize;
         const { data: fillResult, error: fillError } = await supabase.rpc("finalize_pending_order_fill", {
           p_pending_id: pending.id,
           p_user_id: userId,
