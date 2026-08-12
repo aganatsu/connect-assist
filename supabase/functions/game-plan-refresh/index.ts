@@ -37,6 +37,10 @@ import {
 } from "../_shared/gamePlanStore.ts";
 import type { Candle } from "../_shared/smcAnalysis.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("game-plan-refresh");
+
 const BOT_ID = "smc";
 
 function respond(payload: unknown, status = 200) {

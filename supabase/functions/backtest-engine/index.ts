@@ -129,7 +129,7 @@ import {
   checkOverboughtOversoldVeto,
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
-import { acquireApiCredit } from "../_shared/apiCreditBudget.ts";
+import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { aggregateMT5Candles, parseMT5History, type MT5HistoryInterval } from "../_shared/mt5History.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -263,6 +263,9 @@ import {
   type ConvictionConfig,
   DEFAULT_CONVICTION_CONFIG,
 } from "../_shared/thesisConviction.ts";
+
+
+setCreditCallerContext("backtest-engine");
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {

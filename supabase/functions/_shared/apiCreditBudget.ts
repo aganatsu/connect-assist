@@ -18,6 +18,16 @@ let _rpcFailures = 0;
 let _reservationsRefused = 0;
 let _unenforced = 0;   // grants issued without the budget being consulted
 
+// Which Edge Function this isolate is. Eight functions reach TwelveData through
+// candleSource, so without this every credit would be attributed to
+// "candleSource" and the breakdown would say nothing about who to tune.
+let _callerContext = "unknown";
+
+/** Call once at module load in each Edge Function. */
+export function setCreditCallerContext(name: string): void {
+  _callerContext = name;
+}
+
 export interface CreditReservation {
   granted: boolean;
   /** True when the budget was consulted; false when we failed open. */
@@ -39,6 +49,7 @@ export async function reserveApiCredit(
   provider: string,
   limit: number,
   windowSeconds = 60,
+  caller = "unknown",
 ): Promise<CreditReservation> {
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -60,6 +71,7 @@ export async function reserveApiCredit(
         p_provider: provider,
         p_limit: limit,
         p_window_seconds: windowSeconds,
+        p_caller: caller,
       }),
       signal: abort.signal,
     });
@@ -102,7 +114,12 @@ export interface AcquireOptions {
   /** How often to re-ask while waiting. The window rolls, so credits free up
    *  a few at a time rather than all at once. */
   pollMs?: number;
-  /** Prefix for the throttle log line, so call sites are distinguishable. */
+  /**
+   * Identifies the call site. Used both for the throttle log line and as the
+   * `caller` recorded against each reserved credit, which is what makes the
+   * spend attributable — the budget was saturated at exactly 50/min from the
+   * moment it went live, and without this there is no way to see whose it is.
+   */
   label?: string;
 }
 
@@ -124,7 +141,7 @@ export async function acquireApiCredit(
   const { windowSeconds = 60, maxWaitMs = 0, pollMs = 2_000, label = provider } = opts;
   const deadline = Date.now() + maxWaitMs;
   for (;;) {
-    const reservation = await reserveApiCredit(provider, limit, windowSeconds);
+    const reservation = await reserveApiCredit(provider, limit, windowSeconds, `${_callerContext}:${label}`);
     if (reservation.granted) {
       if (!reservation.enforced) _unenforced++;
       return true;
