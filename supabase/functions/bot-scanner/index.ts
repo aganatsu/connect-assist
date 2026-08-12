@@ -163,8 +163,7 @@ import {
 import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
-  type WatchlistDirection,
-} from "../_shared/watchlistInvalidation.ts";
+  type WatchlistDirection, invalidationForPhase, invalidationBreached } from "../_shared/watchlistInvalidation.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -2585,25 +2584,30 @@ async function runScanForUser(
         const entryPrice = parseFloat(pending.entry_price);
         const slLevel = parseFloat(pending.stop_loss);
 
-        // Check SL invalidation: if price has blown past the SL, cancel the order
-        if (pending.direction === "long" && currentPrice < slLevel) {
+        // Invalidation boundary depends on PHASE, not on which field is handy.
+        //
+        // Before touch, the position stop is the wrong question: it is sized for
+        // a trade that exists (entry minus risk, floored by MIN_SL_PIPS and
+        // spread). The right question is whether the zone or impulse that
+        // produced the setup has broken. Observed GBP/CHF: invalidation ~2 pips
+        // below an 11-pip zone floor on a pair with a 25-pip minimum stop — a
+        // pre-armed order there dies on any overshoot before it can fill.
+        const invalidation = invalidationForPhase({
+          direction: pending.direction as "long" | "short",
+          structuralInvalidation: pending.structural_invalidation != null
+            ? Number(pending.structural_invalidation)
+            : null,
+          stopLoss: slLevel,
+          zoneTouchTime: pending.zone_touch_time,
+        });
+        if (invalidationBreached(pending.direction as "long" | "short", currentPrice, invalidation.level)) {
           await supabase.from("pending_orders").update({
             status: "invalidated",
-            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
+            cancel_reason: `Price ${currentPrice} breached ${invalidation.source} ${invalidation.level} (${invalidation.phase})`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pendingCancelled++;
-          console.log(`[pending] Cancelled ${pending.symbol} long — price ${currentPrice} below SL ${slLevel}`);
-          continue;
-        }
-        if (pending.direction === "short" && currentPrice > slLevel) {
-          await supabase.from("pending_orders").update({
-            status: "invalidated",
-            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
-            resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
-          pendingCancelled++;
-          console.log(`[pending] Cancelled ${pending.symbol} short — price ${currentPrice} above SL ${slLevel}`);
+          console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — ${invalidation.reason} (price ${currentPrice} vs ${invalidation.level})`);
           continue;
         }
 
@@ -8890,6 +8894,15 @@ async function runScanForUser(
           // successor the SAME id as the candidate it replaced, making
           // superseded_candidate_id self-referential and the chain meaningless.
           // A changed setup is a new opportunity, so it gets a new identity.
+          // Reuses deriveWatchlistInvalidation via the same wrapper the
+          // watchlist uses, so both phases agree on where structure breaks.
+          const pendingStructuralInvalidation = watchlistInvalidationFor(
+            analysis.direction as WatchlistDirection,
+            (detail as any).impulseZone?.bestZone ?? existingStaged?.originating_zone,
+            limitSL,
+            existingStaged?.analysis_snapshot?.impulseZone?.impulse,
+          );
+
           const pendingIdentity = supersededCandidateId
             ? { candidateId: crypto.randomUUID(), source: "handoff" as const, inherited: false }
             : resolveLifecycleCandidateId({
@@ -9050,6 +9063,11 @@ async function runScanForUser(
             from_watchlist: isPromotedFromStaging || false,
             staged_setup_id: pendingLifecycleEvidence?.setupId || null,
             candidate_id: pendingCandidateId,
+            // Pre-touch boundary: where the ZONE/IMPULSE breaks, not where a
+            // position would stop out. Separate field on purpose — see
+            // migration 20260812070000.
+            structural_invalidation: pendingStructuralInvalidation?.level ?? null,
+            structural_invalidation_source: pendingStructuralInvalidation?.source ?? null,
             superseded_candidate_id: supersededCandidateId,
             handoff_reason: handoffReason,
             originating_zone: pendingOriginatingZone,

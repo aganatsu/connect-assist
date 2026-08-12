@@ -114,3 +114,89 @@ export function isWatchlistInvalidated(
   if (price === null || level === null) return false;
   return direction === "long" ? price < level : price > level;
 }
+
+// ── Phase-correct invalidation boundary ──────────────────────────────
+//
+// Step 1 of the corrected sequence in docs/PREARM_GATE_AUDIT.md.
+//
+// bot-scanner:2588 cancelled any 'pending' row whose price breached stop_loss,
+// touched or not. A stop loss is sized for a position that EXISTS — entry minus
+// risk, floored by MIN_SL_PIPS and spread. Before entry the question is
+// different: has the ZONE or IMPULSE that produced this setup been broken?
+//
+// Observed GBP/CHF: invalidation ~2 pips below an 11-pip zone floor, on a pair
+// with a 25-pip minimum stop. Pre-arming an order there under the position stop
+// means it dies on any overshoot before it can fill.
+
+export type InvalidationPhase = "pre_touch" | "post_touch";
+
+export interface PhaseInvalidationInput {
+  direction: "long" | "short";
+  /** Zone/impulse boundary. Null on legacy rows written before the column existed. */
+  structuralInvalidation?: number | null;
+  /** Position stop loss. Always present. */
+  stopLoss: number;
+  /** Set once price has reached the zone. Its presence IS the phase. */
+  zoneTouchTime?: string | null;
+}
+
+export interface PhaseInvalidation {
+  phase: InvalidationPhase;
+  level: number;
+  source: "structural" | "position_stop" | "position_stop_fallback";
+  reason: string;
+}
+
+/**
+ * Which boundary applies right now.
+ *
+ * Falls back to the position stop when no structural level was recorded, since
+ * every row written before this column existed has none — and an un-invalidated
+ * order is worse than one invalidated slightly early. The fallback is labelled
+ * so it can be counted rather than assumed absent.
+ */
+export function invalidationForPhase(
+  input: PhaseInvalidationInput,
+): PhaseInvalidation {
+  const touched = typeof input.zoneTouchTime === "string" &&
+    input.zoneTouchTime.length > 0;
+
+  if (touched) {
+    return {
+      phase: "post_touch",
+      level: input.stopLoss,
+      source: "position_stop",
+      reason: "price reached the zone — the position stop governs from here",
+    };
+  }
+
+  const structural = typeof input.structuralInvalidation === "number" &&
+      Number.isFinite(input.structuralInvalidation)
+    ? input.structuralInvalidation
+    : null;
+
+  if (structural === null) {
+    return {
+      phase: "pre_touch",
+      level: input.stopLoss,
+      source: "position_stop_fallback",
+      reason: "no structural level recorded (legacy row) — falling back to the position stop",
+    };
+  }
+
+  return {
+    phase: "pre_touch",
+    level: structural,
+    source: "structural",
+    reason: "setup has not been entered — the zone/impulse boundary governs",
+  };
+}
+
+/** Has this boundary been breached? Direction-aware. */
+export function invalidationBreached(
+  direction: "long" | "short",
+  currentPrice: number,
+  level: number,
+): boolean {
+  return direction === "long" ? currentPrice < level : currentPrice > level;
+}
