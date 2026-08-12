@@ -2,6 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("market-data");
+
 // market-data: connected broker (OANDA or MetaAPI) → Twelve Data → Polygon.io failover.
 // Otherwise we fall back to Twelve Data, then Polygon.io.
 

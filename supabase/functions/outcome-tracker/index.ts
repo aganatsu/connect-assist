@@ -23,6 +23,10 @@ import {
   simulateOutcome,
 } from "../_shared/outcomeSimulation.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("outcome-tracker");
+
 export { simulateOutcome } from "../_shared/outcomeSimulation.ts";
 
 // ── Constants ──

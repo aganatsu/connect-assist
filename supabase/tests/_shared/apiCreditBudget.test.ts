@@ -13,7 +13,7 @@
 //      over-spending only degrades to a fallback provider.
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { acquireApiCredit, reserveApiCredit, resetCreditBudgetStats } from "../../functions/_shared/apiCreditBudget.ts";
+import { acquireApiCredit, reserveApiCredit, resetCreditBudgetStats, setCreditCallerContext } from "../../functions/_shared/apiCreditBudget.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -311,5 +311,92 @@ Deno.test("every TwelveData call site reserves from the shared budget", async ()
     offenders,
     [],
     `these hit TwelveData without reserving a credit, so the shared budget cannot see them: ${offenders.join(", ")}`,
+  );
+});
+
+// ─── Attribution ─────────────────────────────────────────────────────
+// The budget went live already saturated — pinned at exactly 50/min. Deciding
+// what to cut requires knowing who is spending it, and eight functions reach
+// TwelveData through candleSource, so a single "candleSource" label would say
+// nothing useful.
+
+Deno.test("reserveApiCredit: records who spent the credit", async () => {
+  withCredentials();
+  let body: Record<string, unknown> = {};
+  withFetch((_u, init) => {
+    body = JSON.parse(String(init.body));
+    return new Response("true", { status: 200 });
+  });
+  try {
+    await reserveApiCredit("twelvedata", 50, 60, "bot-scanner:candleSource");
+    assertEquals(body.p_caller, "bot-scanner:candleSource");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("acquireApiCredit: attributes to <function>:<callsite>", async () => {
+  withCredentials();
+  let body: Record<string, unknown> = {};
+  withFetch((_u, init) => {
+    body = JSON.parse(String(init.body));
+    return new Response("true", { status: 200 });
+  });
+  try {
+    setCreditCallerContext("zone-confirmation-scanner");
+    await acquireApiCredit("twelvedata", 50, { label: "candleSource" });
+    assertEquals(
+      body.p_caller,
+      "zone-confirmation-scanner:candleSource",
+      "the function must be identifiable, not just the module it went through",
+    );
+  } finally {
+    setCreditCallerContext("unknown");
+    restore();
+  }
+});
+
+Deno.test("every function that reaches TwelveData declares who it is", async () => {
+  const root = new URL("../../functions/", import.meta.url);
+  const anonymous: string[] = [];
+
+  for await (const entry of Deno.readDir(root)) {
+    if (!entry.isDirectory || entry.name.startsWith("_")) continue;
+    const indexUrl = new URL(`${entry.name}/index.ts`, root);
+    let src: string;
+    try {
+      src = await Deno.readTextFile(indexUrl);
+    } catch {
+      continue;
+    }
+    const reachesTwelveData = src.includes("api.twelvedata.com") ||
+      src.includes("candleSource.ts");
+    if (!reachesTwelveData) continue;
+    if (!src.includes("setCreditCallerContext(")) anonymous.push(entry.name);
+  }
+
+  assertEquals(
+    anonymous,
+    [],
+    `these spend TwelveData credits without identifying themselves, so their usage ` +
+      `is invisible in the breakdown: ${anonymous.join(", ")}`,
+  );
+});
+
+const attributionMigration = await Deno.readTextFile(
+  new URL("../../migrations/20260812031000_add_credit_caller_attribution.sql", import.meta.url),
+);
+
+Deno.test("migration: the 3-arg overload survives, so a mid-deploy call still enforces", () => {
+  assert(
+    !/DROP FUNCTION IF EXISTS public\.reserve_api_credit\(TEXT, INT, INT\)\s*;/.test(
+      attributionMigration,
+    ),
+    "migrations run before functions redeploy; dropping the old signature would make " +
+      "already-deployed code 404, fail open, and stop enforcing for the length of the deploy",
+  );
+  assert(
+    attributionMigration.includes("'unattributed'"),
+    "a stale deploy must be visible in the breakdown rather than writing NULL",
   );
 });

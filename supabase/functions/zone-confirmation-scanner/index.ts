@@ -156,6 +156,10 @@ import {
   type ScannerTriggerSource,
 } from "../_shared/scannerRuntime.ts";
 
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+setCreditCallerContext("zone-confirmation-scanner");
+
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
 // metaFetch + resolveSymbol are now imported from ../_shared/ (single source of truth)
