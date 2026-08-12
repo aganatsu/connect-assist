@@ -1677,6 +1677,7 @@ export type Database = {
           impulse_entry_lifecycle: Json | null
           impulse_entry_lifecycle_id: string | null
           last_confirmation_checked_at: string | null
+          last_touch_checked_at: string | null
           order_id: string
           order_type: string
           originating_zone: Json | null
@@ -1691,7 +1692,7 @@ export type Database = {
           setup_type: string | null
           signal_reason: Json | null
           signal_score: number | null
-          size: number
+          size: number | null
           staged_cycles: number | null
           staged_initial_score: number | null
           staged_setup_id: string | null
@@ -1760,6 +1761,7 @@ export type Database = {
           impulse_entry_lifecycle?: Json | null
           impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
+          last_touch_checked_at?: string | null
           order_id: string
           order_type?: string
           originating_zone?: Json | null
@@ -1774,7 +1776,7 @@ export type Database = {
           setup_type?: string | null
           signal_reason?: Json | null
           signal_score?: number | null
-          size: number
+          size?: number | null
           staged_cycles?: number | null
           staged_initial_score?: number | null
           staged_setup_id?: string | null
@@ -1843,6 +1845,7 @@ export type Database = {
           impulse_entry_lifecycle?: Json | null
           impulse_entry_lifecycle_id?: string | null
           last_confirmation_checked_at?: string | null
+          last_touch_checked_at?: string | null
           order_id?: string
           order_type?: string
           originating_zone?: Json | null
@@ -1857,7 +1860,7 @@ export type Database = {
           setup_type?: string | null
           signal_reason?: Json | null
           signal_score?: number | null
-          size?: number
+          size?: number | null
           staged_cycles?: number | null
           staged_initial_score?: number | null
           staged_setup_id?: string | null
