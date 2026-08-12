@@ -165,7 +165,16 @@ Deno.test("Fail-open: candles below minimum count → valid", () => {
   assertEquals(result.valid, true);
 });
 
-Deno.test("Direction flip prefers the style-aware evidence contract", () => {
+Deno.test("a bearish evidence read no longer cancels a long by itself", () => {
+  // This used to assert a cancel via checkType "direction_flip". That check
+  // compared the current direction against the ORDER direction absolutely, so
+  // an order placed into a disagreement failed on every single evaluation —
+  // the same re-litigation that made Game Plan cancel 203 orders for a bias
+  // that never moved.
+  //
+  // Direction is now decided by comparing the CURRENT Direction Verdict with
+  // the one FROZEN at placement. Evidence alone, with no frozen baseline to
+  // compare against, cannot cancel.
   const decisionEvidence = {
     version: "style-decision-evidence.v1",
     style: "scalper",
@@ -191,15 +200,28 @@ Deno.test("Direction flip prefers the style-aware evidence contract", () => {
     makeDefaultOpts({ decisionEvidence }),
   );
 
-  assertEquals(result.valid, false);
-  assertEquals(result.checkType, "direction_flip");
-  assert(result.reason?.includes("[1H→15m→5m]"));
+  assertEquals(result.valid, true);
+  assertEquals(result.verdictOutcome, "baseline_missing");
   assertEquals(
     result.decisionEvidenceVersion,
     "style-decision-evidence.v1",
+    "evidence provenance must still be recorded even when nothing cancels",
   );
 });
 
+Deno.test("a confident verdict reversal against the frozen baseline DOES cancel", () => {
+  const result = validatePendingOrderThesis(
+    makePendingOrder({ direction: "long" }),
+    makeDefaultOpts({
+      frozenDirectionVerdict: { verdict: "long", confidence: 70 },
+      currentDirectionVerdict: { verdict: "short", confidence: 82 },
+      currentDirectionVerdictComplete: true,
+    }),
+  );
+  assertEquals(result.valid, false);
+  assertEquals(result.checkType, "direction_verdict_reversal");
+  assert(result.cancelReason!.includes("direction_verdict_reversal"));
+});
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 2: FOTSI Veto Check
 // ═══════════════════════════════════════════════════════════════════════
@@ -260,23 +282,27 @@ Deno.test("FOTSI: non-exhausted currencies → valid", () => {
 // SECTION 3: Game Plan Bias Reversal Check
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("GP bias reversal: bearish bias with high confidence blocks long", () => {
+Deno.test("Game Plan alone no longer cancels a long — it is advisory, weight 0.08", () => {
+  // Previously this asserted a cancel. In production that rule killed 203 of
+  // 1,047 cancelled orders, and the data showed the bias was not flipping:
+  // "bullish 64%" cancelled the same short across Asian, London and New York.
+  // Game Plan already feeds the Direction Verdict at the lowest of five
+  // weights; cancelling on it separately counted it twice and gave advisory
+  // evidence more authority after placement than at placement.
   const gp = makeGamePlan([{
     symbol: "EUR/USD",
     bias: "bearish",
-    biasConfidence: 75, // Above default threshold of 60
+    biasConfidence: 75,
   }]);
   const result = validatePendingOrderThesis(
     makePendingOrder({ direction: "long", symbol: "EUR/USD" }),
     makeDefaultOpts({ lastGamePlan: gp }),
   );
-  assertEquals(result.valid, false);
-  assertEquals(result.checkType, "gp_bias_reversal");
-  assert(result.reason!.includes("bearish"));
-  assert(result.cancelReason!.includes("gp_bias_reversal"));
+  assertEquals(result.valid, true, "advisory evidence must not cancel on its own");
+  assertEquals(result.checkType, null);
 });
 
-Deno.test("GP bias reversal: bullish bias with high confidence blocks short", () => {
+Deno.test("Game Plan alone no longer cancels a short, even at 80% confidence", () => {
   const gp = makeGamePlan([{
     symbol: "GBP/USD",
     bias: "bullish",
@@ -286,9 +312,11 @@ Deno.test("GP bias reversal: bullish bias with high confidence blocks short", ()
     makePendingOrder({ direction: "short", symbol: "GBP/USD" }),
     makeDefaultOpts({ lastGamePlan: gp }),
   );
-  assertEquals(result.valid, false);
-  assertEquals(result.checkType, "gp_bias_reversal");
-  assert(result.reason!.includes("bullish"));
+  assertEquals(
+    result.valid,
+    true,
+    "high advisory confidence is still advisory — direction is the verdict's call",
+  );
 });
 
 Deno.test("GP bias reversal: low confidence → valid (no cancel)", () => {
