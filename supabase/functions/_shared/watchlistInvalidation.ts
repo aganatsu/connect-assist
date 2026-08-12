@@ -218,3 +218,56 @@ export function invalidationBreached(
 ): boolean {
   return direction === "long" ? currentPrice < level : currentPrice > level;
 }
+
+// ── Freezing the boundary across promotion ───────────────────────────
+//
+// A watchlist row already froze its structural level in staged_setups.sl_level
+// when the setup was first staged. Recomputing it at promotion — from the
+// CURRENT scan's bestZone — would give the same lifecycle candidate a different
+// boundary than the one it was staged under, because the detected zone drifts
+// slightly between scans.
+//
+// That breaks the frozen setup contract in the quietest possible way: nothing
+// errors, the numbers just disagree, and the candidate is invalidated against a
+// level it was never staged with.
+
+export interface FrozenInvalidationInput {
+  /** staged_setups.sl_level — the level frozen when the setup entered the watchlist. */
+  stagedLevel?: number | null;
+}
+
+export interface FrozenInvalidation {
+  /**
+   * Null when no structural boundary could be derived — no zone and no impulse.
+   * Stored as null, which makes invalidationForLifecycle() report
+   * legacy_stop_fallback rather than inventing a level.
+   */
+  level: number | null;
+  source: string;
+}
+
+/**
+ * The structural boundary for a new pending order.
+ *
+ * Watchlist promotion copies the frozen level exactly. Direct creation derives
+ * it once from the selected zone, via `derive`, and that value is then
+ * persisted — it must never be recomputed from later scan detail.
+ */
+export function freezeStructuralInvalidation(
+  input: FrozenInvalidationInput,
+  derive: () => WatchlistInvalidation,
+): FrozenInvalidation {
+  const staged = typeof input.stagedLevel === "number" &&
+      Number.isFinite(input.stagedLevel)
+    ? input.stagedLevel
+    : null;
+
+  if (staged !== null) {
+    // Labelled distinctly from the derive-time sources so an inherited level is
+    // never mistaken for a freshly computed one that happened to agree.
+    return { level: staged, source: "staged_inherited" };
+  }
+
+  const derived = derive();
+  return { level: derived.level, source: derived.source };
+}

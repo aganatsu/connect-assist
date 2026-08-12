@@ -163,7 +163,7 @@ import {
 import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
-  type WatchlistDirection, invalidationForLifecycle, invalidationBreached } from "../_shared/watchlistInvalidation.ts";
+  type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -8899,13 +8899,22 @@ async function runScanForUser(
           // successor the SAME id as the candidate it replaced, making
           // superseded_candidate_id self-referential and the chain meaningless.
           // A changed setup is a new opportunity, so it gets a new identity.
-          // Reuses deriveWatchlistInvalidation via the same wrapper the
-          // watchlist uses, so both phases agree on where structure breaks.
-          const pendingStructuralInvalidation = watchlistInvalidationFor(
-            analysis.direction as WatchlistDirection,
-            (detail as any).impulseZone?.bestZone ?? existingStaged?.originating_zone,
-            limitSL,
-            existingStaged?.analysis_snapshot?.impulseZone?.impulse,
+          // Promotion COPIES the level the watchlist froze. Recomputing it from
+          // this scan's bestZone would hand the same lifecycle candidate a
+          // different boundary than it was staged under — the detected zone
+          // drifts slightly between scans, so the numbers would quietly
+          // disagree and the candidate would be judged against a level it was
+          // never staged with. Direct creation derives it once, here, and that
+          // value is persisted rather than recomputed later.
+          const pendingStructuralInvalidation = freezeStructuralInvalidation(
+            { stagedLevel: existingStaged?.sl_level != null ? Number(existingStaged.sl_level) : null },
+            () =>
+              watchlistInvalidationFor(
+                analysis.direction as WatchlistDirection,
+                (detail as any).impulseZone?.bestZone ?? existingStaged?.originating_zone,
+                limitSL,
+                existingStaged?.analysis_snapshot?.impulseZone?.impulse,
+              ),
           );
 
           const pendingIdentity = supersededCandidateId

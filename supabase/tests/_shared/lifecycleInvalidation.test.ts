@@ -19,6 +19,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import {
   invalidationBreached,
   invalidationForLifecycle,
+  freezeStructuralInvalidation,
 } from "../../functions/_shared/watchlistInvalidation.ts";
 
 // GBP/CHF, from the live watchlist card.
@@ -176,4 +177,101 @@ Deno.test("the scanner keys on status, not on zone_touch_time", () => {
 Deno.test("the structural level is persisted", () => {
   assert(scanner.includes("structural_invalidation: pendingStructuralInvalidation"));
   assert(scanner.includes("structural_invalidation_source:"));
+});
+
+// ─── Freezing across promotion ───────────────────────────────────────
+//
+// The watchlist froze a structural level in staged_setups.sl_level when the
+// setup was first staged. Recomputing at promotion, from the CURRENT scan's
+// bestZone, would hand the same lifecycle candidate a different boundary than
+// it was staged under — the detected zone drifts slightly between scans, so
+// nothing errors, the numbers just disagree, and the candidate is judged
+// against a level it was never staged with.
+
+Deno.test("promotion copies the staged level EXACTLY", () => {
+  const stagedLevel = 1.08597;
+  let derived = 0;
+  const r = freezeStructuralInvalidation({ stagedLevel }, () => {
+    derived++;
+    // Deliberately different: a rescan's zone would drift.
+    return { level: 1.08604, source: "zone_boundary", bufferPrice: 0, zone: null, adjusted: false };
+  });
+  assertEquals(r.level, stagedLevel, "the frozen level, not a recomputed one");
+  assertEquals(
+    derived,
+    0,
+    "derive must not even run for a promotion — computing then discarding would " +
+      "still leave the recompute in place for someone to later 'fix' into being used",
+  );
+});
+
+Deno.test("the inherited source is labelled distinctly", () => {
+  const r = freezeStructuralInvalidation({ stagedLevel: 1.08597 }, () => ({
+    level: 1.08597,
+    source: "zone_boundary",
+    bufferPrice: 0,
+    zone: null,
+    adjusted: false,
+  }));
+  assertEquals(
+    r.source,
+    "staged_inherited",
+    "an inherited level must never be mistaken for a freshly derived one that " +
+      "happened to agree — otherwise a broken inheritance looks healthy",
+  );
+});
+
+Deno.test("direct creation derives once", () => {
+  let derived = 0;
+  const r = freezeStructuralInvalidation({ stagedLevel: null }, () => {
+    derived++;
+    return { level: 1.08590, source: "zone_boundary", bufferPrice: 0, zone: null, adjusted: false };
+  });
+  assertEquals(r.level, 1.08590);
+  assertEquals(r.source, "zone_boundary");
+  assertEquals(derived, 1, "exactly once — the persisted value is the contract");
+});
+
+Deno.test("a non-finite staged level is not inherited", () => {
+  for (const bad of [NaN, Infinity, null, undefined]) {
+    const r = freezeStructuralInvalidation({ stagedLevel: bad as number | null }, () => ({
+      level: 1.086,
+      source: "zone_boundary",
+      bufferPrice: 0,
+      zone: null,
+      adjusted: false,
+    }));
+    assertEquals(r.source, "zone_boundary", `${bad} must fall through to derive`);
+  }
+});
+
+Deno.test("an underivable boundary stays null rather than being invented", () => {
+  const r = freezeStructuralInvalidation({ stagedLevel: null }, () => ({
+    level: null,
+    source: "none",
+    bufferPrice: 0,
+    zone: null,
+    adjusted: false,
+  }));
+  assertEquals(
+    r.level,
+    null,
+    "null persists, so invalidationForLifecycle reports legacy_stop_fallback " +
+      "instead of a fabricated level",
+  );
+});
+
+Deno.test("the scanner freezes rather than recomputing on promotion", () => {
+  assert(
+    scanner.includes("freezeStructuralInvalidation("),
+    "promotion must copy the staged level, not recompute from this scan's zone",
+  );
+  const call = scanner.slice(
+    scanner.indexOf("freezeStructuralInvalidation("),
+    scanner.indexOf("freezeStructuralInvalidation(") + 700,
+  );
+  assert(
+    call.includes("existingStaged?.sl_level"),
+    "the staged level is the frozen contract and must be the first source",
+  );
 });
