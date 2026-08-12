@@ -2570,9 +2570,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         );
         const barCanonicalStructure = buildCanonicalStructureAuthority(
           roleCandles.structure,
+          { symbol, timeframe: timeframeAuthority.roles.structure },
         );
         const barCanonicalConfirmationStructure =
-          buildCanonicalStructureAuthority(roleCandles.confirmation);
+          buildCanonicalStructureAuthority(roleCandles.confirmation, {
+            symbol, timeframe: timeframeAuthority.roles.confirmation,
+          });
         const barCanonicalLiquiditySequence = buildCanonicalLiquiditySequences(
           barCanonicalConfirmationStructure,
         );
@@ -2841,7 +2844,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             canonicalDealingRangeEvaluation = evaluateCanonicalDealingRange({
               range: canonicalSelection.range,
               direction: analysis.direction as "long" | "short",
-              price: analysis.lastPrice,
+              price: config.limitOrderEnabled && !config.marketFillAtZone
+                ? (unifiedResult.entry?.entryPrice ??
+                  multiTF.bestZone?.zone.refinedEntry ?? analysis.lastPrice)
+                : analysis.lastPrice,
               mode: normalizeDealingRangeMode(
                 pairConfig.dealingRangeMode,
                 {

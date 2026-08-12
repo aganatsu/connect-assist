@@ -1593,6 +1593,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             direction={t.direction}
                             timeframeEvidenceId={sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId}
                             frozenCrossTimeframeContext={sr.frozenStrategyContext?.crossTimeframeContext}
+                            frozenExecutablePlan={sr.frozenExecutablePlan}
                           />
                           {sr.decisionContext && (
                             <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">
@@ -1982,6 +1983,7 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
   const workflow = detail?.canonicalScannerState;
   const workflowEnforcement = detail?.canonicalScannerEnforcement;
   const presentation = detail?.tradeDecisionPresentation;
+  const sequenceObservation = detail?.liquidityConfirmationObservation;
   if (!decision && !enforcement && !workflow) return null;
   const outcome = String(workflow?.stage || decision?.decision || "unavailable").replace(/_/g, " ").toUpperCase();
   const outcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) ? "text-success"
@@ -2010,6 +2012,14 @@ function TradeDecisionPanel({ detail }: { detail: any }) {
           <div className="border-l-2 border-warning pl-2">
             <p className="text-[11px] font-semibold text-warning">Next required</p>
             <p className="text-[11px] text-foreground/90">{nextRequirement}</p>
+          </div>
+        )}
+        {sequenceObservation && (
+          <div className="border-l-2 border-cyan-500 pl-2 text-[11px]">
+            <span className="font-semibold text-cyan-400">Sequence observation: </span>
+            <span className={sequenceObservation.ready ? "text-success" : "text-warning"}>
+              {String(sequenceObservation.reasonCode || "unavailable").replace(/_/g, " ")}
+            </span>
           </div>
         )}
         <p className="text-muted-foreground">
@@ -2089,6 +2099,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             symbol={d.pair}
             direction={d.direction}
             timeframeEvidenceId={d.timeframeEvidenceId}
+            frozenExecutablePlan={d.frozenExecutablePlan}
           />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
@@ -2304,6 +2315,7 @@ function ScanDetailInline({ signal: d, observedAt }: { signal: any; observedAt?:
         symbol={d.pair}
         direction={d.direction}
         timeframeEvidenceId={d.timeframeEvidenceId}
+        frozenExecutablePlan={d.frozenExecutablePlan}
       />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (

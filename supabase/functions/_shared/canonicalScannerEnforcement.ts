@@ -3,6 +3,21 @@ import type { CanonicalScannerState } from "./canonicalScannerState.ts";
 export const CANONICAL_SCANNER_ENFORCEMENT_VERSION = "canonical-scanner-enforcement.v1";
 export type CanonicalScannerMode = "observe" | "enforce";
 
+const WAITING_STAGES = new Set<CanonicalScannerState["stage"]>([
+  "context", "discovery", "watching", "at_poi", "awaiting_liquidity",
+  "awaiting_confirmation", "awaiting_retracement",
+]);
+
+export type CanonicalScannerDisposition = "allow" | "wait" | "terminal";
+
+export function canonicalScannerDisposition(
+  stage: CanonicalScannerState["stage"],
+): CanonicalScannerDisposition {
+  if (["authorized", "entered", "managing"].includes(stage)) return "allow";
+  if (WAITING_STAGES.has(stage)) return "wait";
+  return "terminal";
+}
+
 export function evaluateCanonicalScannerEnforcement(input: {
   requestedMode?: unknown;
   singleOwnershipEffectiveMode: "observe" | "enforce" | "enforce_live";
@@ -10,10 +25,11 @@ export function evaluateCanonicalScannerEnforcement(input: {
 }) {
   const requestedMode: CanonicalScannerMode = input.requestedMode === "enforce" ? "enforce" : "observe";
   const effectiveMode: CanonicalScannerMode = requestedMode === "enforce" && input.singleOwnershipEffectiveMode === "enforce" ? "enforce" : "observe";
-  const authorized = effectiveMode === "observe" || input.state.stage === "authorized" || input.state.stage === "entered" || input.state.stage === "managing";
+  const disposition = canonicalScannerDisposition(input.state.stage);
+  const authorized = effectiveMode === "observe" || disposition === "allow";
   return {
     contractVersion: CANONICAL_SCANNER_ENFORCEMENT_VERSION,
-    requestedMode, effectiveMode, authorized,
+    requestedMode, effectiveMode, authorized, disposition,
     affectsAuthorization: effectiveMode === "enforce",
     reasonCode: effectiveMode === "observe" ? (requestedMode === "enforce" ? "single_ownership_required" : "observing") : authorized ? "canonical_state_authorized" : `canonical_state_${input.state.stage}`,
   } as const;

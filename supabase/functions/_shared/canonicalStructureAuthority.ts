@@ -1,4 +1,5 @@
 import { calculateATR, type Candle } from "./smcAnalysis.ts";
+import { buildEntityId } from "./conceptEvidence.ts";
 
 export const CANONICAL_STRUCTURE_VERSION = "canonical-structure.v1";
 
@@ -9,6 +10,8 @@ export type StructureEventType = "sweep" | "bos" | "choch" | "mss";
 
 export interface FrozenStructureLevel {
   id: string;
+  /** Stable across rolling candle windows; id remains for legacy scan-local consumers. */
+  durableId: string;
   significance: StructureSignificance;
   side: "high" | "low";
   price: number;
@@ -21,6 +24,8 @@ export interface FrozenStructureLevel {
 
 export interface CanonicalStructureEvent {
   id: string;
+  /** Stable market identity derived from timestamps and price, never array indexes. */
+  durableId: string;
   type: StructureEventType;
   direction: StructureDirection;
   significance: StructureSignificance;
@@ -77,6 +82,8 @@ export function buildCanonicalStructureAuthority(candles: Candle[], options: {
   internalAtrFilter?: number;
   externalAtrFilter?: number;
   mssDisplacement?: number;
+  symbol?: string;
+  timeframe?: string;
 } = {}): CanonicalStructureAuthority {
   const internalLookback = Math.max(1, options.internalLookback ?? 3);
   const externalLookback = Math.max(internalLookback + 1, options.externalLookback ?? 7);
@@ -95,8 +102,19 @@ export function buildCanonicalStructureAuthority(candles: Candle[], options: {
         if (!pivotAt(candles, pivotIndex, lookback, side, filters[significance])) continue;
         const prior = [...levels].reverse().find((level) => level.significance === significance && level.side === side);
         const price = side === "high" ? candles[pivotIndex].high : candles[pivotIndex].low;
+        const durableId = buildEntityId({
+          concept: "swing",
+          detector: { name: "canonical-structure", version: CANONICAL_STRUCTURE_VERSION },
+          symbol: options.symbol || "UNKNOWN",
+          timeframe: options.timeframe || "UNKNOWN",
+          sourceCandleStart: candles[pivotIndex].datetime,
+          direction: "neutral",
+          level: price,
+          discriminator: `${significance}:${side}`,
+        });
         levels.push({
           id: `${significance}:${side}:${pivotIndex}:${price.toFixed(10)}`,
+          durableId,
           significance, side, price, pivotIndex, confirmedIndex: candleIndex,
           datetime: candles[pivotIndex].datetime,
           label: swingLabel(prior, side, price), status: "active",
@@ -123,6 +141,16 @@ export function buildCanonicalStructureAuthority(candles: Candle[], options: {
       }
       events.push({
         id: `${type}:${level.id}:${candleIndex}`,
+        durableId: buildEntityId({
+          concept: type === "sweep" ? "sweep" : "structure_break",
+          detector: { name: "canonical-structure", version: CANONICAL_STRUCTURE_VERSION },
+          symbol: options.symbol || "UNKNOWN",
+          timeframe: options.timeframe || "UNKNOWN",
+          sourceCandleStart: candle.datetime,
+          direction: closedThrough ? breakDirection : breakDirection === "bullish" ? "bearish" : "bullish",
+          level: level.price,
+          discriminator: `${type}:${significance}:${level.durableId}`,
+        }),
         type,
         direction: closedThrough ? breakDirection : breakDirection === "bullish" ? "bearish" : "bullish",
         significance: level.significance, levelId: level.id,

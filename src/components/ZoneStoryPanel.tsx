@@ -268,6 +268,7 @@ interface Props {
   direction?: string | null;
   timeframeEvidenceId?: string | null;
   frozenCrossTimeframeContext?: FrozenCrossTimeframeContextData | null;
+  frozenExecutablePlan?: { entryPrice: number; stopLoss: number | null; takeProfit: number | null } | null;
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -303,6 +304,7 @@ export function ZoneStoryPanel({
   direction,
   timeframeEvidenceId,
   frozenCrossTimeframeContext,
+  frozenExecutablePlan,
 }: Props) {
   if (!unifiedData) {
     return (
@@ -850,7 +852,17 @@ export function ZoneStoryPanel({
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Entry</td>
             <td className="py-1.5">
-              {unifiedData.entry ? (
+              {frozenExecutablePlan ? (
+                <div>
+                  <span className={direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                    {String(direction || unifiedData.entry?.direction || "entry").toUpperCase()}
+                  </span>
+                  <span className="font-mono ml-2">@ {fmt(frozenExecutablePlan.entryPrice)}</span>
+                  <span className="text-red-400 font-mono ml-2">SL: {fmt(frozenExecutablePlan.stopLoss)}</span>
+                  <span className="text-green-400 font-mono ml-2">TP: {fmt(frozenExecutablePlan.takeProfit)}</span>
+                  <span className="ml-2 text-[10px] font-mono text-cyan-400">FROZEN PLAN</span>
+                </div>
+              ) : unifiedData.entry ? (
                 <div>
                   <span className={unifiedData.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
                     {unifiedData.entry.direction.toUpperCase()}
