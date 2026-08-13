@@ -318,6 +318,7 @@ export async function propFirmEmergencyClose(
         user_id: userId,
         position_id: pos.position_id,
         order_id: pos.order_id || crypto.randomUUID().slice(0, 8),
+        source_pending_order_id: pos.source_pending_order_id || null,
         symbol: pos.symbol,
         direction: pos.direction,
         size: pos.size,

@@ -1054,6 +1054,7 @@ Deno.serve(async (req) => {
               open_time: pos.open_time, closed_at: new Date().toISOString(),
               close_reason: closeReason, signal_reason: pos.signal_reason || "",
               signal_score: pos.signal_score, order_id: pos.order_id,
+              source_pending_order_id: pos.source_pending_order_id || null,
               bot_id: closeBotId,
               stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
             });
@@ -1450,6 +1451,7 @@ Deno.serve(async (req) => {
         open_time: pos.open_time, closed_at: new Date().toISOString(),
         close_reason: closeReason, signal_reason: pos.signal_reason || "",
         signal_score: pos.signal_score, order_id: pos.order_id,
+        source_pending_order_id: pos.source_pending_order_id || null,
         stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
       });
 
@@ -1526,6 +1528,7 @@ Deno.serve(async (req) => {
               open_time: pos.open_time, closed_at: new Date().toISOString(),
               close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
               signal_score: pos.signal_score, order_id: pos.order_id,
+              source_pending_order_id: pos.source_pending_order_id || null,
               stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
             });
 

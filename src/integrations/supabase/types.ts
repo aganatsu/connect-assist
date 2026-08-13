@@ -1339,10 +1339,10 @@ export type Database = {
           position_status: string
           signal_reason: string | null
           signal_score: string
+          source_pending_order_id: string | null
           size: number | null
           size_old: string | null
           source_candidate_key: string | null
-          source_pending_order_id: string | null
           staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
@@ -1412,10 +1412,10 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
+          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           source_candidate_key?: string | null
-          source_pending_order_id?: string | null
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -1485,10 +1485,10 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
+          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           source_candidate_key?: string | null
-          source_pending_order_id?: string | null
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -1560,6 +1560,7 @@ export type Database = {
           position_id: string
           signal_reason: string | null
           signal_score: string
+          source_pending_order_id: string | null
           size: number | null
           size_old: string | null
           stop_loss: string | null
@@ -1590,6 +1591,7 @@ export type Database = {
           position_id: string
           signal_reason?: string | null
           signal_score?: string
+          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           stop_loss?: string | null
@@ -1620,6 +1622,7 @@ export type Database = {
           position_id?: string
           signal_reason?: string | null
           signal_score?: string
+          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           stop_loss?: string | null
