@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import {
   Clock, Play, Pause, RotateCw, Zap, BarChart3, Wrench,
   CheckCircle2, XCircle, Minus, ChevronDown, ChevronUp,
-  AlertTriangle,
+  AlertTriangle, Rocket, ExternalLink, Loader2,
 } from "lucide-react";
 import { invokeFunction } from "@/lib/api";
 
@@ -63,6 +63,20 @@ interface OperationalAlert {
 interface ScheduledTasksPayload {
   tasks: ScheduledTask[];
   alerts: OperationalAlert[];
+}
+
+interface DeploymentStatus {
+  authorized: boolean;
+  configured: boolean;
+  run: null | {
+    id: number;
+    status: "queued" | "in_progress" | "completed";
+    conclusion: "success" | "failure" | "cancelled" | null;
+    createdAt: string;
+    updatedAt: string;
+    url: string;
+    commit: string;
+  };
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -150,6 +164,40 @@ export default function ScheduledTasks() {
   const tasks = data?.tasks || [];
   const alerts = data?.alerts || [];
 
+  const deploymentQuery = useQuery<DeploymentStatus>({
+    queryKey: ["edge-function-deployment"],
+    queryFn: async () => {
+      try {
+        return await invokeFunction("deploy-control", { action: "status" });
+      } catch {
+        return { authorized: false, configured: false, run: null };
+      }
+    },
+    refetchInterval: (query) => {
+      const status = query.state.data?.run?.status;
+      return status === "queued" || status === "in_progress" ? 5000 : 30000;
+    },
+    retry: false,
+  });
+
+  const deployMutation = useMutation({
+    mutationFn: async () => invokeFunction("deploy-control", { action: "deploy" }),
+    onSuccess: () => {
+      toast.success("Edge-function deployment queued");
+      setTimeout(() => deploymentQuery.refetch(), 1500);
+    },
+    onError: (err: unknown) => {
+      toast.error("Deployment could not be started", { description: errorMessage(err) });
+    },
+  });
+
+  const deployment = deploymentQuery.data;
+  const deploymentRunning = deployment?.run?.status === "queued" || deployment?.run?.status === "in_progress";
+  const deployAll = () => {
+    if (!window.confirm("Redeploy every production edge function from main? Active requests may briefly use mixed versions during rollout.")) return;
+    deployMutation.mutate();
+  };
+
   const updateMutation = useMutation({
     mutationFn: async (params: { taskId: string; enabled?: boolean; interval_minutes?: number }) => {
       return invokeFunction("scheduled-tasks", { action: "update", ...params });
@@ -226,6 +274,49 @@ export default function ScheduledTasks() {
             {tasks.filter((t) => t.enabled).length}/{tasks.length} active
           </Badge>
         </div>
+
+        {deployment?.authorized && (
+          <Card className="border-primary/40 bg-primary/5">
+            <CardContent className="p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <Rocket className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold">Production Edge Functions</span>
+                      {deploymentRunning ? (
+                        <Badge variant="outline" className="gap-1 text-[10px]">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Deploying
+                        </Badge>
+                      ) : deployment.run?.conclusion === "success" ? (
+                        <Badge variant="outline" className="border-success/40 text-success text-[10px]">Deployed</Badge>
+                      ) : deployment.run?.conclusion ? (
+                        <Badge variant="destructive" className="text-[10px]">{deployment.run.conclusion}</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px]">Ready</Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Redeploys every Supabase edge function from the latest commit on main. Migrations and the frontend are not included.
+                    </p>
+                    {deployment.run && (
+                      <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
+                        <span>Last started {formatTimeAgo(deployment.run.createdAt)}</span>
+                        <a href={deployment.run.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                          View logs <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Button onClick={deployAll} disabled={deploymentRunning || deployMutation.isPending || !deployment.configured} className="shrink-0 gap-2">
+                  {deploymentRunning || deployMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                  {deploymentRunning ? "Deploying" : "Redeploy All"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {alerts.length > 0 && (
           <Card className="border-destructive/50 bg-destructive/5">
