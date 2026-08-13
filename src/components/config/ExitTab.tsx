@@ -17,7 +17,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         icon={<ShieldAlert className="h-4 w-4" />}
         defaultOpen={false}
       >
-        <FieldGroup label="SL Method" description="How the stop loss is calculated">
+        <FieldGroup label="SL Method" description="Chooses the stop; structural and volatility safety may only widen it">
           <Select value={config.exit?.stopLossMethod ?? config.exit?.slMethod ?? "structure"} onValueChange={v => { updateField('exit', 'stopLossMethod', v); updateField('exit', 'slMethod', v); }}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>

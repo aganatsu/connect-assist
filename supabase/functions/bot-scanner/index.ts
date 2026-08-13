@@ -8482,20 +8482,19 @@ async function runScanForUser(
           return direction === "long" ? entry + risk * config.tpRatio : entry - risk * config.tpRatio;
         };
 
-        // Recalculate SL with correct pip size for the (possibly flipped) direction.
-        // If direction was flipped by directionVerdict, force a fresh SL/TP from
-        // structure — analysis.stopLoss/takeProfit are for the ORIGINAL direction
-        // and would produce an inverted trade if reused.
+        // calculateSLTP owns the configured SL method. Only recalculate from
+        // structure when Direction Verdict actually flipped the direction,
+        // because the original SL is then on the wrong side of the entry.
         const originalSlSide = analysis.stopLoss != null
           ? (analysis.stopLoss < analysis.lastPrice ? "long" : "short")
           : null;
         const directionFlipped = originalSlSide !== null && originalSlSide !== analysis.direction;
-        if (analysis.direction === "long") {
+        if (directionFlipped && analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
             sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
             tp = computeTP(analysis.lastPrice, sl, "long");
-          } else if (directionFlipped) {
+          } else {
             // No swings available AND direction was flipped — fall back to ATR/static floor
             // instead of leaving the inverted analysis.stopLoss in place.
             const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
@@ -8503,12 +8502,12 @@ async function runScanForUser(
             tp = computeTP(analysis.lastPrice, sl, "long");
             console.log(`[${pair}] Direction flipped to LONG with no swing lows — using fallback SL ${fallbackPips}p`);
           }
-        } else {
+        } else if (directionFlipped) {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
             sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
             tp = computeTP(analysis.lastPrice, sl, "short");
-          } else if (directionFlipped) {
+          } else {
             const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
             sl = analysis.lastPrice + fallbackPips * spec.pipSize;
             tp = computeTP(analysis.lastPrice, sl, "short");
@@ -8548,24 +8547,25 @@ async function runScanForUser(
               ? impulseData.low - (adjustedSlBuffer * spec.pipSize)
               : impulseData.high + (adjustedSlBuffer * spec.pipSize);
             const impulseSlDistance = Math.abs(analysis.lastPrice - impulseSL);
+            const currentSlDistance = Math.abs(analysis.lastPrice - sl);
             // Only override if impulse SL is wider than current SL (more protective)
             // and within reasonable bounds (not absurdly wide)
             const maxImpulseSlPips = (staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4)); // Configurable cap (default 4x)
             const impulseSlPips = impulseSlDistance / spec.pipSize;
-            if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
+            if (impulseSlDistance > currentSlDistance && impulseSlPips <= maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
               sl = impulseSL;
               // Recalculate TP based on impulse SL for proper R:R
               tp = computeTP(analysis.lastPrice, sl, analysis.direction);
               detail.impulseZoneSLOverride = {
-                originalSL: actualSlDistance / spec.pipSize,
+                originalSL: currentSlDistance / spec.pipSize,
                 impulseSL: impulseSlPips,
                 impulseOrigin: analysis.direction === "long" ? impulseData.low : impulseData.high,
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
-              console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
-            } else if (impulseSlDistance <= actualSlDistance) {
-              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(actualSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
+              console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping configured SL.`);
+            } else if (impulseSlDistance <= currentSlDistance) {
+              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than configured stop (${impulseSlPips.toFixed(1)}p < ${(currentSlDistance / spec.pipSize).toFixed(1)}p). Keeping configured SL.`);
             }
           }
         }
@@ -8577,14 +8577,18 @@ async function runScanForUser(
           const unifiedSL = unifiedZoneData.entry.slPrice;
           const unifiedSlDistance = Math.abs(analysis.lastPrice - unifiedSL);
           const unifiedSlPips = unifiedSlDistance / spec.pipSize;
+          const currentSlDistance = Math.abs(analysis.lastPrice - sl);
           const maxUnifiedSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
-          if (unifiedSlPips >= effectiveMinSlPips && unifiedSlPips <= maxUnifiedSlPips) {
+          const unifiedOnCorrectSide = analysis.direction === "long"
+            ? unifiedSL < analysis.lastPrice
+            : unifiedSL > analysis.lastPrice;
+          if (unifiedOnCorrectSide && unifiedSlDistance > currentSlDistance && unifiedSlPips <= maxUnifiedSlPips) {
             console.log(`[${pair}] Unified Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${unifiedSlPips.toFixed(1)}p (unified story [${unifiedZoneData.selectedTF}])`);
             sl = unifiedSL;
             // Recalculate TP based on unified SL for proper R:R
             tp = computeTP(analysis.lastPrice, sl, analysis.direction);
             (detail as any).unifiedZoneSLOverride = {
-              originalSLPips: actualSlDistance / spec.pipSize,
+              originalSLPips: currentSlDistance / spec.pipSize,
               unifiedSLPips: unifiedSlPips,
               source: `unified_${unifiedZoneData.selectedTF}_story`,
             };
@@ -8600,14 +8604,18 @@ async function runScanForUser(
           const cascadeSL = cascadeResult.sl;
           const cascadeSlDistance = Math.abs(analysis.lastPrice - cascadeSL);
           const cascadeSlPips = cascadeSlDistance / spec.pipSize;
+          const currentSlDistance = Math.abs(analysis.lastPrice - sl);
           const maxCascadeSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 6);
-          if (cascadeSlPips >= effectiveMinSlPips && cascadeSlPips <= maxCascadeSlPips) {
+          const cascadeOnCorrectSide = analysis.direction === "long"
+            ? cascadeSL < analysis.lastPrice
+            : cascadeSL > analysis.lastPrice;
+          if (cascadeOnCorrectSide && cascadeSlDistance > currentSlDistance && cascadeSlPips <= maxCascadeSlPips) {
             console.log(`[${pair}] Cascade Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${cascadeSlPips.toFixed(1)}p (cascade Daily\u21924H\u21921H)`);
             sl = cascadeSL;
             // Recalculate TP based on cascade SL for proper R:R
             tp = computeTP(analysis.lastPrice, sl, analysis.direction);
             (detail as any).cascadeZoneSLOverride = {
-              originalSLPips: actualSlDistance / spec.pipSize,
+              originalSLPips: currentSlDistance / spec.pipSize,
               cascadeSLPips: cascadeSlPips,
               source: "cascade_daily_h4_h1",
             };

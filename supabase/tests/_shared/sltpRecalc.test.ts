@@ -226,6 +226,44 @@ Deno.test("REGRESSION: atr_based SL method works in recalculation scenario", () 
   assertEquals(result.stopLoss, 1.0900 + 0.0015 * 2.0);
 });
 
+Deno.test("configured fixed-pip SL is not tightened to an FVG", () => {
+  const result = calculateSLTP({
+    direction: "long",
+    lastPrice: 1.1000,
+    pipSize: EURUSD_PIP,
+    config: { ...BASE_CONFIG, slMethod: "fixed_pips", fixedSLPips: 25 },
+    swings: [...SWING_LOWS, ...SWING_HIGHS],
+    orderBlocks: BULLISH_OBS as any,
+    liquidityPools: [],
+    pdLevels: null,
+    atrValue: 0,
+    fvgs: [{
+      type: "bullish", high: 1.0992, low: 1.0988, mitigated: false, quality: 5,
+    }] as any,
+  });
+
+  assert(Math.abs(result.stopLoss! - 1.0975) < 1e-10);
+  assert(Math.abs(result.takeProfit! - 1.1050) < 1e-10);
+});
+
+Deno.test("immediate entries preserve the configured SL unless direction flips", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(scanner.includes('if (directionFlipped && analysis.direction === "long")'));
+  assert(scanner.includes('} else if (directionFlipped) {'));
+  assert(!scanner.includes('if (analysis.direction === "long") {\n          const swingLows'));
+});
+
+Deno.test("zone-derived SL adjustments only widen the configured stop", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(scanner.includes("impulseSlDistance > currentSlDistance"));
+  assert(scanner.includes("unifiedSlDistance > currentSlDistance"));
+  assert(scanner.includes("cascadeSlDistance > currentSlDistance"));
+});
+
 Deno.test("REGRESSION: next_level TP method works with recalculated SL", () => {
   const result = calculateSLTP({
     direction: "long",
