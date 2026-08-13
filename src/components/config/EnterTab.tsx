@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Target, SlidersHorizontal, Zap, Shield, Timer, RotateCcw, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,7 +11,6 @@ import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/mar
 import { toast } from "sonner";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
 import { getLiveThesisConvictionDisplay } from "@/lib/featureState";
-import { supabase } from "@/integrations/supabase/client";
 
 // ─── Factor Weight Definitions (with tierPts for scoring) ─────────────────────
 const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; tier: 1 | 2 | 3; tierPts: number; description: string }[] = [
@@ -82,61 +81,13 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
   const weights: Record<string, number> = config.factorWeights || {};
   const hasWeightOverrides = Object.keys(weights).length > 0;
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
-  const [crossTfActivation, setCrossTfActivation] = useState<any>(null);
-  const [crossTfRuntimeTarget, setCrossTfRuntimeTarget] = useState<"paper" | "live">("paper");
   const overrides: Record<string, Record<string, any>> = config.pairGateOverrides || {};
-
-  useEffect(() => {
-    let mounted = true;
-    Promise.all([
-      (supabase as any)
-        .from("strategy_activation_registry")
-        .select("authority_stage,runtime_scope,runtime_enforced,revision,updated_at")
-        .eq("bot_id", "smc")
-        .eq("feature_key", "cross_timeframe_authority")
-        .eq("variant_key", "default")
-        .maybeSingle(),
-      (supabase as any)
-        .from("paper_accounts")
-        .select("execution_mode")
-        .eq("bot_id", "smc")
-        .maybeSingle(),
-    ]).then(([activationResult, accountResult]) => {
-      if (!mounted) return;
-      setCrossTfActivation(activationResult?.data || null);
-      setCrossTfRuntimeTarget(
-        accountResult?.data?.execution_mode === "live" ? "live" : "paper",
-      );
-    }).catch(() => {
-      if (mounted) setCrossTfActivation(null);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const crossTfStatus = useMemo(() => {
     const requested = config.strategy?.crossTfAuthorityMode ?? "observe";
-    const activation = crossTfActivation;
-    const scopeMatches = crossTfRuntimeTarget === "paper"
-      ? ["paper", "live_canary", "live"].includes(activation?.runtime_scope)
-      : ["live_canary", "live"].includes(activation?.runtime_scope);
-    const certified = activation?.runtime_enforced === true && scopeMatches
-      ? activation.authority_stage === "hard_block"
-        ? "hard"
-        : activation.authority_stage === "soft_adjustment"
-        ? "soft"
-        : "observe"
-      : "observe";
-    const rank: Record<string, number> = { observe: 0, soft: 1, hard: 2 };
-    const effective = rank[requested] <= rank[certified]
-      ? requested
-      : certified;
-    return { requested, certified, effective };
+    return { requested, effective: requested };
   }, [
     config.strategy?.crossTfAuthorityMode,
-    crossTfActivation,
-    crossTfRuntimeTarget,
   ]);
 
   // Factor weight helpers
@@ -448,14 +399,13 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
               HTF-to-LTF POI Alignment
             </p>
             <p className="text-[10px] text-muted-foreground mt-1">
-              Available in runtime. A saved request cannot exceed the
-              evidence-certified maximum.
+              The saved mode is the runtime authority. Evidence is still recorded for review.
+              Hard fails closed when parent-child evidence is unavailable.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {[
-              ["Requested", crossTfStatus.requested],
-              ["Certified max", crossTfStatus.certified],
+              ["Saved mode", crossTfStatus.requested],
               ["Effective", crossTfStatus.effective],
             ].map(([label, value]) => (
               <div key={label} className="rounded border border-border bg-muted/30 p-2">
@@ -470,7 +420,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </div>
           <FieldGroup
             label="HTF-to-LTF Alignment Mode"
-            description="Observe records decisions only. Soft and Hard require an approved evidence certificate before becoming effective."
+            description="Observe records decisions only. Soft adjusts scoring. Hard becomes entry authority immediately after Save."
             status={crossTfStatus.effective === "observe" ? "monitoring" : "active"}
           >
             <Select
@@ -481,8 +431,8 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="observe">Observe — evidence only</SelectItem>
-                <SelectItem value="soft">Soft — certified score adjustment</SelectItem>
-                <SelectItem value="hard">Hard — certified entry authority</SelectItem>
+                <SelectItem value="soft">Soft — score adjustment</SelectItem>
+                <SelectItem value="hard">Hard — entry authority</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

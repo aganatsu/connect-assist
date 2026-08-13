@@ -18,7 +18,7 @@ Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
       "Require BSL/SSL Sweep Before Displacement",
       "POI Mitigation State",
       "Maximum Candidates Per Timeframe",
-      "Certified max",
+      "Saved mode",
       "Effective",
     ]
   ) {
@@ -26,12 +26,18 @@ Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
   }
 });
 
-Deno.test("Phase 7 scanner resolves authority without enforcing it", async () => {
+Deno.test("Phase 7 scanner applies the saved authority mode directly", async () => {
   const scanner = await source("supabase/functions/bot-scanner/index.ts");
   assertStringIncludes(scanner, "resolveCrossTimeframeAuthority");
   assertStringIncludes(scanner, "crossTimeframePolicy:");
-  assertStringIncludes(scanner, "requested=${crossTimeframeAuthority.requestedMode}");
-  assertStringIncludes(scanner, "effective=${crossTimeframeAuthority.effectiveMode}");
+  assertStringIncludes(
+    scanner,
+    "requested=${crossTimeframeAuthority.requestedMode}",
+  );
+  assertStringIncludes(
+    scanner,
+    "effective=${crossTimeframeAuthority.effectiveMode}",
+  );
 });
 
 Deno.test("Phase 7 audit view keeps availability and runtime modes separate", async () => {
