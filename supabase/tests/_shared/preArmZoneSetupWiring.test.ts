@@ -9,6 +9,11 @@ Deno.test("pre-arming is disabled by default and requires pending route without 
   assert(scanner.includes("config.limitOrderEnabled && !config.marketFillAtZone"));
 });
 
+Deno.test("visible zone setup expiry owns staging and pending lifecycle clocks", () => {
+  assert(mapper.includes("stagingTTLMinutes: entry.zoneWatchExpiry !== undefined"));
+  assert(mapper.includes("limitOrderExpiryMinutes: entry.zoneWatchExpiry !== undefined"));
+});
+
 Deno.test("pre-armed setup inherits lifecycle identity and has no frozen size", () => {
   const start = scanner.indexOf("signal_reason: { preArmed: true");
   const insert = scanner.slice(start - 900, start + 1200);

@@ -362,6 +362,7 @@ Deno.test("mapNestedToFlat: visible Pending Zone controls map to their runtime b
   assertEquals(result.limitOrderEnabled, true);
   assertAlmostEquals(result.marketFillStrictATRMult, 0.45);
   assertEquals(result.limitOrderExpiryMinutes, 360);
+  assertEquals(result.stagingTTLMinutes, 360);
   assertEquals(result.confirmationMethod, "choch_and_indicators");
 });
 
