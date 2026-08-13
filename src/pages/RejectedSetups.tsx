@@ -29,6 +29,12 @@ import { RecommendationsDashboard } from "@/components/RecommendationsDashboard"
 import { TradeDetailCard } from "@/components/TradeDetailCard";
 import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResearchCard";
 import { StructureAuthorityEvidenceCard } from "@/components/StructureAuthorityEvidenceCard";
+import { PendingLifecycleEvidenceCard } from "@/components/PendingLifecycleEvidenceCard";
+import {
+  buildPendingLifecycleEvidence,
+  type PendingLifecycleOutcome,
+  type PendingLifecycleRow,
+} from "@/lib/pendingLifecycleEvidence";
 import {
   collapseRejectedOpportunities,
   normalizeRejectedGate,
@@ -382,6 +388,61 @@ async function fetchImpulseEntryLifecycleEvidence(
     recent: transitions.slice(0, 10),
   };
 }
+
+async function fetchPendingLifecycleEvidence(userId: string, days: number) {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const { data: orders, error: ordersError } = await (supabase as any)
+    .from("pending_orders")
+    .select("id,order_id,candidate_id,symbol,direction,status,entry_price,current_price,placed_at,expires_at,zone_touch_time,resolved_at,liquidity_confirmation_observation,signal_reason,final_authorization")
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (ordersError) throw new Error(ordersError.message);
+
+  const pendingIds = (orders || []).map((row: any) => row.id);
+  if (pendingIds.length === 0) return buildPendingLifecycleEvidence([], []);
+  const positions: any[] = [];
+  for (let offset = 0; offset < pendingIds.length; offset += 100) {
+    const { data, error } = await (supabase as any)
+      .from("paper_positions")
+      .select("source_pending_order_id,position_id,position_status,close_reason")
+      .eq("user_id", userId)
+      .in("source_pending_order_id", pendingIds.slice(offset, offset + 100));
+    if (error) throw new Error(error.message);
+    positions.push(...(data || []));
+  }
+
+  let history: any[] = [];
+  for (let offset = 0; offset < pendingIds.length; offset += 100) {
+    const { data, error } = await (supabase as any)
+      .from("paper_trade_history")
+      .select("source_pending_order_id,position_id,close_reason,pnl,pnl_pips,closed_at")
+      .eq("user_id", userId)
+      .in("source_pending_order_id", pendingIds.slice(offset, offset + 100))
+      .order("closed_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    history.push(...(data || []));
+  }
+  const historyByOrder = new Map(
+    history.map((row) => [row.source_pending_order_id, {
+      ...row,
+      position_status: "closed",
+    }]),
+  );
+  const activeByOrder = new Map(
+    positions.map((row) => [row.source_pending_order_id, row]),
+  );
+  const outcomes: PendingLifecycleOutcome[] = pendingIds.flatMap((pendingId: string) => {
+    const outcome = historyByOrder.get(pendingId) || activeByOrder.get(pendingId);
+    return outcome ? [outcome] : [];
+  });
+  return buildPendingLifecycleEvidence(
+    (orders || []) as PendingLifecycleRow[],
+    outcomes,
+  );
+}
 async function fetchImpulseLifecycleReplaySummary(
   userId: string,
 ): Promise<ImpulseLifecycleReplaySummary | null> {
@@ -607,6 +668,16 @@ export default function RejectedSetups() {
     retry: false,
   });
   const {
+    data: pendingLifecycleEvidence,
+    isLoading: isLoadingPendingLifecycleEvidence,
+  } = useQuery({
+    queryKey: ["pending-lifecycle-evidence", user?.id, days],
+    queryFn: () => fetchPendingLifecycleEvidence(user!.id, days),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const {
     data: impulseLifecycleReplaySummary,
     refetch: refetchImpulseLifecycleReplaySummary,
   } = useQuery({
@@ -758,9 +829,19 @@ export default function RejectedSetups() {
       ...rawSetups.map((setup) => setup.symbol),
       ...closedTradeEvidence.map((trade) => trade.symbol),
       ...zoneLocalValidation.map((row) => row.symbol),
+      ...(pendingLifecycleEvidence?.rows || []).map((row) => row.symbol),
     ])].sort(),
-    [rawSetups, closedTradeEvidence, zoneLocalValidation],
+    [rawSetups, closedTradeEvidence, zoneLocalValidation, pendingLifecycleEvidence],
   );
+  const filteredPendingLifecycleEvidence = useMemo(() => {
+    if (!pendingLifecycleEvidence || symbolFilter === "all") return pendingLifecycleEvidence;
+    return buildPendingLifecycleEvidence(
+      pendingLifecycleEvidence.rows.filter((row) => row.symbol === symbolFilter),
+      pendingLifecycleEvidence.rows
+        .map((row) => row.linkedPosition)
+        .filter((row): row is PendingLifecycleOutcome => row != null),
+    );
+  }, [pendingLifecycleEvidence, symbolFilter]);
   const stats = useMemo(() => computeStats(setups), [setups]);
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
   const dailyTrend = useMemo(() => computeDailyTrend(setups), [setups]);
@@ -992,6 +1073,7 @@ export default function RejectedSetups() {
         tradeDecisionComparison: singleOwnershipComparison ?? null,
         streamlinedDecisionComparison: streamlinedDecisionComparison ?? null,
         canonicalDealingRangeComparison: dealingRangeComparison ?? null,
+        pendingLifecycleEvidence: filteredPendingLifecycleEvidence ?? null,
         advisor,
       },
     };
@@ -1471,6 +1553,11 @@ export default function RejectedSetups() {
               reviewing={isReviewingImpulseLifecycle}
               onReplay={runImpulseLifecycleReplay}
               onReview={reviewImpulseLifecycleCertificate}
+            />
+
+            <PendingLifecycleEvidenceCard
+              report={filteredPendingLifecycleEvidence}
+              loading={isLoadingPendingLifecycleEvidence}
             />
 
             <StructureAuthorityEvidenceCard setups={setups} />

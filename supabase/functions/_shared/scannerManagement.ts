@@ -640,6 +640,7 @@ export async function manageOpenPositions(
           signal_reason: JSON.stringify(updatedSignalData),
           signal_score: pos.signal_score,
           order_id: pos.order_id,
+          source_pending_order_id: pos.source_pending_order_id || null,
           stop_loss: pos.stop_loss || null,
           take_profit: pos.take_profit || null,
         });

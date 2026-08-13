@@ -2184,6 +2184,7 @@ async function runScanForUser(
         // 2. Insert into paper_trade_history (matches close-on-reverse field set)
         await supabase.from("paper_trade_history").insert({
           user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
+          source_pending_order_id: pos.source_pending_order_id || null,
           symbol: pos.symbol, direction: pos.direction, size: pos.size,
           entry_price: pos.entry_price, exit_price: hitPrice.toString(),
           open_time: pos.open_time || nowClose, closed_at: nowClose,
@@ -9937,6 +9938,7 @@ async function runScanForUser(
             closedOppositeIds.push(opp.position_id);
             await supabase.from("paper_trade_history").insert({
               user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
+              source_pending_order_id: opp.source_pending_order_id || null,
               symbol: pair, direction: opp.direction, size: opp.size,
               entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
               open_time: opp.open_time || nowStr, closed_at: nowStr,

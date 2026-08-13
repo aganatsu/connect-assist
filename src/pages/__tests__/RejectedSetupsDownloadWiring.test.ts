@@ -26,8 +26,16 @@ describe("Rejected Setups complete export", () => {
     expect(handler).toContain("tradeDecisionComparison");
     expect(handler).toContain("streamlinedDecisionComparison");
     expect(handler).toContain("canonicalDealingRangeComparison");
+    expect(handler).toContain("pendingLifecycleEvidence: filteredPendingLifecycleEvidence");
     expect(handler).toContain("advisor");
     expect(handler.match(/downloadFile\(/g)).toHaveLength(1);
     expect(handler).not.toContain("downloadSummary()");
+  });
+
+  it("keeps lifecycle observations separate from rejected opportunities", () => {
+    expect(source).toContain("<PendingLifecycleEvidenceCard");
+    expect(source).toContain('.from("pending_orders")');
+    expect(source).toContain('.from("paper_positions")');
+    expect(source).not.toContain("rawRejectedScans: filteredPendingLifecycleEvidence");
   });
 });
