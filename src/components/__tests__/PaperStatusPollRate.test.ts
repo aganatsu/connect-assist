@@ -54,8 +54,11 @@ describe("paper-status polling cost", () => {
   });
 
   it("live prices are cached server-side", () => {
-    const src = read("../supabase/functions/paper-trading/index.ts");
-    expect(src).toContain("PRICE_CACHE_TTL_MS");
-    expect(src).toMatch(/const cached = priceCache\.get\(symbol\);/);
+    const paperTrading = read("../supabase/functions/paper-trading/index.ts");
+    const candleSource = read("../supabase/functions/_shared/candleSource.ts");
+
+    expect(paperTrading).toContain('import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts"');
+    expect(candleSource).toContain("LIVE_PRICE_CACHE_TTL_MS = 10_000");
+    expect(candleSource).toMatch(/const cached = livePriceCache\.get\(symbol\);/);
   });
 });

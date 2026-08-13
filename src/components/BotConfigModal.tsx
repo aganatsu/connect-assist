@@ -329,7 +329,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     >
       <div
         className={asPage
-          ? "bg-card border border-border w-full flex flex-col overflow-hidden"
+          ? "bg-card border border-border w-full flex flex-col overflow-visible"
           : "bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"}
       >
         {/* Header */}
@@ -595,7 +595,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         </div>
 
         {/* Body: Tab nav + content */}
-        <div className="flex flex-col md:flex-row flex-1 min-h-0">
+        <div className={`flex flex-col md:flex-row flex-1 ${asPage ? "" : "min-h-0"}`}>
           {/* Vertical Tab Nav */}
           <div className="md:w-44 border-b md:border-b-0 md:border-r border-border py-1 md:py-2 shrink-0 overflow-x-auto md:overflow-y-auto flex md:flex-col">
             {filteredTabs.length === 0 && (
@@ -621,7 +621,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
           </div>
 
           {/* Tab Content */}
-          <div ref={contentRef} className="flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-6">
+          <div
+            ref={contentRef}
+            className={`flex-1 p-3 pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-6 ${
+              asPage ? "overflow-visible" : "min-h-0 overflow-y-auto overscroll-contain"
+            }`}
+          >
             <HighlightContext.Provider value={matchedLabels}>
               {config && filteredTabs.length > 0 && (
                 <>

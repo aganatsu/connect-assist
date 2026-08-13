@@ -34,6 +34,11 @@ describe("mobile operability", () => {
     expect(config).toContain("safe-area-inset-bottom");
   });
 
+  it("gives the full-page Bot Config one scroll owner", () => {
+    expect(config).toContain('asPage ? "overflow-visible" : "min-h-0 overflow-y-auto overscroll-contain"');
+    expect(config).toContain('? "bg-card border border-border w-full flex flex-col overflow-visible"');
+  });
+
   it("makes Rejected Setups controls and analysis tabs mobile accessible", () => {
     expect(rejected).toContain("grid-cols-2 sm:flex");
     expect(rejected).toContain("min-w-max justify-start");
