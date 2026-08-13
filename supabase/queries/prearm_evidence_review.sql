@@ -41,22 +41,33 @@ ORDER BY 2 DESC;
 
 
 -- ── 2. Would the new contract have changed the outcome? ──────────────
--- CORRECTED. The original version grouped by pending_orders.status and its
--- comment claimed it showed whether ready=true setups "fill and win". It
--- cannot: pending_orders has no win/loss. Outcomes live in
--- paper_trade_history, reachable only via source_pending_order_id — the column
--- added by #340. Before that lands this query answers fill rate only, and
--- win/loss stays null.
+-- A pending order can produce SEVERAL paper_trade_history rows — partial
+-- closes are separate rows. Joining directly multiplied n by the number of
+-- exits and treated each partial as its own outcome, so a scaled-out winner
+-- counted as several trades. History is aggregated per pending order first, and
+-- the trade is won or lost on its TOTAL pnl.
+--
+-- Depends on #340 for source_pending_order_id. Until that lands, closed_trades
+-- is 0 and this reports fill rate only.
+WITH outcome AS (
+  SELECT source_pending_order_id AS pending_id,
+         sum(pnl) AS total_pnl,
+         count(*) AS exit_legs
+  FROM paper_trade_history
+  WHERE source_pending_order_id IS NOT NULL
+  GROUP BY 1
+)
 SELECT
   (p.liquidity_confirmation_observation->>'ready')::boolean AS sequence_ready,
   p.status,
-  count(*) AS n,
-  count(h.id) AS closed_trades,
-  count(*) FILTER (WHERE h.pnl > 0) AS wins,
-  count(*) FILTER (WHERE h.pnl <= 0) AS losses,
-  round(avg(h.pnl)::numeric, 2) AS avg_pnl
+  count(*) AS orders,
+  count(o.pending_id) AS closed_trades,
+  count(*) FILTER (WHERE o.total_pnl > 0) AS wins,
+  count(*) FILTER (WHERE o.total_pnl <= 0) AS losses,
+  round(avg(o.total_pnl)::numeric, 2) AS avg_pnl,
+  round(avg(o.exit_legs)::numeric, 2) AS avg_exit_legs
 FROM pending_orders p
-LEFT JOIN paper_trade_history h ON h.source_pending_order_id = p.id
+LEFT JOIN outcome o ON o.pending_id = p.id
 WHERE p.liquidity_confirmation_observation IS NOT NULL
   AND p.created_at > now() - interval '7 days'
 GROUP BY 1, 2
@@ -64,15 +75,28 @@ ORDER BY 1 DESC NULLS LAST, 3 DESC;
 
 
 -- ── 3. Ordering-rule timings ─────────────────────────────────────────
--- Sanity on the two rules agreed for the contract:
---   sweepTime >= zoneTouchTime   (same candle allowed)
---   confirmationTime > sweepTime (strictly later closed candle)
+-- Sanity on the two agreed rules:
+--   sweepTime >= zoneTouchTime    (same candle allowed)
+--   confirmationTime > sweepTime  (strictly LATER closed candle, because OHLC
+--                                  cannot prove intrabar ordering)
 --
--- sweep_to_confirm_secs at or below one bar interval means confirmations are
--- landing on the same candle as their sweep, which OHLC cannot order. That
--- would mean the strict rule is doing real work rather than being a formality.
+-- Reading sweep_to_confirm_secs correctly:
+--   = 0                      same candle — the case the strict rule exists to
+--                            reject. OHLC cannot say which came first.
+--   = one bar interval       the valid next candle. This is the NORMAL pass,
+--                            not a near-miss.
+--   > one bar interval       confirmation came later still; also valid.
+--
+-- An earlier version of this comment claimed "at or below one interval means
+-- same candle". That is wrong and inverted the reading: exactly one interval
+-- later is precisely what the rule wants.
+--
+-- The interval itself is per-setup, so the frozen confirmation timeframe is
+-- selected alongside rather than assumed.
 SELECT
   symbol,
+  frozen_strategy_context->'stylePolicy'->'timeframes'->'roles'->>'confirmation'
+    AS confirmation_tf,
   liquidity_confirmation_observation->>'reasonCode' AS reason_code,
   (liquidity_confirmation_observation->>'zoneTouchTime')::timestamptz AS touched,
   (liquidity_confirmation_observation->>'sweepTime')::timestamptz AS swept,
@@ -89,79 +113,83 @@ WHERE liquidity_confirmation_observation->>'sweepTime' IS NOT NULL
   AND created_at > now() - interval '7 days'
 ORDER BY created_at DESC
 LIMIT 50;
--- CORRECTED: also requires zoneTouchTime, or touch_to_sweep_secs is NULL for
--- every row that never touched and the output is mostly blanks. And as with
--- query 1, each row is one order's LAST observation, not a timeline.
+-- As with query 1, each row is one order's LAST observation, not a timeline.
 
 
 -- ── 4. Does frozen-entry location block independently? ───────────────
--- CORRECTED. The original read
---   signal_reason->'frozenExecutablePlan'->'location'->>'allowed'
--- from pending_orders. That path does not exist. frozenExecutablePlan is only
--- ever set on `detail` (bot-scanner:10817) and reaches scan_logs.details_json;
--- the pre-arm insert writes signal_reason = {preArmed, candidateId} and nothing
--- else. The original returned NULL for every row and would have read as "no
--- overlap" — the most misleading possible result for a query whose purpose is
--- deciding whether steps 6 and 7 can ship together.
+-- frozenExecutablePlan never reaches pending_orders; it is set on the scan
+-- detail (bot-scanner:10817) and lands in scan_logs.details_json. The pre-arm
+-- insert writes signal_reason = {preArmed, candidateId} and nothing else.
+--
+-- ONE ROW PER CANDIDATE. A setup is re-observed on every scan while it lives,
+-- so counting raw scan details weights long-lived setups by however many cycles
+-- they survived — a candidate watched for four hours would outvote twelve
+-- short-lived ones. DISTINCT ON takes each candidate's LATEST observation.
 --
 -- details_json is an array from the main scan path and an object from the
 -- game-plan path, and a set-returning function cannot sit inside CASE.
-SELECT
-  (d->'liquidityConfirmationObservation'->>'ready')::boolean AS sequence_ready,
-  (d->'frozenExecutablePlan'->'location'->>'allowed')::boolean AS frozen_entry_allowed,
-  count(*) AS n
-FROM scan_logs,
-     LATERAL jsonb_array_elements(
-       CASE WHEN jsonb_typeof(details_json) = 'array'
-            THEN details_json ELSE jsonb_build_array(details_json) END
-     ) AS x(d)
-WHERE created_at > now() - interval '7 days'
-  AND d ? 'frozenExecutablePlan'
-GROUP BY 1, 2
-ORDER BY 3 DESC;
+WITH obs AS (
+  SELECT DISTINCT ON (d->'frozenExecutablePlan'->>'candidateId')
+    d->'frozenExecutablePlan'->>'candidateId' AS candidate_id,
+    (d->'liquidityConfirmationObservation'->>'ready')::boolean AS sequence_ready,
+    (d->'frozenExecutablePlan'->'location'->>'allowed')::boolean AS frozen_entry_allowed
+  FROM scan_logs,
+       LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(details_json) = 'array'
+              THEN details_json ELSE jsonb_build_array(details_json) END
+       ) AS x(d)
+  WHERE created_at > now() - interval '7 days'
+    AND d ? 'frozenExecutablePlan'
+    AND d->'frozenExecutablePlan'->>'candidateId' IS NOT NULL
+  ORDER BY d->'frozenExecutablePlan'->>'candidateId', created_at DESC
+)
+SELECT sequence_ready, frozen_entry_allowed, count(*) AS candidates
+FROM obs GROUP BY 1, 2 ORDER BY 3 DESC;
 
 
 -- ── 5. Distance vs reachability ──────────────────────────────────────
--- CORRECTED, twice over.
+-- Arm-time distance is NOT recoverable from pending_orders: current_price is
+-- refreshed on every scan, so for a terminal row it is the last observed price.
+-- scan_logs records it as staging.zoneDistance.
 --
--- (a) The original used abs(entry_price - current_price) and called it
---     "distance at arm time". current_price is refreshed on every scan
---     (bot-scanner updates it in the pending loop), so for a terminal row it is
---     the last observed price, not the price when the order was armed. Arm-time
---     distance is not recoverable from pending_orders at all.
+-- FIRST observation per candidate, not every scan. A setup that waits four
+-- hours emits ~48 staging observations; counting them all would report
+-- "armed_observations" as if it were armed setups, and would bias the average
+-- toward whichever setups lingered longest. DISTINCT ON ... ORDER BY created_at
+-- ASC takes the arm-time reading, which is the one the question is about.
 --
--- (b) It averaged raw price deltas across symbols. 0.0010 is 10 pips on
---     USD/CHF, 0.1 pips on USD/JPY and immaterial on XAU/USD. The average was
---     meaningless.
---
--- Arm-time distance IS recorded in scan_logs as staging.zoneDistance, so read
--- it there and normalise by the pair's pip size.
+-- Raw price deltas are not comparable across symbols — 0.0010 is 10 pips on
+-- USD/CHF, 0.1 on USD/JPY, immaterial on XAU/USD — so distance is normalised
+-- to pips per pair.
+WITH armed AS (
+  SELECT DISTINCT ON (d->'frozenExecutablePlan'->>'candidateId')
+    d->>'pair' AS symbol,
+    d->'frozenExecutablePlan'->>'candidateId' AS candidate_id,
+    (d->'staging'->>'zoneDistance')::numeric AS zone_distance
+  FROM scan_logs,
+       LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(details_json) = 'array'
+              THEN details_json ELSE jsonb_build_array(details_json) END
+       ) AS x(d)
+  WHERE created_at > now() - interval '7 days'
+    AND (d->'staging'->>'zoneDistance') IS NOT NULL
+    AND d->'frozenExecutablePlan'->>'candidateId' IS NOT NULL
+  ORDER BY d->'frozenExecutablePlan'->>'candidateId', created_at ASC
+)
 SELECT
-  d->>'pair' AS symbol,
-  count(*) AS armed_observations,
-  round(avg((d->'staging'->>'zoneDistance')::numeric /
-    CASE
-      WHEN d->>'pair' LIKE '%JPY%' THEN 0.01
-      WHEN d->>'pair' IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
-      ELSE 0.0001
-    END, 1) AS avg_distance_pips,
-  round(max((d->'staging'->>'zoneDistance')::numeric /
-    CASE
-      WHEN d->>'pair' LIKE '%JPY%' THEN 0.01
-      WHEN d->>'pair' IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
-      ELSE 0.0001
-    END, 1) AS max_distance_pips
-FROM scan_logs,
-     LATERAL jsonb_array_elements(
-       CASE WHEN jsonb_typeof(details_json) = 'array'
-            THEN details_json ELSE jsonb_build_array(details_json) END
-     ) AS x(d)
-WHERE created_at > now() - interval '7 days'
-  AND (d->'staging'->>'zoneDistance') IS NOT NULL
-GROUP BY 1
-ORDER BY 3 DESC;
+  symbol,
+  count(*) AS armed_setups,
+  round(avg(zone_distance / CASE
+    WHEN symbol LIKE '%JPY%' THEN 0.01
+    WHEN symbol IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
+    ELSE 0.0001 END), 1) AS avg_distance_pips,
+  round(max(zone_distance / CASE
+    WHEN symbol LIKE '%JPY%' THEN 0.01
+    WHEN symbol IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
+    ELSE 0.0001 END), 1) AS max_distance_pips
+FROM armed GROUP BY 1 ORDER BY 2 DESC;
 
--- Companion: did anything actually touch? Status-only, no distance arithmetic.
+-- Companion: did anything actually touch? Status only, no distance arithmetic.
 SELECT status, count(*) AS n,
        count(*) FILTER (WHERE zone_touch_time IS NOT NULL) AS ever_touched,
        avg(expires_at - placed_at) AS avg_ttl
@@ -189,7 +217,13 @@ SELECT
   count(DISTINCT p.id) FILTER (WHERE p.zone_touch_time IS NOT NULL) AS touched,
   count(DISTINCT p.id) FILTER (WHERE p.status = 'filled') AS filled
 FROM staged_setups s
-LEFT JOIN pending_orders p ON p.candidate_id = s.candidate_id
+LEFT JOIN pending_orders p
+  ON  p.user_id      = s.user_id
+  AND p.bot_id       = s.bot_id
+  AND p.candidate_id = s.candidate_id
+  -- Scoped, because candidate_id alone is not unique: both uniqueness indexes
+  -- are on (user_id, bot_id, candidate_id). Joining on the id alone can attach
+  -- another account's pending order to this account's staged setup.
 WHERE s.created_at > now() - interval '14 days'
 GROUP BY 1
 ORDER BY 1 DESC;
