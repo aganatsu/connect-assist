@@ -161,3 +161,17 @@ export function evaluatePostChochRetracement(
   }
   return plan;
 }
+
+export function rearmPostChochRetracement(
+  plan: PostChochEntryPlan,
+  reason: string,
+): PostChochEntryPlan {
+  if (plan.state !== "ready") return plan;
+  return {
+    ...plan,
+    state: "awaiting_retracement",
+    touchedAt: null,
+    resolvedAt: null,
+    reason: `Final authorization waiting: ${reason}`,
+  };
+}

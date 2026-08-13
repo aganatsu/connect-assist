@@ -397,7 +397,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               <SelectContent>
                 <SelectItem value="off">Off</SelectItem>
                 <SelectItem value="avoid_wrong_side">Block Wrong-Side Entries</SelectItem>
-                <SelectItem value="strict_value">Require Discount Longs / Premium Shorts</SelectItem>
+                <SelectItem value="strict_value">Require Discount Buys / Premium Sells</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

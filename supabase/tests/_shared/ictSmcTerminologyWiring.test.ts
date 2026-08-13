@@ -12,7 +12,7 @@ Deno.test("Bot Config uses familiar ICT and SMC workflow terminology", () => {
     "Trade Decision Mode",
     "Premium/Discount Entry Rule",
     "Block Wrong-Side Entries",
-    "Require Discount Longs / Premium Shorts",
+    "Require Discount Buys / Premium Sells",
     "HTF Bias",
     "BSL/SSL Liquidity Levels",
   ]) assertStringIncludes(scan, label);

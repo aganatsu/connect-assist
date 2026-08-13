@@ -5,16 +5,32 @@ import {
 } from "./singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "./singleOwnershipEnforcement.ts";
 import { normalizeRejectedGate } from "./rejectedSetupLogger.ts";
+import type { FrozenSetupStrategyContext } from "./setupLifecycle.ts";
 
 export function evaluateSingleOwnershipFillAuthorization(input: {
   frozenDecision: SingleOwnershipDecisionResult | null;
+  frozenStrategyContext?: FrozenSetupStrategyContext | null;
   evaluatedAt: string;
   candidateId: string;
   symbol: string;
   direction: "long" | "short";
-  directionVerdict: { verdict?: string | null; shouldBlock?: boolean | null; id?: string | null } | null;
-  canonicalLocation: { required: boolean; available: boolean; allowed: boolean | null; rangeId?: string | null; reasonCode?: string | null };
-  confirmation: { passed: boolean; authorityVersion?: string | null; reasonCodes?: string[] };
+  directionVerdict: {
+    verdict?: string | null;
+    shouldBlock?: boolean | null;
+    id?: string | null;
+  } | null;
+  canonicalLocation: {
+    required: boolean;
+    available: boolean;
+    allowed: boolean | null;
+    rangeId?: string | null;
+    reasonCode?: string | null;
+  };
+  confirmation: {
+    passed: boolean;
+    authorityVersion?: string | null;
+    reasonCodes?: string[];
+  };
   thesis: { valid: boolean | null; reasonCodes?: string[] };
   finalChecks: Array<{ passed: boolean; reason: string }>;
   rawFinalAuthorized: boolean;
@@ -22,6 +38,23 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
   runtimeTarget: "paper" | "live";
 }) {
   const frozenZone = input.frozenDecision?.authorities.zoneStory;
+  const frozenOriginatingZone = input.frozenStrategyContext?.scenarioZoneStory
+    .originatingZone;
+  const inheritedZone =
+    frozenOriginatingZone && Object.keys(frozenOriginatingZone).length > 0
+      ? {
+        available: true,
+        valid: true,
+        entryReady: true,
+        source: "frozen_setup_context",
+        candidateId: input.frozenStrategyContext?.candidateId ||
+          input.candidateId,
+        poiType: typeof frozenOriginatingZone.type === "string"
+          ? frozenOriginatingZone.type
+          : null,
+        reasonCodes: ["frozen_zone_story_inherited", "fill_confirmation_ready"],
+      }
+      : null;
   const decision = evaluateSingleOwnershipDecision({
     evaluatedAt: input.evaluatedAt,
     identity: {
@@ -30,19 +63,27 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
       direction: input.direction,
     },
     direction: {
-      verdict: input.directionVerdict?.verdict === "long" || input.directionVerdict?.verdict === "short" || input.directionVerdict?.verdict === "neutral"
+      verdict: input.directionVerdict?.verdict === "long" ||
+          input.directionVerdict?.verdict === "short" ||
+          input.directionVerdict?.verdict === "neutral"
         ? input.directionVerdict.verdict
         : null,
       shouldBlock: input.directionVerdict?.shouldBlock ?? null,
       evidenceId: input.directionVerdict?.id || null,
     },
-    zoneStory: frozenZone ? { ...frozenZone, entryReady: true, reasonCodes: [...frozenZone.reasonCodes, "fill_confirmation_ready"] } : {
-      available: false,
-      valid: null,
-      entryReady: null,
-      source: null,
-      reasonCodes: ["frozen_zone_story_unavailable"],
-    },
+    zoneStory: frozenZone
+      ? {
+        ...frozenZone,
+        entryReady: true,
+        reasonCodes: [...frozenZone.reasonCodes, "fill_confirmation_ready"],
+      }
+      : inheritedZone || {
+        available: false,
+        valid: null,
+        entryReady: null,
+        source: null,
+        reasonCodes: ["frozen_zone_story_unavailable"],
+      },
     canonicalLocation: input.canonicalLocation,
     confirmation: {
       required: true,
