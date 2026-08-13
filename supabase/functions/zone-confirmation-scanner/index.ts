@@ -52,6 +52,7 @@ import {
   derivePostChochEntryPlan,
   evaluatePostChochRetracement,
   normalizeAfterChochMode,
+  rearmPostChochRetracement,
   type PostChochEntryPlan,
 } from "../_shared/postChochRetracement.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
@@ -96,6 +97,7 @@ import {
   evaluateFinalTradeAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
 import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
@@ -1362,6 +1364,7 @@ Deno.serve(async (req) => {
           });
         const ownershipFill = evaluateSingleOwnershipFillAuthorization({
           frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
+          frozenStrategyContext: readFrozenSetupStrategyContext(pending),
           evaluatedAt: nowStr,
           candidateId: parsedPendingEvidence.candidateId || pending.id,
           symbol: pending.symbol,
@@ -1431,7 +1434,7 @@ Deno.serve(async (req) => {
           pendingCanonicalEnforcement.authorized;
         const authorityRawAuthorization = canonicalFillAuthorized
           ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement }
-          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: ownershipFill.retryable, reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement };
+          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingFinalAuthorizationRetryable({ raw: rawAuthorization, ownership: ownershipFill.decision }), reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement };
         const authorization = attachDecisionContext(
           authorityRawAuthorization,
           buildTradeDecisionContext({
@@ -1456,12 +1459,16 @@ Deno.serve(async (req) => {
 
         if (!authorization.authorized) {
           const cancelPermanently = !authorization.retryable;
+          const rearmedRetracement = !cancelPermanently && retracementReadyPlan
+            ? rearmPostChochRetracement(retracementReadyPlan, authorization.reason)
+            : null;
           await supabase.from("pending_orders").update({
             ...(cancelPermanently ? {
               status: "cancelled",
               cancel_reason: `[final-auth:${authorization.code}] ${authorization.reason}`,
               resolved_at: nowStr,
             } : {}),
+            ...(rearmedRetracement ? { post_confirmation_entry: rearmedRetracement } : {}),
             final_authorization: authorization,
           }).eq("id", pending.id).eq("user_id", userId);
           if (cancelPermanently) cancelled++;

@@ -89,7 +89,7 @@ Deno.test("missing valid impulse is unavailable and never invents a rolling rang
   });
 });
 
-Deno.test("legacy toggles map to Avoid Wrong Side, never Strict Value", () => {
+Deno.test("legacy toggles map to Avoid Wrong Side, never Require Discount Buys / Premium Sells", () => {
   assertEquals(normalizeDealingRangeMode(undefined, {
     onlyBuyInDiscount: true,
     onlySellInPremium: true,
@@ -128,7 +128,7 @@ Deno.test("Avoid Wrong Side allows equilibrium boundaries", () => {
   assertEquals(evaluateCanonicalDealingRange({ range: selection.range, direction: "long", price: 1.1555, mode: "avoid_wrong_side" }).allowed, true);
 });
 
-Deno.test("Strict Value names ICT Premium and shows the required Discount price", () => {
+Deno.test("Require Discount Buys / Premium Sells names ICT Premium and shows the required Discount price", () => {
   const bullish = selectCanonicalDealingRange({
     parentImpulse: {
       impulseId: "daily-bullish",
@@ -149,10 +149,10 @@ Deno.test("Strict Value names ICT Premium and shows the required Discount price"
   assertEquals(result.zone, "premium");
   assertStringIncludes(result.explanation, "Long rejected: entry is in Premium");
   assertStringIncludes(result.explanation, "Entry 1.90874 is at 53.4% (Premium)");
-  assertStringIncludes(result.explanation, "Strict Value requires a Discount entry below 45% (1.90378)");
+  assertStringIncludes(result.explanation, "Require Discount Buys / Premium Sells requires a Discount entry below 45% (1.90378)");
 });
 
-Deno.test("Strict Value uses exclusive 45 and 55 percent thresholds", () => {
+Deno.test("Require Discount Buys / Premium Sells uses exclusive 45 and 55 percent thresholds", () => {
   const selection = selectCanonicalDealingRange({ parentImpulse: parent, frozenAt: "now" });
   if (!selection.available) throw new Error("expected range");
   assertEquals(evaluateCanonicalDealingRange({ range: selection.range, direction: "long", price: 1.1545, mode: "strict_value" }).allowed, false);

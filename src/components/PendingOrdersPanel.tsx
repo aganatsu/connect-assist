@@ -152,6 +152,10 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     const retracementPlan = order.post_confirmation_entry;
     const waitingForRetracement =
       retracementPlan?.state === "awaiting_retracement";
+    const authorizationWait = order.final_authorization?.authorized === false &&
+      order.final_authorization?.retryable === true
+      ? order.final_authorization.reason
+      : null;
     return (
       <div
         key={order.order_id}
@@ -277,6 +281,12 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             : generatePendingOrderNarrative(order)
           }
         </p>
+
+        {authorizationWait && (
+          <div className="border border-highlight/30 bg-highlight/5 px-2 py-1.5 text-[11px] text-highlight">
+            Waiting for final entry conditions: {authorizationWait}
+          </div>
+        )}
 
         {order.liquidity_confirmation_observation && (
           <details className="border-t border-border/40 pt-2 text-[11px]">
@@ -542,7 +552,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                     </Badge>
                     <span className="text-foreground/60">@ {Number(order.entry_price).toFixed(5)}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex max-w-[65%] flex-col items-end gap-0.5 text-right">
+                    <div className="flex items-center gap-2">
                     <span className={`capitalize ${statusColor(order.status)}`}>
                       {order.status === "filled" ? "confirmed" : order.status}
                     </span>
@@ -551,6 +562,10 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                         ? new Date(order.resolved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                         : ""}
                     </span>
+                    </div>
+                    {order.cancel_reason && (
+                      <span className="text-[11px] leading-snug text-loss/90">{order.cancel_reason}</span>
+                    )}
                   </div>
                 </div>
               ))}
