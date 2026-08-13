@@ -129,7 +129,13 @@ LIMIT 50;
 -- details_json is an array from the main scan path and an object from the
 -- game-plan path, and a set-returning function cannot sit inside CASE.
 WITH obs AS (
-  SELECT DISTINCT ON (d->'frozenExecutablePlan'->>'candidateId')
+  SELECT DISTINCT ON (
+    scan_logs.user_id,
+    scan_logs.bot_id,
+    d->'frozenExecutablePlan'->>'candidateId'
+  )
+    scan_logs.user_id,
+    scan_logs.bot_id,
     d->'frozenExecutablePlan'->>'candidateId' AS candidate_id,
     (d->'liquidityConfirmationObservation'->>'ready')::boolean AS sequence_ready,
     (d->'frozenExecutablePlan'->'location'->>'allowed')::boolean AS frozen_entry_allowed
@@ -141,7 +147,11 @@ WITH obs AS (
   WHERE created_at > now() - interval '7 days'
     AND d ? 'frozenExecutablePlan'
     AND d->'frozenExecutablePlan'->>'candidateId' IS NOT NULL
-  ORDER BY d->'frozenExecutablePlan'->>'candidateId', created_at DESC
+  ORDER BY
+    scan_logs.user_id,
+    scan_logs.bot_id,
+    d->'frozenExecutablePlan'->>'candidateId',
+    created_at DESC
 )
 SELECT sequence_ready, frozen_entry_allowed, count(*) AS candidates
 FROM obs GROUP BY 1, 2 ORDER BY 3 DESC;
@@ -158,11 +168,18 @@ FROM obs GROUP BY 1, 2 ORDER BY 3 DESC;
 -- toward whichever setups lingered longest. DISTINCT ON ... ORDER BY created_at
 -- ASC takes the arm-time reading, which is the one the question is about.
 --
--- Raw price deltas are not comparable across symbols — 0.0010 is 10 pips on
--- USD/CHF, 0.1 on USD/JPY, immaterial on XAU/USD — so distance is normalised
--- to pips per pair.
+-- Raw price deltas are not comparable across asset classes. This query is
+-- intentionally limited to supported fiat-FX crosses, where the unit is
+-- unambiguously pips. Crypto, indices and commodities use points or
+-- instrument-specific display units and must be analysed separately.
 WITH armed AS (
-  SELECT DISTINCT ON (d->'frozenExecutablePlan'->>'candidateId')
+  SELECT DISTINCT ON (
+    scan_logs.user_id,
+    scan_logs.bot_id,
+    d->'frozenExecutablePlan'->>'candidateId'
+  )
+    scan_logs.user_id,
+    scan_logs.bot_id,
     d->>'pair' AS symbol,
     d->'frozenExecutablePlan'->>'candidateId' AS candidate_id,
     (d->'staging'->>'zoneDistance')::numeric AS zone_distance
@@ -174,18 +191,24 @@ WITH armed AS (
   WHERE created_at > now() - interval '7 days'
     AND (d->'staging'->>'zoneDistance') IS NOT NULL
     AND d->'frozenExecutablePlan'->>'candidateId' IS NOT NULL
-  ORDER BY d->'frozenExecutablePlan'->>'candidateId', created_at ASC
+    AND split_part(d->>'pair', '/', 1)
+      IN ('USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF')
+    AND split_part(d->>'pair', '/', 2)
+      IN ('USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF')
+  ORDER BY
+    scan_logs.user_id,
+    scan_logs.bot_id,
+    d->'frozenExecutablePlan'->>'candidateId',
+    created_at ASC
 )
 SELECT
   symbol,
   count(*) AS armed_setups,
   round(avg(zone_distance / CASE
     WHEN symbol LIKE '%JPY%' THEN 0.01
-    WHEN symbol IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
     ELSE 0.0001 END), 1) AS avg_distance_pips,
   round(max(zone_distance / CASE
     WHEN symbol LIKE '%JPY%' THEN 0.01
-    WHEN symbol IN ('XAU/USD','XAG/USD','BTC/USD','ETH/USD','US Oil') THEN 0.01
     ELSE 0.0001 END), 1) AS max_distance_pips
 FROM armed GROUP BY 1 ORDER BY 2 DESC;
 
