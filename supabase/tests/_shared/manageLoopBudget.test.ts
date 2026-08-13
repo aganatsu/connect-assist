@@ -48,9 +48,9 @@ Deno.test("iterations per minute are bounded", () => {
 Deno.test("worst-case manage-loop credit burn leaves room for the scanner", () => {
   const iterations = Math.ceil(constant("LOOP_BUDGET_MS") / constant("LOOP_INTERVAL_MS"));
   const openSymbols = 5;
-  // Price refresh and the breach check share a cache key when the entry
-  // timeframe matches, so budget ~1.5 fetches per symbol per pass.
-  const perMinute = iterations * openSymbols * 1.5;
+  // Management uses one shared live-quote request per symbol per pass.
+  // Other safety checks may still fetch candles when their feature is active.
+  const perMinute = iterations * openSymbols;
   assert(
     perMinute <= 25,
     `~${perMinute} credits/min from management alone; the plan is 55 and the ` +

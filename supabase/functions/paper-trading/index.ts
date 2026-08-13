@@ -7,87 +7,12 @@ import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
 
 
 setCreditCallerContext("paper-trading");
 
-// ─── TwelveData Symbol Mapping (for live prices) ────────────────────
-const TWELVE_DATA_SYMBOLS: Record<string, string> = {
-  // Forex Majors
-  "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
-  "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
-  "USD/CHF": "USD/CHF",
-  // Forex Crosses
-  "EUR/GBP": "EUR/GBP", "EUR/JPY": "EUR/JPY", "GBP/JPY": "GBP/JPY",
-  "EUR/AUD": "EUR/AUD", "EUR/CAD": "EUR/CAD", "EUR/CHF": "EUR/CHF",
-  "EUR/NZD": "EUR/NZD", "GBP/AUD": "GBP/AUD", "GBP/CAD": "GBP/CAD",
-  "GBP/CHF": "GBP/CHF", "GBP/NZD": "GBP/NZD",   "AUD/CAD": "AUD/CAD", "AUD/JPY": "AUD/JPY", "CAD/JPY": "CAD/JPY",
-  "AUD/CHF": "AUD/CHF", "AUD/NZD": "AUD/NZD", "CAD/CHF": "CAD/CHF",
-  "CHF/JPY": "CHF/JPY", "NZD/CAD": "NZD/CAD", "NZD/CHF": "NZD/CHF",
-  "NZD/JPY": "NZD/JPY",
-  // Indices
-  "US30": "DJI", "NAS100": "IXIC", "SPX500": "SPX",
-  // Commodities
-  "XAU/USD": "XAU/USD", "XAG/USD": "XAG/USD", "US Oil": "WTI/USD",
-  // Crypto
-  "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
-};
-
-/**
- * Live prices are cached briefly.
- *
- * The status endpoint fetches one price per open symbol, and three UI
- * components share the "paper-status" query key — React Query then refetches at
- * the SHORTEST observer interval, which is BotView's 5s. Three positions
- * therefore cost 36 TwelveData credits a minute from a single open tab, against
- * a plan limit of 55. Measured 2026-08-11: 75/min average, 371/min peak, 100%
- * of the quota, and requests failing with 429 — which surfaces as
- * "Insufficient candles (0, need 20)" and a skipped pair.
- *
- * A 10s TTL collapses the 5s polling to at most one call per symbol per 10s
- * without changing what the user sees. Exit detection is unaffected: bot-scanner
- * re-evaluates every position against real closed bars each cycle and is the
- * authoritative closer.
- */
-const PRICE_CACHE_TTL_MS = 10_000;
-
-/**
- * This function talks to TwelveData DIRECTLY — it does not go through
- * candleSource, so candleSource's limiter never saw these calls. Both fetches
- * below therefore reserve from the shared budget themselves.
- *
- * maxWaitMs is 0 on purpose: this is a 5-second poll of open positions. Waiting
- * for a credit would just queue behind the next poll. Skipping is correct —
- * the cached price stands, and bot-scanner is the authoritative closer.
- */
 const TD_CREDIT_LIMIT = 50;
-const priceCache: Map<string, { value: number; expiresAt: number }> = new Map();
-
-async function fetchLivePrice(symbol: string): Promise<number | null> {
-  const cached = priceCache.get(symbol);
-  if (cached && Date.now() < cached.expiresAt) return cached.value;
-
-  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
-  if (!apiKey) return null;
-  const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
-  if (!tdSymbol) return null;
-  if (!await acquireApiCredit("twelvedata", TD_CREDIT_LIMIT, { label: "paper-trading/price" })) {
-    return cached?.value ?? null;
-  }
-  try {
-    const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.status === "error" || !data?.price) return null;
-    const price = Number(data.price);
-    if (!Number.isFinite(price)) return null;
-    priceCache.set(symbol, { value: price, expiresAt: Date.now() + PRICE_CACHE_TTL_MS });
-    return price;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Fetch recent 15-minute candles from TwelveData and compute ATR(14).
