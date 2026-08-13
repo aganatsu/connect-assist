@@ -17,4 +17,9 @@ Deno.test("impulse replay summary explains readiness denominator", () => {
   assertStringIncludes(migration, "AS expired");
   assertStringIncludes(migration, "AS exhausted");
   assertStringIncludes(migration, "outcome IN ('won', 'lost')) >= 30 AS minimum_sample_ready");
+  const existingLast = migration.indexOf("AS minimum_sample_ready");
+  const firstNew = migration.indexOf("AS no_entries");
+  if (!(existingLast >= 0 && firstNew > existingLast)) {
+    throw new Error("New view columns must be appended after the existing view contract");
+  }
 });
