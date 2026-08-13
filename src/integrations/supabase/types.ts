@@ -1339,10 +1339,10 @@ export type Database = {
           position_status: string
           signal_reason: string | null
           signal_score: string
-          source_pending_order_id: string | null
           size: number | null
           size_old: string | null
           source_candidate_key: string | null
+          source_pending_order_id: string | null
           staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
@@ -1412,10 +1412,10 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
-          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           source_candidate_key?: string | null
+          source_pending_order_id?: string | null
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -1485,10 +1485,10 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
-          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
           source_candidate_key?: string | null
+          source_pending_order_id?: string | null
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -1560,9 +1560,9 @@ export type Database = {
           position_id: string
           signal_reason: string | null
           signal_score: string
-          source_pending_order_id: string | null
           size: number | null
           size_old: string | null
+          source_pending_order_id: string | null
           stop_loss: string | null
           streamlined_decision_frozen_at: string | null
           streamlined_decision_latest: Json | null
@@ -1591,9 +1591,9 @@ export type Database = {
           position_id: string
           signal_reason?: string | null
           signal_score?: string
-          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
+          source_pending_order_id?: string | null
           stop_loss?: string | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
@@ -1622,9 +1622,9 @@ export type Database = {
           position_id?: string
           signal_reason?: string | null
           signal_score?: string
-          source_pending_order_id?: string | null
           size?: number | null
           size_old?: string | null
+          source_pending_order_id?: string | null
           stop_loss?: string | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
@@ -1633,7 +1633,15 @@ export type Database = {
           take_profit?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "paper_trade_history_source_pending_order_id_fkey"
+            columns: ["source_pending_order_id"]
+            isOneToOne: false
+            referencedRelation: "pending_orders"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       pending_orders: {
         Row: {
