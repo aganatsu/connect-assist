@@ -506,6 +506,16 @@ Deno.serve(async (req) => {
       try {
         const userId = pending.user_id;
         const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
+        if (pending.expires_at && new Date(pending.expires_at).getTime() <= Date.now()) {
+          await supabase.from("pending_orders").update({
+            status: "expired",
+            cancel_reason: "TTL expired before confirmation fill",
+            resolved_at: new Date().toISOString(),
+          }).eq("id", pending.id).eq("status", "awaiting_confirmation");
+          cancelled++;
+          console.log(`[zone-confirm] EXPIRED ${pending.symbol} ${pending.direction} before confirmation processing`);
+          continue;
+        }
         await markScannerOperation(
           supabase,
           operationRuns.get(userId),

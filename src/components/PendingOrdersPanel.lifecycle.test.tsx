@@ -24,4 +24,11 @@ describe("Zone Setup confirmation contract", () => {
     expect(source).toContain("Confirmation active · {getTimeRemaining(order.expires_at)}");
     expect(source).not.toContain("Confirmation active — no time limit");
   });
+
+  it("does not claim the structure trigger is building before zone touch", () => {
+    expect(source).toContain("STARTS AFTER TOUCH");
+    expect(source).toContain('order.impulse_entry_lifecycle.mode === "enforce"');
+    expect(source).toContain("OBSERVE ONLY");
+    expect(source).toContain("ENFORCED");
+  });
 });

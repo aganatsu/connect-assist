@@ -301,7 +301,12 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {order.impulse_entry_lifecycle?.confirmation && (
           <details className="border-t border-border/40 pt-2 text-[11px]">
             <summary className="cursor-pointer text-foreground/70 font-medium">
-              Structure confirmation plan · {order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
+              Structure confirmation plan · {(!isHunting && order.impulse_entry_lifecycle.confirmation.status === "building")
+                ? "STARTS AFTER TOUCH"
+                : order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
+              <span className={`ml-2 text-[9px] ${order.impulse_entry_lifecycle.mode === "enforce" ? "text-warn" : "text-highlight"}`}>
+                {order.impulse_entry_lifecycle.mode === "enforce" ? "ENFORCED" : "OBSERVE ONLY"}
+              </span>
             </summary>
             <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-foreground/60">
               <span>
