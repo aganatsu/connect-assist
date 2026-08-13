@@ -131,6 +131,9 @@ interface ICTEntryZoneAuthoritySummary {
 
 interface ImpulseLifecycleReplaySummary {
   evidence_source: string; replay_count: number; entries: number;
+  no_entries: number; never_touched: number; touched_trigger_not_locked: number;
+  trigger_locked_not_confirmed: number; inconclusive: number;
+  resolved_outcomes: number; invalidated: number; expired: number; exhausted: number;
   deeper_entries: number; rescued_winners: number; added_losses: number;
   winners_retained: number;
   winners: number; losers: number; avg_mfe: number | null; avg_mae: number | null;
@@ -2039,6 +2042,16 @@ function ImpulseEntryLifecycleEvidenceCard({
             {replay && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-border/40 pt-2 text-xs">
                 <div><span className="text-muted-foreground">Replays</span><p className="font-mono font-bold">{replay.replay_count}</p></div>
+                <div><span className="text-muted-foreground">Entries</span><p className="font-mono font-bold">{replay.entries}</p></div>
+                <div><span className="text-muted-foreground">No entry</span><p className="font-mono font-bold">{replay.no_entries}</p></div>
+                <div><span className="text-muted-foreground">Zone never touched</span><p className="font-mono font-bold">{replay.never_touched}</p></div>
+                <div><span className="text-muted-foreground">Touch, no trigger lock</span><p className="font-mono font-bold">{replay.touched_trigger_not_locked}</p></div>
+                <div><span className="text-muted-foreground">Trigger locked, no confirmation</span><p className="font-mono font-bold">{replay.trigger_locked_not_confirmed}</p></div>
+                <div><span className="text-muted-foreground">Inconclusive</span><p className="font-mono font-bold">{replay.inconclusive}</p></div>
+                <div><span className="text-muted-foreground">Resolved outcomes</span><p className="font-mono font-bold">{replay.resolved_outcomes} / 30</p></div>
+                <div><span className="text-muted-foreground">Invalidated</span><p className="font-mono font-bold text-destructive">{replay.invalidated}</p></div>
+                <div><span className="text-muted-foreground">Expired</span><p className="font-mono font-bold">{replay.expired}</p></div>
+                <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{replay.exhausted}</p></div>
                 <div><span className="text-muted-foreground">Winners retained</span><p className="font-mono font-bold text-success">{replay.winners_retained}</p></div>
                 <div><span className="text-muted-foreground">Rescued winners</span><p className="font-mono font-bold text-success">{replay.rescued_winners}</p></div>
                 <div><span className="text-muted-foreground">Added losses</span><p className="font-mono font-bold text-destructive">{replay.added_losses}</p></div>
