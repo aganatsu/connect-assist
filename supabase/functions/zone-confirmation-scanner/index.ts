@@ -26,9 +26,12 @@ import {
   type BrokerConn,
 } from "../_shared/candleSource.ts";
 import {
+  ATR_SL_FLOOR_MULTIPLIER,
+  MIN_SL_PIPS,
   SPECS,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
+import { buildPreArmedPositionPlan } from "../_shared/pendingOrderPlan.ts";
 import {
   detectZoneConfirmation,
   isPriceInZone,
@@ -1511,6 +1514,31 @@ Deno.serve(async (req) => {
         const fillReason = `[fast-confirm] ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
           + ` (method: ${confirmationMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
           + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
+        const pendingSpec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+        const finalRiskPlan = buildPreArmedPositionPlan({
+          direction: pending.direction,
+          zone: {
+            price: actualFillPrice,
+            zoneType: pending.entry_zone_type || "impulse_zone",
+            zoneLow: Number(pending.entry_zone_low),
+            zoneHigh: Number(pending.entry_zone_high),
+          },
+          structuralInvalidation: Number(pending.structural_invalidation),
+          preferredPositionStop: Number(pending.stop_loss),
+          pipSize: pendingSpec.pipSize,
+          minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
+          atrValue: parsedPendingEvidence?.atrValue,
+          atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
+          takeProfitRatio: Number(config.tpRatio ?? 2),
+        });
+        if (parsedPendingEvidence.preArmed === true && !finalRiskPlan.valid) {
+          console.warn(`[zone-confirm] Final risk geometry failed ${pending.symbol}: ${finalRiskPlan.reason}`);
+          continue;
+        }
+        if (parsedPendingEvidence.preArmed === true && finalRiskPlan.valid) {
+          pending.stop_loss = finalRiskPlan.plan.stopLoss;
+          pending.take_profit = finalRiskPlan.plan.takeProfit;
+        }
         const finalPendingSize = calculateFinalPendingSize({
           balance: Number(account.balance),
           riskPercent: Number(config.riskPerTrade),
@@ -1531,7 +1559,13 @@ Deno.serve(async (req) => {
           signalSource: parsedPendingEvidence.signalSource,
           standaloneMultiplier: (config as any).standaloneMultiplier,
         });
-        const { error: finalSizeError } = await supabase.from("pending_orders").update({ size: finalPendingSize })
+        const { error: finalSizeError } = await supabase.from("pending_orders").update({
+          size: finalPendingSize,
+          ...(parsedPendingEvidence.preArmed === true ? {
+            stop_loss: pending.stop_loss,
+            take_profit: pending.take_profit,
+          } : {}),
+        })
           .eq("id", pending.id).eq("user_id", userId)
           .eq("status", "awaiting_confirmation");
         if (finalSizeError) {

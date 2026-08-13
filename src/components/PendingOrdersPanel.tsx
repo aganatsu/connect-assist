@@ -186,7 +186,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               variant="outline"
               className="text-[11px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
             >
-              {order.order_type === "limit_ob" ? "OB" : "FVG"}
+              {String(order.entry_zone_type || order.order_type).toLowerCase().includes("ob")
+                ? "OB"
+                : String(order.entry_zone_type || order.order_type).toLowerCase().includes("fvg")
+                ? "FVG"
+                : "ZONE"}
             </Badge>
             {isHunting && (
               <Badge

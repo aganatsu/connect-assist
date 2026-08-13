@@ -18,6 +18,66 @@ export type PendingOrderPlanResult =
   | { valid: true; plan: PendingOrderPlan }
   | { valid: false; reason: string };
 
+export interface PreArmedPositionPlanInput {
+  direction: "long" | "short";
+  zone: PendingEntryZone;
+  structuralInvalidation: number;
+  preferredPositionStop?: number | null;
+  pipSize: number;
+  minimumStopPips: number;
+  atrValue?: number | null;
+  atrFloorMultiplier?: number;
+  takeProfitRatio: number;
+}
+
+/** Position-risk geometry is separate from the pre-entry structural boundary. */
+export function buildPreArmedPositionPlan(
+  input: PreArmedPositionPlanInput,
+): PendingOrderPlanResult {
+  const entry = Number(input.zone.price);
+  const structural = Number(input.structuralInvalidation);
+  const pipSize = Math.abs(Number(input.pipSize));
+  if (![entry, structural, pipSize].every(Number.isFinite) || !(pipSize > 0)) {
+    return { valid: false, reason: "Pre-armed risk geometry contains a non-finite price" };
+  }
+
+  const staticFloor = Math.max(0, Number(input.minimumStopPips)) * pipSize;
+  const atrFloor = Math.max(0, Number(input.atrValue || 0)) *
+    Math.max(0, Number(input.atrFloorMultiplier ?? 1.5));
+  const minimumDistance = Math.max(staticFloor, atrFloor, pipSize);
+  const beyondStructural = input.direction === "long"
+    ? structural - pipSize
+    : structural + pipSize;
+  const minimumStop = input.direction === "long"
+    ? entry - minimumDistance
+    : entry + minimumDistance;
+
+  const hasPreferred = input.preferredPositionStop !== null &&
+    input.preferredPositionStop !== undefined;
+  const preferred = Number(input.preferredPositionStop);
+  const preferredIsValid = hasPreferred && Number.isFinite(preferred) && (input.direction === "long"
+    ? preferred <= beyondStructural && preferred < entry
+    : preferred >= beyondStructural && preferred > entry);
+  const stopLoss = preferredIsValid
+    ? preferred
+    : input.direction === "long"
+    ? Math.min(beyondStructural, minimumStop)
+    : Math.max(beyondStructural, minimumStop);
+  const ratio = Math.max(1, Number(input.takeProfitRatio || 1));
+
+  return buildPendingOrderPlan({
+    direction: input.direction,
+    zone: input.zone,
+    stopLoss,
+    takeProfitFor: (positionEntry, positionStop, direction) => {
+      const risk = Math.abs(positionEntry - positionStop);
+      return direction === "long"
+        ? positionEntry + risk * ratio
+        : positionEntry - risk * ratio;
+    },
+  });
+}
+
 /**
  * Freezes order geometry only. Position size and account/runtime safety are
  * deliberately excluded because they must be evaluated at authorization.
