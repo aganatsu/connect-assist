@@ -6692,6 +6692,8 @@ async function runScanForUser(
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
         let zoneWatchPersistenceError: string | null = null;
+        // Set when this scan successfully armed a pending order for the setup.
+        let preArmedThisScan = false;
         let frozenZoneWatch: any = existingStaged || null;
         console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
         // Stage this pair so it's ready when price arrives at the zone
@@ -6882,6 +6884,13 @@ async function runScanForUser(
             });
             if (preArmError && !/duplicate key/i.test(preArmError.message)) {
               zoneWatchPersistenceError = `Pre-arm failed: ${preArmError.message}`;
+            } else {
+              // The setup is ARMED, not merely watched. Without this the scan
+              // reports "watching_zone" while the staged row has already moved
+              // to 'pending', so the Watchlist tab (which queries watching and
+              // qualified) shows nothing and the card says WATCHING. Three
+              // surfaces, three different truths.
+              preArmedThisScan = true;
             }
           } else {
             zoneWatchPersistenceError = `Pre-arm plan rejected: ${plan.reason}`;
@@ -6889,8 +6898,10 @@ async function runScanForUser(
         }
         if (!izData.bestZone?.priceAtZone) {
         if (zoneWatchPersisted) {
-            detail.status = "watching_zone";
-            detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
+            detail.status = preArmedThisScan ? "zone_setup_active" : "watching_zone";
+            detail.skipReason = preArmedThisScan
+              ? `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Pre-armed — awaiting zone touch. Visible under Zone Setups, not Watchlist.`
+              : `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
           } else if (zoneWatchPersistenceError) {
             detail.status = "watchlist_persistence_failed";
             detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
