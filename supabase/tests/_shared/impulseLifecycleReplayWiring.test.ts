@@ -10,6 +10,12 @@ Deno.test("runtime, exact snapshot replay and backtest use the same lifecycle re
   assertStringIncludes(backtest, "replayImpulseEntryLifecycle({");
   assertStringIncludes(backtest, 'action === "impulse_lifecycle_replay"');
   assertStringIncludes(replayFunction, '.from("scan_candle_snapshots")');
+  assertStringIncludes(replayFunction, "normalizeAnalysisTimeframe(");
+  assertStringIncludes(replayFunction, "missingInitialLifecycle");
+  assertStringIncludes(replayFunction, "missingCandleSnapshot");
+  assertStringIncludes(replayFunction, "initial.confirmation?.startedAt");
+  assertStringIncludes(replayFunction, "candleTime >= activationTime");
+  assertStringIncludes(replayFunction, "insufficientPostActivationCandles");
   assertStringIncludes(replayFunction, "monitorOrphanedLifecycles");
   assertStringIncludes(migration, "impulse-lifecycle-shadow-monitor-5min");
   assertStringIncludes(migration, "winners_retained");

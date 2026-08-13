@@ -9,5 +9,8 @@ describe("impulse lifecycle replay evidence", () => {
     expect(page).toContain("Rescued winners");
     expect(page).toContain("Added losses");
     expect(page).toContain("30+ READY");
+    expect(page).toContain("missing initial lifecycle");
+    expect(page).toContain("missing candle snapshot");
+    expect(page).toContain("insufficient post-activation candles");
   });
 });
