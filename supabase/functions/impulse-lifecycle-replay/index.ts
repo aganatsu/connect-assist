@@ -4,6 +4,7 @@ import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { resolveAuthenticatedUserId } from "../_shared/callerAuth.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { replayImpulseEntryLifecycle } from "../_shared/impulseLifecycleReplay.ts";
+import { normalizeAnalysisTimeframe } from "../_shared/timeframeAuthority.ts";
 import {
   observeImpulseConfirmationLock,
   observeImpulseEntryPrice,
@@ -102,6 +103,9 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
   if (error) throw error;
   let replayed = 0;
   let unavailable = 0;
+  let missingInitialLifecycle = 0;
+  let missingCandleSnapshot = 0;
+  let insufficientPostActivationCandles = 0;
   for (const row of lifecycles || []) {
     const { data: created } = await client
       .from("impulse_entry_lifecycle_transitions")
@@ -109,17 +113,41 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
       .eq("lifecycle_id", row.id).eq("event_type", "created")
       .order("created_at", { ascending: true }).limit(1).maybeSingle();
     const initial = created?.lifecycle_snapshot;
-    if (!initial) { unavailable++; continue; }
-    const timeframe = initial.confirmation?.timeframe || "5m";
+    if (!initial) {
+      unavailable++;
+      missingInitialLifecycle++;
+      continue;
+    }
+    const timeframe = normalizeAnalysisTimeframe(
+      initial.confirmation?.timeframe,
+      "5m",
+    );
     const { data: snapshot } = await client.from("scan_candle_snapshots")
       .select("id,candles")
       .eq("user_id", userId).eq("bot_id", BOT_ID)
       .eq("symbol", row.symbol).eq("timeframe", timeframe)
       .order("observed_at", { ascending: false }).limit(1).maybeSingle();
-    if (!snapshot || !Array.isArray(snapshot.candles)) { unavailable++; continue; }
+    if (!snapshot || !Array.isArray(snapshot.candles)) {
+      unavailable++;
+      missingCandleSnapshot++;
+      continue;
+    }
+    const activationTime = Date.parse(
+      initial.confirmation?.startedAt || row.created_at,
+    );
+    const replayCandles = snapshot.candles.filter((candle: any) => {
+      const candleTime = Date.parse(String(candle?.datetime || ""));
+      return Number.isFinite(candleTime) &&
+        (!Number.isFinite(activationTime) || candleTime >= activationTime);
+    });
+    if (replayCandles.length < 2) {
+      unavailable++;
+      insufficientPostActivationCandles++;
+      continue;
+    }
     const result = replayImpulseEntryLifecycle({
       lifecycle: initial,
-      candles: snapshot.candles,
+      candles: replayCandles,
     });
     const { error: insertError } = await client
       .from("impulse_entry_lifecycle_replays")
@@ -135,7 +163,14 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
     if (insertError) throw insertError;
     replayed++;
   }
-  return { replayed, unavailable, requested: lifecycles?.length || 0 };
+  return {
+    replayed,
+    unavailable,
+    missingInitialLifecycle,
+    missingCandleSnapshot,
+    insufficientPostActivationCandles,
+    requested: lifecycles?.length || 0,
+  };
 }
 
 Deno.serve(async (req) => {

@@ -794,8 +794,12 @@ export default function RejectedSetups() {
       if (error) throw error;
       await refetchImpulseLifecycleReplaySummary();
       await refetchImpulseLifecycleCertificate();
+      const unavailable = Number(data?.unavailable || 0);
+      const unavailableDetail = unavailable > 0
+        ? ` (${Number(data?.missingInitialLifecycle || 0)} missing initial lifecycle, ${Number(data?.missingCandleSnapshot || 0)} missing candle snapshot, ${Number(data?.insufficientPostActivationCandles || 0)} insufficient post-activation candles)`
+        : "";
       toast.success(
-        `Lifecycle replay completed: ${data?.replayed || 0} replayed, ${data?.unavailable || 0} unavailable.`,
+        `Lifecycle replay completed: ${data?.replayed || 0} replayed, ${unavailable} unavailable${unavailableDetail}.`,
       );
     } catch (error) {
       toast.error(
