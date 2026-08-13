@@ -4131,10 +4131,19 @@ export type Database = {
           deeper_entries: number | null
           entries: number | null
           evidence_source: string | null
+          exhausted: number | null
+          expired: number | null
+          inconclusive: number | null
+          invalidated: number | null
           losers: number | null
           minimum_sample_ready: boolean | null
+          never_touched: number | null
+          no_entries: number | null
           replay_count: number | null
           rescued_winners: number | null
+          resolved_outcomes: number | null
+          touched_trigger_not_locked: number | null
+          trigger_locked_not_confirmed: number | null
           user_id: string | null
           winners: number | null
           winners_retained: number | null
