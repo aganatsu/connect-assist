@@ -2168,36 +2168,7 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   }
 
-  // ── FVG-aware SL tightening ──
-  // If an unfilled, high-quality FVG sits between entry and SL, tighten SL to FVG boundary.
-  // Rationale: an institutional FVG acts as support/resistance — SL just beyond it is safer.
   const activeFVGs = input.fvgs?.filter(f => !f.mitigated && (f.quality ?? 0) >= 4) || [];
-  if (sl !== null && activeFVGs.length > 0) {
-    if (direction === "long") {
-      // Find bullish FVGs between SL and entry (support zones)
-      const supportFVGs = activeFVGs
-        .filter(f => f.type === "bullish" && f.low > sl! && f.low < lastPrice)
-        .sort((a, b) => b.low - a.low); // closest to entry first
-      if (supportFVGs.length > 0) {
-        const tighterSL = supportFVGs[0].low - buffer;
-        // Only tighten if it reduces SL distance by at least 20% (avoid micro-adjustments)
-        if (tighterSL > sl && (lastPrice - tighterSL) < (lastPrice - sl) * 0.8) {
-          sl = tighterSL;
-        }
-      }
-    } else {
-      // Find bearish FVGs between entry and SL (resistance zones)
-      const resistFVGs = activeFVGs
-        .filter(f => f.type === "bearish" && f.high < sl! && f.high > lastPrice)
-        .sort((a, b) => a.high - b.high); // closest to entry first
-      if (resistFVGs.length > 0) {
-        const tighterSL = resistFVGs[0].high + buffer;
-        if (tighterSL < sl && (tighterSL - lastPrice) < (sl - lastPrice) * 0.8) {
-          sl = tighterSL;
-        }
-      }
-    }
-  }
 
   const tpMethod: string = config.tpMethod || "rr_ratio";
   const slDistance = Math.abs(lastPrice - sl);
