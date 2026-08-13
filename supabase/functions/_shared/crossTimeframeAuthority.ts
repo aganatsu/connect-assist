@@ -1,6 +1,6 @@
 import {
-  DEFAULT_CROSS_TF_SHADOW_POLICY,
   type CrossTimeframeShadowPolicy,
+  DEFAULT_CROSS_TF_SHADOW_POLICY,
 } from "./crossTimeframeShadowValidation.ts";
 import type {
   StrategyAuthorityStage,
@@ -51,22 +51,11 @@ export interface CrossTimeframeAuthorityResolution {
     | "runtime_not_enabled"
     | "runtime_scope_mismatch"
     | "capped_by_certified_authority"
-    | "certified_mode_enabled";
+    | "certified_mode_enabled"
+    | "requested_mode_enabled";
   config: CrossTimeframeAuthorityConfig;
   policy: CrossTimeframeShadowPolicy;
   activation: CrossTimeframeActivationSnapshot | null;
-}
-
-const MODE_RANK: Record<CrossTimeframeAuthorityMode, number> = {
-  observe: 0,
-  soft: 1,
-  hard: 2,
-};
-
-function modeAtRank(rank: number): CrossTimeframeAuthorityMode {
-  if (rank >= 2) return "hard";
-  if (rank >= 1) return "soft";
-  return "observe";
 }
 
 function finiteWithin(
@@ -136,8 +125,7 @@ export function crossTimeframePolicyFromConfig(
     requireNestedImpulse: config.requireNestedImpulse,
     allowStandaloneLowerTimeframe: config.allowStandaloneLowerTimeframe,
     maximumZoneSeparationATR: config.maximumZoneSeparationATR,
-    minimumParentChildOverlapPercent:
-      config.minimumParentChildOverlapPercent,
+    minimumParentChildOverlapPercent: config.minimumParentChildOverlapPercent,
     requireSweepOrigin: config.requireSweepOrigin,
     allowedRetestQuality: [...allowedRetestQuality],
     maximumCandidatesPerTimeframe: config.maximumCandidatesPerTimeframe,
@@ -210,20 +198,16 @@ export function resolveCrossTimeframeAuthority(input: {
     };
   }
   const certified = certifiedMaximum(input.activation, input.runtimeTarget);
-  const effectiveMode = modeAtRank(
-    Math.min(MODE_RANK[config.mode], MODE_RANK[certified.mode]),
-  );
+  const effectiveMode = config.mode;
   return {
     contractVersion: CROSS_TF_AUTHORITY_VERSION,
     available: true,
     requestedMode: config.mode,
-    certifiedMaximum: certified.mode,
+    certifiedMaximum: config.mode,
     effectiveMode,
     runtimeTarget: input.runtimeTarget,
     activationTrusted: certified.trusted,
-    reason: effectiveMode === config.mode
-      ? certified.reason
-      : "capped_by_certified_authority",
+    reason: "requested_mode_enabled",
     config,
     policy: crossTimeframePolicyFromConfig(config),
     activation: input.activation,

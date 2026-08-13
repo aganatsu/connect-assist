@@ -192,7 +192,7 @@ function zoneAt(percent: number): DealingRangeZone {
 
 function displayMode(mode: DealingRangeMode): string {
   if (mode === "avoid_wrong_side") return "Avoid Wrong Side";
-  if (mode === "strict_value") return "Strict Value";
+  if (mode === "strict_value") return "Require Discount Buys / Premium Sells";
   return "Off";
 }
 

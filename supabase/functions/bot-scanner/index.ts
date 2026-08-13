@@ -65,6 +65,7 @@ import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforceme
 import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
 import { applyAuthorityOwnershipToGateResults, evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
 import { fetchCandlesWithFallback, fetchLivePrice, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
@@ -3216,6 +3217,7 @@ async function runScanForUser(
             });
           const pendingOwnershipFill = evaluateSingleOwnershipFillAuthorization({
             frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
+            frozenStrategyContext: readFrozenSetupStrategyContext(pending),
             evaluatedAt: nowStr,
             candidateId: parsedPendingEvidence.candidateId || pending.id,
             symbol: pending.symbol,
@@ -3237,7 +3239,7 @@ async function runScanForUser(
           });
           const authorityFinalAuthorization = pendingOwnershipFill.authorized
             ? { ...rawFinalAuthorization, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement }
-            : { ...rawFinalAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingOwnershipFill.retryable, reason: "Trade Decision did not authorize entry: " + pendingOwnershipFill.reason, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement };
+            : { ...rawFinalAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingFinalAuthorizationRetryable({ raw: rawFinalAuthorization, ownership: pendingOwnershipFill.decision }), reason: "Trade Decision did not authorize entry: " + pendingOwnershipFill.reason, singleOwnershipDecision: pendingOwnershipFill.decision, singleOwnershipEnforcement: pendingOwnershipFill.enforcement };
           const finalAuthorization = attachDecisionContext(
             authorityFinalAuthorization,
             buildTradeDecisionContext({
