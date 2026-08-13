@@ -610,7 +610,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── Setup Staging / Watchlist ──
     stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? RUNTIME_DEFAULTS.stagingEnabled,
     watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? RUNTIME_DEFAULTS.watchThreshold,
-    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? RUNTIME_DEFAULTS.stagingTTLMinutes,
+    stagingTTLMinutes: entry.zoneWatchExpiry !== undefined
+      ? Math.max(1, Number(entry.zoneWatchExpiry)) * 60
+      : strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? RUNTIME_DEFAULTS.stagingTTLMinutes,
     minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? RUNTIME_DEFAULTS.minStagingCycles,
 
     // ── Risk Mappings ──
