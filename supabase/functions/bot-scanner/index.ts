@@ -6499,11 +6499,7 @@ async function runScanForUser(
           tier: factor.tier,
         }));
       const tiered = analysis.tieredScoring;
-      const styleTTL = resolvedStyle === "scalper"
-        ? Math.min(stagingTTLMinutes, 120)
-        : resolvedStyle === "swing_trader"
-        ? Math.max(stagingTTLMinutes, 480)
-        : stagingTTLMinutes;
+      const styleTTL = stagingTTLMinutes;
       const decisionFields = stagedDecisionFields(
         originatingZone,
         executionEligible,
@@ -6736,9 +6732,7 @@ async function runScanForUser(
               const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const ts = analysis.tieredScoring;
-              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes;
+              const styleTTL = stagingTTLMinutes;
               const zoneWatchOrigin = {
                 type: izData.bestZone.type || "impulse_zone",
                 low: izData.bestZone.low,
@@ -6988,9 +6982,7 @@ async function runScanForUser(
                 const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
                 const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
                 const ts = analysis.tieredScoring;
-                const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                  : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                  : stagingTTLMinutes;
+                const styleTTL = stagingTTLMinutes;
                 const sweepWatchOrigin = {
                   type: "standalone_sweep_watch",
                   low: izData.bestZone?.low ?? null,
@@ -11447,9 +11439,7 @@ async function runScanForUser(
               const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const ts = analysis.tieredScoring;
               // Style-aware TTL: scalpers get shorter TTL, swing traders get longer
-              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes;
+              const styleTTL = stagingTTLMinutes;
               const confluenceWatchOrigin = {
                 type: setupClassification.setupType ||
                   "confluence_watch",
@@ -11511,9 +11501,7 @@ async function runScanForUser(
             detail.staging = {
               action: "new",
               watchThreshold,
-              ttlMinutes: resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes,
+              ttlMinutes: stagingTTLMinutes,
             };
           }
         } else {

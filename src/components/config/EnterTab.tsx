@@ -661,7 +661,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             <span className="text-sm font-mono font-bold w-12 text-right">{(config.entry?.zoneProximityATR ?? 0.30).toFixed(2)}×</span>
           </div>
         </FieldGroup>
-        <FieldGroup label="Zone Setup Expiry (hours)" description={pendingZoneOrdersEnabled ? "One clock from Watchlist discovery through confirmation. Scalper is capped at 2h; Day Trader uses this value; Swing Trader uses at least 8h." : "Enable Pending Zone Orders; no pending-zone expiry exists while that route is off."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+        <FieldGroup label="Zone Setup Expiry (hours)" description={pendingZoneOrdersEnabled ? "One clock from Watchlist discovery through confirmation. Applies to new setups; active setups retain the expiry frozen when they were created." : "Enable Pending Zone Orders; no pending-zone expiry exists while that route is off."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
           <Input type="number" value={config.entry?.zoneWatchExpiry ?? 4} onChange={e => updateField('entry', 'zoneWatchExpiry', parseInt(e.target.value) || 4)} min={1} max={48} step={1} className="h-9 text-sm" />
         </FieldGroup>
         <FieldGroup label="Cooldown (minutes)" description="Minimum time between trades on same pair">
