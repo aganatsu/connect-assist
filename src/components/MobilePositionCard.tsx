@@ -79,7 +79,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose,
               <span title="Mirrored to broker" className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
             )}
             {p.mirrorStatus === "orphan" && (
-              <span title="Live mode but NOT mirrored to MT4/MT5 (broker was down at open) — management will not fan out" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
+              <span title="No broker position linked — internal management runs, but updates cannot be sent to MT4/MT5" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
             )}
             <OverrideBadge position={p} />
             {sr.signalSource && (

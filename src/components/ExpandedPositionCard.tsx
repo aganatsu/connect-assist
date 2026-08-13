@@ -48,19 +48,21 @@ function ManagementCard({
   lines,
   borderColor,
   badgeColor,
+  pendingLabel = "Pending",
 }: {
   title: string;
   active: boolean;
   lines: string[];
   borderColor: string;
   badgeColor: string;
+  pendingLabel?: string;
 }) {
   return (
     <div className={`flex-1 min-w-0 rounded-lg border-l-[3px] ${borderColor} bg-secondary/40 px-2.5 py-2`}>
       <div className="flex items-center justify-between mb-1">
         <span className="text-[11px] font-bold text-foreground/80 uppercase tracking-wider">{title}</span>
         <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${badgeColor}`}>
-          {active ? "ACTIVE" : "Pending"}
+          {active ? "ACTIVE" : pendingLabel}
         </span>
       </div>
       {lines.map((line, i) => (
@@ -384,7 +386,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           {p.mirrorStatus === "orphan" && (
             <span
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-warning/15 border border-warning/40 text-warning"
-              title="Live mode but no broker link — this trade was NOT mirrored to MT4/MT5 at open (broker likely undeployed). SL/TP, reverse-close and management will NOT fan out. Close manually on MT5 if needed."
+              title="No broker position is linked. Internal trade management still runs, but SL/TP and close actions cannot be sent to MT4/MT5."
             >
               <span className="w-1.5 h-1.5 rounded-full bg-warning" /> ORPHAN
             </span>
@@ -561,6 +563,11 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 ? "bg-badge-profit text-profit"
                 : "bg-badge-warn text-highlight"
               }
+              pendingLabel={(ef.partialTPEnabled || ef.partialTP) && !(ef.partialTPActivated || p.partialTpFired)
+                ? "WAITING ON PARTIAL"
+                : (currentR != null && trailActivationR != null && currentR >= trailActivationR)
+                ? "NEXT MANAGE PASS"
+                : "PENDING"}
               lines={ef.trailingStopActivated
                 ? [
                     sl != null ? `SL: ${formatPrice(sl, p.symbol)}` : "Active",

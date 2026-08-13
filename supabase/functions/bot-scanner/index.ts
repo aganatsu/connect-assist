@@ -66,7 +66,7 @@ import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPo
 import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { applyAuthorityOwnershipToGateResults, evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
-import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, fetchLivePrice, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,
@@ -1675,14 +1675,10 @@ async function runScanForUser(
   if (openPosArr.length > 0) {
     const posSymbols: string[] = Array.from(new Set(openPosArr.map((p: any) => p.symbol as string)));
     const livePriceMap: Record<string, number> = {};
-    // Fetch a minimal 1-day candle for each symbol — last close = current price
+    // Trade management uses live quotes. Closed candles remain exclusive to detection.
     await Promise.all(posSymbols.map(async (sym: string) => {
-      try {
-        const candles = await cachedFetch(sym, "15m", "5d");
-        if (candles.length > 0) {
-          livePriceMap[sym] = candles[candles.length - 1].close;
-        }
-      } catch {}
+      const price = await fetchLivePrice(sym);
+      if (price !== null) livePriceMap[sym] = price;
     }));
     let priceUpdates = 0;
     for (const pos of openPosArr) {

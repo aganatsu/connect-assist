@@ -190,7 +190,7 @@ const POLYGON_SYMBOLS: Record<string, string> = {
 
 // Twelve Data uses standard pair format with a slash (e.g. "EUR/USD") for FX,
 // dash for crypto, and the index/commodity symbol directly.
-const TWELVE_DATA_SYMBOLS: Record<string, string> = {
+export const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
   "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
   "USD/CHF": "USD/CHF",
@@ -206,6 +206,37 @@ const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "XAU/USD": "XAU/USD", "XAG/USD": "XAG/USD", "US Oil": "WTI/USD",
   "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
 };
+
+const livePriceCache = new Map<string, { value: number; expiresAt: number }>();
+const LIVE_PRICE_CACHE_TTL_MS = 10_000;
+
+/** Live quote for trade management. Detection must continue using closed candles. */
+export async function fetchLivePrice(symbol: string): Promise<number | null> {
+  const cached = livePriceCache.get(symbol);
+  if (cached && Date.now() < cached.expiresAt) return cached.value;
+
+  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
+  const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
+  if (!apiKey || !tdSymbol) return cached?.value ?? null;
+  const granted = await acquireApiCredit("twelvedata", TD_RATE_LIMIT, {
+    maxWaitMs: 0,
+    label: "candleSource/live-price",
+  });
+  if (!granted) return cached?.value ?? null;
+
+  try {
+    const url = "https://api.twelvedata.com/price?symbol=" + encodeURIComponent(tdSymbol) + "&apikey=" + apiKey;
+    const response = await fetch(url);
+    if (!response.ok) return cached?.value ?? null;
+    const payload = await response.json();
+    const price = Number(payload?.price);
+    if (!Number.isFinite(price)) return cached?.value ?? null;
+    livePriceCache.set(symbol, { value: price, expiresAt: Date.now() + LIVE_PRICE_CACHE_TTL_MS });
+    return price;
+  } catch {
+    return cached?.value ?? null;
+  }
+}
 
 // ─── Interval normalization ───────────────────────────────────────────
 // Canonical intervals used internally: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w

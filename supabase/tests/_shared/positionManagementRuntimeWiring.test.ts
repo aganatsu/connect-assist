@@ -28,3 +28,10 @@ Deno.test("broker partial close failures are visible to the operator", () => {
   assertStringIncludes(scanner, "BROKER PARTIAL CLOSE RECONCILIATION REQUIRED");
   assertStringIncludes(scanner, "Broker Reconciliation Required");
 });
+
+Deno.test("management refresh uses shared live quotes instead of closed candles", () => {
+  assertStringIncludes(scanner, "const price = await fetchLivePrice(sym)");
+  assert(!scanner.includes('const candles = await cachedFetch(sym, "15m", "5d")'));
+  assertStringIncludes(paperTrading, 'from "../_shared/candleSource.ts"');
+  assert(!paperTrading.includes("async function fetchLivePrice("));
+});
