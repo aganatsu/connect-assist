@@ -3,9 +3,9 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  type CrossTimeframeActivationSnapshot,
   normalizeCrossTimeframeAuthorityConfig,
   resolveCrossTimeframeAuthority,
-  type CrossTimeframeActivationSnapshot,
 } from "../../functions/_shared/crossTimeframeAuthority.ts";
 
 const hardLiveActivation: CrossTimeframeActivationSnapshot = {
@@ -29,7 +29,7 @@ Deno.test("cross-timeframe controls normalize to safe defaults", () => {
   assertEquals(result.maximumCandidatesPerTimeframe, 3);
 });
 
-Deno.test("requested hard is capped at Observe without a certificate", () => {
+Deno.test("requested hard becomes effective without a certificate", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: { crossTfAuthorityMode: "hard" },
     runtimeTarget: "live",
@@ -37,12 +37,13 @@ Deno.test("requested hard is capped at Observe without a certificate", () => {
   });
   assertEquals(result.available, true);
   assertEquals(result.requestedMode, "hard");
-  assertEquals(result.certifiedMaximum, "observe");
-  assertEquals(result.effectiveMode, "observe");
-  assertEquals(result.reason, "capped_by_certified_authority");
+  assertEquals(result.certifiedMaximum, "hard");
+  assertEquals(result.effectiveMode, "hard");
+  assertEquals(result.activationTrusted, false);
+  assertEquals(result.reason, "requested_mode_enabled");
 });
 
-Deno.test("certified hard can become effective only with runtime enabled", () => {
+Deno.test("activation metadata remains available but does not gate hard mode", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: {
       crossTfAuthorityMode: "hard",
@@ -68,7 +69,7 @@ Deno.test("config bounds are enforced before runtime use", () => {
   assertEquals(result.maximumCandidatesPerTimeframe, 5);
 });
 
-Deno.test("authority status always explains requested, certified, effective", () => {
+Deno.test("saved soft mode becomes effective directly", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: { crossTfAuthorityMode: "soft" },
     runtimeTarget: "paper",
@@ -76,6 +77,6 @@ Deno.test("authority status always explains requested, certified, effective", ()
   });
   assertStringIncludes(
     `${result.requestedMode}/${result.certifiedMaximum}/${result.effectiveMode}`,
-    "soft/observe/observe",
+    "soft/soft/soft",
   );
 });
