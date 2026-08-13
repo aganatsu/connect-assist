@@ -34,3 +34,10 @@ Deno.test("frozen executable entry owns planned location evidence", () => {
   assert(scanner.includes("price: plan.plan.entryPrice"));
   assert(scanner.includes("evaluatedPriceOwner: \"frozen_executable_entry\""));
 });
+
+Deno.test("visible zone setup expiry is not overridden by trading style", () => {
+  assert(!scanner.includes("Math.min(stagingTTLMinutes, 120)"));
+  assert(!scanner.includes("Math.max(stagingTTLMinutes, 480)"));
+  assert(scanner.match(/const styleTTL = stagingTTLMinutes;/g)?.length === 4);
+  assert(scanner.includes("ttlMinutes: stagingTTLMinutes"));
+});
