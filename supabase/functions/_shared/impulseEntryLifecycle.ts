@@ -70,8 +70,12 @@ export interface BuildImpulseEntryLifecycleInput {
   mode?: ImpulseEntryLifecycleMode;
   now: string;
   impulse: ImpulseEntryLifecycle["impulse"];
-  candidates: Array<Omit<ImpulseEntryCandidate,
-    "rank" | "depth" | "state" | "activatedAt" | "failedAt" | "failureReason">>;
+  candidates: Array<
+    Omit<
+      ImpulseEntryCandidate,
+      "rank" | "depth" | "state" | "activatedAt" | "failedAt" | "failureReason"
+    >
+  >;
   confirmation: {
     method: CandidateConfirmationContract["method"];
     timeframe: string;
@@ -127,8 +131,10 @@ export function buildImpulseEntryLifecycle(
   input: BuildImpulseEntryLifecycleInput,
 ): ImpulseEntryLifecycle {
   const { impulse } = input;
-  if (!impulse.id || !(impulse.rangeHigh > impulse.rangeLow) ||
-    !finite(impulse.protectedLevel)) {
+  if (
+    !impulse.id || !(impulse.rangeHigh > impulse.rangeLow) ||
+    !finite(impulse.protectedLevel)
+  ) {
     throw new Error("Impulse authority is incomplete");
   }
 
@@ -257,14 +263,24 @@ export function transitionImpulseEntryLifecycle(
   if (event.type === "zone_touched") {
     if (active.state === "confirming") return current;
     active.state = "confirming";
-    next.lastTransitionReason = `Price touched candidate ${active.id}; confirmation is building`;
+    next.confirmation.startedAt = event.at;
+    next.confirmation.status = "building";
+    next.confirmation.protectedLevel = null;
+    next.confirmation.breakLevel = null;
+    next.confirmation.lockedAt = null;
+    next.confirmation.revisions = [];
+    next.confirmation.confirmedAt = null;
+    next.lastTransitionReason =
+      `Price touched candidate ${active.id}; confirmation is building`;
     return next;
   }
   if (event.type === "trigger_revised") {
     if (next.confirmation.status !== "building") return current;
     const last = next.confirmation.revisions.at(-1);
-    if (last?.protectedLevel === event.protectedLevel &&
-      last?.breakLevel === event.breakLevel) return current;
+    if (
+      last?.protectedLevel === event.protectedLevel &&
+      last?.breakLevel === event.breakLevel
+    ) return current;
     next.confirmation.protectedLevel = event.protectedLevel;
     next.confirmation.breakLevel = event.breakLevel;
     next.confirmation.revisions.push({
@@ -285,13 +301,16 @@ export function transitionImpulseEntryLifecycle(
     next.confirmation.lockedAt = event.at;
     if (next.confirmation.revisions.length === 0) {
       next.confirmation.revisions.push({
-        revision: 1, protectedLevel: event.protectedLevel,
-        breakLevel: event.breakLevel, observedAt: event.at,
+        revision: 1,
+        protectedLevel: event.protectedLevel,
+        breakLevel: event.breakLevel,
+        observedAt: event.at,
         reason: "Initial trigger locked by qualified displacement",
       });
     }
     active.state = "confirming";
-    next.lastTransitionReason = `Locked confirmation trigger ${event.breakLevel} for candidate ${active.id}`;
+    next.lastTransitionReason =
+      `Locked confirmation trigger ${event.breakLevel} for candidate ${active.id}`;
     return next;
   }
   if (event.type === "confirmation_passed") {
@@ -316,7 +335,8 @@ export function transitionImpulseEntryLifecycle(
     next.status = "exhausted";
     next.activeCandidateId = null;
     next.confirmation = null;
-    next.lastTransitionReason = `${event.reason}; no deeper prequalified candidate remains`;
+    next.lastTransitionReason =
+      `${event.reason}; no deeper prequalified candidate remains`;
     return next;
   }
   replacement.state = "active";
@@ -333,7 +353,8 @@ export function transitionImpulseEntryLifecycle(
     },
     event.at,
   );
-  next.lastTransitionReason = `${event.reason}; activated deeper ${replacement.type} candidate ${replacement.id}`;
+  next.lastTransitionReason =
+    `${event.reason}; activated deeper ${replacement.type} candidate ${replacement.id}`;
   return next;
 }
 
