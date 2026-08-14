@@ -80,6 +80,15 @@ describe("automatic Game Plan refresh safety", () => {
     );
   });
 
+  it("keeps rotating discovery slots out of Game Plan authority scope", () => {
+    expect(scannerSource).toContain(
+      "resolveGamePlanMarketScope(\n        fullInstrumentUniverse,"
+    );
+    expect(scannerSource).not.toContain(
+      "resolveGamePlanMarketScope(scanUniverse, now)"
+    );
+  });
+
   it("refreshes independently of scanner trade and position gates", () => {
     expect(scheduledMigrationSource).toContain("game-plan-authority-refresh-15min");
     expect(scheduledMigrationSource).toContain("/functions/v1/game-plan-refresh");
