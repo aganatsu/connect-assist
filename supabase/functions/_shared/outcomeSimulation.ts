@@ -9,7 +9,7 @@ export interface OutcomeCandle {
 }
 
 export interface OutcomeResult {
-  outcome_status: "inconclusive" | "would_have_won" | "would_have_lost";
+  outcome_status: "pending" | "inconclusive" | "would_have_won" | "would_have_lost";
   price_reached_entry: boolean;
   tp_hit: boolean;
   sl_hit: boolean;
@@ -17,10 +17,50 @@ export interface OutcomeResult {
   sl_hit_time_minutes: number | null;
   mfe_pips: number;
   mae_pips: number;
-  outcome_reason: "target_first" | "stop_first" | "entry_not_reached" | "window_expired" | "ambiguous_entry_candle" | "ambiguous_same_candle";
+  outcome_reason: "target_first" | "stop_first" | "awaiting_entry" | "position_open" | "entry_not_reached" | "open_at_horizon" | "window_expired" | "ambiguous_entry_candle" | "ambiguous_same_candle";
   mfe_r: number | null;
   mae_r: number | null;
   outcome_r: number | null;
+}
+
+/**
+ * Convert a candle simulation into its persisted tracking state.
+ *
+ * Deterministic TP/SL and ambiguous candles can resolve immediately. An
+ * otherwise unresolved setup remains pending until its entire frozen outcome
+ * window has elapsed.
+ */
+export function classifyTrackedOutcome(
+  outcome: OutcomeResult,
+  observedAt: string,
+  outcomeWindowHours: number,
+  evaluatedAt = new Date().toISOString(),
+): OutcomeResult {
+  if (
+    outcome.outcome_status === "would_have_won" ||
+    outcome.outcome_status === "would_have_lost" ||
+    outcome.outcome_reason === "ambiguous_entry_candle" ||
+    outcome.outcome_reason === "ambiguous_same_candle"
+  ) return outcome;
+
+  const observedMs = Date.parse(observedAt);
+  const evaluatedMs = Date.parse(evaluatedAt);
+  const horizonMs = observedMs + outcomeWindowHours * 60 * 60 * 1000;
+  const windowElapsed = Number.isFinite(observedMs) && Number.isFinite(evaluatedMs) && evaluatedMs >= horizonMs;
+
+  if (!windowElapsed) {
+    return {
+      ...outcome,
+      outcome_status: "pending",
+      outcome_reason: outcome.price_reached_entry ? "position_open" : "awaiting_entry",
+    };
+  }
+
+  return {
+    ...outcome,
+    outcome_status: "inconclusive",
+    outcome_reason: outcome.price_reached_entry ? "open_at_horizon" : "entry_not_reached",
+  };
 }
 
 /**

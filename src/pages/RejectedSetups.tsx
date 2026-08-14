@@ -36,9 +36,11 @@ import {
   type PendingLifecycleRow,
 } from "@/lib/pendingLifecycleEvidence";
 import {
+  buildRejectedOutcomeDistribution,
   collapseRejectedOpportunities,
   normalizeRejectedGate,
   normalizedGateLabel,
+  rejectedOutcomeLabel,
 } from "@/lib/rejectedSetupAnalytics";
 import {
   buildShadowEvidenceReport,
@@ -96,6 +98,8 @@ interface RejectedSetup {
   fotsi_quote_tsi: number | null;
   price_at_rejection: number | null;
   outcome_status: string;
+  outcome_reason?: string | null;
+  outcome_window_hours?: number | null;
   outcome_checked_at: string | null;
   mfe_pips: number | null;
   mae_pips: number | null;
@@ -203,13 +207,6 @@ interface ZoneLocalValidationSummary {
 }
 
 // ── Constants ──
-const OUTCOME_COLORS: Record<string, string> = {
-  would_have_won: "#22c55e",
-  would_have_lost: "#ef4444",
-  inconclusive: "#6b7280",
-  pending: "#f59e0b",
-};
-
 const REJECTION_TYPE_LABELS: Record<string, string> = {
   gate_blocked: "Gate Blocked",
   below_threshold_strong_t1: "Below Threshold (Strong T1)",
@@ -940,6 +937,8 @@ export default function RejectedSetups() {
       fotsi_quote_tsi: s.fotsi_quote_tsi,
       price_at_rejection: s.price_at_rejection,
       outcome_status: s.outcome_status,
+      outcome_reason: s.outcome_reason,
+      outcome_window_hours: s.outcome_window_hours,
       mixed_outcome: s.mixed_outcome,
       mfe_pips: s.mfe_pips,
       mae_pips: s.mae_pips,
@@ -1094,12 +1093,10 @@ export default function RejectedSetups() {
   };
 
   // Pie chart data
-  const outcomeDistribution = useMemo(() => [
-    { name: "Would Have Won", value: stats.winners, color: OUTCOME_COLORS.would_have_won },
-    { name: "Would Have Lost", value: stats.losers, color: OUTCOME_COLORS.would_have_lost },
-    { name: "Inconclusive", value: setups.filter(s => s.outcome_status === "inconclusive").length, color: OUTCOME_COLORS.inconclusive },
-    { name: "Pending", value: setups.filter(s => s.outcome_status === "pending").length, color: OUTCOME_COLORS.pending },
-  ].filter(d => d.value > 0), [stats, setups]);
+  const outcomeDistribution = useMemo(
+    () => buildRejectedOutcomeDistribution(setups),
+    [setups],
+  );
 
   return (
     <AppShell>
@@ -1257,7 +1254,8 @@ export default function RejectedSetups() {
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {outcomeDistribution.length > 0 ? (
-                    <ChartContainer config={{ won: { label: "Won", color: "#22c55e" }, lost: { label: "Lost", color: "#ef4444" }, inconclusive: { label: "Inconclusive", color: "#6b7280" }, pending: { label: "Pending", color: "#f59e0b" } }} className="h-[200px] w-full">
+                    <>
+                    <ChartContainer config={{ won: { label: "Won", color: "#22c55e" }, lost: { label: "Lost", color: "#ef4444" }, developing: { label: "Developing", color: "#f59e0b" }, terminal: { label: "Terminal", color: "#6b7280" } }} className="h-[200px] w-full">
                       <PieChart>
                         <Pie
                           data={outcomeDistribution}
@@ -1278,6 +1276,19 @@ export default function RejectedSetups() {
                         <ChartTooltip content={<ChartTooltipContent hideIndicator />} />
                       </PieChart>
                     </ChartContainer>
+                    <div className="grid gap-1 px-3 pb-1 text-[10px]">
+                      {outcomeDistribution.map((item) => (
+                        <div key={item.key} className="flex items-start justify-between gap-3">
+                          <span className="flex min-w-0 items-start gap-1.5 text-muted-foreground" title={item.description}>
+                            <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
+                            <span>{item.name}</span>
+                          </span>
+                          <span className="font-mono text-foreground">{item.value}</span>
+                        </div>
+                      ))}
+                      <p className="pt-1 text-muted-foreground">Only resolved wins and losses count toward Winner-Block Rate.</p>
+                    </div>
+                    </>
                   ) : (
                     <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                   )}
@@ -1800,7 +1811,7 @@ export default function RejectedSetups() {
                               {s.direction.toUpperCase()}
                             </Badge>
                           </div>
-                          <OutcomeBadge status={s.outcome_status} />
+                          <OutcomeBadge status={s.outcome_status} reason={s.outcome_reason} />
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                           <span>{formatBrokerTime(s.rejected_at)}</span>
@@ -1880,7 +1891,7 @@ export default function RejectedSetups() {
                               <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
                               <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
                               <td className="px-3 py-2 min-w-[150px]"><ShadowDecision audit={getShadowAudit(s)} /></td>
-                              <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
+                              <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} reason={s.outcome_reason} /></td>
                             </tr>
                             {expandedRow === s.id && (
                               <tr>
@@ -2583,15 +2594,19 @@ function ShadowFeatureEvidenceCard({
   );
 }
 
-function OutcomeBadge({ status }: { status: string }) {
-  const config: Record<string, { label: string; className: string }> = {
-    would_have_won: { label: "Won ✓", className: "bg-emerald-500/10 text-profit border-emerald-500/30" },
-    would_have_lost: { label: "Lost ✗", className: "bg-destructive/10 text-loss border-destructive/30" },
-    inconclusive: { label: "Inconclusive", className: "bg-muted text-muted-foreground border-border/50" },
-    pending: { label: "Pending", className: "bg-amber-500/10 text-amber-500 border-amber-500/30" },
-  };
-  const c = config[status] || config.pending;
-  return <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${c.className}`}>{c.label}</Badge>;
+function OutcomeBadge({ status, reason }: { status: string; reason?: string | null }) {
+  const fullLabel = rejectedOutcomeLabel({ outcome_status: status, outcome_reason: reason });
+  const className = status === "would_have_won"
+    ? "bg-emerald-500/10 text-profit border-emerald-500/30"
+    : status === "would_have_lost"
+    ? "bg-destructive/10 text-loss border-destructive/30"
+    : status === "pending"
+    ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
+    : "bg-muted text-muted-foreground border-border/50";
+  const compactLabel = status === "would_have_won" ? "Won"
+    : status === "would_have_lost" ? "Lost"
+    : fullLabel.replace("Developing: ", "").replace(" Before Expiry", "").replace(" at Window End", " at Expiry").replace("Legacy Result ", "");
+  return <Badge title={fullLabel} variant="outline" className={`text-[10px] px-1.5 py-0 ${className}`}>{compactLabel}</Badge>;
 }
 
 function ShadowDecision({ audit }: { audit: ShadowAudit | null }) {

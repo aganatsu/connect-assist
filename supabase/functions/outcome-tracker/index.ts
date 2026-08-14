@@ -20,8 +20,13 @@ import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { SPECS } from "../_shared/smcAnalysis.ts";
 import {
+  classifyTrackedOutcome,
   simulateOutcome,
 } from "../_shared/outcomeSimulation.ts";
+import {
+  normalizeTradingStyle,
+  outcomeCandleRequest,
+} from "../_shared/decisionOutcomeContract.ts";
 
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 
@@ -73,6 +78,7 @@ Deno.serve(async (req: Request) => {
       shadow_updated: 0,
       shadow_errors: 0,
       shadow_cleaned: 0,
+      developing: 0,
     };
 
     // ── Step 1: Fetch pending outcomes older than 1 hour ──
@@ -82,6 +88,7 @@ Deno.serve(async (req: Request) => {
       .select("*")
       .eq("outcome_status", "pending")
       .lt("rejected_at", cutoff)
+      .order("outcome_checked_at", { ascending: true, nullsFirst: true })
       .order("rejected_at", { ascending: true })
       .limit(BATCH_SIZE);
 
@@ -100,22 +107,36 @@ Deno.serve(async (req: Request) => {
       for (const setup of pendingSetups) {
         results.processed++;
         try {
+          const evaluatedAt = new Date().toISOString();
           const outcomeWindowHours = Number(setup.outcome_window_hours) || OUTCOME_WINDOW_HOURS;
-          // Fetch enough 1H candles for the frozen style-specific outcome window.
+          const frozenStyle = normalizeTradingStyle(setup.decision_outcome_snapshot?.tradingStyle);
+          const candleRequest = outcomeCandleRequest(
+            frozenStyle,
+            setup.rejected_at,
+            outcomeWindowHours,
+            evaluatedAt,
+          );
           const { candles } = await fetchCandlesWithFallback({
             symbol: setup.symbol,
-            interval: "1h",
-            limit: Math.max(48, outcomeWindowHours + 24),
+            interval: candleRequest.interval,
+            limit: candleRequest.limit,
+            startAt: candleRequest.startAt,
+            endAt: candleRequest.endAt,
+            skipBroker: true,
           });
 
           if (candles.length < 5) {
             console.warn(`[outcome-tracker] Insufficient candles for ${setup.symbol} (${candles.length})`);
+            await supabase.from("rejected_setups").update({
+              outcome_checked_at: evaluatedAt,
+              outcome_reason: "candle_data_unavailable",
+            }).eq("id", setup.id);
             results.errors++;
             continue;
           }
 
           const pipSize = getPipSize(setup.symbol);
-          const outcome = simulateOutcome(
+          const simulated = simulateOutcome(
             candles,
             setup.direction as "long" | "short",
             parseFloat(setup.entry_price),
@@ -124,6 +145,13 @@ Deno.serve(async (req: Request) => {
             setup.rejected_at,
             outcomeWindowHours,
           );
+          const outcome = classifyTrackedOutcome(
+            simulated,
+            setup.rejected_at,
+            outcomeWindowHours,
+            evaluatedAt,
+          );
+          if (outcome.outcome_status === "pending") results.developing++;
 
           // Convert MFE/MAE from price units to pips
           const mfePips = outcome.mfe_pips / pipSize;
@@ -134,7 +162,7 @@ Deno.serve(async (req: Request) => {
             .from("rejected_setups")
             .update({
               outcome_status: outcome.outcome_status,
-              outcome_checked_at: new Date().toISOString(),
+              outcome_checked_at: evaluatedAt,
               price_reached_entry: outcome.price_reached_entry,
               tp_hit: outcome.tp_hit,
               sl_hit: outcome.sl_hit,
@@ -157,6 +185,10 @@ Deno.serve(async (req: Request) => {
           }
         } catch (e: any) {
           console.warn(`[outcome-tracker] Error processing ${setup.symbol}: ${e?.message}`);
+          await supabase.from("rejected_setups").update({
+            outcome_checked_at: new Date().toISOString(),
+            outcome_reason: "tracking_error",
+          }).eq("id", setup.id);
           results.errors++;
         }
       }

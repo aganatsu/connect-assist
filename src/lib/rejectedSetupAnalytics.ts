@@ -9,6 +9,7 @@ export interface RejectedSetupAnalyticsRecord {
   normalized_gates?: string[] | null;
   opportunity_key?: string | null;
   outcome_status: string;
+  outcome_reason?: string | null;
 }
 
 export type CollapsedRejectedSetup<T extends RejectedSetupAnalyticsRecord> = T & {
@@ -49,6 +50,56 @@ export const NORMALIZED_GATE_LABELS: Record<string, string> = {
   daily_loss_limit: "Daily-Loss Limit",
   drawdown_limit: "Drawdown Limit",
 };
+
+export interface RejectedOutcomeDistributionItem {
+  key: string;
+  name: string;
+  value: number;
+  color: string;
+  description: string;
+}
+
+const OUTCOME_BUCKETS = {
+  would_have_won: { name: "Would Have Won", color: "#22c55e", description: "The simulated trade reached its target before its stop." },
+  would_have_lost: { name: "Would Have Lost", color: "#ef4444", description: "The simulated trade reached its stop before its target." },
+  awaiting_entry: { name: "Developing: Waiting for Entry", color: "#f59e0b", description: "The frozen outcome window is still open and price has not reached entry." },
+  position_open: { name: "Developing: Entry Reached", color: "#eab308", description: "Entry was reached, but neither target nor stop has resolved the setup yet." },
+  data_retry: { name: "Data Unavailable: Retrying", color: "#0ea5e9", description: "The historical candle request was unavailable; the tracker will retry on a later run." },
+  entry_not_reached: { name: "No Entry Before Expiry", color: "#64748b", description: "Price never reached the planned entry before the frozen outcome window ended." },
+  open_at_horizon: { name: "Open at Window End", color: "#8b5cf6", description: "Entry was reached, but neither target nor stop was hit before the window ended." },
+  ambiguous: { name: "Ambiguous Candle", color: "#a855f7", description: "Candle data cannot prove whether entry, target, or stop happened first." },
+  mixed: { name: "Mixed Repeat Outcomes", color: "#ec4899", description: "Repeated scanner observations for one opportunity resolved differently." },
+  legacy_inconclusive: { name: "Legacy Result Awaiting Replay", color: "#6b7280", description: "This older result does not yet carry a precise terminal reason." },
+} as const;
+
+export function rejectedOutcomeBucket(record: Pick<RejectedSetupAnalyticsRecord, "outcome_status" | "outcome_reason">): keyof typeof OUTCOME_BUCKETS {
+  if (record.outcome_status === "would_have_won") return "would_have_won";
+  if (record.outcome_status === "would_have_lost") return "would_have_lost";
+  if (record.outcome_reason === "mixed_repeated_observations") return "mixed";
+  if (record.outcome_reason === "ambiguous_entry_candle" || record.outcome_reason === "ambiguous_same_candle") return "ambiguous";
+  if (record.outcome_status === "pending") {
+    if (record.outcome_reason === "candle_data_unavailable" || record.outcome_reason === "tracking_error") return "data_retry";
+    return record.outcome_reason === "position_open" ? "position_open" : "awaiting_entry";
+  }
+  if (record.outcome_reason === "entry_not_reached") return "entry_not_reached";
+  if (record.outcome_reason === "open_at_horizon") return "open_at_horizon";
+  return "legacy_inconclusive";
+}
+
+export function rejectedOutcomeLabel(record: Pick<RejectedSetupAnalyticsRecord, "outcome_status" | "outcome_reason">): string {
+  return OUTCOME_BUCKETS[rejectedOutcomeBucket(record)].name;
+}
+
+export function buildRejectedOutcomeDistribution(records: Array<Pick<RejectedSetupAnalyticsRecord, "outcome_status" | "outcome_reason">>): RejectedOutcomeDistributionItem[] {
+  const counts = new Map<keyof typeof OUTCOME_BUCKETS, number>();
+  for (const record of records) {
+    const key = rejectedOutcomeBucket(record);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return (Object.keys(OUTCOME_BUCKETS) as Array<keyof typeof OUTCOME_BUCKETS>)
+    .map((key) => ({ key, ...OUTCOME_BUCKETS[key], value: counts.get(key) || 0 }))
+    .filter((bucket) => bucket.value > 0);
+}
 
 export function normalizeRejectedGate(reason: string): string {
   const gate = reason.trim().toLowerCase();
@@ -181,6 +232,9 @@ export function collapseRejectedOpportunities<T extends RejectedSetupAnalyticsRe
         .filter((status) => status === "would_have_won" || status === "would_have_lost"),
     );
     const mixedOutcome = resolved.size > 1;
+    const resolvedRecord = [...group.records].reverse().find(
+      (record) => record.outcome_status === "would_have_won" || record.outcome_status === "would_have_lost",
+    );
     const collapsedOutcome = mixedOutcome
       ? "inconclusive"
       : resolved.size === 1
@@ -190,6 +244,9 @@ export function collapseRejectedOpportunities<T extends RejectedSetupAnalyticsRe
     return {
       ...representative,
       outcome_status: collapsedOutcome,
+      outcome_reason: mixedOutcome
+        ? "mixed_repeated_observations"
+        : resolvedRecord?.outcome_reason ?? representative.outcome_reason ?? null,
       occurrence_count: group.records.length,
       first_seen_at: new Date(group.firstMs).toISOString(),
       last_seen_at: new Date(group.lastMs).toISOString(),
