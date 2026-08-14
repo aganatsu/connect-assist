@@ -8,6 +8,7 @@
 import { assertEquals, assertNotEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   detectZoneConfirmation,
+  mapHierarchyToSignal,
   isPriceInZone,
   isImpulseBroken,
   formatConfirmationSummary,
@@ -884,4 +885,30 @@ Deno.test("isPriceInZone directional: ATR-based buffer works correctly for LONG"
   // Price outside ATR buffer (should invalidate)
   const priceOutside = zoneLow - atrBuffer - 0.001;
   assertEquals(isPriceInZone(priceOutside, zoneLow, zoneHigh, "long", atr), false);
+});
+
+Deno.test("LTF hierarchy confirmation keeps its source candle index", () => {
+  const confirmationCandles = Array.from({ length: 15 }, (_, index) =>
+    makeCandle(65, 65.1, 64.9, 65, new Date(Date.UTC(2026, 7, 14, 0, index * 5)).toISOString())
+  );
+  const ltfCandles = Array.from({ length: 40 }, (_, index) =>
+    makeCandle(64.2, 64.25, 64.0, index === 32 ? 64.05 : 64.2, new Date(Date.UTC(2026, 7, 14, 1, index)).toISOString())
+  );
+  const source = ltfCandles[32];
+  const signal = mapHierarchyToSignal({
+    type: "ltf_choch", score: 2, entryReady: true, confirmationIndex: 32,
+    direction: "bearish", detail: "LTF CHoCH", insideZone: false,
+    authority: {
+      contractVersion: "confirmation-authority.v1", source: "unified_hierarchy",
+      level: "close_choch", direction: "short", entryReadyUnderCurrentBehavior: true,
+      evaluatedAt: source.datetime, candleIndex: 32, candleTime: source.datetime,
+      price: source.close, closeBased: true, displacement: null, supportingSignals: [],
+      reasonCodes: ["ltf_choch"], observationOnly: true, affectsAuthorization: false,
+    },
+  }, confirmationCandles, "short", ltfCandles);
+
+  assert(signal, "LTF confirmation should not be discarded when its index exceeds the 5m array");
+  assertEquals(signal.candleIndex, 32);
+  assertEquals(signal.price, source.close);
+  assertEquals(signal.authority?.candleTime, source.datetime);
 });
