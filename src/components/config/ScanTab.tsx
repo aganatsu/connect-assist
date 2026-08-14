@@ -1,5 +1,4 @@
 import React from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Globe, Clock, TrendingUp, BarChart3, Crosshair, Sparkles, Layers, BookOpen } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -10,8 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, FeatureStateBadge, ConfigTabProps } from "./ConfigShared";
-import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 
 // ─── Instruments Data (derived from canonical marketData.ts) ─────────────────
 const INSTRUMENT_GROUPS = INSTRUMENT_TYPES.map(type => ({
@@ -141,20 +138,6 @@ const SMC_ENHANCEMENT_MODULES: {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
-  const { user } = useAuth();
-  const { data: lifecycleCertificate } = useQuery({
-    queryKey: ["impulse-lifecycle-enforcement-certificate", user?.id],
-    queryFn: async () => {
-      const { data, error } = await (supabase as any)
-        .from("impulse_lifecycle_enforcement_certificates").select("*")
-        .eq("user_id", user!.id).eq("bot_id", "smc").eq("is_current", true).maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user?.id, retry: false,
-  });
-  const lifecycleEnforceUnlocked = lifecycleCertificate?.status === "eligible" &&
-    lifecycleCertificate?.reviewed === true && lifecycleCertificate?.minimum_sample_ready === true;
   // Count active instruments
   const ALL_INSTRUMENTS = INSTRUMENTS.map(i => i.symbol);
   const totalPairs = ALL_INSTRUMENTS.length;
@@ -407,9 +390,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               <SelectContent>
                 <SelectItem value="off">Off</SelectItem>
                 <SelectItem value="observe">Observe</SelectItem>
-                <SelectItem value="enforce" disabled={!lifecycleEnforceUnlocked}>
-                  {lifecycleEnforceUnlocked ? "Enforce" : "Enforce (locked until evidence review)"}
-                </SelectItem>
+                <SelectItem value="enforce">Enforce</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>
