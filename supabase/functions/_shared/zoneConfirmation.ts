@@ -230,12 +230,33 @@ function detectSupportingSignals(
  * Maps a ConfirmationResult from confirmationHierarchy to the ConfirmationSignal
  * format expected by callers. Returns null if the mapping isn't possible.
  */
-function mapHierarchyToSignal(
+export function mapHierarchyToSignal(
   result: ConfirmationResult,
-  candles: Candle[],
+  confirmationCandles: Candle[],
   direction: "long" | "short",
+  ltfCandles?: Candle[],
 ): ConfirmationSignal | null {
-  const idx = result.confirmationIndex;
+  const authorityTime = result.authority?.candleTime || null;
+  const authorityPrice = result.authority?.price;
+  const sources = [
+    ...(ltfCandles ? [ltfCandles] : []),
+    confirmationCandles,
+  ];
+  let candles = confirmationCandles;
+  let idx = result.confirmationIndex;
+  if (authorityTime) {
+    for (const source of sources) {
+      const match = source.findIndex((candle) =>
+        candle.datetime === authorityTime &&
+        (authorityPrice == null || Math.abs(candle.close - authorityPrice) < 1e-10)
+      );
+      if (match >= 0) {
+        candles = source;
+        idx = match;
+        break;
+      }
+    }
+  }
   if (idx === null || idx < 0 || idx >= candles.length) return null;
 
   const candle = candles[idx];
@@ -329,7 +350,7 @@ export function detectZoneConfirmation(
     });
     // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level)
     if (hierarchyResult.entryReady && hierarchyResult.type !== "none") {
-      const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction);
+      const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction, ltfCandles);
       if (mapped) return mapped;
     }
   }
