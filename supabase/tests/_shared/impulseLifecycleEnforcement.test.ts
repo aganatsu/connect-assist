@@ -14,14 +14,11 @@ const eligible = {
   is_current: true,
 };
 
-Deno.test("enforcement fails closed without reviewed evidence", () => {
-  assertEquals(
-    resolveImpulseLifecycleEnforcement("enforce", null).effectiveMode,
-    "observe",
-  );
+Deno.test("saved enforcement does not require an evidence certificate", () => {
+  assertEquals(resolveImpulseLifecycleEnforcement("enforce", null).effectiveMode, "enforce");
   assertEquals(
     resolveImpulseLifecycleEnforcement("enforce", { ...eligible, reviewed: false }).effectiveMode,
-    "observe",
+    "enforce",
   );
 });
 
@@ -32,10 +29,10 @@ Deno.test("current beneficial reviewed evidence unlocks enforcement", () => {
   assertEquals(resolution.evidenceHash, eligible.evidence_hash);
 });
 
-Deno.test("harmful evidence cannot unlock enforcement", () => {
+Deno.test("harmful evidence remains metadata and does not override saved enforcement", () => {
   const resolution = resolveImpulseLifecycleEnforcement("enforce", {
     ...eligible, rescued_winners: 1, added_losses: 2,
   });
-  assertEquals(resolution.effectiveMode, "observe");
-  assertEquals(resolution.allowed, false);
+  assertEquals(resolution.effectiveMode, "enforce");
+  assertEquals(resolution.allowed, true);
 });
