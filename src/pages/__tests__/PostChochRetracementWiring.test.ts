@@ -24,4 +24,11 @@ describe("post-CHoCH retracement wiring", () => {
     expect(pending).toContain("CHoCH confirmed");
     expect(pending).toContain("RETRACEMENT");
   });
+
+  it("notifies once when CHoCH starts the retracement wait", () => {
+    expect(scanner).toContain("notifyCategories.confirmed_entry !== false");
+    expect(scanner).toContain("CHoCH CONFIRMED");
+    expect(scanner).toContain("No trade has opened yet.");
+    expect(scanner).toContain("postChochPlan.zone");
+  });
 });

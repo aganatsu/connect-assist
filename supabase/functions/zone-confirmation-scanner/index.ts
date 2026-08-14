@@ -358,6 +358,7 @@ Deno.serve(async (req) => {
     // Load user settings (for telegram) and broker connections per user
     const userDataMap: Record<string, {
       telegramChatIds: string[];
+      notifyCategories: Record<string, boolean>;
       brokerConnections: any[];
       brokerConn: BrokerConn | null;
       openPositions: any[];
@@ -377,6 +378,7 @@ Deno.serve(async (req) => {
         .from("user_settings").select("preferences_json")
         .eq("user_id", userId).maybeSingle();
       const prefs = (userSettings?.preferences_json as any) || {};
+      const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
       const telegramChatIds: string[] = (() => {
         const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
         const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
@@ -477,6 +479,7 @@ Deno.serve(async (req) => {
       );
       userDataMap[userId] = {
         telegramChatIds,
+        notifyCategories,
         brokerConnections: connections || [],
         brokerConn,
         openPositions: openPositions || [],
@@ -532,6 +535,7 @@ Deno.serve(async (req) => {
 
         const {
           telegramChatIds,
+          notifyCategories,
           brokerConnections,
           brokerConn,
           openPositions,
@@ -1022,6 +1026,50 @@ Deno.serve(async (req) => {
               .eq("id", pending.id).eq("user_id", userId);
             if (planPersistError) throw planPersistError;
             if (afterChochMode === "wait_retracement") {
+              if (
+                telegramChatIds.length > 0 &&
+                notifyCategories.confirmed_entry !== false
+              ) {
+                const directionLabel = pending.direction === "long" ? "BULLISH" : "BEARISH";
+                const spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+                const decimals = Math.max(2, Math.round(-Math.log10(spec.pipSize)) + 1);
+                const fmt = (value: unknown) => {
+                  const number = Number(value);
+                  return Number.isFinite(number) ? number.toFixed(decimals) : String(value);
+                };
+                const expiryLabel = new Date(postChochPlan.expiresAt).toLocaleString(
+                  "en-US",
+                  {
+                    timeZone: "America/New_York",
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                    timeZoneName: "short",
+                  },
+                );
+                const message =
+                  "<b>" + pending.symbol + " " + directionLabel + " CHoCH CONFIRMED</b>\n\n" +
+                  tgLine("Structure break", fmt(confirmedSignal.price)) +
+                  tgLine("Confirmation", pendingTimeframeAuthority.roles.confirmation) +
+                  tgLine("Waiting for", postChochPlan.zone.type.toUpperCase() + " retracement") +
+                  tgLine("Retracement zone", fmt(postChochPlan.zone.low) + " - " + fmt(postChochPlan.zone.high)) +
+                  tgLine("Protected level", fmt(postChochPlan.protectedLevel)) +
+                  tgLine("Expires", expiryLabel) +
+                  "\n<b>No trade has opened yet.</b> Entry requires a retracement into the frozen zone and fresh final authorization.";
+                await Promise.allSettled(
+                  telegramChatIds.map((chatId: string) =>
+                    fetch(supabaseUrl + "/functions/v1/telegram-notify", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: "Bearer " + supabaseKey,
+                      },
+                      body: JSON.stringify({ chat_id: chatId, message }),
+                    })
+                  ),
+                );
+              }
               stillHunting++;
               console.log(`[zone-confirm] ${pending.symbol} CHoCH confirmed; waiting for ${postChochPlan.zone.type} retracement ${postChochPlan.zone.low}-${postChochPlan.zone.high}`);
               continue;
