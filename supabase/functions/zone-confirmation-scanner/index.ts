@@ -44,7 +44,6 @@ import {
   advanceStoredTradeLifecycle,
 } from "../_shared/impulseEntryLifecycleStore.ts";
 import {
-  loadImpulseLifecycleCertificate,
   resolveImpulseLifecycleEnforcement,
   type ImpulseLifecycleEnforcementResolution,
 } from "../_shared/impulseLifecycleEnforcement.ts";
@@ -472,15 +471,9 @@ Deno.serve(async (req) => {
         runtimeTarget: account?.execution_mode === "live" ? "live" : "paper",
         activation: crossTimeframeActivation,
       });
-      let lifecycleCertificate = null;
-      try {
-        lifecycleCertificate = await loadImpulseLifecycleCertificate(supabase, userId, BOT_ID);
-      } catch (error) {
-        console.warn(`[zone-confirm] Lifecycle certificate unavailable; enforcement fails closed: ${String(error)}`);
-      }
       const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
         (styleResolution.config as any).impulseEntryLifecycleMode,
-        lifecycleCertificate,
+        null,
       );
       userDataMap[userId] = {
         telegramChatIds,

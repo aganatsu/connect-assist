@@ -1,4 +1,4 @@
-export const IMPULSE_LIFECYCLE_ENFORCEMENT_VERSION = "impulse-lifecycle-enforcement.v1";
+export const IMPULSE_LIFECYCLE_ENFORCEMENT_VERSION = "impulse-lifecycle-enforcement.v2";
 
 export interface ImpulseLifecycleCertificate {
   evidence_hash: string;
@@ -37,18 +37,12 @@ export function resolveImpulseLifecycleEnforcement(
       evidenceHash: certificate?.evidence_hash || null,
     };
   }
-  const eligible = certificate?.is_current === true &&
-    certificate.status === "eligible" && certificate.reviewed === true &&
-    certificate.minimum_sample_ready === true &&
-    certificate.rescued_winners >= certificate.added_losses;
   return {
     contractVersion: IMPULSE_LIFECYCLE_ENFORCEMENT_VERSION,
     requestedMode,
-    effectiveMode: eligible ? "enforce" : "observe",
-    allowed: eligible,
-    reason: eligible
-      ? `Reviewed lifecycle certificate ${certificate!.evidence_hash.slice(0, 12)} authorizes enforcement`
-      : "Enforce requested but a current, sample-ready, beneficial, owner-reviewed certificate is unavailable",
+    effectiveMode: "enforce",
+    allowed: true,
+    reason: "Lifecycle enforcement requested by saved Bot Config",
     evidenceHash: certificate?.evidence_hash || null,
   };
 }
