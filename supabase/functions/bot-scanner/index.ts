@@ -3864,7 +3864,13 @@ async function runScanForUser(
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
-      const gamePlanMarketScope = resolveGamePlanMarketScope(scanUniverse, now);
+      // Game Plan authority covers the configured universe. The rotating scan
+      // batch is discovery scheduling only; using it here regenerated and
+      // notified a new plan every time the eight active slots rotated.
+      const gamePlanMarketScope = resolveGamePlanMarketScope(
+        fullInstrumentUniverse,
+        now,
+      );
       const gamePlanSymbols = gamePlanMarketScope.eligibleSymbols;
       const lastGP = _lastGamePlanForValidation;
       const lastGPTime = lastGP?.generatedAt
