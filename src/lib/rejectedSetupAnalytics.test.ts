@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRejectedOutcomeDistribution,
   collapseRejectedOpportunities,
   normalizeRejectedGate,
   uniqueRejectionReasons,
@@ -81,5 +82,30 @@ describe("rejected setup opportunity analytics", () => {
     const [opportunity] = collapseRejectedOpportunities(records);
     expect(opportunity.mixed_outcome).toBe(true);
     expect(opportunity.outcome_status).toBe("inconclusive");
+  });
+
+  it("explains developing and terminal unresolved outcomes separately", () => {
+    const distribution = buildRejectedOutcomeDistribution([
+      { outcome_status: "pending", outcome_reason: "awaiting_entry" },
+      { outcome_status: "pending", outcome_reason: "position_open" },
+      { outcome_status: "pending", outcome_reason: "candle_data_unavailable" },
+      { outcome_status: "inconclusive", outcome_reason: "entry_not_reached" },
+      { outcome_status: "inconclusive", outcome_reason: "open_at_horizon" },
+      { outcome_status: "inconclusive", outcome_reason: "ambiguous_same_candle" },
+    ]);
+    expect(distribution.map((bucket) => bucket.name)).toEqual([
+      "Developing: Waiting for Entry", "Developing: Entry Reached", "Data Unavailable: Retrying",
+      "No Entry Before Expiry", "Open at Window End", "Ambiguous Candle",
+    ]);
+  });
+
+  it("labels contradictory repeat observations as mixed outcomes", () => {
+    const records = [
+      { ...record("1", "2026-07-27T16:05:00Z", "Already long on GBP/USD", "would_have_won"), outcome_reason: "target_first" },
+      { ...record("2", "2026-07-27T16:15:00Z", "Already long on GBP/USD", "would_have_lost"), outcome_reason: "stop_first" },
+    ];
+    const [opportunity] = collapseRejectedOpportunities(records);
+    expect(opportunity.outcome_reason).toBe("mixed_repeated_observations");
+    expect(buildRejectedOutcomeDistribution([opportunity])[0].name).toBe("Mixed Repeat Outcomes");
   });
 });

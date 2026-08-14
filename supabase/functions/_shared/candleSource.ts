@@ -664,6 +664,7 @@ async function twelveDataCandles(
   symbol: string,
   canon: string,
   limit: number,
+  range?: { startAt?: string; endAt?: string },
 ): Promise<Candle[]> {
   const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (!apiKey) return [];
@@ -675,7 +676,12 @@ async function twelveDataCandles(
   if (!hasSlot) return []; // Skip to Polygon fallback
 
   const interval = twelveDataInterval(canon);
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC&timezone=UTC`;
+  const formatRangeTime = (value: string) => new Date(value).toISOString().replace("T", " ").slice(0, 19);
+  const rangeParams = [
+    range?.startAt ? `start_date=${encodeURIComponent(formatRangeTime(range.startAt))}` : "",
+    range?.endAt ? `end_date=${encodeURIComponent(formatRangeTime(range.endAt))}` : "",
+  ].filter(Boolean).join("&");
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC&timezone=UTC${rangeParams ? `&${rangeParams}` : ""}`;
   try {
     const res = await fetch(url);
     // H8: Handle 429 with exponential backoff
@@ -727,6 +733,7 @@ async function polygonCandles(
   symbol: string,
   canon: string,
   limit: number,
+  range?: { startAt?: string; endAt?: string },
 ): Promise<Candle[]> {
   const apiKey = Deno.env.get("POLYGON_API_KEY");
   if (!apiKey) return [];
@@ -735,8 +742,10 @@ async function polygonCandles(
 
   const { multiplier, timespan } = polygonTimespan(canon);
   const lookbackDays = polygonLookbackDays(canon);
-  const to = new Date();
-  const from = new Date(to.getTime() - lookbackDays * 86_400_000);
+  const to = range?.endAt ? new Date(range.endAt) : new Date();
+  const from = range?.startAt
+    ? new Date(range.startAt)
+    : new Date(to.getTime() - lookbackDays * 86_400_000);
   const fromStr = from.toISOString().slice(0, 10);
   const toStr = to.toISOString().slice(0, 10);
 
@@ -815,6 +824,8 @@ export interface FetchOptions {
   limit?: number;            // desired number of candles (default 200)
   brokerConn?: BrokerConn | null; // optional connected OANDA or MetaAPI account
   skipBroker?: boolean;      // true for request-budget-sensitive scans; use public data directly
+  startAt?: string;           // optional historical range start (ISO timestamp)
+  endAt?: string;             // optional historical range end (ISO timestamp)
   /**
    * Keep the in-progress bar. Display surfaces only — never detection, scoring
    * or backtest, which require closed bars for live/backtest parity.
@@ -929,7 +940,10 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 async function fetchCandlesRaw(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
-  const cacheScope = opts.brokerConn?.api_key ? `${opts.brokerConn.broker_type ?? "metaapi"}:${opts.brokerConn.account_id}` : "public";
+  const baseCacheScope = opts.brokerConn?.api_key ? `${opts.brokerConn.broker_type ?? "metaapi"}:${opts.brokerConn.account_id}` : "public";
+  const cacheScope = opts.startAt || opts.endAt
+    ? `${baseCacheScope}:range:${opts.startAt ?? "open"}:${opts.endAt ?? "now"}`
+    : baseCacheScope;
 
   // Global deadline so a single request can never eat the 150s edge runtime budget.
   // MetaAPI region probing + subscribe retries can each take 30-40s; cap the whole
@@ -990,18 +1004,18 @@ async function fetchCandlesRaw(opts: FetchOptions): Promise<FetchResult> {
 
 
   // Try Twelve Data
-  const td = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : []);
+  const td = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit, { startAt: opts.startAt, endAt: opts.endAt }) : []);
   if (td.length >= 30) {
     if (_activeTally) _activeTally.twelvedata++;
-    setCachedCandles(opts.symbol, canon, td, "twelvedata");
+    setCachedCandles(opts.symbol, canon, td, "twelvedata", cacheScope);
     return { candles: td.slice(-limit), source: "twelvedata" };
   }
 
   // Polygon.io fallback
-  const pg = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : []);
+  const pg = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit, { startAt: opts.startAt, endAt: opts.endAt }) : []);
   if (pg.length >= 30) {
     if (_activeTally) _activeTally.polygon++;
-    setCachedCandles(opts.symbol, canon, pg, "polygon");
+    setCachedCandles(opts.symbol, canon, pg, "polygon", cacheScope);
     return { candles: pg.slice(-limit), source: "polygon" };
   }
 
@@ -1012,17 +1026,17 @@ async function fetchCandlesRaw(opts: FetchOptions): Promise<FetchResult> {
     console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
     await new Promise(r => setTimeout(r, 2000));
 
-    const tdRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : []);
+    const tdRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit, { startAt: opts.startAt, endAt: opts.endAt }) : []);
     if (tdRetry.length >= 30) {
       if (_activeTally) _activeTally.twelvedata++;
-      setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
+      setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata", cacheScope);
       return { candles: tdRetry.slice(-limit), source: "twelvedata" };
     }
 
-    const pgRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : []);
+    const pgRetry = filterClosedMarketCandles(opts.symbol, timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit, { startAt: opts.startAt, endAt: opts.endAt }) : []);
     if (pgRetry.length >= 30) {
       if (_activeTally) _activeTally.polygon++;
-      setCachedCandles(opts.symbol, canon, pgRetry, "polygon");
+      setCachedCandles(opts.symbol, canon, pgRetry, "polygon", cacheScope);
       return { candles: pgRetry.slice(-limit), source: "polygon" };
     }
   }

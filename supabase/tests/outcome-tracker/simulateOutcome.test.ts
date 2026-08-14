@@ -10,7 +10,7 @@
  * Run: deno test --allow-all supabase/functions/outcome-tracker/simulateOutcome.test.ts
  */
 import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { simulateOutcome } from "../../functions/_shared/outcomeSimulation.ts";
+import { classifyTrackedOutcome, simulateOutcome } from "../../functions/_shared/outcomeSimulation.ts";
 
 // ── Helper: generate candle data ──
 function makeCandle(datetime: string, open: number, high: number, low: number, close: number) {
@@ -347,4 +347,27 @@ Deno.test("resolved outcome includes R-normalized excursions", () => {
   assertEquals(result.outcome_status, "would_have_won");
   assertAlmostEquals(result.outcome_r!, 2, 1e-10);
   assertAlmostEquals(result.mfe_r!, 2, 1e-10);
+});
+
+
+Deno.test("unresolved entry remains pending before the full frozen window", () => {
+  const simulated = simulateOutcome([], "long", 1.1, 1.09, 1.12, "2026-08-14T10:00:00Z", 8);
+  const tracked = classifyTrackedOutcome(simulated, "2026-08-14T10:00:00Z", 8, "2026-08-14T12:00:00Z");
+  assertEquals(tracked.outcome_status, "pending");
+  assertEquals(tracked.outcome_reason, "awaiting_entry");
+});
+
+Deno.test("entered unresolved setup remains pending before the full frozen window", () => {
+  const candles = [makeCandle("2026-08-14T11:00:00Z", 1.1, 1.105, 1.095, 1.102)];
+  const simulated = simulateOutcome(candles, "long", 1.1, 1.09, 1.12, "2026-08-14T10:00:00Z", 8);
+  const tracked = classifyTrackedOutcome(simulated, "2026-08-14T10:00:00Z", 8, "2026-08-14T12:00:00Z");
+  assertEquals(tracked.outcome_status, "pending");
+  assertEquals(tracked.outcome_reason, "position_open");
+});
+
+Deno.test("unreached entry becomes terminal only after the full frozen window", () => {
+  const simulated = simulateOutcome([], "long", 1.1, 1.09, 1.12, "2026-08-14T10:00:00Z", 8);
+  const tracked = classifyTrackedOutcome(simulated, "2026-08-14T10:00:00Z", 8, "2026-08-14T18:00:00Z");
+  assertEquals(tracked.outcome_status, "inconclusive");
+  assertEquals(tracked.outcome_reason, "entry_not_reached");
 });
