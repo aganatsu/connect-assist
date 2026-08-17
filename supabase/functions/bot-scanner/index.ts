@@ -1960,12 +1960,8 @@ async function runScanForUser(
       );
       if (candles.length === 0) continue;
       const currentPrice = candles[candles.length - 1].close;
-      const frozenImpulse = setup.analysis_snapshot?.impulseZone?.impulse ||
-        setup.analysis_snapshot?.impulse || null;
       const invalidation = deriveWatchlistInvalidation({
         direction: setup.direction as WatchlistDirection,
-        zone,
-        impulse: frozenImpulse,
         proposedLevel: setup.sl_level,
       });
       if (isWatchlistInvalidated(setup.direction as WatchlistDirection, currentPrice, invalidation.level)) {
@@ -6777,13 +6773,6 @@ async function runScanForUser(
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
                 entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: watchlistInvalidationFor(
-                  analysis.direction as WatchlistDirection,
-                  existingStagedForZone.originating_zone,
-                  existingStagedForZone.sl_level,
-                  existingStagedForZone.analysis_snapshot?.impulseZone
-                    ?.impulse,
-                ).level,
               }).eq("id", existingStagedForZone.id);
               if (zoneWatchUpdateError) throw zoneWatchUpdateError;
               frozenZoneWatch = existingStagedForZone;
