@@ -8,8 +8,14 @@ const fastScannerUrl = new URL(
   "../../functions/zone-confirmation-scanner/index.ts",
   import.meta.url,
 );
-const botScannerUrl = new URL("../../functions/bot-scanner/index.ts", import.meta.url);
-const brokerExecuteUrl = new URL("../../functions/broker-execute/index.ts", import.meta.url);
+const botScannerUrl = new URL(
+  "../../functions/bot-scanner/index.ts",
+  import.meta.url,
+);
+const brokerExecuteUrl = new URL(
+  "../../functions/broker-execute/index.ts",
+  import.meta.url,
+);
 const phaseOneMigrationUrl = new URL(
   "../../migrations/20260728200000_complete_phase1_execution_authority.sql",
   import.meta.url,
@@ -181,10 +187,16 @@ Deno.test("all live entry routes claim durable broker execution before sending",
 Deno.test("all live entry routes finalize internal state from broker ledger", async () => {
   const fastSource = await Deno.readTextFile(fastScannerUrl.pathname);
   const botSource = await Deno.readTextFile(botScannerUrl.pathname);
-  assertStringIncludes(fastSource, 'supabase.rpc("finalize_live_broker_position"');
-  assertEquals(botSource.split('supabase.rpc("finalize_live_broker_position"').length - 1, 2);
+  assertStringIncludes(
+    fastSource,
+    'supabase.rpc("finalize_live_broker_position"',
+  );
+  assertEquals(
+    botSource.split('supabase.rpc("finalize_live_broker_position"').length - 1,
+    2,
+  );
   assertStringIncludes(botSource, 'account.execution_mode !== "live"');
-  assertStringIncludes(botSource, 'brokerLifecycle?.open === true');
+  assertStringIncludes(botSource, "brokerLifecycle?.open === true");
 });
 
 Deno.test("reverse close preserves internal position until broker closes confirm", async () => {
@@ -193,9 +205,14 @@ Deno.test("reverse close preserves internal position until broker closes confirm
   const end = source.indexOf("// GUARD: reject trades", start);
   const closeSection = source.slice(start, end);
   const brokerConfirmation = closeSection.indexOf("confirmedBrokerCloses");
-  const internalDelete = closeSection.indexOf("supabase.from(\"paper_positions\").delete()");
-  assert(brokerConfirmation >= 0 && internalDelete > brokerConfirmation);
-  assertStringIncludes(closeSection, "broker_close_state: \"reconciliation_required\"");
+  const atomicFinalization = closeSection.indexOf(
+    "finalizePaperPositionClose(supabase",
+  );
+  assert(brokerConfirmation >= 0 && atomicFinalization > brokerConfirmation);
+  assertStringIncludes(
+    closeSection,
+    'broker_close_state: "reconciliation_required"',
+  );
   assertStringIncludes(closeSection, "internal position remains open");
 });
 

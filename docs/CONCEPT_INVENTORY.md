@@ -29,6 +29,7 @@ instead of arbitrating.
 | Concept | Impls | Live owner | Status |
 |---|---|---|---|
 | **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
+| **Paper final-close persistence** | 1 | `finalizePaperPositionClose` + `finalize_paper_position_close` RPC | 🟢 Single owner |
 | Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
 | SMT divergence | 2 | scanner-local copy | 🔴 **DUPLICATE** |
 | Min-confluence threshold | 2 | both (raw + effective) | 🔴 **DUPLICATE, drifted** |
@@ -47,6 +48,15 @@ instead of arbitrating.
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 
 ---
+
+## Paper final-close persistence
+
+Exit *detection* remains owned by `_shared/exitEvaluation.ts`. Once a caller has an
+exit decision, `_shared/finalizePaperPositionClose.ts` is the single owner of final
+persistence. Its database RPC locks the source position and commits history insertion,
+account balance movement, and source-position deletion in one transaction. Callers may
+only emit post-mortems, audit rows, notifications, and broker side effects after the RPC
+returns `closed: true`. Partial take profit remains a non-final size reduction.
 
 ## 🔴 Must fix
 

@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
 import {
   applyPairOverrides,
 } from "../_shared/configMapper.ts";
@@ -2167,39 +2168,22 @@ async function runScanForUser(
         const pnlPips = diff / spec.pipSize;
         const nowClose = new Date().toISOString();
 
-        // 1. Delete from paper_positions
-        await supabase.from("paper_positions").delete()
-          .eq("position_id", pos.position_id).eq("user_id", userId);
-
-        // 2. Insert into paper_trade_history (matches close-on-reverse field set)
-        await supabase.from("paper_trade_history").insert({
-          user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
-          source_pending_order_id: pos.source_pending_order_id || null,
-          symbol: pos.symbol, direction: pos.direction, size: pos.size,
-          entry_price: pos.entry_price, exit_price: hitPrice.toString(),
-          open_time: pos.open_time || nowClose, closed_at: nowClose,
-          close_reason: closeReason,
-          pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
-          signal_score: pos.signal_score || "0",
-          signal_reason: pos.signal_reason || "",
-          bot_id: BOT_ID,
-          stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+        const finalization = await finalizePaperPositionClose(supabase, {
+          positionRowId: pos.id,
+          userId,
+          botId: pos.bot_id || BOT_ID,
+          exitPrice: hitPrice,
+          pnl,
+          pnlPips,
+          closeReason,
+          closedAt: nowClose,
         });
-
-        // 3. Update paper_accounts balance + peak_balance (scoped to bot)
-        const balQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", userId);
-        if (account.bot_id) balQ.eq("bot_id", BOT_ID);
-        const curBal = parseFloat((await balQ.single()).data?.balance || "10000");
-        const newBal = curBal + pnl;
-        const newPeak = Math.max(newBal, parseFloat(account.peak_balance || "10000"));
-        const balUpd = supabase.from("paper_accounts").update({
-          balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
-        }).eq("user_id", userId);
-        if (account.bot_id) balUpd.eq("bot_id", BOT_ID);
-        await balUpd;
-        // Keep in-memory account in sync for subsequent position sizing
-        account.balance = newBal.toFixed(2);
-        account.peak_balance = newPeak.toFixed(2);
+        if (!finalization.closed) {
+          console.log(`[breach-check] ${pos.position_id}: close skipped (${finalization.code})`);
+          continue;
+        }
+        if (finalization.balance !== undefined) account.balance = finalization.balance.toString();
+        if (finalization.peak_balance !== undefined) account.peak_balance = finalization.peak_balance.toString();
 
         // 4. Audit log
         const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
@@ -9976,27 +9960,23 @@ async function runScanForUser(
                 .eq("position_id", opp.position_id).eq("user_id", userId);
             }
 
-            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
-            closedOppositeIds.push(opp.position_id);
-            await supabase.from("paper_trade_history").insert({
-              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
-              source_pending_order_id: opp.source_pending_order_id || null,
-              symbol: pair, direction: opp.direction, size: opp.size,
-              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
-              open_time: opp.open_time || nowStr, closed_at: nowStr,
-              close_reason: "reverse_signal",
-              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
-              signal_score: opp.signal_score || "0",
-              bot_id: BOT_ID,
+            const finalization = await finalizePaperPositionClose(supabase, {
+              positionRowId: opp.id,
+              userId,
+              botId: opp.bot_id || BOT_ID,
+              exitPrice: analysis.lastPrice,
+              pnl: oppPnl,
+              pnlPips: oppPnlPips,
+              closeReason: "reverse_signal",
+              closedAt: nowStr,
             });
-            // Update balance with actual PnL — scope to this bot's account
-            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
-            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
-            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
-            const newBal = curBal + oppPnl;
-            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
-            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
-            await balUpdate;;
+            if (!finalization.closed) {
+              console.log(`[close] reverse ${opp.position_id} skipped: ${finalization.code}`);
+              continue;
+            }
+            closedOppositeIds.push(opp.position_id);
+            if (finalization.balance !== undefined) account.balance = finalization.balance.toString();
+            if (finalization.peak_balance !== undefined) account.peak_balance = finalization.peak_balance.toString();
 
             // Audit log entry for the reverse-signal close
             console.log("[close]", JSON.stringify({

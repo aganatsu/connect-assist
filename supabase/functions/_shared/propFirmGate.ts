@@ -23,6 +23,7 @@ import {
   type PropFirmEventType,
   type EventSeverity,
 } from "./propFirmRisk.ts";
+import { finalizePaperPositionClose } from "./finalizePaperPositionClose.ts";
 
 export interface PropFirmGateResult {
   enabled: boolean;
@@ -310,27 +311,19 @@ export async function propFirmEmergencyClose(
       const diff = pos.direction === "long" ? current - entry : entry - current;
       const pnl = diff * size * 100_000; // Simplified P&L
 
-      // Close the paper position
-      await supabase.from("paper_positions").delete().eq("id", pos.id);
-
-      // Record in trade history
-      await supabase.from("paper_trade_history").insert({
-        user_id: userId,
-        position_id: pos.position_id,
-        order_id: pos.order_id || crypto.randomUUID().slice(0, 8),
-        source_pending_order_id: pos.source_pending_order_id || null,
-        symbol: pos.symbol,
-        direction: pos.direction,
-        size: pos.size,
-        entry_price: pos.entry_price,
-        exit_price: current.toString(),
-        open_time: pos.open_time || new Date().toISOString(),
-        closed_at: new Date().toISOString(),
-        close_reason: "prop_firm_emergency",
-        pnl: pnl.toFixed(2),
-        signal_score: pos.signal_score || "0",
-        bot_id: botId,
+      const finalization = await finalizePaperPositionClose(supabase, {
+        positionRowId: pos.id,
+        userId,
+        botId: pos.bot_id || botId,
+        exitPrice: current,
+        pnl,
+        pnlPips: null,
+        closeReason: "prop_firm_emergency",
       });
+      if (!finalization.closed) {
+        console.log(`[prop-firm-emergency] Skipped ${pos.symbol}: ${finalization.code}`);
+        continue;
+      }
 
       closedCount++;
       console.log(`[prop-firm-emergency] Closed ${pos.symbol} ${pos.direction} — PnL: $${pnl.toFixed(2)} — reason: ${reason}`);
@@ -339,33 +332,7 @@ export async function propFirmEmergencyClose(
     }
   }
 
-  // Update account balance after all closes
-  if (closedCount > 0) {
-    // Recalculate balance from trade history (most accurate)
-    const { data: acct } = await supabase
-      .from("paper_accounts")
-      .select("balance")
-      .eq("user_id", userId)
-      .eq("bot_id", botId)
-      .maybeSingle();
 
-    if (acct) {
-      let totalPnL = 0;
-      for (const pos of openPositions) {
-        const entry = parseFloat(pos.entry_price || "0");
-        const current = parseFloat(pos.current_price || pos.entry_price || "0");
-        const size = parseFloat(pos.size || "0");
-        const diff = pos.direction === "long" ? current - entry : entry - current;
-        totalPnL += diff * size * 100_000;
-      }
-      const newBalance = parseFloat(acct.balance) + totalPnL;
-      await supabase
-        .from("paper_accounts")
-        .update({ balance: newBalance.toFixed(2) })
-        .eq("user_id", userId)
-        .eq("bot_id", botId);
-    }
-  }
 
   console.log(`[prop-firm-emergency] ${scanCycleId} | Closed ${closedCount}/${openPositions.length} positions — ${reason}`);
   return closedCount;
