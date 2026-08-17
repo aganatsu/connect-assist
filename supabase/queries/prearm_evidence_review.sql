@@ -250,3 +250,68 @@ LEFT JOIN pending_orders p
 WHERE s.created_at > now() - interval '14 days'
 GROUP BY 1
 ORDER BY 1 DESC;
+
+
+-- ── 5b. Persisted arm-time reachability (new rows after deployment) ──
+-- Unlike current_price, this payload is frozen when the pending order is
+-- created. It is observation-only: within_reference_distance describes how the
+-- existing regular-limit distance setting would classify the setup; it does
+-- not block pre-arming.
+SELECT
+  symbol,
+  status,
+  count(*) AS setups,
+  round(avg((signal_reason->'preArmReachability'->>'distancePips')::numeric), 1)
+    AS avg_raw_runtime_pips,
+  round(avg((signal_reason->'preArmReachability'->>'distanceAtr')::numeric), 2)
+    AS avg_distance_atr,
+  round(avg((signal_reason->'preArmReachability'->>'ttlMinutes')::numeric), 1)
+    AS avg_ttl_minutes,
+  count(*) FILTER (WHERE
+    (signal_reason->'preArmReachability'->>'withinReferenceDistance')::boolean
+  ) AS within_reference_distance,
+  count(*) FILTER (WHERE zone_touch_time IS NOT NULL) AS touched,
+  count(*) FILTER (WHERE status = 'expired' AND zone_touch_time IS NULL)
+    AS expired_untouched
+FROM pending_orders
+WHERE signal_reason->'preArmReachability'->>'contractVersion'
+      = 'prearm-reachability.v1'
+  AND created_at > now() - interval '7 days'
+GROUP BY symbol, status
+ORDER BY setups DESC, symbol;
+
+
+-- ── 7. Exact executable plans recreated across terminal lifecycles ──
+-- This is analytics grouping, not lifecycle identity. It answers whether the
+-- same symbol, direction, zone bounds and entry are repeatedly re-armed after
+-- expiry/cancellation. Active uniqueness does not prevent terminal rows from
+-- being followed by a new lifecycle.
+WITH plans AS (
+  SELECT
+    user_id,
+    bot_id,
+    symbol,
+    direction,
+    entry_zone_type,
+    entry_zone_low,
+    entry_zone_high,
+    entry_price,
+    count(*) AS lifecycles,
+    count(*) FILTER (WHERE status = 'expired' AND zone_touch_time IS NULL)
+      AS expired_untouched,
+    count(*) FILTER (WHERE zone_touch_time IS NOT NULL) AS touched,
+    count(*) FILTER (WHERE status = 'filled') AS filled,
+    min(created_at) AS first_armed,
+    max(created_at) AS last_armed
+  FROM pending_orders
+  WHERE created_at > now() - interval '14 days'
+    AND entry_zone_type IS NOT NULL
+    AND entry_zone_low IS NOT NULL
+    AND entry_zone_high IS NOT NULL
+  GROUP BY user_id, bot_id, symbol, direction, entry_zone_type,
+           entry_zone_low, entry_zone_high, entry_price
+)
+SELECT *
+FROM plans
+WHERE lifecycles > 1
+ORDER BY lifecycles DESC, last_armed DESC;

@@ -15,12 +15,19 @@ Deno.test("visible zone setup expiry owns staging and pending lifecycle clocks",
 });
 
 Deno.test("pre-armed setup inherits lifecycle identity and has no frozen size", () => {
-  const start = scanner.indexOf("signal_reason: { preArmed: true");
-  const insert = scanner.slice(start - 900, start + 1200);
+  const start = scanner.indexOf("staged_setup_id: frozenZoneWatch.id");
+  const insert = scanner.slice(start - 1200, start + 1200);
   assert(insert.includes("candidate_id: frozenZoneWatch.candidate_id"));
   assert(insert.includes("staged_setup_id: frozenZoneWatch.id"));
   assert(insert.includes("frozen_strategy_context: frozenZoneWatch.frozen_strategy_context"));
   assert(insert.includes("size: null"));
+});
+
+Deno.test("both pre-arm routes persist observation-only reachability evidence", () => {
+  assert(scanner.includes("observePreArmReachability"));
+  assert(scanner.match(/const preArmReachability = observePreArmReachability/g)?.length === 2);
+  assert(scanner.match(/preArmReachability,/g)?.length === 2);
+  assert(scanner.match(/referenceMaxDistancePips: Number\(config\.limitOrderMaxDistancePips \?\? 30\)/g)?.length === 2);
 });
 
 Deno.test("at-zone canonical waits remain in the pre-armed lifecycle", () => {

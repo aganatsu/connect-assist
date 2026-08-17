@@ -393,7 +393,7 @@ async function fetchPendingLifecycleEvidence(userId: string, days: number) {
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
   const { data: orders, error: ordersError } = await (supabase as any)
     .from("pending_orders")
-    .select("id,order_id,candidate_id,symbol,direction,status,entry_price,current_price,placed_at,expires_at,zone_touch_time,resolved_at,liquidity_confirmation_observation,signal_reason,final_authorization")
+    .select("id,order_id,candidate_id,symbol,direction,status,entry_price,current_price,entry_zone_type,entry_zone_low,entry_zone_high,placed_at,expires_at,zone_touch_time,resolved_at,liquidity_confirmation_observation,signal_reason,final_authorization")
     .eq("user_id", userId)
     .eq("bot_id", "smc")
     .gte("created_at", since)
