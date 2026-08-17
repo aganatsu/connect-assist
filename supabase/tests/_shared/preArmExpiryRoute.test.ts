@@ -2,7 +2,8 @@ import { assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 const scanner = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
 
 Deno.test("pre-arm expiry is anchored to Watchlist staging time", () => {
-  assert(scanner.includes("stagedAt + Number(frozenZoneWatch.ttl_minutes"));
+  assert(scanner.includes("const ttlMinutes = Number(frozenZoneWatch.ttl_minutes"));
+  assert(scanner.includes("stagedAt + ttlMinutes * 60_000"));
   assert(!scanner.includes("Date.now() + Number(frozenZoneWatch.ttl_minutes"));
 });
 

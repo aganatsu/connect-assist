@@ -24,4 +24,58 @@ describe("pending lifecycle evidence", () => {
     expect(report.summary.linkedOutcomes).toBe(1);
     expect(report.rows[0].linkedPosition?.close_reason).toBe("tp_hit");
   });
+
+  it("uses arm-time reachability and identifies repeated executable plans", () => {
+    const base = {
+      order_id: "pending", candidate_id: "candidate",
+      symbol: "EUR/USD", direction: "long",
+      entry_price: 1.1, entry_zone_type: "fvg",
+      entry_zone_low: 1.099, entry_zone_high: 1.101,
+      placed_at: "2026-08-12T10:00:00Z",
+      expires_at: "2026-08-12T14:00:00Z",
+      zone_touch_time: null, resolved_at: "2026-08-12T14:00:00Z",
+      liquidity_confirmation_observation: null,
+      signal_reason: {
+        preArmReachability: {
+          contractVersion: "prearm-reachability.v1",
+          distancePips: 50,
+          distanceAtr: 1.25,
+          ttlMinutes: 240,
+          referenceMaxDistancePips: 30,
+          withinReferenceDistance: false,
+        },
+      },
+    };
+    const report = buildPendingLifecycleEvidence([
+      { ...base, id: "1", status: "expired", current_price: 1.1002 },
+      { ...base, id: "2", status: "expired", current_price: 1.12 },
+      {
+        ...base, id: "3", status: "filled", current_price: 1.1,
+        entry_price: 1.09, entry_zone_low: 1.089, entry_zone_high: 1.091,
+        zone_touch_time: "2026-08-12T11:00:00Z",
+        signal_reason: {
+          preArmReachability: {
+            contractVersion: "prearm-reachability.v1",
+            distancePips: 20,
+            distanceAtr: 0.5,
+            ttlMinutes: 240,
+            referenceMaxDistancePips: 30,
+            withinReferenceDistance: true,
+          },
+        },
+      },
+    ], []);
+
+    expect(report.rows[0].armDistancePips).toBe(50);
+    expect(report.rows[0].latestDistancePips).toBeCloseTo(2);
+    expect(report.rows[0].repeatPlanCount).toBe(2);
+    expect(report.rows[1].repeatPlanCount).toBe(2);
+    expect(report.summary.expiredUntouched).toBe(2);
+    expect(report.summary.expiredUntouchedRate).toBeCloseTo(2 / 3);
+    expect(report.summary.averageArmDistancePips).toBeCloseTo(40);
+    expect(report.summary.averageArmDistanceAtr).toBeCloseTo(1);
+    expect(report.summary.repeatedPlans).toBe(1);
+    expect(report.summary.repeatedLifecycleRows).toBe(2);
+    expect(report.summary.withinReferenceDistance).toBe(1);
+  });
 });

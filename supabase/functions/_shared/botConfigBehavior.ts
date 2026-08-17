@@ -104,3 +104,52 @@ export function shouldSupersedePendingOrder(
 
   return { supersede: false, reason: "unchanged setup — existing order retained" };
 }
+
+export interface PreArmReachabilityInput {
+  currentPrice: number;
+  entryPrice: number;
+  pipSize: number;
+  atrValue?: number | null;
+  ttlMinutes: number;
+  referenceMaxDistancePips: number;
+  armedAt: string;
+}
+
+export interface PreArmReachabilityObservation {
+  contractVersion: "prearm-reachability.v1";
+  armedAt: string;
+  distancePrice: number;
+  distancePips: number;
+  distanceAtr: number | null;
+  ttlMinutes: number;
+  referenceMaxDistancePips: number;
+  withinReferenceDistance: boolean;
+}
+
+/**
+ * Records how reachable a pre-armed entry was at creation time.
+ *
+ * This is deliberately observation-only. The regular limit-order route has a
+ * distance setting, while pre-arming currently does not enforce it. Persisting
+ * both values lets outcome evidence decide whether that policy should change.
+ */
+export function observePreArmReachability(
+  input: PreArmReachabilityInput,
+): PreArmReachabilityObservation {
+  const distancePrice = Math.abs(input.currentPrice - input.entryPrice);
+  const distancePips = input.pipSize > 0 ? distancePrice / input.pipSize : 0;
+  const distanceAtr = input.atrValue != null && input.atrValue > 0
+    ? distancePrice / input.atrValue
+    : null;
+
+  return {
+    contractVersion: "prearm-reachability.v1",
+    armedAt: input.armedAt,
+    distancePrice,
+    distancePips,
+    distanceAtr,
+    ttlMinutes: input.ttlMinutes,
+    referenceMaxDistancePips: input.referenceMaxDistancePips,
+    withinReferenceDistance: distancePips <= input.referenceMaxDistancePips,
+  };
+}

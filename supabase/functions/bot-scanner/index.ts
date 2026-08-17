@@ -9,7 +9,11 @@ import {
   loadEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
-import { shouldCreatePendingZoneOrder, shouldSupersedePendingOrder } from "../_shared/botConfigBehavior.ts";
+import {
+  observePreArmReachability,
+  shouldCreatePendingZoneOrder,
+  shouldSupersedePendingOrder,
+} from "../_shared/botConfigBehavior.ts";
 import {
   resolveImpulseLifecycleEnforcement,
 } from "../_shared/impulseLifecycleEnforcement.ts";
@@ -6847,8 +6851,19 @@ async function runScanForUser(
             const stagedAt = Date.parse(
               frozenZoneWatch.staged_at || frozenZoneWatch.created_at || new Date().toISOString(),
             );
+            const ttlMinutes = Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes);
+            const placedAt = new Date().toISOString();
+            const preArmReachability = observePreArmReachability({
+              currentPrice: Number(analysis.lastPrice),
+              entryPrice: plan.plan.entryPrice,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              atrValue: Number((analysis as any).atrValue) || null,
+              ttlMinutes,
+              referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
+              armedAt: placedAt,
+            });
             const absoluteExpiry = new Date(
-              stagedAt + Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes) * 60_000,
+              stagedAt + ttlMinutes * 60_000,
             ).toISOString();
             const { error: preArmError } = await supabase.from("pending_orders").insert({
               user_id: userId,
@@ -6866,9 +6881,13 @@ async function runScanForUser(
               entry_zone_low: plan.plan.zone.zoneLow,
               entry_zone_high: plan.plan.zone.zoneHigh,
               status: "pending",
-              expiry_minutes: Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes),
+              expiry_minutes: ttlMinutes,
               expires_at: absoluteExpiry,
-              signal_reason: { preArmed: true, candidateId: frozenZoneWatch.candidate_id },
+              signal_reason: {
+                preArmed: true,
+                candidateId: frozenZoneWatch.candidate_id,
+                preArmReachability,
+              },
               signal_score: analysis.score,
               from_watchlist: true,
               staged_setup_id: frozenZoneWatch.id,
@@ -6879,7 +6898,7 @@ async function runScanForUser(
               frozen_strategy_context: frozenZoneWatch.frozen_strategy_context,
               confirmation_method: frozenZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
               confirmation_config: frozenZoneWatch.confirmation_config,
-              placed_at: new Date().toISOString(),
+              placed_at: placedAt,
             });
             if (preArmError && !/duplicate key/i.test(preArmError.message)) {
               zoneWatchPersistenceError = `Pre-arm failed: ${preArmError.message}`;
@@ -10811,6 +10830,16 @@ async function runScanForUser(
           if (waitPlan.valid) {
             const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
             const ttlMinutes = Number(preparedZoneWatch.ttl_minutes || stagingTTLMinutes);
+            const placedAt = new Date().toISOString();
+            const preArmReachability = observePreArmReachability({
+              currentPrice: Number(analysis.lastPrice),
+              entryPrice: waitPlan.plan.entryPrice,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              atrValue: Number((analysis as any).atrValue) || null,
+              ttlMinutes,
+              referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
+              armedAt: placedAt,
+            });
             const expiresAt = new Date(stagedAt + ttlMinutes * 60_000).toISOString();
             const { error } = await supabase.from("pending_orders").insert({
               user_id: userId, bot_id: BOT_ID, order_id: crypto.randomUUID().slice(0, 8),
@@ -10820,13 +10849,17 @@ async function runScanForUser(
               entry_zone_type: waitPlan.plan.zone.zoneType, entry_zone_low: waitPlan.plan.zone.zoneLow,
               entry_zone_high: waitPlan.plan.zone.zoneHigh, status: "pending",
               expiry_minutes: ttlMinutes, expires_at: expiresAt,
-              signal_reason: { preArmed: true, candidateId: preparedZoneWatch.candidate_id },
+              signal_reason: {
+                preArmed: true,
+                candidateId: preparedZoneWatch.candidate_id,
+                preArmReachability,
+              },
               signal_score: analysis.score, from_watchlist: true, staged_setup_id: preparedZoneWatch.id,
               candidate_id: preparedZoneWatch.candidate_id, structural_invalidation: frozenStop,
               structural_invalidation_source: "staged_inherited", originating_zone: frozenZone,
               frozen_strategy_context: preparedZoneWatch.frozen_strategy_context,
               confirmation_method: preparedZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
-              confirmation_config: preparedZoneWatch.confirmation_config, placed_at: new Date().toISOString(),
+              confirmation_config: preparedZoneWatch.confirmation_config, placed_at: placedAt,
               liquidity_confirmation_observation: (detail as any).liquidityConfirmationObservation || null,
             });
             if (error && !/duplicate key/i.test(error.message)) waitPersistenceError = error.message;

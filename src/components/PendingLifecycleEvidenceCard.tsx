@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getPipLabel } from "@/lib/pipDisplay";
 import type { PendingLifecycleEvidenceRow } from "@/lib/pendingLifecycleEvidence";
 
 interface PendingLifecycleReport {
@@ -8,11 +9,17 @@ interface PendingLifecycleReport {
     active: number;
     touched: number;
     expiredUntouched: number;
+    expiredUntouchedRate: number | null;
     sequenceReady: number;
     filled: number;
     linkedOutcomes: number;
     frozenLocationAvailable: number;
-    averageObservedDistancePips: number | null;
+    reachabilityAvailable: number;
+    withinReferenceDistance: number;
+    averageArmDistancePips: number | null;
+    averageArmDistanceAtr: number | null;
+    repeatedPlans: number;
+    repeatedLifecycleRows: number;
     reasonCounts: Record<string, number>;
   };
   rows: PendingLifecycleEvidenceRow[];
@@ -32,7 +39,7 @@ export function PendingLifecycleEvidenceCard({
           <div>
             <CardTitle className="text-sm font-medium">Pending Lifecycle Evidence</CardTitle>
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Zone watches and confirmation observations. These are not rejected setups and do not change execution.
+              Arm-time reachability, zone watches, and confirmation outcomes. This evidence never changes execution.
             </p>
           </div>
           <Badge variant="outline" className="border-cyan-500/40 text-[9px] text-cyan-400">
@@ -47,20 +54,39 @@ export function PendingLifecycleEvidenceCard({
           <div className="py-8 text-center text-sm text-muted-foreground">Pending lifecycle evidence is unavailable.</div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 xl:grid-cols-9">
+            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 xl:grid-cols-12">
               <Metric label="Setups" value={report.summary.total} />
               <Metric label="Active" value={report.summary.active} />
               <Metric label="Zone touched" value={report.summary.touched} />
-              <Metric label="Expired untouched" value={report.summary.expiredUntouched} />
+              <Metric
+                label="Expired untouched"
+                value={report.summary.expiredUntouchedRate == null
+                  ? report.summary.expiredUntouched
+                  : report.summary.expiredUntouched + " · " + (report.summary.expiredUntouchedRate * 100).toFixed(0) + "%"}
+              />
               <Metric label="Sequence seen" value={report.summary.sequenceReady} />
               <Metric label="Filled" value={report.summary.filled} />
               <Metric label="Linked outcomes" value={report.summary.linkedOutcomes} />
-              <Metric label="P/D available" value={report.summary.frozenLocationAvailable} />
+              <Metric label="Reachability sample" value={report.summary.reachabilityAvailable + "/" + report.summary.total} />
               <Metric
-                label="Observed distance"
-                value={report.summary.averageObservedDistancePips == null
+                label="Within limit reference"
+                value={report.summary.withinReferenceDistance + "/" + report.summary.reachabilityAvailable}
+              />
+              <Metric
+                label="Avg FX arm distance"
+                value={report.summary.averageArmDistancePips == null
                   ? "—"
-                  : `${report.summary.averageObservedDistancePips.toFixed(1)} pips`}
+                  : report.summary.averageArmDistancePips.toFixed(1) + " pips"}
+              />
+              <Metric
+                label="Avg arm distance"
+                value={report.summary.averageArmDistanceAtr == null
+                  ? "—"
+                  : report.summary.averageArmDistanceAtr.toFixed(2) + " ATR"}
+              />
+              <Metric
+                label="Repeated plans"
+                value={report.summary.repeatedPlans + " · " + report.summary.repeatedLifecycleRows + " rows"}
               />
             </div>
             <div>
@@ -76,19 +102,29 @@ export function PendingLifecycleEvidenceCard({
               </div>
             </div>
             <div className="space-y-1.5">
-              {report.rows.slice(0, 12).map((row) => (
-                <div key={row.id} className="grid grid-cols-1 gap-1 border-l-2 border-cyan-500/40 pl-3 text-[10px] sm:grid-cols-[1fr_auto]">
-                  <div>
-                    <span className="font-mono font-medium">{row.symbol} {row.direction.toUpperCase()}</span>
-                    <span className="text-muted-foreground"> · {row.status.replace(/_/g, " ")} · {row.sequenceReason?.replace(/_/g, " ") || "observation unavailable"}</span>
+              {report.rows.slice(0, 12).map((row) => {
+                const unit = getPipLabel(row.symbol);
+                return (
+                  <div key={row.id} className="grid grid-cols-1 gap-1 border-l-2 border-cyan-500/40 pl-3 text-[10px] sm:grid-cols-[1fr_auto]">
+                    <div>
+                      <span className="font-mono font-medium">{row.symbol} {row.direction.toUpperCase()}</span>
+                      <span className="text-muted-foreground"> · {row.status.replace(/_/g, " ")} · {row.sequenceReason?.replace(/_/g, " ") || "observation unavailable"}</span>
+                    </div>
+                    <div className="font-mono text-muted-foreground">
+                      {row.armDistancePips == null ? "armed —" : "armed " + row.armDistancePips.toFixed(1) + " " + unit}
+                      {row.armDistanceAtr == null ? "" : " / " + row.armDistanceAtr.toFixed(2) + " ATR"}
+                      {row.latestDistancePips == null ? "" : " → latest " + row.latestDistancePips.toFixed(1) + " " + unit}
+                      {row.armTtlMinutes == null ? "" : " · TTL " + row.armTtlMinutes.toFixed(0) + "m"}
+                      {row.withinReferenceDistance == null ? "" : row.withinReferenceDistance
+                        ? " · within distance reference"
+                        : " · beyond " + row.referenceMaxDistancePips?.toFixed(0) + "p reference"}
+                      {row.repeatPlanCount > 1 ? " · same plan ×" + row.repeatPlanCount : ""}
+                      {row.frozenEntryLocationAllowed == null ? " · P/D —" : " · P/D " + (row.frozenEntryLocationAllowed ? "pass" : "block")}
+                      {row.linkedPosition ? " · " + (row.linkedPosition.close_reason || row.linkedPosition.position_status) : ""}
+                    </div>
                   </div>
-                  <div className="font-mono text-muted-foreground">
-                    {row.observedDistancePips == null ? "distance —" : `${row.observedDistancePips.toFixed(1)} pips`}
-                    {row.frozenEntryLocationAllowed == null ? " · P/D —" : ` · P/D ${row.frozenEntryLocationAllowed ? "pass" : "block"}`}
-                    {row.linkedPosition ? ` · ${row.linkedPosition.close_reason || row.linkedPosition.position_status}` : ""}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
