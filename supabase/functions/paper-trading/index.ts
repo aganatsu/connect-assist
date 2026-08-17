@@ -6,6 +6,7 @@ import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts"
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
+import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
 
@@ -972,29 +973,21 @@ Deno.serve(async (req) => {
           if (closeReason) {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
             const closeBotId = pos.bot_id || "smc";
-            await supabase.from("paper_trade_history").insert({
-              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-              direction: pos.direction, size: size.toString(), entry_price: pos.entry_price,
-              exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
-              open_time: pos.open_time, closed_at: new Date().toISOString(),
-              close_reason: closeReason, signal_reason: pos.signal_reason || "",
-              signal_score: pos.signal_score, order_id: pos.order_id,
-              source_pending_order_id: pos.source_pending_order_id || null,
-              bot_id: closeBotId,
-              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+            const finalization = await finalizePaperPositionClose(supabase, {
+              positionRowId: pos.id,
+              userId: user.id,
+              botId: closeBotId,
+              exitPrice,
+              pnl,
+              pnlPips,
+              closeReason,
             });
-            // Update balance — route to the correct bot's account
-            const closeAcctQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
-            if (account?.bot_id) closeAcctQ.eq("bot_id", closeBotId);
-            const { data: closeAcct } = await closeAcctQ.maybeSingle();
-            const curBal = parseFloat(closeAcct?.balance || account?.balance || "10000");
-            const newBal = curBal + pnl;
-            const newPeak = Math.max(parseFloat(closeAcct?.peak_balance || account?.peak_balance || "10000"), newBal);
-            const closeBalUpd = supabase.from("paper_accounts").update({
-              balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
-            }).eq("user_id", user.id);
-            if (account?.bot_id) closeBalUpd.eq("bot_id", closeBotId);
-            await closeBalUpd;
+            if (!finalization.closed) {
+              console.log(`Auto-close skipped [${pos.position_id}]: ${finalization.code}`);
+              continue;
+            }
+            if (finalization.balance !== undefined) account.balance = finalization.balance.toString();
+            if (finalization.peak_balance !== undefined) account.peak_balance = finalization.peak_balance.toString();
 
             // Generate post-mortem
             const postMortem = generatePostMortem(pos, exitPrice, pnl, pnlPips, closeReason);
@@ -1005,7 +998,6 @@ Deno.serve(async (req) => {
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
 
-            await supabase.from("paper_positions").delete().eq("id", pos.id);
             closedIds.push(pos.id);
 
             await logClose(supabase, user.id, pos, {
@@ -1364,30 +1356,22 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id).eq("position_id", positionId).single();
       if (!pos) throw new Error("Position not found");
 
-      const ep = exitPrice || parseFloat(pos.current_price);
+      const ep = Number(exitPrice || pos.current_price);
       const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
       const closeReason = payload.reason || "manual";
 
-      // Record in history
-      await supabase.from("paper_trade_history").insert({
-        user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-        direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
-        exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
-        open_time: pos.open_time, closed_at: new Date().toISOString(),
-        close_reason: closeReason, signal_reason: pos.signal_reason || "",
-        signal_score: pos.signal_score, order_id: pos.order_id,
-        source_pending_order_id: pos.source_pending_order_id || null,
-        stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+      const finalization = await finalizePaperPositionClose(supabase, {
+        positionRowId: pos.id,
+        userId: user.id,
+        botId: pos.bot_id || "smc",
+        exitPrice: ep,
+        pnl,
+        pnlPips,
+        closeReason,
       });
-
-      // Update balance
-      const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
-      const newBalance = parseFloat(account.balance) + pnl;
-      const newPeak = Math.max(parseFloat(account.peak_balance), newBalance);
-      await supabase.from("paper_accounts").update({
-        balance: newBalance.toString(),
-        peak_balance: newPeak.toString(),
-      }).eq("user_id", user.id);
+      if (!finalization.closed) {
+        return respond({ success: true, alreadyClosed: true, code: finalization.code });
+      }
 
       // Generate post-mortem
       const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, closeReason);
@@ -1403,9 +1387,6 @@ Deno.serve(async (req) => {
         lesson_learned: postMortem.lessonLearned,
         detail_json: postMortem,
       });
-
-      // Remove position
-      await supabase.from("paper_positions").delete().eq("id", pos.id);
 
       await logClose(supabase, user.id, pos, {
         closeReason, closeSource: "user", pnl, exitPrice: ep,
@@ -1437,25 +1418,23 @@ Deno.serve(async (req) => {
         // Close all open positions
         const { data: positions } = await supabase.from("paper_positions").select("*")
           .eq("user_id", user.id).eq("position_status", "open");
-        const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
-
         if (positions && positions.length > 0) {
-          let totalPnl = 0;
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);
             const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
-            totalPnl += pnl;
-
-            await supabase.from("paper_trade_history").insert({
-              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
-              exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
-              open_time: pos.open_time, closed_at: new Date().toISOString(),
-              close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
-              signal_score: pos.signal_score, order_id: pos.order_id,
-              source_pending_order_id: pos.source_pending_order_id || null,
-              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+            const finalization = await finalizePaperPositionClose(supabase, {
+              positionRowId: pos.id,
+              userId: user.id,
+              botId: pos.bot_id || "smc",
+              exitPrice: ep,
+              pnl,
+              pnlPips,
+              closeReason: "kill_switch",
             });
+            if (!finalization.closed) {
+              console.log(`Kill-switch close skipped [${pos.position_id}]: ${finalization.code}`);
+              continue;
+            }
 
             const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, "kill_switch");
             await supabase.from("trade_post_mortems").insert({
@@ -1472,15 +1451,7 @@ Deno.serve(async (req) => {
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
           }
 
-          await supabase.from("paper_positions").delete().eq("user_id", user.id);
 
-          if (account) {
-            const newBal = parseFloat(account.balance) + totalPnl;
-            await supabase.from("paper_accounts").update({
-              balance: newBal.toString(),
-              peak_balance: Math.max(parseFloat(account.peak_balance), newBal).toString(),
-            }).eq("user_id", user.id);
-          }
         }
 
         await supabase.from("paper_accounts").update({

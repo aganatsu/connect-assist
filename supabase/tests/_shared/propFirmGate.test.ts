@@ -29,6 +29,10 @@ function makeMockSupabase(opts: {
   const insertedHistory: any[] = opts.insertedHistory || [];
 
   return {
+    rpc: async (_name: string, args: any) => {
+      deletedPositions.push(args.p_position_row_id);
+      return { data: { closed: true, code: "closed" }, error: null };
+    },
     from: (table: string) => {
       if (table === "prop_firm_config") {
         return {
@@ -288,8 +292,8 @@ Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypt
 
   // Only BTCUSD should be closed (crypto)
   assertEquals(closedCount, 1);
-  assertEquals(closedSymbols.length, 1);
-  assertEquals(closedSymbols[0], "BTCUSD");
+  assertEquals(deletedPositions.length, 1);
+  assertEquals(deletedPositions[0], "3");
 });
 
 Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
@@ -297,6 +301,10 @@ Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
   let closedSymbols: string[] = [];
 
   const supabase = {
+    rpc: async (_name: string, args: any) => {
+      closedSymbols.push(args.p_position_row_id);
+      return { data: { closed: true, code: "closed" }, error: null };
+    },
     from: (table: string) => {
       if (table === "paper_positions") {
         return {
@@ -348,9 +356,9 @@ Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
 
   assertEquals(closedCount, 3);
   assertEquals(closedSymbols.length, 3);
-  assert(closedSymbols.includes("EURUSD"));
-  assert(closedSymbols.includes("BTCUSD"));
-  assert(closedSymbols.includes("USDCAD"));
+  assert(closedSymbols.includes("1"));
+  assert(closedSymbols.includes("2"));
+  assert(closedSymbols.includes("3"));
 });
 
 Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async () => {
@@ -358,6 +366,10 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
   let closedSymbols: string[] = [];
 
   const supabase = {
+    rpc: async (_name: string, args: any) => {
+      closedSymbols.push(args.p_position_row_id);
+      return { data: { closed: true, code: "closed" }, error: null };
+    },
     from: (table: string) => {
       if (table === "paper_positions") {
         return {
