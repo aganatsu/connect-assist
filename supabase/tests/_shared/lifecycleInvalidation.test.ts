@@ -275,3 +275,39 @@ Deno.test("the scanner freezes rather than recomputing on promotion", () => {
     "the staged level is the frozen contract and must be the first source",
   );
 });
+
+Deno.test("Watchlist lifecycle monitoring reads the frozen boundary", () => {
+  const monitorStart = scanner.indexOf("for (const setup of executableWatchlist)");
+  const monitorEnd = scanner.indexOf("// ── Thesis Conviction Tracker", monitorStart);
+  const monitor = scanner.slice(monitorStart, monitorEnd);
+  const invalidationStart = monitor.indexOf("const invalidation = deriveWatchlistInvalidation({");
+  const invalidationEnd = monitor.indexOf("});", invalidationStart);
+  const invalidationCall = monitor.slice(invalidationStart, invalidationEnd);
+
+  assert(invalidationStart >= 0, "the lifecycle monitor must resolve invalidation");
+  assert(
+    invalidationCall.includes("proposedLevel: setup.sl_level"),
+    "monitoring must use the level frozen when the setup was staged",
+  );
+  assert(
+    !invalidationCall.includes("zone,"),
+    "passing the zone would make deriveWatchlistInvalidation replace the frozen level",
+  );
+  assert(
+    !invalidationCall.includes("impulse:"),
+    "a later scan must not re-derive the frozen boundary from impulse data",
+  );
+});
+
+Deno.test("routine Watchlist refresh does not rewrite sl_level", () => {
+  const updateMarker = "// Update existing staged with latest zone data";
+  const updateStart = scanner.indexOf(updateMarker);
+  const updateEnd = scanner.indexOf("if (zoneWatchUpdateError)", updateStart);
+  const update = scanner.slice(updateStart, updateEnd);
+
+  assert(updateStart >= 0, "expected the existing Watchlist refresh path");
+  assert(
+    !update.includes("sl_level:"),
+    "a refresh may update observations, but the structural boundary is immutable",
+  );
+});
