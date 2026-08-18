@@ -1,7 +1,7 @@
 import { calculateATR, type Candle, detectSwingPoints } from "./smcAnalysis.ts";
 import type { ImpulseEntryLifecycle } from "./impulseEntryLifecycle.ts";
 
-export const IMPULSE_CONFIRMATION_LOCK_VERSION = "impulse-confirmation-lock.v1";
+export const IMPULSE_CONFIRMATION_LOCK_VERSION = "impulse-confirmation-lock.v2";
 
 export interface ConfirmationTriggerPlan {
   contractVersion: typeof IMPULSE_CONFIRMATION_LOCK_VERSION;
@@ -14,6 +14,7 @@ export interface ConfirmationTriggerPlan {
   displacementIndex: number | null;
   displacementQualified: boolean;
   shouldLock: boolean;
+  requiresRevision: boolean;
   confirmationPassed: boolean;
   evaluatedAt: string;
   explanation: string;
@@ -76,34 +77,49 @@ export function deriveConfirmationTriggerPlan(input: {
   ) return null;
   const config = input.config || DEFAULT_CONFIRMATION_TRIGGER_LOCK_CONFIG;
   const startIndex = indexAtOrAfter(candles, confirmation.startedAt);
-  const completed = candles.slice(0, -1);
+  const completed = candles;
   const contextStart = Math.max(0, startIndex - 12);
-  const protectedSlice = completed.slice(startIndex);
-  if (protectedSlice.length === 0) return null;
-  let protectedPivotIndex = startIndex;
-  for (let index = startIndex + 1; index < completed.length; index++) {
-    const candidate = completed[index];
-    const current = completed[protectedPivotIndex];
-    const isDeeper = lifecycle.impulse.direction === "long"
-      ? candidate.low < current.low
-      : candidate.high > current.high;
-    if (isDeeper) protectedPivotIndex = index;
-  }
-  const protectedLevel = lifecycle.impulse.direction === "long"
-    ? completed[protectedPivotIndex].low
-    : completed[protectedPivotIndex].high;
+  if (completed.length - startIndex < config.pivotLookback * 2 + 1) return null;
+
+  // The protected pivot must be a confirmed post-touch swing. A raw latest low/high
+  // is still forming and cannot own an enforced confirmation contract.
   const swings = detectSwingPoints(completed, config.pivotLookback, 0);
+  const protectedType = lifecycle.impulse.direction === "long" ? "low" : "high";
+  const protectedPivots = swings.filter((swing) =>
+    swing.index >= startIndex && swing.type === protectedType
+  );
+  if (protectedPivots.length === 0) return null;
+  const protectedPivot = protectedPivots.reduce((selected, candidate) => {
+    const isDeeper = lifecycle.impulse.direction === "long"
+      ? candidate.price < selected.price
+      : candidate.price > selected.price;
+    return isDeeper ? candidate : selected;
+  });
+  const protectedPivotIndex = protectedPivot.index;
+  const protectedLevel = protectedPivot.price;
+
+  // CHoCH/MSS breaks the most recent opposing pivot before the protected
+  // extreme. The bounded pre-touch context supplies the first trigger; later
+  // deeper retracements naturally select the newer internal pivot.
   const breakPivot = swings.filter((swing) =>
     swing.index >= contextStart && swing.index < protectedPivotIndex &&
     swing.type === (lifecycle.impulse.direction === "long" ? "high" : "low")
   ).at(-1);
   if (!breakPivot) return null;
+  const breakLevel = breakPivot.price;
   const latestIndex = completed.length - 1;
   const latest = completed[latestIndex]!;
-  const breakLevel = breakPivot.price;
+  const levelChanged = confirmation.status === "trigger_locked" &&
+    confirmation.protectedLevel != null && confirmation.breakLevel != null &&
+    (Math.abs(confirmation.protectedLevel - protectedLevel) > 1e-10 ||
+      Math.abs(confirmation.breakLevel - breakLevel) > 1e-10);
+  const effectiveBreakLevel = confirmation.status === "trigger_locked" &&
+      !levelChanged && confirmation.breakLevel != null
+    ? confirmation.breakLevel
+    : breakLevel;
   const closeThrough = lifecycle.impulse.direction === "long"
-    ? latest.close > breakLevel
-    : latest.close < breakLevel;
+    ? latest.close > effectiveBreakLevel
+    : latest.close < effectiveBreakLevel;
   const afterLock = confirmation.lockedAt != null &&
     Date.parse(latest.datetime) > Date.parse(confirmation.lockedAt);
   const displacement = displacementQualified(
@@ -114,7 +130,8 @@ export function deriveConfirmationTriggerPlan(input: {
     )
     ? latestIndex
     : null;
-  const passed = afterLock && closeThrough && displacement !== null;
+  const passed = !levelChanged && afterLock && closeThrough &&
+    displacement !== null;
   return {
     contractVersion: IMPULSE_CONFIRMATION_LOCK_VERSION,
     candidateId: active.id,
@@ -126,10 +143,13 @@ export function deriveConfirmationTriggerPlan(input: {
     displacementIndex: displacement,
     displacementQualified: displacement !== null,
     shouldLock: true,
+    requiresRevision: levelChanged,
     confirmationPassed: confirmation.status === "trigger_locked" && passed,
     evaluatedAt: latest.datetime,
-    explanation: displacement === null
+    explanation: levelChanged
+      ? `Deeper post-touch structure rebuilt protected pivot ${protectedLevel} and break ${breakLevel}`
+      : displacement === null
       ? `Structure frozen: protected pivot ${protectedLevel}, break ${breakLevel}; waiting for a later displaced close`
-      : `Close through ${breakLevel} with displacement confirms ${lifecycle.impulse.direction}`,
+      : `Close through ${effectiveBreakLevel} with displacement confirms ${lifecycle.impulse.direction}`,
   };
 }
