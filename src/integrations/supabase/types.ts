@@ -1563,6 +1563,7 @@ export type Database = {
           size: number | null
           size_old: string | null
           source_pending_order_id: string | null
+          source_position_row_id: string | null
           stop_loss: string | null
           streamlined_decision_frozen_at: string | null
           streamlined_decision_latest: Json | null
@@ -1594,6 +1595,7 @@ export type Database = {
           size?: number | null
           size_old?: string | null
           source_pending_order_id?: string | null
+          source_position_row_id?: string | null
           stop_loss?: string | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
@@ -1625,6 +1627,7 @@ export type Database = {
           size?: number | null
           size_old?: string | null
           source_pending_order_id?: string | null
+          source_position_row_id?: string | null
           stop_loss?: string | null
           streamlined_decision_frozen_at?: string | null
           streamlined_decision_latest?: Json | null
@@ -1642,6 +1645,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      paper_trade_history_duplicate_audit: {
+        Row: {
+          bot_id: string
+          duplicate_history_id: string
+          duplicate_pnl: number
+          duplicate_row: Json
+          kept_history_id: string
+          position_id: string
+          reconciled_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          duplicate_history_id: string
+          duplicate_pnl: number
+          duplicate_row: Json
+          kept_history_id: string
+          position_id: string
+          reconciled_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          duplicate_history_id?: string
+          duplicate_pnl?: number
+          duplicate_row?: Json
+          kept_history_id?: string
+          position_id?: string
+          reconciled_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       pending_orders: {
         Row: {
@@ -4317,6 +4353,19 @@ export type Database = {
           p_max_per_symbol: number
           p_position: Json
           p_source_candidate_key: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      finalize_paper_position_close: {
+        Args: {
+          p_bot_id: string
+          p_close_reason: string
+          p_closed_at: string
+          p_exit_price: number
+          p_pnl: number
+          p_pnl_pips: number
+          p_position_row_id: string
           p_user_id: string
         }
         Returns: Json
