@@ -75,6 +75,15 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
 
   if (functionName === "bot-scanner") {
     const action = body?.action;
+    if (action === "pending_orders" && body?.status === "snapshot") {
+      return {
+        active: [],
+        history: [],
+        fetchedAt: null,
+        fallback: true,
+        error: "Zone Setup data is temporarily unavailable.",
+      };
+    }
     if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) return [];
     if (action === "manual_scan") return { error: "Scanner is temporarily unavailable. Please try again shortly.", started: false, pairsScanned: 0, signalsFound: 0, tradesPlaced: 0 };
     return { ok: false, error: "Scanner is temporarily unavailable. Please try again shortly.", fallback: true };
@@ -197,6 +206,15 @@ export async function invokeFunction<T = any>(
   // the Bot page crash into a blank screen.
   if (functionName === "bot-scanner" && isTransient503(error, data)) {
     const action = body?.action;
+    if (action === "pending_orders" && body?.status === "snapshot") {
+      return {
+        active: [],
+        history: [],
+        fetchedAt: null,
+        fallback: true,
+        error: "Zone Setup data is temporarily unavailable.",
+      } as T;
+    }
     if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) {
       return [] as T;
     }
@@ -784,6 +802,12 @@ export const scannerApi = {
   allPending: async (): Promise<PendingOrder[]> => {
     return invokeFunction<PendingOrder[]>("bot-scanner", { action: "pending_orders", status: "all" });
   },
+  pendingSnapshot: async (): Promise<PendingOrderSnapshot> => {
+    return invokeFunction<PendingOrderSnapshot>("bot-scanner", {
+      action: "pending_orders",
+      status: "snapshot",
+    });
+  },
   cancelPending: async (orderId: string) => {
     return invokeFunction("bot-scanner", { action: "cancel_pending", orderId });
   },
@@ -887,6 +911,14 @@ export interface StagedSetup {
 }
 
 // ── Pending Order Type ──
+export interface PendingOrderSnapshot {
+  active: PendingOrder[];
+  history: PendingOrder[];
+  fetchedAt: string | null;
+  fallback?: boolean;
+  error?: string;
+}
+
 export interface PendingOrder {
   order_id: string;
   user_id: string;

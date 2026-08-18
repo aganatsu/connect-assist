@@ -18,21 +18,28 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [loadWarning, setLoadWarning] = useState<string | null>(null);
   const { toast } = useToast();
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const [activeRes, allRes] = await Promise.all([
-        scannerApi.activePending(),
-        scannerApi.allPending(),
-      ]);
-      setOrders(activeRes || []);
-      setHistory((allRes || []).filter((o: PendingOrder) =>
+      const snapshot = await scannerApi.pendingSnapshot();
+      if (snapshot.fallback) {
+        setLoadWarning(snapshot.error || "Zone Setup data is temporarily unavailable.");
+        return;
+      }
+      if (!Array.isArray(snapshot.active) || !Array.isArray(snapshot.history)) {
+        throw new Error("Invalid Zone Setup snapshot response");
+      }
+      setOrders(snapshot.active);
+      setHistory(snapshot.history.filter((o: PendingOrder) =>
         pendingOrderDisplayStage(o) === "history"
       ));
+      setLoadWarning(null);
     } catch (err) {
       console.error("Failed to fetch zone setups:", err);
+      setLoadWarning("Could not refresh Zone Setups. The last known state is still shown.");
     } finally {
       setLoading(false);
     }
@@ -500,11 +507,20 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         </Button>
       </div>
 
+      {loadWarning && (
+        <div className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-warn">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{loadWarning}</span>
+        </div>
+      )}
+
       {/* Active Zone Setups */}
       {orders.length === 0 ? (
-        <div className="text-xs text-foreground/50 py-2 text-center">
-          No active zone setups. When the bot identifies an impulse zone entry, it will appear here.
-        </div>
+        loadWarning ? null : (
+          <div className="text-xs text-foreground/50 py-2 text-center">
+            No active zone setups. When the bot identifies an impulse zone entry, it will appear here.
+          </div>
+        )
       ) : (
         <div className="space-y-3">
           {reconciliationOrders.length > 0 && (
@@ -564,7 +580,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
           {showHistory && (
             <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto">
-              {history.slice(0, 20).map((order) => (
+              {history.map((order) => (
                 <div
                   key={order.order_id}
                   className="flex items-center justify-between text-[12px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
