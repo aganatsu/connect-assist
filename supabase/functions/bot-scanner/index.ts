@@ -1162,22 +1162,63 @@ Deno.serve(async (req) => {
     if (action === "pending_orders") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const statusFilter = body.status || "all";
+
+      if (statusFilter === "snapshot") {
+        const activeStatuses = [
+          "pending",
+          "awaiting_confirmation",
+          "reconciliation_required",
+        ];
+        const terminalStatuses = [
+          "filled",
+          "broker_rejected",
+          "invalidated",
+          "expired",
+          "cancelled",
+        ];
+        // Read active rows first, then terminal rows. If a row resolves between
+        // the queries it can briefly appear in both sections, but it cannot vanish
+        // from both sections during the state transition.
+        const activeResult = await adminClient.from("pending_orders").select("*")
+          .eq("user_id", userId).eq("bot_id", BOT_ID)
+          .in("status", activeStatuses)
+          .order("placed_at", { ascending: false });
+        if (activeResult.error) {
+          return respond({ error: activeResult.error.message }, 500);
+        }
+        const historyResult = await adminClient.from("pending_orders").select("*")
+          .eq("user_id", userId).eq("bot_id", BOT_ID)
+          .in("status", terminalStatuses)
+          .order("resolved_at", { ascending: false, nullsFirst: false })
+          .limit(100);
+        if (historyResult.error) {
+          return respond({ error: historyResult.error.message }, 500);
+        }
+        const [active, history] = await Promise.all([
+          hydratePendingLifecycleRows(adminClient, activeResult.data || []),
+          hydratePendingLifecycleRows(adminClient, historyResult.data || []),
+        ]);
+        return respond({ active, history, fetchedAt: new Date().toISOString() });
+      }
+
       let query = adminClient.from("pending_orders").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID);
       if (statusFilter !== "all") {
         query = query.eq("status", statusFilter);
       }
-      const { data } = await query.order("placed_at", { ascending: false }).limit(100);
+      const { data, error } = await query.order("placed_at", { ascending: false }).limit(100);
+      if (error) return respond({ error: error.message }, 500);
       return respond(await hydratePendingLifecycleRows(adminClient, data || []));
     }
 
     // ── Pending Orders: Get only active pending orders ──
     if (action === "active_pending") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const { data } = await adminClient.from("pending_orders").select("*")
+      const { data, error } = await adminClient.from("pending_orders").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID)
         .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
         .order("placed_at", { ascending: false });
+      if (error) return respond({ error: error.message }, 500);
       return respond(await hydratePendingLifecycleRows(adminClient, data || []));
     }
 
