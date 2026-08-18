@@ -45,9 +45,19 @@ instead of arbitrating.
 | Market structure | 1 | `analyzeMarketStructure` | 🟢 Single owner |
 | Liquidity pools | 1 | `detectLiquidityPools` | 🟢 Single owner |
 | Zone confirmation | 1 | `detectZoneConfirmation` | 🟢 Single owner |
+| Post-touch CHoCH/MSS trigger | 1 | `impulseConfirmationLock` | 🟢 Single owner |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 
 ---
+
+## Post-touch CHoCH/MSS trigger
+
+`_shared/impulseConfirmationLock.ts` is the single owner of the enforced
+post-touch structure contract. It evaluates closed confirmation-timeframe bars.
+A confirmed deeper retracement revises the protected pivot and internal break
+level on the same persisted lifecycle. The revision resets the lock time, so only
+a later displaced close through the revised break can authorize entry. Runtime,
+replay, and backtest all advance through `tradeLifecycleAuthority.ts`.
 
 ## Paper final-close persistence
 

@@ -3,6 +3,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { deriveConfirmationTriggerPlan } from "../../functions/_shared/impulseConfirmationLock.ts";
+import { advanceTradeLifecycle } from "../../functions/_shared/tradeLifecycleAuthority.ts";
 import {
   buildImpulseEntryLifecycle,
   transitionImpulseEntryLifecycle,
@@ -137,7 +138,7 @@ Deno.test("requires a later displaced close through the frozen break", () => {
   assertEquals(confirmed.confirmationPassed, true);
 });
 
-Deno.test("trigger revisions stop after lock and confirmation is immutable", () => {
+Deno.test("locked trigger rebuilds before confirmation and is immutable after entry", () => {
   const building = lifecycle();
   const revised = transitionImpulseEntryLifecycle(building, {
     type: "trigger_revised",
@@ -161,18 +162,162 @@ Deno.test("trigger revisions stop after lock and confirmation is immutable", () 
     protectedLevel: 98.8,
     breakLevel: 102.4,
   });
-  const ignored = transitionImpulseEntryLifecycle(locked, {
+  const rebuilt = transitionImpulseEntryLifecycle(locked, {
     type: "trigger_revised",
     at: "2026-08-06T11:15:00.000Z",
     protectedLevel: 98.7,
     breakLevel: 102.8,
-    reason: "late structure",
+    reason: "deeper post-touch structure",
   });
-  assertEquals(ignored.revision, locked.revision);
-  const confirmed = transitionImpulseEntryLifecycle(locked, {
+  assertEquals(rebuilt.confirmation?.status, "trigger_locked");
+  assertEquals(rebuilt.confirmation?.protectedLevel, 98.7);
+  assertEquals(rebuilt.confirmation?.breakLevel, 102.8);
+  assertEquals(rebuilt.confirmation?.lockedAt, "2026-08-06T11:15:00.000Z");
+  assertEquals(rebuilt.confirmation?.revisions.length, 2);
+  const confirmed = transitionImpulseEntryLifecycle(rebuilt, {
     type: "confirmation_passed",
     at: "2026-08-06T11:20:00.000Z",
   });
+  const immutable = transitionImpulseEntryLifecycle(confirmed, {
+    type: "trigger_revised",
+    at: "2026-08-06T11:25:00.000Z",
+    protectedLevel: 98.6,
+    breakLevel: 102.9,
+    reason: "too late",
+  });
+  assertEquals(immutable.revision, confirmed.revision);
   assertEquals(confirmed.confirmation?.confirmedAt, "2026-08-06T11:20:00.000Z");
   assertEquals(confirmed.status, "entered");
+});
+
+Deno.test("a deeper post-touch retracement rebuilds the locked internal trigger", () => {
+  const building = lifecycle();
+  const initialCandles: Candle[] = [
+    ...candles.slice(0, 12),
+    {
+      datetime: "2026-08-06T11:00:00.000Z",
+      open: 99.8,
+      high: 100.1,
+      low: 99.7,
+      close: 99.9,
+      volume: 100,
+    },
+  ];
+  const firstPass = deriveConfirmationTriggerPlan({
+    lifecycle: building,
+    candles: initialCandles,
+    config: {
+      pivotLookback: 2,
+      minDisplacementBodyRatio: 0.55,
+      minDisplacementATR: 0,
+    },
+  });
+  assert(firstPass);
+  const locked = transitionImpulseEntryLifecycle(building, {
+    type: "trigger_locked",
+    at: firstPass.evaluatedAt,
+    protectedLevel: firstPass.protectedLevel,
+    breakLevel: firstPass.breakLevel,
+  });
+
+  const deeperRetracement: Candle[] = [
+    {
+      datetime: "2026-08-06T11:35:00.000Z",
+      open: 99.8,
+      high: 100.7,
+      low: 99.5,
+      close: 100.4,
+      volume: 100,
+    },
+    {
+      datetime: "2026-08-06T11:40:00.000Z",
+      open: 100.4,
+      high: 100.9,
+      low: 100.2,
+      close: 100.6,
+      volume: 100,
+    },
+    {
+      datetime: "2026-08-06T11:45:00.000Z",
+      open: 100.6,
+      high: 100.7,
+      low: 99.4,
+      close: 99.7,
+      volume: 100,
+    },
+    {
+      datetime: "2026-08-06T11:50:00.000Z",
+      open: 99.7,
+      high: 99.9,
+      low: 98.4,
+      close: 98.8,
+      volume: 100,
+    },
+    {
+      datetime: "2026-08-06T11:55:00.000Z",
+      open: 98.8,
+      high: 99.5,
+      low: 98.7,
+      close: 99.2,
+      volume: 100,
+    },
+    {
+      datetime: "2026-08-06T12:00:00.000Z",
+      open: 99.2,
+      high: 100.1,
+      low: 99,
+      close: 99.8,
+      volume: 100,
+    },
+  ];
+  const revised = deriveConfirmationTriggerPlan({
+    lifecycle: locked,
+    candles: [...initialCandles, ...deeperRetracement],
+    config: {
+      pivotLookback: 2,
+      minDisplacementBodyRatio: 0.55,
+      minDisplacementATR: 0,
+    },
+  });
+  assert(revised);
+  assertEquals(revised.requiresRevision, true);
+  assert(revised.protectedLevel < firstPass.protectedLevel);
+  assert(revised.breakLevel < firstPass.breakLevel);
+  assertEquals(revised.confirmationPassed, false);
+
+  const rebuilt = advanceTradeLifecycle({
+    lifecycle: locked,
+    candle: deeperRetracement.at(-1)!,
+    completedCandles: [...initialCandles, ...deeperRetracement],
+  });
+  assertEquals(rebuilt.events.map((event) => event.type), ["trigger_revised"]);
+  assertEquals(
+    rebuilt.after.confirmation?.protectedLevel,
+    revised.protectedLevel,
+  );
+  assertEquals(rebuilt.after.confirmation?.breakLevel, revised.breakLevel);
+  assertEquals(rebuilt.after.confirmation?.lockedAt, revised.evaluatedAt);
+  assertEquals(rebuilt.disposition, "watch");
+
+  const confirming: Candle = {
+    datetime: "2026-08-06T12:05:00.000Z",
+    open: revised.breakLevel - 0.5,
+    high: revised.breakLevel + 1,
+    low: revised.breakLevel - 1,
+    close: revised.breakLevel + 0.9,
+    volume: 100,
+  };
+  const entered = advanceTradeLifecycle({
+    lifecycle: rebuilt.after,
+    candle: confirming,
+    completedCandles: [
+      ...initialCandles,
+      ...deeperRetracement,
+      confirming,
+    ],
+  });
+  assertEquals(entered.events.map((event) => event.type), [
+    "confirmation_passed",
+  ]);
+  assertEquals(entered.disposition, "entry_ready");
 });

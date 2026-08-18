@@ -275,12 +275,15 @@ export function transitionImpulseEntryLifecycle(
     return next;
   }
   if (event.type === "trigger_revised") {
-    if (next.confirmation.status !== "building") return current;
+    if (!["building", "trigger_locked"].includes(next.confirmation.status)) {
+      return current;
+    }
     const last = next.confirmation.revisions.at(-1);
     if (
       last?.protectedLevel === event.protectedLevel &&
       last?.breakLevel === event.breakLevel
     ) return current;
+    const wasLocked = next.confirmation.status === "trigger_locked";
     next.confirmation.protectedLevel = event.protectedLevel;
     next.confirmation.breakLevel = event.breakLevel;
     next.confirmation.revisions.push({
@@ -290,6 +293,11 @@ export function transitionImpulseEntryLifecycle(
       observedAt: event.at,
       reason: event.reason,
     });
+    if (wasLocked) {
+      // A deeper valid retracement creates a new local structure contract.
+      // Keep it locked, but require confirmation from a later closed candle.
+      next.confirmation.lockedAt = event.at;
+    }
     next.lastTransitionReason = event.reason;
     return next;
   }

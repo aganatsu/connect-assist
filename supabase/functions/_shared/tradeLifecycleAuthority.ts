@@ -50,6 +50,8 @@ export function advanceTradeLifecycle(input: {
     if (confirmationPlan && after.confirmation?.status === "building") {
       emit({ type: "trigger_revised", at: confirmationPlan.evaluatedAt, protectedLevel: confirmationPlan.protectedLevel, breakLevel: confirmationPlan.breakLevel, reason: confirmationPlan.explanation });
       if (confirmationPlan.shouldLock && after.confirmation?.status === "building") emit({ type: "trigger_locked", at: confirmationPlan.evaluatedAt, protectedLevel: confirmationPlan.protectedLevel, breakLevel: confirmationPlan.breakLevel });
+    } else if (confirmationPlan?.requiresRevision && after.confirmation?.status === "trigger_locked") {
+      emit({ type: "trigger_revised", at: confirmationPlan.evaluatedAt, protectedLevel: confirmationPlan.protectedLevel, breakLevel: confirmationPlan.breakLevel, reason: confirmationPlan.explanation });
     } else if (confirmationPlan?.confirmationPassed && after.confirmation?.status === "trigger_locked") {
       emit({ type: "confirmation_passed", at: confirmationPlan.evaluatedAt });
     }

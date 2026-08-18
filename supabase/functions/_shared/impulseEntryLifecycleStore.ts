@@ -154,6 +154,24 @@ export async function observeImpulseConfirmationLock(
       }
     }
   } else if (lifecycle.confirmation?.status === "trigger_locked" &&
+    plan.requiresRevision) {
+    const revised = await persistImpulseEntryLifecycleTransition(
+      client,
+      lifecycleId,
+      lifecycle,
+      {
+        type: "trigger_revised",
+        at: plan.evaluatedAt,
+        protectedLevel: plan.protectedLevel,
+        breakLevel: plan.breakLevel,
+        reason: plan.explanation,
+      },
+    );
+    if (revised.persisted) {
+      transitions.push(revised);
+      lifecycle = revised.after;
+    }
+  } else if (lifecycle.confirmation?.status === "trigger_locked" &&
     plan.confirmationPassed) {
     const confirmed = await persistImpulseEntryLifecycleTransition(
       client,
