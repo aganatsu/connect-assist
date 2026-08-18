@@ -22,7 +22,7 @@ Deno.test("every live entry authorization requires Cross-TF authority", async ()
   const fastRequirements = fast.match(
     /requireCrossTimeframeAuthority:\s*true/g,
   ) || [];
-  assert(scannerCalls.length >= 3);
+  assert(scannerCalls.length >= 2);
   assert(scannerRequirements.length >= scannerCalls.length);
   assert(fastCalls.length >= 1);
   assert(fastRequirements.length >= fastCalls.length);

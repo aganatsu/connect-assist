@@ -6,7 +6,10 @@ const botScanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const zoneScanner = await Deno.readTextFile(
-  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  new URL(
+    "../../functions/zone-confirmation-scanner/index.ts",
+    import.meta.url,
+  ),
 );
 const scheduledTasks = await Deno.readTextFile(
   new URL("../../functions/scheduled-tasks/index.ts", import.meta.url),
@@ -19,7 +22,6 @@ Deno.test("Phase 5B records source, authorization, and confirmation health", () 
   assertStringIncludes(botScanner, "publishCandleSourceAlerts");
   assertStringIncludes(botScanner, "recordScannerAuthorizationFailure");
   assertStringIncludes(botScanner, "metaapi_certificate_failure");
-  assertStringIncludes(botScanner, "last_confirmation_checked_at");
 
   assertStringIncludes(zoneScanner, "publishCandleSourceAlerts");
   assertStringIncludes(zoneScanner, "recordScannerAuthorizationFailure");

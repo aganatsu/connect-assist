@@ -8,10 +8,17 @@ async function source(path: string): Promise<string> {
 
 Deno.test("live market and pending fills evaluate their actual entry prices", async () => {
   const scanner = await source("functions/bot-scanner/index.ts");
-  assertStringIncludes(scanner, "price: actualFillPrice");
-  assertStringIncludes(scanner, "canonicalDealingRange: pendingCanonicalDealingRange");
+  const pending = await source("functions/zone-confirmation-scanner/index.ts");
+  assertStringIncludes(pending, "price: actualFillPrice");
+  assertStringIncludes(
+    pending,
+    "canonicalDealingRange: pendingCanonicalDealingRange",
+  );
   assertStringIncludes(scanner, "price: marketEntryPrice");
-  assertStringIncludes(scanner, "canonicalDealingRange: directCanonicalDealingRange");
+  assertStringIncludes(
+    scanner,
+    "canonicalDealingRange: directCanonicalDealingRange",
+  );
 });
 
 Deno.test("backtest uses the shared evaluator as a non-blocking observation", async () => {

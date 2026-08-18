@@ -42,10 +42,6 @@ Deno.test("all automated fill paths preserve style policy evidence", () => {
     `expected style policy on candidate, pending, direct, breaker, verdict and watchlist paths; found ${pairPolicyUses.length}`,
   );
   assertStringIncludes(
-    scanner,
-    "stylePolicy: pendingPolicyResolution.policy",
-  );
-  assertStringIncludes(
     fastScanner,
     "stylePolicy: pendingPolicyResolution.policy",
   );

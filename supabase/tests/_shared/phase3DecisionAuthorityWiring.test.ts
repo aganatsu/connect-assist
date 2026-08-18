@@ -7,7 +7,10 @@ const botScanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const fastScanner = await Deno.readTextFile(
-  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  new URL(
+    "../../functions/zone-confirmation-scanner/index.ts",
+    import.meta.url,
+  ),
 );
 
 Deno.test("main scanner persists Direction Verdicts and durable decision contexts", () => {
@@ -33,16 +36,12 @@ Deno.test("both fill scanners load dedicated Direction Verdict authority instead
   assertStringIncludes(fastScanner, "directionVerdictMatchesGamePlan");
 });
 
-Deno.test("both fill scanners make thesis validity mandatory and record confirmation", () => {
-  assertStringIncludes(botScanner, "requireThesisValidation: true");
+Deno.test("the sole pending fill scanner makes thesis validity mandatory and records confirmation", () => {
   assertStringIncludes(fastScanner, "const requireThesisValidation = true");
-  assertStringIncludes(
-    botScanner,
-    "entryConfirmation: pendingEntryConfirmation",
-  );
   assertStringIncludes(fastScanner, "entryConfirmation,");
   assertStringIncludes(
     fastScanner,
     "decisionContext: authorization.decisionContext",
   );
+  assert(!botScanner.includes("entryConfirmation: pendingEntryConfirmation"));
 });

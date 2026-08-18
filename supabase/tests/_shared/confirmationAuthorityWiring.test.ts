@@ -24,11 +24,16 @@ Deno.test("all confirmation mechanisms expose one observation contract", () => {
   assertStringIncludes(fastScanner, "buildRoutedConfirmationObservation");
 });
 
-Deno.test("both fill routes persist confirmation authority", () => {
-  assertStringIncludes(scanner, "authority: confirmedSignal.authority || null");
-  assertStringIncludes(fastScanner, "authority: confirmedSignal.authority || null");
+Deno.test("the sole pending fill route persists confirmation authority", () => {
+  assertStringIncludes(
+    fastScanner,
+    "authority: confirmedSignal.authority || null",
+  );
   assertStringIncludes(fastScanner, "authority: confirmationAuthority");
-  assertStringIncludes(fastScanner, "authority: confirmationAuthority");
+  assert(
+    !scanner.includes("authority: confirmedSignal.authority || null"),
+    "bot-scanner must not persist confirmation from a duplicate pending route",
+  );
 });
 
 Deno.test("observation metadata does not become an authorization branch", () => {
