@@ -4170,6 +4170,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           minimumRiskReward: pairConfig.minRiskReward,
           directionVerdict,
           requireDirectionVerdict: true,
+          directionVerdictPolicy: "retain_frozen_until_opposed",
           gamePlan: activeGamePlan,
           gamePlanEnabled: pairConfig.gamePlanEnabled !== false,
           gamePlanMode: pairConfig.gpEnforcementMode,

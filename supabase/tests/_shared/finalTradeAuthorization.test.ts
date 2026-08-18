@@ -228,6 +228,29 @@ Deno.test("final authorization waits when the current Direction Verdict is unava
   assertEquals(result.retryable, true);
 });
 
+Deno.test("frozen final authorization waits rather than cancelling when direction expires", () => {
+  const input = baseInput();
+  input.directionVerdictPolicy = "retain_frozen_until_opposed";
+  input.directionVerdict = null;
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.code, "direction_unavailable");
+  assertEquals(result.retryable, true);
+  assertStringIncludes(result.reason, "Frozen SHORT direction retained");
+});
+
+Deno.test("frozen final authorization makes an explicit reversal terminal", () => {
+  const input = baseInput();
+  input.directionVerdictPolicy = "retain_frozen_until_opposed";
+  input.directionVerdict = {
+    verdict: "long",
+    shouldBlock: false,
+    confidence: 81,
+  };
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.code, "direction_conflict");
+  assertEquals(result.retryable, false);
+});
+
 Deno.test("final authorization blocks a freshly invalidated thesis", () => {
   const input = baseInput();
   input.thesisResult = {

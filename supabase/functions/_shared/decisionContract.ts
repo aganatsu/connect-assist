@@ -29,6 +29,10 @@ export interface DirectionVerdictDecision {
   decisionEvidence?: StyleDecisionEvidence | null;
 }
 
+export type DirectionVerdictPolicy =
+  | "require_current"
+  | "retain_frozen_until_opposed";
+
 export interface EntryConfirmationDecision {
   required: boolean;
   passed: boolean;
@@ -76,6 +80,7 @@ export interface DecisionHierarchyInput {
   gamePlanMinimumConfidence: number;
   directionVerdict: DirectionVerdictDecision | null;
   requireDirectionVerdict: boolean;
+  directionVerdictPolicy?: DirectionVerdictPolicy;
   thesisResult: ThesisValidationResult | null;
   requireThesisValidation: boolean;
   entryConfirmation?: EntryConfirmationDecision | null;
@@ -133,8 +138,26 @@ export function evaluateDecisionHierarchy(
 
   if (input.requireDirectionVerdict) {
     const verdict = input.directionVerdict;
-    if (!verdict || !verdict.verdict) {
-      const reason = "Current Direction Verdict is unavailable";
+    const retainFrozenDirection = input.directionVerdictPolicy ===
+      "retain_frozen_until_opposed";
+    const explicitOpposite = verdict?.shouldBlock === false &&
+        (verdict.verdict === "long" || verdict.verdict === "short")
+      ? verdict.verdict !== input.direction
+      : false;
+    if (retainFrozenDirection && explicitOpposite) {
+      const reason =
+        `Fresh Direction Verdict reversed to ${verdict!.verdict}; frozen candidate is ${input.direction}`;
+      checks.push({ layer: "direction_verdict", passed: false, reason });
+      return blocked("direction_conflict", reason, false, checks);
+    }
+    if (
+      !verdict || !verdict.verdict ||
+      (retainFrozenDirection &&
+        (verdict.shouldBlock === true || verdict.verdict === "neutral"))
+    ) {
+      const reason = retainFrozenDirection
+        ? `Frozen ${input.direction.toUpperCase()} direction retained; waiting for a fresh non-opposing Direction Verdict`
+        : "Current Direction Verdict is unavailable";
       checks.push({ layer: "direction_verdict", passed: false, reason });
       return blocked("direction_unavailable", reason, true, checks);
     }

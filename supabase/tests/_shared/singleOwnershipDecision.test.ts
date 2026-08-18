@@ -43,6 +43,42 @@ Deno.test("blocks canonical location, invalid thesis, and operational safety fai
   assertEquals(result.reasonCodes, ["safety_news", "strict_value_required", "thesis_invalid"]);
 });
 
+Deno.test("frozen ownership waits on neutral direction but blocks an explicit reversal", () => {
+  const unavailable: any = input();
+  unavailable.direction = {
+    verdict: "neutral",
+    shouldBlock: true,
+    policy: "retain_frozen_until_opposed",
+  };
+  const waiting = evaluateSingleOwnershipDecision(unavailable);
+  assertEquals(waiting.decision, "unavailable");
+  assertEquals(waiting.completeness.unavailable, ["direction"]);
+  assertEquals(waiting.reasonCodes, []);
+
+  const reversed: any = input();
+  reversed.direction = {
+    verdict: "short",
+    shouldBlock: false,
+    policy: "retain_frozen_until_opposed",
+  };
+  const blocked = evaluateSingleOwnershipDecision(reversed);
+  assertEquals(blocked.decision, "block");
+  assertEquals(blocked.reasonCodes, ["direction_not_authorized"]);
+});
+
+Deno.test("frozen ownership waits when an opposite direction label is itself blocked", () => {
+  const value: any = input();
+  value.direction = {
+    verdict: "short",
+    shouldBlock: true,
+    policy: "retain_frozen_until_opposed",
+  };
+  const result = evaluateSingleOwnershipDecision(value);
+  assertEquals(result.decision, "unavailable");
+  assertEquals(result.completeness.unavailable, ["direction"]);
+  assertEquals(result.reasonCodes, []);
+});
+
 Deno.test("operational safety excludes market evidence and legacy score gates", async () => {
   const { operationalSafetyChecks } = await import("../../functions/_shared/singleOwnershipDecision.ts");
   assertEquals(operationalSafetyChecks([

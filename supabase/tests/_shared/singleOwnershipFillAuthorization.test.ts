@@ -34,6 +34,29 @@ Deno.test("fill authorization refreshes frozen story and allows complete paper s
   assertEquals(result.authorized, true);
 });
 
+Deno.test("fill authorization retains frozen direction while a current verdict is unavailable", () => {
+  const result = evaluateSingleOwnershipFillAuthorization({
+    ...base,
+    directionVerdict: null,
+    rawFinalAuthorized: false,
+  });
+  assertEquals(result.decision.decision, "unavailable");
+  assertEquals(result.decision.completeness.unavailable, ["direction"]);
+  assertEquals(result.retryable, true);
+  assertEquals(result.authorized, false);
+});
+
+Deno.test("fill authorization blocks a fresh explicit direction reversal", () => {
+  const result = evaluateSingleOwnershipFillAuthorization({
+    ...base,
+    directionVerdict: { verdict: "long", shouldBlock: false },
+  });
+  assertEquals(result.decision.decision, "block");
+  assertEquals(result.decision.reasonCodes, ["direction_not_authorized"]);
+  assertEquals(result.retryable, false);
+  assertEquals(result.authorized, false);
+});
+
 Deno.test("fill authorization blocks changed canonical location", () => {
   const result = evaluateSingleOwnershipFillAuthorization({
     ...base,

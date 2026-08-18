@@ -10,5 +10,8 @@ Deno.test("backtest reauthorizes a confirmed candidate at historical fill", () =
   assertStringIncludes(engine, "projectCanonicalScannerState({");
   assertStringIncludes(engine, "canonicalDealingRangeEvaluation.allowed === true");
   assertStringIncludes(engine, "finalAuthorization.authorized");
-  assertStringIncludes(engine, "singleOwnershipFillAuthorization = ownershipFill");
+  assertStringIncludes(
+    engine,
+    "(replaySnapshot as any).singleOwnershipFillAuthorization",
+  );
 });

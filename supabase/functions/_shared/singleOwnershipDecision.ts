@@ -1,3 +1,5 @@
+import type { DirectionVerdictPolicy } from "./decisionContract.ts";
+
 export const SINGLE_OWNERSHIP_DECISION_VERSION =
   "single-ownership-decision.v1";
 
@@ -18,6 +20,7 @@ export interface SingleOwnershipDecisionInput {
     verdict: "long" | "short" | "neutral" | null;
     shouldBlock: boolean | null;
     evidenceId?: string | null;
+    policy?: DirectionVerdictPolicy;
   };
   zoneStory: {
     available: boolean;
@@ -113,7 +116,19 @@ export function evaluateSingleOwnershipDecision(
   const unavailable: string[] = [];
   const reasons: string[] = [];
 
-  if (!input.direction.verdict || input.direction.shouldBlock === null) {
+  const retainFrozenDirection = input.direction.policy ===
+    "retain_frozen_until_opposed";
+  const explicitOpposite = input.direction.shouldBlock === false &&
+      (input.direction.verdict === "long" || input.direction.verdict === "short")
+    ? input.direction.verdict !== input.identity.direction
+    : false;
+  if (retainFrozenDirection && explicitOpposite) {
+    reasons.push("direction_not_authorized");
+  } else if (
+    !input.direction.verdict || input.direction.shouldBlock === null ||
+    (retainFrozenDirection &&
+      (input.direction.shouldBlock || input.direction.verdict === "neutral"))
+  ) {
     unavailable.push("direction");
   } else if (
     input.direction.shouldBlock || input.direction.verdict === "neutral" ||

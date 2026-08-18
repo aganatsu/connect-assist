@@ -62,6 +62,16 @@ level on the same persisted lifecycle. The revision resets the lock time, so onl
 a later displaced close through the revised break can authorize entry. Runtime,
 replay, and backtest all advance through `tradeLifecycleAuthority.ts`.
 
+## Frozen setup direction at final authorization
+
+`decisionContract.ts` remains the single owner of Direction Verdict semantics.
+Immediate market entries require a current aligned verdict. A pending setup that has
+already frozen its direction uses `retain_frozen_until_opposed`: an unavailable or
+neutral current verdict keeps the setup waiting, while a fresh explicit opposite
+long/short verdict terminates it. Missing evidence never authorizes entry. The same
+policy is passed through `finalTradeAuthorization.ts`,
+`singleOwnershipFillAuthorization.ts`, the zone-confirmation scanner, and backtest.
+
 ## Paper final-close persistence
 
 Exit *detection* remains owned by `_shared/exitEvaluation.ts`. Once a caller has an
