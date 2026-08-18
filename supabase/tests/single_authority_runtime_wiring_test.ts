@@ -1,4 +1,8 @@
-import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { applyAuthorityOwnershipToGateResults } from "../functions/_shared/authorityGateOwnership.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -16,9 +20,14 @@ Deno.test("live and backtest apply the shared gate ownership boundary", async ()
     assertStringIncludes(source, "final decision hierarchy owns authorization");
     assert(!source.includes("directionVerdict && !gpGate.passed"));
   }
-  for (const source of [live, backtest, pending]) {
+  assertStringIncludes(live, "gamePlanEnabled,");
+  for (const source of [backtest, pending]) {
     assertStringIncludes(source, "gamePlanEnabled:");
-    assert(!source.includes('gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"]'));
+    assert(
+      !source.includes(
+        'gamePlanEnabled: config.gamePlanEnabled && !(["enforce", "enforce_live"]',
+      ),
+    );
   }
   assertStringIncludes(live, 'pairConfig.gpEnforcementMode !== "off" && gpCtx');
   assertStringIncludes(backtest, 'pairConfig.gpEnforcementMode === "off"');
@@ -37,5 +46,10 @@ Deno.test("canonical location replaces rolling P/D while operational safety rema
     canonicalRangeAvailable: true,
     normalizeCode: (reason) => reason,
   });
-  assertEquals(results.map((result) => result.passed), [true, true, true, false]);
+  assertEquals(results.map((result) => result.passed), [
+    true,
+    true,
+    true,
+    false,
+  ]);
 });

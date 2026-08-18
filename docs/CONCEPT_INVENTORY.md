@@ -54,6 +54,9 @@ instead of arbitrating.
 
 `_shared/impulseConfirmationLock.ts` is the single owner of the enforced
 post-touch structure contract. It evaluates closed confirmation-timeframe bars.
+`zone-confirmation-scanner` is the sole runtime owner once a pending order
+reaches `awaiting_confirmation`; the five-minute `bot-scanner` retains the row
+for discovery exclusion but does not advance, reset, authorize, size, or fill it.
 A confirmed deeper retracement revises the protected pivot and internal break
 level on the same persisted lifecycle. The revision resets the lock time, so only
 a later displaced close through the revised break can authorize entry. Runtime,

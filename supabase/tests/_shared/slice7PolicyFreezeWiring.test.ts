@@ -6,7 +6,10 @@ const botScanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const fastScanner = await Deno.readTextFile(
-  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  new URL(
+    "../../functions/zone-confirmation-scanner/index.ts",
+    import.meta.url,
+  ),
 );
 
 Deno.test("every bot-scanner entry path creates a frozen strategy context", () => {
@@ -30,34 +33,25 @@ Deno.test("every bot-scanner entry path creates a frozen strategy context", () =
   );
 });
 
-Deno.test("both confirmation paths resolve style and attempts from the frozen setup", () => {
-  for (const source of [botScanner, fastScanner]) {
-    assertStringIncludes(source, "resolvePendingStylePolicy(");
-    assertStringIncludes(source, "validateFrozenSetupIdentity(");
-    assertStringIncludes(
-      source,
-      "resolvePendingMaxConfirmationAttempts(",
-    );
-    assertStringIncludes(
-      source,
-      "pendingTimeframeAuthority.roles.confirmation",
-    );
-    assertStringIncludes(
-      source,
-      "pendingTimeframeAuthority.roles.refinement",
-    );
-    assertStringIncludes(
-      source,
-      "interval: pendingTimeframeAuthority.runtimeEntry",
-    );
-  }
+Deno.test("the sole confirmation path resolves style and attempts from the frozen setup", () => {
+  assertStringIncludes(fastScanner, "resolvePendingStylePolicy(");
+  assertStringIncludes(fastScanner, "validateFrozenSetupIdentity(");
+  assertStringIncludes(fastScanner, "resolvePendingMaxConfirmationAttempts(");
+  assertStringIncludes(
+    fastScanner,
+    "pendingTimeframeAuthority.roles.confirmation",
+  );
+  assertStringIncludes(
+    fastScanner,
+    "pendingTimeframeAuthority.roles.refinement",
+  );
+  assertStringIncludes(
+    fastScanner,
+    "interval: pendingTimeframeAuthority.runtimeEntry",
+  );
 });
 
 Deno.test("fill authorization carries the original policy snapshot", () => {
-  assertStringIncludes(
-    botScanner,
-    "stylePolicy: pendingPolicyResolution.policy",
-  );
   assertStringIncludes(
     fastScanner,
     "stylePolicy: pendingPolicyResolution.policy",

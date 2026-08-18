@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
 import { generatePendingOrderNarrative } from "@/lib/narrative";
 import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
+import { pendingOrderDisplayStage } from "@/lib/pendingOrderDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle, Eye, Crosshair } from "lucide-react";
@@ -27,7 +28,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         scannerApi.allPending(),
       ]);
       setOrders(activeRes || []);
-      setHistory((allRes || []).filter((o: PendingOrder) => o.status !== "pending" && o.status !== "awaiting_confirmation" && o.status !== "reconciliation_required"));
+      setHistory((allRes || []).filter((o: PendingOrder) =>
+        pendingOrderDisplayStage(o) === "history"
+      ));
     } catch (err) {
       console.error("Failed to fetch zone setups:", err);
     } finally {
@@ -119,10 +122,21 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     }
   };
 
-  // Separate orders into watching (pending) and hunting (awaiting_confirmation)
-  const watchingOrders = orders.filter(o => o.status === "pending");
-  const huntingOrders = orders.filter(o => o.status === "awaiting_confirmation");
-  const reconciliationOrders = orders.filter(o => o.status === "reconciliation_required");
+  // The frozen retracement plan is the authoritative presentation stage.
+  // This keeps a valid setup visible even if an older scanner reset its outer
+  // pending-order status before the one-time data repair runs.
+  const retracementOrders = orders.filter(o =>
+    pendingOrderDisplayStage(o) === "retracement"
+  );
+  const watchingOrders = orders.filter(o =>
+    pendingOrderDisplayStage(o) === "watching"
+  );
+  const huntingOrders = orders.filter(o =>
+    pendingOrderDisplayStage(o) === "confirmation"
+  );
+  const reconciliationOrders = orders.filter(o =>
+    pendingOrderDisplayStage(o) === "reconciliation"
+  );
 
   const renderOrderCard = (order: PendingOrder, isHunting: boolean) => {
     const expiryPct = getExpiryPercent(order.placed_at, order.expires_at);
@@ -152,6 +166,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     const retracementPlan = order.post_confirmation_entry;
     const waitingForRetracement =
       retracementPlan?.state === "awaiting_retracement";
+    const retracementReady = retracementPlan?.state === "ready";
+    const hasActiveRetracement = waitingForRetracement || retracementReady;
     const authorizationWait = order.final_authorization?.authorized === false &&
       order.final_authorization?.retryable === true
       ? order.final_authorization.reason
@@ -202,7 +218,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 className="text-[11px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
               >
                 <Crosshair className="w-2.5 h-2.5 mr-0.5" />
-                {waitingForRetracement ? "RETRACEMENT" : "HUNTING"}
+                {hasActiveRetracement ? "RETRACEMENT" : "HUNTING"}
               </Badge>
             )}
             {!isHunting && order.from_watchlist && (
@@ -239,6 +255,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               <Crosshair className="w-3 h-3 inline mr-1" />
               {waitingForRetracement
                 ? `CHoCH confirmed — waiting for ${retracementPlan.zone.type.replace(/_/g, " ")} [${Number(retracementPlan.zone.low).toFixed(5)} – ${Number(retracementPlan.zone.high).toFixed(5)}]`
+                : retracementReady
+                ? "Retracement reached — running fresh final authorization"
                 : `Price in zone — awaiting ${order.direction === "short" ? "bearish" : "bullish"} ${confirmationLabel}`}
             </span>
             <span className="text-foreground/60">
@@ -276,7 +294,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Narrative sentence */}
         <p className="text-[11px] text-foreground/50 italic leading-tight">
-          {isHunting
+          {waitingForRetracement
+            ? `The saved CHoCH is confirmed. Price must retrace into the frozen ${retracementPlan.zone.type.replace(/_/g, " ")} before final authorization.`
+            : retracementReady
+            ? "The frozen retracement was reached. Final authorization must pass before entry."
+            : isHunting
             ? `Price has entered the ${order.entry_zone_type} zone. The saved ${confirmationLabel} rule must pass before entry.`
             : generatePendingOrderNarrative(order)
           }
@@ -492,6 +514,16 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 Broker Reconciliation ({reconciliationOrders.length})
               </div>
               {reconciliationOrders.map((order) => renderOrderCard(order, true))}
+            </div>
+          )}
+
+          {retracementOrders.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
+                <Crosshair className="w-3 h-3" />
+                Waiting for Retracement ({retracementOrders.length})
+              </div>
+              {retracementOrders.map((order) => renderOrderCard(order, true))}
             </div>
           )}
 

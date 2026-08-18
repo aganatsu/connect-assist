@@ -1,16 +1,30 @@
 import { assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-const main = await Deno.readTextFile("./supabase/functions/bot-scanner/index.ts");
-const fast = await Deno.readTextFile("./supabase/functions/zone-confirmation-scanner/index.ts");
-const confirmation = await Deno.readTextFile("./supabase/functions/_shared/zoneConfirmation.ts");
-const backtest = await Deno.readTextFile("./supabase/functions/backtest-engine/index.ts");
+const main = await Deno.readTextFile(
+  "./supabase/functions/bot-scanner/index.ts",
+);
+const fast = await Deno.readTextFile(
+  "./supabase/functions/zone-confirmation-scanner/index.ts",
+);
+const confirmation = await Deno.readTextFile(
+  "./supabase/functions/_shared/zoneConfirmation.ts",
+);
+const backtest = await Deno.readTextFile(
+  "./supabase/functions/backtest-engine/index.ts",
+);
 
-Deno.test("both confirmation scanners use frozen route candlestick profiles", () => {
-  for (const source of [main, fast]) {
-    assertStringIncludes(source, 'candlestickProfile: "unified" | "standalone" | "cascade"');
-    assertStringIncludes(source, 'sr?.signalSource === "cascade"');
-    assertStringIncludes(source, 'sr?.signalSource === "unified"');
-    assertStringIncludes(source, "candlestickProfile,");
+Deno.test("the sole pending confirmation scanner uses frozen route candlestick profiles", () => {
+  assertStringIncludes(
+    fast,
+    'candlestickProfile: "unified" | "standalone" | "cascade"',
+  );
+  assertStringIncludes(fast, 'sr?.signalSource === "cascade"');
+  assertStringIncludes(fast, 'sr?.signalSource === "unified"');
+  assertStringIncludes(fast, "candlestickProfile,");
+  if (main.includes('if (pending.status === "awaiting_confirmation")')) {
+    throw new Error(
+      "bot-scanner must not reintroduce a second pending confirmation owner",
+    );
   }
 });
 

@@ -7,7 +7,10 @@ const botScanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const fastScanner = await Deno.readTextFile(
-  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  new URL(
+    "../../functions/zone-confirmation-scanner/index.ts",
+    import.meta.url,
+  ),
 );
 
 Deno.test("Watchlist score eligibility is not recorded as terminal promotion", () => {
@@ -35,12 +38,7 @@ Deno.test("pending and direct entries preserve the Watchlist identity", () => {
   assertStringIncludes(botScanner, "blocked_after_qualification");
 });
 
-Deno.test("both confirmation scanners use the saved pending confirmation rule", () => {
-  assertStringIncludes(botScanner, "resolvePendingConfirmationMethod(");
-  assertStringIncludes(
-    botScanner,
-    "resolvePendingIndicatorMinimum(pending, config)",
-  );
+Deno.test("the sole confirmation scanner uses the saved pending rule", () => {
   assertStringIncludes(
     fastScanner,
     "resolvePendingConfirmationMethod(",
@@ -49,6 +47,8 @@ Deno.test("both confirmation scanners use the saved pending confirmation rule", 
     fastScanner,
     "resolvePendingIndicatorMinimum(pending, config)",
   );
+  assertStringIncludes(botScanner, "confirmation_config:");
+  assertStringIncludes(botScanner, "confirmation_method:");
 });
 
 Deno.test("active Zone Setup API includes awaiting-confirmation rows", () => {
@@ -64,4 +64,26 @@ Deno.test("active Zone Setup API includes awaiting-confirmation rows", () => {
     section,
     '.in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])',
   );
+});
+
+Deno.test("the five-minute scanner does not advance post-touch confirmation", () => {
+  const monitorStart = botScanner.indexOf(
+    "for (const pending of activePendingOrders)",
+  );
+  const monitorEnd = botScanner.indexOf(
+    "// ── Management-Only Early Return",
+    monitorStart,
+  );
+  const monitor = botScanner.slice(monitorStart, monitorEnd);
+  assertStringIncludes(monitor, `if (pending.status !== "pending")`);
+  assertStringIncludes(monitor, "pendingConfirmationHunting++");
+  assert(
+    !monitor.includes(`if (pending.status === "awaiting_confirmation")`),
+    "The five-minute scanner must not duplicate CHoCH, retracement, or fill ownership",
+  );
+  assertStringIncludes(
+    fastScanner,
+    `.eq("status", "awaiting_confirmation")`,
+  );
+  assertStringIncludes(fastScanner, "post_confirmation_entry");
 });

@@ -32,7 +32,7 @@ Deno.test("fast confirmation uses shared authorization and atomic fill only", as
   );
 });
 
-Deno.test("normal pending confirmation uses shared authorization and atomic fill", async () => {
+Deno.test("bot scanner delegates touched pending orders to the sole confirmation owner", async () => {
   const source = await Deno.readTextFile(botScannerUrl.pathname);
   const start = source.indexOf(
     "// ── Limit Orders: Monitor active pending orders",
@@ -43,15 +43,10 @@ Deno.test("normal pending confirmation uses shared authorization and atomic fill
     "Pending-order monitoring section must be discoverable",
   );
   const pendingSection = source.slice(start, end);
-  assertStringIncludes(pendingSection, "evaluateFinalTradeAuthorization({");
-  assertStringIncludes(
-    pendingSection,
-    'supabase.rpc("finalize_pending_order_fill"',
-  );
+  assertStringIncludes(pendingSection, 'if (pending.status !== "pending")');
   assertEquals(
-    pendingSection.includes('supabase.from("paper_positions").insert'),
+    pendingSection.includes('rpc("finalize_pending_order_fill"'),
     false,
-    "Normal pending confirmation must not insert a position outside the atomic RPC",
   );
 });
 
@@ -123,8 +118,12 @@ Deno.test("all automated entry models terminate in an authorized execution route
   ) {
     assertStringIncludes(source, marker);
   }
+  const fastSource = await Deno.readTextFile(fastScannerUrl.pathname);
   assertStringIncludes(source, "evaluateFinalTradeAuthorization({");
-  assertStringIncludes(source, 'supabase.rpc("finalize_pending_order_fill"');
+  assertStringIncludes(
+    fastSource,
+    'supabase.rpc("finalize_pending_order_fill"',
+  );
   assertStringIncludes(source, 'supabase.rpc("finalize_market_entry"');
 });
 
@@ -169,7 +168,7 @@ Deno.test("all live entry routes claim durable broker execution before sending",
   assertStringIncludes(fastSource, 'route: "fast_confirmation"');
 
   assertStringIncludes(botSource, "executeBrokerOrderWithLedger(");
-  assertStringIncludes(botSource, 'route: "normal_pending"');
+  assertEquals(botSource.includes('route: "normal_pending"'), false);
   assertStringIncludes(botSource, 'route: "direct_market"');
 
   assertEquals(
@@ -179,8 +178,8 @@ Deno.test("all live entry routes claim durable broker execution before sending",
   );
   assertEquals(
     botSource.split("executeBrokerOrderWithLedger(").length - 1,
-    4,
-    "Bot scanner must ledger normal-pending and direct-market sends for both broker paths",
+    2,
+    "Bot scanner must ledger direct-market sends for both broker paths",
   );
 });
 
@@ -193,7 +192,7 @@ Deno.test("all live entry routes finalize internal state from broker ledger", as
   );
   assertEquals(
     botSource.split('supabase.rpc("finalize_live_broker_position"').length - 1,
-    2,
+    1,
   );
   assertStringIncludes(botSource, 'account.execution_mode !== "live"');
   assertStringIncludes(botSource, "brokerLifecycle?.open === true");

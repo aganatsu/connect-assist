@@ -163,7 +163,7 @@ Deno.test("fill inherits the persisted originating zone when the scan snapshot i
   assertEquals(result.authorized, true);
 });
 
-Deno.test("both pending fill routes use the shared retry policy", async () => {
+Deno.test("the sole pending fill route uses the shared retry policy", async () => {
   const mainScanner = await Deno.readTextFile(
     new URL("../../functions/bot-scanner/index.ts", import.meta.url),
   );
@@ -175,7 +175,7 @@ Deno.test("both pending fill routes use the shared retry policy", async () => {
   );
   assertEquals(
     mainScanner.includes("pendingFinalAuthorizationRetryable({"),
-    true,
+    false,
   );
   assertEquals(
     confirmationScanner.includes("pendingFinalAuthorizationRetryable({"),
