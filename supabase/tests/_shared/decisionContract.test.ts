@@ -87,6 +87,56 @@ Deno.test("Gameplan context cannot manufacture a trade without Direction Verdict
   assertEquals(result.code, "direction_unavailable");
 });
 
+Deno.test("frozen lifecycle waits when the current Direction Verdict is missing", () => {
+  const value = input();
+  value.directionVerdictPolicy = "retain_frozen_until_opposed";
+  value.directionVerdict = null;
+  const result = evaluateDecisionHierarchy(value);
+  assertEquals(result.code, "direction_unavailable");
+  assertEquals(result.retryable, true);
+  assertStringIncludes(result.reason, "Frozen SHORT direction retained");
+});
+
+Deno.test("frozen lifecycle treats a neutral blocking verdict as unavailable", () => {
+  const value = input();
+  value.directionVerdictPolicy = "retain_frozen_until_opposed";
+  value.directionVerdict = {
+    verdict: "neutral",
+    shouldBlock: true,
+    blockReason: "Panel agreement is below the floor",
+  };
+  const result = evaluateDecisionHierarchy(value);
+  assertEquals(result.code, "direction_unavailable");
+  assertEquals(result.retryable, true);
+});
+
+Deno.test("frozen lifecycle does not treat a blocked opposite label as a reversal", () => {
+  const value = input();
+  value.directionVerdictPolicy = "retain_frozen_until_opposed";
+  value.directionVerdict = {
+    verdict: "long",
+    shouldBlock: true,
+    blockReason: "Panel agreement is below the floor",
+  };
+  const result = evaluateDecisionHierarchy(value);
+  assertEquals(result.code, "direction_unavailable");
+  assertEquals(result.retryable, true);
+});
+
+Deno.test("frozen lifecycle terminates only on a fresh explicit reversal", () => {
+  const value = input();
+  value.directionVerdictPolicy = "retain_frozen_until_opposed";
+  value.directionVerdict = {
+    verdict: "long",
+    shouldBlock: false,
+    confidence: 81,
+  };
+  const result = evaluateDecisionHierarchy(value);
+  assertEquals(result.code, "direction_conflict");
+  assertEquals(result.retryable, false);
+  assertStringIncludes(result.reason, "reversed to long");
+});
+
 Deno.test("confirmation cannot override a broken thesis", () => {
   const value = input();
   value.thesisResult = {

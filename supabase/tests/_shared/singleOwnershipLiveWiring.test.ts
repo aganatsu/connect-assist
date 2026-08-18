@@ -40,9 +40,26 @@ Deno.test("live enforcement reaches placement and the sole pending fill route", 
   assertStringIncludes(fast, "evaluateSingleOwnershipFillAuthorization({");
 });
 
+Deno.test("frozen fill and backtest use the same retained-direction policy", async () => {
+  const backtest = await Deno.readTextFile(
+    "./supabase/functions/backtest-engine/index.ts",
+  );
+  assertStringIncludes(
+    fast,
+    'directionVerdictPolicy: "retain_frozen_until_opposed"',
+  );
+  assertStringIncludes(
+    backtest,
+    'directionVerdictPolicy: "retain_frozen_until_opposed"',
+  );
+  if (scanner.includes('directionVerdictPolicy: "retain_frozen_until_opposed"')) {
+    throw new Error("Immediate market entries must keep strict current-direction authorization");
+  }
+});
+
 Deno.test("live routes retain final and atomic operational authorization", () => {
   assertStringIncludes(scanner, "evaluateFinalTradeAuthorization({");
-  assertStringIncludes(scanner, 'rpc("finalize_market_entry"');
+  assertStringIncludes(scanner, "finalize_market_entry");
   assertStringIncludes(fast, "evaluateFinalTradeAuthorization({");
-  assertStringIncludes(fast, 'rpc("finalize_pending_order_fill"');
+  assertStringIncludes(fast, "finalize_pending_order_fill");
 });

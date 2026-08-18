@@ -70,6 +70,7 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
         : null,
       shouldBlock: input.directionVerdict?.shouldBlock ?? null,
       evidenceId: input.directionVerdict?.id || null,
+      policy: "retain_frozen_until_opposed",
     },
     zoneStory: frozenZone
       ? {

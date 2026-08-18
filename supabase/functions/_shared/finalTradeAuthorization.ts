@@ -10,6 +10,7 @@ import type { FinalRuntimeGateStates } from "./finalRuntimeGates.ts";
 import {
   type DecisionHierarchyResult,
   type DirectionVerdictDecision,
+  type DirectionVerdictPolicy,
   type EntryConfirmationDecision,
   evaluateDecisionHierarchy,
 } from "./decisionContract.ts";
@@ -117,6 +118,7 @@ export interface FinalTradeAuthorizationInput {
   minimumRiskReward: number;
   directionVerdict: DirectionVerdictForAuthorization | null;
   requireDirectionVerdict?: boolean;
+  directionVerdictPolicy?: DirectionVerdictPolicy;
   gamePlan: SessionGamePlan | null;
   gamePlanEnabled: boolean;
   gamePlanMode: GamePlanEnforcementMode;
@@ -322,6 +324,7 @@ export function evaluateFinalTradeAuthorization(
     gamePlanMinimumConfidence: input.gamePlanMinimumConfidence,
     directionVerdict: input.directionVerdict,
     requireDirectionVerdict: input.requireDirectionVerdict !== false,
+    directionVerdictPolicy: input.directionVerdictPolicy,
     thesisResult: input.thesisResult,
     requireThesisValidation: input.requireThesisValidation,
     entryConfirmation: input.entryConfirmation,
