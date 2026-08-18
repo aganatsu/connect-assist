@@ -165,11 +165,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       signalReason.watchlistLifecycle?.confirmationMethod ||
       signalReason.confirmationMethod ||
       "choch";
-    const confirmationLabel = confirmationMethod === "indicators"
+    const structureLifecycleEnforced =
+      order.impulse_entry_lifecycle?.mode === "enforce";
+    const confirmationLabel = structureLifecycleEnforced
+      ? confirmationMethod === "indicators" || confirmationMethod === "choch_and_indicators"
+        ? "displaced MSS/CHoCH close + indicator consensus"
+        : "displaced MSS/CHoCH close"
+      : confirmationMethod === "indicators"
       ? "indicator consensus"
       : confirmationMethod === "choch_and_indicators"
-      ? "CHoCH + indicators"
-      : "CHoCH/BOS";
+      ? "MSS/CHoCH, displacement, or reversal candle + indicators"
+      : "MSS/CHoCH, displacement, or reversal candle";
     const retracementPlan = order.post_confirmation_entry;
     const waitingForRetracement =
       retracementPlan?.state === "awaiting_retracement";
@@ -306,7 +312,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             : retracementReady
             ? "The frozen retracement was reached. Final authorization must pass before entry."
             : isHunting
-            ? `Price has entered the ${order.entry_zone_type} zone. The saved ${confirmationLabel} rule must pass before entry.`
+            ? structureLifecycleEnforced
+              ? `Price has entered the ${order.entry_zone_type} zone. The enforced structure lifecycle requires a later displaced close through its locked MSS/CHoCH break${confirmationMethod === "indicators" || confirmationMethod === "choch_and_indicators" ? " and indicator consensus" : ""} before entry.`
+              : `Price has entered the ${order.entry_zone_type} zone. The saved ${confirmationLabel} rule must pass before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>
