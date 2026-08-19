@@ -36,55 +36,90 @@ are three workarounds for one missing input.
 
 ---
 
-## Nothing is style-aware except by accident
+## One style-blind constant overrides the style-aware ones
+
+The system **does** carry style-awareness. `tradingStyleConfig.ts` sets:
+
+| style | `slBufferPips` | `breakEvenEnabled` | `breakEvenPips` | ATR timeframe |
+|---|---|---|---|---|
+| scalper | 1 | false | 8 | 5m |
+| day_trader | 2 | true | 20 | 15m |
+| swing | 5 | false | 40 | 1h |
+
+What is **not** style-aware:
 
 ```
-MIN_SL_PIPS              per-symbol, style-blind        GBP/USD = 25
-ATR_SL_FLOOR_MULTIPLIER  constant 1.5, style-blind
-breakEvenPips            constant 20, style-blind
+MIN_SL_PIPS               per-symbol only        GBP/USD = 25
+ATR_SL_FLOOR_MULTIPLIER   constant 1.5
+impulseSlCapMultiplier    config, 4 (6 cascade)
 ```
 
-Zero style references across all three. The **only** style-aware term is that
-ATR is measured on a per-style timeframe — and it is dominated by the
-style-blind static floor.
+The problem is not an absence of style-awareness. It is that one style-blind
+constant sits in a `max()` above terms that are correctly style-scaled, and
+therefore decides the stop whenever it is the largest — which, on the measured
+case below, it was by a factor of four.
+
+> An earlier revision of this document claimed nothing was style-aware and that
+> `breakEvenPips: 20` was a global constant. Both were wrong: 20 is the
+> **day_trader** value and also the `RUNTIME_DEFAULTS` fallback, and the fallback
+> was mistaken for the only value.
 
 ### Measured, GBP/USD 2026-08-18
 
 ```
 structural invalidation   2.5 pips     (staged_inherited)
-ATR floor                 6.1 pips     (15m ATR 4.1 × 1.5)   ← style-aware
-MIN_SL_PIPS              25.0 pips                            ← binding
+ATR floor                 6.1 pips     (15m ATR 4.1 x 1.5)
+MIN_SL_PIPS              25.0 pips     <- binding
 actual stop              25.0 pips     exactly the static floor
 ```
 
-The stop landing exactly on `MIN_SL_PIPS` proves the other two terms never
-bound. Structure at 2.5 pips cannot bind at any plausible floor, so
-`slMethod = "structure"` is honoured in name and inert in practice.
+The stop landing exactly on `MIN_SL_PIPS` shows the other two terms did not bind
+**on this setup**. That is one row. It does not establish that structural stops
+never dominate anywhere, and this document should not be read as claiming so —
+the scope of the measurement is a single order.
 
-### What that cost
+The 6.1-pip figure is **15m** ATR. The Scalper contract proposed below requires
+**5m** ATR, which was omitted from the export by a faulty `LIMIT` clause. The
+correct 5m figure has not been measured, so every number derived from 6.1 is
+illustrative rather than evidential.
+
+### What it would have cost — counterfactual, not history
 
 ```
 nearest structural target   13.7 pips
 stop                        25.0 pips
-R:R                          0.55      → rejected against a 1.0 floor
+R:R                          0.55      -> below a 1.0 floor
 ```
 
-The setup was correct — zone found, touch detected, bullish reaction confirmed,
-price reached the target. It was refused because the stop was 6× the 15m ATR.
+**This setup was not historically rejected by the R:R gate.** It expired waiting
+for a post-CHoCH retracement that never arrived. The 0.55R figure is what the
+gate *would* compute under #372, once the configured `next_level` target replaces
+the ratio-substituted one — it is a projection about future behaviour, not a
+recorded rejection.
 
----
+The setup itself was correct: zone found, touch detected, bullish reaction
+confirmed, price reached the target. What is measured is the stop; what is
+projected is the consequence.
 
 ## Proposal — one owner, one formula
 
 ```
-anchorStop = structuralAnchor ± dynamicBuffer
-noiseStop  = entry ± (k_style × ATR(confirmation timeframe, closed bars))
+structuralStop = anchor  ± styleBuffer                      // slBufferPips, already style-aware
+noiseStop      = entry   ± (k_style × ATR(confirmation TF, closed bars))
+executionStop  = entry   ± max(brokerMinimumStopDistance,
+                               liveSpread × safetyMultiplier,
+                               oneTick)
 
-finalStop  = whichever is FARTHER from entry
+finalStop = FARTHEST of the three from entry
 
 if |finalStop - entry| > styleRiskCap:
     REJECT the setup
 ```
+
+All three terms enter the same comparison. An earlier revision chose only
+between the structural and ATR stops and described the execution floor
+separately, so it never reached `finalStop` — a stop inside the broker minimum
+is not placeable regardless of how sound the thesis is.
 
 ### Never clamp inward
 
@@ -105,6 +140,27 @@ is no trade, say so rather than manufacture one.
 The retracement OB/FVG determines *entry*. The protected pivot determines where
 the reversal thesis *fails*. Anchoring the stop to the retracement box produces
 a stop tight enough to be swept while the thesis is still valid.
+
+### When the stop freezes
+
+The anchor changes by phase, but the plan freezes **once**. Those are not in
+tension only if the sequence is stated:
+
+| stage | stop |
+|---|---|
+| discovery / pre-arm | **provisional** — computed from the entry-zone invalidation so the setup can be sized and gated |
+| confirmation (CHoCH/MSS) | provisional anchor is **replaced** by the frozen protected pivot |
+| immediately before final authorization | **frozen** — this is the plan of record |
+| authorization, sizing, broker execution, management, backtest | all consume that frozen plan; none recompute |
+
+The target freezes at discovery and never moves (see
+`PENDING_ORDER_PREARMING_PLAN.md`). The stop freezes later, at confirmation,
+because the protected pivot does not exist until the reversal has formed.
+
+**A broker constraint discovered after freezing rejects the order. It must never
+silently widen the stop** — a stop widened after sizing invalidates the position
+size that was computed against it, which is how a risk-percent breach happens
+without anything appearing to fail.
 
 ### ATR on the confirmation timeframe
 
@@ -195,12 +251,20 @@ The "0.5R that turned into 4–5R" complaint has two causes and this addresses o
    TP cannot express a 5R run — **not** fixed here.
 
 Capturing the rest needs partial profit plus a runner, with the R:R gate judging
-the first target rather than the full potential. That is an exit-management
-change through `_shared/exitEvaluation.ts` and belongs after this one.
+the first target rather than the full potential.
 
-Related: `breakEvenPips: 20` is also style-blind. On a Scalper setup with a
-13.7-pip target it can never trigger before TP, so break-even is dead on that
-style today.
+That belongs in **trade management**, not `exitEvaluation.ts`. That module
+decides *whether a bar closed a position and at what price* — fill
+determination. Partial-and-runner is exit *policy*: how much to take off, where
+to trail, when to let the remainder run. Putting policy inside the fill
+evaluator would give one module two concepts, which is the pattern this
+consolidation exists to remove.
+
+Break-even is already style-scaled — 8 / 20 / 40 pips — and Scalper has it
+**disabled by default** (`breakEvenEnabled: false`). An earlier revision claimed
+it was a style-blind 20 and therefore dead on Scalper; both halves were wrong.
+Whether an 8-pip trigger is right for a 13.7-pip target is a separate question
+and needs its own evidence.
 
 ---
 
