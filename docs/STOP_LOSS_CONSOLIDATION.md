@@ -303,11 +303,36 @@ BTC/USD  typicalSpread 20.0  maxSpread 50
 
 ```
 executionFloor = max(
-    broker minimum stop distance,
-    live spread × safety multiplier,     // fall back to SPECS.typicalSpread
-    one tick
+    brokerStopsLevel_asQuoteDistance,
+    liveSpread_asQuoteDistance × safetyMultiplier,
+    tickSize_asQuoteDistance
 )
 ```
+
+**Every term must be converted to quote-price distance before `max()`.** They
+arrive in three different units, and `pipSize` is *not* universally one tick — a
+5-digit FX feed has ten ticks per pip. The conversions, stated here so they
+cannot be re-derived differently at each call site:
+
+```
+brokerStopsLevel_asQuoteDistance = stopsLevel × 10^(-digits)
+      // stopsLevel is in POINTS; digits is the instrument's decimal places.
+      // 5-digit EUR/USD: 30 points × 10^-5 = 0.00030  (= 3.0 pips)
+
+liveSpread_asQuoteDistance       = spreadInPips × pipSize
+      // SPECS.typicalSpread is in PIPS, not price:
+      //   EUR/USD  1.0 × 0.0001 = 0.00010
+      //   XAU/USD  3.0 × 0.01   = 0.03
+      //   BTC/USD 20.0 × 1      = 20.0
+      // prefer the live spread; fall back to SPECS.typicalSpread
+
+tickSize_asQuoteDistance         = tickSize
+      // already a raw price increment — use directly, do NOT scale by pipSize
+```
+
+`SPECS` supplies `pipSize` and `typicalSpread`. `digits`, `stopsLevel` and
+`tickSize` come from the broker connection and must be read per instrument
+rather than assumed.
 
 An earlier draft of this document proposed "≈3 pips", which is meaningless on
 gold, oil, indices and crypto — the same class of error as the Manual Impulse
