@@ -42,7 +42,15 @@ async function refreshAccessToken(): Promise<string | null> {
   if (!refreshInFlight) {
     refreshInFlight = supabase.auth
       .refreshSession()
-      .then(({ data }) => data.session?.access_token ?? null)
+      .then(async ({ data, error }) => {
+        const token = data.session?.access_token;
+        if (!error && token) return token;
+        // refreshSession can fail transiently (offline, concurrent rotation).
+        // Fall back to whatever the client has persisted before giving up.
+        const { data: fallback } = await supabase.auth.getSession();
+        const persisted = fallback.session?.access_token;
+        return persisted && jwtHasSubject(persisted) ? persisted : null;
+      })
       .catch(() => null)
       .finally(() => {
         refreshInFlight = null;
@@ -294,6 +302,17 @@ export async function invokeFunction<T = any>(
       ({ data, error } = await invokeSupabaseFunction(functionName, body));
     }
     if (isAuthError(error, data)) {
+      // Confirm the session is really gone before tearing the app down — a
+      // single 401 on an expired JWT must not blank the screen if the client
+      // still holds (or just obtained) a valid session.
+      const { data: check } = await supabase.auth.getSession();
+      const stillValid = jwtHasSubject(check.session?.access_token);
+      if (stillValid) {
+        ({ data, error } = await invokeSupabaseFunction(functionName, body));
+      }
+    }
+    if (isAuthError(error, data)) {
+      const authFallback = getFunctionFallback(functionName, body);
       await supabase.auth.signOut().catch(() => {});
       if (typeof window !== "undefined" && !signOutRedirectTriggered) {
         try {
@@ -305,6 +324,7 @@ export async function invokeFunction<T = any>(
         } catch {}
       }
       redirectToLoginOnce(1800);
+      if (authFallback !== undefined) return authFallback as T;
       throw new Error("Session expired. Please sign in again.");
     }
   }
