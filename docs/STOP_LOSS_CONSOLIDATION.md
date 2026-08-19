@@ -9,22 +9,59 @@ Read `CLAUDE.md` first. This is a consolidation, which in this repo means
 
 ## Why this exists
 
-Six places decide or modify a stop, across two pipelines that share no code. The
-only style-aware input is overruled by a style-blind one, with the result that
-the configured `slMethod` has never actually set a stop in production.
+At least twelve places decide or modify a stop, across four pipelines that share
+no code: entry, pre-arm, management and backtest. Two independent static floor
+tables exist. On the one setup measured here, the style-blind entry floor
+dominated every style-aware term — that is a scoped observation about one row,
+not a claim about all production setups.
 
 ---
 
 ## Current inventory
 
-| # | site | behaviour |
-|---|---|---|
-| 1 | `smcAnalysis.ts:2115` `calculateSLTP` | base stop from `slMethod` — `structure` / `atr_based` / `fixed_pips` / `below_ob` |
-| 2 | `bot-scanner:7712` | two-layer floor `max(MIN_SL_PIPS, ATR × 1.5)`, widens a tighter stop |
-| 3 | `bot-scanner:7733` | Impulse Zone override → impulse origin ± buffer, capped |
-| 4 | `bot-scanner:7767` | Unified Zone override → engine `slPrice`, capped `MIN_SL × 4` |
-| 5 | `bot-scanner:7794` | Cascade override (swing only) → Daily zone origin, capped `MIN_SL × 6` |
-| 6 | `pendingOrderPlan.ts` `resolvePreArmedPositionStop` | **separate pipeline** — `max(static, ATR, structural)`; 3–5 never apply |
+### Entry path
+
+| # | site | behaviour | disposition |
+|---|---|---|---|
+| 1 | `smcAnalysis:2115` `calculateSLTP` | base stop from `slMethod` | **keep — becomes the single owner** |
+| 2 | `bot-scanner:4216` | recalc when direction was null | keep — already delegates to (1) |
+| 3 | `bot-scanner:7712` | `max(MIN_SL_PIPS, ATR × 1.5)` | delete; folded into (1) |
+| 4 | `bot-scanner:7733` | Impulse Zone override | delete; anchor feeds (1) |
+| 5 | `bot-scanner:7767` | Unified Zone override | delete; anchor feeds (1) |
+| 6 | `bot-scanner:7794` | Cascade override (swing) | delete; anchor feeds (1) |
+| 7 | `unifiedZoneEngine:742` | produces `slPrice` = `poi.high + 0.5 × height` | becomes an **anchor input** to (1), not a stop |
+| 8 | `pendingOrderPlan` `resolvePreArmedPositionStop` | separate pre-arm pipeline | delete; call (1) |
+
+### Backtest — duplicated, not shared
+
+| # | site | behaviour | disposition |
+|---|---|---|---|
+| 9 | `backtest-engine:4074/4077` | its own floor enforcement | delete; call (1) |
+| 10 | `backtest-engine:4099` | its own impulse override | delete; call (1) |
+
+Backtest holds private copies of (3) and (4). Parity is currently maintained by
+duplication, so deleting the entry-path copies alone would silently diverge live
+from backtest — the failure `CLAUDE.md` names explicitly.
+
+### Management path — separate concern, must not be merged
+
+| # | site | behaviour | disposition |
+|---|---|---|---|
+| 11 | `computeManagementDecision:102,339` | `MGMT_SL_FLOOR_PIPS`, **second** static floor table, default 10 | out of scope here; see below |
+| 12 | `paper-trading:954` | trailing ratchet `newSL` | out of scope |
+| 13 | `paper-trading:1197` | `adjustedSL` | out of scope |
+
+Sites 11–13 move a stop on an **open position**. That is a different concept
+from placing the initial stop, and merging them would repeat the
+structural-invalidation-versus-position-stop conflation fixed in #325.
+
+They are listed because `MGMT_SL_FLOOR_PIPS` is a second style-blind static
+floor table (default 10, against the entry table's 25), and a consolidation that
+removes one while leaving the other has only half-solved the problem. Its
+disposition needs its own decision, not silent inheritance.
+
+Sites checked and found **not** to produce stops: `manualImpulse.ts`,
+`gamePlan.ts`.
 
 Market fill can be overridden three times in sequence, each by a different
 engine's answer to the same question. Pre-arm reaches none of them. The two
@@ -40,19 +77,23 @@ are three workarounds for one missing input.
 
 The system **does** carry style-awareness. `tradingStyleConfig.ts` sets:
 
-| style | `slBufferPips` | `breakEvenEnabled` | `breakEvenPips` | ATR timeframe |
-|---|---|---|---|---|
-| scalper | 1 | false | 8 | 5m |
-| day_trader | 2 | true | 20 | 15m |
-| swing | 5 | false | 40 | 1h |
+| style | `slBufferPips` | `breakEvenEnabled` | `breakEvenPips` | ATR timeframe | `impulseSlCapMultiplier` |
+|---|---|---|---|---|---|
+| scalper | 1 | false | 8 | 5m | 1.5 |
+| day_trader | 2 | true | 20 | 15m | 4 (default) |
+| swing | 5 | false | 40 | 1h | 6 |
 
 What is **not** style-aware:
 
 ```
-MIN_SL_PIPS               per-symbol only        GBP/USD = 25
+MIN_SL_PIPS               per-symbol only, no style dimension   GBP/USD = 25
+MGMT_SL_FLOOR_PIPS        per-symbol only, no style dimension   default 10
 ATR_SL_FLOOR_MULTIPLIER   constant 1.5
-impulseSlCapMultiplier    config, 4 (6 cascade)
 ```
+
+`impulseSlCapMultiplier` **is** style-aware — scalper 1.5, swing 6, day_trader
+falling through to the `?? 4` default — and an earlier revision wrongly listed it
+as style-blind.
 
 The problem is not an absence of style-awareness. It is that one style-blind
 constant sits in a `max()` above terms that are correctly style-scaled, and
@@ -104,7 +145,7 @@ projected is the consequence.
 ## Proposal — one owner, one formula
 
 ```
-structuralStop = anchor  ± styleBuffer                      // slBufferPips, already style-aware
+structuralStop = bufferedInvalidation                       // buffer ALREADY applied — see below
 noiseStop      = entry   ± (k_style × ATR(confirmation TF, closed bars))
 executionStop  = entry   ± max(brokerMinimumStopDistance,
                                liveSpread × safetyMultiplier,
@@ -115,6 +156,23 @@ finalStop = FARTHEST of the three from entry
 if |finalStop - entry| > styleRiskCap:
     REJECT the setup
 ```
+
+**Do not add the buffer again.** `deriveWatchlistInvalidation` already returns a
+buffered level:
+
+```js
+const level = direction === "long" ? zone.low - bufferPrice : zone.high + bufferPrice;
+```
+
+and `bufferPrice` is `adjustedSlBuffer × pipSize`, which resolves from the
+style-aware `slBufferPips`. The persisted `structural_invalidation` is therefore
+**post-buffer**. An earlier revision wrote `anchor ± styleBuffer`, which would
+have applied it twice.
+
+Pick one and state it at the call site: either a **raw** zone/pivot anchor with
+the buffer applied here, or the **persisted buffered invalidation** consumed
+unchanged. The second is preferable — it is what the row already stores, and it
+keeps one owner for the buffer.
 
 All three terms enter the same comparison. An earlier revision chose only
 between the structural and ATR stops and described the execution floor
@@ -148,7 +206,7 @@ tension only if the sequence is stated:
 
 | stage | stop |
 |---|---|
-| discovery / pre-arm | **provisional** — computed from the entry-zone invalidation so the setup can be sized and gated |
+| discovery / pre-arm | **provisional** — computed from the entry-zone invalidation so geometry and R:R can be evaluated. **Not** for sizing: pre-armed `size` is deliberately `null` and position size is computed at final authorization from current equity and exposure (#334) |
 | confirmation (CHoCH/MSS) | provisional anchor is **replaced** by the frozen protected pivot |
 | immediately before final authorization | **frozen** — this is the plan of record |
 | authorization, sizing, broker execution, management, backtest | all consume that frozen plan; none recompute |
@@ -214,14 +272,20 @@ measured on, not from a second static table — a per-style pip table would be
 correct today and wrong the next time conditions change, which is how the 25 got
 there.
 
-### Effect on the measured case
+### Illustrative effect — not a measured result
 
 ```
-anchorStop = 2.5 + buffer
-noiseStop  = 1.5 × 4.1 = 6.2 pips      → farther, so it wins
-finalStop  = 6.2 pips
-R:R        = 13.7 / 6.2 = 2.2          → arms, with the configured structural target
+structuralStop = 2.5 pips (already buffered)
+noiseStop      = 1.5 × 4.1 = 6.2 pips        <- 15m ATR, NOT the Scalper 5m the contract requires
+executionStop  = not measured (broker minimum / live spread unknown)
+finalStop      = 6.2 pips  [provisional]
+R:R            = 13.7 / 6.2 = 2.2            [provisional]
 ```
+
+**Two of the three terms are unmeasured.** The 5m ATR the Scalper contract keys
+on was omitted from the export by a faulty `LIMIT`, and the execution floor
+needs broker minimum stop distance and live spread. This example shows the shape
+of the calculation, not its outcome. Do not cite 2.2R as evidence.
 
 ---
 
@@ -246,7 +310,9 @@ R:R        = 13.7 / 6.2 = 2.2          → arms, with the configured structural 
 
 The "0.5R that turned into 4–5R" complaint has two causes and this addresses one.
 
-1. The inflated stop understated R — fixed here (0.55R → 2.2R on the measured case).
+1. The inflated stop understated R — addressed here. The 0.55R → 2.2R figure is
+   illustrative and rests on unmeasured inputs; the direction is sound, the
+   magnitude is not established.
 2. `next_level` selects the **nearest** qualifying structural target, so a fixed
    TP cannot express a 5R run — **not** fixed here.
 
