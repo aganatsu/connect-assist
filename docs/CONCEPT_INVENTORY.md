@@ -45,22 +45,24 @@ instead of arbitrating.
 | Market structure | 1 | `analyzeMarketStructure` | 🟢 Single owner |
 | Liquidity pools | 1 | `detectLiquidityPools` | 🟢 Single owner |
 | Zone confirmation | 1 | `detectZoneConfirmation` | 🟢 Single owner |
-| Post-touch CHoCH/MSS trigger | 1 | `impulseConfirmationLock` | 🟢 Single owner |
+| Post-touch CHoCH/MSS trigger | 2 enforced checks | `detectZoneConfirmation` + `impulseConfirmationLock` | 🔴 DUPLICATE ENFORCEMENT |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 
 ---
 
 ## Post-touch CHoCH/MSS trigger
 
-`_shared/impulseConfirmationLock.ts` is the single owner of the enforced
-post-touch structure contract. It evaluates closed confirmation-timeframe bars.
-`zone-confirmation-scanner` is the sole runtime owner once a pending order
-reaches `awaiting_confirmation`; the five-minute `bot-scanner` retains the row
-for discovery exclusion but does not advance, reset, authorize, size, or fill it.
-A confirmed deeper retracement revises the protected pivot and internal break
-level on the same persisted lifecycle. The revision resets the lock time, so only
-a later displaced close through the revised break can authorize entry. Runtime,
-replay, and backtest all advance through `tradeLifecycleAuthority.ts`.
+`zone-confirmation-scanner` currently requires both `detectZoneConfirmation` and
+the persisted `impulseConfirmationLock` lifecycle to pass. The former can use the
+frozen refinement timeframe while the latter advances on confirmation-timeframe
+bars, so either check can keep a setup hunting after the other passes. This is a
+known ownership violation, not correct layering.
+
+`pending_authorization_observation` records the four-way agreement matrix without
+changing authorization. That evidence must choose the surviving owner before one
+check is removed. The five-minute `bot-scanner` remains discovery-only once a
+pending order reaches `awaiting_confirmation`; runtime lifecycle advancement,
+replay, and backtest still delegate through `tradeLifecycleAuthority.ts`.
 
 ## Frozen setup direction at final authorization
 

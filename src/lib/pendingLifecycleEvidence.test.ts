@@ -14,6 +14,29 @@ describe("pending lifecycle evidence", () => {
           contractVersion: "liquidity-confirmation.v2", ready: true,
           reasonCode: "sequence_confirmed",
         },
+        pending_authorization_observation: {
+          contractVersion: "pending-authorization-observation.v1",
+          confirmation: {
+            evaluations: 4,
+            matrixCounts: {
+              both_passed: 1,
+              detector_only: 2,
+              lifecycle_only: 0,
+              neither_passed: 1,
+            },
+            missingContractSamples: 1,
+          },
+          finalAuthorization: {
+            authorized: false,
+            code: "additional_gate",
+            reason: "safety_minimum_risk_reward",
+            effectiveTargetRiskReward: 1,
+            effectiveMinimumRiskReward: 1,
+            authorizationGeometry: { riskReward: 0.8 },
+            wouldBeExecutionGeometry: { riskReward: 1 },
+            favorableEntryDriftR: 0.12,
+          },
+        },
       },
     ], [{
       source_pending_order_id: "1", position_id: "position-1",
@@ -23,6 +46,17 @@ describe("pending lifecycle evidence", () => {
     expect(report.summary.sequenceReady).toBe(1);
     expect(report.summary.linkedOutcomes).toBe(1);
     expect(report.rows[0].linkedPosition?.close_reason).toBe("tp_hit");
+    expect(report.summary.confirmationEvaluations).toBe(4);
+    expect(report.summary.confirmationBothPassed).toBe(1);
+    expect(report.summary.confirmationDetectorOnly).toBe(2);
+    expect(report.summary.confirmationNeitherPassed).toBe(1);
+    expect(report.summary.missingLifecycleContractSamples).toBe(1);
+    expect(report.summary.finalAuthorizationBlocked).toBe(1);
+    expect(report.summary.finalAuthorizationRiskRewardBlocked).toBe(1);
+    expect(report.summary.averageFavorableEntryDriftR).toBeCloseTo(0.12);
+    expect(report.summary.riskRewardRegimes).toEqual({
+      "1.00 target / 1.00 floor": 1,
+    });
   });
 
   it("uses arm-time reachability and identifies repeated executable plans", () => {

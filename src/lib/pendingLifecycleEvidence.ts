@@ -17,6 +17,7 @@ export interface PendingLifecycleRow {
   zone_touch_time: string | null;
   resolved_at: string | null;
   liquidity_confirmation_observation: Record<string, unknown> | null;
+  pending_authorization_observation?: Record<string, any> | null;
   signal_reason?: Record<string, unknown> | string | null;
   final_authorization?: Record<string, unknown> | null;
 }
@@ -45,6 +46,21 @@ export interface PendingLifecycleEvidenceRow extends PendingLifecycleRow {
   frozenEntryLocationAllowed: boolean | null;
   frozenEntryLocationPercent: number | null;
   linkedPosition: PendingLifecycleOutcome | null;
+  confirmationMatrixEvaluations: number;
+  confirmationBothPassed: number;
+  confirmationDetectorOnly: number;
+  confirmationLifecycleOnly: number;
+  confirmationNeitherPassed: number;
+  missingLifecycleContractSamples: number;
+  finalAuthorizationObserved: boolean;
+  finalAuthorizationAuthorized: boolean | null;
+  finalAuthorizationCode: string | null;
+  finalAuthorizationReason: string | null;
+  authorizationRiskReward: number | null;
+  executionRiskReward: number | null;
+  favorableEntryDriftR: number | null;
+  effectiveTargetRiskReward: number | null;
+  effectiveMinimumRiskReward: number | null;
 }
 
 interface ReachabilityObservation {
@@ -68,6 +84,11 @@ function finiteNumber(value: unknown): number | null {
   if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonNegativeCount(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function executablePlanKey(order: PendingLifecycleRow): string | null {
@@ -102,6 +123,15 @@ export function buildPendingLifecycleEvidence(
 
   const rows: PendingLifecycleEvidenceRow[] = orders.map((order) => {
     const observation = order.liquidity_confirmation_observation;
+    const authorizationObservation =
+      order.pending_authorization_observation?.contractVersion ===
+          "pending-authorization-observation.v1"
+        ? order.pending_authorization_observation
+        : null;
+    const confirmationMatrix = authorizationObservation?.confirmation || null;
+    const matrixCounts = confirmationMatrix?.matrixCounts || {};
+    const finalAuthorizationObservation =
+      authorizationObservation?.finalAuthorization || null;
     const signalReason = parseSignalReason(order.signal_reason);
     const candidateReachability = (signalReason.preArmReachability || null) as ReachabilityObservation | null;
     const reachability = candidateReachability?.contractVersion === "prearm-reachability.v1"
@@ -140,6 +170,44 @@ export function buildPendingLifecycleEvidence(
       frozenEntryLocationAllowed: typeof location?.allowed === "boolean" ? location.allowed : null,
       frozenEntryLocationPercent: finiteNumber(location?.percent),
       linkedPosition: positionsByOrder.get(order.id) || null,
+      confirmationMatrixEvaluations: nonNegativeCount(
+        confirmationMatrix?.evaluations,
+      ),
+      confirmationBothPassed: nonNegativeCount(matrixCounts.both_passed),
+      confirmationDetectorOnly: nonNegativeCount(matrixCounts.detector_only),
+      confirmationLifecycleOnly: nonNegativeCount(matrixCounts.lifecycle_only),
+      confirmationNeitherPassed: nonNegativeCount(matrixCounts.neither_passed),
+      missingLifecycleContractSamples: nonNegativeCount(
+        confirmationMatrix?.missingContractSamples,
+      ),
+      finalAuthorizationObserved: finalAuthorizationObservation != null,
+      finalAuthorizationAuthorized:
+        typeof finalAuthorizationObservation?.authorized === "boolean"
+          ? finalAuthorizationObservation.authorized
+          : null,
+      finalAuthorizationCode:
+        typeof finalAuthorizationObservation?.code === "string"
+          ? finalAuthorizationObservation.code
+          : null,
+      finalAuthorizationReason:
+        typeof finalAuthorizationObservation?.reason === "string"
+          ? finalAuthorizationObservation.reason
+          : null,
+      authorizationRiskReward: finiteNumber(
+        finalAuthorizationObservation?.authorizationGeometry?.riskReward,
+      ),
+      executionRiskReward: finiteNumber(
+        finalAuthorizationObservation?.wouldBeExecutionGeometry?.riskReward,
+      ),
+      favorableEntryDriftR: finiteNumber(
+        finalAuthorizationObservation?.favorableEntryDriftR,
+      ),
+      effectiveTargetRiskReward: finiteNumber(
+        finalAuthorizationObservation?.effectiveTargetRiskReward,
+      ),
+      effectiveMinimumRiskReward: finiteNumber(
+        finalAuthorizationObservation?.effectiveMinimumRiskReward,
+      ),
     };
   });
 
@@ -157,6 +225,23 @@ export function buildPendingLifecycleEvidence(
   const armAtrDistances = rows.map((row) => row.armDistanceAtr)
     .filter((value): value is number => value != null && Number.isFinite(value));
   const repeatedGroups = [...planCounts.values()].filter((count) => count > 1);
+  const finalAuthorizationRows = rows.filter((row) => row.finalAuthorizationObserved);
+  const favorableEntryDrifts = finalAuthorizationRows
+    .map((row) => row.favorableEntryDriftR)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const riskRewardRegimes = finalAuthorizationRows.reduce<Record<string, number>>(
+    (counts, row) => {
+      if (
+        row.effectiveTargetRiskReward == null ||
+        row.effectiveMinimumRiskReward == null
+      ) return counts;
+      const key = row.effectiveTargetRiskReward.toFixed(2) + " target / " +
+        row.effectiveMinimumRiskReward.toFixed(2) + " floor";
+      counts[key] = (counts[key] || 0) + 1;
+      return counts;
+    },
+    {},
+  );
 
   return {
     summary: {
@@ -180,6 +265,43 @@ export function buildPendingLifecycleEvidence(
       repeatedPlans: repeatedGroups.length,
       repeatedLifecycleRows: repeatedGroups.reduce((sum, count) => sum + count, 0),
       reasonCounts,
+      confirmationEvaluations: rows.reduce(
+        (sum, row) => sum + row.confirmationMatrixEvaluations,
+        0,
+      ),
+      confirmationBothPassed: rows.reduce(
+        (sum, row) => sum + row.confirmationBothPassed,
+        0,
+      ),
+      confirmationDetectorOnly: rows.reduce(
+        (sum, row) => sum + row.confirmationDetectorOnly,
+        0,
+      ),
+      confirmationLifecycleOnly: rows.reduce(
+        (sum, row) => sum + row.confirmationLifecycleOnly,
+        0,
+      ),
+      confirmationNeitherPassed: rows.reduce(
+        (sum, row) => sum + row.confirmationNeitherPassed,
+        0,
+      ),
+      missingLifecycleContractSamples: rows.reduce(
+        (sum, row) => sum + row.missingLifecycleContractSamples,
+        0,
+      ),
+      finalAuthorizationObserved: finalAuthorizationRows.length,
+      finalAuthorizationBlocked: finalAuthorizationRows.filter((row) =>
+        row.finalAuthorizationAuthorized === false
+      ).length,
+      finalAuthorizationRiskRewardBlocked: finalAuthorizationRows.filter((row) =>
+        row.finalAuthorizationCode === "risk_reward" ||
+        row.finalAuthorizationReason?.includes("risk_reward")
+      ).length,
+      averageFavorableEntryDriftR: favorableEntryDrifts.length
+        ? favorableEntryDrifts.reduce((sum, value) => sum + value, 0) /
+          favorableEntryDrifts.length
+        : null,
+      riskRewardRegimes,
     },
     rows,
   };
