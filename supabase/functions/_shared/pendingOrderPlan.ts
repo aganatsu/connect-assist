@@ -18,7 +18,7 @@ export type PendingOrderPlanResult =
   | { valid: true; plan: PendingOrderPlan }
   | { valid: false; reason: string };
 
-export interface PreArmedPositionPlanInput {
+export interface PreArmedStopInput {
   direction: "long" | "short";
   zone: PendingEntryZone;
   structuralInvalidation: number;
@@ -27,13 +27,23 @@ export interface PreArmedPositionPlanInput {
   minimumStopPips: number;
   atrValue?: number | null;
   atrFloorMultiplier?: number;
-  takeProfitRatio: number;
 }
 
+export interface PreArmedPositionPlanInput extends PreArmedStopInput {
+  /** Target frozen by the configured TP owner at discovery. */
+  frozenTakeProfit?: number | null;
+  /** Retained for rr_ratio callers and explicit ratio fallback only. */
+  takeProfitRatio?: number;
+}
+
+export type PreArmedStopResult =
+  | { valid: true; stopLoss: number }
+  | { valid: false; reason: string };
+
 /** Position-risk geometry is separate from the pre-entry structural boundary. */
-export function buildPreArmedPositionPlan(
-  input: PreArmedPositionPlanInput,
-): PendingOrderPlanResult {
+export function resolvePreArmedPositionStop(
+  input: PreArmedStopInput,
+): PreArmedStopResult {
   const entry = Number(input.zone.price);
   const structural = Number(input.structuralInvalidation);
   const pipSize = Math.abs(Number(input.pipSize));
@@ -58,18 +68,45 @@ export function buildPreArmedPositionPlan(
   const preferredIsValid = hasPreferred && Number.isFinite(preferred) && (input.direction === "long"
     ? preferred <= beyondStructural && preferred < entry
     : preferred >= beyondStructural && preferred > entry);
-  const stopLoss = preferredIsValid
-    ? preferred
-    : input.direction === "long"
-    ? Math.min(beyondStructural, minimumStop)
-    : Math.max(beyondStructural, minimumStop);
+  return {
+    valid: true,
+    stopLoss: preferredIsValid
+      ? preferred
+      : input.direction === "long"
+      ? Math.min(beyondStructural, minimumStop)
+      : Math.max(beyondStructural, minimumStop),
+  };
+}
+
+export function buildPreArmedPositionPlan(
+  input: PreArmedPositionPlanInput,
+): PendingOrderPlanResult {
+  const stop = resolvePreArmedPositionStop(input);
+  if (!stop.valid) return stop;
+
+  const frozenTakeProfit = Number(input.frozenTakeProfit);
+  const hasFrozenTarget = input.frozenTakeProfit !== null &&
+    input.frozenTakeProfit !== undefined && Number.isFinite(frozenTakeProfit);
+  if (hasFrozenTarget) {
+    const entry = Number(input.zone.price);
+    const targetAhead = input.direction === "long"
+      ? frozenTakeProfit > entry
+      : frozenTakeProfit < entry;
+    if (!targetAhead) {
+      return {
+        valid: false,
+        reason: "frozen_target_already_reached: entry=" + entry + " target=" + frozenTakeProfit,
+      };
+    }
+  }
   const ratio = Math.max(1, Number(input.takeProfitRatio || 1));
 
   return buildPendingOrderPlan({
     direction: input.direction,
     zone: input.zone,
-    stopLoss,
+    stopLoss: stop.stopLoss,
     takeProfitFor: (positionEntry, positionStop, direction) => {
+      if (hasFrozenTarget) return frozenTakeProfit;
       const risk = Math.abs(positionEntry - positionStop);
       return direction === "long"
         ? positionEntry + risk * ratio

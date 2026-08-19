@@ -77,6 +77,17 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             </SelectContent>
           </Select>
         </FieldGroup>
+        {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod ?? "rr_ratio") === "next_level" && (
+          <FieldGroup label="When No Level Is Viable" description="Choose explicitly; the bot will never substitute another TP method silently">
+            <Select value={config.exit?.nextLevelFallback ?? "reject"} onValueChange={v => updateField("exit", "nextLevelFallback", v)}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="reject">Reject Setup — Require a viable structural target</SelectItem>
+                <SelectItem value="rr_ratio">Use R:R Target — Explicit ratio fallback</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
+        )}
         {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod ?? "rr_ratio") === "rr_ratio" && (
           <FieldGroup label="R:R Target" description="Target reward as multiple of risk">
             <div className="flex items-center gap-4">

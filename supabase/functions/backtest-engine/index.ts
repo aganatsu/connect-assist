@@ -4054,6 +4054,29 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           continue;
         }
 
+        const retargetNextLevelForStop = (stopLoss: number): number | null => {
+          if (pairConfig.tpMethod !== "next_level") return analysis.takeProfit;
+          const gamePlanContext = (pairConfig as any)._gamePlanContext;
+          const dolTargets = (pairConfig as any).dolTPExtensionEnabled !== false && gamePlanContext?.dol
+            ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
+            : undefined;
+          return calculateSLTP({
+            direction: analysis.direction,
+            lastPrice: candle.close,
+            pipSize: spec.pipSize,
+            config: pairConfig,
+            swings: analysis.structure?.swingPoints || [],
+            orderBlocks: analysis.orderBlocks || [],
+            liquidityPools: analysis.liquidityPools || [],
+            pdLevels: analysis.pdLevels || null,
+            atrValue: Number((analysis as any).atrValue) || 0,
+            fvgs: analysis.fvgs || [],
+            fibExtensions: analysis.fibLevels?.extensions,
+            dolTargets,
+            resolvedStopLoss: stopLoss,
+          }).takeProfit;
+        };
+
         // ── SL Floor Enforcement (matching bot-scanner/paper-trading) ──
         // Two-layer floor: max(staticMinSlPips, atrFloorPips)
         {
@@ -4065,18 +4088,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
           const effectiveMinSl = Math.max(staticMin, atrFloorPips);
           if (slDistPips < effectiveMinSl) {
-            // Widen SL to minimum, preserve R:R
-            const origRR = analysis.takeProfit && analysis.stopLoss
+            const originalRiskReward = analysis.takeProfit && analysis.stopLoss
               ? Math.abs(candle.close - analysis.takeProfit) / Math.abs(candle.close - analysis.stopLoss)
               : 2;
             const newSlDist = effectiveMinSl * spec.pipSize;
-            if (analysis.direction === "long") {
-              analysis.stopLoss = candle.close - newSlDist;
-              analysis.takeProfit = candle.close + newSlDist * origRR;
-            } else {
-              analysis.stopLoss = candle.close + newSlDist;
-              analysis.takeProfit = candle.close - newSlDist * origRR;
-            }
+            analysis.stopLoss = analysis.direction === "long"
+              ? candle.close - newSlDist
+              : candle.close + newSlDist;
+            analysis.takeProfit = pairConfig.tpMethod === "next_level"
+              ? retargetNextLevelForStop(analysis.stopLoss)
+              : analysis.direction === "long"
+              ? candle.close + newSlDist * originalRiskReward
+              : candle.close - newSlDist * originalRiskReward;
           }
         }
 
@@ -4097,14 +4120,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           // Only override if impulse SL is wider (more protective) and within cap
           if (impulseSlDistance > currentSlDistance && impulseSlPips <= maxImpulseSlPips) {
             analysis.stopLoss = impulseSL;
-            // Recalculate TP to maintain R:R
             const newRisk = Math.abs(candle.close - analysis.stopLoss);
-            if (analysis.direction === "long") {
-              analysis.takeProfit = candle.close + newRisk * (config.tpRatio ?? 2);
-            } else {
-              analysis.takeProfit = candle.close - newRisk * (config.tpRatio ?? 2);
-            }
+            analysis.takeProfit = pairConfig.tpMethod === "next_level"
+              ? retargetNextLevelForStop(analysis.stopLoss)
+              : analysis.direction === "long"
+              ? candle.close + newRisk * (config.tpRatio ?? 2)
+              : candle.close - newRisk * (config.tpRatio ?? 2);
           }
+        }
+
+        if (!analysis.takeProfit) {
+          diagnostics.skippedNoSLTP++;
+          continue;
         }
 
         // ── Regime-Adaptive TP Adjustment (matching bot-scanner) ──

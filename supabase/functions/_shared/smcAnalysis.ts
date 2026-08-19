@@ -227,6 +227,15 @@ export interface SLTPInput {
   fibExtensions?: FibLevel[];
   /** Optional: Draw on Liquidity targets from game plan (Layer 2) */
   dolTargets?: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; description: string }>;
+  /** Position stop already repaired for execution floors. TP must be selected against this stop. */
+  resolvedStopLoss?: number | null;
+}
+
+export interface SLTPResult {
+  stopLoss: number | null;
+  takeProfit: number | null;
+  takeProfitSource: string | null;
+  takeProfitFallbackReason: string | null;
 }
 
 export interface OpeningRangeResult {
@@ -2112,16 +2121,31 @@ export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number
 }
 
 // ─── SL/TP Calculation ──────────────────────────────────────────────
-export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
+export function calculateSLTP(input: SLTPInput): SLTPResult {
   const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
-  if (!direction) return { stopLoss: null, takeProfit: null };
+  if (!direction) {
+    return {
+      stopLoss: null,
+      takeProfit: null,
+      takeProfitSource: null,
+      takeProfitFallbackReason: null,
+    };
+  }
 
   const buffer = (config.slBufferPips || 2) * pipSize;
   let sl: number | null = null;
   let tp: number | null = null;
+  let takeProfitSource: string | null = null;
+  let takeProfitFallbackReason: string | null = null;
 
+  const resolvedStopLoss = Number(input.resolvedStopLoss);
+  const hasResolvedStop = Number.isFinite(resolvedStopLoss) && (direction === "long"
+    ? resolvedStopLoss < lastPrice
+    : resolvedStopLoss > lastPrice);
   const slMethod: string = config.slMethod || "structure";
-  if (slMethod === "fixed_pips") {
+  if (hasResolvedStop) {
+    sl = resolvedStopLoss;
+  } else if (slMethod === "fixed_pips") {
     const dist = (config.fixedSLPips || 25) * pipSize;
     sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
   } else if (slMethod === "atr_based") {
@@ -2160,7 +2184,7 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
 
   // ── ATR-based SL floor: ensure SL is at least 1.5× ATR ──
   // This prevents micro-scalp SLs on structure-based method when swing points are very close.
-  if (atrValue > 0 && sl !== null) {
+  if (!hasResolvedStop && atrValue > 0 && sl !== null) {
     const atrFloorDistance = atrValue * 1.5; // 1.5× ATR
     const currentSlDistance = Math.abs(lastPrice - sl);
     if (currentSlDistance < atrFloorDistance) {
@@ -2176,6 +2200,7 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
   if (tpMethod === "fixed_pips") {
     const dist = (config.fixedTPPips || 50) * pipSize;
     tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    takeProfitSource = "fixed_pips";
   } else if (tpMethod === "next_level") {
     const targets: number[] = [];
     if (direction === "long") {
@@ -2201,26 +2226,31 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
       : targets[0];
     if (viableTarget !== undefined) {
       tp = viableTarget;
-    } else if (targets.length > 0) {
-      // All structural targets produce sub-minimum R:R — fall back to rr_ratio method.
-      // This ensures we never take a trade with a target 1 pip away.
-      tp = direction === "long"
-        ? lastPrice + slDistance * (config.tpRatio || 2.0)
-        : lastPrice - slDistance * (config.tpRatio || 2.0);
+      takeProfitSource = "next_level";
     } else {
-      // No structural targets at all — use fixed pips fallback
-      const dist = (config.fixedTPPips || 50) * pipSize;
-      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+      takeProfitFallbackReason = targets.length > 0
+        ? "no_structural_target_meets_minimum_rr"
+        : "no_structural_target_available";
+      if (config.nextLevelFallback === "rr_ratio") {
+        tp = direction === "long"
+          ? lastPrice + slDistance * (config.tpRatio || 2.0)
+          : lastPrice - slDistance * (config.tpRatio || 2.0);
+        takeProfitSource = "next_level_rr_fallback";
+      }
     }
   } else if (tpMethod === "atr_multiple") {
     if (atrValue > 0) {
       const dist = atrValue * (config.tpATRMultiple || 2.0);
       tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+      takeProfitSource = "atr_multiple";
     } else {
       tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
+      takeProfitSource = "atr_multiple_rr_fallback";
+      takeProfitFallbackReason = "atr_unavailable";
     }
   } else {
     tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
+    takeProfitSource = "rr_ratio";
   }
 
   // ── FVG-aware TP extension ──
@@ -2318,7 +2348,12 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   }
 
-  return { stopLoss: sl, takeProfit: tp };
+  return {
+    stopLoss: sl,
+    takeProfit: tp,
+    takeProfitSource,
+    takeProfitFallbackReason,
+  };
 }
 
 // ─── Quote-to-USD Conversion ────────────────────────────────────────

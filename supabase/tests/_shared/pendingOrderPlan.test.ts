@@ -72,3 +72,31 @@ Deno.test("valid wider position stop is preserved at final authorization", () =>
   assertEquals(result.plan.stopLoss, 1.196);
   assertAlmostEquals(result.plan.takeProfit, 1.208);
 });
+
+Deno.test("pre-armed plan preserves the frozen target when confirmation entry moves", () => {
+  const result = buildPreArmedPositionPlan({
+    direction: "long",
+    zone: { ...zone, price: 1.202 },
+    structuralInvalidation: 1.1979,
+    preferredPositionStop: 1.1975,
+    pipSize: 0.0001,
+    minimumStopPips: 25,
+    frozenTakeProfit: 1.205,
+  });
+  assert(result.valid);
+  assertEquals(result.plan.takeProfit, 1.205);
+});
+
+Deno.test("pre-armed plan reports when confirmation arrives beyond the frozen target", () => {
+  const result = buildPreArmedPositionPlan({
+    direction: "long",
+    zone: { ...zone, price: 1.206 },
+    structuralInvalidation: 1.1979,
+    preferredPositionStop: 1.1975,
+    pipSize: 0.0001,
+    minimumStopPips: 25,
+    frozenTakeProfit: 1.205,
+  });
+  assertEquals(result.valid, false);
+  if (!result.valid) assert(result.reason.startsWith("frozen_target_already_reached:"));
+});
