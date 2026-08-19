@@ -31,12 +31,31 @@ not a claim about all production setups.
 | 6 | `bot-scanner:7794` | Cascade override (swing) | delete; anchor feeds (1) |
 | 7 | `unifiedZoneEngine:742` | produces `slPrice` = `poi.high + 0.5 × height` | becomes an **anchor input** to (1), not a stop |
 | 8 | `pendingOrderPlan` `resolvePreArmedPositionStop` | separate pre-arm pipeline | delete; call (1) |
-| 8b | `paper-trading:1134` (`action === "place_order"`) | widens `adjustedSL`, recomputes TP, then **inserts a new position** | delete; call (1) |
+| 8b | `paper-trading:1134` (`action === "place_order"`) | widens `adjustedSL`, recomputes TP, then **inserts a new position** | delete the rewrite — but it **cannot** call (1); see below |
 
-Site 8b sits beside the trailing code in `paper-trading` and was initially filed
-as management. It is not: it constructs the stop on the insert path. Leaving it
-out of scope would preserve an independent initial-stop rewrite after the
-consolidation — the one route where a manual or externally-placed order enters.
+Site 8b sits beside the trailing code and was initially filed as management. It
+is not: it constructs the stop on the insert path.
+
+It also **cannot delegate to `calculateSLTP`.** The payload is:
+
+```js
+const { symbol, direction, size, stopLoss, takeProfit, signalReason, signalScore } = payload;
+```
+
+and `paper-trading` contains no swings, order blocks, liquidity pools or PD
+levels anywhere. It is an order-placement API, not an analysis surface, so the
+inputs `calculateSLTP` requires do not exist there. Its disposition is therefore
+different from every other site:
+
+| origin | behaviour |
+|---|---|
+| automated order (scanner / confirmation) | consume the **already-frozen** stop plan; do not recompute |
+| manual order with an explicit stop | **preserve and validate** it — never recompute, never widen |
+| manual order with no stop, or one the broker rejects | **fail explicitly**; do not substitute a computed stop |
+
+Widening a caller-supplied stop is the specific defect: it silently changes the
+risk the caller asked for, and on a manual order there is no thesis to derive a
+replacement from.
 
 ### Backtest — duplicated, not shared
 
@@ -158,9 +177,9 @@ projected is the consequence.
 ```
 structuralStop = bufferedInvalidation                       // buffer ALREADY applied — see below
 noiseStop      = entry   ± (k_style × ATR(confirmation TF, closed bars))
-executionStop  = entry   ± max(brokerMinimumStopDistance,
-                               liveSpread × safetyMultiplier,
-                               oneTick)
+executionStop  = entry   ± max(brokerStopsLevel_asQuoteDistance,
+                               liveSpread_asQuoteDistance × safetyMultiplier,
+                               tickSize_asQuoteDistance)
 
 finalStop = FARTHEST of the three from entry
 
@@ -185,12 +204,24 @@ The two anchors differ, and the contract must say so per phase:
 | phase | anchor | buffering |
 |---|---|---|
 | pre-confirmation | `structural_invalidation` (persisted) | **already buffered** — consume unchanged |
-| post-confirmation | `protectedLevel` from `impulseConfirmationLock:99` | **raw swing price** — apply exactly one style buffer, then freeze |
+| post-confirmation | `protectedLevel` from `impulseConfirmationLock:99` | **raw swing price** — apply exactly one **resolved** buffer, then freeze |
 
 ```js
 // impulseConfirmationLock.ts:99
 const protectedLevel = protectedPivot.price;   // raw; no buffer applied anywhere
 ```
+
+The buffer to apply is the **resolved** one, not the raw style value:
+
+```js
+adjustedSlBuffer = instrumentBuffers[pair]?.slBufferPips
+                ?? (slBufferPips × assetProfile.slBufferMultiplier)
+```
+
+A per-instrument override wins outright; otherwise the style buffer is scaled by
+the asset-class multiplier. Applying `slBufferPips` directly would drop both,
+which is the same value the pre-confirmation anchor was already buffered with —
+so the two phases would disagree about buffer size while appearing consistent.
 
 A single rule for both is wrong in one direction or the other. "Always consume
 unchanged" places the post-confirmation stop exactly on the swing low, where any
