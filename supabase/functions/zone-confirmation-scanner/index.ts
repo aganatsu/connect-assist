@@ -1379,7 +1379,7 @@ Deno.serve(async (req) => {
           minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
           atrValue: parsedPendingEvidence?.atrValue,
           atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-          takeProfitRatio: Number(config.tpRatio ?? 2),
+          frozenTakeProfit: Number(pending.take_profit),
         });
         let rawAuthorization = evaluateFinalTradeAuthorization({
           account,
@@ -1690,7 +1690,7 @@ Deno.serve(async (req) => {
           minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
           atrValue: parsedPendingEvidence?.atrValue,
           atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-          takeProfitRatio: Number(config.tpRatio ?? 2),
+          frozenTakeProfit: Number(pending.take_profit),
         });
         if (parsedPendingEvidence.preArmed === true && !finalRiskPlan.valid) {
           console.warn(`[zone-confirm] Final risk geometry failed ${pending.symbol}: ${finalRiskPlan.reason}`);

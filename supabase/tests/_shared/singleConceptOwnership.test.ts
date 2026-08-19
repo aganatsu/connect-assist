@@ -51,6 +51,7 @@ const SINGLE_OWNER: string[] = [
   // ── Risk / sizing ──
   "calculatePositionSize",
   "computePositionSize",
+  "calculateSLTP",
   "finalizePaperPositionClose",
   // ── Entry confirmation ──
   "detectZoneConfirmation",

@@ -168,7 +168,12 @@ import {
   isWatchlistInvalidated,
   type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
 import { cursorAfterLatestTouchCandle, findEarliestPendingZoneTouch } from "../_shared/pendingZoneTouch.ts";
-import { buildPendingOrderPlan, buildPreArmedPositionPlan } from "../_shared/pendingOrderPlan.ts";
+import {
+  buildPendingOrderPlan,
+  buildPreArmedPositionPlan,
+  resolvePreArmedPositionStop,
+  type PendingEntryZone,
+} from "../_shared/pendingOrderPlan.ts";
 import {
   buildWatchlistLifecycleEvidence,
   deriveWatchlistLifecyclePhase,
@@ -432,6 +437,87 @@ function fmtPx(v: number | string | null | undefined, sym: string): string {
   const ps = SPECS[sym]?.pipSize ?? 0.0001;
   const decimals = Math.max(2, Math.round(-Math.log10(ps)) + 1);
   return n.toFixed(decimals);
+}
+
+function buildConfiguredPreArmedPlan(input: {
+  direction: "long" | "short";
+  zone: PendingEntryZone;
+  structuralInvalidation: number;
+  preferredPositionStop?: number | null;
+  symbol: string;
+  atrValue?: number | null;
+  config: any;
+  analysis: any;
+}) {
+  const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
+  const stop = resolvePreArmedPositionStop({
+    direction: input.direction,
+    zone: input.zone,
+    structuralInvalidation: input.structuralInvalidation,
+    preferredPositionStop: input.preferredPositionStop,
+    pipSize: spec.pipSize,
+    minimumStopPips: MIN_SL_PIPS[input.symbol] ?? 15,
+    atrValue: input.atrValue,
+    atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
+  });
+  if (!stop.valid) return stop;
+
+  const gamePlanContext = input.config?._gamePlanContext;
+  const dolTargets = input.config?.dolTPExtensionEnabled !== false && gamePlanContext?.dol
+    ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
+    : undefined;
+  const target = calculateSLTP({
+    direction: input.direction,
+    lastPrice: input.zone.price,
+    pipSize: spec.pipSize,
+    config: input.config,
+    swings: input.analysis.structure?.swingPoints || [],
+    orderBlocks: input.analysis.orderBlocks || [],
+    liquidityPools: input.analysis.liquidityPools || [],
+    pdLevels: input.analysis.pdLevels || null,
+    atrValue: Number(input.atrValue) || 0,
+    fvgs: input.analysis.fvgs || [],
+    fibExtensions: input.analysis.fibLevels?.extensions,
+    dolTargets,
+    resolvedStopLoss: stop.stopLoss,
+  });
+  if (!Number.isFinite(Number(target.takeProfit))) {
+    return {
+      valid: false as const,
+      reason: "No viable take-profit target: " +
+        (target.takeProfitFallbackReason || "configured TP method returned no target"),
+    };
+  }
+
+  const plan = buildPreArmedPositionPlan({
+    direction: input.direction,
+    zone: input.zone,
+    structuralInvalidation: input.structuralInvalidation,
+    preferredPositionStop: stop.stopLoss,
+    pipSize: spec.pipSize,
+    minimumStopPips: MIN_SL_PIPS[input.symbol] ?? 15,
+    atrValue: input.atrValue,
+    atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
+    frozenTakeProfit: Number(target.takeProfit),
+  });
+  return plan.valid
+    ? {
+      ...plan,
+      takeProfitSource: target.takeProfitSource,
+      takeProfitFallbackReason: target.takeProfitFallbackReason,
+    }
+    : plan;
+}
+
+function rejectedPreArmDecision(reason: string, candidateId: string | null | undefined) {
+  return {
+    outcome: "not_armed",
+    reasonCode: reason.startsWith("No viable take-profit target")
+      ? "no_viable_take_profit"
+      : "invalid_pre_arm_geometry",
+    reason,
+    candidateId: candidateId ?? null,
+  };
 }
 
 function getEntryInterval(entryTf: string): string {
@@ -5914,6 +6000,7 @@ async function runScanForUser(
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
         let zoneWatchPersistenceError: string | null = null;
+        let preArmPlanRejectionReason: string | null = null;
         // Set when this scan successfully armed a pending order for the setup.
         let preArmedThisScan = false;
         let frozenZoneWatch: any = existingStaged || null;
@@ -6016,8 +6103,7 @@ async function runScanForUser(
           const zone = frozenZoneWatch.originating_zone;
           const entryPrice = Number(frozenZoneWatch.entry_price ?? zone?.entry);
           const structuralStop = Number(frozenZoneWatch.sl_level);
-          const rr = Math.max(1, Number(pairConfig.tpRatio ?? 2));
-          const plan = buildPreArmedPositionPlan({
+          const plan = buildConfiguredPreArmedPlan({
             direction: analysis.direction as "long" | "short",
             zone: {
               price: entryPrice,
@@ -6027,11 +6113,10 @@ async function runScanForUser(
             },
             structuralInvalidation: structuralStop,
             preferredPositionStop: analysis.stopLoss,
-            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-            minimumStopPips: MIN_SL_PIPS[pair] ?? 15,
+            symbol: pair,
             atrValue: (analysis as any).atrValue,
-            atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-            takeProfitRatio: rr,
+            config: pairConfig,
+            analysis,
           });
           if (plan.valid) {
             const currentCanonicalLocation = (detail as any).canonicalDealingRangeObservation?.canonical || null;
@@ -6050,6 +6135,8 @@ async function runScanForUser(
               entryPrice: plan.plan.entryPrice,
               stopLoss: plan.plan.stopLoss,
               takeProfit: plan.plan.takeProfit,
+              takeProfitSource: plan.takeProfitSource,
+              takeProfitFallbackReason: plan.takeProfitFallbackReason,
               zone: plan.plan.zone,
               location: frozenEntryLocation,
             };
@@ -6100,6 +6187,8 @@ async function runScanForUser(
                 preArmed: true,
                 candidateId: frozenZoneWatch.candidate_id,
                 preArmReachability,
+                takeProfitSource: plan.takeProfitSource,
+                takeProfitFallbackReason: plan.takeProfitFallbackReason,
               },
               signal_score: analysis.score,
               from_watchlist: true,
@@ -6124,7 +6213,7 @@ async function runScanForUser(
               preArmedThisScan = true;
             }
           } else {
-            zoneWatchPersistenceError = `Pre-arm plan rejected: ${plan.reason}`;
+            preArmPlanRejectionReason = plan.reason;
           }
         }
         if (!izData.bestZone?.priceAtZone) {
@@ -6132,7 +6221,15 @@ async function runScanForUser(
             detail.status = preArmedThisScan ? "zone_setup_active" : "watching_zone";
             detail.skipReason = preArmedThisScan
               ? `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Pre-armed — awaiting zone touch. Visible under Zone Setups, not Watchlist.`
+              : preArmPlanRejectionReason
+              ? `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist; pre-arm plan not armed: ${preArmPlanRejectionReason}.`
               : `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
+            if (preArmPlanRejectionReason) {
+              detail.preArmDecision = rejectedPreArmDecision(
+                preArmPlanRejectionReason,
+                frozenZoneWatch?.candidate_id,
+              );
+            }
           } else if (zoneWatchPersistenceError) {
             detail.status = "watchlist_persistence_failed";
             detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
@@ -7637,27 +7734,35 @@ async function runScanForUser(
         const spec = SPECS[pair] || SPECS["EUR/USD"];
         let sl = analysis.stopLoss;
         let tp = analysis.takeProfit;
-        // ── computeTP: respects next_level TP from smcAnalysis when configured ──
-        // When tpMethod="next_level", keeps the structure-based TP (PDH/PDL/PWH/PWL/liquidity)
-        // unless the recalculated SL makes the R:R unacceptable (below minRiskReward).
+        // next_level delegates to calculateSLTP so every route shares target selection and fallback policy.
         const computeTP = (entry: number, newSl: number, direction: string): number => {
           const risk = Math.abs(entry - newSl);
-          if (config.tpMethod === "next_level" && analysis.takeProfit) {
-            // Guard: TP from smcAnalysis was computed for the ORIGINAL direction.
-            // If direction was flipped by directionVerdict, analysis.takeProfit may
-            // sit on the wrong side of entry. Only reuse it if orientation matches.
-            const tpOnCorrectSide = direction === "long"
-              ? analysis.takeProfit > entry
-              : analysis.takeProfit < entry;
-            const structureRR = Math.abs(analysis.takeProfit - entry) / risk;
-            if (tpOnCorrectSide && structureRR >= (config.minRiskReward ?? 1.0)) {
-              return analysis.takeProfit;
-            }
+          if (pairConfig.tpMethod === "next_level") {
+            const gamePlanContext = (pairConfig as any)._gamePlanContext;
+            const dolTargets = (pairConfig as any).dolTPExtensionEnabled !== false && gamePlanContext?.dol
+              ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
+              : undefined;
+            const target = calculateSLTP({
+              direction: direction as "long" | "short",
+              lastPrice: entry,
+              pipSize: spec.pipSize,
+              config: pairConfig,
+              swings: analysis.structure?.swingPoints || [],
+              orderBlocks: analysis.orderBlocks || [],
+              liquidityPools: analysis.liquidityPools || [],
+              pdLevels: analysis.pdLevels || null,
+              atrValue: Number((analysis as any).atrValue) || 0,
+              fvgs: analysis.fvgs || [],
+              fibExtensions: analysis.fibLevels?.extensions,
+              dolTargets,
+              resolvedStopLoss: newSl,
+            });
+            return target.takeProfit ?? Number.NaN;
           }
           // ── Fib 3-Point Extension TP (SMC Enhancement) ──
           // Measures extensions from the ENTRY point (Point C), not from the swing origin.
           // Uses the first extension level that satisfies minRiskReward.
-          if ((config.tpMethod as string) === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
+          if ((pairConfig.tpMethod as string) === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
             const ext = smcEnhResult.fibExtension;
             // Try each extension level (ordered from nearest to farthest)
             for (const level of ext.levels) {
@@ -7667,13 +7772,13 @@ async function runScanForUser(
                 : tpCandidate < entry;
               if (!tpOnCorrectSide) continue;
               const extensionRR = Math.abs(tpCandidate - entry) / risk;
-              if (extensionRR >= (config.minRiskReward ?? 1.0)) {
+              if (extensionRR >= (pairConfig.minRiskReward ?? 1.0)) {
                 return tpCandidate;
               }
             }
             // Fallback: no extension level satisfies R:R, use default ratio
           }
-          return direction === "long" ? entry + risk * config.tpRatio : entry - risk * config.tpRatio;
+          return direction === "long" ? entry + risk * pairConfig.tpRatio : entry - risk * pairConfig.tpRatio;
         };
 
         // calculateSLTP owns the configured SL method. Only recalculate from
@@ -10007,6 +10112,7 @@ async function runScanForUser(
         (detail as any).canonicalScannerEnforcement?.disposition === "wait"
       ) {
         let waitPersistenceError: string | null = null;
+        let waitPlanRejectionReason: string | null = null;
         if (!currentPendingCandidate && preparedZoneWatch &&
             pairConfig.preArmZoneSetups === true && config.limitOrderEnabled &&
             !config.marketFillAtZone) {
@@ -10024,7 +10130,7 @@ async function runScanForUser(
           const frozenZone = preparedZoneWatch.originating_zone;
           const frozenEntry = Number(preparedZoneWatch.entry_price ?? frozenZone?.entry);
           const frozenStop = Number(preparedZoneWatch.sl_level);
-          const waitPlan = buildPreArmedPositionPlan({
+          const waitPlan = buildConfiguredPreArmedPlan({
             direction: analysis.direction as "long" | "short",
             zone: {
               price: frozenEntry,
@@ -10034,11 +10140,10 @@ async function runScanForUser(
             },
             structuralInvalidation: frozenStop,
             preferredPositionStop: analysis.stopLoss,
-            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-            minimumStopPips: MIN_SL_PIPS[pair] ?? 15,
+            symbol: pair,
             atrValue: (analysis as any).atrValue,
-            atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-            takeProfitRatio: Math.max(1, Number(pairConfig.tpRatio ?? 2)),
+            config: pairConfig,
+            analysis,
           });
           if (waitPlan.valid) {
             const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
@@ -10066,6 +10171,8 @@ async function runScanForUser(
                 preArmed: true,
                 candidateId: preparedZoneWatch.candidate_id,
                 preArmReachability,
+                takeProfitSource: waitPlan.takeProfitSource,
+                takeProfitFallbackReason: waitPlan.takeProfitFallbackReason,
               },
               signal_score: analysis.score, from_watchlist: true, staged_setup_id: preparedZoneWatch.id,
               candidate_id: preparedZoneWatch.candidate_id, structural_invalidation: frozenStop,
@@ -10079,10 +10186,13 @@ async function runScanForUser(
             (detail as any).frozenExecutablePlan = {
               ...((detail as any).frozenExecutablePlan || {}),
               entryPrice: waitPlan.plan.entryPrice, stopLoss: waitPlan.plan.stopLoss,
-              takeProfit: waitPlan.plan.takeProfit, zone: waitPlan.plan.zone,
+              takeProfit: waitPlan.plan.takeProfit,
+              takeProfitSource: waitPlan.takeProfitSource,
+              takeProfitFallbackReason: waitPlan.takeProfitFallbackReason,
+              zone: waitPlan.plan.zone,
             };
           } else {
-            waitPersistenceError = waitPlan.reason;
+            waitPlanRejectionReason = waitPlan.reason;
           }
           }
         }
@@ -10095,6 +10205,13 @@ async function runScanForUser(
         detail.skipReason = (detail as any).canonicalScannerState?.explanation ||
           "Canonical setup remains active and is waiting for more evidence";
         if (waitPersistenceError) detail.skipReason += `; pending persistence failed: ${waitPersistenceError}`;
+        if (waitPlanRejectionReason) {
+          detail.skipReason += `; pre-arm plan not armed: ${waitPlanRejectionReason}`;
+          detail.preArmDecision = rejectedPreArmDecision(
+            waitPlanRejectionReason,
+            preparedZoneWatch?.candidate_id,
+          );
+        }
         detail.rejectionReasons = [];
         scanDetails.push(detail);
         continue;

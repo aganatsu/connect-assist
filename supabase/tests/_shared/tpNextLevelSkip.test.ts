@@ -4,11 +4,12 @@
  * Before this fix: next_level always used targets[0] (nearest target),
  * even if it was 1 pip away with SL 14 pips away (R:R = 0.07).
  *
- * After this fix: targets producing R:R below minRiskReward are skipped.
- * Falls through to the next viable target, or rr_ratio fallback if none qualify.
+ * Targets producing R:R below minRiskReward are skipped. The next viable
+ * structural target is used; ratio fallback occurs only when explicitly saved.
  */
-import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertAlmostEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { calculateSLTP } from "../../functions/_shared/smcAnalysis.ts";
+import { mapNestedToFlat } from "../../functions/_shared/configMapper.ts";
 
 // Minimal fixtures — include all required SwingPoint fields
 const baseSwings = [
@@ -111,6 +112,7 @@ Deno.test("next_level TP: falls back to rr_ratio when ALL targets produce sub-mi
       tpMethod: "next_level",
       minRiskReward: 1.5,
       tpRatio: 2.0,
+      nextLevelFallback: "rr_ratio",
     },
     swings: baseSwings,
     orderBlocks: [],
@@ -187,4 +189,85 @@ Deno.test("next_level TP: respects higher minRiskReward config", () => {
   // Pool at 0.59200: reward = 35 pips, R:R = 2.33 → ✓ use this
   assertEquals(result.takeProfit !== null, true);
   assertAlmostEquals(result.takeProfit!, 0.59200, 0.00005);
+});
+
+Deno.test("next_level TP: rejects when final repaired stop makes every structural target sub-minimum", () => {
+  const result = calculateSLTP({
+    direction: "long",
+    lastPrice: 1.3525625,
+    pipSize: 0.0001,
+    config: {
+      tpMethod: "next_level",
+      nextLevelFallback: "reject",
+      minRiskReward: 1.0,
+      tpRatio: 1.0,
+    },
+    swings: [],
+    orderBlocks: [],
+    liquidityPools: [],
+    pdLevels: { pdh: 1.35393576 },
+    atrValue: 0,
+    resolvedStopLoss: 1.3500625,
+  });
+
+  assertEquals(result.stopLoss, 1.3500625);
+  assertEquals(result.takeProfit, null);
+  assertEquals(result.takeProfitSource, null);
+  assertEquals(result.takeProfitFallbackReason, "no_structural_target_meets_minimum_rr");
+});
+
+Deno.test("next_level TP: ratio fallback must be explicit and is labelled", () => {
+  const result = calculateSLTP({
+    direction: "long",
+    lastPrice: 1.3525625,
+    pipSize: 0.0001,
+    config: {
+      tpMethod: "next_level",
+      nextLevelFallback: "rr_ratio",
+      minRiskReward: 1.0,
+      tpRatio: 1.0,
+    },
+    swings: [],
+    orderBlocks: [],
+    liquidityPools: [],
+    pdLevels: { pdh: 1.35393576 },
+    atrValue: 0,
+    resolvedStopLoss: 1.3500625,
+  });
+
+  assertAlmostEquals(result.takeProfit!, 1.3550625, 0.0000001);
+  assertEquals(result.takeProfitSource, "next_level_rr_fallback");
+  assertEquals(result.takeProfitFallbackReason, "no_structural_target_meets_minimum_rr");
+});
+
+Deno.test("next_level fallback is explicit in nested Bot Config", () => {
+  assertEquals(mapNestedToFlat({}).nextLevelFallback, "reject");
+  assertEquals(
+    mapNestedToFlat({ exit: { nextLevelFallback: "rr_ratio" } }).nextLevelFallback,
+    "rr_ratio",
+  );
+});
+
+Deno.test("next_level rejection telemetry distinguishes plan eligibility from persistence", () => {
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assertStringIncludes(scanner, 'reasonCode: reason.startsWith("No viable take-profit target")');
+  assertStringIncludes(scanner, 'outcome: "not_armed"');
+  assertStringIncludes(scanner, "pre-arm plan not armed:");
+});
+
+Deno.test("next_level stop repair delegates to calculateSLTP in live and backtest", () => {
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  const backtest = Deno.readTextFileSync(
+    new URL("../../functions/backtest-engine/index.ts", import.meta.url),
+  );
+  const confirmation = Deno.readTextFileSync(
+    new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  );
+  assertStringIncludes(scanner, "resolvedStopLoss: stop.stopLoss");
+  assertStringIncludes(backtest, "resolvedStopLoss: stopLoss");
+  assertStringIncludes(confirmation, "frozenTakeProfit: Number(pending.take_profit)");
 });

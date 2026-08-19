@@ -145,6 +145,7 @@ export const RUNTIME_DEFAULTS = {
   slBufferPips: 2,
   instrumentBuffers: {} as Record<string, { slBufferPips?: number }>,
   tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
+  nextLevelFallback: "reject" as "reject" | "rr_ratio",
   fixedTPPips: 50,
   tpRatio: 2.0,
   tpATRMultiple: 2.0,
@@ -659,6 +660,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
         ? "fixed_pips"
         : method;
     })() as RuntimeConfig["tpMethod"],
+    nextLevelFallback: (exit.nextLevelFallback ?? raw.nextLevelFallback ?? RUNTIME_DEFAULTS.nextLevelFallback) as RuntimeConfig["nextLevelFallback"],
     fixedTPPips: exit.fixedTPPips ?? raw.fixedTPPips ?? RUNTIME_DEFAULTS.fixedTPPips,
     tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? RUNTIME_DEFAULTS.tpRatio,
     tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? RUNTIME_DEFAULTS.tpATRMultiple,

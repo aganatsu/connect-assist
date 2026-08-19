@@ -37,6 +37,7 @@ instead of arbitrating.
 | Judas swing | 2 | both (distinct semantics) | 🟠 Name collision |
 | AMD phase | 2 | shared only | 🟡 Dead local copy |
 | Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
+| SL/TP target selection | 1 | `calculateSLTP` | 🟢 Single owner |
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
 | Session detection | 2 | `sessions.ts` | 🟢 Correct delegation |
 | FVG | 1 | `detectFVGs` | 🟢 Single owner |
@@ -49,6 +50,18 @@ instead of arbitrating.
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 
 ---
+
+## SL/TP target selection
+
+`_shared/smcAnalysis.ts:calculateSLTP` owns configured stop and target selection.
+Pre-armed setups first resolve their execution stop through
+`resolvePreArmedPositionStop`, then call `calculateSLTP` with that repaired stop.
+The selected target and its source are frozen on the pending order; confirmation
+may repair the position stop around the live fill but must not chase or regenerate
+the target. `bot-scanner` and `backtest-engine` delegate next-level retargeting to
+the same owner. A `next_level` setup with no structural target meeting the saved
+minimum R:R either rejects or uses the explicitly configured R:R fallback; the
+fallback is never implicit.
 
 ## Post-touch CHoCH/MSS trigger
 
