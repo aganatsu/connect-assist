@@ -31,6 +31,12 @@ not a claim about all production setups.
 | 6 | `bot-scanner:7794` | Cascade override (swing) | delete; anchor feeds (1) |
 | 7 | `unifiedZoneEngine:742` | produces `slPrice` = `poi.high + 0.5 × height` | becomes an **anchor input** to (1), not a stop |
 | 8 | `pendingOrderPlan` `resolvePreArmedPositionStop` | separate pre-arm pipeline | delete; call (1) |
+| 8b | `paper-trading:1134` (`action === "place_order"`) | widens `adjustedSL`, recomputes TP, then **inserts a new position** | delete; call (1) |
+
+Site 8b sits beside the trailing code in `paper-trading` and was initially filed
+as management. It is not: it constructs the stop on the insert path. Leaving it
+out of scope would preserve an independent initial-stop rewrite after the
+consolidation — the one route where a manual or externally-placed order enters.
 
 ### Backtest — duplicated, not shared
 
@@ -49,16 +55,21 @@ from backtest — the failure `CLAUDE.md` names explicitly.
 |---|---|---|---|
 | 11 | `computeManagementDecision:102,339` | `MGMT_SL_FLOOR_PIPS`, **second** static floor table, default 10 | out of scope here; see below |
 | 12 | `paper-trading:954` | trailing ratchet `newSL` | out of scope |
-| 13 | `paper-trading:1197` | `adjustedSL` | out of scope |
+| ~~13~~ | ~~`paper-trading:1197`~~ | **misclassified — moved to the entry path as (8b)** | |
 
-Sites 11–13 move a stop on an **open position**. That is a different concept
+Sites 11–12 move a stop on an **open position**. That is a different concept
 from placing the initial stop, and merging them would repeat the
 structural-invalidation-versus-position-stop conflation fixed in #325.
 
-They are listed because `MGMT_SL_FLOOR_PIPS` is a second style-blind static
-floor table (default 10, against the entry table's 25), and a consolidation that
-removes one while leaving the other has only half-solved the problem. Its
-disposition needs its own decision, not silent inheritance.
+`MGMT_SL_FLOOR_PIPS` (default 10) is a second style-blind static floor table,
+but it governs a **post-entry tightening** decision, not initial placement. It
+is separate technical debt rather than half of this fix, and it stays out of
+this consolidation.
+
+One constraint it must respect: **it can tighten a stop, never widen the frozen
+initial one.** A management floor that widens would invalidate the position size
+computed against the frozen stop at authorization — the same silent
+risk-percent breach described under the freeze rules above.
 
 Sites checked and found **not** to produce stops: `manualImpulse.ts`,
 `gamePlan.ts`.
@@ -169,10 +180,22 @@ style-aware `slBufferPips`. The persisted `structural_invalidation` is therefore
 **post-buffer**. An earlier revision wrote `anchor ± styleBuffer`, which would
 have applied it twice.
 
-Pick one and state it at the call site: either a **raw** zone/pivot anchor with
-the buffer applied here, or the **persisted buffered invalidation** consumed
-unchanged. The second is preferable — it is what the row already stores, and it
-keeps one owner for the buffer.
+The two anchors differ, and the contract must say so per phase:
+
+| phase | anchor | buffering |
+|---|---|---|
+| pre-confirmation | `structural_invalidation` (persisted) | **already buffered** — consume unchanged |
+| post-confirmation | `protectedLevel` from `impulseConfirmationLock:99` | **raw swing price** — apply exactly one style buffer, then freeze |
+
+```js
+// impulseConfirmationLock.ts:99
+const protectedLevel = protectedPivot.price;   // raw; no buffer applied anywhere
+```
+
+A single rule for both is wrong in one direction or the other. "Always consume
+unchanged" places the post-confirmation stop exactly on the swing low, where any
+wick testing that level sweeps it. "Always add a buffer" double-buffers the
+pre-confirmation anchor. The resolved, buffered level is what freezes.
 
 All three terms enter the same comparison. An earlier revision chose only
 between the structural and ATR stops and described the execution floor
@@ -339,12 +362,34 @@ and needs its own evidence.
 This changes every stop in the system, so per `CLAUDE.md` it needs its own PR
 with evidence against historical setups.
 
-The cheap version needs no fills: for every stored setup, compute both stops —
-current pipeline versus proposed formula — and report how many rejected setups
-would have cleared the R:R floor, and how many currently-armed ones would newly
-exceed the risk cap and be rejected.
+### Gate counts are not sufficient
 
-Both directions matter. The change should admit setups like the GBP/USD case
-**and** reject setups whose invalidation is genuinely too far away. A result
-showing only the first is a sign the cap is not binding anywhere and needs
-review before it ships.
+An earlier revision proposed counting how many rejected setups would clear the
+R:R floor and how many armed ones would newly breach the cap. That measures
+**gate effects only**. A tighter stop mechanically admits more setups and
+mechanically increases stop-outs, and counting admissions while ignoring
+outcomes would show the change working while it loses money.
+
+### Required replay output
+
+Grouped by **style**, **asset class** and **setup source**:
+
+| measure | why |
+|---|---|
+| old stop vs proposed stop | the size of the change, per group |
+| TP-first vs SL-first | did the tighter stop get hit before the target |
+| MAE and MFE in R | how close each trade came to stopping out, and how much was left on the table |
+| expected R **after spread, slippage and commission** | a 6-pip stop and a 25-pip stop are not equally affected by costs |
+| confirmation entry vs touch entry, separately | different populations with different entry prices; mixing them makes the aggregate meaningless |
+| cap rejections and R:R rejections, before and after | what the change refuses, not only what it admits |
+
+The costs row matters most at the tight end. At a 6-pip stop a 1-pip spread is
+17% of risk; at 25 pips it is 4%. A proposal that improves raw R:R can still
+reduce net expectancy, and only the after-costs figure will show it.
+
+### Precondition
+
+Two inputs the contract depends on are still unmeasured: the **Scalper 5m ATR**
+and the **execution floor** (broker minimum stop distance, live spread). Both
+must be captured before replay, or the proposed stop cannot be computed
+faithfully and the comparison measures something other than the proposal.
