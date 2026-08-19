@@ -21,6 +21,17 @@ interface PendingLifecycleReport {
     repeatedPlans: number;
     repeatedLifecycleRows: number;
     reasonCounts: Record<string, number>;
+    confirmationEvaluations: number;
+    confirmationBothPassed: number;
+    confirmationDetectorOnly: number;
+    confirmationLifecycleOnly: number;
+    confirmationNeitherPassed: number;
+    missingLifecycleContractSamples: number;
+    finalAuthorizationObserved: number;
+    finalAuthorizationBlocked: number;
+    finalAuthorizationRiskRewardBlocked: number;
+    averageFavorableEntryDriftR: number | null;
+    riskRewardRegimes: Record<string, number>;
   };
   rows: PendingLifecycleEvidenceRow[];
 }
@@ -89,6 +100,36 @@ export function PendingLifecycleEvidenceCard({
                 value={report.summary.repeatedPlans + " · " + report.summary.repeatedLifecycleRows + " rows"}
               />
             </div>
+            <div className="border-t border-border/60 pt-3">
+              <p className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
+                Confirmation ownership · closed-candle observations
+              </p>
+              <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 xl:grid-cols-8">
+                <Metric label="Evaluations" value={report.summary.confirmationEvaluations} />
+                <Metric label="Both passed" value={report.summary.confirmationBothPassed} />
+                <Metric label="Detector only" value={report.summary.confirmationDetectorOnly} />
+                <Metric label="Lifecycle only" value={report.summary.confirmationLifecycleOnly} />
+                <Metric label="Neither passed" value={report.summary.confirmationNeitherPassed} />
+                <Metric label="Missing contract" value={report.summary.missingLifecycleContractSamples} />
+                <Metric
+                  label="Final auth blocked"
+                  value={report.summary.finalAuthorizationBlocked + "/" + report.summary.finalAuthorizationObserved}
+                />
+                <Metric label="R:R blocked" value={report.summary.finalAuthorizationRiskRewardBlocked} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <Badge variant="outline" className="text-[9px]">
+                  Avg favorable entry drift · {report.summary.averageFavorableEntryDriftR == null
+                    ? "—"
+                    : report.summary.averageFavorableEntryDriftR.toFixed(2) + "R"}
+                </Badge>
+                {Object.entries(report.summary.riskRewardRegimes).map(([regime, count]) => (
+                  <Badge key={regime} variant="outline" className="text-[9px]">
+                    {regime} · {count}
+                  </Badge>
+                ))}
+              </div>
+            </div>
             <div>
               <p className="mb-1.5 text-[10px] font-medium uppercase text-muted-foreground">Sequence reasons</p>
               <div className="flex flex-wrap gap-1.5">
@@ -121,6 +162,11 @@ export function PendingLifecycleEvidenceCard({
                       {row.repeatPlanCount > 1 ? " · same plan ×" + row.repeatPlanCount : ""}
                       {row.frozenEntryLocationAllowed == null ? " · P/D —" : " · P/D " + (row.frozenEntryLocationAllowed ? "pass" : "block")}
                       {row.linkedPosition ? " · " + (row.linkedPosition.close_reason || row.linkedPosition.position_status) : ""}
+                      {row.finalAuthorizationObserved
+                        ? " · auth " + (row.finalAuthorizationAuthorized ? "pass" : "block") +
+                          (row.authorizationRiskReward == null ? "" : " @ " + row.authorizationRiskReward.toFixed(2) + "R") +
+                          (row.favorableEntryDriftR == null ? "" : " · drift " + row.favorableEntryDriftR.toFixed(2) + "R")
+                        : ""}
                     </div>
                   </div>
                 );

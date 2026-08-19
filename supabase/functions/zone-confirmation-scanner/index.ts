@@ -33,6 +33,10 @@ import {
 } from "../_shared/smcAnalysis.ts";
 import { buildPreArmedPositionPlan } from "../_shared/pendingOrderPlan.ts";
 import {
+  recordConfirmationMatrixObservation,
+  recordFinalAuthorizationObservation,
+} from "../_shared/pendingAuthorizationObservation.ts";
+import {
   detectZoneConfirmation,
   isPriceInZone,
   isImpulseBroken,
@@ -835,6 +839,43 @@ Deno.serve(async (req) => {
         const lifecycleConfirmationPassed =
           impulseLifecycleEnforcement.effectiveMode !== "enforce" ||
           lifecycleAfterLock?.status === "entered";
+        const confirmationCandleTime =
+          candles5m[candles5m.length - 1]?.datetime || new Date().toISOString();
+        const previousConfirmationObservationUpdatedAt =
+          pending.pending_authorization_observation?.updatedAt || null;
+        const confirmationObservation = recordConfirmationMatrixObservation(
+          pending.pending_authorization_observation,
+          {
+            sampledAt: new Date().toISOString(),
+            candleTime: confirmationCandleTime,
+            timeframe: confirmationTimeframe,
+            method: confirmationMethod,
+            lifecycleMode: impulseLifecycleEnforcement.effectiveMode,
+            lifecycleAvailable: lifecycleAfterLock !== null,
+            lifecycleStatus: lifecycleAfterLock?.status || null,
+            detectorPassed: confirmationPassed,
+          },
+        );
+        pending.pending_authorization_observation = confirmationObservation;
+        try {
+          if (
+            confirmationObservation.updatedAt !==
+              previousConfirmationObservationUpdatedAt
+          ) {
+            const { error: observationError } = await supabase
+              .from("pending_orders")
+              .update({ pending_authorization_observation: confirmationObservation })
+              .eq("id", pending.id).eq("user_id", userId)
+              .eq("status", "awaiting_confirmation");
+            if (observationError) throw observationError;
+          }
+        } catch (observationError: any) {
+          console.warn(
+            "[zone-confirm] " + pending.symbol +
+              " confirmation matrix observation unavailable (non-fatal): " +
+              observationError?.message,
+          );
+        }
         const confirmationAuthority = buildRoutedConfirmationObservation({
           method: confirmationMethod,
           direction: pending.direction as "long" | "short",
@@ -1323,6 +1364,23 @@ Deno.serve(async (req) => {
             onlySellInPremium: config.onlySellInPremium,
           }),
         });
+        const pendingSpecForObservation = SPECS[pending.symbol] || SPECS["EUR/USD"];
+        const wouldBeExecutionPlan = buildPreArmedPositionPlan({
+          direction: pending.direction,
+          zone: {
+            price: actualFillPrice,
+            zoneType: pending.entry_zone_type || "impulse_zone",
+            zoneLow: Number(pending.entry_zone_low),
+            zoneHigh: Number(pending.entry_zone_high),
+          },
+          structuralInvalidation: Number(pending.structural_invalidation),
+          preferredPositionStop: Number(pending.stop_loss),
+          pipSize: pendingSpecForObservation.pipSize,
+          minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
+          atrValue: parsedPendingEvidence?.atrValue,
+          atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
+          takeProfitRatio: Number(config.tpRatio ?? 2),
+        });
         let rawAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
@@ -1499,6 +1557,49 @@ Deno.serve(async (req) => {
             evaluatedAt: nowStr,
           }),
         );
+
+        const finalAuthorizationObservation = recordFinalAuthorizationObservation(
+          pending.pending_authorization_observation,
+          {
+            evaluatedAt: nowStr,
+            direction: pending.direction as "long" | "short",
+            plannedEntryPrice: entryPrice,
+            authorizationEntryPrice: actualFillPrice,
+            storedStopLoss: Number(pending.stop_loss),
+            storedTakeProfit: Number(pending.take_profit),
+            effectiveTargetRiskReward: Number(config.tpRatio ?? 2),
+            effectiveMinimumRiskReward: Number(config.minRiskReward),
+            executionGeometry: wouldBeExecutionPlan.valid
+              ? {
+                valid: true,
+                entryPrice: wouldBeExecutionPlan.plan.entryPrice,
+                stopLoss: wouldBeExecutionPlan.plan.stopLoss,
+                takeProfit: wouldBeExecutionPlan.plan.takeProfit,
+              }
+              : { valid: false, reason: wouldBeExecutionPlan.reason },
+            authorization: {
+              authorized: authorization.authorized,
+              code: authorization.code,
+              retryable: authorization.retryable,
+              reason: authorization.reason,
+            },
+          },
+        );
+        pending.pending_authorization_observation = finalAuthorizationObservation;
+        try {
+          const { error: observationError } = await supabase
+            .from("pending_orders")
+            .update({ pending_authorization_observation: finalAuthorizationObservation })
+            .eq("id", pending.id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
+          if (observationError) throw observationError;
+        } catch (observationError: any) {
+          console.warn(
+            "[zone-confirm] " + pending.symbol +
+              " final authorization observation unavailable (non-fatal): " +
+              observationError?.message,
+          );
+        }
 
         if (!authorization.authorized) {
           const cancelPermanently = !authorization.retryable;

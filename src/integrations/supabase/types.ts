@@ -1729,6 +1729,7 @@ export type Database = {
           order_id: string
           order_type: string
           originating_zone: Json | null
+          pending_authorization_observation: Json | null
           placed_at: string
           policy_frozen_at: string | null
           post_confirmation_entry: Json | null
@@ -1814,6 +1815,7 @@ export type Database = {
           order_id: string
           order_type?: string
           originating_zone?: Json | null
+          pending_authorization_observation?: Json | null
           placed_at?: string
           policy_frozen_at?: string | null
           post_confirmation_entry?: Json | null
@@ -1899,6 +1901,7 @@ export type Database = {
           order_id?: string
           order_type?: string
           originating_zone?: Json | null
+          pending_authorization_observation?: Json | null
           placed_at?: string
           policy_frozen_at?: string | null
           post_confirmation_entry?: Json | null
