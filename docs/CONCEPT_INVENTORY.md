@@ -88,9 +88,10 @@ known ownership violation, not correct layering.
 
 `pending_authorization_observation` records the four-way agreement matrix without
 changing authorization. That evidence must choose the surviving owner before one
-check is removed. The five-minute `bot-scanner` remains discovery-only once a
-pending order reaches `awaiting_confirmation`; runtime lifecycle advancement,
-replay, and backtest still delegate through `tradeLifecycleAuthority.ts`.
+check is removed. The five-minute `bot-scanner` deep-scans pending orders only while they are
+near their frozen zone or hunting confirmation, refreshing prerequisites such as
+Direction Verdict without owning post-touch confirmation. Runtime lifecycle advancement, replay,
+and backtest still delegate through `tradeLifecycleAuthority.ts`.
 
 ## Frozen setup direction at final authorization
 

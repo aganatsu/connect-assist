@@ -81,6 +81,7 @@ import { batchGetCachedCandles, batchSetCachedCandles } from "../_shared/candleC
 import {
   classifyRotationOutcome,
   loadRotatingImpulseState,
+  measureLifecycleZoneProximity,
   saveRotatingImpulseState,
   selectRotatingImpulseUniverse,
   updateRotatingImpulseState,
@@ -2134,14 +2135,15 @@ async function runScanForUser(
         stagedInvalidated++;
         continue;
       }
-      const zoneLow = Math.min(low, high);
-      const zoneHigh = Math.max(low, high);
-      const distance = currentPrice < zoneLow
-        ? zoneLow - currentPrice
-        : currentPrice > zoneHigh ? currentPrice - zoneHigh : 0;
       const pipSize = (SPECS[setup.symbol] || SPECS["EUR/USD"]).pipSize;
-      const nearBuffer = Math.max((zoneHigh - zoneLow) * 2, pipSize * 20);
-      const nearZone = distance <= nearBuffer;
+      const proximity = measureLifecycleZoneProximity({
+        currentPrice,
+        zoneLow: low,
+        zoneHigh: high,
+        pipSize,
+      });
+      if (!proximity) continue;
+      const { distance, nearBuffer, nearZone } = proximity;
       const phase = distance === 0 ? "at_zone" : nearZone ? "approaching_zone" : "zone_discovered";
       const observedAt = new Date().toISOString();
       await supabase.from("staged_setups").update({
@@ -2640,6 +2642,7 @@ async function runScanForUser(
         // reset or fill the same lifecycle using its original entry zone.
         if (pending.status !== "pending") {
           pendingConfirmationHunting++;
+          lifecycleDeepScanSymbols.add(pending.symbol);
           continue;
         }
         const pendingPolicyResolution = resolvePendingStylePolicy(
@@ -2813,6 +2816,16 @@ async function runScanForUser(
           }
         }
 
+        const pendingProximity = measureLifecycleZoneProximity({
+          currentPrice,
+          zoneLow: Number(pending.entry_zone_low),
+          zoneHigh: Number(pending.entry_zone_high),
+          pipSize: (SPECS[pending.symbol] || SPECS["EUR/USD"]).pipSize,
+        });
+        if (pendingProximity?.nearZone) {
+          lifecycleDeepScanSymbols.add(pending.symbol);
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // ── ZONE CONFIRMATION ENTRY STATE MACHINE ──
         // States: "pending" → "awaiting_confirmation" →
@@ -2854,6 +2867,7 @@ async function runScanForUser(
             ).select("id").maybeSingle();
             if (!transitionedTouch) continue;
             pendingConfirmationHunting++;
+            lifecycleDeepScanSymbols.add(pending.symbol);
             console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice} on ${touch.touchTime}, entering confirmation hunt mode (${pendingConfirmationLabel})`);
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {

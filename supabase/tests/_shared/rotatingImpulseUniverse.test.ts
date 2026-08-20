@@ -1,5 +1,23 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { emptyRotationState, selectRotatingImpulseUniverse, updateRotatingImpulseState, classifyRotationOutcome } from "../../functions/_shared/rotatingImpulseUniverse.ts";
+import { emptyRotationState, measureLifecycleZoneProximity, selectRotatingImpulseUniverse, updateRotatingImpulseState, classifyRotationOutcome } from "../../functions/_shared/rotatingImpulseUniverse.ts";
+
+Deno.test("lifecycle proximity uses the wider of zone width and pip buffer", () => {
+  assertEquals(measureLifecycleZoneProximity({
+    currentPrice: 103, zoneLow: 100, zoneHigh: 101, pipSize: 0.1,
+  }), { distance: 2, nearBuffer: 2, nearZone: true });
+  assertEquals(measureLifecycleZoneProximity({
+    currentPrice: 103.01, zoneLow: 100, zoneHigh: 101, pipSize: 0.1,
+  })?.nearZone, false);
+});
+
+Deno.test("lifecycle proximity handles reversed bounds and rejects invalid values", () => {
+  assertEquals(measureLifecycleZoneProximity({
+    currentPrice: 100, zoneLow: 101, zoneHigh: 99, pipSize: 0.01,
+  }), { distance: 0, nearBuffer: 4, nearZone: true });
+  assertEquals(measureLifecycleZoneProximity({
+    currentPrice: Number.NaN, zoneLow: 99, zoneHigh: 101, pipSize: 0.01,
+  }), null);
+});
 
 Deno.test("rotation selects eight never-scanned pairs first", () => {
   const universe = Array.from({ length: 40 }, (_, i) => `PAIR-${i + 1}`);
@@ -45,4 +63,9 @@ Deno.test("scanner separates discovery from lifecycle monitoring", async () => {
     "if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol)",
     "const rotationResults = discoveryScanUniverse.map",
   ]) assertEquals(scanner.includes(expected), true);
+  for (const pendingWiring of [
+    "const pendingProximity = measureLifecycleZoneProximity({",
+    "if (pendingProximity?.nearZone) {",
+    "lifecycleDeepScanSymbols.add(pending.symbol);",
+  ]) assertEquals(scanner.includes(pendingWiring), true);
 });

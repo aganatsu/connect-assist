@@ -20,6 +20,42 @@ export interface RotationSelection {
   state: RotationState;
 }
 
+export interface LifecycleZoneProximity {
+  distance: number;
+  nearBuffer: number;
+  nearZone: boolean;
+}
+
+export function measureLifecycleZoneProximity(input: {
+  currentPrice: number;
+  zoneLow: number;
+  zoneHigh: number;
+  pipSize: number;
+  minimumBufferPips?: number;
+  zoneWidthMultiplier?: number;
+}): LifecycleZoneProximity | null {
+  const values = [input.currentPrice, input.zoneLow, input.zoneHigh, input.pipSize];
+  if (values.some((value) => !Number.isFinite(value)) || input.pipSize <= 0) return null;
+  const zoneLow = Math.min(input.zoneLow, input.zoneHigh);
+  const zoneHigh = Math.max(input.zoneLow, input.zoneHigh);
+  const distance = input.currentPrice < zoneLow
+    ? zoneLow - input.currentPrice
+    : input.currentPrice > zoneHigh
+    ? input.currentPrice - zoneHigh
+    : 0;
+  const minimumBufferPips = Number.isFinite(input.minimumBufferPips)
+    ? Math.max(0, Number(input.minimumBufferPips))
+    : 20;
+  const zoneWidthMultiplier = Number.isFinite(input.zoneWidthMultiplier)
+    ? Math.max(0, Number(input.zoneWidthMultiplier))
+    : 2;
+  const nearBuffer = Math.max(
+    (zoneHigh - zoneLow) * zoneWidthMultiplier,
+    input.pipSize * minimumBufferPips,
+  );
+  return { distance, nearBuffer, nearZone: distance <= nearBuffer };
+}
+
 export function emptyRotationState(now = new Date().toISOString()): RotationState {
   return { version: "impulse-rotation.v1", updatedAt: now, pairs: {} };
 }
