@@ -27,11 +27,17 @@ import {
 } from "../_shared/candleSource.ts";
 import {
   ATR_SL_FLOOR_MULTIPLIER,
+  calculateATR,
+  evaluateStyleAwareStopPolicy,
   MIN_SL_PIPS,
   SPECS,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
 import { buildPreArmedPositionPlan } from "../_shared/pendingOrderPlan.ts";
+import {
+  calculateBrokerExecutionFloor,
+  resolveZoneStopPolicyMode,
+} from "../_shared/stopPolicyMode.ts";
 import {
   recordConfirmationMatrixObservation,
   recordFinalAuthorizationObservation,
@@ -192,17 +198,31 @@ async function fetchCandles(
 
 // ─── Spread Check (for broker mirroring) ────────────────────────────────────
 
+interface BrokerMarketConstraints {
+  bid: number;
+  ask: number;
+  spreadPips: number;
+  passed: boolean;
+  effectiveMax: number;
+  digits: number;
+  stopsLevel: number;
+  tickSize: number;
+}
+
 async function fetchBrokerSpread(
   conn: any,
   pair: string,
   config: { spreadFilterEnabled: boolean; maxSpreadPips: number },
   metaAccountId?: string,
   authToken?: string,
-): Promise<{ bid: number; ask: number; spreadPips: number; passed: boolean; effectiveMax: number } | null> {
+): Promise<BrokerMarketConstraints | null> {
   const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
   const effectiveMax = config.maxSpreadPips > 0 ? config.maxSpreadPips : pairSpec.maxSpread;
   try {
     let bid = 0, ask = 0;
+    let digits = 0;
+    let stopsLevel = 0;
+    let tickSize = 0;
     if (conn.broker_type === "oanda") {
       const oandaBase = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
       const oandaSym = resolveSymbol(pair, conn).replace(/([A-Z]{3})([A-Z]{3})/, "$1_$2");
@@ -216,6 +236,16 @@ async function fetchBrokerSpread(
       if (!pricing) return null;
       bid = parseFloat(pricing.bids?.[0]?.price ?? "0");
       ask = parseFloat(pricing.asks?.[0]?.price ?? "0");
+      const specRes = await fetch(
+        `${oandaBase}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaSym)}`,
+        { headers: { Authorization: `Bearer ${conn.api_key}` } },
+      );
+      if (!specRes.ok) return null;
+      const specData: any = await specRes.json();
+      const instrument = specData.instruments?.[0];
+      if (!instrument) return null;
+      digits = Number(instrument.displayPrecision);
+      tickSize = Math.pow(10, -digits);
     } else if (conn.broker_type === "metaapi" && metaAccountId && authToken) {
       const brokerSymbol = resolveSymbol(pair, conn);
       const { res: priceRes, body: priceBody } = await metaFetch(
@@ -226,13 +256,31 @@ async function fetchBrokerSpread(
       const priceData: any = JSON.parse(priceBody);
       bid = priceData.bid ?? 0;
       ask = priceData.ask ?? 0;
+      const { res: specRes, body: specBody } = await metaFetch(
+        metaAccountId, authToken,
+        (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/specification`,
+      );
+      if (!specRes.ok) return null;
+      const specData: any = JSON.parse(specBody);
+      digits = Number(specData.digits);
+      stopsLevel = Number(specData.stopsLevel || 0);
+      tickSize = Number(specData.tickSize || specData.point || Math.pow(10, -digits));
     } else {
       return null;
     }
-    if (bid <= 0 || ask <= 0) return null;
+    if (bid <= 0 || ask <= 0 || digits < 0 || !Number.isInteger(digits) || tickSize <= 0) return null;
     const spreadPips = (ask - bid) / pairSpec.pipSize;
     const passed = !config.spreadFilterEnabled || spreadPips <= effectiveMax;
-    return { bid, ask, spreadPips, passed, effectiveMax };
+    return {
+      bid,
+      ask,
+      spreadPips,
+      passed,
+      effectiveMax,
+      digits,
+      stopsLevel,
+      tickSize,
+    };
   } catch {
     return null;
   }
@@ -1269,8 +1317,20 @@ Deno.serve(async (req) => {
           maxSpreadPips: config.maxSpreadPips,
         };
         const liveMode = account.execution_mode === "live";
+        const requestedStopPolicyResolution = resolveZoneStopPolicyMode(
+          parsedPendingEvidence.zoneSetupStopPolicyMode ?? "observe",
+          liveMode ? "live" : "paper",
+        );
+        const pendingStopPolicyResolution =
+          parsedPendingEvidence.zoneSetupStopPolicyAppliedAtArm === true
+            ? requestedStopPolicyResolution
+            : {
+              ...requestedStopPolicyResolution,
+              enforced: false,
+              reason: "Stop policy was not active when this order was armed",
+            };
         const spreadResults: Array<{ conn: any; result: Awaited<ReturnType<typeof fetchBrokerSpread>> }> = [];
-        if (liveMode && config.spreadFilterEnabled) {
+        if (liveMode && (config.spreadFilterEnabled || pendingStopPolicyResolution.enforced)) {
           for (const conn of brokerConnections) {
             let metaAccountId: string | undefined;
             let authToken: string | undefined;
@@ -1365,6 +1425,93 @@ Deno.serve(async (req) => {
           }),
         });
         const pendingSpecForObservation = SPECS[pending.symbol] || SPECS["EUR/USD"];
+        let selectedExecutionStop = Number(pending.stop_loss);
+        let executionStructuralInvalidation = Number(pending.structural_invalidation);
+        let stopPolicyEvaluation: ReturnType<typeof evaluateStyleAwareStopPolicy> | null = null;
+        if (pendingStopPolicyResolution.enforced) {
+          const protectedLevel = Number(
+            lifecycleAfterLock?.confirmation?.protectedLevel,
+          );
+          const structuralBufferQuoteDistance = Number(
+            parsedPendingEvidence.zoneSetupStopPolicyBufferQuoteDistance,
+          );
+          if (
+            !Number.isFinite(protectedLevel) ||
+            !Number.isFinite(structuralBufferQuoteDistance) ||
+            structuralBufferQuoteDistance < 0
+          ) {
+            const reason =
+              "Style-aware stop policy rejected fill: protected_pivot_or_buffer_unavailable";
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: reason,
+              resolved_at: nowStr,
+            }).eq("id", pending.id).eq("user_id", userId);
+            cancelled++;
+            console.warn(`[zone-confirm] ${pending.symbol} ${reason}`);
+            continue;
+          }
+          executionStructuralInvalidation = pending.direction === "long"
+            ? protectedLevel - structuralBufferQuoteDistance
+            : protectedLevel + structuralBufferQuoteDistance;
+          const confirmationAtr = calculateATR(
+            candles5m,
+            Number(config.slATRPeriod || 14),
+          );
+          let executionFloorQuoteDistance =
+            Number(pendingSpecForObservation.typicalSpread || 0) *
+            pendingSpecForObservation.pipSize * 1.5;
+          let executionFloorSource: "spread_proxy" | "broker_snapshot" = "spread_proxy";
+
+          if (liveMode) {
+            const exactConstraints = spreadResults.filter((item) => item.result !== null);
+            if (
+              brokerConnections.length === 0 ||
+              exactConstraints.length !== brokerConnections.length
+            ) {
+              console.warn(
+                `[zone-confirm] ${pending.symbol} live stop policy waiting: exact broker constraints unavailable`,
+              );
+              stillHunting++;
+              continue;
+            }
+            const brokerFloor = calculateBrokerExecutionFloor(
+              exactConstraints.map((item) => item.result!),
+            );
+            if (brokerFloor === null) {
+              console.warn(`[zone-confirm] ${pending.symbol} live broker floor invalid`);
+              stillHunting++;
+              continue;
+            }
+            executionFloorQuoteDistance = brokerFloor;
+            executionFloorSource = "broker_snapshot";
+          }
+
+          stopPolicyEvaluation = evaluateStyleAwareStopPolicy({
+            observationOnly: false,
+            direction: pending.direction as "long" | "short",
+            entryPrice: actualFillPrice,
+            structuralInvalidation: executionStructuralInvalidation,
+            confirmationAtr,
+            atrMultiplier: 1.5,
+            executionFloorQuoteDistance,
+            executionFloorSource,
+            riskCapAtrMultiplier:
+              pendingPolicyResolution.policy.style === "swing_trader" ? 6 : 4,
+          });
+          if (!stopPolicyEvaluation.valid || stopPolicyEvaluation.stopLoss === null) {
+            const reason = `Style-aware stop policy rejected fill: ${stopPolicyEvaluation.reason || "stop_unavailable"}`;
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: reason,
+              resolved_at: nowStr,
+            }).eq("id", pending.id).eq("user_id", userId);
+            cancelled++;
+            console.warn(`[zone-confirm] ${pending.symbol} ${reason}`);
+            continue;
+          }
+          selectedExecutionStop = stopPolicyEvaluation.stopLoss;
+        }
         const wouldBeExecutionPlan = buildPreArmedPositionPlan({
           direction: pending.direction,
           zone: {
@@ -1373,21 +1520,30 @@ Deno.serve(async (req) => {
             zoneLow: Number(pending.entry_zone_low),
             zoneHigh: Number(pending.entry_zone_high),
           },
-          structuralInvalidation: Number(pending.structural_invalidation),
-          preferredPositionStop: Number(pending.stop_loss),
+          structuralInvalidation: executionStructuralInvalidation,
+          preferredPositionStop: selectedExecutionStop,
+          finalPositionStop: pendingStopPolicyResolution.enforced ? selectedExecutionStop : undefined,
           pipSize: pendingSpecForObservation.pipSize,
-          minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
-          atrValue: parsedPendingEvidence?.atrValue,
+          minimumStopPips: pendingStopPolicyResolution.enforced ? 0 : MIN_SL_PIPS[pending.symbol] ?? 15,
+          atrValue: pendingStopPolicyResolution.enforced ? null : parsedPendingEvidence?.atrValue,
           atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
           frozenTakeProfit: Number(pending.take_profit),
         });
+        if (parsedPendingEvidence.preArmed === true && !wouldBeExecutionPlan.valid) {
+          console.warn(
+            `[zone-confirm] Final risk geometry failed ${pending.symbol}: ${wouldBeExecutionPlan.reason}`,
+          );
+          continue;
+        }
+        const authorizationStop = wouldBeExecutionPlan.valid
+          ? wouldBeExecutionPlan.plan.stopLoss : Number(pending.stop_loss);
         let rawAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
             symbol: pending.symbol,
             direction: pending.direction as "long" | "short",
             entryPrice: actualFillPrice,
-            stopLoss: Number(pending.stop_loss),
+            stopLoss: authorizationStop,
             takeProfit: Number(pending.take_profit),
           },
           openPositions,
@@ -1641,6 +1797,14 @@ Deno.serve(async (req) => {
             confirmationAttempts: pending.confirmation_attempts || 0,
             method: confirmationMethod,
           },
+          zoneSetupStopPolicyEnforcement: {
+            ...pendingStopPolicyResolution,
+            protectedLevel: lifecycleAfterLock?.confirmation?.protectedLevel ?? null,
+            structuralBufferQuoteDistance:
+              parsedPendingEvidence.zoneSetupStopPolicyBufferQuoteDistance ?? null,
+            evaluation: stopPolicyEvaluation,
+            finalStopLoss: authorizationStop,
+          },
           postChochEntry:
             retracementReadyPlan || observedPostChochPlan || null,
           limitOrderOrigin: {
@@ -1675,23 +1839,7 @@ Deno.serve(async (req) => {
         const fillReason = `[fast-confirm] ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
           + ` (method: ${confirmationMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
           + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
-        const pendingSpec = SPECS[pending.symbol] || SPECS["EUR/USD"];
-        const finalRiskPlan = buildPreArmedPositionPlan({
-          direction: pending.direction,
-          zone: {
-            price: actualFillPrice,
-            zoneType: pending.entry_zone_type || "impulse_zone",
-            zoneLow: Number(pending.entry_zone_low),
-            zoneHigh: Number(pending.entry_zone_high),
-          },
-          structuralInvalidation: Number(pending.structural_invalidation),
-          preferredPositionStop: Number(pending.stop_loss),
-          pipSize: pendingSpec.pipSize,
-          minimumStopPips: MIN_SL_PIPS[pending.symbol] ?? 15,
-          atrValue: parsedPendingEvidence?.atrValue,
-          atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-          frozenTakeProfit: Number(pending.take_profit),
-        });
+        const finalRiskPlan = wouldBeExecutionPlan;
         if (parsedPendingEvidence.preArmed === true && !finalRiskPlan.valid) {
           console.warn(`[zone-confirm] Final risk geometry failed ${pending.symbol}: ${finalRiskPlan.reason}`);
           continue;

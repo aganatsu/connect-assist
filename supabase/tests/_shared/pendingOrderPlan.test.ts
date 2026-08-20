@@ -100,3 +100,19 @@ Deno.test("pre-armed plan reports when confirmation arrives beyond the frozen ta
   assertEquals(result.valid, false);
   if (!result.valid) assert(result.reason.startsWith("frozen_target_already_reached:"));
 });
+
+Deno.test("pre-armed plan does not widen a final buffered stop", () => {
+  const result = buildPreArmedPositionPlan({
+    direction: "long",
+    zone,
+    structuralInvalidation: 1.1979,
+    preferredPositionStop: 1.1979,
+    finalPositionStop: 1.1979,
+    pipSize: 0.0001,
+    minimumStopPips: 25,
+    atrValue: 0.002,
+    frozenTakeProfit: 1.205,
+  });
+  assert(result.valid);
+  assertEquals(result.plan.stopLoss, 1.1979);
+});

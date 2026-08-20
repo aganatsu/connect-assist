@@ -9,6 +9,7 @@ import {
   loadEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
+import { resolveZoneStopPolicyMode } from "../_shared/stopPolicyMode.ts";
 import {
   observePreArmReachability,
   shouldCreatePendingZoneOrder,
@@ -90,6 +91,7 @@ import {
   // Types
   type Candle, type SwingPoint, type OrderBlock,
   type LiquidityPool, type BreakerBlock, type UnicornSetup,
+  type StopPolicyShadowInput,
   type SMTResult, type AMDResult, type SilverBulletResult, type MacroWindowResult,
   type ReasoningFactor, type GateResult,
   // Constants
@@ -452,6 +454,7 @@ function buildConfiguredPreArmedPlan(input: {
   atrValue?: number | null;
   config: any;
   analysis: any;
+  stopPolicy?: StopPolicyShadowInput;
 }) {
   const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
   const stop = resolvePreArmedPositionStop({
@@ -484,6 +487,7 @@ function buildConfiguredPreArmedPlan(input: {
     fibExtensions: input.analysis.fibLevels?.extensions,
     dolTargets,
     resolvedStopLoss: stop.stopLoss,
+    stopPolicyShadow: input.stopPolicy,
   });
   if (!Number.isFinite(Number(target.takeProfit))) {
     return {
@@ -492,15 +496,28 @@ function buildConfiguredPreArmedPlan(input: {
         (target.takeProfitFallbackReason || "configured TP method returned no target"),
     };
   }
+  if (
+    input.stopPolicy &&
+    (!target.stopPolicyShadow?.valid || !Number.isFinite(Number(target.stopLoss)))
+  ) {
+    return {
+      valid: false as const,
+      reason: `Style-aware stop policy unavailable: ${target.stopPolicyShadow?.reason || "stop_unavailable"}`,
+    };
+  }
+
+  const selectedStop = input.stopPolicy ? Number(target.stopLoss) : stop.stopLoss;
+
 
   const plan = buildPreArmedPositionPlan({
     direction: input.direction,
     zone: input.zone,
     structuralInvalidation: input.structuralInvalidation,
-    preferredPositionStop: stop.stopLoss,
+    preferredPositionStop: selectedStop,
+    finalPositionStop: input.stopPolicy ? selectedStop : undefined,
     pipSize: spec.pipSize,
-    minimumStopPips: MIN_SL_PIPS[input.symbol] ?? 15,
-    atrValue: input.atrValue,
+    minimumStopPips: input.stopPolicy ? 0 : MIN_SL_PIPS[input.symbol] ?? 15,
+    atrValue: input.stopPolicy ? null : input.atrValue,
     atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
     frozenTakeProfit: Number(target.takeProfit),
   });
@@ -509,6 +526,7 @@ function buildConfiguredPreArmedPlan(input: {
       ...plan,
       takeProfitSource: target.takeProfitSource,
       takeProfitFallbackReason: target.takeProfitFallbackReason,
+      stopPolicy: target.stopPolicyShadow,
     }
     : plan;
 }
@@ -5578,6 +5596,30 @@ async function runScanForUser(
       },
     });
 
+    const zoneStopPolicyResolution = resolveZoneStopPolicyMode(
+      (pairConfig as any).zoneSetupStopPolicyMode,
+      account.execution_mode === "live" ? "live" : "paper",
+    );
+    const zoneStopPolicySpec = SPECS[pair] || SPECS["EUR/USD"];
+    const zoneStopPolicyConfirmationAtr = calculateATR(
+      roleCandles.confirmation,
+      pairConfig.slATRPeriod || 14,
+    );
+    const enforcedZoneStopPolicyFor = (
+      structuralInvalidation: number,
+    ): StopPolicyShadowInput | undefined => zoneStopPolicyResolution.enforced
+      ? {
+        observationOnly: false,
+        structuralInvalidation,
+        confirmationAtr: zoneStopPolicyConfirmationAtr,
+        atrMultiplier: 1.5,
+        executionFloorQuoteDistance:
+          Number(zoneStopPolicySpec.typicalSpread || 0) * zoneStopPolicySpec.pipSize * 1.5,
+        executionFloorSource: "spread_proxy",
+        riskCapAtrMultiplier: resolvedStyle === "swing_trader" ? 6 : 4,
+      }
+      : undefined;
+
     // Observation only: capture the first evaluation of each deterministic
     // zone candidate before any watch/reject branch can remove it.
     if (analysis.direction && izData?.bestZone) {
@@ -6268,6 +6310,7 @@ async function runScanForUser(
             atrValue: (analysis as any).atrValue,
             config: pairConfig,
             analysis,
+            stopPolicy: enforcedZoneStopPolicyFor(structuralStop),
           });
           if (plan.valid) {
             const currentCanonicalLocation = (detail as any).canonicalDealingRangeObservation?.canonical || null;
@@ -6340,6 +6383,11 @@ async function runScanForUser(
                 preArmReachability,
                 takeProfitSource: plan.takeProfitSource,
                 takeProfitFallbackReason: plan.takeProfitFallbackReason,
+                zoneSetupStopPolicyMode: zoneStopPolicyResolution.requestedMode,
+                zoneSetupStopPolicyAppliedAtArm: zoneStopPolicyResolution.enforced,
+                zoneSetupStopPolicyBufferQuoteDistance:
+                  adjustedSlBuffer * zoneStopPolicySpec.pipSize,
+                zoneSetupStopPolicy: plan.stopPolicy || null,
               },
               signal_score: analysis.score,
               from_watchlist: true,
@@ -10295,6 +10343,7 @@ async function runScanForUser(
             atrValue: (analysis as any).atrValue,
             config: pairConfig,
             analysis,
+            stopPolicy: enforcedZoneStopPolicyFor(frozenStop),
           });
           if (waitPlan.valid) {
             const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
@@ -10324,6 +10373,11 @@ async function runScanForUser(
                 preArmReachability,
                 takeProfitSource: waitPlan.takeProfitSource,
                 takeProfitFallbackReason: waitPlan.takeProfitFallbackReason,
+                zoneSetupStopPolicyMode: zoneStopPolicyResolution.requestedMode,
+                zoneSetupStopPolicyAppliedAtArm: zoneStopPolicyResolution.enforced,
+                zoneSetupStopPolicyBufferQuoteDistance:
+                  adjustedSlBuffer * zoneStopPolicySpec.pipSize,
+                zoneSetupStopPolicy: waitPlan.stopPolicy || null,
               },
               signal_score: analysis.score, from_watchlist: true, staged_setup_id: preparedZoneWatch.id,
               candidate_id: preparedZoneWatch.candidate_id, structural_invalidation: frozenStop,

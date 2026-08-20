@@ -157,6 +157,18 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         }
       })()
       : (order.signal_reason || {});
+    const zoneStopPolicyAppliedAtArm =
+      signalReason.zoneSetupStopPolicyAppliedAtArm === true;
+    const zoneStopPolicyMode = zoneStopPolicyAppliedAtArm
+      ? signalReason.zoneSetupStopPolicyMode
+      : "observe";
+    const zoneStopPolicyLabel = zoneStopPolicyMode === "enforce_live"
+      ? "PAPER + LIVE"
+      : zoneStopPolicyMode === "enforce_paper"
+      ? "PAPER"
+      : "OBSERVE";
+    const zoneStopPolicyPlan = signalReason.zoneSetupStopPolicy || null;
+
     const decision = order.decision_context ||
       signalReason.decisionContext ||
       order.final_authorization?.decisionContext ||
@@ -318,6 +330,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             : generatePendingOrderNarrative(order)
           }
         </p>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2 text-[11px]">
+          <span className="text-foreground/70">
+            Zone stop policy / <span className="font-medium text-foreground">{zoneStopPolicyLabel}</span>
+          </span>
+          <span className={zoneStopPolicyAppliedAtArm ? "text-profit" : "text-foreground/50"}>
+            {zoneStopPolicyAppliedAtArm
+              ? `ENFORCED / ${zoneStopPolicyPlan?.executionFloorSource === "broker_snapshot" ? "broker constraints" : "arm-time spread proxy"}`
+              : "OBSERVE ONLY"}
+          </span>
+        </div>
 
         {authorizationWait && (
           <div className="border border-highlight/30 bg-highlight/5 px-2 py-1.5 text-[11px] text-highlight">

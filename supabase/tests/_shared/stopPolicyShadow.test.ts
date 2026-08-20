@@ -2,7 +2,10 @@ import {
   assertAlmostEquals,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { calculateSLTP } from "../../functions/_shared/smcAnalysis.ts";
+import {
+  calculateSLTP,
+  evaluateStyleAwareStopPolicy,
+} from "../../functions/_shared/smcAnalysis.ts";
 
 const baseInput = {
   direction: "long" as const,
@@ -70,4 +73,23 @@ Deno.test("stop-policy shadow records a cap breach without authorizing it", () =
   );
   assertEquals(observed.stopPolicyShadow?.riskCapBreached, true);
   assertAlmostEquals(observed.stopLoss!, 90);
+});
+
+Deno.test("enforced stop policy returns the execution stop from the same owner", () => {
+  const result = evaluateStyleAwareStopPolicy({
+    observationOnly: false,
+    direction: "long",
+    entryPrice: 100,
+    structuralInvalidation: 99.9,
+    confirmationAtr: 0.1,
+    atrMultiplier: 1.5,
+    executionFloorQuoteDistance: 0.05,
+    executionFloorSource: "broker_snapshot",
+    riskCapAtrMultiplier: 4,
+  });
+
+  assertEquals(result.observationOnly, false);
+  assertEquals(result.valid, true);
+  assertAlmostEquals(result.stopLoss!, 99.85);
+  assertEquals(result.executionFloorSource, "broker_snapshot");
 });

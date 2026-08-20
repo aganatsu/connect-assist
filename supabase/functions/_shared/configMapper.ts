@@ -90,6 +90,7 @@ export const RUNTIME_DEFAULTS = {
   onlySellInPremium: false,
   dealingRangeMode: "avoid_wrong_side",
   impulseEntryLifecycleMode: "observe",
+  zoneSetupStopPolicyMode: "observe" as "observe" | "enforce_paper" | "enforce_live",
   singleOwnershipMode: "observe",
   directionUnavailableMode: "observe_fail_closed",
   canonicalScannerMode: "observe",
@@ -521,6 +522,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       RUNTIME_DEFAULTS.dealingRangeMode,
     impulseEntryLifecycleMode: strategy.impulseEntryLifecycleMode ??
       raw.impulseEntryLifecycleMode ?? RUNTIME_DEFAULTS.impulseEntryLifecycleMode,
+    zoneSetupStopPolicyMode: exit.zoneSetupStopPolicyMode ??
+      raw.zoneSetupStopPolicyMode ?? RUNTIME_DEFAULTS.zoneSetupStopPolicyMode,
     directionUnavailableMode: strategy.directionUnavailableMode ??
       raw.directionUnavailableMode ?? RUNTIME_DEFAULTS.directionUnavailableMode,
     canonicalScannerMode: strategy.canonicalScannerMode ??

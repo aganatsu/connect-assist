@@ -30,6 +30,8 @@ export interface PreArmedStopInput {
 }
 
 export interface PreArmedPositionPlanInput extends PreArmedStopInput {
+  /** Fully resolved and buffered stop. Validate it but never widen it. */
+  finalPositionStop?: number | null;
   /** Target frozen by the configured TP owner at discovery. */
   frozenTakeProfit?: number | null;
   /** Retained for rr_ratio callers and explicit ratio fallback only. */
@@ -81,7 +83,25 @@ export function resolvePreArmedPositionStop(
 export function buildPreArmedPositionPlan(
   input: PreArmedPositionPlanInput,
 ): PendingOrderPlanResult {
-  const stop = resolvePreArmedPositionStop(input);
+  const finalPositionStop = Number(input.finalPositionStop);
+  const hasFinalPositionStop = input.finalPositionStop !== null &&
+    input.finalPositionStop !== undefined;
+  const finalStopIsValid = hasFinalPositionStop &&
+    Number.isFinite(finalPositionStop) &&
+    (input.direction === "long"
+      ? finalPositionStop < input.zone.price &&
+        finalPositionStop <= input.structuralInvalidation
+      : finalPositionStop > input.zone.price &&
+        finalPositionStop >= input.structuralInvalidation);
+  if (hasFinalPositionStop && !finalStopIsValid) {
+    return {
+      valid: false,
+      reason: "Final position stop is unavailable, misoriented, or inside structural invalidation",
+    };
+  }
+  const stop: PreArmedStopResult = hasFinalPositionStop
+    ? { valid: true, stopLoss: finalPositionStop }
+    : resolvePreArmedPositionStop(input);
   if (!stop.valid) return stop;
 
   const frozenTakeProfit = Number(input.frozenTakeProfit);

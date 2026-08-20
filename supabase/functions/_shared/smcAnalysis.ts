@@ -229,11 +229,12 @@ export interface SLTPInput {
   dolTargets?: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; description: string }>;
   /** Position stop already repaired for execution floors. TP must be selected against this stop. */
   resolvedStopLoss?: number | null;
-  /** Observation-only proposed stop policy. Never pass this result to a live plan. */
+  /** Shared style-aware stop policy input. Callers decide observe versus enforce. */
   stopPolicyShadow?: StopPolicyShadowInput;
 }
 
 export interface StopPolicyShadowInput {
+  observationOnly?: boolean;
   structuralInvalidation: number;
   confirmationAtr: number;
   atrMultiplier: number;
@@ -244,7 +245,7 @@ export interface StopPolicyShadowInput {
 
 export interface StopPolicyShadowResult {
   contractVersion: "stop-policy-shadow.v1";
-  observationOnly: true;
+  observationOnly: boolean;
   valid: boolean;
   reason: string | null;
   structuralDistance: number | null;
@@ -254,6 +255,10 @@ export interface StopPolicyShadowResult {
   riskCapDistance: number | null;
   riskCapBreached: boolean | null;
   executionFloorSource: "spread_proxy" | "broker_snapshot";
+}
+
+export interface StopPolicyEvaluationResult extends StopPolicyShadowResult {
+  stopLoss: number | null;
 }
 
 export interface SLTPResult {
@@ -2146,6 +2151,78 @@ export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number
   return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
+export function evaluateStyleAwareStopPolicy(
+  input: StopPolicyShadowInput & {
+    direction: "long" | "short";
+    entryPrice: number;
+  },
+): StopPolicyEvaluationResult {
+  const entryPrice = Number(input.entryPrice);
+  const structural = Number(input.structuralInvalidation);
+  const confirmationAtr = Number(input.confirmationAtr);
+  const atrMultiplier = Number(input.atrMultiplier);
+  const executionFloorDistance = Number(input.executionFloorQuoteDistance);
+  const riskCapAtrMultiplier = Number(input.riskCapAtrMultiplier);
+  const observationOnly = input.observationOnly !== false;
+  const oriented = Number.isFinite(structural) && Number.isFinite(entryPrice) &&
+    (input.direction === "long" ? structural < entryPrice : structural > entryPrice);
+  const inputsValid = oriented && confirmationAtr > 0 &&
+    Number.isFinite(atrMultiplier) && atrMultiplier > 0 &&
+    Number.isFinite(executionFloorDistance) && executionFloorDistance > 0 &&
+    Number.isFinite(riskCapAtrMultiplier) && riskCapAtrMultiplier > 0;
+
+  if (!inputsValid) {
+    return {
+      contractVersion: "stop-policy-shadow.v1",
+      observationOnly,
+      valid: false,
+      reason: !oriented
+        ? "structural_invalidation_unavailable_or_misoriented"
+        : !(confirmationAtr > 0)
+        ? "confirmation_atr_unavailable"
+        : "execution_policy_input_unavailable",
+      structuralDistance: oriented ? Math.abs(entryPrice - structural) : null,
+      noiseFloorDistance: confirmationAtr > 0 && atrMultiplier > 0
+        ? confirmationAtr * atrMultiplier
+        : null,
+      executionFloorDistance: executionFloorDistance > 0 ? executionFloorDistance : null,
+      finalStopDistance: null,
+      riskCapDistance: confirmationAtr > 0 && riskCapAtrMultiplier > 0
+        ? confirmationAtr * riskCapAtrMultiplier
+        : null,
+      riskCapBreached: null,
+      executionFloorSource: input.executionFloorSource,
+      stopLoss: null,
+    };
+  }
+
+  const structuralDistance = Math.abs(entryPrice - structural);
+  const noiseFloorDistance = confirmationAtr * atrMultiplier;
+  const finalStopDistance = Math.max(
+    structuralDistance,
+    noiseFloorDistance,
+    executionFloorDistance,
+  );
+  const riskCapDistance = confirmationAtr * riskCapAtrMultiplier;
+  const riskCapBreached = finalStopDistance > riskCapDistance;
+  return {
+    contractVersion: "stop-policy-shadow.v1",
+    observationOnly,
+    valid: !riskCapBreached,
+    reason: riskCapBreached ? "style_risk_cap_exceeded" : null,
+    structuralDistance,
+    noiseFloorDistance,
+    executionFloorDistance,
+    finalStopDistance,
+    riskCapDistance,
+    riskCapBreached,
+    executionFloorSource: input.executionFloorSource,
+    stopLoss: input.direction === "long"
+      ? entryPrice - finalStopDistance
+      : entryPrice + finalStopDistance,
+  };
+}
+
 // ─── SL/TP Calculation ──────────────────────────────────────────────
 export function calculateSLTP(input: SLTPInput): SLTPResult {
   const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
@@ -2220,68 +2297,14 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
   }
 
   if (input.stopPolicyShadow) {
-    const shadow = input.stopPolicyShadow;
-    const structural = Number(shadow.structuralInvalidation);
-    const confirmationAtr = Number(shadow.confirmationAtr);
-    const atrMultiplier = Number(shadow.atrMultiplier);
-    const executionFloorDistance = Number(shadow.executionFloorQuoteDistance);
-    const riskCapAtrMultiplier = Number(shadow.riskCapAtrMultiplier);
-    const oriented = Number.isFinite(structural) && (direction === "long"
-      ? structural < lastPrice
-      : structural > lastPrice);
-    const inputsValid = oriented && confirmationAtr > 0 &&
-      Number.isFinite(atrMultiplier) && atrMultiplier > 0 &&
-      Number.isFinite(executionFloorDistance) && executionFloorDistance > 0 &&
-      Number.isFinite(riskCapAtrMultiplier) && riskCapAtrMultiplier > 0;
-
-    if (!inputsValid) {
-      stopPolicyShadow = {
-        contractVersion: "stop-policy-shadow.v1",
-        observationOnly: true,
-        valid: false,
-        reason: !oriented
-          ? "structural_invalidation_unavailable_or_misoriented"
-          : !(confirmationAtr > 0)
-          ? "confirmation_atr_unavailable"
-          : "execution_policy_input_unavailable",
-        structuralDistance: oriented ? Math.abs(lastPrice - structural) : null,
-        noiseFloorDistance: confirmationAtr > 0 && atrMultiplier > 0
-          ? confirmationAtr * atrMultiplier
-          : null,
-        executionFloorDistance: executionFloorDistance > 0 ? executionFloorDistance : null,
-        finalStopDistance: null,
-        riskCapDistance: confirmationAtr > 0 && riskCapAtrMultiplier > 0
-          ? confirmationAtr * riskCapAtrMultiplier
-          : null,
-        riskCapBreached: null,
-        executionFloorSource: shadow.executionFloorSource,
-      };
-    } else {
-      const structuralDistance = Math.abs(lastPrice - structural);
-      const noiseFloorDistance = confirmationAtr * atrMultiplier;
-      const finalStopDistance = Math.max(
-        structuralDistance,
-        noiseFloorDistance,
-        executionFloorDistance,
-      );
-      const riskCapDistance = confirmationAtr * riskCapAtrMultiplier;
-      const riskCapBreached = finalStopDistance > riskCapDistance;
-      sl = direction === "long"
-        ? lastPrice - finalStopDistance
-        : lastPrice + finalStopDistance;
-      stopPolicyShadow = {
-        contractVersion: "stop-policy-shadow.v1",
-        observationOnly: true,
-        valid: !riskCapBreached,
-        reason: riskCapBreached ? "style_risk_cap_exceeded" : null,
-        structuralDistance,
-        noiseFloorDistance,
-        executionFloorDistance,
-        finalStopDistance,
-        riskCapDistance,
-        riskCapBreached,
-        executionFloorSource: shadow.executionFloorSource,
-      };
+    const evaluation = evaluateStyleAwareStopPolicy({
+      ...input.stopPolicyShadow,
+      direction,
+      entryPrice: lastPrice,
+    });
+    stopPolicyShadow = evaluation;
+    if (evaluation.stopLoss !== null) {
+      sl = evaluation.stopLoss;
     }
   }
 
