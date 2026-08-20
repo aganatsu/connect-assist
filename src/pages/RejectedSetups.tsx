@@ -30,11 +30,16 @@ import { TradeDetailCard } from "@/components/TradeDetailCard";
 import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResearchCard";
 import { StructureAuthorityEvidenceCard } from "@/components/StructureAuthorityEvidenceCard";
 import { PendingLifecycleEvidenceCard } from "@/components/PendingLifecycleEvidenceCard";
+import { StopPolicyEvidenceCard } from "@/components/StopPolicyEvidenceCard";
 import {
   buildPendingLifecycleEvidence,
   type PendingLifecycleOutcome,
   type PendingLifecycleRow,
 } from "@/lib/pendingLifecycleEvidence";
+import {
+  buildStopPolicyEvidenceReport,
+  type StopPolicyObservation,
+} from "@/lib/stopPolicyEvidence";
 import {
   buildRejectedOutcomeDistribution,
   collapseRejectedOpportunities,
@@ -443,6 +448,20 @@ async function fetchPendingLifecycleEvidence(userId: string, days: number) {
     outcomes,
   );
 }
+async function fetchStopPolicyEvidence(userId: string, days: number) {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const { data, error } = await (supabase as any)
+    .from("stop_policy_observations")
+    .select("id,candidate_id,observed_at,symbol,direction,trading_style,confirmation_timeframe,entry_price,current_plan_valid,current_stop_loss,current_take_profit,current_risk_reward,current_take_profit_source,current_plan_reason,shadow_plan_valid,shadow_stop_loss,shadow_take_profit,shadow_risk_reward,shadow_take_profit_source,shadow_plan_reason,execution_floor_source,broker_stops_level,broker_digits,tick_size,shadow_measurements")
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .gte("observed_at", since)
+    .order("observed_at", { ascending: false })
+    .limit(500);
+  if (error) throw new Error(error.message);
+  return buildStopPolicyEvidenceReport((data || []) as StopPolicyObservation[]);
+}
+
 async function fetchImpulseLifecycleReplaySummary(
   userId: string,
 ): Promise<ImpulseLifecycleReplaySummary | null> {
@@ -678,6 +697,16 @@ export default function RejectedSetups() {
     retry: false,
   });
   const {
+    data: stopPolicyEvidence,
+    isLoading: isLoadingStopPolicyEvidence,
+  } = useQuery({
+    queryKey: ["stop-policy-evidence", user?.id, days],
+    queryFn: () => fetchStopPolicyEvidence(user!.id, days),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const {
     data: impulseLifecycleReplaySummary,
     refetch: refetchImpulseLifecycleReplaySummary,
   } = useQuery({
@@ -834,8 +863,9 @@ export default function RejectedSetups() {
       ...closedTradeEvidence.map((trade) => trade.symbol),
       ...zoneLocalValidation.map((row) => row.symbol),
       ...(pendingLifecycleEvidence?.rows || []).map((row) => row.symbol),
+      ...(stopPolicyEvidence?.rows || []).map((row) => row.symbol),
     ])].sort(),
-    [rawSetups, closedTradeEvidence, zoneLocalValidation, pendingLifecycleEvidence],
+    [rawSetups, closedTradeEvidence, zoneLocalValidation, pendingLifecycleEvidence, stopPolicyEvidence],
   );
   const filteredPendingLifecycleEvidence = useMemo(() => {
     if (!pendingLifecycleEvidence || symbolFilter === "all") return pendingLifecycleEvidence;
@@ -846,6 +876,12 @@ export default function RejectedSetups() {
         .filter((row): row is PendingLifecycleOutcome => row != null),
     );
   }, [pendingLifecycleEvidence, symbolFilter]);
+  const filteredStopPolicyEvidence = useMemo(() => {
+    if (!stopPolicyEvidence || symbolFilter === "all") return stopPolicyEvidence;
+    return buildStopPolicyEvidenceReport(
+      stopPolicyEvidence.rows.filter((row) => row.symbol === symbolFilter),
+    );
+  }, [stopPolicyEvidence, symbolFilter]);
   const stats = useMemo(() => computeStats(setups), [setups]);
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
   const dailyTrend = useMemo(() => computeDailyTrend(setups), [setups]);
@@ -1080,6 +1116,7 @@ export default function RejectedSetups() {
         streamlinedDecisionComparison: streamlinedDecisionComparison ?? null,
         canonicalDealingRangeComparison: dealingRangeComparison ?? null,
         pendingLifecycleEvidence: filteredPendingLifecycleEvidence ?? null,
+        stopPolicyEvidence: filteredStopPolicyEvidence ?? null,
         advisor,
       },
     };
@@ -1576,6 +1613,11 @@ export default function RejectedSetups() {
             <PendingLifecycleEvidenceCard
               report={filteredPendingLifecycleEvidence}
               loading={isLoadingPendingLifecycleEvidence}
+            />
+
+            <StopPolicyEvidenceCard
+              report={filteredStopPolicyEvidence}
+              loading={isLoadingStopPolicyEvidence}
             />
 
             <StructureAuthorityEvidenceCard setups={setups} />
