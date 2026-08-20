@@ -61,7 +61,9 @@ may repair the position stop around the live fill but must not chase or regenera
 the target. `bot-scanner` and `backtest-engine` delegate next-level retargeting to
 the same owner. A `next_level` setup with no structural target meeting the saved
 minimum R:R either rejects or uses the explicitly configured R:R fallback; the
-fallback is never implicit.
+fallback is never implicit. The opt-in `stopPolicyShadow` branch on the same
+owner records proposed style-aware stop geometry at a candidate's first
+evaluation. It is observation-only and is never assigned to a live plan.
 
 ## Post-touch CHoCH/MSS trigger
 

@@ -179,6 +179,10 @@ import {
   deriveWatchlistLifecyclePhase,
 } from "../_shared/watchlistLifecycleEvidence.ts";
 import {
+  persistStopPolicyEvidence,
+  type StopPolicyPlanObservation,
+} from "../_shared/stopPolicyEvidence.ts";
+import {
   buildFrozenCrossTimeframeContext,
   loadCurrentEvidenceCertificateReferences,
   type EvidenceCertificateReference,
@@ -5573,6 +5577,153 @@ async function runScanForUser(
         impulseSpanBars: izData?.impulse?.spanBars ?? null,
       },
     });
+
+    // Observation only: capture the first evaluation of each deterministic
+    // zone candidate before any watch/reject branch can remove it.
+    if (analysis.direction && izData?.bestZone) {
+      try {
+        const candidateId = izData.bestZone.candidateModel?.candidateId ||
+          izData.bestZone.localConfluence?.candidateId || null;
+        if (candidateId) {
+          const spec = SPECS[pair] || SPECS["EUR/USD"];
+          const zone = {
+            price: Number(izData.bestZone.refinedEntry ??
+              ((izData.bestZone.high + izData.bestZone.low) / 2)),
+            zoneType: String(izData.bestZone.type || "impulse_zone"),
+            zoneLow: Number(izData.bestZone.low),
+            zoneHigh: Number(izData.bestZone.high),
+          };
+          const structural = watchlistInvalidationFor(
+            analysis.direction as WatchlistDirection,
+            { type: zone.zoneType, low: zone.zoneLow, high: zone.zoneHigh, entry: zone.price },
+            analysis.direction === "long" ? izData.impulse?.low : izData.impulse?.high,
+            izData.impulse,
+          );
+          const structuralLevel = Number(structural.level);
+          if (!Number.isFinite(structuralLevel) || structuralLevel <= 0) {
+            throw new Error("structural invalidation unavailable");
+          }
+          const currentPlanResult = buildConfiguredPreArmedPlan({
+            direction: analysis.direction as "long" | "short",
+            zone,
+            structuralInvalidation: structuralLevel,
+            preferredPositionStop: analysis.stopLoss,
+            symbol: pair,
+            atrValue: (analysis as any).atrValue,
+            config: pairConfig,
+            analysis,
+          });
+          const confirmationAtr = calculateATR(
+            roleCandles.confirmation,
+            pairConfig.slATRPeriod || 14,
+          );
+          const spreadPips = Number(spec.typicalSpread || 0);
+          const spreadSafetyMultiplier = 1.5;
+          const executionFloorQuoteDistance = spreadPips * spec.pipSize * spreadSafetyMultiplier;
+          const riskCapAtrMultiplier = resolvedStyle === "swing_trader" ? 6 : 4;
+          const gamePlanContext = (pairConfig as any)._gamePlanContext;
+          const dolTargets = (pairConfig as any).dolTPExtensionEnabled !== false && gamePlanContext?.dol
+            ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
+            : undefined;
+          const shadowResult = calculateSLTP({
+            direction: analysis.direction as "long" | "short",
+            lastPrice: zone.price,
+            pipSize: spec.pipSize,
+            config: pairConfig,
+            swings: analysis.structure?.swingPoints || [],
+            orderBlocks: analysis.orderBlocks || [],
+            liquidityPools: analysis.liquidityPools || [],
+            pdLevels: analysis.pdLevels || null,
+            atrValue: confirmationAtr,
+            fvgs: analysis.fvgs || [],
+            fibExtensions: analysis.fibLevels?.extensions,
+            dolTargets,
+            stopPolicyShadow: {
+              structuralInvalidation: structuralLevel,
+              confirmationAtr,
+              atrMultiplier: 1.5,
+              executionFloorQuoteDistance,
+              executionFloorSource: "spread_proxy",
+              riskCapAtrMultiplier,
+            },
+          });
+
+          const toPlanObservation = (
+            result: any,
+            shadowValid?: boolean,
+            shadowReason?: string | null,
+          ): StopPolicyPlanObservation => {
+            if (!result?.valid || shadowValid === false) {
+              return {
+                valid: false,
+                stopLoss: Number.isFinite(Number(result?.plan?.stopLoss))
+                  ? Number(result.plan.stopLoss) : null,
+                takeProfit: Number.isFinite(Number(result?.plan?.takeProfit))
+                  ? Number(result.plan.takeProfit) : null,
+                riskReward: Number.isFinite(Number(result?.plan?.riskReward))
+                  ? Number(result.plan.riskReward) : null,
+                takeProfitSource: result?.takeProfitSource || null,
+                takeProfitFallbackReason: result?.takeProfitFallbackReason || null,
+                reason: shadowReason || result?.reason || "plan_unavailable",
+              };
+            }
+            return {
+              valid: true,
+              stopLoss: Number(result.plan.stopLoss),
+              takeProfit: Number(result.plan.takeProfit),
+              riskReward: Number(result.plan.riskReward),
+              takeProfitSource: result.takeProfitSource || null,
+              takeProfitFallbackReason: result.takeProfitFallbackReason || null,
+              reason: null,
+            };
+          };
+          const shadowStop = Number(shadowResult.stopLoss);
+          const shadowTarget = Number(shadowResult.takeProfit);
+          const shadowRisk = Math.abs(zone.price - shadowStop);
+          const shadowPlanResult = {
+            valid: Number.isFinite(shadowStop) && Number.isFinite(shadowTarget) && shadowRisk > 0,
+            plan: {
+              stopLoss: shadowStop,
+              takeProfit: shadowTarget,
+              riskReward: shadowRisk > 0
+                ? Math.abs(shadowTarget - zone.price) / shadowRisk
+                : Number.NaN,
+            },
+            takeProfitSource: shadowResult.takeProfitSource,
+            takeProfitFallbackReason: shadowResult.takeProfitFallbackReason,
+          };
+          const shadow = shadowResult.stopPolicyShadow;
+          if (shadow) {
+            await persistStopPolicyEvidence(supabase, {
+              userId,
+              botId: BOT_ID,
+              scanCycleId,
+              candidateId,
+              symbol: pair,
+              direction: analysis.direction as "long" | "short",
+              tradingStyle: resolvedStyle,
+              setupSource: String((detail as any).signalSource || "standalone"),
+              confirmationTimeframe: timeframeAuthority.roles.confirmation,
+              observedAt: new Date().toISOString(),
+              entryPrice: zone.price,
+              structuralInvalidation: structuralLevel,
+              confirmationAtr,
+              pipSize: spec.pipSize,
+              spreadPips,
+              spreadSource: "spec_proxy",
+              spreadSafetyMultiplier,
+              executionFloorQuoteDistance,
+              executionFloorSource: "spread_proxy",
+              currentPlan: toPlanObservation(currentPlanResult),
+              shadowPlan: toPlanObservation(shadowPlanResult, shadow.valid, shadow.reason),
+              shadow,
+            });
+          }
+        }
+      } catch (stopPolicyEvidenceError: any) {
+        console.warn(`[stop-policy-evidence] ${pair}: ${stopPolicyEvidenceError?.message}`);
+      }
+    }
 
     const stageUnifiedWatch = async (
       executionEligible: boolean,

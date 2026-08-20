@@ -4,6 +4,7 @@
 // Retention rules:
 // - scan_logs: delete rows older than 30 days
 // - close_audit_log: delete rows older than 30 days
+// - stop_policy_observations: delete rows older than the named 90-day evidence window
 // - paper_trade_history: archive rows older than 90 days to trade_archive
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -13,6 +14,7 @@ import {
   buildCompactSummary,
   type EvidenceRow,
 } from "../_shared/zoneTimeframeEvidence.ts";
+import { STOP_POLICY_EVIDENCE_RETENTION_DAYS } from "../_shared/stopPolicyEvidence.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -44,6 +46,18 @@ Deno.serve(async (req) => {
       .lt("created_at", thirtyDaysAgo);
     if (candleSnapshotErr) console.error("[data-cleanup] scan_candle_snapshots error:", candleSnapshotErr.message);
     results.scan_candle_snapshots_deleted = candleSnapshotsDeleted || 0;
+
+    const stopPolicyCutoff = new Date(
+      Date.now() - STOP_POLICY_EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const { count: stopPolicyDeleted, error: stopPolicyError } = await supabase
+      .from("stop_policy_observations")
+      .delete({ count: "exact" })
+      .lt("created_at", stopPolicyCutoff);
+    if (stopPolicyError) {
+      console.error("[data-cleanup] stop_policy_observations error:", stopPolicyError.message);
+    }
+    results.stop_policy_observations_deleted = stopPolicyDeleted || 0;
 
     // 2. Delete close_audit_log older than 30 days
     const { count: auditDeleted, error: alErr } = await supabase
