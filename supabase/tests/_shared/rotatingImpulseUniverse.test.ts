@@ -45,4 +45,9 @@ Deno.test("scanner separates discovery from lifecycle monitoring", async () => {
     "if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol)",
     "const rotationResults = discoveryScanUniverse.map",
   ]) assertEquals(scanner.includes(expected), true);
+  assertEquals(scanner.includes(
+    "for (const pending of activePendingOrders || []) {\n" +
+      "    lifecycleDeepScanSymbols.add(pending.symbol);\n" +
+      "  }",
+  ), true);
 });

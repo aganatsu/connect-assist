@@ -2905,6 +2905,14 @@ async function runScanForUser(
     console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled, ${pendingConfirmationHunting} awaiting confirmation`);
   }
 
+  // Pending orders have left the staged `watching` lane, but final
+  // authorization still requires fresh analysis-owned evidence (notably the
+  // Direction Verdict). Keep them in the deep-scan universe while the
+  // zone-confirmation scanner remains the sole owner of post-touch timing.
+  for (const pending of activePendingOrders || []) {
+    lifecycleDeepScanSymbols.add(pending.symbol);
+  }
+
   // ── Management-Only Early Return ──
   // When called with isManagementOnly, we've already done: config load, style resolve,
   // price refresh, management (trailing/BE/partial/structure), broker sync, telegram,
