@@ -3017,6 +3017,138 @@ export type Database = {
           },
         ]
       }
+      stop_policy_observations: {
+        Row: {
+          bot_id: string
+          broker_digits: number | null
+          broker_stops_level: number | null
+          candidate_id: string
+          confirmation_atr: number
+          confirmation_timeframe: string
+          contract_version: string
+          created_at: string
+          current_plan_reason: string | null
+          current_plan_valid: boolean
+          current_risk_reward: number | null
+          current_stop_loss: number | null
+          current_take_profit: number | null
+          current_take_profit_fallback_reason: string | null
+          current_take_profit_source: string | null
+          direction: string
+          entry_price: number
+          execution_floor_quote_distance: number
+          execution_floor_source: string
+          id: string
+          observation_only: boolean
+          observed_at: string
+          pip_size: number
+          scan_cycle_id: string
+          setup_source: string
+          shadow_measurements: Json
+          shadow_plan_reason: string | null
+          shadow_plan_valid: boolean
+          shadow_risk_reward: number | null
+          shadow_stop_loss: number | null
+          shadow_take_profit: number | null
+          shadow_take_profit_fallback_reason: string | null
+          shadow_take_profit_source: string | null
+          spread_pips: number
+          spread_safety_multiplier: number
+          spread_source: string
+          structural_invalidation: number
+          symbol: string
+          tick_size: number | null
+          trading_style: string
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          broker_digits?: number | null
+          broker_stops_level?: number | null
+          candidate_id: string
+          confirmation_atr: number
+          confirmation_timeframe: string
+          contract_version?: string
+          created_at?: string
+          current_plan_reason?: string | null
+          current_plan_valid: boolean
+          current_risk_reward?: number | null
+          current_stop_loss?: number | null
+          current_take_profit?: number | null
+          current_take_profit_fallback_reason?: string | null
+          current_take_profit_source?: string | null
+          direction: string
+          entry_price: number
+          execution_floor_quote_distance: number
+          execution_floor_source: string
+          id?: string
+          observation_only?: boolean
+          observed_at: string
+          pip_size: number
+          scan_cycle_id: string
+          setup_source: string
+          shadow_measurements: Json
+          shadow_plan_reason?: string | null
+          shadow_plan_valid: boolean
+          shadow_risk_reward?: number | null
+          shadow_stop_loss?: number | null
+          shadow_take_profit?: number | null
+          shadow_take_profit_fallback_reason?: string | null
+          shadow_take_profit_source?: string | null
+          spread_pips: number
+          spread_safety_multiplier: number
+          spread_source: string
+          structural_invalidation: number
+          symbol: string
+          tick_size?: number | null
+          trading_style: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          broker_digits?: number | null
+          broker_stops_level?: number | null
+          candidate_id?: string
+          confirmation_atr?: number
+          confirmation_timeframe?: string
+          contract_version?: string
+          created_at?: string
+          current_plan_reason?: string | null
+          current_plan_valid?: boolean
+          current_risk_reward?: number | null
+          current_stop_loss?: number | null
+          current_take_profit?: number | null
+          current_take_profit_fallback_reason?: string | null
+          current_take_profit_source?: string | null
+          direction?: string
+          entry_price?: number
+          execution_floor_quote_distance?: number
+          execution_floor_source?: string
+          id?: string
+          observation_only?: boolean
+          observed_at?: string
+          pip_size?: number
+          scan_cycle_id?: string
+          setup_source?: string
+          shadow_measurements?: Json
+          shadow_plan_reason?: string | null
+          shadow_plan_valid?: boolean
+          shadow_risk_reward?: number | null
+          shadow_stop_loss?: number | null
+          shadow_take_profit?: number | null
+          shadow_take_profit_fallback_reason?: string | null
+          shadow_take_profit_source?: string | null
+          spread_pips?: number
+          spread_safety_multiplier?: number
+          spread_source?: string
+          structural_invalidation?: number
+          symbol?: string
+          tick_size?: number | null
+          trading_style?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       strategy_activation_events: {
         Row: {
           activation_id: string
