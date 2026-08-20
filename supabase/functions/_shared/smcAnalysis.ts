@@ -229,6 +229,31 @@ export interface SLTPInput {
   dolTargets?: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; description: string }>;
   /** Position stop already repaired for execution floors. TP must be selected against this stop. */
   resolvedStopLoss?: number | null;
+  /** Observation-only proposed stop policy. Never pass this result to a live plan. */
+  stopPolicyShadow?: StopPolicyShadowInput;
+}
+
+export interface StopPolicyShadowInput {
+  structuralInvalidation: number;
+  confirmationAtr: number;
+  atrMultiplier: number;
+  executionFloorQuoteDistance: number;
+  executionFloorSource: "spread_proxy" | "broker_snapshot";
+  riskCapAtrMultiplier: number;
+}
+
+export interface StopPolicyShadowResult {
+  contractVersion: "stop-policy-shadow.v1";
+  observationOnly: true;
+  valid: boolean;
+  reason: string | null;
+  structuralDistance: number | null;
+  noiseFloorDistance: number | null;
+  executionFloorDistance: number | null;
+  finalStopDistance: number | null;
+  riskCapDistance: number | null;
+  riskCapBreached: boolean | null;
+  executionFloorSource: "spread_proxy" | "broker_snapshot";
 }
 
 export interface SLTPResult {
@@ -236,6 +261,7 @@ export interface SLTPResult {
   takeProfit: number | null;
   takeProfitSource: string | null;
   takeProfitFallbackReason: string | null;
+  stopPolicyShadow?: StopPolicyShadowResult;
 }
 
 export interface OpeningRangeResult {
@@ -2137,6 +2163,7 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
   let tp: number | null = null;
   let takeProfitSource: string | null = null;
   let takeProfitFallbackReason: string | null = null;
+  let stopPolicyShadow: StopPolicyShadowResult | undefined;
 
   const resolvedStopLoss = Number(input.resolvedStopLoss);
   const hasResolvedStop = Number.isFinite(resolvedStopLoss) && (direction === "long"
@@ -2189,6 +2216,72 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
     const currentSlDistance = Math.abs(lastPrice - sl);
     if (currentSlDistance < atrFloorDistance) {
       sl = direction === "long" ? lastPrice - atrFloorDistance : lastPrice + atrFloorDistance;
+    }
+  }
+
+  if (input.stopPolicyShadow) {
+    const shadow = input.stopPolicyShadow;
+    const structural = Number(shadow.structuralInvalidation);
+    const confirmationAtr = Number(shadow.confirmationAtr);
+    const atrMultiplier = Number(shadow.atrMultiplier);
+    const executionFloorDistance = Number(shadow.executionFloorQuoteDistance);
+    const riskCapAtrMultiplier = Number(shadow.riskCapAtrMultiplier);
+    const oriented = Number.isFinite(structural) && (direction === "long"
+      ? structural < lastPrice
+      : structural > lastPrice);
+    const inputsValid = oriented && confirmationAtr > 0 &&
+      Number.isFinite(atrMultiplier) && atrMultiplier > 0 &&
+      Number.isFinite(executionFloorDistance) && executionFloorDistance > 0 &&
+      Number.isFinite(riskCapAtrMultiplier) && riskCapAtrMultiplier > 0;
+
+    if (!inputsValid) {
+      stopPolicyShadow = {
+        contractVersion: "stop-policy-shadow.v1",
+        observationOnly: true,
+        valid: false,
+        reason: !oriented
+          ? "structural_invalidation_unavailable_or_misoriented"
+          : !(confirmationAtr > 0)
+          ? "confirmation_atr_unavailable"
+          : "execution_policy_input_unavailable",
+        structuralDistance: oriented ? Math.abs(lastPrice - structural) : null,
+        noiseFloorDistance: confirmationAtr > 0 && atrMultiplier > 0
+          ? confirmationAtr * atrMultiplier
+          : null,
+        executionFloorDistance: executionFloorDistance > 0 ? executionFloorDistance : null,
+        finalStopDistance: null,
+        riskCapDistance: confirmationAtr > 0 && riskCapAtrMultiplier > 0
+          ? confirmationAtr * riskCapAtrMultiplier
+          : null,
+        riskCapBreached: null,
+        executionFloorSource: shadow.executionFloorSource,
+      };
+    } else {
+      const structuralDistance = Math.abs(lastPrice - structural);
+      const noiseFloorDistance = confirmationAtr * atrMultiplier;
+      const finalStopDistance = Math.max(
+        structuralDistance,
+        noiseFloorDistance,
+        executionFloorDistance,
+      );
+      const riskCapDistance = confirmationAtr * riskCapAtrMultiplier;
+      const riskCapBreached = finalStopDistance > riskCapDistance;
+      sl = direction === "long"
+        ? lastPrice - finalStopDistance
+        : lastPrice + finalStopDistance;
+      stopPolicyShadow = {
+        contractVersion: "stop-policy-shadow.v1",
+        observationOnly: true,
+        valid: !riskCapBreached,
+        reason: riskCapBreached ? "style_risk_cap_exceeded" : null,
+        structuralDistance,
+        noiseFloorDistance,
+        executionFloorDistance,
+        finalStopDistance,
+        riskCapDistance,
+        riskCapBreached,
+        executionFloorSource: shadow.executionFloorSource,
+      };
     }
   }
 
@@ -2353,6 +2446,7 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
     takeProfit: tp,
     takeProfitSource,
     takeProfitFallbackReason,
+    ...(stopPolicyShadow ? { stopPolicyShadow } : {}),
   };
 }
 
