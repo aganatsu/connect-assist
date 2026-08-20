@@ -1,12 +1,33 @@
-import React from "react";
+import React, { useState } from "react";
 import { ShieldAlert, Flag, GitBranch } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { CollapsibleSection, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
 
 export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
+  const [confirmLiveStopPolicy, setConfirmLiveStopPolicy] = useState(false);
+  const stopPolicyMode = config.exit?.zoneSetupStopPolicyMode ?? "observe";
+
+  const selectStopPolicyMode = (value: string) => {
+    if (value === "enforce_live") {
+      setConfirmLiveStopPolicy(true);
+      return;
+    }
+    updateField("exit", "zoneSetupStopPolicyMode", value);
+  };
+
   return (
     <div className="space-y-3">
       {/* ── Stop Loss ── */}
@@ -46,6 +67,20 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             <Slider value={[config.exit?.slBufferPips ?? 2]} onValueChange={v => updateField('exit', 'slBufferPips', v[0])} min={0} max={10} step={0.5} className="flex-1" />
             <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.slBufferPips ?? 2}</span>
           </div>
+        </FieldGroup>
+        <FieldGroup
+          label="Zone Setup Stop Policy"
+          description="Controls the style-aware stop only for pre-armed Zone Setup orders; targets remain frozen"
+          status={stopPolicyMode === "observe" ? "monitoring" : "active"}
+        >
+          <Select value={stopPolicyMode} onValueChange={selectStopPolicyMode}>
+            <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="observe">Observe Only</SelectItem>
+              <SelectItem value="enforce_paper">Enforce on Paper</SelectItem>
+              <SelectItem value="enforce_live">Enforce on Paper + Live</SelectItem>
+            </SelectContent>
+          </Select>
         </FieldGroup>
         <FieldGroup label="Max SL (pips)" description="Not yet enforced by the shared execution engine" status="unavailable">
           <Input type="number" value={config.exit?.maxSLPips ?? 50} onChange={() => {}} min={5} max={500} step={5} className="h-9 text-sm" disabled />
@@ -221,6 +256,25 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
           <ToggleField label="End-of-Session Close" description="Not yet implemented by the shared position-management engine" checked={false} onChange={() => {}} disabled status="unavailable" />
         </div>
       </CollapsibleSection>
+      <AlertDialog open={confirmLiveStopPolicy} onOpenChange={setConfirmLiveStopPolicy}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Enable this stop policy for live money?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This changes stop distance and position size for pre-armed Zone Setup orders on FTMO and other live broker accounts. Live fills require broker constraints; unavailable constraints fail closed instead of widening the stop after sizing.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Current Mode</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => updateField("exit", "zoneSetupStopPolicyMode", "enforce_live")}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Enable Paper + Live
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

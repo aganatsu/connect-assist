@@ -53,17 +53,30 @@ instead of arbitrating.
 
 ## SL/TP target selection
 
-`_shared/smcAnalysis.ts:calculateSLTP` owns configured stop and target selection.
-Pre-armed setups first resolve their execution stop through
-`resolvePreArmedPositionStop`, then call `calculateSLTP` with that repaired stop.
+`_shared/smcAnalysis.ts:calculateSLTP` owns configured stop and target selection,
+and `evaluateStyleAwareStopPolicy` in the same module owns the style-aware
+initial position stop. Legacy pre-armed setups resolve their execution stop
+through `resolvePreArmedPositionStop`. Activated setups use the shared
+style-aware evaluator at discovery and again at the confirmation fill, then pass
+its fully resolved stop to `buildPreArmedPositionPlan` for validation without
+widening it.
+
 The selected target and its source are frozen on the pending order; confirmation
-may repair the position stop around the live fill but must not chase or regenerate
-the target. `bot-scanner` and `backtest-engine` delegate next-level retargeting to
-the same owner. A `next_level` setup with no structural target meeting the saved
-minimum R:R either rejects or uses the explicitly configured R:R fallback; the
-fallback is never implicit. The opt-in `stopPolicyShadow` branch on the same
-owner records proposed style-aware stop geometry at a candidate's first
-evaluation. It is observation-only and is never assigned to a live plan.
+may recalculate the position stop around the live fill but must not chase or
+regenerate the target. `bot-scanner` and `backtest-engine` delegate next-level
+retargeting to the same owner. A `next_level` setup with no structural target
+meeting the saved minimum R:R either rejects or uses the explicitly configured
+R:R fallback; the fallback is never implicit.
+
+`exit.zoneSetupStopPolicyMode` is the only activation control for the pre-armed
+Zone Setup route: `observe`, `enforce_paper`, or `enforce_live`. The chosen
+mode is frozen when the order arms. Live enforcement requires exact constraints
+from every active broker connection and fails closed when they are unavailable.
+The observation contract remains stored as `stopPolicyShadow` so historical
+evidence stays comparable; its result only affects execution when the frozen
+activation mode requires it. The backtest orchestrator does not simulate the
+post-touch pending-order lifecycle, so this route-specific activation is not
+silently applied to unrelated market-fill backtests.
 
 ## Post-touch CHoCH/MSS trigger
 

@@ -38,4 +38,11 @@ describe("Zone Setup confirmation contract", () => {
     expect(source).toContain("MSS/CHoCH, displacement, or reversal candle");
     expect(source).not.toContain(' : "CHoCH/BOS"');
   });
+
+  it("shows whether the frozen Zone Setup stop policy can affect paper and live execution", () => {
+    expect(source).toContain("zoneSetupStopPolicyAppliedAtArm");
+    expect(source).toContain("Zone stop policy");
+    expect(source).toContain("PAPER + LIVE");
+    expect(source).toContain("broker constraints");
+  });
 });
