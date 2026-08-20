@@ -9,6 +9,14 @@ describe("Zone Setup confirmation contract", () => {
     expect(source).toContain("Revisions:");
   });
 
+  it("explains why a structure confirmation plan is still building", () => {
+    expect(source).toContain("confirmation_build_diagnostic");
+    expect(source).toContain("Waiting for closed");
+    expect(source).toContain("No confirmed post-touch protected pivot yet");
+    expect(source).toContain("no qualifying opposing break pivot exists");
+    expect(source).toContain("Waiting: {buildingReason}");
+  });
+
   it("separates observation-only liquidity sequencing from the structure plan", () => {
     expect(source).toContain("Liquidity → structure observation");
     expect(source).toContain("OBSERVE ONLY");

@@ -694,6 +694,20 @@ Deno.serve(async (req) => {
             );
           }
           lifecycleAfterLock = impulseLifecycleObservation?.after || null;
+          const buildDiagnostic =
+            impulseLifecycleObservation?.confirmationBuildDiagnostic || null;
+          if (
+            buildDiagnostic &&
+            JSON.stringify(pending.confirmation_build_diagnostic || null) !==
+              JSON.stringify(buildDiagnostic)
+          ) {
+            const { error: diagnosticError } = await supabase
+              .from("pending_orders")
+              .update({ confirmation_build_diagnostic: buildDiagnostic })
+              .eq("id", pending.id)
+              .eq("status", "awaiting_confirmation");
+            if (diagnosticError) throw diagnosticError;
+          }
         } catch (lifecycleError: any) {
           console.warn(
             `[zone-confirm] ${pending.symbol} shared lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,

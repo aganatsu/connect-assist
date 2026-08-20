@@ -978,6 +978,19 @@ export interface PendingOrder {
     afterChochMode?: "confirmation_close" | "observe_retracement" | "wait_retracement";
     afterChochExpiryMinutes?: number;
   };
+  confirmation_build_diagnostic?: {
+    contractVersion: string;
+    reasonCode: "inactive_contract" | "insufficient_history" |
+      "insufficient_post_touch_bars" | "protected_pivot_missing" |
+      "break_pivot_missing" | "trigger_ready";
+    evaluatedAt: string | null;
+    confirmationTimeframe: string | null;
+    barsAfterTouch: number;
+    requiredBars: number;
+    swingCount: number;
+    protectedPivotCount: number;
+    breakPivotCount: number;
+  } | null;
   post_confirmation_entry?: {
     state: "awaiting_retracement" | "ready" | "invalidated" | "expired";
     zone: { type: string; low: number; high: number; midpoint: number };

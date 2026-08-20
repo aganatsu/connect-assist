@@ -20,6 +20,30 @@ export interface ConfirmationTriggerPlan {
   explanation: string;
 }
 
+export type ConfirmationBuildReasonCode =
+  | "inactive_contract"
+  | "insufficient_history"
+  | "insufficient_post_touch_bars"
+  | "protected_pivot_missing"
+  | "break_pivot_missing"
+  | "trigger_ready";
+
+export interface ConfirmationBuildDiagnostic {
+  contractVersion: typeof IMPULSE_CONFIRMATION_LOCK_VERSION;
+  reasonCode: ConfirmationBuildReasonCode;
+  evaluatedAt: string | null;
+  confirmationTimeframe: string | null;
+  barsAfterTouch: number;
+  requiredBars: number;
+  swingCount: number;
+  protectedPivotCount: number;
+  breakPivotCount: number;
+}
+
+export interface ConfirmationBuildDiagnosticSink {
+  current: ConfirmationBuildDiagnostic | null;
+}
+
 export interface ConfirmationTriggerLockConfig {
   pivotLookback: number;
   minDisplacementBodyRatio: number;
@@ -65,21 +89,55 @@ export function deriveConfirmationTriggerPlan(input: {
   lifecycle: ImpulseEntryLifecycle;
   candles: Candle[];
   config?: ConfirmationTriggerLockConfig;
+  diagnosticSink?: ConfirmationBuildDiagnosticSink;
 }): ConfirmationTriggerPlan | null {
   const { lifecycle, candles } = input;
   const confirmation = lifecycle.confirmation;
   const active = lifecycle.candidates.find((candidate) =>
     candidate.id === lifecycle.activeCandidateId
   );
+  const report = (
+    reasonCode: ConfirmationBuildReasonCode,
+    barsAfterTouch = 0,
+    requiredBars = 0,
+    swingCount = 0,
+    protectedPivotCount = 0,
+    breakPivotCount = 0,
+  ) => {
+    if (!input.diagnosticSink) return;
+    input.diagnosticSink.current = {
+      contractVersion: IMPULSE_CONFIRMATION_LOCK_VERSION,
+      reasonCode,
+      evaluatedAt: candles.at(-1)?.datetime || null,
+      confirmationTimeframe: confirmation?.timeframe || null,
+      barsAfterTouch,
+      requiredBars,
+      swingCount,
+      protectedPivotCount,
+      breakPivotCount,
+    };
+  };
   if (
     !confirmation || !active || confirmation.candidateId !== active.id ||
-    active.state !== "confirming" || candles.length < 8
-  ) return null;
+    active.state !== "confirming"
+  ) {
+    report("inactive_contract");
+    return null;
+  }
+  if (candles.length < 8) {
+    report("insufficient_history", candles.length, 8);
+    return null;
+  }
   const config = input.config || DEFAULT_CONFIRMATION_TRIGGER_LOCK_CONFIG;
   const startIndex = indexAtOrAfter(candles, confirmation.startedAt);
   const completed = candles;
   const contextStart = Math.max(0, startIndex - 12);
-  if (completed.length - startIndex < config.pivotLookback * 2 + 1) return null;
+  const barsAfterTouch = completed.length - startIndex;
+  const requiredBars = config.pivotLookback * 2 + 1;
+  if (barsAfterTouch < requiredBars) {
+    report("insufficient_post_touch_bars", barsAfterTouch, requiredBars);
+    return null;
+  }
 
   // The protected pivot must be a confirmed post-touch swing. A raw latest low/high
   // is still forming and cannot own an enforced confirmation contract.
@@ -88,7 +146,17 @@ export function deriveConfirmationTriggerPlan(input: {
   const protectedPivots = swings.filter((swing) =>
     swing.index >= startIndex && swing.type === protectedType
   );
-  if (protectedPivots.length === 0) return null;
+  if (protectedPivots.length === 0) {
+    report(
+      "protected_pivot_missing",
+      barsAfterTouch,
+      requiredBars,
+      swings.length,
+      0,
+      0,
+    );
+    return null;
+  }
   const protectedPivot = protectedPivots.reduce((selected, candidate) => {
     const isDeeper = lifecycle.impulse.direction === "long"
       ? candidate.price < selected.price
@@ -105,7 +173,17 @@ export function deriveConfirmationTriggerPlan(input: {
     swing.index >= contextStart && swing.index < protectedPivotIndex &&
     swing.type === (lifecycle.impulse.direction === "long" ? "high" : "low")
   ).at(-1);
-  if (!breakPivot) return null;
+  if (!breakPivot) {
+    report(
+      "break_pivot_missing",
+      barsAfterTouch,
+      requiredBars,
+      swings.length,
+      protectedPivots.length,
+      0,
+    );
+    return null;
+  }
   const breakLevel = breakPivot.price;
   const latestIndex = completed.length - 1;
   const latest = completed[latestIndex]!;
@@ -132,6 +210,14 @@ export function deriveConfirmationTriggerPlan(input: {
     : null;
   const passed = !levelChanged && afterLock && closeThrough &&
     displacement !== null;
+  report(
+    "trigger_ready",
+    barsAfterTouch,
+    requiredBars,
+    swings.length,
+    protectedPivots.length,
+    1,
+  );
   return {
     contractVersion: IMPULSE_CONFIRMATION_LOCK_VERSION,
     candidateId: active.id,

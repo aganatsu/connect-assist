@@ -2,7 +2,10 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { deriveConfirmationTriggerPlan } from "../../functions/_shared/impulseConfirmationLock.ts";
+import {
+  type ConfirmationBuildDiagnosticSink,
+  deriveConfirmationTriggerPlan,
+} from "../../functions/_shared/impulseConfirmationLock.ts";
 import { advanceTradeLifecycle } from "../../functions/_shared/tradeLifecycleAuthority.ts";
 import {
   buildImpulseEntryLifecycle,
@@ -320,4 +323,72 @@ Deno.test("a deeper post-touch retracement rebuilds the locked internal trigger"
     "confirmation_passed",
   ]);
   assertEquals(entered.disposition, "entry_ready");
+});
+
+Deno.test("reports why the post-touch trigger is still building", () => {
+  const insufficientSink: ConfirmationBuildDiagnosticSink = { current: null };
+  const insufficient = deriveConfirmationTriggerPlan({
+    lifecycle: lifecycle(),
+    candles: candles.slice(0, 11),
+    diagnosticSink: insufficientSink,
+  });
+  assertEquals(insufficient, null);
+  assertEquals(
+    insufficientSink.current?.reasonCode,
+    "insufficient_post_touch_bars",
+  );
+  assertEquals(insufficientSink.current?.barsAfterTouch, 3);
+  assertEquals(insufficientSink.current?.requiredBars, 5);
+
+  const monotonic = Array.from({ length: 14 }, (_, index): Candle => ({
+    datetime: new Date(Date.parse("2026-08-06T10:00:00.000Z") + index * 300_000)
+      .toISOString(),
+    open: 100 + index,
+    high: 100.4 + index,
+    low: 99.8 + index,
+    close: 100.2 + index,
+    volume: 100,
+  }));
+  const protectedSink: ConfirmationBuildDiagnosticSink = { current: null };
+  const withoutProtectedPivot = deriveConfirmationTriggerPlan({
+    lifecycle: lifecycle(),
+    candles: monotonic,
+    config: {
+      pivotLookback: 1,
+      minDisplacementBodyRatio: 0.55,
+      minDisplacementATR: 0,
+    },
+    diagnosticSink: protectedSink,
+  });
+  assertEquals(withoutProtectedPivot, null);
+  assertEquals(protectedSink.current?.reasonCode, "protected_pivot_missing");
+
+  const valley = Array.from({ length: 14 }, (_, index): Candle => {
+    const price = index <= 10 ? 110 - index : 100 + (index - 10);
+    return {
+      datetime: new Date(
+        Date.parse("2026-08-06T10:00:00.000Z") + index * 300_000,
+      ).toISOString(),
+      open: price + 0.1,
+      high: price + 0.4,
+      low: price - 0.4,
+      close: price,
+      volume: 100,
+    };
+  });
+  const breakSink: ConfirmationBuildDiagnosticSink = { current: null };
+  const withoutBreakPivot = deriveConfirmationTriggerPlan({
+    lifecycle: lifecycle(),
+    candles: valley,
+    config: {
+      pivotLookback: 1,
+      minDisplacementBodyRatio: 0.55,
+      minDisplacementATR: 0,
+    },
+    diagnosticSink: breakSink,
+  });
+  assertEquals(withoutBreakPivot, null);
+  assertEquals(breakSink.current?.reasonCode, "break_pivot_missing");
+  assertEquals(breakSink.current?.protectedPivotCount, 1);
+  assertEquals(breakSink.current?.breakPivotCount, 0);
 });

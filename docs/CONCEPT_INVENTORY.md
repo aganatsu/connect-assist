@@ -91,7 +91,11 @@ changing authorization. That evidence must choose the surviving owner before one
 check is removed. The five-minute `bot-scanner` deep-scans pending orders only while they are
 near their frozen zone or hunting confirmation, refreshing prerequisites such as
 Direction Verdict without owning post-touch confirmation. Runtime lifecycle advancement, replay,
-and backtest still delegate through `tradeLifecycleAuthority.ts`.
+and backtest still delegate through `tradeLifecycleAuthority.ts`. The shared
+`impulseConfirmationLock.ts` owner emits a closed-candle build diagnostic
+(`insufficient_post_touch_bars`, `protected_pivot_missing`, or
+`break_pivot_missing`) that the scanner persists for Zone Setup presentation;
+it does not alter the lifecycle decision.
 
 ## Frozen setup direction at final authorization
 
