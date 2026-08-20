@@ -1,5 +1,21 @@
 import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildPendingOrderPlan, buildPreArmedPositionPlan } from "../../functions/_shared/pendingOrderPlan.ts";
+import { buildPendingOrderPlan, buildPreArmedPositionPlan, frozenTargetAlreadyReached } from "../../functions/_shared/pendingOrderPlan.ts";
+
+Deno.test("frozen target completion is direction-aware and rejects non-finite prices", () => {
+  assertEquals(frozenTargetAlreadyReached("long", 112.95, 112.7713), true);
+  assertEquals(frozenTargetAlreadyReached("long", 112.70, 112.7713), false);
+  assertEquals(frozenTargetAlreadyReached("short", 1.09, 1.10), true);
+  assertEquals(frozenTargetAlreadyReached("short", 1.11, 1.10), false);
+  assertEquals(frozenTargetAlreadyReached("long", Number.NaN, 112.7713), false);
+});
+
+Deno.test("confirmation scanner terminates a hunt after its frozen target", async () => {
+  const scanner = await Deno.readTextFile(new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url));
+  assert(scanner.includes("frozenTargetAlreadyReached("));
+  assert(scanner.includes("const targetReachedCandle = candles5m.find"));
+  assert(scanner.includes("frozen_target_already_reached: price="));
+  assert(scanner.includes("status: \"cancelled\""));
+});
 
 const zone = {
   price: 1.2000,
