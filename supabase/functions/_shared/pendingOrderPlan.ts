@@ -42,6 +42,18 @@ export type PreArmedStopResult =
   | { valid: true; stopLoss: number }
   | { valid: false; reason: string };
 
+/** A frozen target behind the observed price means the planned move is over. */
+export function frozenTargetAlreadyReached(
+  direction: "long" | "short",
+  observedPrice: number,
+  frozenTakeProfit: number,
+): boolean {
+  if (!Number.isFinite(observedPrice) || !Number.isFinite(frozenTakeProfit)) return false;
+  return direction === "long"
+    ? observedPrice >= frozenTakeProfit
+    : observedPrice <= frozenTakeProfit;
+}
+
 /** Position-risk geometry is separate from the pre-entry structural boundary. */
 export function resolvePreArmedPositionStop(
   input: PreArmedStopInput,
@@ -109,10 +121,7 @@ export function buildPreArmedPositionPlan(
     input.frozenTakeProfit !== undefined && Number.isFinite(frozenTakeProfit);
   if (hasFrozenTarget) {
     const entry = Number(input.zone.price);
-    const targetAhead = input.direction === "long"
-      ? frozenTakeProfit > entry
-      : frozenTakeProfit < entry;
-    if (!targetAhead) {
+    if (frozenTargetAlreadyReached(input.direction, entry, frozenTakeProfit)) {
       return {
         valid: false,
         reason: "frozen_target_already_reached: entry=" + entry + " target=" + frozenTakeProfit,

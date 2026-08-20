@@ -33,7 +33,7 @@ import {
   SPECS,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
-import { buildPreArmedPositionPlan } from "../_shared/pendingOrderPlan.ts";
+import { buildPreArmedPositionPlan, frozenTargetAlreadyReached } from "../_shared/pendingOrderPlan.ts";
 import {
   calculateBrokerExecutionFloor,
   resolveZoneStopPolicyMode,
@@ -654,8 +654,30 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Get current price from latest candle
         const currentPrice = candles5m[candles5m.length - 1].close;
+        const frozenTakeProfit = Number(pending.take_profit);
+        const touchTime = Date.parse(String(pending.zone_touch_time || ""));
+        const targetReachedCandle = candles5m.find((candle) => {
+          const candleTime = Date.parse(candle.datetime);
+          const targetSidePrice = pending.direction === "long" ? candle.high : candle.low;
+          return Number.isFinite(touchTime) && candleTime > touchTime &&
+            frozenTargetAlreadyReached(
+              pending.direction as "long" | "short", targetSidePrice, frozenTakeProfit,
+            );
+        });
+        if (targetReachedCandle) {
+          const targetSidePrice = pending.direction === "long"
+            ? targetReachedCandle.high : targetReachedCandle.low;
+          const reason = "frozen_target_already_reached: price=" + targetSidePrice +
+            " target=" + frozenTakeProfit + " candle=" + targetReachedCandle.datetime;
+          const { data: targetCancelled } = await supabase.from("pending_orders").update({
+            status: "cancelled", cancel_reason: reason, resolved_at: new Date().toISOString(),
+          }).eq("id", pending.id).eq("status", "awaiting_confirmation").select("id").maybeSingle();
+          if (!targetCancelled) continue;
+          cancelled++;
+          console.log("[zone-confirm] CANCELLED " + pending.symbol + " " + pending.direction + ": " + reason);
+          continue;
+        }
 
         let impulseLifecycleObservation = null;
         let lifecycleAfterLock = null;
