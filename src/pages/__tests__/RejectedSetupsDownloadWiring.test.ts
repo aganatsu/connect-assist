@@ -27,6 +27,7 @@ describe("Rejected Setups complete export", () => {
     expect(handler).toContain("streamlinedDecisionComparison");
     expect(handler).toContain("canonicalDealingRangeComparison");
     expect(handler).toContain("pendingLifecycleEvidence: filteredPendingLifecycleEvidence");
+    expect(handler).toContain("stopPolicyEvidence: filteredStopPolicyEvidence");
     expect(handler).toContain("advisor");
     expect(handler.match(/downloadFile\(/g)).toHaveLength(1);
     expect(handler).not.toContain("downloadSummary()");
@@ -34,8 +35,11 @@ describe("Rejected Setups complete export", () => {
 
   it("keeps lifecycle observations separate from rejected opportunities", () => {
     expect(source).toContain("<PendingLifecycleEvidenceCard");
+    expect(source).toContain("<StopPolicyEvidenceCard");
     expect(source).toContain('.from("pending_orders")');
     expect(source).toContain('.from("paper_positions")');
+    expect(source).toContain('.from("stop_policy_observations")');
     expect(source).not.toContain("rawRejectedScans: filteredPendingLifecycleEvidence");
+    expect(source).not.toContain("rawRejectedScans: filteredStopPolicyEvidence");
   });
 });
