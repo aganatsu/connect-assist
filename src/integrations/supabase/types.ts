@@ -1689,8 +1689,8 @@ export type Database = {
           canonical_dealing_range_timeframe: string | null
           canonical_dealing_range_version: string | null
           confirmation_attempts: number | null
-          confirmation_config: Json
           confirmation_build_diagnostic: Json | null
+          confirmation_config: Json
           confirmation_method: string | null
           created_at: string
           cross_tf_context_version: string | null
@@ -1776,8 +1776,8 @@ export type Database = {
           canonical_dealing_range_timeframe?: string | null
           canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
-          confirmation_config?: Json
           confirmation_build_diagnostic?: Json | null
+          confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
           cross_tf_context_version?: string | null
@@ -1863,8 +1863,8 @@ export type Database = {
           canonical_dealing_range_timeframe?: string | null
           canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
-          confirmation_config?: Json
           confirmation_build_diagnostic?: Json | null
+          confirmation_config?: Json
           confirmation_method?: string | null
           created_at?: string
           cross_tf_context_version?: string | null
