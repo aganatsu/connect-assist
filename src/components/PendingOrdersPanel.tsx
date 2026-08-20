@@ -98,6 +98,31 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     }
   };
 
+  const confirmationBuildReason = (
+    diagnostic?: PendingOrder["confirmation_build_diagnostic"],
+  ): string | null => {
+    if (!diagnostic) return null;
+    const timeframe = diagnostic.confirmationTimeframe
+      ? " " + diagnostic.confirmationTimeframe
+      : "";
+    switch (diagnostic.reasonCode) {
+      case "inactive_contract":
+        return "The frozen confirmation contract is not active";
+      case "insufficient_history":
+        return "Waiting for candle history (" + diagnostic.barsAfterTouch + "/" + diagnostic.requiredBars + " bars available)";
+      case "insufficient_post_touch_bars":
+        return "Waiting for closed" + timeframe + " bars after touch (" + diagnostic.barsAfterTouch + "/" + diagnostic.requiredBars + ")";
+      case "protected_pivot_missing":
+        return "No confirmed post-touch protected pivot yet (" + diagnostic.swingCount + " swings detected)";
+      case "break_pivot_missing":
+        return "Protected pivot found; no qualifying opposing break pivot exists in the bounded context";
+      case "trigger_ready":
+        return "Protected pivot and break level are available";
+      default:
+        return null;
+    }
+  };
+
   const getDistanceDisplay = (order: PendingOrder): string => {
     if (!order.current_price) return "—";
     const pipSize = getPipSize(order.symbol);
@@ -148,6 +173,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const renderOrderCard = (order: PendingOrder, isHunting: boolean) => {
     const expiryPct = getExpiryPercent(order.placed_at, order.expires_at);
     const isExpiringSoon = expiryPct > 75;
+    const buildingReason = confirmationBuildReason(order.confirmation_build_diagnostic);
     const signalReason = typeof order.signal_reason === "string"
       ? (() => {
         try {
@@ -403,6 +429,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                   {order.impulse_entry_lifecycle.confirmation.revisions?.length || 0}
                 </strong>
               </span>
+              {order.impulse_entry_lifecycle.confirmation.status === "building" && buildingReason && (
+                <p className="sm:col-span-2 text-[10px] text-highlight">
+                  Waiting: {buildingReason}
+                </p>
+              )}
               <p className="sm:col-span-2 text-[10px] text-muted-foreground">
                 {order.impulse_entry_lifecycle.lastTransitionReason}
               </p>
