@@ -26,7 +26,6 @@ Deno.test("Gameplan uses style-authoritative bias and structure evidence", () =>
     "options?.decisionEvidence?.layers.structure.trend",
   );
   assertStringIncludes(refresh, "buildStyleDecisionEvidence(");
-  assertStringIncludes(scanner, "decisionEvidence,");
   assertStringIncludes(backtest, "{ decisionEvidence: gpDecisionEvidence }");
 });
 

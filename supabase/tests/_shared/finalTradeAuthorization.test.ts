@@ -150,6 +150,40 @@ Deno.test("final authorization blocks an opposing current Direction Verdict", ()
   assertStringIncludes(result.reason, "candidate is short");
 });
 
+Deno.test("Game Plan off is observational while Direction Verdict stays enforced", () => {
+  const input = baseInput();
+  input.gamePlanEnabled = true;
+  input.gamePlanMode = "off";
+  input.gamePlan = {
+    session: "london",
+    generatedAt: "2026-07-28T16:55:00.000Z",
+    focusPairs: ["GBP/CAD"],
+    newsEvents: [],
+    summary: "Conflicting bullish plan",
+    plans: [{
+      symbol: "GBP/CAD",
+      bias: "bullish",
+      biasConfidence: 90,
+      tradeable: false,
+      state: "skip",
+      generatedAt: "2026-07-28T16:55:00.000Z",
+    }],
+  } as any;
+
+  const observed = evaluateFinalTradeAuthorization(input);
+  assertEquals(observed.authorized, true);
+  assertEquals(observed.code, "authorized");
+
+  input.directionVerdict = {
+    verdict: "long",
+    shouldBlock: false,
+    confidence: 90,
+  };
+  const blocked = evaluateFinalTradeAuthorization(input);
+  assertEquals(blocked.authorized, false);
+  assertEquals(blocked.code, "direction_conflict");
+});
+
 Deno.test("hard Game Plan waits when aligned confidence is below its threshold", () => {
   const input = baseInput();
   input.gamePlanEnabled = true;

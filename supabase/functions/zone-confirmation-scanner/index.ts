@@ -1404,6 +1404,7 @@ Deno.serve(async (req) => {
         if (
           directionVerdict &&
           config.gamePlanEnabled &&
+          config.gpEnforcementMode !== "off" &&
           !directionVerdictMatchesGamePlan(
             directionVerdict,
             gamePlan,

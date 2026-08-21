@@ -47,9 +47,6 @@ describe("manual Game Plan refresh safety", () => {
       "symbols: marketScope.eligibleSymbols",
     );
     expect(scannerSource).toContain("gamePlanSymbolsMatchScope");
-    expect(scannerSource).toContain(
-      "const missingGamePlanSymbols = gamePlanSymbols.filter",
-    );
     expect(gamePlanPanelSource).toContain("STALE PLAN");
     expect(gamePlanPanelSource).toContain("currentPlanIsExpired");
   });
@@ -73,11 +70,22 @@ describe("manual Game Plan refresh safety", () => {
 });
 
 describe("automatic Game Plan refresh safety", () => {
-  it("keeps a partial generated plan out of active authority", () => {
-    expect(scannerSource).toContain("missingGamePlanSymbols.length === 0");
-    expect(scannerSource).toContain(
-      "Previous complete plan remains authoritative; partial plan was not activated.",
-    );
+  it("keeps generation and activation out of the trading scanner", () => {
+    expect(scannerSource).toContain("loadActiveGamePlan(");
+    for (
+      const forbiddenCall of [
+        "generateInstrumentGamePlan(",
+        "buildSessionGamePlan(",
+        "fetchNewsForGamePlan(",
+        "persistActiveGamePlan(",
+        "applyGamePlanValidityWindow(",
+      ]
+    ) {
+      expect(scannerSource).not.toContain(forbiddenCall);
+    }
+    expect(scannerSource).not.toContain('source: "automatic_scan"');
+    expect(refreshFunctionSource).toContain("generateInstrumentGamePlan(");
+    expect(refreshFunctionSource).toContain("persistActiveGamePlan(");
   });
 
   it("keeps rotating discovery slots out of Game Plan authority scope", () => {
