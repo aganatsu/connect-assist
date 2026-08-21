@@ -53,4 +53,9 @@ describe("Zone Setup confirmation contract", () => {
     expect(source).toContain("PAPER + LIVE");
     expect(source).toContain("broker constraints");
   });
+
+  it("labels an enforced pre-armed stop as arm-time geometry", () => {
+    expect(source).toContain('const stopLossLabel = zoneStopPolicyAppliedAtArm ? "Arm-time SL" : "SL"');
+    expect(source).toContain("Final SL recalculated at authorization");
+  });
 });

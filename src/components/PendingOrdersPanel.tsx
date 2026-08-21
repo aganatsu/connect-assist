@@ -194,6 +194,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       ? "PAPER"
       : "OBSERVE";
     const zoneStopPolicyPlan = signalReason.zoneSetupStopPolicy || null;
+    const stopLossLabel = zoneStopPolicyAppliedAtArm ? "Arm-time SL" : "SL";
 
     const decision = order.decision_context ||
       signalReason.decisionContext ||
@@ -311,7 +312,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 : `Price in zone — awaiting ${order.direction === "short" ? "bearish" : "bullish"} ${confirmationLabel}`}
             </span>
             <span className="text-foreground/60">
-              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+              {stopLossLabel}: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
               TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
@@ -324,7 +325,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               <span className="text-info-c">{getDistanceDisplay(order)} away</span>
             </span>
             <span>
-              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+              {stopLossLabel}: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
               TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
@@ -363,7 +364,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           </span>
           <span className={zoneStopPolicyAppliedAtArm ? "text-profit" : "text-foreground/50"}>
             {zoneStopPolicyAppliedAtArm
-              ? `ENFORCED / ${zoneStopPolicyPlan?.executionFloorSource === "broker_snapshot" ? "broker constraints" : "arm-time spread proxy"}`
+              ? `ENFORCED / ${zoneStopPolicyPlan?.executionFloorSource === "broker_snapshot" ? "broker constraints" : "arm-time spread proxy"} · Final SL recalculated at authorization`
               : "OBSERVE ONLY"}
           </span>
         </div>
