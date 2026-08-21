@@ -8,13 +8,13 @@ import {
   evaluateCrossTimeframeShadowCandidate,
 } from "./crossTimeframeShadowValidation.ts";
 import {
-  evaluateCrossTimeframeEntryAuthority,
   type CrossTimeframeEntryAuthorityDecision,
+  evaluateCrossTimeframeEntryAuthority,
 } from "./crossTimeframeEntryAuthority.ts";
 import type { RankedPOI } from "./impulseZoneEngine.ts";
 import {
-  resolveCanonicalDealingRange,
   type CanonicalDealingRangeSelection,
+  resolveCanonicalDealingRange,
 } from "./canonicalDealingRange.ts";
 import type { EvidenceRow } from "./zoneTimeframeEvidence.ts";
 import {
@@ -124,7 +124,9 @@ function impulseReference(
         .length > 0
       ? record(candidate.canonicalImpulseMetrics)
       : null,
-    qualification: Object.keys(record(qualification)).length > 0 ? record(qualification) : null,
+    qualification: Object.keys(record(qualification)).length > 0
+      ? record(qualification)
+      : null,
   };
 }
 
@@ -137,10 +139,12 @@ export function buildFrozenCrossTimeframeContext(input: {
   zoneStory?: unknown;
   evidenceCertificates?: EvidenceCertificateReference[];
   crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
-  timeframeEvidence?: Pick<
-    EvidenceRow,
-    "observed_at" | "selected_timeframe" | "slots"
-  > | null;
+  timeframeEvidence?:
+    | Pick<
+      EvidenceRow,
+      "observed_at" | "selected_timeframe" | "slots"
+    >
+    | null;
   impulseEntryLifecycleMode?: ImpulseEntryLifecycleMode;
   confirmationMethod?: "choch" | "indicators" | "choch_and_indicators";
 }): FrozenCrossTimeframeContext {
@@ -177,8 +181,8 @@ export function buildFrozenCrossTimeframeContext(input: {
     }
     : null;
   const ictEntryZoneAuthority = Object.keys(
-    record(story.candidateAuthorityObservation),
-  ).length > 0
+      record(story.candidateAuthorityObservation),
+    ).length > 0
     ? record(story.candidateAuthorityObservation)
     : null;
   const shadowEvaluation = selectedZone
@@ -187,31 +191,57 @@ export function buildFrozenCrossTimeframeContext(input: {
       input.crossTimeframeAuthority.policy,
     )
     : null;
-  const canonicalDealingRange = input.timeframeEvidence && selectedZone?.timeframe
-    ? resolveCanonicalDealingRange({
-      slots: input.timeframeEvidence.slots,
-      parentTimeframe: typeof lineage.parentTimeframe === "string"
-        ? lineage.parentTimeframe
-        : null,
-      childTimeframe: selectedZone.timeframe,
-      frozenAt: input.timeframeEvidence.observed_at,
-    })
-    : {
-      available: false as const,
-      range: null,
-      reason: "no_valid_impulse_range" as const,
-    };
+  const canonicalDealingRange =
+    input.timeframeEvidence && selectedZone?.timeframe
+      ? resolveCanonicalDealingRange({
+        slots: input.timeframeEvidence.slots,
+        parentTimeframe: typeof lineage.parentTimeframe === "string"
+          ? lineage.parentTimeframe
+          : null,
+        childTimeframe: selectedZone.timeframe,
+        frozenAt: input.timeframeEvidence.observed_at,
+      })
+      : {
+        available: false as const,
+        range: null,
+        reason: "no_valid_impulse_range" as const,
+      };
 
   const authorityCandidates = Array.isArray(ictEntryZoneAuthority?.ranked)
     ? ictEntryZoneAuthority.ranked.map(record)
     : [];
-  const authoritySelected = record(ictEntryZoneAuthority?.selected);
-  const canonicalRange = canonicalDealingRange.available ? canonicalDealingRange.range : null;
+  const canonicalRange = canonicalDealingRange.available
+    ? canonicalDealingRange.range
+    : null;
   const impulseQualification = record(story.impulseQualification);
   const lifecycleImpulseQualified = impulseQualification.qualified === true &&
     impulseQualification.state === "qualified" &&
     impulseQualification.contractVersion === "impulse-zone-qualification.v2";
-  const lifecycleCandidates = canonicalRange
+  const lifecycleCandidateTypes = [
+    "ob",
+    "fvg",
+    "breaker",
+    "ob_fvg",
+    "breaker_fvg",
+  ] as const;
+  const executableCandidateType =
+    lifecycleCandidateTypes.find((type) => type === selectedZone?.type) || null;
+  const executableLifecycleCandidate = canonicalRange &&
+      selectedZone?.candidateId && executableCandidateType &&
+      selectedZone.low !== null && selectedZone.high !== null &&
+      selectedZone.high > selectedZone.low &&
+      selectedZone.low >= canonicalRange.low &&
+      selectedZone.high <= canonicalRange.high
+    ? {
+      id: selectedZone.candidateId,
+      type: executableCandidateType,
+      low: selectedZone.low,
+      high: selectedZone.high,
+      timeframe: selectedZone.timeframe || "unknown",
+      impulseId: canonicalRange.impulseId,
+    }
+    : null;
+  const authorityLifecycleCandidates = canonicalRange
     ? authorityCandidates
       .filter((candidate) =>
         candidate.eligible === true &&
@@ -222,20 +252,47 @@ export function buildFrozenCrossTimeframeContext(input: {
       )
       .map((candidate) => ({
         id: String(candidate.id),
-        type: candidate.type as "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg",
+        type: candidate.type as
+          | "ob"
+          | "fvg"
+          | "breaker"
+          | "ob_fvg"
+          | "breaker_fvg",
         low: Number(candidate.low),
         high: Number(candidate.high),
-        timeframe: String(candidate.timeframe || selectedZone?.timeframe || "unknown"),
+        timeframe: String(
+          candidate.timeframe || selectedZone?.timeframe || "unknown",
+        ),
         impulseId: canonicalRange.impulseId,
       }))
     : [];
+  const lifecycleCandidates = executableLifecycleCandidate
+    ? [
+      executableLifecycleCandidate,
+      ...authorityLifecycleCandidates.filter((candidate) =>
+        candidate.id !== executableLifecycleCandidate.id &&
+        (candidate.low !== executableLifecycleCandidate.low ||
+          candidate.high !== executableLifecycleCandidate.high)
+      ),
+    ]
+    : [];
+  if (
+    canonicalRange && lifecycleImpulseQualified &&
+    input.impulseEntryLifecycleMode === "enforce" &&
+    !executableLifecycleCandidate
+  ) {
+    throw new Error(
+      "Enforced impulse lifecycle requires the executable selected zone inside the canonical range",
+    );
+  }
   const lifecycleExpiry = canonicalRange
     ? new Date(
       Date.parse(canonicalRange.frozenAt) +
         (input.stylePolicy.lifecycle?.limitOrderExpiryMinutes ?? 60) * 60_000,
     ).toISOString()
     : null;
-  const impulseEntryLifecycle = canonicalRange && lifecycleImpulseQualified && lifecycleCandidates.length > 0
+  const impulseEntryLifecycle = canonicalRange && lifecycleImpulseQualified &&
+      lifecycleCandidates.length > 0
     ? buildImpulseEntryLifecycle({
       mode: input.impulseEntryLifecycleMode || "observe",
       now: canonicalRange.frozenAt,
@@ -251,13 +308,12 @@ export function buildFrozenCrossTimeframeContext(input: {
         expiresAt: lifecycleExpiry!,
       },
       candidates: lifecycleCandidates,
-      initialCandidateId: typeof authoritySelected.id === "string"
-        ? authoritySelected.id
-        : selectedZone?.candidateId,
+      initialCandidateId: executableLifecycleCandidate!.id,
       confirmation: {
         method: input.confirmationMethod || "choch",
         timeframe: input.stylePolicy.timeframes?.roles?.confirmation || "5m",
-        refinementTimeframe: input.stylePolicy.timeframes?.roles?.refinement || "1m",
+        refinementTimeframe: input.stylePolicy.timeframes?.roles?.refinement ||
+          "1m",
         expiresAt: lifecycleExpiry!,
       },
     })
@@ -302,7 +358,11 @@ export function buildFrozenCrossTimeframeContext(input: {
       : null,
     parentImpulse: parent ? impulseReference(parent) : null,
     childImpulse: selectedZone
-      ? impulseReference(best, record(story.impulse), record(story.impulseQualification))
+      ? impulseReference(
+        best,
+        record(story.impulse),
+        record(story.impulseQualification),
+      )
       : null,
     canonicalDealingRange,
     impulseEntryLifecycle,

@@ -78,6 +78,14 @@ activation mode requires it. The backtest orchestrator does not simulate the
 post-touch pending-order lifecycle, so this route-specific activation is not
 silently applied to unrelated market-fill backtests.
 
+## Impulse entry lifecycle zone identity
+
+`frozenCrossTimeframeContext.ts` seeds the lifecycle active candidate from the exact
+executable `bestZone` geometry. The observe-only ICT entry-zone authority may supply
+prequalified deeper candidates, but it cannot replace the executable initial zone.
+`impulseEntryLifecycle.ts` rejects an explicitly requested initial candidate when
+filtering removes it; it must never silently activate a different zone.
+
 ## Post-touch CHoCH/MSS trigger
 
 `zone-confirmation-scanner` currently requires both `detectZoneConfirmation` and

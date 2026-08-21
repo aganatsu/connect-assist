@@ -43,7 +43,11 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
         enforcement: "observe_only",
         selected: { id: "child-1+fvg-1", type: "ob_fvg" },
       },
-      impulseQualification: { contractVersion: "impulse-zone-qualification.v2", state: "qualified", qualified: true },
+      impulseQualification: {
+        contractVersion: "impulse-zone-qualification.v2",
+        state: "qualified",
+        qualified: true,
+      },
       impulse: {
         high: 1.72,
         low: 1.7,
@@ -154,4 +158,87 @@ Deno.test("frozen cross-TF context records absence instead of inventing lineage"
   assertEquals(frozen.canonicalDealingRange.available, false);
   assertEquals(frozen.evidenceCertificates, []);
   assertEquals(frozen.authority.evidenceAvailable, false);
+});
+
+Deno.test("impulse lifecycle starts from the executable zone and queues deeper authority candidates", () => {
+  const frozen = buildFrozenCrossTimeframeContext({
+    symbol: "CHF/JPY",
+    gamePlan: null,
+    directionVerdict: null,
+    stylePolicy,
+    zoneStory: {
+      selectedTF: "5m",
+      impulseQualification: {
+        contractVersion: "impulse-zone-qualification.v2",
+        state: "qualified",
+        qualified: true,
+      },
+      bestZone: {
+        type: "fvg",
+        low: 198.26666,
+        high: 198.3589,
+        candidateModel: { candidateId: "executable-fvg", rank: 1 },
+        timeframeLineage: { candidateTimeframe: "5m" },
+      },
+      candidateAuthorityObservation: {
+        selected: {
+          id: "deeper-ob",
+          type: "ob",
+          direction: "bullish",
+          low: 198.12,
+          high: 198.2,
+          timeframe: "5m",
+          eligible: true,
+        },
+        ranked: [{
+          id: "deeper-ob",
+          type: "ob",
+          direction: "bullish",
+          low: 198.12,
+          high: 198.2,
+          timeframe: "5m",
+          eligible: true,
+        }],
+      },
+    },
+    crossTimeframeAuthority,
+    impulseEntryLifecycleMode: "enforce",
+    timeframeEvidence: {
+      observed_at: "2026-08-21T08:00:00.000Z",
+      selected_timeframe: "5m",
+      slots: [{
+        timeframe: "5m",
+        impulses: [{
+          impulseId: "chfjpy-impulse",
+          selected: true,
+          direction: "bullish",
+          high: 198.5,
+          low: 198,
+        }],
+      }],
+    } as any,
+  });
+
+  const lifecycle = frozen.impulseEntryLifecycle;
+  if (!lifecycle) throw new Error("expected an impulse lifecycle");
+  assertEquals(lifecycle.activeCandidateId, "executable-fvg");
+  assertEquals(
+    lifecycle.candidates.map((candidate) => ({
+      id: candidate.id,
+      low: candidate.low,
+      high: candidate.high,
+      state: candidate.state,
+    })),
+    [{
+      id: "executable-fvg",
+      low: 198.26666,
+      high: 198.3589,
+      state: "active",
+    }, {
+      id: "deeper-ob",
+      low: 198.12,
+      high: 198.2,
+      state: "queued",
+    }],
+  );
 });
