@@ -356,8 +356,10 @@ Deno.serve(async (req) => {
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const msg = String(error?.message || "");
+    const isAuth = /jwt|unauthor|authorization/i.test(msg);
+    return new Response(JSON.stringify({ error: msg, code: isAuth ? "invalid_jwt" : undefined }), {
+      status: isAuth ? 401 : 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
