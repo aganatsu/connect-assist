@@ -21,7 +21,6 @@ import {
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
   evaluateFinalTradeAuthorization,
-  type DirectionVerdictForAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import {
   attachDecisionContext,
@@ -32,7 +31,6 @@ import {
   type EntryConfirmationDecision,
 } from "../_shared/decisionContract.ts";
 import {
-  directionVerdictMatchesGamePlan,
   loadActiveDirectionVerdicts,
   persistActiveDirectionVerdict,
 } from "../_shared/directionVerdictStore.ts";
@@ -123,22 +121,16 @@ import {
   normalizeSymKey,
 } from "../_shared/smcAnalysis.ts";
 import {
-  generateInstrumentGamePlan, buildSessionGamePlan,
-  getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews, formatGamePlanAuthoritySummary,
-  type SessionGamePlan, type InstrumentGamePlan, type SessionName,
+  getCurrentSession,
+  type SessionGamePlan, type InstrumentGamePlan,
 } from "../_shared/gamePlan.ts";
 import {
   gamePlanSymbolsMatchScope,
   resolveGamePlanMarketScope,
 } from "../_shared/gamePlanMarketScope.ts";
 import {
-  applyGamePlanValidityWindow,
-  buildGamePlanConfigSnapshot,
-  enrichGamePlanWithDirectionalNews,
   evaluateGamePlanReuse,
-  gamePlanToScanLogDetails,
   loadActiveGamePlan,
-  persistActiveGamePlan,
 } from "../_shared/gamePlanStore.ts";
 import {
   classifySetupType, manageOpenPositions,
@@ -1600,6 +1592,13 @@ async function runScanForUser(
   try {
   const styleResolution = await loadConfig(supabase, userId);
   const config = styleResolution.config;
+  const gamePlanEnabled = (config as any).gamePlanEnabled !== false;
+  const gpEnforcementMode = ((config as any).gpEnforcementMode ?? "hard") as
+    | "off"
+    | "soft"
+    | "hard";
+  const gamePlanAffectsExecution =
+    gamePlanEnabled && gpEnforcementMode !== "off";
   const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
     (config as any).impulseEntryLifecycleMode,
     null,
@@ -2576,15 +2575,15 @@ async function runScanForUser(
   }
 
   // ── Thesis Validation: Load the dedicated active Gameplan version ──
-  // This runs BEFORE the game plan generation section (which is after management-only return).
-  // All later consumers reuse this exact version instead of searching scan_logs.
+  // Every later consumer reuses this exact dedicated version. The trading
+  // scanner never generates or persists Game Plans.
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
   let _activeDirectionVerdicts = new Map<
     string,
     DirectionVerdictDecision
   >();
   let _evidenceCertificateReferences: EvidenceCertificateReference[] = [];
-  if ((config as any).gamePlanEnabled !== false) {
+  if (gamePlanEnabled) {
     try {
       _lastGamePlanForValidation = await loadActiveGamePlan(
         supabase,
@@ -2618,25 +2617,6 @@ async function runScanForUser(
       `[scan ${scanCycleId}] Frozen context: current evidence certificates unavailable: ${certificateLoadErr?.message}`,
     );
   }
-
-  const latestDirectionVerdictFor = (symbol: string): DirectionVerdictForAuthorization | null => {
-    const verdict = _activeDirectionVerdicts.get(symbol) || null;
-    if (
-      verdict &&
-      (config as any).gamePlanEnabled !== false &&
-      !directionVerdictMatchesGamePlan(
-        verdict,
-        _lastGamePlanForValidation,
-        symbol,
-      )
-    ) {
-      console.warn(
-        `[scan ${scanCycleId}] ${symbol}: active Direction Verdict references a different Gameplan version`,
-      );
-      return null;
-    }
-    return verdict;
-  };
 
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
   let pendingFilled = 0;
@@ -3187,32 +3167,18 @@ async function runScanForUser(
     );
   }
 
-  // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
-  // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
-  // Validity comes from the immutable resolved style policy.
-  // ═══════════════════════════════════════════════════════════════════════════
-  const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
+  // ── GAME PLAN: consume the dedicated active version ──
+  // game-plan-refresh is the only live generator and persistence owner. A
+  // missing, stale, or wrong-scope plan must never delay the trading scan.
   let activeGamePlan: SessionGamePlan | null = null;
-  try {
-    const currentSessionName = getCurrentSession();
-    const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
-    const gamePlanValidityMinutes = scanStylePolicy.lifecycle.gamePlanValidityMinutes;
-    const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
-    const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
-    if (gamePlanEnabled) {
-      // Game Plan authority covers the configured universe. The rotating scan
-      // batch is discovery scheduling only; using it here regenerated and
-      // notified a new plan every time the eight active slots rotated.
+  if (gamePlanEnabled) {
+    try {
+      const currentSessionName = getCurrentSession();
       const gamePlanMarketScope = resolveGamePlanMarketScope(
         fullInstrumentUniverse,
         now,
       );
-      const gamePlanSymbols = gamePlanMarketScope.eligibleSymbols;
       const lastGP = _lastGamePlanForValidation;
-      const lastGPTime = lastGP?.generatedAt
-        ? new Date(lastGP.generatedAt).getTime()
-        : 0;
-      const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
       const reuseDecision = evaluateGamePlanReuse(lastGP, {
         session: currentSessionName,
         style: scanStylePolicy.style,
@@ -3224,219 +3190,27 @@ async function runScanForUser(
         )
         : false;
 
-      console.log(`[scan ${scanCycleId}] Game Plan validity check: session=${currentSessionName}, style=${scanStylePolicy.style}, ageHours=${hoursSinceLastGP.toFixed(2)}, reusable=${reuseDecision.reusable && lastPlanMatchesMarketScope}, validityMinutes=${gamePlanValidityMinutes}, expiresAt=${reuseDecision.expiresAt || "none"}, reason=${lastPlanMatchesMarketScope ? reuseDecision.reason : "market_scope_changed"}, scope=${gamePlanMarketScope.reason}, eligible=[${gamePlanSymbols.join(", ")}], excluded=[${gamePlanMarketScope.excludedSymbols.join(", ")}]`);
-
       if (reuseDecision.reusable && lastGP && lastPlanMatchesMarketScope) {
-        // Reuse the immutable active version — don't regenerate or notify.
         activeGamePlan = lastGP;
-        console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING version ${lastGP.planVersion} for ${currentSessionName} (${hoursSinceLastGP.toFixed(1)}h old, expires ${reuseDecision.expiresAt}) — NO notification sent`);
-      } else {
-        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${lastPlanMatchesMarketScope ? reuseDecision.reason : "market_scope_changed"}`);
-      }
-
-      if (!activeGamePlan && gamePlanSymbols.length === 0) {
         console.log(
-          `[scan ${scanCycleId}] Game Plan: no enabled instruments are open in market scope ${gamePlanMarketScope.reason}; previous plan will not be reused`,
+          `[scan ${scanCycleId}] Game Plan: consuming active version ${lastGP.planVersion}`,
         );
-      }
-
-      if (!activeGamePlan && gamePlanSymbols.length > 0) {
-      console.log(`[scan ${scanCycleId}] Game Plan: generating NEW plan for ${currentSessionName} session...`);
-      const instrumentPlans: InstrumentGamePlan[] = [];
-      // Fetch HTF data for each enabled instrument (batched to respect rate limits)
-      const GP_BATCH_SIZE = 3;
-      const GP_BATCH_DELAY = 1200;
-      for (let i = 0; i < gamePlanSymbols.length; i += GP_BATCH_SIZE) {
-        const batch = gamePlanSymbols.slice(i, i + GP_BATCH_SIZE);
-        const batchPlans = await Promise.all(batch.map(async (sym: string) => {
-          try {
-            // Fetch legacy session/level datasets plus the exact structural
-            // role candles required by the active style policy.
-            const [
-              gpDaily,
-              gpH4,
-              gpEntry,
-              gpHourly,
-              gpBias,
-              gpStructure,
-              gpSetup,
-            ] = await Promise.all([
-              cachedFetch(sym, "1d", "1y"),
-              cachedFetch(sym, "4h", "1mo"),
-              cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
-              cachedFetch(sym, "1h", "5d"),
-              cachedFetch(
-                sym,
-                timeframeAuthority.roles.bias,
-                timeframeFetchRange(timeframeAuthority.roles.bias),
-              ),
-              cachedFetch(
-                sym,
-                timeframeAuthority.roles.structure,
-                timeframeFetchRange(timeframeAuthority.roles.structure),
-              ),
-              cachedFetch(
-                sym,
-                timeframeAuthority.roles.setup,
-                timeframeFetchRange(timeframeAuthority.roles.setup),
-              ),
-            ]);
-            if (gpDaily.length < 10 || gpEntry.length < 10) return null;
-            const decisionEvidence = buildStyleDecisionEvidence(
-              timeframeAuthority,
-              bindTimeframeCandles(
-                timeframeAuthority,
-                buildTimeframeCandleMap([
-                  {
-                    timeframe: timeframeAuthority.roles.bias,
-                    candles: gpBias,
-                  },
-                  {
-                    timeframe: timeframeAuthority.roles.structure,
-                    candles: gpStructure,
-                  },
-                  {
-                    timeframe: timeframeAuthority.roles.setup,
-                    candles: gpSetup,
-                  },
-                  {
-                    timeframe: getEntryInterval(config.entryTimeframe),
-                    candles: gpEntry,
-                  },
-                ]),
-              ),
-              {
-                h4ChochLookback: config.simpleDirectionH4ChochLookback,
-                h1BosLookback: config.simpleDirectionH1BosLookback,
-                confirmedTrendFibFactor: config.confirmedTrendFibFactor,
-                confirmedTrendSwingLookback:
-                  config.confirmedTrendSwingLookback,
-                useConfirmedTrend: config.useConfirmedTrend,
-              },
-            );
-            return generateInstrumentGamePlan(
-              sym,
-              gpDaily,
-              gpH4,
-              gpEntry,
-              gpHourly,
-              currentSessionName,
-              {
-                ipdaRangesEnabled,
-                equalHighsLowsSensitivity:
-                  config.equalHighsLowsSensitivity,
-                liquidityPoolMinTouches: config.liquidityPoolMinTouches,
-                decisionEvidence,
-              },
-            );
-          } catch (e: any) {
-            console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
-            return null;
-          }
-        }));
-        for (const plan of batchPlans) {
-          if (plan) instrumentPlans.push(plan);
-        }
-        if (i + GP_BATCH_SIZE < gamePlanSymbols.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
-      }
-      const generatedGamePlanSymbols = new Set(
-        instrumentPlans.map((plan) => plan.symbol),
-      );
-      const missingGamePlanSymbols = gamePlanSymbols.filter(
-        (symbol: string) => !generatedGamePlanSymbols.has(symbol),
-      );
-      if (missingGamePlanSymbols.length === 0) {
-        activeGamePlan = buildSessionGamePlan(currentSessionName, instrumentPlans);
-        console.log(`[scan ${scanCycleId}] Game Plan: ${currentSessionName} — ${activeGamePlan.focusPairs.length} focus pairs: [${activeGamePlan.focusPairs.join(", ")}]`);
-        for (const plan of instrumentPlans) {
-          const emoji = plan.bias === "bullish" ? "🟢" : plan.bias === "bearish" ? "🔴" : "⚪";
-          console.log(`[scan ${scanCycleId}] Game Plan ${emoji} ${plan.symbol}: ${plan.bias} (${plan.biasConfidence}%) | DOL: ${plan.dol?.description || "none"} | Regime: ${plan.regime} | Trade: ${plan.tradeable}`);
-        }
-        // Fetch economic calendar events and enrich game plan with news awareness
-        try {
-          const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-          const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-          const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, gamePlanSymbols);
-          if (newsEvents.length > 0) {
-            activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
-            activeGamePlan = enrichGamePlanWithDirectionalNews(activeGamePlan);
-            console.log(`[scan ${scanCycleId}] Game Plan: ${newsEvents.length} news events found (${newsEvents.filter(e => e.impact === "high").length} high-impact)`);
-            console.log(`[scan ${scanCycleId}] News Impact: ${((activeGamePlan as any).newsImpacts || []).length} events analyzed`);
-          } else {
-            console.log(`[scan ${scanCycleId}] Game Plan: no relevant news events today`);
-          }
-        } catch (e: any) {
-          console.warn(`[scan ${scanCycleId}] Game Plan: news fetch error (non-fatal): ${e?.message}`);
-        }
-        activeGamePlan = applyGamePlanValidityWindow(
-          activeGamePlan,
-          scanStylePolicy,
-        );
-        activeGamePlan.summary = formatGamePlanAuthoritySummary(activeGamePlan);
-        try {
-          activeGamePlan = await persistActiveGamePlan(
-            supabase,
-            activeGamePlan,
-            {
-              userId,
-              botId: BOT_ID,
-              source: "automatic_scan",
-              configSnapshot: buildGamePlanConfigSnapshot(
-                config,
-                scanStylePolicy,
-                runtimeConfigProvenance,
-              ),
-              marketDataSnapshot: {
-                hierarchy: ["Twelve Data", "Polygon"],
-                scanCycleId,
-                gamePlanMarketScope,
-              },
-            },
-          );
-        } catch (storeError) {
-          // Never let an unversioned in-memory plan become execution context.
-          activeGamePlan = null;
-          throw storeError;
-        }
-        _lastGamePlanForValidation = activeGamePlan;
-
-        // Keep scan_logs as an observability event, never as active storage.
-        await supabase.from("scan_logs").insert({
-          user_id: userId,
-          bot_id: BOT_ID,
-          pairs_scanned: 0,
-          signals_found: 0,
-          trades_placed: 0,
-          details_json: gamePlanToScanLogDetails(
-            activeGamePlan,
-            "automatic_scan",
-          ),
-        });
-        // Send Telegram notification with game plan summary (only for NEW plans, respects gamePlanNotify toggle)
-        if (gamePlanNotify && telegramChatIds.length > 0 && shouldNotify("game_plan") && activeGamePlan.summary) {
-          await Promise.all(telegramChatIds.map(async (chatId: string) => {
-            try {
-              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                body: JSON.stringify({ chat_id: chatId, message: activeGamePlan!.summary }),
-              });
-            } catch (e: any) {
-              console.warn(`[game-plan] Telegram send error [${chatId}]: ${e?.message}`);
-            }
-          }));
-        } else if (!gamePlanNotify) {
-          console.log(`[scan ${scanCycleId}] Game Plan: Telegram notifications disabled by config`);
-        }
       } else {
-        console.error(
-          `[scan ${scanCycleId}] Game Plan: incomplete generation (${instrumentPlans.length}/${gamePlanSymbols.length}); missing [${missingGamePlanSymbols.join(", ")}]. Previous complete plan remains authoritative; partial plan was not activated.`,
+        const unavailableReason = !lastGP
+          ? "missing_active_plan"
+          : !lastPlanMatchesMarketScope
+          ? "market_scope_changed"
+          : reuseDecision.reason;
+        console.warn(
+          `[scan ${scanCycleId}] Game Plan unavailable for consumption (${unavailableReason}); pair scanning continues and game-plan-refresh remains the sole live generator`,
         );
       }
-      } // close if (!activeGamePlan) — new plan generation block
+    } catch (error: any) {
+      activeGamePlan = null;
+      console.warn(
+        `[scan ${scanCycleId}] Game Plan consumer validation failed (${error?.message}); pair scanning continues`,
+      );
     }
-  } catch (e: any) {
-    console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
   }
 
   // ── Phase 6: Focus Pair Priority ──
@@ -3444,7 +3218,7 @@ async function runScanForUser(
   // When max positions are limited, this gives focus pairs first shot at available slots.
   // Non-focus pairs are still scanned if capacity remains.
   let scanOrder = [...scanUniverse];
-  if (activeGamePlan && activeGamePlan.focusPairs && activeGamePlan.focusPairs.length > 0) {
+  if (gamePlanAffectsExecution && activeGamePlan?.focusPairs?.length) {
     const focusSet = new Set(activeGamePlan.focusPairs);
     const focusPairs = scanOrder.filter(p => focusSet.has(p));
     const nonFocusPairs = scanOrder.filter(p => !focusSet.has(p));
@@ -3919,8 +3693,7 @@ async function runScanForUser(
     // Pass the per-instrument game plan data into the confluence engine so it can
     // use bias, DOL, key levels, and focus-pair status for scoring and TP placement.
     // The game plan is generated once per session (Layer 2) and consumed here (Layer 3).
-    const gpEnforcementMode = ((config as any).gpEnforcementMode ?? "hard") as "off" | "soft" | "hard";
-    if (activeGamePlan && gpEnforcementMode !== "off") {
+    if (activeGamePlan && gamePlanAffectsExecution) {
       const pairPlan = activeGamePlan.plans.find((p: InstrumentGamePlan) => p.symbol === pair) || null;
       (pairConfig as any)._gamePlanContext = pairPlan ? {
         bias: pairPlan.bias,
@@ -7375,10 +7148,18 @@ async function runScanForUser(
       if (newsImpacts && newsImpacts.length > 0 && (config as any).newsFilterEnabled !== false) {
         try {
           const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
+          const newsConflictEnforced =
+            gamePlanAffectsExecution && newsAlignment.conflicting;
           if (newsAlignment.conflicting) {
-            // Strong news conflict — block the trade
-            gates.push({ passed: false, reason: `News conflict: ${newsAlignment.advisory}` });
-            console.log(`[scan ${scanCycleId}] ❌ ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
+            gates.push({
+              passed: !newsConflictEnforced,
+              reason: gamePlanAffectsExecution
+                ? `News conflict: ${newsAlignment.advisory}`
+                : `[diagnostic:gameplan_news] News conflict observed: ${newsAlignment.advisory}; Game Plan mode is off`,
+            });
+            console.log(
+              `[scan ${scanCycleId}] ${newsConflictEnforced ? "❌" : "ℹ️"} ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`,
+            );
           } else if (!newsAlignment.aligned && newsAlignment.strength >= 25) {
             // Moderate conflict — log warning but allow
             gates.push({ passed: true, reason: `News caution: ${newsAlignment.advisory}` });
@@ -11269,12 +11050,6 @@ async function runScanForUser(
     console.log(`[scan ${scanCycleId}] Persistent candle cache: wrote ${freshlyFetchedCandles.length} entries to DB`);
   }
 
-  if (candleSnapshotRows.length > 0) {
-    for (let i = 0; i < candleSnapshotRows.length; i += 20) {
-      const { error } = await supabase.from("scan_candle_snapshots").upsert(candleSnapshotRows.slice(i, i + 20), { onConflict: "user_id,bot_id,scan_cycle_id,symbol,timeframe", ignoreDuplicates: true });
-      if (error) console.warn(`[scan ] candle snapshot chunk failed (non-fatal): `);
-    }
-  }
   scanCache.clear();
   _scanCandleSources.clear();
   // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──

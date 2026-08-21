@@ -12,16 +12,16 @@ const [scanner, fastScanner, manualGamePlan, backtest] = await Promise.all([
   Deno.readTextFile("./supabase/functions/backtest-engine/index.ts"),
 ]);
 
-Deno.test("automatic scanner snapshots one global and one pair style policy", () => {
+Deno.test("scanner snapshots pair policy and dedicated refresh snapshots Game Plan policy", () => {
   assertStringIncludes(scanner, "const scanStylePolicy = await");
   assertStringIncludes(scanner, "const pairStylePolicy = await");
   assertStringIncludes(scanner, "baseConfig: config");
   assert(
-    /buildGamePlanConfigSnapshot\(\s*config,\s*scanStylePolicy,\s*runtimeConfigProvenance,\s*\)/
+    /buildGamePlanConfigSnapshot\(\s*config,\s*stylePolicy,\s*styleResolution\.provenance,\s*\)/
       .test(
-        scanner,
+        manualGamePlan,
       ),
-    "automatic Gameplan must snapshot the resolved scan policy",
+    "dedicated Game Plan refresh must snapshot its resolved style policy",
   );
   assertStringIncludes(scanner, "stylePolicy: pairStylePolicy");
   assertStringIncludes(

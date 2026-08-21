@@ -13,16 +13,83 @@ const migrationUrl = new URL(
   "../../migrations/20260729100000_create_active_game_plans.sql",
   import.meta.url,
 );
+const functionsRoot = new URL("../../functions/", import.meta.url);
 
-Deno.test("automatic scanner reads and activates dedicated Gameplan versions", async () => {
+function collectFunctionSources(dir: URL, sources: URL[] = []): URL[] {
+  for (const entry of Deno.readDirSync(dir)) {
+    if (
+      entry.isDirectory &&
+      (entry.name === "_shared" || entry.name === "backtest-engine")
+    ) {
+      continue;
+    }
+    const child = new URL(entry.name + (entry.isDirectory ? "/" : ""), dir);
+    if (entry.isDirectory) collectFunctionSources(child, sources);
+    else if (entry.name.endsWith(".ts")) sources.push(child);
+  }
+  return sources;
+}
+
+Deno.test("automatic scanner consumes but never generates Gameplan versions", async () => {
   const source = await Deno.readTextFile(scannerUrl.pathname);
   assertStringIncludes(source, "loadActiveGamePlan(");
-  assertStringIncludes(source, "persistActiveGamePlan(");
-  assertStringIncludes(source, "applyGamePlanValidityWindow(");
-  assertStringIncludes(source, 'source: "automatic_scan"');
+  assertStringIncludes(source, "Game Plan consumer validation failed");
+  for (
+    const forbiddenCall of [
+      "generateInstrumentGamePlan(",
+      "buildSessionGamePlan(",
+      "fetchNewsForGamePlan(",
+      "persistActiveGamePlan(",
+      "applyGamePlanValidityWindow(",
+    ]
+  ) {
+    assertEquals(
+      source.includes(forbiddenCall),
+      false,
+      `bot-scanner must not call ${forbiddenCall}`,
+    );
+  }
+  assertEquals(source.includes('source: "automatic_scan"'), false);
   assertEquals(
     source.includes('.contains("details_json", { type: "game_plan" })'),
     false,
+  );
+});
+
+Deno.test("game-plan-refresh is the sole live Gameplan generator", () => {
+  const callSites = collectFunctionSources(functionsRoot)
+    .filter((file) =>
+      Deno.readTextFileSync(file).includes("generateInstrumentGamePlan(")
+    )
+    .map((file) => file.pathname.split("/functions/")[1])
+    .sort();
+
+  assertEquals(callSites, ["game-plan-refresh/index.ts"]);
+});
+
+Deno.test("Gameplan observation mode cannot change scanner execution", async () => {
+  const scannerSource = await Deno.readTextFile(scannerUrl.pathname);
+  const fastScannerSource = await Deno.readTextFile(fastScannerUrl.pathname);
+
+  assertStringIncludes(
+    scannerSource,
+    "const gamePlanAffectsExecution =\n    gamePlanEnabled && gpEnforcementMode !== \"off\";",
+  );
+  assertStringIncludes(
+    scannerSource,
+    "if (gamePlanAffectsExecution && activeGamePlan?.focusPairs?.length)",
+  );
+  assertStringIncludes(
+    scannerSource,
+    "const newsConflictEnforced =",
+  );
+  assertStringIncludes(
+    scannerSource,
+    "gamePlanAffectsExecution && newsAlignment.conflicting;",
+  );
+  assertStringIncludes(
+    fastScannerSource,
+    "config.gpEnforcementMode !== \"off\" &&",
   );
 });
 

@@ -38,6 +38,7 @@ instead of arbitrating.
 | AMD phase | 2 | shared only | 🟡 Dead local copy |
 | Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
 | SL/TP target selection | 1 | `calculateSLTP` | 🟢 Single owner |
+| Game Plan generation | 1 | `generateInstrumentGamePlan` / `game-plan-refresh` | 🟢 Single algorithm and live producer |
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
 | Session detection | 2 | `sessions.ts` | 🟢 Correct delegation |
 | FVG | 1 | `detectFVGs` | 🟢 Single owner |
@@ -50,6 +51,21 @@ instead of arbitrating.
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 
 ---
+
+## Game Plan generation and consumption
+
+`_shared/gamePlan.ts:generateInstrumentGamePlan` is the single algorithm owner.
+`game-plan-refresh` is the only live orchestrator allowed to call it and persist
+an active version. `bot-scanner` is a read-only consumer; missing, expired,
+malformed, or wrong-scope plans must not delay or abort pair scanning. Backtest
+may invoke the same shared algorithm directly for deterministic replay.
+
+With `gpEnforcementMode: "off"`, Game Plan remains observable but cannot reorder
+the scan universe, turn its directional-news analysis into a failed gate, alter
+scoring or targets, or invalidate an otherwise current Direction Verdict because
+of a Game Plan version mismatch. Direction Verdict and every independent safety
+gate keep their configured enforcement. Hard and soft Game Plan behavior remains
+unchanged.
 
 ## SL/TP target selection
 
