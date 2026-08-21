@@ -34,6 +34,22 @@ Deno.test("scanner freezes cross-TF context on every setup construction path", (
   assertStringIncludes(scanner, "canonicalImpulseMetrics:");
 });
 
+Deno.test("pending lifecycle identity uses the raw POI type, not its display label", () => {
+  assertStringIncludes(
+    scanner,
+    "lifecycleCandidateType: izData.bestZone.type",
+  );
+  assertStringIncludes(
+    scanner,
+    'lifecycleCandidateType: zonePOI?.type ?? ""',
+  );
+  assertStringIncludes(
+    scanner,
+    "type: limitEntry.lifecycleCandidateType",
+  );
+  assertStringIncludes(scanner, "displayType: limitEntry.zoneType");
+});
+
 Deno.test("setup lifecycle owns the cross-TF context", () => {
   assertStringIncludes(
     lifecycle,

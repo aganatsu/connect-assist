@@ -114,7 +114,8 @@ function lifecycleCandidateType(value: unknown):
   | "ob_fvg"
   | "breaker_fvg"
   | null {
-  const normalized = value === "breaker_block" ? "breaker" : value;
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const normalized = raw === "breaker_block" ? "breaker" : raw;
   return normalized === "ob" || normalized === "fvg" ||
       normalized === "breaker" || normalized === "ob_fvg" ||
       normalized === "breaker_fvg"
@@ -291,16 +292,17 @@ export function buildFrozenCrossTimeframeContext(input: {
   ) {
     lifecycleUnavailableReason = "executable_zone_outside_canonical_range";
   }
-  const executableLifecycleCandidate = canonicalRange && lifecycleUnavailableReason === null
-    ? {
-      id: executableZone.candidateId!,
-      type: executableZone.type!,
-      low: executableZone.low!,
-      high: executableZone.high!,
-      timeframe: executableZone.timeframe || "unknown",
-      impulseId: canonicalRange.impulseId,
-    }
-    : null;
+  const executableLifecycleCandidate =
+    canonicalRange && lifecycleUnavailableReason === null
+      ? {
+        id: executableZone.candidateId!,
+        type: executableZone.type!,
+        low: executableZone.low!,
+        high: executableZone.high!,
+        timeframe: executableZone.timeframe || "unknown",
+        impulseId: canonicalRange.impulseId,
+      }
+      : null;
   const authorityLifecycleCandidates = canonicalRange
     ? authorityCandidates
       .filter((candidate) =>
@@ -312,10 +314,17 @@ export function buildFrozenCrossTimeframeContext(input: {
       )
       .map((candidate) => ({
         id: String(candidate.id),
-        type: candidate.type as "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg",
+        type: candidate.type as
+          | "ob"
+          | "fvg"
+          | "breaker"
+          | "ob_fvg"
+          | "breaker_fvg",
         low: Number(candidate.low),
         high: Number(candidate.high),
-        timeframe: String(candidate.timeframe || executableZone.timeframe || "unknown"),
+        timeframe: String(
+          candidate.timeframe || executableZone.timeframe || "unknown",
+        ),
         impulseId: canonicalRange.impulseId,
       }))
     : [];
@@ -440,7 +449,10 @@ export function validateImpulseLifecycleExecutableZone(input: {
     return { valid: true, reason: "Impulse lifecycle is not enforced" };
   }
   if (!input.context) {
-    return { valid: false, reason: "impulse_entry_lifecycle_context_unavailable" };
+    return {
+      valid: false,
+      reason: "impulse_entry_lifecycle_context_unavailable",
+    };
   }
   const availability = input.context.impulseEntryLifecycleAvailability;
   if (availability && !availability.available) {
@@ -466,13 +478,19 @@ export function validateImpulseLifecycleExecutableZone(input: {
       reason: "impulse_entry_lifecycle_executable_zone_unavailable",
     };
   }
-  if (active.low !== zoneLow || active.high !== zoneHigh || active.type !== zoneType) {
+  if (
+    active.low !== zoneLow || active.high !== zoneHigh ||
+    active.type !== zoneType
+  ) {
     return {
       valid: false,
       reason: "impulse_entry_lifecycle_executable_zone_mismatch",
     };
   }
-  return { valid: true, reason: "Impulse lifecycle matches the executable zone" };
+  return {
+    valid: true,
+    reason: "Impulse lifecycle matches the executable zone",
+  };
 }
 
 export async function loadCurrentEvidenceCertificateReferences(

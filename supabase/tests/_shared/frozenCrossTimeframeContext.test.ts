@@ -203,7 +203,7 @@ Deno.test("impulse lifecycle starts from the executable zone and queues deeper a
       },
     },
     executableZone: {
-      type: "fvg",
+      type: "FVG",
       low: 198.26666,
       high: 198.3589,
       timeframe: "5m",
@@ -233,7 +233,7 @@ Deno.test("impulse lifecycle starts from the executable zone and queues deeper a
     validateImpulseLifecycleExecutableZone({
       mode: "enforce",
       context: frozen,
-      executableZone: { type: "fvg", low: 198.26666, high: 198.3589 },
+      executableZone: { type: "FVG", low: 198.26666, high: 198.3589 },
     }).valid,
     true,
   );
@@ -244,6 +244,14 @@ Deno.test("impulse lifecycle starts from the executable zone and queues deeper a
       executableZone: { type: "fvg", low: 198.2, high: 198.3589 },
     }).reason,
     "impulse_entry_lifecycle_executable_zone_mismatch",
+  );
+  assertEquals(
+    validateImpulseLifecycleExecutableZone({
+      mode: "enforce",
+      context: frozen,
+      executableZone: { type: "IZ-FVG", low: 198.26666, high: 198.3589 },
+    }).reason,
+    "impulse_entry_lifecycle_executable_zone_unavailable",
   );
   assertEquals(
     lifecycle.candidates.map((candidate) => ({
@@ -280,7 +288,9 @@ Deno.test("enforced frozen context reports an out-of-range executable zone witho
         qualified: true,
       },
       bestZone: {
-        type: "fvg", low: 1.099, high: 1.101,
+        type: "fvg",
+        low: 1.099,
+        high: 1.101,
         candidateModel: { candidateId: "outside-fvg", rank: 1 },
         timeframeLineage: { candidateTimeframe: "5m" },
       },
@@ -294,8 +304,11 @@ Deno.test("enforced frozen context reports an out-of-range executable zone witho
       slots: [{
         timeframe: "5m",
         impulses: [{
-          impulseId: "gbpusd-impulse", selected: true, direction: "bullish",
-          high: 1.11, low: 1.1,
+          impulseId: "gbpusd-impulse",
+          selected: true,
+          direction: "bullish",
+          high: 1.11,
+          low: 1.1,
         }],
       }],
     } as any,

@@ -2503,7 +2503,13 @@ async function runScanForUser(
   // ── Limit Orders: Helper to compute optimal entry price from OB/FVG zones ──
   function computeLimitEntryPrice(
     analysis: any, pair: string, direction: string
-  ): { price: number; zoneType: string; zoneLow: number; zoneHigh: number } | null {
+  ): {
+    price: number;
+    zoneType: string;
+    lifecycleCandidateType: string;
+    zoneLow: number;
+    zoneHigh: number;
+  } | null {
     if (!config.limitOrderEnabled) return null;
     const lastPrice = analysis.lastPrice;
     const spec = SPECS[pair] || SPECS["EUR/USD"];
@@ -2560,7 +2566,13 @@ async function runScanForUser(
     // Pick the closest candidate to current price (best fill probability)
     candidates.sort((a, b) => a.distance - b.distance);
     const best = candidates[0];
-    return { price: best.price, zoneType: best.zoneType, zoneLow: best.low, zoneHigh: best.high };
+    return {
+      price: best.price,
+      zoneType: best.zoneType,
+      lifecycleCandidateType: best.zoneType,
+      zoneLow: best.low,
+      zoneHigh: best.high,
+    };
   }
 
   // ── Thesis Validation: Load the dedicated active Gameplan version ──
@@ -8350,7 +8362,13 @@ async function runScanForUser(
           const zoneLow = izData.bestZone.low;
           const zoneHigh = izData.bestZone.high;
           const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
-          limitEntry = { price: zoneEntry, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
+          limitEntry = {
+            price: zoneEntry,
+            zoneType: `IZ-${zoneType}`,
+            lifecycleCandidateType: izData.bestZone.type,
+            zoneLow,
+            zoneHigh,
+          };
           console.log(`[${pair}] Impulse Zone entry override: limit at ${zoneEntry.toFixed(5)} (${zoneType} zone)`);
         } else if (izGateMode === "hard" && izData?.bestZone && !limitEntry) {
           // Fallback: use zone midpoint if no refined entry available
@@ -8358,7 +8376,13 @@ async function runScanForUser(
           const zoneLow = izData.bestZone.low;
           const zoneHigh = izData.bestZone.high;
           const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
-          limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
+          limitEntry = {
+            price: zoneMid,
+            zoneType: `IZ-${zoneType}`,
+            lifecycleCandidateType: izData.bestZone.type,
+            zoneLow,
+            zoneHigh,
+          };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
         // ── Unified Zone Entry Override ──
@@ -8370,7 +8394,13 @@ async function runScanForUser(
           const zoneLow = zonePOI?.low ?? unifiedEntry;
           const zoneHigh = zonePOI?.high ?? unifiedEntry;
           const zoneType = `UNIFIED-${(unifiedZoneData.selectedTF || "1H").toUpperCase()}`;
-          limitEntry = { price: unifiedEntry, zoneType, zoneLow, zoneHigh };
+          limitEntry = {
+            price: unifiedEntry,
+            zoneType,
+            lifecycleCandidateType: zonePOI?.type ?? "",
+            zoneLow,
+            zoneHigh,
+          };
           console.log(`[${pair}] Unified Zone entry override: limit at ${unifiedEntry.toFixed(5)} (${unifiedZoneData.selectedTF} story, score ${unifiedZoneData.unifiedScore}/14)`);
         }
 
@@ -8534,7 +8564,8 @@ async function runScanForUser(
           const limitSL = pendingPlan.stopLoss;
           const limitTP = pendingPlan.takeProfit;
           const pendingOriginatingZone = {
-            type: limitEntry.zoneType,
+            type: limitEntry.lifecycleCandidateType,
+            displayType: limitEntry.zoneType,
             low: limitEntry.zoneLow,
             high: limitEntry.zoneHigh,
             entry: limitEntry.price,
