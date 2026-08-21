@@ -104,6 +104,12 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
     if (["place_order", "close_trade", "modify_trade"].includes(action)) return { error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.", fallback: true };
   }
 
+  if (functionName === "broker-connections") {
+    const action = body?.action;
+    if (["list", "list_symbols", "probe_symbols"].includes(action)) return [];
+    return { error: "Broker connections are temporarily unavailable. Please retry shortly.", fallback: true };
+  }
+
   if (functionName === "paper-trading") {
     const action = body?.action;
     if (action === "status") return { ok: false, error: "Paper trading service is temporarily unavailable. Please try again shortly.", fallback: true, engine_status: "unknown", positions: [], orders: [] };

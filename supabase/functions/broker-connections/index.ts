@@ -119,7 +119,13 @@ Deno.serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     );
     const { data: claimsData, error: authError } = await supabase.auth.getClaims(token);
-    if (authError || !claimsData?.claims?.sub) throw new Error("Unauthorized");
+    if (authError || !claimsData?.claims?.sub) {
+      // 401 (not 500) so the client knows to refresh the session and retry.
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", code: "invalid_jwt", details: authError?.message || "missing sub claim" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
     const user = { id: claimsData.claims.sub as string };
 
     const { action, ...payload } = await req.json();
@@ -350,8 +356,10 @@ Deno.serve(async (req) => {
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const msg = String(error?.message || "");
+    const isAuth = /jwt|unauthor|authorization/i.test(msg);
+    return new Response(JSON.stringify({ error: msg, code: isAuth ? "invalid_jwt" : undefined }), {
+      status: isAuth ? 401 : 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
