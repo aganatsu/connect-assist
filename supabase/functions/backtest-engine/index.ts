@@ -2857,8 +2857,29 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               ),
             });
             analysis._canonicalDealingRangeAvailable = canonicalSelection.available;
+            const lifecycleExecutableZone = multiTF.bestZone
+              ? {
+                id: multiTF.bestZone.zone.candidateModel?.candidateId ||
+                  multiTF.bestZone.zone.localConfluence?.candidateId ||
+                  multiTF.bestZone.zone.poi.evidence?.entityId ||
+                  multiTF.bestZone.zone.poi.type + ":" +
+                    multiTF.bestZone.zone.poi.low + ":" +
+                    multiTF.bestZone.zone.poi.high,
+                type: multiTF.bestZone.zone.poi.type,
+                low: multiTF.bestZone.zone.poi.low,
+                high: multiTF.bestZone.zone.poi.high,
+                timeframe:
+                  multiTF.bestZone.zone.timeframeLineage?.candidateTimeframe ||
+                  multiTF.bestZone.zone.poi.evidence?.timeframe ||
+                  multiTF.selectedTF || "unknown",
+                impulseId: canonicalSelection.available
+                  ? canonicalSelection.range.impulseId
+                  : "",
+              }
+              : null;
             if (canonicalSelection.available &&
-              unifiedResult.candidateAuthorityObservation) {
+              unifiedResult.candidateAuthorityObservation &&
+              lifecycleExecutableZone) {
               const expiryMinutes = Number(
                 pairConfig.limitOrderExpiryMinutes ?? 60,
               );
@@ -2870,6 +2891,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 state: tradeLifecycleState,
                 range: canonicalSelection.range,
                 authority: unifiedResult.candidateAuthorityObservation,
+                executableZone: lifecycleExecutableZone,
                 mode: pairConfig.impulseEntryLifecycleMode || "observe",
                 now: candle.datetime,
                 expiresAt,

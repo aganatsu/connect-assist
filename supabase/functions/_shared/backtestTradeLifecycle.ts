@@ -3,6 +3,7 @@ import type { CanonicalDealingRange } from "./canonicalDealingRange.ts";
 import type { ICTEntryZoneSelection } from "./ictEntryZoneAuthority.ts";
 import {
   buildImpulseEntryLifecycle,
+  type BuildImpulseEntryLifecycleInput,
   type CandidateConfirmationContract,
   type ImpulseEntryLifecycle,
   type ImpulseEntryLifecycleMode,
@@ -43,6 +44,7 @@ export function discoverBacktestTradeLifecycle(input: {
   state: BacktestTradeLifecycleState;
   range: CanonicalDealingRange;
   authority: ICTEntryZoneSelection;
+  executableZone: BuildImpulseEntryLifecycleInput["candidates"][number];
   mode: ImpulseEntryLifecycleMode;
   now: string;
   expiresAt: string;
@@ -56,7 +58,7 @@ export function discoverBacktestTradeLifecycle(input: {
     return input.state;
   }
 
-  const candidates = input.authority.ranked
+  const authorityCandidates = input.authority.ranked
     .filter((candidate) =>
       candidate.eligible && candidate.impulseId.length > 0 &&
       candidate.direction === input.range.direction &&
@@ -70,7 +72,22 @@ export function discoverBacktestTradeLifecycle(input: {
       timeframe: candidate.timeframe,
       impulseId: input.range.impulseId,
     }));
-  if (candidates.length === 0) return input.state;
+  const executableCandidate =
+    input.executableZone.id.length > 0 &&
+      input.executableZone.high > input.executableZone.low &&
+      input.executableZone.low >= input.range.low &&
+      input.executableZone.high <= input.range.high
+      ? { ...input.executableZone, impulseId: input.range.impulseId }
+      : null;
+  if (!executableCandidate) return input.state;
+  const candidates = [
+    executableCandidate,
+    ...authorityCandidates.filter((candidate) =>
+      candidate.id !== executableCandidate.id &&
+      (candidate.low !== executableCandidate.low ||
+        candidate.high !== executableCandidate.high)
+    ),
+  ];
 
   return {
     ...input.state,
@@ -89,7 +106,7 @@ export function discoverBacktestTradeLifecycle(input: {
         expiresAt: input.expiresAt,
       },
       candidates,
-      initialCandidateId: input.authority.selected?.id || null,
+      initialCandidateId: input.executableZone.id,
       confirmation: {
         method: input.confirmationMethod,
         timeframe: input.confirmationTimeframe,

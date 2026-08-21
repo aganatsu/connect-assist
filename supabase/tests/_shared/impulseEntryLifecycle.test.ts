@@ -1,3 +1,4 @@
+import { assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildImpulseEntryLifecycle,
   candidateFailedByClose,
@@ -17,9 +18,30 @@ const input = {
     expiresAt: "2026-08-06T20:00:00.000Z",
   },
   candidates: [
-    { id: "deep-ob", type: "ob" as const, low: 1.11, high: 1.12, timeframe: "1H", impulseId: "impulse-1" },
-    { id: "shallow-fvg", type: "fvg" as const, low: 1.16, high: 1.17, timeframe: "1H", impulseId: "impulse-1" },
-    { id: "other-impulse", type: "ob" as const, low: 1.13, high: 1.14, timeframe: "1H", impulseId: "impulse-2" },
+    {
+      id: "deep-ob",
+      type: "ob" as const,
+      low: 1.11,
+      high: 1.12,
+      timeframe: "1H",
+      impulseId: "impulse-1",
+    },
+    {
+      id: "shallow-fvg",
+      type: "fvg" as const,
+      low: 1.16,
+      high: 1.17,
+      timeframe: "1H",
+      impulseId: "impulse-1",
+    },
+    {
+      id: "other-impulse",
+      type: "ob" as const,
+      low: 1.13,
+      high: 1.14,
+      timeframe: "1H",
+      impulseId: "impulse-2",
+    },
   ],
   confirmation: {
     method: "choch" as const,
@@ -32,9 +54,27 @@ const input = {
 
 Deno.test("orders candidates shallow to deep and rejects unrelated impulses", () => {
   const lifecycle = buildImpulseEntryLifecycle(input);
-  if (lifecycle.candidates.length !== 2) throw new Error("expected two candidates");
-  if (lifecycle.activeCandidateId !== "shallow-fvg") throw new Error("shallow zone must activate first");
-  if (lifecycle.candidates[1].id !== "deep-ob") throw new Error("deeper zone must queue second");
+  if (lifecycle.candidates.length !== 2) {
+    throw new Error("expected two candidates");
+  }
+  if (lifecycle.activeCandidateId !== "shallow-fvg") {
+    throw new Error("shallow zone must activate first");
+  }
+  if (lifecycle.candidates[1].id !== "deep-ob") {
+    throw new Error("deeper zone must queue second");
+  }
+});
+
+Deno.test("rejects an explicit initial candidate that is not eligible", () => {
+  assertThrows(
+    () =>
+      buildImpulseEntryLifecycle({
+        ...input,
+        initialCandidateId: "missing-zone",
+      }),
+    Error,
+    "Initial impulse entry candidate missing-zone is not eligible",
+  );
 });
 
 Deno.test("failed candidate advances deeper and starts a fresh confirmation", () => {
@@ -48,17 +88,28 @@ Deno.test("failed candidate advances deeper and starts a fresh confirmation", ()
     at: "2026-08-05T20:10:00.000Z",
     reason: "5m close through FVG far boundary",
   });
-  if (advanced.activeCandidateId !== "deep-ob") throw new Error("expected deeper candidate");
-  if (advanced.confirmation?.candidateId !== "deep-ob" || advanced.confirmation.generation !== 2) {
+  if (advanced.activeCandidateId !== "deep-ob") {
+    throw new Error("expected deeper candidate");
+  }
+  if (
+    advanced.confirmation?.candidateId !== "deep-ob" ||
+    advanced.confirmation.generation !== 2
+  ) {
     throw new Error("replacement requires a fresh confirmation contract");
   }
 });
 
 Deno.test("candidate failure and impulse invalidation use separate levels", () => {
   const lifecycle = buildImpulseEntryLifecycle(input);
-  if (!candidateFailedByClose(lifecycle, 1.15)) throw new Error("shallow FVG should fail");
-  if (impulseInvalidatedByClose(lifecycle, 1.15)) throw new Error("impulse must remain valid");
-  if (!impulseInvalidatedByClose(lifecycle, 1.09)) throw new Error("protected low should invalidate impulse");
+  if (!candidateFailedByClose(lifecycle, 1.15)) {
+    throw new Error("shallow FVG should fail");
+  }
+  if (impulseInvalidatedByClose(lifecycle, 1.15)) {
+    throw new Error("impulse must remain valid");
+  }
+  if (!impulseInvalidatedByClose(lifecycle, 1.09)) {
+    throw new Error("protected low should invalidate impulse");
+  }
 });
 
 Deno.test("confirmation must lock before it can authorize entry", () => {
@@ -67,7 +118,9 @@ Deno.test("confirmation must lock before it can authorize entry", () => {
     type: "confirmation_passed",
     at: "2026-08-05T20:05:00.000Z",
   });
-  if (premature.status !== "active") throw new Error("unlocked confirmation must not enter");
+  if (premature.status !== "active") {
+    throw new Error("unlocked confirmation must not enter");
+  }
   const locked = transitionImpulseEntryLifecycle(initial, {
     type: "trigger_locked",
     at: "2026-08-05T20:05:00.000Z",
@@ -78,5 +131,7 @@ Deno.test("confirmation must lock before it can authorize entry", () => {
     type: "confirmation_passed",
     at: "2026-08-05T20:10:00.000Z",
   });
-  if (entered.status !== "entered") throw new Error("locked confirmation should enter");
+  if (entered.status !== "entered") {
+    throw new Error("locked confirmation should enter");
+  }
 });

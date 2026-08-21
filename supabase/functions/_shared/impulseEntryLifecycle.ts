@@ -158,16 +158,26 @@ export function buildImpulseEntryLifecycle(
       ),
     }))
     .sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id));
+  const initialCandidateId = typeof input.initialCandidateId === "string" &&
+      input.initialCandidateId.length > 0
+    ? input.initialCandidateId
+    : null;
   const selectedDepth = rankedCandidates.find((candidate) =>
-    candidate.id === input.initialCandidateId
+    candidate.id === initialCandidateId
   )?.depth;
+  if (initialCandidateId && selectedDepth === undefined) {
+    throw new Error(
+      "Initial impulse entry candidate " + initialCandidateId +
+        " is not eligible",
+    );
+  }
   const candidates = rankedCandidates
     .filter((candidate) =>
       selectedDepth === undefined || candidate.depth >= selectedDepth
     )
     .sort((a, b) => {
-      if (a.id === input.initialCandidateId) return -1;
-      if (b.id === input.initialCandidateId) return 1;
+      if (a.id === initialCandidateId) return -1;
+      if (b.id === initialCandidateId) return 1;
       return a.depth - b.depth || a.id.localeCompare(b.id);
     })
     .slice(0, Math.max(1, input.maxCandidates ?? 3))

@@ -43,13 +43,28 @@ const authority = {
   }],
 };
 
+const executableZone = {
+  id: "ob-1",
+  type: "ob" as const,
+  low: 102,
+  high: 104,
+  timeframe: "1h",
+  impulseId: "impulse-1",
+};
+
 Deno.test("nested child impulse zone can enter the frozen parent range lifecycle", () => {
   const nestedAuthority = structuredClone(authority);
   nestedAuthority.ranked[0].impulseId = "child-impulse-15m";
   nestedAuthority.ranked[0].timeframe = "15m";
   const state = discoverBacktestTradeLifecycle({
     state: emptyBacktestTradeLifecycleState(), range,
-    authority: nestedAuthority, mode: "enforce", now: range.frozenAt,
+    authority: nestedAuthority,
+    executableZone: {
+      ...executableZone,
+      timeframe: "15m",
+      impulseId: "child-impulse-15m",
+    },
+    mode: "enforce", now: range.frozenAt,
     expiresAt: "2026-08-08T12:00:00.000Z",
     confirmationMethod: "choch", confirmationTimeframe: "5m",
     refinementTimeframe: "1m",
@@ -61,7 +76,7 @@ Deno.test("nested child impulse zone can enter the frozen parent range lifecycle
 
 Deno.test("backtest lifecycle persists and does not resurrect a terminal impulse", () => {
   let state = discoverBacktestTradeLifecycle({
-    state: emptyBacktestTradeLifecycleState(), range, authority,
+    state: emptyBacktestTradeLifecycleState(), range, authority, executableZone,
     mode: "enforce", now: range.frozenAt,
     expiresAt: "2026-08-08T12:00:00.000Z",
     confirmationMethod: "choch", confirmationTimeframe: "5m",
@@ -75,7 +90,7 @@ Deno.test("backtest lifecycle persists and does not resurrect a terminal impulse
   });
   assertEquals(state.lifecycle?.status, "exhausted");
   state = discoverBacktestTradeLifecycle({
-    state, range, authority, mode: "enforce",
+    state, range, authority, executableZone, mode: "enforce",
     now: "2026-08-08T10:30:00.000Z", expiresAt: "2026-08-08T12:00:00.000Z",
     confirmationMethod: "choch", confirmationTimeframe: "5m", refinementTimeframe: "1m",
   });
@@ -134,4 +149,48 @@ Deno.test("wait retracement remains blocked until its frozen plan is ready", () 
   assertEquals(isBacktestTradeLifecycleEntryReady(state), false);
   state.postConfirmationEntry.state = "ready";
   assertEquals(isBacktestTradeLifecycleEntryReady(state), true);
+});
+
+
+Deno.test("backtest lifecycle starts from executable geometry before deeper authority candidates", () => {
+  const deeperAuthority = structuredClone(authority);
+  deeperAuthority.selected = deeperAuthority.ranked[0];
+  const state = discoverBacktestTradeLifecycle({
+    state: emptyBacktestTradeLifecycleState(),
+    range,
+    authority: deeperAuthority,
+    executableZone: {
+      id: "executable-fvg",
+      type: "fvg",
+      low: 106,
+      high: 108,
+      timeframe: "1h",
+      impulseId: "impulse-1",
+    },
+    mode: "enforce",
+    now: range.frozenAt,
+    expiresAt: "2026-08-08T12:00:00.000Z",
+    confirmationMethod: "choch",
+    confirmationTimeframe: "5m",
+    refinementTimeframe: "1m",
+  });
+
+  assertEquals(state.lifecycle?.activeCandidateId, "executable-fvg");
+  assertEquals(
+    state.lifecycle?.candidates.map((candidate) => candidate.id),
+    ["executable-fvg", "ob-1"],
+  );
+});
+
+Deno.test("backtest ignores an executable zone outside the canonical range", () => {
+  const initial = emptyBacktestTradeLifecycleState();
+  const state = discoverBacktestTradeLifecycle({
+    state: initial, range, authority,
+    executableZone: { ...executableZone, low: 99, high: 101 },
+    mode: "enforce", now: range.frozenAt,
+    expiresAt: "2026-08-08T12:00:00.000Z",
+    confirmationMethod: "choch", confirmationTimeframe: "5m",
+    refinementTimeframe: "1m",
+  });
+  assertEquals(state, initial);
 });
