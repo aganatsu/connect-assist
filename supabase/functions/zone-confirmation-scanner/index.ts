@@ -1173,9 +1173,16 @@ Deno.serve(async (req) => {
                     timeZoneName: "short",
                   },
                 );
+                const lockedBreakLevel = Number(
+                  lifecycleAfterLock?.confirmation?.breakLevel,
+                );
+                const lockedBreakLine = Number.isFinite(lockedBreakLevel)
+                  ? tgLine("Locked structure break", fmt(lockedBreakLevel))
+                  : "";
                 const message =
                   "<b>" + pending.symbol + " " + directionLabel + " CHoCH CONFIRMED</b>\n\n" +
-                  tgLine("Structure break", fmt(confirmedSignal.price)) +
+                  lockedBreakLine +
+                  tgLine("Confirmation close", fmt(confirmedSignal.price)) +
                   tgLine("Confirmation", pendingTimeframeAuthority.roles.confirmation) +
                   tgLine("Waiting for", postChochPlan.zone.type.toUpperCase() + " retracement") +
                   tgLine("Retracement zone", fmt(postChochPlan.zone.low) + " - " + fmt(postChochPlan.zone.high)) +

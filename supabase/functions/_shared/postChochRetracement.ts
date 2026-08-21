@@ -24,6 +24,7 @@ export interface PostChochEntryPlan {
     closeBased: boolean;
     supportingSignals: string[];
     authority: unknown;
+    candleClose?: number;
   };
   zone: {
     type: "fvg_ob_overlap" | "fvg" | "micro_ob" | "displacement_50";
@@ -52,6 +53,16 @@ function overlap(
   const low = Math.max(left.low, right.low);
   const high = Math.min(left.high, right.high);
   return high > low ? { low, high } : null;
+}
+
+function isOnRetracementSide(
+  direction: "long" | "short",
+  zone: { low: number; high: number },
+  confirmationPrice: number,
+): boolean {
+  return direction === "long"
+    ? zone.high <= confirmationPrice
+    : zone.low >= confirmationPrice;
 }
 
 export function derivePostChochEntryPlan(input: {
@@ -89,8 +100,11 @@ export function derivePostChochEntryPlan(input: {
     const opposing = direction === "long"
       ? candle.close < candle.open
       : candle.close > candle.open;
-    if (opposing) {
-      microOb = { low: candle.low, high: candle.high };
+    const candidate = { low: candle.low, high: candle.high };
+    // Opposing candles beyond the confirmation close are continuation-side,
+    // not zones price can retrace into from the confirmed move.
+    if (opposing && isOnRetracementSide(direction, candidate, confirmation.close)) {
+      microOb = candidate;
       break;
     }
   }
@@ -123,6 +137,7 @@ export function derivePostChochEntryPlan(input: {
       closeBased: signal.closeBased,
       supportingSignals: signal.supportingSignals,
       authority: signal.authority || null,
+      candleClose: confirmation.close,
     },
     zone: {
       type: selected.type, low: selected.low, high: selected.high,
@@ -142,6 +157,21 @@ export function evaluatePostChochRetracement(
   candle: Candle,
 ): PostChochEntryPlan {
   if (plan.state !== "awaiting_retracement") return plan;
+  const confirmationPrice = Number(
+    plan.confirmation.candleClose ?? plan.confirmation.price,
+  );
+  if (
+    Number.isFinite(confirmationPrice) &&
+    !isOnRetracementSide(plan.direction, plan.zone, confirmationPrice)
+  ) {
+    return {
+      ...plan,
+      state: "invalidated",
+      resolvedAt: candle.datetime,
+      reason: "Post-CHoCH " + plan.zone.type +
+        " zone is on wrong side of confirmation price " + confirmationPrice,
+    };
+  }
   const now = candle.datetime;
   if (Date.parse(now) > Date.parse(plan.expiresAt)) {
     return { ...plan, state: "expired", resolvedAt: now, reason: "Post-CHoCH retracement window expired" };
