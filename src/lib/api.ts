@@ -201,6 +201,7 @@ export async function invokeFunction<T = any>(
       ctx?.status ??
       ctx?.response?.status ??
       err?.status;
+    if (isAuthError(err, d)) return false;
     if (typeof status === "number" && status >= 500) return true;
     const msg = (err?.message || d?.message || d?.error || "").toString();
     // Cloudflare/gateway HTML error pages (520-527, e.g. "525: SSL handshake failed")
