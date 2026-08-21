@@ -165,7 +165,9 @@ export function prepareBacktestPostConfirmationEntry(input: {
     signal: {
       type: "close_choch",
       tier: 1,
-      price: trigger.breakLevel,
+      // ConfirmationSignal.price is the confirming candle close. The locked
+      // structure level remains available on authority as trigger.breakLevel.
+      price: input.completedCandles[candleIndex].close,
       candleIndex,
       displacement: trigger.displacementQualified ? 1 : 0,
       significance: "internal",

@@ -4,6 +4,7 @@ import {
   discoverBacktestTradeLifecycle,
   emptyBacktestTradeLifecycleState,
   isBacktestTradeLifecycleEntryReady,
+  prepareBacktestPostConfirmationEntry,
 } from "../functions/_shared/backtestTradeLifecycle.ts";
 
 const range = {
@@ -80,6 +81,39 @@ Deno.test("backtest lifecycle persists and does not resurrect a terminal impulse
   });
   assertEquals(state.lifecycle?.status, "exhausted");
   assertEquals(state.terminalImpulseIds, ["impulse-1"]);
+});
+
+Deno.test("backtest post-confirmation plan uses the confirming close, not the break level", () => {
+  const confirming = {
+    datetime: "2026-08-08T10:10:00.000Z", open: 1.1000, high: 1.1040,
+    low: 1.0995, close: 1.1035, volume: 100,
+  };
+  const state: any = {
+    contractVersion: "backtest-trade-lifecycle.v1", terminalImpulseIds: [],
+    postConfirmationEntry: null,
+    lifecycle: {
+      status: "entered",
+      impulse: { direction: "long" },
+      confirmation: { confirmedAt: confirming.datetime },
+    },
+    lastStep: {
+      confirmationPlan: {
+        evaluatedAt: confirming.datetime, breakLevel: 1.1010,
+        protectedLevel: 1.0985, candidateId: "zone-1", generation: 1,
+        displacementQualified: true,
+      },
+    },
+  };
+  const result = prepareBacktestPostConfirmationEntry({
+    state, completedCandles: [
+      { datetime: "2026-08-08T10:00:00.000Z", open: 1.1000, high: 1.1005, low: 1.0990, close: 1.0995, volume: 100 },
+      { datetime: "2026-08-08T10:05:00.000Z", open: 1.0995, high: 1.1000, low: 1.0985, close: 1.0990, volume: 100 },
+      confirming,
+    ],
+    mode: "wait_retracement", expiryMinutes: 30,
+  });
+  assertEquals(result.postConfirmationEntry?.confirmation.price, confirming.close);
+  assertEquals((result.postConfirmationEntry?.confirmation.authority as any)?.breakLevel, 1.1010);
 });
 
 Deno.test("wait retracement remains blocked until its frozen plan is ready", () => {
