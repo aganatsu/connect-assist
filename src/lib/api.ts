@@ -201,9 +201,12 @@ export async function invokeFunction<T = any>(
       ctx?.status ??
       ctx?.response?.status ??
       err?.status;
-    if (status === 503 || status === 504 || status === 502) return true;
+    if (isAuthError(err, d)) return false;
+    if (typeof status === "number" && status >= 500) return true;
     const msg = (err?.message || d?.message || d?.error || "").toString();
-    return /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 50[234]|BOOT_ERROR|WORKER_LIMIT/i.test(msg);
+    // Cloudflare/gateway HTML error pages (520-527, e.g. "525: SSL handshake failed")
+    if (/<!DOCTYPE html|cf-error-details|SSL handshake failed|Cloudflare Ray ID|Error code 5\d\d/i.test(msg)) return true;
+    return /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 5\d\d|BOOT_ERROR|WORKER_LIMIT/i.test(msg);
   };
 
   for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
@@ -213,7 +216,10 @@ export async function invokeFunction<T = any>(
 
   if (isTransient503(error, data)) {
     functionCooldownUntil.set(functionName, Date.now() + 15_000);
+    const transientFallback = getFunctionFallback(functionName, body);
+    if (transientFallback !== undefined) return transientFallback as T;
   }
+
 
   // Bot scanner data is dashboard/polling data. If the hosted function is briefly
   // unavailable even after retries, return a safe empty result instead of letting
