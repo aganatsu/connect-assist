@@ -72,12 +72,20 @@ export function discoverBacktestTradeLifecycle(input: {
       timeframe: candidate.timeframe,
       impulseId: input.range.impulseId,
     }));
+  const executableCandidate =
+    input.executableZone.id.length > 0 &&
+      input.executableZone.high > input.executableZone.low &&
+      input.executableZone.low >= input.range.low &&
+      input.executableZone.high <= input.range.high
+      ? { ...input.executableZone, impulseId: input.range.impulseId }
+      : null;
+  if (!executableCandidate) return input.state;
   const candidates = [
-    { ...input.executableZone, impulseId: input.range.impulseId },
+    executableCandidate,
     ...authorityCandidates.filter((candidate) =>
-      candidate.id !== input.executableZone.id &&
-      (candidate.low !== input.executableZone.low ||
-        candidate.high !== input.executableZone.high)
+      candidate.id !== executableCandidate.id &&
+      (candidate.low !== executableCandidate.low ||
+        candidate.high !== executableCandidate.high)
     ),
   ];
 

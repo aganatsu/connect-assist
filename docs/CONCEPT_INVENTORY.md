@@ -81,10 +81,14 @@ silently applied to unrelated market-fill backtests.
 ## Impulse entry lifecycle zone identity
 
 `frozenCrossTimeframeContext.ts` seeds the lifecycle active candidate from the exact
-executable `bestZone` geometry. The observe-only ICT entry-zone authority may supply
-prequalified deeper candidates, but it cannot replace the executable initial zone.
-`impulseEntryLifecycle.ts` rejects an explicitly requested initial candidate when
-filtering removes it; it must never silently activate a different zone.
+zone geometry the order can execute. The observe-only ICT entry-zone authority may
+supply prequalified deeper candidates, but it cannot replace the executable initial
+zone. `impulseEntryLifecycle.ts` rejects an explicitly requested initial candidate when
+filtering removes it; it must never silently activate a different zone. When enforcement
+cannot construct that identity, the frozen context records a named unavailable reason
+and the order-creation boundary rejects only that setup. It must not throw across the
+scanner loop. Backtest applies the same containment check and retains its prior state
+when the executable zone is outside the canonical range.
 
 ## Post-touch CHoCH/MSS trigger
 

@@ -188,6 +188,7 @@ import {
 import {
   buildFrozenCrossTimeframeContext,
   loadCurrentEvidenceCertificateReferences,
+  validateImpulseLifecycleExecutableZone,
   type EvidenceCertificateReference,
 } from "../_shared/frozenCrossTimeframeContext.ts";
 import {
@@ -456,7 +457,11 @@ function buildConfiguredPreArmedPlan(input: {
   config: any;
   analysis: any;
   stopPolicy?: StopPolicyShadowInput;
+  lifecycleDecision?: { valid: boolean; reason: string };
 }) {
+  if (input.lifecycleDecision && !input.lifecycleDecision.valid) {
+    return { valid: false as const, reason: input.lifecycleDecision.reason };
+  }
   const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
   const stop = resolvePreArmedPositionStop({
     direction: input.direction,
@@ -5147,7 +5152,7 @@ async function runScanForUser(
         bufferPrice: adjustedSlBuffer *
           (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
       });
-    const selectedCrossTimeframeContext = () =>
+    const selectedCrossTimeframeContext = (executableZone?: Record<string, unknown> | null) =>
       buildFrozenCrossTimeframeContext({
         timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
         symbol: pair,
@@ -5155,6 +5160,7 @@ async function runScanForUser(
         directionVerdict: activeDirectionVerdict,
         stylePolicy: pairStylePolicy,
         zoneStory: (detail as any).impulseZone || null,
+        executableZone,
         evidenceCertificates: _evidenceCertificateReferences,
         crossTimeframeAuthority,
         timeframeEvidence: zoneEvidenceRows.find((row) =>
@@ -5163,6 +5169,12 @@ async function runScanForUser(
         impulseEntryLifecycleMode:
           impulseLifecycleEnforcement.effectiveMode,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
+      });
+    const validatePendingLifecycle = (frozenStrategyContext: any, executableZone: unknown) =>
+      validateImpulseLifecycleExecutableZone({
+        mode: impulseLifecycleEnforcement.effectiveMode,
+        context: frozenStrategyContext?.crossTimeframeContext || null,
+        executableZone,
       });
     const currentWatchlistLifecycle = (executionEligible: boolean) => {
       const lifecycleZoneData = (detail as any).unifiedZone;
@@ -5227,7 +5239,7 @@ async function runScanForUser(
         zoneLocalConfluence: selectedZoneLocalConfluence(),
         zoneCandidateShadowRanking: selectedZoneShadowRanking(),
         zoneLocalEnforcement: selectedZoneLocalEnforcement(),
-        crossTimeframeContext: selectedCrossTimeframeContext(),
+        crossTimeframeContext: selectedCrossTimeframeContext(originatingZone),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -6325,6 +6337,10 @@ async function runScanForUser(
             config: pairConfig,
             analysis,
             stopPolicy: enforcedZoneStopPolicyFor(structuralStop),
+            lifecycleDecision: validatePendingLifecycle(
+              readFrozenSetupStrategyContext(frozenZoneWatch),
+              zone,
+            ),
           });
           if (plan.valid) {
             const currentCanonicalLocation = (detail as any).canonicalDealingRangeObservation?.canonical || null;
@@ -7108,7 +7124,7 @@ async function runScanForUser(
           conceptEvidence: selectedZoneConceptEvidence(),
           zoneLocalConfluence: selectedZoneLocalConfluence(),
           zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-          crossTimeframeContext: selectedCrossTimeframeContext(),
+          crossTimeframeContext: selectedCrossTimeframeContext(existingStaged.originating_zone || originatingZone),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -8517,6 +8533,34 @@ async function runScanForUser(
           const pendingPlan = pendingPlanResult.plan;
           const limitSL = pendingPlan.stopLoss;
           const limitTP = pendingPlan.takeProfit;
+          const pendingOriginatingZone = {
+            type: limitEntry.zoneType,
+            low: limitEntry.zoneLow,
+            high: limitEntry.zoneHigh,
+            entry: limitEntry.price,
+            refinedLow: izData?.bestZone?.ltfRefined
+                ? Math.min(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
+                : null,
+            refinedHigh: izData?.bestZone?.ltfRefined
+                ? Math.max(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
+                : null,
+            signalSource: (detail as any).signalSource || null,
+          };
+          const pendingFrozenCrossTimeframeContext =
+            readFrozenSetupStrategyContext(existingStaged)?.crossTimeframeContext ||
+            selectedCrossTimeframeContext(pendingOriginatingZone);
+          const prospectiveLifecycleValidation =
+            validateImpulseLifecycleExecutableZone({
+              mode: impulseLifecycleEnforcement.effectiveMode,
+              context: pendingFrozenCrossTimeframeContext,
+              executableZone: pendingOriginatingZone,
+            });
+          if (!prospectiveLifecycleValidation.valid) {
+            detail.status = "zone_setup_rejected_lifecycle_identity";
+            detail.skipReason = prospectiveLifecycleValidation.reason;
+            scanDetails.push(detail);
+            continue;
+          }
 
           // Recalculate position size based on limit entry price (unified sizing)
           const limitSizingResult = computePositionSize(
@@ -8653,25 +8697,6 @@ async function runScanForUser(
             stylePolicy: pairStylePolicy,
             evaluatedAt: nowStr,
           });
-          const pendingOriginatingZone = {
-            type: limitEntry.zoneType,
-            low: limitEntry.zoneLow,
-            high: limitEntry.zoneHigh,
-            entry: limitEntry.price,
-            refinedLow: izData?.bestZone?.ltfRefined
-                ? Math.min(
-                  Number(izData.bestZone.refinedEntry),
-                  Number(izData.bestZone.refinedSL),
-                )
-                : null,
-            refinedHigh: izData?.bestZone?.ltfRefined
-                ? Math.max(
-                  Number(izData.bestZone.refinedEntry),
-                  Number(izData.bestZone.refinedSL),
-                )
-                : null,
-            signalSource: (detail as any).signalSource || null,
-          };
           const pendingLifecycleEvidence = buildPromotedLifecycleEvidence(
             pendingOriginatingZone,
             pendingHierarchy as unknown as Record<string, unknown>,
@@ -8751,7 +8776,7 @@ async function runScanForUser(
               conceptEvidence: selectedZoneConceptEvidence(),
               zoneLocalConfluence: selectedZoneLocalConfluence(),
               zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-              crossTimeframeContext: selectedCrossTimeframeContext(),
+              crossTimeframeContext: pendingFrozenCrossTimeframeContext,
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -8763,6 +8788,20 @@ async function runScanForUser(
             });
           (detail as any).linkedSetupId =
             pendingFrozenStrategyContext.setupId;
+          const pendingLifecycleValidation = validatePendingLifecycle(
+            pendingFrozenStrategyContext,
+            pendingOriginatingZone,
+          );
+          if (!pendingLifecycleValidation.valid) {
+            detail.status = "zone_setup_rejected_lifecycle_identity";
+            detail.skipReason = pendingLifecycleValidation.reason;
+            await blockQualifiedSetup(
+              pendingLifecycleEvidence,
+              pendingLifecycleValidation.reason,
+            );
+            scanDetails.push(detail);
+            continue;
+          }
           if (pendingLifecycleEvidence) {
             try {
               await qualifyPromotedSetup(
@@ -9337,7 +9376,7 @@ async function runScanForUser(
             conceptEvidence: selectedZoneConceptEvidence(),
             zoneLocalConfluence: selectedZoneLocalConfluence(),
             zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-            crossTimeframeContext: selectedCrossTimeframeContext(),
+            crossTimeframeContext: selectedCrossTimeframeContext(directOriginatingZone),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
@@ -10358,6 +10397,10 @@ async function runScanForUser(
             config: pairConfig,
             analysis,
             stopPolicy: enforcedZoneStopPolicyFor(frozenStop),
+            lifecycleDecision: validatePendingLifecycle(
+              readFrozenSetupStrategyContext(preparedZoneWatch),
+              frozenZone,
+            ),
           });
           if (waitPlan.valid) {
             const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
@@ -10781,7 +10824,7 @@ async function runScanForUser(
                 decisionContext: breakerAuthorization.decisionContext,
                 gamePlan: activeGamePlan,
                 directionVerdict: activeDirectionVerdict,
-                crossTimeframeContext: selectedCrossTimeframeContext(),
+                crossTimeframeContext: selectedCrossTimeframeContext(breakerOriginatingZone),
                 originatingZone: breakerOriginatingZone,
                 confirmationMethod:
                   pairConfig.confirmationMethod || "choch",
@@ -10789,6 +10832,16 @@ async function runScanForUser(
               });
             (detail as any).linkedSetupId =
               breakerFrozenStrategyContext.setupId;
+            const breakerLifecycleValidation = validatePendingLifecycle(
+              breakerFrozenStrategyContext,
+              breakerOriginatingZone,
+            );
+            if (!breakerLifecycleValidation.valid) {
+              detail.status = "breaker_rejected_lifecycle_identity";
+              detail.skipReason = breakerLifecycleValidation.reason;
+              scanDetails.push(detail);
+              continue;
+            }
 
             const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
               user_id: userId,

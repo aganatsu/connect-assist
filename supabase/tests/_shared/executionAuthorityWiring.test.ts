@@ -252,3 +252,14 @@ Deno.test("live market-order sends suppress unsafe automatic retries", async () 
   assertStringIncludes(fastSource, "allowFailover: false");
   assertStringIncludes(botSource, "allowFailover: false");
 });
+
+Deno.test("all pending-order creation paths enforce lifecycle zone identity", async () => {
+  const source = await Deno.readTextFile(botScannerUrl.pathname);
+  assertEquals(
+    source.match(/lifecycleDecision: validatePendingLifecycle\(/g)?.length,
+    2,
+    "Both pre-arm paths must pass lifecycle identity into plan construction",
+  );
+  assertStringIncludes(source, "const pendingLifecycleValidation = validatePendingLifecycle(");
+  assertStringIncludes(source, "const breakerLifecycleValidation = validatePendingLifecycle(");
+});

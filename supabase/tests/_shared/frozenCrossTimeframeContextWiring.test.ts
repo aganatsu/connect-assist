@@ -17,7 +17,19 @@ Deno.test("scanner freezes cross-TF context on every setup construction path", (
   assertStringIncludes(scanner, "buildFrozenCrossTimeframeContext");
   assertStringIncludes(
     scanner,
-    "crossTimeframeContext: selectedCrossTimeframeContext()",
+    "crossTimeframeContext: selectedCrossTimeframeContext(originatingZone)",
+  );
+  assertStringIncludes(
+    scanner,
+    "crossTimeframeContext: pendingFrozenCrossTimeframeContext",
+  );
+  assertStringIncludes(
+    scanner,
+    "crossTimeframeContext: selectedCrossTimeframeContext(directOriginatingZone)",
+  );
+  assertStringIncludes(
+    scanner,
+    "crossTimeframeContext: selectedCrossTimeframeContext(breakerOriginatingZone)",
   );
   assertStringIncludes(scanner, "canonicalImpulseMetrics:");
 });

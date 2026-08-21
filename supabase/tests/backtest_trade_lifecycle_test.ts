@@ -181,3 +181,16 @@ Deno.test("backtest lifecycle starts from executable geometry before deeper auth
     ["executable-fvg", "ob-1"],
   );
 });
+
+Deno.test("backtest ignores an executable zone outside the canonical range", () => {
+  const initial = emptyBacktestTradeLifecycleState();
+  const state = discoverBacktestTradeLifecycle({
+    state: initial, range, authority,
+    executableZone: { ...executableZone, low: 99, high: 101 },
+    mode: "enforce", now: range.frozenAt,
+    expiresAt: "2026-08-08T12:00:00.000Z",
+    confirmationMethod: "choch", confirmationTimeframe: "5m",
+    refinementTimeframe: "1m",
+  });
+  assertEquals(state, initial);
+});
