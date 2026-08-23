@@ -323,6 +323,15 @@ export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: st
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000, maxSpread: 5, typicalSpread: 2.0 },
 };
 
+const SPEC_SYMBOL_BY_NORMALIZED_KEY = new Map(
+  Object.keys(SPECS).map((symbol) => [normalizeSymKey(symbol), symbol]),
+);
+
+function resolveSupportedSpecSymbol(symbol: string): string {
+  if (SPECS[symbol]) return symbol;
+  return SPEC_SYMBOL_BY_NORMALIZED_KEY.get(normalizeSymKey(symbol)) || symbol;
+}
+
 // Canonical set of supported trading instruments.
 // Keys are internal symbol names; values are Polygon.io tickers.
 export const SUPPORTED_SYMBOLS: Record<string, string> = {
@@ -2490,11 +2499,12 @@ export const FALLBACK_RATES: Record<string, number> = {
 };
 
 export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
+  const resolvedSymbol = resolveSupportedSpecSymbol(symbol);
   // Non-forex: already USD-denominated
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const spec = SPECS[resolvedSymbol] || SPECS["EUR/USD"];
   if (spec.type !== "forex") return 1.0;
 
-  const parts = symbol.split("/");
+  const parts = resolvedSymbol.split("/");
   if (parts.length !== 2) return 1.0;
   const quote = parts[1]; // e.g. "JPY" in EUR/JPY, "USD" in EUR/USD
 
@@ -2604,9 +2614,10 @@ export function calculatePositionSize(
 // ─── PnL Calculation ────────────────────────────────────────────────
 // rateMap: optional map for cross-pair PnL conversion to USD
 export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const resolvedSymbol = resolveSupportedSpecSymbol(symbol);
+  const spec = SPECS[resolvedSymbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
-  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+  const quoteToUSD = getQuoteToUSDRate(resolvedSymbol, rateMap);
   return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
 }
 

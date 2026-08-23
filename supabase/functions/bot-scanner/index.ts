@@ -3027,7 +3027,7 @@ async function runScanForUser(
     }
     propFirmGateResult = await runPropFirmGate(
       supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
-      { brokerEquity, isLiveAccount: isLiveMode, hasBrokerConnection: isLiveMode && !!_scanBrokerConn, fxMarketClosed },
+      { brokerEquity, isLiveAccount: isLiveMode, hasBrokerConnection: isLiveMode && !!_scanBrokerConn, fxMarketClosed, rateMap },
     );
 
     if (propFirmGateResult.enabled) {
@@ -3038,7 +3038,7 @@ async function runScanForUser(
         console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
         const closedCount = await propFirmEmergencyClose(
           supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
-          { fxMarketClosed },
+          { fxMarketClosed, rateMap },
         );
         // Notify via Telegram
         if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {

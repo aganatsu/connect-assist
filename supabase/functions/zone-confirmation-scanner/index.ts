@@ -1328,6 +1328,8 @@ Deno.serve(async (req) => {
           }
         }
 
+        const sizingRateMap = await loadCachedSizingRateMap(supabase);
+
         let propFirmResult: PropFirmGateResult | null = null;
         try {
           propFirmResult = await runPropFirmGate(
@@ -1341,6 +1343,7 @@ Deno.serve(async (req) => {
               brokerEquity,
               isLiveAccount: account.execution_mode === "live",
               hasBrokerConnection: account.execution_mode === "live" && !!brokerConn,
+              rateMap: sizingRateMap,
             },
           );
         } catch (e: any) {
@@ -1900,7 +1903,7 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           method: (config as any).positionSizingMethod,
           fixedLotSize: (config as any).fixedLotSize,
-          rateMap: await loadCachedSizingRateMap(supabase),
+          rateMap: sizingRateMap,
           commissionPerLot: await loadAverageRoundTripCommission(
             supabase,
             userId,

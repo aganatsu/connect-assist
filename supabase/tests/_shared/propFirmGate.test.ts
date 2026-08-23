@@ -421,6 +421,76 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
   assertEquals(closedSymbols.length, 2);
 });
 
+Deno.test("propFirmGate: paper equity uses the instrument contract size", async () => {
+  const config = makeConfig();
+  const dailyState = makeDailyState();
+  const supabase = makeMockSupabase({ config, dailyState });
+
+  const result = await runPropFirmGate(
+    supabase,
+    "test-user",
+    "smc",
+    100_000,
+    [{
+      symbol: "XAUUSD",
+      direction: "long",
+      entry_price: "2000",
+      current_price: "1995",
+      size: "1",
+    }],
+    "scan-instrument-pnl",
+  );
+
+  // One gold lot is 100 oz, so this is a $500 floating loss. The old
+  // 100,000-unit FX assumption produced a phantom $500,000 loss and blocked.
+  assertEquals(result.allowed, true);
+  assert(!result.reason.includes("sanity check"));
+});
+
+Deno.test("propFirmEmergencyClose: realizes P&L with instrument contract size", async () => {
+  let recordedPnl: number | null = null;
+  const supabase = {
+    rpc: async (_name: string, args: any) => {
+      recordedPnl = Number(args.p_pnl);
+      return { data: { closed: true, code: "closed" }, error: null };
+    },
+  };
+
+  const closedCount = await propFirmEmergencyClose(
+    supabase as any,
+    "test-user",
+    "smc",
+    [{
+      id: "gold-position",
+      symbol: "XAUUSD",
+      direction: "long",
+      entry_price: "2000",
+      current_price: "2001",
+      size: "0.1",
+      position_id: "gold-1",
+    }],
+    "test emergency",
+    "scan-instrument-close",
+  );
+
+  assertEquals(closedCount, 1);
+  assertEquals(recordedPnl, 10);
+});
+
+Deno.test("propFirmGate: both scanners pass their sizing rate map", async () => {
+  const botScanner = await Deno.readTextFile(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  const zoneScanner = await Deno.readTextFile(
+    new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  );
+
+  const botGateStart = botScanner.indexOf("propFirmGateResult = await runPropFirmGate(");
+  const zoneGateStart = zoneScanner.indexOf("propFirmResult = await runPropFirmGate(");
+  assert(botScanner.slice(botGateStart, botGateStart + 700).includes("rateMap"));
+  assert(zoneScanner.slice(zoneGateStart, zoneGateStart + 700).includes("rateMap: sizingRateMap"));
+});
+
 // ─── Test: Config query error → fail-closed ─────────────────────────────────
 
 Deno.test("propFirmGate: config query error BLOCKS trades (fail-closed)", async () => {
