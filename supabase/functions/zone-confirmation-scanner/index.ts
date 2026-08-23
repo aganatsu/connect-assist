@@ -1902,7 +1902,7 @@ Deno.serve(async (req) => {
           pending.stop_loss = finalRiskPlan.plan.stopLoss;
           pending.take_profit = finalRiskPlan.plan.takeProfit;
         }
-        const finalPendingSize = calculateFinalPendingSize({
+        const finalPendingSizing = calculateFinalPendingSize({
           balance: Number(account.balance),
           riskPercent: Number(config.riskPerTrade),
           fillPrice: actualFillPrice,
@@ -1922,6 +1922,13 @@ Deno.serve(async (req) => {
           signalSource: parsedPendingEvidence.signalSource,
           standaloneMultiplier: (config as any).standaloneMultiplier,
         });
+        if (finalPendingSizing.rejected) {
+          console.warn(
+            `[zone-confirm] Final sizing rejected ${pending.symbol}: ${finalPendingSizing.rejectionReason || "no executable size"}`,
+          );
+          continue;
+        }
+        const finalPendingSize = finalPendingSizing.lots;
         const { error: finalSizeError } = await supabase.from("pending_orders").update({
           size: finalPendingSize,
           ...(parsedPendingEvidence.preArmed === true ? {

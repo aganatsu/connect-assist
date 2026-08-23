@@ -158,7 +158,7 @@ const sizing = computePositionSize(
   undefined,
 );
 const finalSize = applyFinalCandidateSizeAdjustments({
-  lots: sizing.lots,
+  sizingResult: sizing,
   correlationMultiplier: 0.75,
   signalSource: "unified",
   standaloneMultiplier: runtimeConfig.standaloneMultiplier,

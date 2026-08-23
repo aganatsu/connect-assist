@@ -119,7 +119,7 @@ export interface SizingAdjustment {
 export type CandidateSignalSource = "cascade" | "unified" | "standalone";
 
 export interface FinalCandidateSizeInput {
-  lots: number;
+  sizingResult: Pick<SizingResult, "lots" | "rejected" | "rejectionReason">;
   correlationMultiplier?: number;
   signalSource?: CandidateSignalSource | null;
   standaloneMultiplier?: number;
@@ -130,7 +130,13 @@ export interface FinalCandidateSizeResult {
   afterCorrelationLots: number;
   correlationMultiplier: number;
   signalSourceMultiplier: number;
+  rejected: boolean;
+  rejectionReason?: string;
 }
+
+export type BrokerVolumeNormalizationResult =
+  | { ok: true; volume: number }
+  | { ok: false; error: string };
 
 export interface OandaUnitConversionInput {
   symbol: string;
@@ -187,6 +193,39 @@ export function convertLotsToOandaUnits(input: OandaUnitConversionInput): OandaU
     ? signedUnits.toFixed(0)
     : signedUnits.toFixed(input.tradeUnitsPrecision).replace(/0+$/, "").replace(/\.$/, "");
   return { ok: true, units, unsignedUnits, lotUnits };
+}
+
+/** Normalize lots to broker constraints without ever increasing requested risk. */
+export function normalizeBrokerVolumeDown(input: {
+  lots: number;
+  minVolume: number;
+  maxVolume: number;
+  volumeStep: number;
+}): BrokerVolumeNormalizationResult {
+  if (!Number.isFinite(input.lots) || input.lots <= 0) {
+    return { ok: false, error: "Broker volume must be a positive finite number" };
+  }
+  if (
+    !Number.isFinite(input.minVolume) || input.minVolume <= 0 ||
+    !Number.isFinite(input.maxVolume) || input.maxVolume <= 0 ||
+    !Number.isFinite(input.volumeStep) || input.volumeStep <= 0 ||
+    input.maxVolume < input.minVolume
+  ) {
+    return { ok: false, error: "Invalid broker volume constraints" };
+  }
+
+  const capped = Math.min(input.lots, input.maxVolume);
+  const scaled = capped / input.volumeStep;
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 8;
+  const stepped = Math.floor(scaled + tolerance) * input.volumeStep;
+  const volume = Number(stepped.toFixed(10));
+  if (volume < input.minVolume) {
+    return { ok: false, error: `Requested size ${input.lots} is below broker minimum ${input.minVolume}` };
+  }
+  if (!Number.isFinite(volume) || volume <= 0 || volume > capped) {
+    return { ok: false, error: "Broker volume normalization produced an invalid size" };
+  }
+  return { ok: true, volume };
 }
 
 // ─── Correlation Map ─────────────────────────────────────────────────
@@ -279,7 +318,7 @@ export function resolveCorrelationSizeMultiplier(
 /**
  * Applies the post-engine candidate adjustments shared by live and replay.
  * Correlation is applied first, then the signal-source multiplier, matching
- * the historical live execution order and its 0.01-lot rounding floor.
+ * the historical live execution order. A rejected size stays rejected.
  */
 export function applyFinalCandidateSizeAdjustments(
   input: FinalCandidateSizeInput,
@@ -288,17 +327,40 @@ export function applyFinalCandidateSizeAdjustments(
     0,
     Math.min(1, input.correlationMultiplier ?? 1),
   );
-  let lots = input.lots;
+  const signalSourceMultiplier = input.signalSource === "unified" ? 1 : Math.max(0.1, Math.min(1, input.standaloneMultiplier ?? 0.5));
+  const reject = (reason: string): FinalCandidateSizeResult => ({
+    lots: 0,
+    afterCorrelationLots: 0,
+    correlationMultiplier,
+    signalSourceMultiplier,
+    rejected: true,
+    rejectionReason: reason,
+  });
+  if (
+    input.sizingResult.rejected ||
+    !Number.isFinite(input.sizingResult.lots) ||
+    input.sizingResult.lots <= 0
+  ) {
+    return reject(
+      input.sizingResult.rejectionReason ||
+        "Upstream position sizing rejected the candidate",
+    );
+  }
+
+  let lots = input.sizingResult.lots;
   if (correlationMultiplier < 1) {
     lots = Math.round(lots * correlationMultiplier * 100) / 100;
-    if (lots < 0.01) lots = 0.01;
+    if (lots < 0.01) {
+      return reject("Correlation adjustment reduced size below the executable minimum");
+    }
   }
   const afterCorrelationLots = lots;
 
-  const signalSourceMultiplier = input.signalSource === "unified" ? 1 : Math.max(0.1, Math.min(1, input.standaloneMultiplier ?? 0.5));
   if (signalSourceMultiplier < 1) {
     lots = Math.round(lots * signalSourceMultiplier * 100) / 100;
-    if (lots < 0.01) lots = 0.01;
+    if (lots < 0.01) {
+      return reject("Signal-source adjustment reduced size below the executable minimum");
+    }
   }
 
   return {
@@ -306,6 +368,7 @@ export function applyFinalCandidateSizeAdjustments(
     afterCorrelationLots,
     correlationMultiplier,
     signalSourceMultiplier,
+    rejected: false,
   };
 }
 
@@ -328,6 +391,42 @@ export function computePositionSize(
   // Stays Infinity if no cap tighter than the base size ever applied.
   let hardCapUSD = Infinity;
 
+  const reject = (reason: string, baseLots = 0): SizingResult => ({
+    lots: 0,
+    riskUSD: 0,
+    riskPercent: 0,
+    baseLots,
+    adjustments: [],
+    rejected: true,
+    rejectionReason: reason,
+  });
+  if (
+    !Number.isFinite(input.balance) || input.balance <= 0 ||
+    !Number.isFinite(input.entryPrice) || input.entryPrice <= 0 ||
+    !Number.isFinite(input.stopLoss) || input.stopLoss <= 0 ||
+    input.entryPrice === input.stopLoss
+  ) {
+    return reject("Position sizing requires a positive balance and distinct finite entry/stop prices");
+  }
+  if (input.method !== "fixed_lot" && (!Number.isFinite(input.riskPercent) || input.riskPercent <= 0)) {
+    return reject("Position sizing requires a positive finite risk percentage");
+  }
+  if (
+    input.method === "fixed_lot" &&
+    (!Number.isFinite(Number(input.fixedLotSize)) || Number(input.fixedLotSize) < 0.01)
+  ) {
+    return reject("Fixed-lot sizing requires at least the 0.01 executable minimum");
+  }
+  if (
+    input.commissionPerLot !== undefined &&
+    (!Number.isFinite(input.commissionPerLot) || input.commissionPerLot < 0)
+  ) {
+    return reject("Position sizing requires a non-negative finite commission");
+  }
+  if (input.maxLot !== undefined && (!Number.isFinite(input.maxLot) || input.maxLot < 0.01)) {
+    return reject("Position sizing maximum lot must allow the 0.01 executable minimum");
+  }
+
   // Step 1: Calculate base position size using the shared function
   const baseLots = calculatePositionSize(
     input.balance,
@@ -349,6 +448,10 @@ export function computePositionSize(
   let lots = baseLots;
 
   // Step 2: Portfolio heat check
+  if (!Number.isFinite(baseLots) || baseLots <= 0) {
+    return reject("Base position sizing produced no executable size", baseLots);
+  }
+
   if (portfolio) {
     const maxHeat = portfolio.maxPortfolioHeat ?? 6.0;
     const currentHeat = portfolio.openPositions.reduce(
@@ -529,6 +632,30 @@ export function computePositionSize(
   const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
   const riskUSD = slDistance * spec.lotUnits * lots * quoteToUSD;
   const riskPct = input.balance > 0 ? (riskUSD / input.balance) * 100 : 0;
+
+  const totalRiskUSD = riskUSD + lots * (input.commissionPerLot ?? 0);
+  if (!Number.isFinite(totalRiskUSD) || !Number.isFinite(riskPct)) {
+    return reject("Position sizing produced non-finite risk", baseLots);
+  }
+  if (input.method !== "fixed_lot" && lots === 0.01) {
+    const riskBudgetUSD = input.balance * (input.riskPercent / 100);
+    const tolerance = Number.EPSILON * Math.max(1, Math.abs(riskBudgetUSD)) * 8;
+    if (totalRiskUSD > riskBudgetUSD + tolerance) {
+      return {
+        lots: 0,
+        riskUSD: 0,
+        riskPercent: 0,
+        baseLots,
+        adjustments: [...adjustments, {
+          type: "min_lot_floor",
+          multiplier: 0,
+          reason: `Min lot would risk $${totalRiskUSD.toFixed(2)}, above the $${riskBudgetUSD.toFixed(2)} trade budget`,
+        }],
+        rejected: true,
+        rejectionReason: "Minimum executable lot exceeds the configured trade risk budget",
+      };
+    }
+  }
 
   return {
     lots,

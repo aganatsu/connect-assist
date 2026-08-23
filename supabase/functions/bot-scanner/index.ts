@@ -297,6 +297,7 @@ import {
   applyFinalCandidateSizeAdjustments,
   computePositionSize,
   calculatePositionRisk,
+  normalizeBrokerVolumeDown,
   resolveCorrelationSizeMultiplier,
   resolveSizingVolatilityContext,
   type PropFirmContext,
@@ -8073,7 +8074,7 @@ async function runScanForUser(
           propFirmCtx,
         );
         const finalSizing = applyFinalCandidateSizeAdjustments({
-          lots: sizingResult.lots,
+          sizingResult,
           correlationMultiplier: correlationSizeMultiplier,
           signalSource: (detail as any).signalSource,
           standaloneMultiplier: (pairConfig as any).standaloneMultiplier,
@@ -8396,12 +8397,19 @@ async function runScanForUser(
             volCtx,
             propFirmCtx,
           );
-          let limitSize = limitSizingResult.lots;
-          // Apply signal source size multiplier to limit orders too
-          if ((detail as any).signalSource !== "unified") {
-            limitSize = Math.round(limitSize * 0.5 * 100) / 100;
-            if (limitSize < 0.01) limitSize = 0.01;
+          const finalLimitSizing = applyFinalCandidateSizeAdjustments({
+            sizingResult: limitSizingResult,
+            signalSource: (detail as any).signalSource,
+          });
+          if (finalLimitSizing.rejected) {
+            detail.status = "position_sizing_rejected";
+            detail.skipReason = finalLimitSizing.rejectionReason ||
+              "Pending-order sizing produced no executable size";
+            console.warn(`[${pair}] ${detail.skipReason}`);
+            scanDetails.push(detail);
+            continue;
           }
+          const limitSize = finalLimitSizing.lots;
 
           // Set when a material change replaces one lifecycle candidate with
           // another. An unchanged setup is not a handoff — #318 leaves it alone.
@@ -8875,6 +8883,32 @@ async function runScanForUser(
 
         // Place position (market order)
         // Two scenarios reach here:
+        if (finalSizing.rejected) {
+          detail.status = "position_sizing_rejected";
+          detail.skipReason = finalSizing.rejectionReason ||
+            "Market-entry sizing produced no executable size";
+          await finalizeDetailGoldenReplay({
+            execution: {
+              eligible: false,
+              entryPrice: analysis.lastPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              positionSize: 0,
+              orderType: "market",
+            },
+            lifecycle: {
+              route: "market",
+              stage: "sizing",
+              outcome: "blocked",
+              reason: detail.skipReason,
+            },
+            provenance: { orderId, positionId },
+          });
+          console.warn(`[${pair}] ${detail.skipReason}`);
+          scanDetails.push(detail);
+          continue;
+        }
+
         // 1. marketFillAtZone=true + price IS at validated impulse zone (primary path)
         // 2. Limit orders disabled and no zone entry found (legacy fallback)
         // Market orders ALWAYS fill at current price (analysis.lastPrice).
@@ -9907,6 +9941,14 @@ async function runScanForUser(
                        volCtx,
                        undefined, // No prop firm context for broker (broker has own limits)
                      );
+                     if (brokerSizingResult.rejected || brokerSizingResult.lots <= 0) {
+                       const reason = brokerSizingResult.rejectionReason || "no executable broker size";
+                       console.warn(`Broker sizing rejected [${conn.display_name}]: ${reason}`);
+                       mirrorResults.push(
+                         `${conn.display_name}: skipped (sizing rejected: ${reason})`,
+                       );
+                       continue;
+                     }
                      brokerVolume = brokerSizingResult.lots;
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})${brokerSizingResult.adjustments.length > 0 ? ` [${brokerSizingResult.adjustments.map(a => a.type).join(",")}]` : ""}`);
                    } catch (balErr: any) {
@@ -9933,13 +9975,27 @@ async function runScanForUser(
                      }
                    }
                    const brokerSpec = specCache[specCacheKey];
-                   if (brokerSpec) {
-                     const preClamp = brokerVolume;
-                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, brokerVolume));
-                     brokerVolume = Math.round(brokerVolume / brokerSpec.volumeStep) * brokerSpec.volumeStep;
-                     brokerVolume = parseFloat(brokerVolume.toFixed(6)); // avoid floating-point artifacts
-                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
+                   if (!brokerSpec) {
+                     const reason = "broker symbol specification unavailable";
+                     console.warn(`Broker sizing rejected [${conn.display_name}]: ${reason}`);
+                     mirrorResults.push(`${conn.display_name}: skipped (${reason})`);
+                     continue;
                    }
+                   const normalizedVolume = normalizeBrokerVolumeDown({
+                     lots: brokerVolume,
+                     minVolume: brokerSpec.minVolume,
+                     maxVolume: brokerSpec.maxVolume,
+                     volumeStep: brokerSpec.volumeStep,
+                   });
+                   if (!normalizedVolume.ok) {
+                     console.warn(`Broker sizing rejected [${conn.display_name}]: ${normalizedVolume.error}`);
+                     mirrorResults.push(
+                       `${conn.display_name}: skipped (sizing rejected: ${normalizedVolume.error})`,
+                     );
+                     continue;
+                   }
+                   brokerVolume = normalizedVolume.volume;
+                   console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → normalized down to ${brokerVolume}`);
 
                    // ── Unified spread check for MetaApi ──
                    const metaSpread = await fetchBrokerSpread(conn, pair, pairConfig, metaAccountId, authToken);
@@ -10418,9 +10474,20 @@ async function runScanForUser(
             );
             const breakerSizing = computePositionSize(
               { balance, riskPercent: pairConfig.riskPerTrade * breakerSizeMultiplier, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
-              undefined, undefined, undefined,
+              undefined, undefined, { enabled: true, sizeMultiplier: propFirmSizeMultiplier },
             );
-            let breakerSize = Math.max(breakerSizing.lots * propFirmSizeMultiplier, 0.01);
+            const finalBreakerSizing = applyFinalCandidateSizeAdjustments({
+              sizingResult: breakerSizing,
+              signalSource: "unified",
+            });
+            if (finalBreakerSizing.rejected) {
+              detail.status = "position_sizing_rejected";
+              detail.skipReason = finalBreakerSizing.rejectionReason ||
+                "Breaker sizing produced no executable size";
+              scanDetails.push(detail);
+              continue;
+            }
+            const breakerSize = finalBreakerSizing.lots;
 
             const breakerThesisResult = validatePendingOrderThesis(
               {

@@ -378,7 +378,10 @@ copies should follow. `gamePlan.ts:225 getCurrentSession()` does the same, with 
 
 **Position sizing** is properly layered: `computePositionSize` (`unifiedPositionSizing.ts`)
 wraps `calculatePositionSize` (`smcAnalysis.ts`) and adds volatility scaling and prop-firm
-compliance. It is the sole entry point for `bot-scanner` and `backtest-engine`.
+compliance. It is the sole entry point for `bot-scanner` and `backtest-engine`. Rejections
+remain zero-sized through final candidate adjustments and pending-order authorization;
+`normalizeBrokerVolumeDown` owns broker-step normalization and can only reduce an accepted
+size, never raise it to a broker minimum.
 
 **Max drawdown** — `gateMaxDrawdown.ts` and `propFirmRisk.ts` are both live but on mutually
 exclusive paths with an explicit delegation comment (Gate 8 hands off when
