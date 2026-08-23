@@ -175,7 +175,14 @@ Deno.serve(async (req) => {
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         return respond(JSON.parse(body));
       }
     }
@@ -199,7 +206,14 @@ Deno.serve(async (req) => {
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/positions`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         return respond(JSON.parse(body));
       }
     }
@@ -327,7 +341,14 @@ Deno.serve(async (req) => {
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         const info: any = JSON.parse(body);
         return respond({
           balance: parseFloat(info.balance ?? "0"),
@@ -353,9 +374,22 @@ Deno.serve(async (req) => {
         const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: body.slice(0, 300) });
+            return respond({
+              ok: false,
+              errorOrigin: "broker",
+              broker: "metaapi",
+              brokerStatus: res.status,
+              brokerSymbol: brokerSym,
+              status: res.status,
+              error: body.slice(0, 300),
+            });
           }
-          return respond({ error: `MetaAPI symbol_specs error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI symbol_specs error: ${res.status}`,
+            body,
+          );
         }
         const spec: any = JSON.parse(body);
         if (action === "validate_symbol") {
@@ -428,7 +462,12 @@ Deno.serve(async (req) => {
         const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
         const body = await res.text();
         if (!res.ok) {
-          return respond({ ok: false, state: "unknown", error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 503);
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI provisioning ${res.status}`,
+            body,
+          );
         }
         const info: any = JSON.parse(body);
         return respond({
@@ -514,7 +553,14 @@ Deno.serve(async (req) => {
         const startTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const endTime = new Date().toISOString();
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/history-deals/time/${startTime}/${endTime}`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         const deals: any[] = JSON.parse(body);
         // Group deals by positionId to reconstruct trades
         const posMap = new Map<string, any[]>();

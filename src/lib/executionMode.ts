@@ -27,6 +27,16 @@ export interface FreshTradingTruthSnapshot {
   }[];
 }
 
+export interface FreshTradingTruthOptions {
+  targetMode?: ExecutionMode;
+  targetConnectionId?: string;
+}
+
+export interface BrokerExposureState {
+  available: boolean;
+  positions: unknown;
+}
+
 type ExecutionModePayload = {
   executionMode?: unknown;
   account?: { execution_mode?: unknown };
@@ -62,6 +72,21 @@ export function canUseTradingControls(
     (mode === "live" && liveBrokerStates.length > 0 && liveBrokerStates.every(Boolean));
 }
 
+/** Returning to paper needs exact empty broker exposure, not broker readiness. */
+export function canReturnToPaper(
+  mode: ExecutionModeState,
+  brokerConnectionsKnown: boolean,
+  activeBrokerExposure: readonly BrokerExposureState[],
+): boolean {
+  return mode === "live" &&
+    brokerConnectionsKnown &&
+    activeBrokerExposure.every((state) =>
+      state.available &&
+      Array.isArray(state.positions) &&
+      state.positions.length === 0
+    );
+}
+
 function isAvailableObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
@@ -76,7 +101,7 @@ function isAvailableObject(value: unknown): value is Record<string, unknown> {
  */
 export async function requireFreshTradingTruth(
   readers: FreshTradingTruthReaders,
-  options: { targetMode?: ExecutionMode } = {},
+  options: FreshTradingTruthOptions = {},
 ): Promise<FreshTradingTruthSnapshot> {
   const paperStatus = await readers.readPaperStatus();
   const currentMode = readExecutionMode(paperStatus);
@@ -86,8 +111,11 @@ export async function requireFreshTradingTruth(
     );
   }
 
+  const reducingToPaper = currentMode === "live" &&
+    options.targetMode === "paper";
   const brokerTruthRequired = currentMode === "live" ||
-    options.targetMode === "live";
+    options.targetMode === "live" ||
+    !!options.targetConnectionId;
   if (!brokerTruthRequired) {
     return {
       mode: currentMode,
@@ -106,6 +134,50 @@ export async function requireFreshTradingTruth(
   const activeConnections = connections.filter((connection) =>
     connection?.is_active === true
   );
+
+  if (
+    options.targetConnectionId &&
+    !activeConnections.some((connection) =>
+      connection.id === options.targetConnectionId
+    )
+  ) {
+    throw new Error(
+      "The requested broker connection is not active. Refresh broker connections before retrying.",
+    );
+  }
+
+  if (reducingToPaper) {
+    const brokerSnapshots = await Promise.all(
+      activeConnections.map(async (connection) => {
+        const openTrades = await readers.readBrokerOpenTrades(connection.id);
+        if (!Array.isArray(openTrades)) {
+          throw new Error(
+            `${connection.display_name || "Broker"} current positions are unavailable.`,
+          );
+        }
+        return {
+          connection,
+          connectionStatus: null,
+          account: null,
+          openTrades,
+        };
+      }),
+    );
+
+    if (brokerSnapshots.some((snapshot) => snapshot.openTrades.length > 0)) {
+      throw new Error(
+        "Close all live broker positions before switching execution to paper.",
+      );
+    }
+
+    return {
+      mode: currentMode,
+      paperStatus,
+      activeConnections,
+      brokerSnapshots,
+    };
+  }
+
   if (activeConnections.length === 0) {
     throw new Error(
       "At least one active broker connection is required for live execution.",
@@ -133,16 +205,6 @@ export async function requireFreshTradingTruth(
   if (!canUseTradingControls("live", brokerSnapshots.map(() => true))) {
     throw new Error(
       "Current broker state is unavailable. Refresh before changing trading state.",
-    );
-  }
-  if (
-    currentMode === "live" && options.targetMode === "paper" &&
-    brokerSnapshots.some((snapshot) =>
-      Array.isArray(snapshot.openTrades) && snapshot.openTrades.length > 0
-    )
-  ) {
-    throw new Error(
-      "Close all live broker positions before switching execution to paper.",
     );
   }
 

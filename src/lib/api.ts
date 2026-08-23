@@ -6,7 +6,7 @@ import {
 import { requireAvailableCollection, requireAvailableObject } from "@/lib/remoteRead";
 import {
   requireFreshTradingTruth,
-  type ExecutionMode,
+  type FreshTradingTruthOptions,
 } from "@/lib/executionMode";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
@@ -447,6 +447,17 @@ export async function invokeFunction<T = any>(
   return data as T;
 }
 
+function requireReadableExecutionMode(data: unknown) {
+  return requireAvailableObject<any>(
+    data,
+    "Trading account status",
+    (status) => {
+      const mode = status.executionMode ?? status.account?.execution_mode;
+      return mode === "paper" || mode === "live";
+    },
+  );
+}
+
 function requireCompletePaperStatus(data: unknown) {
   const status = requireAvailableObject<any>(data, "Trading account status");
   const mode = status.executionMode ?? status.account?.execution_mode;
@@ -466,11 +477,14 @@ function requireCompletePaperStatus(data: unknown) {
   return status;
 }
 
-async function readFreshTradingTruth(options: { targetMode?: ExecutionMode } = {}) {
+async function readFreshTradingTruth(options: FreshTradingTruthOptions = {}) {
   return requireFreshTradingTruth({
-    readPaperStatus: async () => requireCompletePaperStatus(
-      await invokeFunction("paper-trading", { action: "status" }),
-    ),
+    readPaperStatus: async () => {
+      const status = await invokeFunction("paper-trading", { action: "status" });
+      return options.targetMode === "paper"
+        ? requireReadableExecutionMode(status)
+        : requireCompletePaperStatus(status);
+    },
     listBrokerConnections: async () => requireAvailableCollection<any>(
       await invokeFunction("broker-connections", { action: "list" }),
       "Broker connections",
@@ -509,7 +523,7 @@ async function readFreshTradingTruth(options: { targetMode?: ExecutionMode } = {
 
 async function afterFreshTradingTruth<T>(
   mutation: () => Promise<T>,
-  options: { targetMode?: ExecutionMode } = {},
+  options: FreshTradingTruthOptions = {},
 ): Promise<T> {
   await readFreshTradingTruth(options);
   return mutation();
@@ -684,7 +698,9 @@ export const brokerApi = {
   ),
   test: (id: string) => invokeFunction("broker-connections", { action: "test", id }),
   listSymbols: (id: string) => invokeFunction("broker-connections", { action: "list_symbols", id }),
-  autoMapSymbols: (id: string) => invokeFunction("broker-connections", { action: "auto_map_symbols", id }),
+  autoMapSymbols: (id: string) => afterFreshTradingTruth(
+    () => invokeFunction("broker-connections", { action: "auto_map_symbols", id }),
+  ),
   probeSymbols: (id: string, symbols: string[]) =>
     invokeFunction("broker-connections", { action: "probe_symbols", id, symbols }),
 };
@@ -708,10 +724,9 @@ export const paperApi = {
     afterFreshTradingTruth(
       () => invokeFunction("paper-trading", { action: "place_order", ...order }),
     ),
+  // Closing a known position reduces risk and must survive unrelated truth outages.
   closePosition: (positionId: string, exitPrice?: number, reason?: string) =>
-    afterFreshTradingTruth(
-      () => invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
-    ),
+    invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
   updatePosition: (positionId: string, updates: { stopLoss?: number | null; takeProfit?: number | null; tradeOverrides?: Record<string, any> | null }) =>
     afterFreshTradingTruth(
       () => invokeFunction("paper-trading", { action: "update_position", positionId, ...updates }),
@@ -1300,12 +1315,13 @@ export const brokerExecApi = {
     afterFreshTradingTruth(
       () => invokeFunction("broker-execute", { action: "place_order", connectionId, ...order })
         .then(requireConfirmedBrokerMutation),
+      { targetMode: "live", targetConnectionId: connectionId },
     ),
+  // A close targets an already-known broker trade and is intentionally not
+  // coupled to aggregate account/broker reads.
   closeTrade: (connectionId: string, tradeId: string) =>
-    afterFreshTradingTruth(
-      () => invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
-        .then(requireConfirmedBrokerMutation),
-    ),
+    invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
+      .then(requireConfirmedBrokerMutation),
   tradeHistory: (connectionId: string, limit = 50) =>
     invokeFunction("broker-execute", { action: "trade_history", connectionId, limit })
       .then((data) => requireAvailableCollection<any>(data, "Broker trade history")),
@@ -1313,6 +1329,7 @@ export const brokerExecApi = {
     afterFreshTradingTruth(
       () => invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
         .then(requireConfirmedBrokerMutation),
+      { targetMode: "live", targetConnectionId: connectionId },
     ),
 };
 

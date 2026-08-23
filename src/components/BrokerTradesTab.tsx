@@ -127,12 +127,18 @@ function CollapsibleSection({
 }
 
 // ── Section: Account Summary ──
-function UnavailableRead({ message }: { message: string }) {
+function UnavailableRead({
+  message,
+  detail = "Actions that require this data remain unavailable until the read succeeds.",
+}: {
+  message: string;
+  detail?: string;
+}) {
   return (
     <div className="p-4 text-center text-warning">
       <AlertTriangle className="mx-auto mb-2 h-4 w-4" />
       <p className="text-xs font-medium">{message}</p>
-      <p className="mt-1 text-[10px] text-muted-foreground">Live controls are disabled until this read succeeds.</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">{detail}</p>
     </div>
   );
 }
@@ -198,15 +204,17 @@ function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoadin
 }
 
 // ── Section: Open Positions ──
-function OpenPositionsContent({
-  positions, paperPositions, connectionId, isLoading, error, mutationsEnabled, mutationUnavailableMessage,
+export function OpenPositionsContent({
+  positions, paperPositions, connectionId, isLoading, error, modifyEnabled,
+  closeEnabled, mutationUnavailableMessage,
 }: {
   positions: any[];
   paperPositions: any[];
   connectionId: string;
   isLoading: boolean;
   error?: string;
-  mutationsEnabled: boolean;
+  modifyEnabled: boolean;
+  closeEnabled: boolean;
   mutationUnavailableMessage?: string;
 }) {
   const queryClient = useQueryClient();
@@ -216,7 +224,9 @@ function OpenPositionsContent({
 
   const closeMut = useMutation({
     mutationFn: (tradeId: string) => {
-      if (!mutationsEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
+      if (!connectionId || !tradeId) {
+        throw new Error("A known broker connection and trade are required to close this position.");
+      }
       return brokerExecApi.closeTrade(connectionId, tradeId);
     },
     onSuccess: () => {
@@ -229,7 +239,7 @@ function OpenPositionsContent({
 
   const modifyMut = useMutation({
     mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) => {
-      if (!mutationsEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
+      if (!modifyEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
       return brokerExecApi.modifyTrade(connectionId, tradeId, updates);
     },
     onSuccess: () => {
@@ -260,9 +270,9 @@ function OpenPositionsContent({
 
   return (
     <>
-    {!mutationsEnabled && (
+    {!modifyEnabled && (
       <div className="mx-2 mt-2 border border-warning/30 bg-warning/5 px-2 py-1.5 text-[10px] text-warning">
-        {mutationUnavailableMessage || "Broker state is unavailable. Live position controls are disabled."}
+        {mutationUnavailableMessage || "Broker state is unavailable. SL/TP edits are disabled; known positions can still be closed."}
       </div>
     )}
     {/* Mobile: Stacked cards */}
@@ -295,6 +305,22 @@ function OpenPositionsContent({
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
               <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, pos.symbol)}</span>
               <span className="text-success/80">TP: {formatPrice(pos.takeProfit, pos.symbol)}</span>
+            </div>
+            <div className="flex justify-end border-t border-border/30 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Close ${pos.symbol} ${isLong ? "BUY" : "SELL"} position on broker?`)) {
+                    closeMut.mutate(pos.id);
+                  }
+                }}
+                disabled={!closeEnabled || !pos.id || closeMut.isPending}
+                title={!closeEnabled || !pos.id ? "Current broker positions are unavailable" : "Close position"}
+                aria-label={`Close ${pos.symbol} position`}
+                className="inline-flex items-center gap-1 p-1 text-[10px] text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <XCircle className="h-3 w-3" /> Close
+              </button>
             </div>
           </div>
         );
@@ -402,8 +428,8 @@ function OpenPositionsContent({
                             modifyMut.mutate({ tradeId: pos.id, updates });
                           }}
                           className="text-success hover:bg-success/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!mutationsEnabled || modifyMut.isPending}
-                          title={!mutationsEnabled ? "Broker state unavailable" : "Save SL/TP"}
+                          disabled={!modifyEnabled || modifyMut.isPending}
+                          title={!modifyEnabled ? "Broker state unavailable" : "Save SL/TP"}
                         >
                           {modifyMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                         </button>
@@ -420,8 +446,8 @@ function OpenPositionsContent({
                             setEditTP(pos.takeProfit?.toString() || "");
                           }}
                           className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!mutationsEnabled}
-                          title={!mutationsEnabled ? "Broker state unavailable" : "Edit SL/TP"}
+                          disabled={!modifyEnabled}
+                          title={!modifyEnabled ? "Broker state unavailable" : "Edit SL/TP"}
                         >
                           <Edit3 className="h-3 w-3" />
                         </button>
@@ -432,8 +458,8 @@ function OpenPositionsContent({
                             }
                           }}
                           className="text-destructive hover:bg-destructive/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!mutationsEnabled || closeMut.isPending}
-                          title={!mutationsEnabled ? "Broker state unavailable" : "Close position"}
+                          disabled={!closeEnabled || !pos.id || closeMut.isPending}
+                          title={!closeEnabled || !pos.id ? "Current broker positions are unavailable" : "Close position"}
                         >
                           <XCircle className="h-3 w-3" />
                         </button>
@@ -849,6 +875,8 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
       connectionStateAvailable && connectionState?.ready === true &&
       accountAvailable && positionsAvailable,
     ]);
+  const brokerCloseEnabled = !!connId && positionsAvailable &&
+    Array.isArray(brokerPositions);
   const syncTruthPending = brokerTruthFetching;
   const syncTruthUnavailable = connectionStateUnavailable || accountUnavailable ||
     positionsUnavailable || paperStatusUnavailable;
@@ -933,7 +961,8 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
           connectionId={connId}
           isLoading={positionsLoading}
           error={positionsUnavailable ? readErrorMessage(positionsError, "Broker position state is unavailable") : undefined}
-          mutationsEnabled={brokerMutationsEnabled}
+          modifyEnabled={brokerMutationsEnabled}
+          closeEnabled={brokerCloseEnabled}
           mutationUnavailableMessage={mutationUnavailableMessage}
         />
       ),
@@ -1035,8 +1064,10 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
         <div className="border border-warning/30 bg-warning/5 rounded-lg p-3 flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
           <div>
-            <p className="text-xs font-medium text-warning">Live controls unavailable</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{mutationUnavailableMessage}</p>
+            <p className="text-xs font-medium text-warning">Live position edits unavailable</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {mutationUnavailableMessage} A known position can still be closed.
+            </p>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,8 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { brokerApi, brokerExecApi } from "@/lib/api";
+import { brokerApi, brokerExecApi, paperApi } from "@/lib/api";
+import { canUseTradingControls, readExecutionMode } from "@/lib/executionMode";
 import { BotConfigModal } from "@/components/BotConfigModal";
 
 type Connection = {
@@ -70,6 +71,54 @@ export default function BrokersPage() {
     queryFn: () => brokerApi.list(),
   });
   const connections = !connectionsUnavailable && Array.isArray(connectionData) ? connectionData : [];
+  const activeConnections = connections.filter((connection) => connection.is_active);
+
+  const {
+    data: paperStatus,
+    isSuccess: paperStatusAvailable,
+  } = useQuery({
+    queryKey: ["paper-status"],
+    queryFn: () => paperApi.status(),
+    refetchInterval: 10000,
+  });
+  const executionMode = paperStatusAvailable
+    ? readExecutionMode(paperStatus)
+    : "unknown";
+  const liveBrokerStatusQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-connection-status", connection.id],
+      queryFn: () => brokerExecApi.connectionStatus(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 30000,
+    })),
+  });
+  const liveBrokerAccountQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-account", connection.id],
+      queryFn: () => brokerExecApi.accountSummary(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 10000,
+    })),
+  });
+  const liveBrokerPositionQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-open-trades", connection.id],
+      queryFn: () => brokerExecApi.openTrades(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 10000,
+    })),
+  });
+  const configurationMutationsEnabled = canUseTradingControls(
+    executionMode,
+    activeConnections.map((_, index) =>
+      liveBrokerStatusQueries[index]?.isSuccess === true &&
+      liveBrokerStatusQueries[index]?.data?.ready === true &&
+      liveBrokerAccountQueries[index]?.isSuccess === true &&
+      !!liveBrokerAccountQueries[index]?.data &&
+      liveBrokerPositionQueries[index]?.isSuccess === true &&
+      Array.isArray(liveBrokerPositionQueries[index]?.data)
+    ),
+  );
 
   const selected = useMemo(
     () => connections.find((c) => c.id === selectedId) ?? connections[0] ?? null,
@@ -289,6 +338,7 @@ export default function BrokersPage() {
                   if (confirm(`Delete "${selected.display_name}"?`)) deleteMutation.mutate(selected.id);
                 }}
                 isAutoMapping={autoMapMutation.isPending}
+                configurationMutationsEnabled={configurationMutationsEnabled}
                 isListing={listSymbolsMutation.isPending}
                 isTesting={testMutation.isPending}
               />
@@ -358,9 +408,10 @@ export default function BrokersPage() {
 }
 
 // ─── Connection detail panel ─────────────────────────────────────────
-function ConnectionDetail({
+export function ConnectionDetail({
   connection: c, probeDetails, onTest, onCheckStatus, onAutoMap, onListSymbols,
-  onConfigOpen, onDelete, isAutoMapping, isListing, isTesting,
+  onConfigOpen, onDelete, isAutoMapping, configurationMutationsEnabled,
+  isListing, isTesting,
 }: {
   connection: Connection;
   probeDetails?: ProbeDetails;
@@ -371,6 +422,7 @@ function ConnectionDetail({
   onConfigOpen: () => void;
   onDelete: () => void;
   isAutoMapping: boolean;
+  configurationMutationsEnabled: boolean;
   isListing: boolean;
   isTesting: boolean;
 }) {
@@ -549,7 +601,13 @@ function ConnectionDetail({
             </Button>
             {isMetaApi && (
               <>
-                <Button size="sm" variant="outline" onClick={onAutoMap} disabled={isAutoMapping}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onAutoMap}
+                  disabled={!configurationMutationsEnabled || isAutoMapping}
+                  title={!configurationMutationsEnabled ? "Current trading state is unavailable" : undefined}
+                >
                   <Wand2 className="h-3.5 w-3.5 mr-1.5" />
                   {isAutoMapping ? "Mapping…" : "Auto-map symbols"}
                 </Button>

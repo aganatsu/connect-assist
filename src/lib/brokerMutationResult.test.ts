@@ -127,11 +127,11 @@ describe("broker mutation result", () => {
   });
 
   it("routes a rejected close response to the mutation error path", async () => {
-    stubFreshLiveTruthThen({
+    vi.stubGlobal("fetch", vi.fn(async () => brokerResponse({
       ok: false,
       brokerExecutionStatus: "rejected",
       error: "TRADE_RETCODE_INVALID_STOPS: Invalid stops",
-    });
+    })));
 
     await expect(brokerExecApi.closeTrade("connection-1", "trade-1"))
       .rejects.toThrow("TRADE_RETCODE_INVALID_STOPS: Invalid stops");
@@ -151,11 +151,11 @@ describe("broker mutation result", () => {
   });
 
   it("resolves a semantically confirmed close response", async () => {
-    stubFreshLiveTruthThen({
+    vi.stubGlobal("fetch", vi.fn(async () => brokerResponse({
       ok: true,
       brokerExecutionStatus: "succeeded",
       stringCode: "TRADE_RETCODE_DONE",
-    });
+    })));
 
     await expect(brokerExecApi.closeTrade("connection-1", "trade-1"))
       .resolves.toMatchObject({

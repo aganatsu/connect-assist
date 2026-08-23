@@ -9,13 +9,14 @@ import { ChevronRight, Info } from "lucide-react";
 interface MobilePositionCardProps {
   position: any;
   mutationsEnabled: boolean;
+  closeEnabled: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   onClose: (id: string) => void;
   onSaved: () => void;
 }
 
-export function MobilePositionCard({ position: p, mutationsEnabled, isExpanded, onToggle, onClose, onSaved }: MobilePositionCardProps) {
+export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled, isExpanded, onToggle, onClose, onSaved }: MobilePositionCardProps) {
   const [detailSheet, setDetailSheet] = useState(false);
 
   const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
@@ -187,8 +188,8 @@ export function MobilePositionCard({ position: p, mutationsEnabled, isExpanded, 
           </div>
           <div className="pl-4 flex gap-2">
             <button
-              onClick={(e) => { e.stopPropagation(); if (mutationsEnabled) onClose(p.id); }}
-              disabled={!mutationsEnabled}
+              onClick={(e) => { e.stopPropagation(); if (closeEnabled) onClose(p.id); }}
+              disabled={!closeEnabled}
               className="text-[10px] font-medium text-destructive border border-destructive/30 px-2 py-1 hover:bg-destructive/10 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             >
               Close Position

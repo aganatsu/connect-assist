@@ -45,7 +45,13 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
-import { canUseTradingControls, readExecutionMode, verifyExecutionModeChange, type ExecutionMode } from "@/lib/executionMode";
+import {
+  canReturnToPaper,
+  canUseTradingControls,
+  readExecutionMode,
+  verifyExecutionModeChange,
+  type ExecutionMode,
+} from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -222,15 +228,6 @@ export default function BotView() {
     brokerAccountQueries[index]?.isError ||
     brokerPositionQueries[index]?.isError
   );
-  const liveBrokerTruthKnown = brokerConnectionsKnown && activeConnections.every((_, index) =>
-    brokerConnectionStateQueries[index]?.isSuccess === true &&
-    typeof brokerConnectionStateQueries[index]?.data?.ready === "boolean" &&
-    brokerAccountQueries[index]?.isSuccess === true &&
-    !!brokerAccountQueries[index]?.data &&
-    brokerPositionQueries[index]?.isSuccess === true &&
-    Array.isArray(brokerPositionQueries[index]?.data)
-  );
-
   const liveBrokerStates = activeConnections.map((_, index) =>
     brokerConnectionStateQueries[index]?.isSuccess === true &&
     brokerConnectionStateQueries[index]?.data?.ready === true &&
@@ -240,8 +237,16 @@ export default function BotView() {
     Array.isArray(brokerPositionQueries[index]?.data)
   );
   const tradingControlsEnabled = canUseTradingControls(executionMode, liveBrokerStates);
+  const canSwitchBackToPaper = canReturnToPaper(
+    executionMode,
+    brokerConnectionsKnown,
+    activeConnections.map((_, index) => ({
+      available: brokerPositionQueries[index]?.isSuccess === true,
+      positions: brokerPositionQueries[index]?.data,
+    })),
+  );
   const modeChangeEnabled = accountStatusKnown && (
-    executionMode === "paper" ? brokerConnectionsKnown : liveBrokerTruthKnown
+    executionMode === "paper" ? brokerConnectionsKnown : canSwitchBackToPaper
   );
 
   useEffect(() => {
@@ -259,7 +264,7 @@ export default function BotView() {
 
   const closePositionFromDashboard = async (positionId: string) => {
     try {
-      requireTradingControls();
+      if (!positionId) throw new Error("A known position is required to close.");
       await paperApi.closePosition(positionId);
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
     } catch (error) {
@@ -692,8 +697,8 @@ export default function BotView() {
             ) : executionMode === "live" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!modeChangeEnabled || modeMut.isPending || d.positions.length > 0}
-                title={!modeChangeEnabled ? "Broker or account status is unavailable" : d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
+                disabled={!canSwitchBackToPaper || modeMut.isPending}
+                title={!canSwitchBackToPaper ? "Broker positions must be confirmed empty before switching to Paper" : "Switch new execution back to Paper"}
                 onClick={() => {
                   if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
                     modeMut.mutate("paper");
@@ -904,6 +909,7 @@ export default function BotView() {
                         key={p.id}
                         position={p}
                         mutationsEnabled={tradingControlsEnabled}
+                        closeEnabled={Boolean(p.id)}
                         isExpanded={expandedPosition === p.id}
                         onToggle={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}
                         onClose={(id) => {
@@ -993,7 +999,7 @@ export default function BotView() {
                             </td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
-                                disabled={!tradingControlsEnabled}
+                                disabled={!p.id}
                                 onClick={() => {
                                   if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
                                     void closePositionFromDashboard(p.id);

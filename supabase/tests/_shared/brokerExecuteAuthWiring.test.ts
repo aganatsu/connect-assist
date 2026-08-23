@@ -67,7 +67,7 @@ Deno.test("automated broker-execute callers send the explicit owner id", () => {
   }
 });
 
-Deno.test("OANDA read failures preserve broker origin across the execution boundary", () => {
+Deno.test("broker read failures preserve upstream origin across the execution boundary", () => {
   const helper = source.split("function respondWithBrokerReadFailure")[1]
     ?.split("function respondWithBrokerMutationOutcome")[0] || "";
   assertStringIncludes(helper, 'errorOrigin: "broker"');
@@ -96,5 +96,20 @@ Deno.test("OANDA read failures preserve broker origin across the execution bound
       'respondWithBrokerReadFailure(\n            "oanda",',
       `${start} must distinguish upstream OANDA failures from app authentication failures`,
     );
+    assertStringIncludes(
+      section,
+      'respondWithBrokerReadFailure(\n            "metaapi",',
+      `${start} must distinguish upstream MetaAPI failures from app authentication failures`,
+    );
   }
+
+  const symbolSection = source.split(
+    'if (action === "symbol_specs" || action === "validate_symbol")',
+  )[1]?.split('if (action === "connection_status")')[0] || "";
+  const metaValidationFailure = symbolSection.split(
+    'if (action === "validate_symbol")',
+  )[1]?.split("return respondWithBrokerReadFailure")[0] || "";
+  assertStringIncludes(metaValidationFailure, 'errorOrigin: "broker"');
+  assertStringIncludes(metaValidationFailure, 'broker: "metaapi"');
+  assertStringIncludes(metaValidationFailure, "brokerStatus: res.status");
 });

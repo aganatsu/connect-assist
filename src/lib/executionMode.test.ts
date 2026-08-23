@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canReturnToPaper,
   canUseTradingControls,
   type ExecutionMode,
   requireFreshTradingTruth,
@@ -17,6 +18,25 @@ describe("canUseTradingControls", () => {
   it("allows a known paper account or fully known live accounts", () => {
     expect(canUseTradingControls("paper", [])).toBe(true);
     expect(canUseTradingControls("live", [true, true])).toBe(true);
+  });
+});
+
+describe("canReturnToPaper", () => {
+  it("depends only on exact empty exposure for every active broker", () => {
+    expect(canReturnToPaper("live", true, [
+      { available: true, positions: [] },
+      { available: true, positions: [] },
+    ])).toBe(true);
+    expect(canReturnToPaper("live", true, [
+      { available: true, positions: [{ id: "open-1" }] },
+    ])).toBe(false);
+    expect(canReturnToPaper("live", true, [
+      { available: false, positions: [] },
+    ])).toBe(false);
+    expect(canReturnToPaper("live", true, [])).toBe(true);
+    expect(canReturnToPaper("paper", true, [
+      { available: true, positions: [] },
+    ])).toBe(false);
   });
 });
 
@@ -78,11 +98,41 @@ describe("requireFreshTradingTruth", () => {
     expect(brokerListReads).toBe(0);
   });
 
-  it("blocks a live-to-paper switch while a broker still has positions", async () => {
+  it("allows a live-to-paper switch when disconnected brokers are provably flat", async () => {
+    let connectionStatusReads = 0;
+    let accountReads = 0;
+
     await expect(requireFreshTradingTruth(readers({
+      readBrokerConnectionStatus: async () => {
+        connectionStatusReads += 1;
+        return { ready: false };
+      },
+      readBrokerAccount: async () => {
+        accountReads += 1;
+        throw new Error("account unavailable");
+      },
+      readBrokerOpenTrades: async () => [],
+    }), { targetMode: "paper" })).resolves.toMatchObject({ mode: "live" });
+
+    expect(connectionStatusReads).toBe(0);
+    expect(accountReads).toBe(0);
+  });
+
+  it("blocks a live-to-paper switch while a disconnected broker still has positions", async () => {
+    await expect(requireFreshTradingTruth(readers({
+      readBrokerConnectionStatus: async () => ({ ready: false }),
       readBrokerOpenTrades: async () => [{ id: "open-1" }],
     }), { targetMode: "paper" })).rejects.toThrow(
       "Close all live broker positions",
+    );
+  });
+
+  it("blocks a live-to-paper switch when broker positions cannot be read exactly", async () => {
+    await expect(requireFreshTradingTruth(readers({
+      readBrokerConnectionStatus: async () => ({ ready: false }),
+      readBrokerOpenTrades: async () => ({ state: "unknown" }),
+    }), { targetMode: "paper" })).rejects.toThrow(
+      "current positions are unavailable",
     );
   });
 
@@ -96,6 +146,27 @@ describe("requireFreshTradingTruth", () => {
       },
     }), { targetMode: "live" });
     expect(brokerListReads).toBe(1);
+  });
+
+  it("checks broker truth for a targeted live mutation while aggregate mode is paper", async () => {
+    const connectionReads: string[] = [];
+    await requireFreshTradingTruth(readers({
+      readPaperStatus: async () => ({ ok: true, state: "available", executionMode: "paper" }),
+      readBrokerConnectionStatus: async (id) => {
+        connectionReads.push(id);
+        return { ready: true };
+      },
+    }), { targetConnectionId: "broker-2" });
+
+    expect(connectionReads).toEqual(["broker-1", "broker-2"]);
+  });
+
+  it("rejects a targeted live mutation when the requested connection is not active", async () => {
+    await expect(requireFreshTradingTruth(readers({
+      readPaperStatus: async () => ({ ok: true, state: "available", executionMode: "paper" }),
+    }), { targetConnectionId: "broker-missing" })).rejects.toThrow(
+      "requested broker connection is not active",
+    );
   });
 });
 
