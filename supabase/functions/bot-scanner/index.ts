@@ -9061,6 +9061,7 @@ async function runScanForUser(
           supabase,
           userId,
           accountExecutionMode: account.execution_mode,
+          brokerExecutionConnectionCount: (directConnections || []).length,
           symbol: pair,
           direction: analysis.direction as "long" | "short",
           currentPrice: marketEntryPrice,
@@ -9843,9 +9844,8 @@ async function runScanForUser(
         console.log(`Mirror check for ${pair}: execution_mode=${account.execution_mode}, positionId=${positionId}`);
         try {
           if (account.execution_mode === "live") {
-            const { data: connections } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
-            if (connections && connections.length > 0) {
+            const connections = directConnections || [];
+            if (connections.length > 0) {
               const mirrorResults: string[] = [];
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               let brokerFillPrice: number | null = null; // Actual fill price from first successful broker execution
@@ -10570,6 +10570,7 @@ async function runScanForUser(
               supabase,
               userId,
               accountExecutionMode: account.execution_mode,
+              brokerExecutionConnectionCount: null,
               symbol: pair,
               direction: breakerDir,
               currentPrice: analysis.lastPrice,

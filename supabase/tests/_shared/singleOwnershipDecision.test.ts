@@ -85,9 +85,11 @@ Deno.test("operational safety excludes market evidence and legacy score gates", 
     { code: "minimum_score", passed: false },
     { code: "tier1_minimum", passed: false },
     { code: "high_impact_news", passed: false },
+    { code: "multiple_live_connections_require_per_connection_sizing", passed: false },
     { code: "portfolio_heat", passed: true },
   ]), [
     { code: "high_impact_news", passed: false },
+    { code: "multiple_live_connections_require_per_connection_sizing", passed: false },
     { code: "portfolio_heat", passed: true },
   ]);
 });

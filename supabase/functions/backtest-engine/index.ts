@@ -4257,6 +4257,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           },
           runtimeGates: {
             executionMode: { passed: true, reason: "Historical execution mode is paper" },
+            brokerConnectionAvailability: {
+              passed: true,
+              reason: "Broker connection availability is live operational safety only",
+            },
+            brokerConnectionSizing: {
+              passed: true,
+              reason: "Broker connection sizing is live operational safety only",
+            },
             freshness: { passed: true, reason: "Current replay candle is the fill authority" },
             session: { passed: true, reason: `${session.name} session passed historical gates` },
             news: { passed: true, reason: "Historical news gate passed" },

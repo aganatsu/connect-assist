@@ -24,7 +24,8 @@ Deno.test("owned authorities and operational safety remain enforcing", () => {
   for (const code of [
     "daily_loss_limit", "drawdown_limit", "duplicate_position",
     "portfolio_heat", "high_impact_news", "spread", "minimum_risk_reward",
-    "invalid_sl_tp",
+    "invalid_sl_tp", "live_broker_connection_required",
+    "multiple_live_connections_require_per_connection_sizing",
   ]) {
     assertEquals(authorityGateOwner(code), "operational_safety", code);
   }

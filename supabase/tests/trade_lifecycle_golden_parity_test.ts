@@ -80,6 +80,14 @@ const passingAuthorization = {
   spread: { required: false, available: true, passed: true },
   runtimeGates: {
     executionMode: { passed: true, reason: "paper" },
+    brokerConnectionAvailability: {
+      passed: true,
+      reason: "paper execution",
+    },
+    brokerConnectionSizing: {
+      passed: true,
+      reason: "paper execution",
+    },
     portfolioHeat: { passed: true, reason: "within limit" },
     correlation: { passed: true, reason: "within limit" },
     cooldown: { passed: true, reason: "passed" },
