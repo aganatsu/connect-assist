@@ -4457,13 +4457,41 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           { staticOnly: true },
         );
         const finalSizing = applyFinalCandidateSizeAdjustments({
-          lots: sizingResult.lots,
+          sizingResult,
           correlationMultiplier: resolveCorrelationSizeMultiplier(
             portfolioCheck.concentrationScore,
           ),
           signalSource,
           standaloneMultiplier: pairConfig.standaloneMultiplier,
         });
+        if (finalSizing.rejected) {
+          replaySnapshot = await finalizeGoldenReplaySnapshot(
+            replaySnapshot,
+            {
+              execution: {
+                eligible: false,
+                entryPrice: candle.close,
+                stopLoss: analysis.stopLoss,
+                takeProfit: analysis.takeProfit,
+                positionSize: 0,
+                orderType: "market",
+              },
+              lifecycle: {
+                route: "market",
+                stage: "sizing",
+                outcome: "blocked",
+                reason: finalSizing.rejectionReason ||
+                  "Backtest sizing produced no executable size",
+              },
+            },
+          );
+          goldenReplaySnapshots.push(replaySnapshot);
+          if (goldenReplaySnapshots.length > 500) {
+            goldenReplaySnapshots.shift();
+          }
+          diagnostics.skippedGateBlocked++;
+          continue;
+        }
         const posSize = finalSizing.lots;
 
         // ── Open Position ──

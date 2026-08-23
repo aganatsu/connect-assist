@@ -2,6 +2,7 @@ import { batchGetCachedCandles } from "./candleCache.ts";
 import {
   applyFinalCandidateSizeAdjustments,
   computePositionSize,
+  type FinalCandidateSizeResult,
   type PropFirmContext,
   resolveSizingVolatilityContext,
 } from "./unifiedPositionSizing.ts";
@@ -60,7 +61,7 @@ export function calculateFinalPendingSize(input: {
   propFirmSizeMultiplier?: number;
   signalSource?: string | null;
   standaloneMultiplier?: number;
-}): number {
+}): FinalCandidateSizeResult {
   const propFirm: PropFirmContext | undefined = input.propFirmSizeMultiplier == null
     ? undefined
     : { enabled: true, sizeMultiplier: input.propFirmSizeMultiplier };
@@ -83,12 +84,9 @@ export function calculateFinalPendingSize(input: {
     ? input.signalSource
     : null;
   const adjusted = applyFinalCandidateSizeAdjustments({
-    lots: result.lots,
+    sizingResult: result,
     signalSource,
     standaloneMultiplier: input.standaloneMultiplier,
   });
-  if (!Number.isFinite(adjusted.lots) || adjusted.lots <= 0) {
-    throw new Error("Final pending-order size is unavailable");
-  }
-  return adjusted.lots;
+  return adjusted;
 }

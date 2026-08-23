@@ -47,6 +47,45 @@ Deno.test("backtest no longer uses the simplified manual lot formula", () => {
   );
 });
 
+Deno.test("live and backtest reject sizing before opening a position", () => {
+  const liveSizingAt = liveScanner.indexOf("const finalSizing = applyFinalCandidateSizeAdjustments({");
+  const liveRejectAt = liveScanner.indexOf("if (finalSizing.rejected)", liveSizingAt);
+  const liveOpenAt = liveScanner.indexOf("const marketEntryPrice = analysis.lastPrice", liveRejectAt);
+  assert(liveSizingAt > 0 && liveRejectAt > liveSizingAt && liveOpenAt > liveRejectAt);
+
+  const backtestSizingAt = backtestEngine.indexOf("const finalSizing = applyFinalCandidateSizeAdjustments({");
+  const backtestRejectAt = backtestEngine.indexOf("if (finalSizing.rejected)", backtestSizingAt);
+  const backtestOpenAt = backtestEngine.indexOf("const posSize = finalSizing.lots", backtestRejectAt);
+  assert(backtestSizingAt > 0 && backtestRejectAt > backtestSizingAt && backtestOpenAt > backtestRejectAt);
+});
+
+Deno.test("pending and breaker paths cannot restore the 0.01 lot floor", () => {
+  const pendingSizingAt = liveScanner.indexOf("const finalLimitSizing = applyFinalCandidateSizeAdjustments({");
+  const pendingRejectAt = liveScanner.indexOf("if (finalLimitSizing.rejected)", pendingSizingAt);
+  const pendingUseAt = liveScanner.indexOf("const limitSize = finalLimitSizing.lots", pendingRejectAt);
+  assert(pendingSizingAt > 0 && pendingRejectAt > pendingSizingAt && pendingUseAt > pendingRejectAt);
+
+  const breakerSizingAt = liveScanner.indexOf("const finalBreakerSizing = applyFinalCandidateSizeAdjustments({");
+  const breakerRejectAt = liveScanner.indexOf("if (finalBreakerSizing.rejected)", breakerSizingAt);
+  const breakerUseAt = liveScanner.indexOf("const breakerSize = finalBreakerSizing.lots", breakerRejectAt);
+  assert(breakerSizingAt > 0 && breakerRejectAt > breakerSizingAt && breakerUseAt > breakerRejectAt);
+  assert(!liveScanner.includes("Math.max(breakerSizing.lots * propFirmSizeMultiplier, 0.01)"));
+});
+
+Deno.test("Meta broker sizing rejects before volume normalization and broker send", () => {
+  const brokerSizingAt = liveScanner.indexOf("const brokerSizingResult = computePositionSize(");
+  const brokerRejectAt = liveScanner.indexOf("if (brokerSizingResult.rejected", brokerSizingAt);
+  const normalizeAt = liveScanner.indexOf("const normalizedVolume = normalizeBrokerVolumeDown({", brokerRejectAt);
+  const brokerSendAt = liveScanner.indexOf("const mt5Body: any = {", normalizeAt);
+  assert(
+    brokerSizingAt > 0 &&
+      brokerRejectAt > brokerSizingAt &&
+      normalizeAt > brokerRejectAt &&
+      brokerSendAt > normalizeAt,
+  );
+  assert(!liveScanner.includes("Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, brokerVolume))"));
+});
+
 Deno.test("identical live and backtest sizing fixtures produce one lot size", () => {
   const input = {
     balance: 10_000,
@@ -63,14 +102,16 @@ Deno.test("identical live and backtest sizing fixtures produce one lot size", ()
     atrTrend: "expanding",
   });
 
+  const liveSizing = computePositionSize(input, undefined, volatility);
   const live = applyFinalCandidateSizeAdjustments({
-    lots: computePositionSize(input, undefined, volatility).lots,
+    sizingResult: liveSizing,
     correlationMultiplier: 0.75,
     signalSource: "standalone",
     standaloneMultiplier: 0.5,
   });
+  const backtestSizing = computePositionSize(input, undefined, volatility);
   const backtest = applyFinalCandidateSizeAdjustments({
-    lots: computePositionSize(input, undefined, volatility).lots,
+    sizingResult: backtestSizing,
     correlationMultiplier: 0.75,
     signalSource: "standalone",
     standaloneMultiplier: 0.5,

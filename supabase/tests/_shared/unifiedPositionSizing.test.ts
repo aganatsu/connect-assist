@@ -5,6 +5,7 @@ import {
   canOpenNewTrade,
   computePositionSize,
   convertLotsToOandaUnits,
+  normalizeBrokerVolumeDown,
   type OpenPositionRisk,
   type PortfolioContext,
   type PropFirmContext,
@@ -65,6 +66,31 @@ Deno.test("OANDA conversion fails closed for unknown or invalid sizes", () => {
   assertEquals(convertLotsToOandaUnits({ ...defaults, symbol: "EUR/USD", maximumOrderUnits: 9_999 }).ok, false);
 });
 
+Deno.test("broker volume normalization floors to step without increasing risk", () => {
+  const result = normalizeBrokerVolumeDown({
+    lots: 0.019,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+  });
+  assertEquals(result, { ok: true, volume: 0.01 });
+});
+
+Deno.test("broker volume normalization rejects zero and below-minimum sizes", () => {
+  assertEquals(normalizeBrokerVolumeDown({
+    lots: 0,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+  }).ok, false);
+  assertEquals(normalizeBrokerVolumeDown({
+    lots: 0.009,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+  }).ok, false);
+});
+
 // ─── Base Sizing Tests ───────────────────────────────────────────────
 
 const baseInput: SizingInput = {
@@ -98,13 +124,31 @@ Deno.test("computePositionSize handles fixed_lot method", () => {
   assertEquals(result.baseLots, 0.25);
 });
 
-Deno.test("computePositionSize handles zero SL distance gracefully", () => {
-  const input: SizingInput = { ...baseInput, stopLoss: 1.10000 }; // Same as entry
-  const result = computePositionSize(input);
-  assertEquals(result.lots, 0.01); // Minimum lot
+Deno.test("computePositionSize never raises a fixed lot or max-lot cap to 0.01", () => {
+  const fixed = computePositionSize({
+    ...baseInput,
+    method: "fixed_lot",
+    fixedLotSize: 0.005,
+  });
+  assertEquals(fixed.lots, 0);
+  assertEquals(fixed.rejected, true);
+
+  const capped = computePositionSize({
+    ...baseInput,
+    maxLot: 0.005,
+  });
+  assertEquals(capped.lots, 0);
+  assertEquals(capped.rejected, true);
 });
 
-Deno.test("computePositionSize respects minimum lot of 0.01", () => {
+Deno.test("computePositionSize rejects zero SL distance", () => {
+  const input: SizingInput = { ...baseInput, stopLoss: 1.10000 }; // Same as entry
+  const result = computePositionSize(input);
+  assertEquals(result.lots, 0);
+  assertEquals(result.rejected, true);
+});
+
+Deno.test("computePositionSize rejects when minimum lot exceeds the risk budget", () => {
   const input: SizingInput = {
     ...baseInput,
     balance: 100, // Tiny account
@@ -112,7 +156,8 @@ Deno.test("computePositionSize respects minimum lot of 0.01", () => {
     stopLoss: 1.09000, // 100 pips SL
   };
   const result = computePositionSize(input);
-  assertEquals(result.lots >= 0.01, true);
+  assertEquals(result.lots, 0);
+  assertEquals(result.rejected, true);
 });
 
 // ─── Portfolio Heat Tests ────────────────────────────────────────────
@@ -252,7 +297,7 @@ Deno.test("resolveSizingVolatilityContext matches live regime mapping", () => {
 
 Deno.test("final candidate sizing applies correlation before source multiplier", () => {
   const result = applyFinalCandidateSizeAdjustments({
-    lots: 0.5,
+    sizingResult: { lots: 0.5, rejected: false },
     correlationMultiplier: 0.75,
     signalSource: "standalone",
     standaloneMultiplier: 0.5,
@@ -265,7 +310,7 @@ Deno.test("final candidate sizing applies correlation before source multiplier",
 
 Deno.test("unified source keeps the correlation-adjusted size", () => {
   const result = applyFinalCandidateSizeAdjustments({
-    lots: 0.5,
+    sizingResult: { lots: 0.5, rejected: false },
     correlationMultiplier: 0.75,
     signalSource: "unified",
     standaloneMultiplier: 0.5,
@@ -274,6 +319,20 @@ Deno.test("unified source keeps the correlation-adjusted size", () => {
   assertEquals(result.afterCorrelationLots, 0.38);
   assertEquals(result.lots, 0.38);
   assertEquals(result.signalSourceMultiplier, 1);
+});
+
+Deno.test("final candidate sizing never revives a zero-sized rejection", () => {
+  const result = applyFinalCandidateSizeAdjustments({
+    sizingResult: { lots: 0, rejected: true, rejectionReason: "risk cap" },
+    correlationMultiplier: 0.75,
+    signalSource: "standalone",
+    standaloneMultiplier: 0.5,
+  });
+
+  assertEquals(result.lots, 0);
+  assertEquals(result.afterCorrelationLots, 0);
+  assertEquals(result.rejected, true);
+  assertEquals(result.rejectionReason, "risk cap");
 });
 
 Deno.test("correlation concentration maps to the historical live multiplier", () => {
