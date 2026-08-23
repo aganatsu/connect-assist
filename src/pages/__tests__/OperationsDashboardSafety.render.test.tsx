@@ -132,14 +132,17 @@ describe("OperationsDashboard safety integration", () => {
       { id: "offline", display_name: "Small Live", is_active: true },
     ]);
     api.connectionStatus.mockImplementation(async (connectionId: string) => ({ ready: connectionId === "ready" }));
-    api.openTrades.mockResolvedValue([{
-      id: "trade-1",
-      symbol: "EUR/USD",
-      direction: "long",
-      openPrice: 1.1,
-      currentPrice: 1.101,
-      profit: 10,
-    }]);
+    api.openTrades.mockImplementation(async (connectionId: string) => {
+      if (connectionId !== "ready") throw new Error("Broker position state unavailable");
+      return [{
+        id: "trade-1",
+        symbol: "EUR/USD",
+        direction: "long",
+        openPrice: 1.1,
+        currentPrice: 1.101,
+        profit: 10,
+      }];
+    });
     renderDashboard();
 
     const modeButton = await screen.findByRole("button", { name: "→ Paper" });
@@ -148,7 +151,20 @@ describe("OperationsDashboard safety integration", () => {
     expect(await screen.findByText(/Broker exposure could not be verified for every active connection/i)).toBeInTheDocument();
     expect(screen.getByText("EUR/USD")).toBeInTheDocument();
     expect(screen.queryByText(/report no open trades/i)).not.toBeInTheDocument();
-    expect(api.openTrades).toHaveBeenCalledTimes(1);
+    expect(api.openTrades).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a disconnected but confirmed-flat broker to return to paper", async () => {
+    api.status.mockResolvedValue(knownStatus({ executionMode: "live" }));
+    api.connections.mockResolvedValue([{ id: "offline", display_name: "Small Live", is_active: true }]);
+    api.connectionStatus.mockResolvedValue({ ready: false });
+    api.openTrades.mockResolvedValue([]);
+    renderDashboard();
+
+    const modeButton = await screen.findByRole("button", { name: "→ Paper" });
+    await waitFor(() => expect(modeButton).toBeEnabled());
+    expect(api.openTrades).toHaveBeenCalledWith("offline");
+    expect(api.accountSummary).not.toHaveBeenCalled();
   });
 
   it("allows paper mode only after every broker reports verified empty exposure", async () => {
@@ -185,5 +201,19 @@ describe("OperationsDashboard safety integration", () => {
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Linked live broker positions close first"));
     await waitFor(() => expect(api.openTrades.mock.calls.length).toBeGreaterThan(1));
     await waitFor(() => expect(api.accountSummary.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("disables broker and managed closes when their record IDs are unavailable", async () => {
+    api.status.mockResolvedValue(knownStatus({
+      executionMode: "live",
+      positions: [{ symbol: "GBP/USD", direction: "long", entryPrice: 1.3, currentPrice: 1.301, pnl: 12 }],
+    }));
+    api.connections.mockResolvedValue([{ id: "ready", display_name: "FTMO", is_active: true }]);
+    api.openTrades.mockResolvedValue([{ symbol: "EUR/USD", direction: "long", openPrice: 1.1, currentPrice: 1.101, profit: 10 }]);
+    renderDashboard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Positions" }));
+    expect(await screen.findByRole("button", { name: /Close at broker/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Close managed position/i })).toBeDisabled();
   });
 });

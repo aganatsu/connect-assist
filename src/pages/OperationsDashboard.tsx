@@ -311,6 +311,12 @@ function brokerTradeDirection(trade: any): "long" | "short" {
     : "long";
 }
 
+function recordIdentifier(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const identifier = String(value).trim();
+  return identifier || null;
+}
+
 function downloadScanCsv(details: any[], observedAt: string | undefined) {
   const headers = ["observed_at", "pair", "direction", "score", "status", "reason"];
   const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -517,10 +523,10 @@ function OperationsDashboard() {
     })),
   });
   const brokerTradeQueries = useQueries({
-    queries: activeConnections.map((connection: any, index: number) => ({
+    queries: activeConnections.map((connection: any) => ({
       queryKey: ["broker-open-trades", connection.id],
       queryFn: () => brokerExecApi.openTrades(connection.id),
-      enabled: connectionStatusQueries[index]?.data?.ready === true,
+      enabled: brokerConnectionsKnown,
       refetchInterval: 10_000,
       retry: false,
     })),
@@ -536,22 +542,17 @@ function OperationsDashboard() {
   const brokerExposurePending = connectionsQuery.isPending || activeConnections.some((_: any, index: number) => {
     const statusCheck = connectionStatusQueries[index];
     const positionsCheck = brokerTradeQueries[index];
-    return statusCheck?.isPending ||
-      (statusCheck?.data?.ready === true && positionsCheck?.isPending);
+    return statusCheck?.isPending || positionsCheck?.isPending;
   });
   const brokerExposureUnavailable = connectionsQuery.isError || activeConnections.some((_: any, index: number) => {
-    const statusCheck = connectionStatusQueries[index];
     const positionsCheck = brokerTradeQueries[index];
-    if (statusCheck?.isError) return true;
-    if (statusCheck?.isSuccess && statusCheck.data?.ready !== true) return true;
-    return statusCheck?.data?.ready === true &&
-      (positionsCheck?.isError || (positionsCheck?.isSuccess && !Array.isArray(positionsCheck.data)));
+    return positionsCheck?.isError ||
+      (positionsCheck?.isSuccess && !Array.isArray(positionsCheck.data));
   });
   const brokerExposureComplete = brokerConnectionsKnown &&
     !brokerExposurePending &&
     !brokerExposureUnavailable &&
     activeConnections.every((_: any, index: number) =>
-      connectionStatusQueries[index]?.data?.ready === true &&
       brokerTradeQueries[index]?.isSuccess === true &&
       Array.isArray(brokerTradeQueries[index]?.data)
     );
@@ -560,10 +561,11 @@ function OperationsDashboard() {
     if (!Array.isArray(trades)) return [];
     return trades.map((trade: any) => ({ trade, connection }));
   });
-  const brokerAccounts = activeConnections.map((connection: any, index: number) => ({
-    connection,
-    account: brokerAccountQueries[index]?.data,
-  })).filter((item) => item.account && item.account.fallback !== true);
+  const brokerAccounts = activeConnections.flatMap((connection: any, index: number) => {
+    const query = brokerAccountQueries[index];
+    if (!query?.isSuccess || !query.data || query.data.fallback === true) return [];
+    return [{ connection, account: query.data }];
+  });
   const liveBrokerStates = activeConnections.map((_: any, index: number) =>
     connectionStatusQueries[index]?.isSuccess === true &&
     connectionStatusQueries[index]?.data?.ready === true &&
@@ -775,7 +777,10 @@ function OperationsDashboard() {
     onError: (error: any) => toast.error(error?.message || "Candidate was not dismissed"),
   });
   const paperCloseMutation = useMutation({
-    mutationFn: (positionId: string) => paperApi.closePosition(positionId),
+    mutationFn: (positionId: string) => {
+      if (!positionId) throw new Error("A known managed position is required to close it.");
+      return paperApi.closePosition(positionId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
@@ -785,7 +790,12 @@ function OperationsDashboard() {
     onError: (error: any) => toast.error(error?.message || "Position close was not confirmed"),
   });
   const brokerCloseMutation = useMutation({
-    mutationFn: ({ connectionId, tradeId }: { connectionId: string; tradeId: string }) => brokerExecApi.closeTrade(connectionId, tradeId),
+    mutationFn: ({ connectionId, tradeId }: { connectionId: string; tradeId: string }) => {
+      if (!connectionId || !tradeId) {
+        throw new Error("A known broker connection and trade are required to close this position.");
+      }
+      return brokerExecApi.closeTrade(connectionId, tradeId);
+    },
     onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades", variables.connectionId] });
       queryClient.invalidateQueries({ queryKey: ["broker-account", variables.connectionId] });
@@ -1210,27 +1220,28 @@ function OperationsDashboard() {
           <SheetContent side="right" className="apex-position-sheet">
             <SheetHeader>
               <SheetTitle>Open Positions</SheetTitle>
-              <SheetDescription className="sr-only">Verified broker exposure and managed position records.</SheetDescription>
+              <SheetDescription className="sr-only">Known broker exposure and managed position records.</SheetDescription>
             </SheetHeader>
             <section className="apex-position-section">
-              <div className="apex-position-section-head"><h3>Broker positions</h3><span>{brokerTrades.length} verified</span></div>
+              <div className="apex-position-section-head"><h3>Broker positions</h3><span>{brokerTrades.length} known</span></div>
               {brokerExposurePending && <div className="apex-position-warning"><Loader2 className="spin" /> Broker exposure is still being verified. Known positions are shown below.</div>}
               {brokerExposureUnavailable && <div className="apex-position-warning"><WifiOff /> Broker exposure could not be verified for every active connection. Do not assume unreported exposure is zero.</div>}
               {brokerConnectionsKnown && activeConnections.length === 0 && <div className="apex-empty">No active broker connection configured.</div>}
               {brokerExposureComplete && activeConnections.length > 0 && brokerTrades.length === 0 && <div className="apex-empty">All verified brokers report no open trades.</div>}
-              {brokerTrades.length > 0 && <div className="apex-position-list">{brokerTrades.map(({ trade, connection }: any) => {
+              {brokerTrades.length > 0 && <div className="apex-position-list">{brokerTrades.map(({ trade, connection }: any, index: number) => {
                 const symbol = brokerTradeSymbol(trade);
                 const direction = brokerTradeDirection(trade);
                 const pnl = Number(trade.profit ?? trade.unrealizedPL ?? trade.unrealizedProfit ?? 0);
-                return <article key={`${connection.id}-${trade.id}`}>
+                const tradeId = recordIdentifier(trade.id);
+                return <article key={`${connection.id}-${tradeId || `missing-${index}`}`}>
                   <div><strong>{symbol}</strong><span className={direction}>{direction} · {connection.display_name}</span></div>
                   <dl>
                     <div><dt>Entry</dt><dd>{optionalPrice(trade.openPrice ?? trade.price, symbol)}</dd></div>
                     <div><dt>Current</dt><dd>{optionalPrice(trade.currentPrice, symbol)}</dd></div>
                     <div><dt>P&amp;L</dt><dd>{Number.isFinite(pnl) ? pnl.toFixed(2) : "Unavailable"}</dd></div>
                   </dl>
-                  <button disabled={brokerCloseMutation.isPending} onClick={() => {
-                    if (window.confirm(`Close ${symbol} at ${connection.display_name}?`)) brokerCloseMutation.mutate({ connectionId: connection.id, tradeId: String(trade.id) });
+                  <button disabled={brokerCloseMutation.isPending || !tradeId} onClick={() => {
+                    if (tradeId && window.confirm(`Close ${symbol} at ${connection.display_name}?`)) brokerCloseMutation.mutate({ connectionId: connection.id, tradeId });
                   }}><X /> Close at broker</button>
                 </article>;
               })}</div>}
@@ -1243,19 +1254,20 @@ function OperationsDashboard() {
                 <div className="apex-position-warning"><WifiOff /> Internal position state is unavailable. Open exposure has not been assumed to be zero.</div>
               ) : !Array.isArray(status.positions) || status.positions.length === 0 ? (
                 <div className="apex-empty">No internal open positions.</div>
-              ) : <div className="apex-position-list">{status.positions.map((position: any) => (
-                <article key={position.id}>
+              ) : <div className="apex-position-list">{status.positions.map((position: any, index: number) => {
+                const positionId = recordIdentifier(position.id);
+                return <article key={positionId || `missing-${index}`}>
                   <div><strong>{position.symbol}</strong><span className={position.direction}>{position.direction}</span></div>
                   <dl>
                     <div><dt>Entry</dt><dd>{optionalPrice(position.entryPrice, position.symbol)}</dd></div>
                     <div><dt>Current</dt><dd>{optionalPrice(position.currentPrice, position.symbol)}</dd></div>
                     <div><dt>P&amp;L</dt><dd>{Number(position.pnl || 0).toFixed(2)}</dd></div>
                   </dl>
-                  <button disabled={paperCloseMutation.isPending} onClick={() => {
-                    if (window.confirm(`Close ${position.symbol} managed position? Linked live broker positions close first; the internal ledger finalizes only after broker confirmation.`)) paperCloseMutation.mutate(position.id);
+                  <button disabled={paperCloseMutation.isPending || !positionId} onClick={() => {
+                    if (positionId && window.confirm(`Close ${position.symbol} managed position? Linked live broker positions close first; the internal ledger finalizes only after broker confirmation.`)) paperCloseMutation.mutate(positionId);
                   }}><X /> Close managed position</button>
-                </article>
-              ))}</div>}
+                </article>;
+              })}</div>}
             </section>
           </SheetContent>
         </Sheet>
