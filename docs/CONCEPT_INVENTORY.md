@@ -30,6 +30,7 @@ instead of arbitrating.
 |---|---|---|---|
 | **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
 | **Paper final-close persistence** | 1 | `finalizePaperPositionClose` + `finalize_paper_position_close` RPC | 🟢 Single owner |
+| **Full broker close** | 1 | `reconcileBrokerState.ts:reconcileFullBrokerClose` | 🟢 Single owner |
 | Instrument-aware P&L | 1 | `smcAnalysis.ts:calcPnl` | 🟢 Single owner |
 | Live broker target-count safety | 1 | `finalRuntimeGates.ts` | 🟢 Single owner |
 | Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
@@ -95,6 +96,23 @@ evidence stays comparable; its result only affects execution when the frozen
 activation mode requires it. The backtest orchestrator does not simulate the
 post-touch pending-order lifecycle, so this route-specific activation is not
 silently applied to unrelated market-fill backtests.
+
+## Full broker close
+
+`_shared/reconcileBrokerState.ts:reconcileFullBrokerClose` is the only owner of
+full broker-position closure. Paper auto exits, manual close, kill switch,
+account reset, scanner SL/TP exits, reversal exits, and prop-firm emergency
+close all call it before `finalizePaperPositionClose` or deletion.
+
+The owner consumes the execution mode and exact broker-position IDs returned by
+the service-only locked close-context RPC. Broker-backed positions use the
+durable execution ledger and require an exact-ID broker readback proving the
+position fully closed. Symbol, direction, and comment-tag fallbacks are not
+valid close identity. Missing identity, partial closure, transport ambiguity,
+ledger failure, or persistence failure leaves the internal position open and
+returns reconciliation-required. Only a position locked as paper-only may
+finalize without broker work. Partial-close and protective-order reconciliation
+remain distinct operations in the same owner module.
 
 ## Impulse entry lifecycle zone identity
 

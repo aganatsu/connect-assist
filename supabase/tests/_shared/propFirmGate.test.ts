@@ -15,6 +15,31 @@ import {
 
 // ─── Mock Supabase Client ────────────────────────────────────────────────────
 
+function paperCloseRpc(onFinalize?: (args: any) => void) {
+  return async (name: string, args: any) => {
+    if (name === "load_paper_position_close_context") {
+      return {
+        data: {
+          position_found: true,
+          position_status: "open",
+          broker_execution_state: "paper",
+          execution_mode: "paper",
+          required_connection_ids: [],
+          missing_close_connection_ids: [],
+          unknown_identity_connection_ids: [],
+          broker_position_ids: {},
+        },
+        error: null,
+      };
+    }
+    if (name === "finalize_paper_position_close") {
+      onFinalize?.(args);
+      return { data: { closed: true, code: "closed" }, error: null };
+    }
+    throw new Error(`Unexpected RPC ${name}`);
+  };
+}
+
 function makeMockSupabase(opts: {
   config?: any;
   dailyState?: any;
@@ -29,10 +54,7 @@ function makeMockSupabase(opts: {
   const insertedHistory: any[] = opts.insertedHistory || [];
 
   return {
-    rpc: async (_name: string, args: any) => {
-      deletedPositions.push(args.p_position_row_id);
-      return { data: { closed: true, code: "closed" }, error: null };
-    },
+    rpc: paperCloseRpc((args) => deletedPositions.push(args.p_position_row_id)),
     from: (table: string) => {
       if (table === "prop_firm_config") {
         return {
@@ -285,13 +307,15 @@ Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypt
   ];
 
   // Weekend: FX market closed
-  const closedCount = await propFirmEmergencyClose(
+  const closeResult = await propFirmEmergencyClose(
     supabase, "test-user", "smc", positions, "test emergency", "scan-005",
     { fxMarketClosed: true },
   );
 
   // Only BTCUSD should be closed (crypto)
-  assertEquals(closedCount, 1);
+  assertEquals(closeResult.closedCount, 1);
+  assertEquals(closeResult.complete, false);
+  assertEquals(closeResult.unresolved.length, 3);
   assertEquals(deletedPositions.length, 1);
   assertEquals(deletedPositions[0], "3");
 });
@@ -301,10 +325,7 @@ Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
   let closedSymbols: string[] = [];
 
   const supabase = {
-    rpc: async (_name: string, args: any) => {
-      closedSymbols.push(args.p_position_row_id);
-      return { data: { closed: true, code: "closed" }, error: null };
-    },
+    rpc: paperCloseRpc((args) => closedSymbols.push(args.p_position_row_id)),
     from: (table: string) => {
       if (table === "paper_positions") {
         return {
@@ -349,12 +370,13 @@ Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
   ];
 
   // Weekday: FX market open — close everything
-  const closedCount = await propFirmEmergencyClose(
+  const closeResult = await propFirmEmergencyClose(
     supabase as any, "test-user", "smc", positions, "test emergency", "scan-006",
     { fxMarketClosed: false },
   );
 
-  assertEquals(closedCount, 3);
+  assertEquals(closeResult.closedCount, 3);
+  assertEquals(closeResult.complete, true);
   assertEquals(closedSymbols.length, 3);
   assert(closedSymbols.includes("1"));
   assert(closedSymbols.includes("2"));
@@ -366,10 +388,7 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
   let closedSymbols: string[] = [];
 
   const supabase = {
-    rpc: async (_name: string, args: any) => {
-      closedSymbols.push(args.p_position_row_id);
-      return { data: { closed: true, code: "closed" }, error: null };
-    },
+    rpc: paperCloseRpc((args) => closedSymbols.push(args.p_position_row_id)),
     from: (table: string) => {
       if (table === "paper_positions") {
         return {
@@ -413,12 +432,60 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
   ];
 
   // No opts passed at all — backward compatible, closes everything
-  const closedCount = await propFirmEmergencyClose(
+  const closeResult = await propFirmEmergencyClose(
     supabase as any, "test-user", "smc", positions, "test emergency", "scan-007",
   );
 
-  assertEquals(closedCount, 2);
+  assertEquals(closeResult.closedCount, 2);
+  assertEquals(closeResult.complete, true);
   assertEquals(closedSymbols.length, 2);
+});
+
+Deno.test("propFirmEmergencyClose: exceptions remain unresolved", async () => {
+  const supabase = {
+    rpc: async (name: string) => {
+      if (name === "load_paper_position_close_context") {
+        return {
+          data: {
+            position_found: true,
+            position_status: "open",
+            broker_execution_state: "paper",
+            execution_mode: "paper",
+            required_connection_ids: [],
+            missing_close_connection_ids: [],
+            unknown_identity_connection_ids: [],
+            broker_position_ids: {},
+          },
+          error: null,
+        };
+      }
+      throw new Error("finalizer unavailable");
+    },
+  };
+
+  const result = await propFirmEmergencyClose(
+    supabase as any,
+    "test-user",
+    "smc",
+    [{
+      id: "1",
+      symbol: "EURUSD",
+      direction: "long",
+      entry_price: "1.1000",
+      current_price: "1.0950",
+      size: "0.01",
+      position_id: "p1",
+    }],
+    "test emergency",
+    "scan-exception",
+  );
+
+  assertEquals(result.closedCount, 0);
+  assertEquals(result.complete, false);
+  assertEquals(result.unresolved, [{
+    positionId: "p1",
+    reason: "close_exception:finalizer unavailable",
+  }]);
 });
 
 Deno.test("propFirmGate: paper equity uses the instrument contract size", async () => {
@@ -450,13 +517,12 @@ Deno.test("propFirmGate: paper equity uses the instrument contract size", async 
 Deno.test("propFirmEmergencyClose: realizes P&L with instrument contract size", async () => {
   let recordedPnl: number | null = null;
   const supabase = {
-    rpc: async (_name: string, args: any) => {
+    rpc: paperCloseRpc((args) => {
       recordedPnl = Number(args.p_pnl);
-      return { data: { closed: true, code: "closed" }, error: null };
-    },
+    }),
   };
 
-  const closedCount = await propFirmEmergencyClose(
+  const closeResult = await propFirmEmergencyClose(
     supabase as any,
     "test-user",
     "smc",
@@ -473,7 +539,8 @@ Deno.test("propFirmEmergencyClose: realizes P&L with instrument contract size", 
     "scan-instrument-close",
   );
 
-  assertEquals(closedCount, 1);
+  assertEquals(closeResult.closedCount, 1);
+  assertEquals(closeResult.complete, true);
   assertEquals(recordedPnl, 10);
 });
 
@@ -593,7 +660,7 @@ Deno.test("propFirmEmergencyClose: invalid PnL inputs never finalize at zero", a
     },
   };
 
-  const closedCount = await propFirmEmergencyClose(
+  const closeResult = await propFirmEmergencyClose(
     supabase as any,
     "test-user",
     "smc",
@@ -610,7 +677,9 @@ Deno.test("propFirmEmergencyClose: invalid PnL inputs never finalize at zero", a
     "scan-invalid-pnl",
   );
 
-  assertEquals(closedCount, 0);
+  assertEquals(closeResult.closedCount, 0);
+  assertEquals(closeResult.complete, false);
+  assertEquals(closeResult.unresolved[0].positionId, "invalid-1");
   assertEquals(rpcCalls, 0);
 });
 

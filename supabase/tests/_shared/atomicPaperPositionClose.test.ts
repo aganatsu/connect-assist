@@ -99,7 +99,7 @@ Deno.test("every full-close caller delegates to the atomic finalizer", async () 
     new URL("_shared/propFirmGate.ts", root).pathname,
   );
 
-  assertStringIncludes(paper, "finalizePaperPositionClose(supabase");
+  assertStringIncludes(paper, "finalizePaperPositionClose(serviceSupabase");
   assertStringIncludes(scanner, "finalizePaperPositionClose(supabase");
   assertStringIncludes(propFirm, "finalizePaperPositionClose(supabase");
   assertStringIncludes(paper, "if (!finalization.closed)");

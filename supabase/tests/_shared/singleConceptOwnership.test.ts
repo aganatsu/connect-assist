@@ -53,6 +53,7 @@ const SINGLE_OWNER: string[] = [
   "computePositionSize",
   "calculateSLTP",
   "finalizePaperPositionClose",
+  "reconcileFullBrokerClose",
   "calcPnl",
   "checkBrokerConnectionAvailabilityAtExecution",
   "checkBrokerConnectionSizingAtExecution",

@@ -23,16 +23,11 @@ const scannerSource = Deno.readTextFileSync(
 // Helper: extract a code block by action name
 // ═══════════════════════════════════════════════════════════════════════
 function extractBlock(source: string, actionName: string): string {
-  const regex = new RegExp(
-    `if\\s*\\(action\\s*===\\s*"${actionName}"\\)\\s*\\{[\\s\\S]*?return respond\\(`,
-    "g",
-  );
-  const matches = [...source.matchAll(regex)];
-  // For blocks with multiple return statements (like set_balance with error return),
-  // take the last match which includes the full block
-  const match = matches[matches.length - 1];
-  assert(match, `Block for action "${actionName}" not found`);
-  return match[0];
+  const marker = `if (action === "${actionName}")`;
+  const start = source.indexOf(marker);
+  assert(start >= 0, `Block for action "${actionName}" not found`);
+  const nextAction = source.indexOf('\n    if (action === "', start + marker.length);
+  return source.slice(start, nextAction >= 0 ? nextAction : source.length);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

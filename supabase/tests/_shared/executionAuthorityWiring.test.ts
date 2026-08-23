@@ -203,14 +203,16 @@ Deno.test("reverse close preserves internal position until broker closes confirm
   const start = source.indexOf("const closeOppositePositionsAfterEntry");
   const end = source.indexOf("// GUARD: reject trades", start);
   const closeSection = source.slice(start, end);
-  const brokerConfirmation = closeSection.indexOf("confirmedBrokerCloses");
+  const brokerConfirmation = closeSection.indexOf(
+    "reconcileFullBrokerClose({",
+  );
   const atomicFinalization = closeSection.indexOf(
     "finalizePaperPositionClose(supabase",
   );
   assert(brokerConfirmation >= 0 && atomicFinalization > brokerConfirmation);
   assertStringIncludes(
     closeSection,
-    'broker_close_state: "reconciliation_required"',
+    "if (!brokerClose.readyToFinalize)",
   );
   assertStringIncludes(closeSection, "internal position remains open");
 });
