@@ -206,6 +206,43 @@ describe("edge function retry safety", () => {
     expect(supabase.auth.signOut).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["list_symbols", () => brokerApi.listSymbols("connection-1")],
+    ["test", () => brokerApi.test("connection-1")],
+    ["probe_symbols", () => brokerApi.probeSymbols("connection-1", ["EURUSD"])],
+    ["auto_map_symbols", () => brokerApi.autoMapSymbols("connection-1")],
+  ])(
+    "keeps valid app auth intact when broker-connections %s receives a broker 401",
+    async (action, request) => {
+      const fetchMock = vi.fn(async (...args: unknown[]) => {
+        const body = requestBody(args);
+        if (
+          functionName(args) === "paper-trading" &&
+          body.action === "status"
+        ) {
+          return edgeResponse(200, paperStatus("paper"));
+        }
+        return edgeResponse(401, {
+          success: false,
+          errorOrigin: "broker",
+          broker: "metaapi",
+          brokerStatus: 401,
+          error: "MetaAPI error: 401 Unauthorized",
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(request()).rejects.toThrow("MetaAPI error: 401 Unauthorized");
+      expect(
+        fetchMock.mock.calls
+          .map((call) => requestBody(call).action)
+          .filter((requestedAction) => requestedAction === action),
+      ).toHaveLength(1);
+      expect(supabase.auth.refreshSession).not.toHaveBeenCalled();
+      expect(supabase.auth.signOut).not.toHaveBeenCalled();
+    },
+  );
+
   it("re-reads live broker truth before a nested position update", async () => {
     const fetchMock = vi.fn(async (...args: unknown[]) => {
       const body = requestBody(args);
