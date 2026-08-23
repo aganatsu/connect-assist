@@ -25,6 +25,18 @@ export interface CallerScopedUserId {
   forbidden: boolean;
 }
 
+export type AuthorizedCallerScope =
+  | {
+    authorized: true;
+    userId: string;
+    serviceRole: boolean;
+  }
+  | {
+    authorized: false;
+    status: 400 | 401 | 403;
+    error: string;
+  };
+
 /** Verifier signature so tests can inject a deterministic implementation. */
 export type ClaimsVerifier = (token: string) => Promise<VerifiedClaims | null>;
 
@@ -124,5 +136,52 @@ export function resolveCallerScopedUserId(
   return {
     userId: authenticatedUserId || requested,
     forbidden: false,
+  };
+}
+
+/**
+ * Authenticate either an exact service-role caller or a signed-in user, then
+ * resolve the user-owned scope for the operation.
+ *
+ * Service callers must name the target explicitly. User callers may omit the
+ * target, but may never select a user other than the validated JWT subject.
+ */
+export async function authorizeScopedCaller(
+  req: Request,
+  requestedUserId: unknown,
+  verifier: ClaimsVerifier = defaultClaimsVerifier,
+): Promise<AuthorizedCallerScope> {
+  const serviceRole = isServiceRoleCaller(req);
+  const authenticatedUserId = serviceRole
+    ? null
+    : await resolveAuthenticatedUserId(req, verifier);
+
+  if (!serviceRole && !authenticatedUserId) {
+    return { authorized: false, status: 401, error: "Unauthorized" };
+  }
+
+  const callerScope = resolveCallerScopedUserId(
+    authenticatedUserId,
+    requestedUserId,
+  );
+  if (callerScope.forbidden) {
+    return {
+      authorized: false,
+      status: 403,
+      error: "Cannot operate another user's broker connection",
+    };
+  }
+  if (!callerScope.userId) {
+    return {
+      authorized: false,
+      status: 400,
+      error: "Service caller must provide userId",
+    };
+  }
+
+  return {
+    authorized: true,
+    userId: callerScope.userId,
+    serviceRole,
   };
 }
