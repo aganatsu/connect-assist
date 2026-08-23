@@ -98,16 +98,22 @@ export function checkBrokerConnectionAvailabilityAtExecution(input: {
   executionMode: unknown;
   executionConnectionCount: number | null;
 }): FinalRuntimeGate {
-  if (
-    input.executionMode !== "live" ||
-    input.executionConnectionCount === null ||
-    input.executionConnectionCount > 0
-  ) {
+  if (input.executionMode !== "live") {
     return {
       passed: true,
-      reason: input.executionMode === "live"
-        ? "A live broker execution connection is available"
-        : "Broker connection availability does not apply to paper execution",
+      reason: "Broker connection availability does not apply to paper execution",
+    };
+  }
+  if (input.executionConnectionCount === null) {
+    return {
+      passed: true,
+      reason: "This authorization stage does not send a broker order",
+    };
+  }
+  if (input.executionConnectionCount > 0) {
+    return {
+      passed: true,
+      reason: "A live broker execution connection is available",
     };
   }
   return { passed: false, reason: LIVE_BROKER_CONNECTION_REQUIRED };

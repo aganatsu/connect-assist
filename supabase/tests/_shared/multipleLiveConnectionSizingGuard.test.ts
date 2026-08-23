@@ -31,8 +31,11 @@ Deno.test("live execution requires a broker connection before internal fill", ()
     checkBrokerConnectionAvailabilityAtExecution({
       executionMode: "live",
       executionConnectionCount: null,
-    }).passed,
-    true,
+    }),
+    {
+      passed: true,
+      reason: "This authorization stage does not send a broker order",
+    },
   );
 });
 
