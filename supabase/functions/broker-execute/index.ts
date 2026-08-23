@@ -3,6 +3,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
+import { classifyBrokerExecutionResponse } from "../_shared/brokerExecutionLedger.ts";
+import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
@@ -45,6 +47,44 @@ function getOandaPrecision(symbol: string): number {
 function roundOandaPrice(symbol: string, price: number): string {
   const precision = getOandaPrecision(symbol);
   return price.toFixed(precision);
+}
+
+function respondWithMetaApiMutationOutcome(res: Response, body: string) {
+  let parsedBody: any = null;
+  try {
+    parsedBody = body ? JSON.parse(body) : null;
+  } catch {
+    // The shared classifier records malformed 2xx bodies as uncertain.
+  }
+
+  const outcome = classifyBrokerExecutionResponse({
+    ok: res.ok,
+    httpStatus: res.status,
+    parsedBody,
+    rawBody: body,
+    confirmationMode: "metaapi_trade",
+  });
+  const brokerCode = parsedBody?.stringCode || parsedBody?.errorCode;
+
+  if (outcome.status === "succeeded") {
+    return respond({
+      ...parsedBody,
+      ok: true,
+      brokerExecutionStatus: "succeeded",
+    });
+  }
+
+  const reason = brokerCode && outcome.error !== brokerCode
+    ? `${brokerCode}: ${outcome.error}`
+    : outcome.error || "MetaAPI did not confirm the broker mutation";
+  return respond({
+    ok: false,
+    brokerExecutionStatus: outcome.status,
+    brokerCode: brokerCode || undefined,
+    error: reason,
+    details: body ? body.slice(0, 1000) : undefined,
+    fallback: outcome.status === "uncertain",
+  }, 409);
 }
 
 // H9: Retry helper with exponential backoff for broker execution
@@ -146,13 +186,38 @@ Deno.serve(async (req) => {
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const units = direction === "long" ? Math.round(size * 100000) : -Math.round(size * 100000);
         const oandaInstrument = resolveOandaSymbol(symbol, conn);
+        const instrumentRes = await fetch(
+          `${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaInstrument)}`,
+          { headers: { Authorization: `Bearer ${conn.api_key}` } },
+        );
+        if (!instrumentRes.ok) {
+          const details = await instrumentRes.text();
+          return respond({
+            error: `OANDA instrument specification failed: ${instrumentRes.status}`, details,
+            fallback: instrumentRes.status >= 500,
+          }, instrumentRes.status);
+        }
+        const instrument = (await instrumentRes.json()).instruments?.[0];
+        if (!instrument) {
+          return respond({ error: `OANDA instrument not found: ${oandaInstrument}`, fallback: false }, 400);
+        }
+        const unitConversion = convertLotsToOandaUnits({
+          symbol,
+          lots: Number(size),
+          direction,
+          tradeUnitsPrecision: Number(instrument.tradeUnitsPrecision),
+          minimumTradeSize: Number(instrument.minimumTradeSize),
+          maximumOrderUnits: Number(instrument.maximumOrderUnits),
+        });
+        if (!unitConversion.ok) {
+          return respond({ error: `OANDA size rejected: ${unitConversion.error}`, fallback: false }, 400);
+        }
         // H10: Round prices to correct OANDA precision
         const slPrice = stopLoss ? roundOandaPrice(symbol, stopLoss) : null;
         const tpPrice = takeProfit ? roundOandaPrice(symbol, takeProfit) : null;
         const orderBody: any = {
-          order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
+          order: { type: "MARKET", instrument: oandaInstrument, units: unitConversion.units, timeInForce: "FOK", positionFill: "DEFAULT" },
         };
         if (positionId) {
           const clientId = String(positionId).slice(0, 128);
@@ -376,15 +441,15 @@ Deno.serve(async (req) => {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
           });
-          if (!res.ok) {
-            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
-              throw new Error(`MetaAPI close failed: ${res.status} — ${body.slice(0, 200)}`);
-            }
-            return { _noRetry: true, error: `MetaAPI close failed: ${res.status}`, details: body, fallback: false };
+          if (
+            !res.ok &&
+            (res.status >= 500 || /not connected to broker|region/i.test(body))
+          ) {
+            throw new Error(`MetaAPI close failed: ${res.status} — ${body.slice(0, 200)}`);
           }
-          return JSON.parse(body);
+          return { res, body };
         }, isRetryableError);
-        return respond(result);
+        return respondWithMetaApiMutationOutcome(result.res, result.body);
       }
     }
 
@@ -463,8 +528,7 @@ Deno.serve(async (req) => {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
         });
-        if (!res.ok) return respond({ error: `MetaAPI modify failed: ${res.status}`, details: body }, 200);
-        return respond(JSON.parse(body));
+        return respondWithMetaApiMutationOutcome(res, body);
       }
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";

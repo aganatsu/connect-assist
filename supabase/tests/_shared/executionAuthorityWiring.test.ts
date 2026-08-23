@@ -226,6 +226,18 @@ Deno.test("broker-execute carries local position identity to both brokers", asyn
   assertStringIncludes(source, "tradeBody.comment = `paper:${positionId}`");
 });
 
+Deno.test("OANDA market orders use instrument-aware native units", async () => {
+  const source = await Deno.readTextFile(brokerExecuteUrl.pathname);
+  const placeOrderStart = source.indexOf('if (action === "place_order")');
+  const placeOrderEnd = source.indexOf('if (action === "account_balance")', placeOrderStart);
+  const placeOrderSection = source.slice(placeOrderStart, placeOrderEnd);
+  assertStringIncludes(placeOrderSection, "convertLotsToOandaUnits({");
+  assertStringIncludes(placeOrderSection, "instrument.tradeUnitsPrecision");
+  assertStringIncludes(placeOrderSection, "instrument.minimumTradeSize");
+  assertStringIncludes(placeOrderSection, "instrument.maximumOrderUnits");
+  assertEquals(placeOrderSection.includes("size * 100000"), false);
+});
+
 Deno.test("live market-order sends suppress unsafe automatic retries", async () => {
   const brokerSource = await Deno.readTextFile(brokerExecuteUrl.pathname);
   const placeOrderStart = brokerSource.indexOf(

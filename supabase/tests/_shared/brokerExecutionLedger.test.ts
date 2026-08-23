@@ -118,6 +118,69 @@ Deno.test("broker response never treats an unparseable 2xx as confirmed", () => 
   );
 });
 
+Deno.test("MetaAPI trade mutations require an explicit broker success code", () => {
+  const invalid = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stringCode: "TRADE_RETCODE_INVALID_STOPS",
+      message: "Invalid stops",
+    },
+    confirmationMode: "metaapi_trade",
+  });
+  assertEquals(invalid, { status: "rejected", error: "Invalid stops" });
+
+  const empty = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: null,
+    rawBody: "",
+    confirmationMode: "metaapi_trade",
+  });
+  assertEquals(empty, {
+    status: "uncertain",
+    error: "Broker returned an empty success response",
+  });
+
+  const malformed = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    rawBody: "not-json",
+    confirmationMode: "metaapi_trade",
+  });
+  assertEquals(malformed, {
+    status: "uncertain",
+    error: "Broker returned an unparseable success response: not-json",
+  });
+
+  const missingConfirmation = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {},
+    rawBody: "{}",
+    confirmationMode: "metaapi_trade",
+  });
+  assertEquals(missingConfirmation, {
+    status: "uncertain",
+    error:
+      "MetaAPI returned HTTP success without a recognized trade confirmation code",
+  });
+
+  const confirmed = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stringCode: "TRADE_RETCODE_DONE",
+      positionId: "position-1",
+    },
+    confirmationMode: "metaapi_trade",
+  });
+  assertEquals(confirmed, {
+    status: "succeeded",
+    brokerOrderId: "position-1",
+  });
+});
+
 Deno.test("execution wrapper never sends when a durable claim already exists", async () => {
   let sent = false;
   const supabase = {

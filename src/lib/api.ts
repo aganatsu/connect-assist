@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { requireConfirmedBrokerMutation } from "@/lib/brokerMutationResult";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
 const functionCooldownUntil = new Map<string, number>();
@@ -101,7 +102,19 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
     const action = body?.action;
     if (["open_trades", "trade_history"].includes(action)) return [];
     if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
-    if (["place_order", "close_trade", "modify_trade"].includes(action)) return { error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.", fallback: true };
+    if (action === "place_order") {
+      return {
+        error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.",
+        fallback: true,
+      };
+    }
+    if (["close_trade", "modify_trade"].includes(action)) {
+      return {
+        error: "Broker execution could not be confirmed. Verify broker state before retrying.",
+        fallback: true,
+        brokerExecutionStatus: "uncertain",
+      };
+    }
   }
 
   if (functionName === "broker-connections") {
@@ -271,10 +284,17 @@ export async function invokeFunction<T = any>(
         fallback: true,
       } as T;
     }
-    if (["place_order", "close_trade", "modify_trade"].includes(action)) {
+    if (action === "place_order") {
       return {
         error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.",
         fallback: true,
+      } as T;
+    }
+    if (["close_trade", "modify_trade"].includes(action)) {
+      return {
+        error: "Broker execution could not be confirmed. Verify broker state before retrying.",
+        fallback: true,
+        brokerExecutionStatus: "uncertain",
       } as T;
     }
   }
@@ -1082,11 +1102,13 @@ export const brokerExecApi = {
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
     invokeFunction("broker-execute", { action: "place_order", connectionId, ...order }),
   closeTrade: (connectionId: string, tradeId: string) =>
-    invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId }),
+    invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
+      .then(requireConfirmedBrokerMutation),
   tradeHistory: (connectionId: string, limit = 50) =>
     invokeFunction("broker-execute", { action: "trade_history", connectionId, limit }),
   modifyTrade: (connectionId: string, tradeId: string, updates: { stopLoss?: number; takeProfit?: number; symbol?: string }) =>
-    invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates }),
+    invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
+      .then(requireConfirmedBrokerMutation),
 };
 
 // ── Prop Firm ──
