@@ -474,17 +474,21 @@ export function detectZoneConfirmation(
       if (direction === "long" && !isBullishCandle) continue;
 
       const supporting = detectSupportingSignals(candles5m, i, direction);
-      const pattern = evaluateCandlestickConfirmation({
-        candles: candles5m, candleIndex: i, direction,
-        profile: candlestickProfile,
-        minimumDisplacement: effectiveDisplacement,
-        hasSweep: !!sweepEvent,
-      });
+      const pattern = candlestickProfile === "legacy"
+        ? null
+        : evaluateCandlestickConfirmation({
+          candles: candles5m,
+          candleIndex: i,
+          direction,
+          profile: candlestickProfile,
+          minimumDisplacement: effectiveDisplacement,
+          hasSweep: !!sweepEvent,
+        });
       const legacyEngulfingRejection = displacement >= effectiveDisplacement &&
         supporting.hasEngulfing &&
         supporting.hasRejectionWick &&
         (candlestickProfile !== "standalone" || !!sweepEvent);
-      const patternAuthorized = candlestickProfile !== "legacy" && pattern.authorized;
+      const patternAuthorized = pattern?.authorized === true;
       if (!legacyEngulfingRejection && !patternAuthorized) continue;
       if (patternAuthorized && pattern.pattern) {
         supporting.signals.push(

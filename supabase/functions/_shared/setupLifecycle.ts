@@ -259,6 +259,7 @@ export function buildFrozenSetupStrategyContext(input: {
     }));
   const confirmationMethod =
     normalizeConfirmationMethod(input.confirmationMethod) || "choch";
+  const indicatorMinimum = normalizeIndicatorMinimum(input.indicatorMinCount);
   return {
     contractVersion: FROZEN_SETUP_POLICY_VERSION,
     frozenAt: input.frozenAt || new Date().toISOString(),
@@ -307,9 +308,7 @@ export function buildFrozenSetupStrategyContext(input: {
     }),
     confirmation: {
       method: confirmationMethod,
-      indicatorMinCount: normalizeIndicatorMinimum(
-        input.indicatorMinCount,
-      ),
+      indicatorMinCount: indicatorMinimum,
       maxAttempts: normalizeMaxConfirmationAttempts(
         input.stylePolicy.lifecycle.maxConfirmationAttempts,
       ),
@@ -319,7 +318,7 @@ export function buildFrozenSetupStrategyContext(input: {
         method: confirmationMethod,
         confirmationTimeframe: input.stylePolicy.timeframes.roles.confirmation,
         refinementTimeframe: input.stylePolicy.timeframes.roles.refinement,
-        indicatorMinimum: input.indicatorMinCount,
+        indicatorMinimum,
         maxAttempts: input.stylePolicy.lifecycle.maxConfirmationAttempts,
         liquiditySweep: input.liquiditySweepRole,
         displacement: input.displacementRole,

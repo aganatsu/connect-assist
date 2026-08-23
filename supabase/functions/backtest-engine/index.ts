@@ -93,6 +93,7 @@ import {
   prepareBacktestPostConfirmationEntry,
   type BacktestTradeLifecycleState,
 } from "../_shared/backtestTradeLifecycle.ts";
+import { replayImpulseEntryLifecycle } from "../_shared/impulseLifecycleReplay.ts";
 import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
 import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
 import {

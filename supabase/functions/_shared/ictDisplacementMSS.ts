@@ -188,7 +188,7 @@ export function validateMSSDisplacement(
     scoreAdjustment = 0;
     reason = hasDisplacement
       ? `[OFF] MSS has ${displacementStrength} displacement (${displacementCandles.length} candles, ${maxConsecutive} consecutive)`
-      : `[OFF] MSS lacks displacement — would have ${config.gateMode === "hard" ? "blocked" : "penalized"}`;
+      : "[OFF] MSS lacks displacement — gate disabled";
   } else if (!hasDisplacement) {
     // No displacement on the break
     if (config.gateMode === "hard") {

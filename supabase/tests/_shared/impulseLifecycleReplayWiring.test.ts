@@ -7,6 +7,10 @@ Deno.test("runtime, exact snapshot replay and backtest use the same lifecycle re
     read("supabase/functions/impulse-lifecycle-replay/index.ts"),
     read("supabase/migrations/20260806110000_add_impulse_lifecycle_replay.sql"),
   ]);
+  assertStringIncludes(
+    backtest,
+    'import { replayImpulseEntryLifecycle } from "../_shared/impulseLifecycleReplay.ts";',
+  );
   assertStringIncludes(backtest, "replayImpulseEntryLifecycle({");
   assertStringIncludes(backtest, 'action === "impulse_lifecycle_replay"');
   assertStringIncludes(replayFunction, '.from("scan_candle_snapshots")');

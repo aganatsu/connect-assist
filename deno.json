@@ -1,5 +1,6 @@
 {
   "tasks": {
+    "check": "deno check supabase/functions/*/index.ts",
     "test": "deno test --no-check --allow-read --allow-net --allow-env supabase/tests/"
   },
   "exclude": ["node_modules/"]

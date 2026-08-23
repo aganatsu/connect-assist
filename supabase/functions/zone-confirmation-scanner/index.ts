@@ -1682,7 +1682,12 @@ Deno.serve(async (req) => {
             reasonCode: pendingCanonicalDealingRange.code,
           },
           confirmation: { passed: true, authorityVersion: "confirmation-authority.v1", reasonCodes: ["zone_confirmation_ready"] },
-          thesis: { valid: thesisResult.valid, reasonCodes: [thesisResult.checkType || "thesis_valid"] },
+          thesis: thesisResult
+            ? {
+              valid: thesisResult.valid,
+              reasonCodes: [thesisResult.checkType || "thesis_valid"],
+            }
+            : { valid: null, reasonCodes: ["thesis_unavailable"] },
           finalChecks: rawAuthorization.checks,
           rawFinalAuthorized: rawAuthorization.authorized,
           requestedMode: (config as any).singleOwnershipMode,
@@ -1872,6 +1877,7 @@ Deno.serve(async (req) => {
           canonicalScannerState: authorization.canonicalScannerState,
           tradeDecisionPresentation: authorization.tradeDecisionPresentation,
           canonicalScannerEnforcement: authorization.canonicalScannerEnforcement,
+          directionVerdict,
           streamlinedDecisionOrigin: pending.streamlined_decision_origin || parsedPendingEvidence.streamlinedDecisionOrigin || null,
           streamlinedDecisionLatest: {
             ...(parsedPendingEvidence.streamlinedDecisionLatest || {}),

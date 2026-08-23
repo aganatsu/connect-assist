@@ -59,5 +59,8 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Type-check edge functions
+        run: deno task check
+
       - name: Shared-function tests
         run: deno task test

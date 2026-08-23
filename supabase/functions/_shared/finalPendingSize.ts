@@ -77,9 +77,14 @@ export function calculateFinalPendingSize(input: {
     rateMap: input.rateMap,
     commissionPerLot: input.commissionPerLot,
   }, undefined, resolveSizingVolatilityContext(input.regimeInfo), propFirm);
+  const signalSource = input.signalSource === "cascade" ||
+      input.signalSource === "unified" ||
+      input.signalSource === "standalone"
+    ? input.signalSource
+    : null;
   const adjusted = applyFinalCandidateSizeAdjustments({
     lots: result.lots,
-    signalSource: input.signalSource,
+    signalSource,
     standaloneMultiplier: input.standaloneMultiplier,
   });
   if (!Number.isFinite(adjusted.lots) || adjusted.lots <= 0) {

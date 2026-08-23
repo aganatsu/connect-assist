@@ -58,6 +58,11 @@ export function advanceTradeLifecycle(input: {
       emit({ type: "confirmation_passed", at: confirmationPlan.evaluatedAt });
     }
   }
-  const disposition = after.status === "entered" ? "entry_ready" : after.status === "active" ? "watch" : "terminal";
+  const finalStatus = (after as ImpulseEntryLifecycle).status;
+  const disposition = finalStatus === "entered"
+    ? "entry_ready"
+    : finalStatus === "active"
+    ? "watch"
+    : "terminal";
   return { contractVersion: TRADE_LIFECYCLE_AUTHORITY_VERSION, before, after, events, confirmationPlan, confirmationBuildDiagnostic: diagnosticSink.current, disposition };
 }

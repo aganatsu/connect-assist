@@ -14,6 +14,10 @@ Deno.test("the sole pending-fill route uses the shared ownership evaluator", () 
     "frozenDecision: parsedPendingEvidence.singleOwnershipDecision",
   );
   assertStringIncludes(fast, "rawFinalAuthorized:");
+  assertStringIncludes(
+    fast,
+    'valid: null, reasonCodes: ["thesis_unavailable"]',
+  );
   assertStringIncludes(fast, "singleOwnershipEnforcement:");
   if (main.includes("evaluateSingleOwnershipFillAuthorization({")) {
     throw new Error("duplicate pending-fill evaluator");

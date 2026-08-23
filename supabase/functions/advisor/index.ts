@@ -14,6 +14,7 @@ import { mapNestedToFlat } from "../_shared/configMapper.ts";
 import {
   type AdvisorMode,
   type AdvisorContext,
+  type AdvisorSupabaseClient,
   type TradeRecord,
   type TradeReasoning,
   normalizeTradeRecord,
@@ -31,7 +32,7 @@ const MODE_CONFIG: Record<AdvisorMode, { windowDays: number; notifyCategory: str
 
 // ─── Data Loading ───────────────────────────────────────────
 async function loadContext(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AdvisorSupabaseClient,
   mode: AdvisorMode,
   userId: string,
   botId: string,
@@ -146,7 +147,7 @@ async function loadContext(
 
 // ─── Dedup Check ────────────────────────────────────────────
 async function hasPendingRecToday(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AdvisorSupabaseClient,
   userId: string,
   botId: string,
   reviewType: string,
@@ -169,7 +170,7 @@ async function hasPendingRecToday(
 
 // ─── Persist Result ─────────────────────────────────────────
 async function persistRecommendation(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AdvisorSupabaseClient,
   ctx: AdvisorContext,
   result: Awaited<ReturnType<typeof runAdvisorPipeline>>,
 ): Promise<void> {
@@ -246,7 +247,7 @@ function buildNotificationMessage(
 
 // ─── Process Single Bot ─────────────────────────────────────
 async function processSingleBot(
-  supabase: ReturnType<typeof createClient>,
+  supabase: AdvisorSupabaseClient,
   mode: AdvisorMode,
   userId: string,
   botId: string,
