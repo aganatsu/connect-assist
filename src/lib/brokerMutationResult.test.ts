@@ -44,6 +44,20 @@ describe("broker mutation result", () => {
   });
 
   it.each([
+    {},
+    { ok: false },
+    { ok: true },
+    { brokerExecutionStatus: "succeeded" as const },
+  ])(
+    "rejects a broker response without the complete success contract",
+    (result) => {
+      expect(() => requireConfirmedBrokerMutation(result)).toThrow(
+        "Broker execution outcome is unknown. Check broker state before retrying.",
+      );
+    },
+  );
+
+  it.each([
     {
       brokerExecutionStatus: "rejected" as const,
       error: "TRADE_RETCODE_INVALID_STOPS: Invalid stops",
@@ -60,6 +74,27 @@ describe("broker mutation result", () => {
   ])("rejects failed or uncertain results", (result) => {
     expect(() => requireConfirmedBrokerMutation(result)).toThrow(
       String(result.error),
+    );
+  });
+
+  it("routes an uncertain place-order response to the mutation error path", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        brokerResponse({
+          ok: false,
+          brokerExecutionStatus: "uncertain",
+          fallback: true,
+        })
+      ),
+    );
+
+    await expect(brokerExecApi.placeOrder("connection-1", {
+      symbol: "EUR/USD",
+      direction: "long",
+      size: 0.1,
+    })).rejects.toThrow(
+      "Broker execution outcome is unknown. Check broker state before retrying.",
     );
   });
 

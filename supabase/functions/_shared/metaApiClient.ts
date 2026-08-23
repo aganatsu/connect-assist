@@ -8,9 +8,10 @@
  *   3. Caches successful region for subsequent calls
  *   4. Logs warnings on failover for observability
  *
- * Non-idempotent calls such as opening a market order must pass
- * allowFailover: false. A lost response can mean the broker accepted the order,
- * so silently sending it to another region could create a duplicate trade.
+ * Mutating HTTP methods never fail over, even if a caller requests it. On a
+ * cold cache, a read-only account-information request discovers the region
+ * before the mutation is dispatched exactly once. A lost mutation response can
+ * mean the broker accepted it, so silently resending could duplicate a trade.
  *
  * Previously duplicated in: bot-scanner, broker-execute, paper-trading,
  * zone-confirmation-scanner, reconcileBrokerState, candleSource (as metaFetchCandles).
@@ -44,9 +45,33 @@ export async function metaFetch(
   init?: RequestInit,
   options?: { allowFailover?: boolean },
 ): Promise<{ res: Response; body: string }> {
+  const method = String(init?.method || "GET").toUpperCase();
+  const isMutation = method !== "GET" && method !== "HEAD";
+  const failoverAllowed = !isMutation && options?.allowFailover !== false;
+
+  // Mutations may be dispatched only once. A cold edge-function isolate has
+  // no cached region, so locate the account with a read-only request first.
+  if (!failoverAllowed && !regionCache.has(accountId)) {
+    const discovery = await metaFetch(
+      accountId,
+      authToken,
+      (base) => `${base}/account-information`,
+    );
+    if (!discovery.res.ok || !regionCache.has(accountId)) {
+      return {
+        res: new Response(
+          "MetaAPI account region could not be established; mutation was not sent",
+          { status: 503 },
+        ),
+        body:
+          "MetaAPI account region could not be established; mutation was not sent",
+      };
+    }
+  }
+
   const cached = regionCache.get(accountId);
   const preferredRegion = cached || META_REGIONS[0];
-  const order = options?.allowFailover === false
+  const order = !failoverAllowed
     ? [preferredRegion]
     : cached
     ? [cached, ...META_REGIONS.filter((r) => r !== cached)]
@@ -66,7 +91,7 @@ export async function metaFetch(
         return { res: new Response(body, { status: res.status }), body };
       }
       console.warn(
-        options?.allowFailover === false
+        !failoverAllowed
           ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
           : `MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`,
       );
@@ -74,7 +99,7 @@ export async function metaFetch(
       lastBody = `network error: ${(err as Error).message}`;
       lastStatus = 504;
       console.warn(
-        options?.allowFailover === false
+        !failoverAllowed
           ? `MetaAPI ${region} network error; unsafe retry suppressed: ${(err as Error).message}`
           : `MetaAPI ${region} network error, trying next: ${(err as Error).message}`,
       );

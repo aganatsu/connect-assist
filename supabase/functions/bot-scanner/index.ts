@@ -139,10 +139,11 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch, metaBaseUrl, META_REGIONS, regionCache } from "../_shared/metaApiClient.ts";
 import {
-  reconcileBrokerState, reconcilePartialClose,
+  findOandaBrokerPosition, reconcileBrokerState, reconcilePartialClose,
   type ReconcilePosition, type BrokerConnection,
 } from "../_shared/reconcileBrokerState.ts";
 import {
+  classifyBrokerMutationHttpResponse,
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
 import {
@@ -2374,6 +2375,48 @@ async function runScanForUser(
           if (closeConns && closeConns.length > 0) {
             for (const conn of closeConns) {
               try {
+                if (conn.broker_type === "oanda") {
+                  const baseUrl = conn.is_live
+                    ? "https://api-fxtrade.oanda.com"
+                    : "https://api-fxpractice.oanda.com";
+                  const openRes = await fetch(
+                    `${baseUrl}/v3/accounts/${conn.account_id}/openTrades`,
+                    { headers: { Authorization: `Bearer ${conn.api_key}` } },
+                  );
+                  if (!openRes.ok) {
+                    console.warn(`SL/TP close [${conn.display_name}]: positions fetch failed ${openRes.status}`);
+                    continue;
+                  }
+                  const openBody = await openRes.json();
+                  const match = findOandaBrokerPosition(
+                    openBody.trades || [],
+                    pos,
+                    conn,
+                  );
+                  if (!match.trade) {
+                    console.warn(`SL/TP close [${conn.display_name}]: OANDA position match is ${match.match}`);
+                    continue;
+                  }
+                  const closeRes = await fetch(
+                    `${baseUrl}/v3/accounts/${conn.account_id}/trades/${match.trade.id}/close`,
+                    {
+                      method: "PUT",
+                      headers: {
+                        Authorization: `Bearer ${conn.api_key}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: "{}",
+                    },
+                  );
+                  const rawBody = await closeRes.text();
+                  const outcome = classifyBrokerMutationHttpResponse(
+                    closeRes,
+                    rawBody,
+                    "oanda_order_fill",
+                  );
+                  console.log(`SL/TP close [${conn.display_name}]: ${outcome.status} paper:${pos.position_id}${outcome.error ? ` (${outcome.error})` : ""}`);
+                  continue;
+                }
                 let authToken = conn.api_key;
                 let metaAccountId = conn.account_id;
                 if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
@@ -2392,11 +2435,16 @@ async function runScanForUser(
                   console.log(`SL/TP close [${conn.display_name}]: no matching comment-tagged position for paper:${pos.position_id} — skipping`);
                   continue;
                 }
-                const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                const { res: closeRes, body: closeBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
                   method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
-                });
-                console.log(`SL/TP close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${pos.position_id}`);
+                }, { allowFailover: false });
+                const outcome = classifyBrokerMutationHttpResponse(
+                  closeRes,
+                  closeBody,
+                  "metaapi_trade",
+                );
+                console.log(`SL/TP close [${conn.display_name}]: ${outcome.status} paper:${pos.position_id}${outcome.error ? ` (${outcome.error})` : ""}`);
               } catch (brokerErr: any) {
                 console.warn(`SL/TP close [${conn.display_name}] error: ${brokerErr?.message}`);
               }
@@ -9340,7 +9388,14 @@ async function runScanForUser(
                         headers: { Authorization: "Bearer " + conn.api_key, "Content-Type": "application/json" },
                         body: "{}",
                       });
-                      if (closeRes.ok) confirmedBrokerCloses++;
+                      const closeBody = await closeRes.text();
+                      const outcome = classifyBrokerMutationHttpResponse(
+                        closeRes,
+                        closeBody,
+                        "oanda_order_fill",
+                      );
+                      if (outcome.status === "succeeded") confirmedBrokerCloses++;
+                      else console.warn("Reverse close [" + conn.display_name + "] " + outcome.status + ": " + (outcome.error || "reconciliation required"));
                       continue;
                     }
                     let authToken = conn.api_key;
@@ -9355,11 +9410,17 @@ async function runScanForUser(
                     const shortTag = commentTag.slice(0, 28);
                     const brokerPos = brokerPositions.find((p: any) => p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag)));
                     if (!brokerPos) continue;
-                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => base + "/trade", {
+                    const { res: closeRes, body: closeBody } = await metaFetch(metaAccountId, authToken, (base) => base + "/trade", {
                       method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
-                    });
-                    if (closeRes.ok) confirmedBrokerCloses++;
+                    }, { allowFailover: false });
+                    const outcome = classifyBrokerMutationHttpResponse(
+                      closeRes,
+                      closeBody,
+                      "metaapi_trade",
+                    );
+                    if (outcome.status === "succeeded") confirmedBrokerCloses++;
+                    else console.warn("Reverse close [" + conn.display_name + "] " + outcome.status + ": " + (outcome.error || "reconciliation required"));
                   } catch (e: any) {
                     console.warn("Reverse close [" + conn.display_name + "] error: " + e?.message);
                   }
@@ -10063,6 +10124,7 @@ async function runScanForUser(
                          httpStatus: mt5Res.status,
                          parsedBody,
                          rawBody,
+                         confirmationMode: "metaapi_position_open",
                        };
                      },
                    );

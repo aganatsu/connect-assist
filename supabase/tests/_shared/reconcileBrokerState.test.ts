@@ -467,7 +467,13 @@ Deno.test("reconcilePartialClose: uses native OANDA trade close endpoint", async
   const conn = makeConnection({ broker_type: "oanda", account_id: "oanda-account", api_key: "oanda-token" });
   setupFetch([
     { ok: true, status: 200, body: JSON.stringify({ trades: [{ id: "oanda-trade-1", instrument: "EUR_USD", currentUnits: "10000", clientExtensions: { id: "POS_001" } }] }) },
-    { ok: true, status: 200, body: "{}" },
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        orderFillTransaction: { id: "fill-1", tradesClosed: [{ tradeID: "oanda-trade-1" }] },
+      }),
+    },
   ]);
   const results = await reconcilePartialClose({
     supabase, positions: [pos], connections: [conn],
@@ -494,4 +500,155 @@ Deno.test("reconcilePartialClose: returns OANDA failures for reconciliation", as
   assertEquals(results.length, 1);
   assertEquals(results[0].ok, false);
   assert(results[0].error?.includes("OANDA position match"));
+});
+
+Deno.test("reconcileBrokerState: MetaAPI 2xx without a trade confirmation stays unconfirmed", async () => {
+  _testHelpers.resetState();
+  const supabase = createMockSupabase();
+  const pos = makePosition({ stop_loss: 1.086 });
+  const conn = makeConnection();
+  setupFetch([
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify([{
+        id: "broker-pos-1",
+        comment: "paper:POS_001",
+        stopLoss: 1.084,
+        takeProfit: 1.095,
+        currentPrice: 1.092,
+        openPrice: 1.087,
+        profit: 50,
+        symbol: "EURUSD",
+        type: "POSITION_TYPE_BUY",
+      }]),
+    },
+    { ok: true, status: 200, body: "{}" },
+  ]);
+
+  const results = await reconcileBrokerState({
+    supabase: supabase as any,
+    userId: "user-1",
+    positions: [pos],
+    connections: [conn],
+    telegramChatIds: [],
+    shouldNotify: () => true,
+    scanCycleId: "test-unconfirmed-metaapi-modify",
+  });
+  teardownFetch();
+
+  assertEquals(results[0].status, "error");
+  assert(results[0].detail?.includes("uncertain"));
+  assertEquals(mockUpdates.length, 0);
+});
+
+Deno.test("reconcileBrokerState: OANDA 2xx without requested order confirmations stays unconfirmed", async () => {
+  _testHelpers.resetState();
+  const supabase = createMockSupabase();
+  const pos = makePosition({ stop_loss: 1.086 });
+  const conn = makeConnection({
+    broker_type: "oanda",
+    account_id: "oanda-account",
+    api_key: "oanda-token",
+  });
+  setupFetch([
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        trades: [{
+          id: "oanda-trade-1",
+          instrument: "EUR_USD",
+          currentUnits: "10000",
+          price: "1.092",
+          stopLossOrder: { price: "1.084" },
+          clientExtensions: { id: "POS_001" },
+        }],
+      }),
+    },
+    { ok: true, status: 200, body: "{}" },
+  ]);
+
+  const results = await reconcileBrokerState({
+    supabase: supabase as any,
+    userId: "user-1",
+    positions: [pos],
+    connections: [conn],
+    telegramChatIds: [],
+    shouldNotify: () => true,
+    scanCycleId: "test-unconfirmed-oanda-modify",
+  });
+  teardownFetch();
+
+  assertEquals(results[0].status, "error");
+  assert(results[0].detail?.includes("uncertain"));
+  assertEquals(mockUpdates.length, 0);
+});
+
+Deno.test("reconcilePartialClose: OANDA 2xx cancellation is not a success", async () => {
+  const supabase = createMockSupabase();
+  const pos = makePosition();
+  const conn = makeConnection({
+    broker_type: "oanda",
+    account_id: "oanda-account",
+    api_key: "oanda-token",
+  });
+  setupFetch([
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        trades: [{ id: "oanda-trade-1", instrument: "EUR_USD", currentUnits: "10000", clientExtensions: { id: "POS_001" } }],
+      }),
+    },
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        orderCancelTransaction: { id: "cancel-1", reason: "MARKET_HALTED" },
+      }),
+    },
+  ]);
+
+  const results = await reconcilePartialClose({
+    supabase,
+    positions: [pos],
+    connections: [conn],
+    partialActions: [{ positionId: "POS_001", symbol: "EUR/USD", closeFraction: 0.5, direction: "long" }],
+  });
+  teardownFetch();
+
+  assertEquals(results[0].ok, false);
+  assert(results[0].error?.includes("MARKET_HALTED"));
+});
+
+Deno.test("reconcilePartialClose: MetaAPI 2xx without a trade confirmation is not a success", async () => {
+  const supabase = createMockSupabase();
+  const pos = makePosition();
+  const conn = makeConnection();
+  setupFetch([
+    {
+      ok: true,
+      status: 200,
+      body: JSON.stringify([{
+        id: "broker-pos-1",
+        comment: "paper:POS_001",
+        volume: 0.2,
+        symbol: "EURUSD",
+        type: "POSITION_TYPE_BUY",
+      }]),
+    },
+    { ok: true, status: 200, body: "{}" },
+  ]);
+
+  const results = await reconcilePartialClose({
+    supabase,
+    positions: [pos],
+    connections: [conn],
+    partialActions: [{ positionId: "POS_001", symbol: "EUR/USD", closeFraction: 0.5, direction: "long" }],
+  });
+  teardownFetch();
+
+  assertEquals(results[0].ok, false);
+  assert(results[0].error?.includes("uncertain"));
 });

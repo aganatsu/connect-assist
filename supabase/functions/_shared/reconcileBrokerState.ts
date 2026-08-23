@@ -18,6 +18,10 @@
 import { SPECS, normalizeSymKey } from "./smcAnalysis.ts";
 import { resolveSymbol } from "./brokerSymbols.ts";
 import { metaFetch } from "./metaApiClient.ts";
+import {
+  type BrokerExecutionTerminalStatus,
+  classifyBrokerMutationHttpResponse,
+} from "./brokerExecutionLedger.ts";
 
 // ─── OANDA Helpers ─────────────────────────────────────────────────────
 function resolveOandaSymbol(symbol: string, conn: BrokerConnection): string {
@@ -66,7 +70,13 @@ async function oandaFetchPositions(conn: BrokerConnection): Promise<{ ok: boolea
   }
 }
 
-async function oandaModifySL(conn: BrokerConnection, tradeId: string, symbol: string, sl: number, tp: number | null): Promise<{ ok: boolean; error?: string }> {
+async function oandaModifySL(
+  conn: BrokerConnection,
+  tradeId: string,
+  symbol: string,
+  sl: number,
+  tp: number | null,
+): Promise<{ ok: boolean; status?: BrokerExecutionTerminalStatus; error?: string }> {
   const baseUrl = getOandaBaseUrl(conn);
   const updates: any = {
     stopLoss: { price: roundOandaPrice(symbol, sl), timeInForce: "GTC" },
@@ -80,13 +90,22 @@ async function oandaModifySL(conn: BrokerConnection, tradeId: string, symbol: st
       headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
       body: JSON.stringify(updates),
     });
-    if (!res.ok) {
-      const errText = await res.text();
-      return { ok: false, error: `OANDA modify failed ${res.status}: ${errText.slice(0, 200)}` };
+    const rawBody = await res.text();
+    const required = ["stopLossOrderTransaction"] as const;
+    const outcome = classifyBrokerMutationHttpResponse(
+      res,
+      rawBody,
+      "oanda_trade_orders",
+      tp != null && tp > 0
+        ? [...required, "takeProfitOrderTransaction"]
+        : required,
+    );
+    if (outcome.status !== "succeeded") {
+      return { ok: false, status: outcome.status, error: outcome.error };
     }
-    return { ok: true };
+    return { ok: true, status: "succeeded" };
   } catch (e: any) {
-    return { ok: false, error: e?.message };
+    return { ok: false, status: "uncertain", error: e?.message };
   }
 }
 
@@ -95,7 +114,7 @@ async function oandaPartialClose(
   tradeId: string,
   currentUnits: number,
   closeFraction: number,
-): Promise<{ ok: boolean; closedUnits?: number; error?: string }> {
+): Promise<{ ok: boolean; status?: BrokerExecutionTerminalStatus; closedUnits?: number; error?: string }> {
   if (!Number.isFinite(currentUnits) || currentUnits === 0) {
     return { ok: false, error: "OANDA trade has no closeable units" };
   }
@@ -115,13 +134,18 @@ async function oandaPartialClose(
         body: JSON.stringify({ units: String(units) }),
       },
     );
-    if (!res.ok) {
-      const detail = await res.text();
-      return { ok: false, error: `OANDA partial close failed ${res.status}: ${detail.slice(0, 200)}` };
+    const rawBody = await res.text();
+    const outcome = classifyBrokerMutationHttpResponse(
+      res,
+      rawBody,
+      "oanda_order_fill",
+    );
+    if (outcome.status !== "succeeded") {
+      return { ok: false, status: outcome.status, error: outcome.error };
     }
-    return { ok: true, closedUnits: units };
+    return { ok: true, status: "succeeded", closedUnits: units };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, status: "uncertain", error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -300,6 +324,8 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
 
           let pushSuccess = false;
           let confirmedBrokerSL = brokerSL;
+          let pushUncertain = false;
+          let pushFailure: string | undefined;
 
           if (finalSL !== null) {
             const modResult = await oandaModifySL(conn, brokerPos.id, pos.symbol, finalSL, pos.take_profit);
@@ -308,14 +334,16 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
               confirmedBrokerSL = finalSL;
               console.log(`[reconcile] ${conn.display_name}: OANDA SL synced to ${roundOandaPrice(pos.symbol, finalSL)} for ${pos.symbol} (${pos.position_id})`);
             } else {
-              console.warn(`[reconcile] ${conn.display_name}: OANDA SL modify failed — ${modResult.error}`);
+              pushUncertain = modResult.status === "uncertain";
+              pushFailure = modResult.error;
+              console.warn(`[reconcile] ${conn.display_name}: OANDA SL modify ${modResult.status || "rejected"} — ${modResult.error}`);
               pushSuccess = false;
               confirmedBrokerSL = brokerSL;
             }
           }
 
           // Broker-authoritative: write back to DB
-          if (confirmedBrokerSL !== null && confirmedBrokerSL !== intendedSL) {
+          if (!pushUncertain && confirmedBrokerSL !== null && confirmedBrokerSL !== intendedSL) {
             await supabase.from("paper_positions")
               .update({ stop_loss: confirmedBrokerSL.toString() })
               .eq("id", pos.id);
@@ -353,7 +381,16 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
               }
               console.warn(`[reconcile] ALERT: ${pos.symbol} (${pos.position_id}) — ${count} consecutive OANDA SL mismatches`);
             }
-            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "rejected", intendedSL: intendedSL ?? undefined, brokerSL: confirmedBrokerSL ?? undefined, detail: `mismatch cycle ${count}` });
+            results.push({
+              positionId: pos.position_id,
+              symbol: pos.symbol,
+              status: pushUncertain ? "error" : "rejected",
+              intendedSL: intendedSL ?? undefined,
+              brokerSL: confirmedBrokerSL ?? undefined,
+              detail: pushUncertain
+                ? `uncertain broker mutation: ${pushFailure || "confirmation missing"}`
+                : `mismatch cycle ${count}`,
+            });
           } else {
             mismatchCycles.set(pos.position_id, 0);
             results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "corrected", intendedSL: intendedSL ?? undefined, brokerSL: confirmedBrokerSL ?? undefined });
@@ -456,6 +493,8 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
         let pushSuccess = false;
         let confirmedBrokerSL = brokerSL; // Default: keep broker's current value
 
+        let pushUncertain = false;
+        let pushFailure: string | undefined;
         if (finalSL !== null) {
           const modifyBody: any = {
             actionType: "POSITION_MODIFY",
@@ -469,30 +508,28 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
 
           const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
-          });
+          }, { allowFailover: false });
+          const outcome = classifyBrokerMutationHttpResponse(
+            res,
+            resBody,
+            "metaapi_trade",
+          );
 
-          if (res.ok) {
-            let modParsed: any = null;
-            try { modParsed = JSON.parse(resBody); } catch {}
-            if (modParsed?.stringCode && modParsed.stringCode !== "TRADE_RETCODE_DONE" && modParsed.stringCode !== "ERR_NO_ERROR") {
-              // Broker rejected the modify
-              console.warn(`[reconcile] ${conn.display_name}: SL modify REJECTED — ${modParsed.stringCode}: ${modParsed.message || ""} | ${pos.symbol} SL→${finalSL}`);
-              pushSuccess = false;
-              confirmedBrokerSL = brokerSL; // Broker didn't change
-            } else {
-              pushSuccess = true;
-              confirmedBrokerSL = finalSL; // Broker accepted
-              console.log(`[reconcile] ${conn.display_name}: SL synced to ${finalSL} for ${pos.symbol} (${pos.position_id})`);
-            }
+          if (outcome.status === "succeeded") {
+            pushSuccess = true;
+            confirmedBrokerSL = finalSL;
+            console.log(`[reconcile] ${conn.display_name}: SL synced to ${finalSL} for ${pos.symbol} (${pos.position_id})`);
           } else {
-            console.warn(`[reconcile] ${conn.display_name}: SL modify failed [${res.status}]: ${resBody.slice(0, 200)}`);
+            pushUncertain = outcome.status === "uncertain";
+            pushFailure = outcome.error;
+            console.warn(`[reconcile] ${conn.display_name}: SL modify ${outcome.status} — ${outcome.error || resBody.slice(0, 200)}`);
             pushSuccess = false;
             confirmedBrokerSL = brokerSL;
           }
         }
 
         // ── Broker-authoritative: write broker's ACTUAL value back to DB ──
-        if (confirmedBrokerSL !== null && confirmedBrokerSL !== intendedSL) {
+        if (!pushUncertain && confirmedBrokerSL !== null && confirmedBrokerSL !== intendedSL) {
           // DB must reflect what broker actually has
           await supabase.from("paper_positions")
             .update({ stop_loss: confirmedBrokerSL.toString() })
@@ -535,9 +572,14 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
           }
 
           results.push({
-            positionId: pos.position_id, symbol: pos.symbol, status: "rejected",
-            intendedSL: intendedSL ?? undefined, brokerSL: confirmedBrokerSL ?? undefined,
-            detail: `mismatch cycle ${count}`,
+            positionId: pos.position_id,
+            symbol: pos.symbol,
+            status: pushUncertain ? "error" : "rejected",
+            intendedSL: intendedSL ?? undefined,
+            brokerSL: confirmedBrokerSL ?? undefined,
+            detail: pushUncertain
+              ? `uncertain broker mutation: ${pushFailure || "confirmation missing"}`
+              : `mismatch cycle ${count}`,
           });
         } else {
           mismatchCycles.set(pos.position_id, 0);
@@ -694,14 +736,20 @@ export async function reconcilePartialClose(opts: {
               volume: closeVolume,
             }),
           },
+          { allowFailover: false },
+        );
+        const outcome = classifyBrokerMutationHttpResponse(
+          closeResponse,
+          closeBody,
+          "metaapi_trade",
         );
         results.push({
           positionId: action.positionId,
           connectionId: connection.id,
-          ok: closeResponse.ok,
-          error: closeResponse.ok
+          ok: outcome.status === "succeeded",
+          error: outcome.status === "succeeded"
             ? undefined
-            : `MetaAPI partial close failed ${closeResponse.status}: ${closeBody.slice(0, 200)}`,
+            : `${outcome.status}: ${outcome.error || closeBody.slice(0, 200)}`,
         });
       } catch (error) {
         results.push({

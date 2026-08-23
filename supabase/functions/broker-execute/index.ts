@@ -3,7 +3,11 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
-import { classifyBrokerExecutionResponse } from "../_shared/brokerExecutionLedger.ts";
+import {
+  type BrokerExecutionConfirmationMode,
+  classifyBrokerMutationHttpResponse,
+  type OandaDependentOrderTransaction,
+} from "../_shared/brokerExecutionLedger.ts";
 import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
 
 // Broker execution — routes orders to OANDA or MetaAPI
@@ -49,34 +53,33 @@ function roundOandaPrice(symbol: string, price: number): string {
   return price.toFixed(precision);
 }
 
-function respondWithMetaApiMutationOutcome(res: Response, body: string) {
-  let parsedBody: any = null;
-  try {
-    parsedBody = body ? JSON.parse(body) : null;
-  } catch {
-    // The shared classifier records malformed 2xx bodies as uncertain.
-  }
-
-  const outcome = classifyBrokerExecutionResponse({
-    ok: res.ok,
-    httpStatus: res.status,
-    parsedBody,
-    rawBody: body,
-    confirmationMode: "metaapi_trade",
-  });
+function respondWithBrokerMutationOutcome(
+  res: Response,
+  body: string,
+  confirmationMode: BrokerExecutionConfirmationMode,
+  requiredOandaTransactions?: readonly OandaDependentOrderTransaction[],
+) {
+  const outcome = classifyBrokerMutationHttpResponse(
+    res,
+    body,
+    confirmationMode,
+    requiredOandaTransactions,
+  );
+  const parsedBody = outcome.parsedBody;
   const brokerCode = parsedBody?.stringCode || parsedBody?.errorCode;
 
   if (outcome.status === "succeeded") {
     return respond({
-      ...parsedBody,
+      ...(parsedBody && typeof parsedBody === "object" ? parsedBody : {}),
       ok: true,
       brokerExecutionStatus: "succeeded",
+      brokerOrderId: outcome.brokerOrderId,
     });
   }
 
   const reason = brokerCode && outcome.error !== brokerCode
     ? `${brokerCode}: ${outcome.error}`
-    : outcome.error || "MetaAPI did not confirm the broker mutation";
+    : outcome.error || "Broker did not confirm the mutation";
   return respond({
     ok: false,
     brokerExecutionStatus: outcome.status,
@@ -85,36 +88,6 @@ function respondWithMetaApiMutationOutcome(res: Response, body: string) {
     details: body ? body.slice(0, 1000) : undefined,
     fallback: outcome.status === "uncertain",
   }, 409);
-}
-
-// H9: Retry helper with exponential backoff for broker execution
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  shouldRetry: (err: any) => boolean,
-  maxAttempts = 3,
-  baseDelayMs = 1000,
-): Promise<T> {
-  let lastErr: any;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastErr = err;
-      if (attempt >= maxAttempts || !shouldRetry(err)) throw err;
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
-      console.warn(`Broker execute retry ${attempt}/${maxAttempts} after ${delay}ms: ${err?.message || err}`);
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-  throw lastErr;
-}
-
-// Determine if an error is retryable (5xx, connection issues — NOT 4xx)
-function isRetryableError(err: any): boolean {
-  const msg = String(err?.message || err || "").toLowerCase();
-  if (msg.includes("5") && /50[0-9]|5[1-9][0-9]/.test(msg)) return true;
-  if (msg.includes("not connected") || msg.includes("timeout") || msg.includes("econnreset") || msg.includes("network")) return true;
-  return false;
 }
 
 Deno.serve(async (req) => {
@@ -242,15 +215,12 @@ Deno.serve(async (req) => {
           method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
           body: JSON.stringify(orderBody),
         });
-        if (!res.ok) {
-          const details = await res.text();
-          return respond({
-            error: `OANDA order failed: ${res.status}`,
-            details,
-            fallback: res.status >= 500,
-          }, res.status);
-        }
-        return respond(await res.json());
+        const body = await res.text();
+        return respondWithBrokerMutationOutcome(
+          res,
+          body,
+          "oanda_trade_open",
+        );
       }
 
       if (conn.broker_type === "metaapi") {
@@ -273,16 +243,11 @@ Deno.serve(async (req) => {
           },
           { allowFailover: false },
         );
-        if (!res.ok) {
-          const uncertain = res.status >= 500 ||
-            /not connected to broker|region|network error|timeout/i.test(body);
-          return respond({
-            error: `MetaAPI order failed: ${res.status}`,
-            details: body,
-            fallback: uncertain,
-          }, uncertain ? 200 : res.status);
-        }
-        return respond(JSON.parse(body));
+        return respondWithBrokerMutationOutcome(
+          res,
+          body,
+          "metaapi_position_open",
+        );
       }
     }
 
@@ -419,37 +384,29 @@ Deno.serve(async (req) => {
     if (action === "close_trade") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        // H9: Retry with backoff
-        const result = await retryWithBackoff(async () => {
-          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
-            method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-            body: JSON.stringify(payload.units ? { units: payload.units.toString() } : {}),
-          });
-          if (!res.ok) {
-            const errMsg = `OANDA close failed: ${res.status}`;
-            if (res.status >= 500) throw new Error(errMsg);
-            throw Object.assign(new Error(errMsg), { nonRetryable: true });
-          }
-          return await res.json();
-        }, (err) => !err.nonRetryable && isRetryableError(err));
-        return respond(result);
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
+          method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload.units ? { units: payload.units.toString() } : {}),
+        });
+        const body = await res.text();
+        return respondWithBrokerMutationOutcome(
+          res,
+          body,
+          "oanda_order_fill",
+        );
       }
       if (conn.broker_type === "metaapi") {
-        // H9: Retry with backoff
-        const result = await retryWithBackoff(async () => {
-          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+        const { res, body } = await metaFetch(
+          conn.account_id,
+          conn.api_key,
+          (b) => `${b}/trade`,
+          {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
-          });
-          if (
-            !res.ok &&
-            (res.status >= 500 || /not connected to broker|region/i.test(body))
-          ) {
-            throw new Error(`MetaAPI close failed: ${res.status} — ${body.slice(0, 200)}`);
-          }
-          return { res, body };
-        }, isRetryableError);
-        return respondWithMetaApiMutationOutcome(result.res, result.body);
+          },
+          { allowFailover: false },
+        );
+        return respondWithBrokerMutationOutcome(res, body, "metaapi_trade");
       }
     }
 
@@ -525,10 +482,16 @@ Deno.serve(async (req) => {
         const modifyBody: any = { actionType: "POSITION_MODIFY", positionId: tradeId };
         if (stopLoss !== undefined) modifyBody.stopLoss = stopLoss;
         if (takeProfit !== undefined) modifyBody.takeProfit = takeProfit;
-        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
-        });
-        return respondWithMetaApiMutationOutcome(res, body);
+        const { res, body } = await metaFetch(
+          conn.account_id,
+          conn.api_key,
+          (b) => `${b}/trade`,
+          {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+          },
+          { allowFailover: false },
+        );
+        return respondWithBrokerMutationOutcome(res, body, "metaapi_trade");
       }
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
@@ -539,8 +502,20 @@ Deno.serve(async (req) => {
           method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
           body: JSON.stringify(updates),
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA modify failed: ${res.status}`, details: errText }, res.status); }
-        return respond(await res.json());
+        const body = await res.text();
+        const requiredOandaTransactions: OandaDependentOrderTransaction[] = [];
+        if (stopLoss !== undefined) {
+          requiredOandaTransactions.push("stopLossOrderTransaction");
+        }
+        if (takeProfit !== undefined) {
+          requiredOandaTransactions.push("takeProfitOrderTransaction");
+        }
+        return respondWithBrokerMutationOutcome(
+          res,
+          body,
+          "oanda_trade_orders",
+          requiredOandaTransactions,
+        );
       }
     }
 

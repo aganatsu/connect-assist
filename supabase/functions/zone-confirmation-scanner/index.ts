@@ -2153,6 +2153,7 @@ Deno.serve(async (req) => {
                     httpStatus: mt5Res.status,
                     parsedBody,
                     rawBody,
+                    confirmationMode: "metaapi_position_open",
                   };
                 },
               );
