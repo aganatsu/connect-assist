@@ -88,6 +88,7 @@ export function classifyBrokerExecutionResponse(input: {
   httpStatus?: number;
   parsedBody?: any;
   rawBody?: string;
+  confirmationMode?: "default" | "metaapi_trade";
 }): {
   status: BrokerExecutionTerminalStatus;
   brokerOrderId?: string;
@@ -97,6 +98,8 @@ export function classifyBrokerExecutionResponse(input: {
   const parsed = input.parsedBody;
   const brokerCode = parsed?.stringCode || parsed?.errorCode;
   const explicitError = parsed?.error || parsed?.errorMessage;
+  const explicitSuccessCode = brokerCode === "TRADE_RETCODE_DONE" ||
+    brokerCode === "ERR_NO_ERROR";
 
   if (input.ok && !parsed) {
     return {
@@ -112,9 +115,8 @@ export function classifyBrokerExecutionResponse(input: {
   if (
     input.ok &&
     !explicitError &&
-    (!brokerCode ||
-      brokerCode === "TRADE_RETCODE_DONE" ||
-      brokerCode === "ERR_NO_ERROR")
+    (explicitSuccessCode ||
+      (input.confirmationMode !== "metaapi_trade" && !brokerCode))
   ) {
     const brokerOrderId = parsed?.orderId ||
       parsed?.positionId ||
@@ -125,6 +127,19 @@ export function classifyBrokerExecutionResponse(input: {
     return {
       status: "succeeded",
       brokerOrderId: brokerOrderId ? String(brokerOrderId) : undefined,
+    };
+  }
+
+  if (
+    input.ok &&
+    input.confirmationMode === "metaapi_trade" &&
+    !explicitError &&
+    !brokerCode
+  ) {
+    return {
+      status: "uncertain",
+      error:
+        "MetaAPI returned HTTP success without a recognized trade confirmation code",
     };
   }
 
