@@ -24,6 +24,7 @@ import {
   type EventSeverity,
 } from "./propFirmRisk.ts";
 import { finalizePaperPositionClose } from "./finalizePaperPositionClose.ts";
+import { reconcileFullBrokerClose } from "./reconcileBrokerState.ts";
 import { calcPnl } from "./smcAnalysis.ts";
 
 export interface PropFirmGateResult {
@@ -288,6 +289,13 @@ export async function runPropFirmGate(
   };
 }
 
+export interface PropFirmEmergencyCloseResult {
+  attemptedCount: number;
+  closedCount: number;
+  complete: boolean;
+  unresolved: Array<{ positionId: string; reason: string }>;
+}
+
 /**
  * Emergency close all open positions.
  * Called when prop firm compliance triggers shouldCloseAll.
@@ -300,11 +308,12 @@ export async function propFirmEmergencyClose(
   reason: string,
   scanCycleId: string,
   opts?: { fxMarketClosed?: boolean; rateMap?: Record<string, number> },
-): Promise<number> {
+): Promise<PropFirmEmergencyCloseResult> {
   // Weekend guard: when FX market is closed, only close crypto positions.
   // FX positions can't be executed on weekends anyway, and stale prices
   // could produce incorrect P&L calculations.
   let positionsToClose = openPositions;
+  const unresolved: Array<{ positionId: string; reason: string }> = [];
   if (opts?.fxMarketClosed) {
     const cryptoSymbols = new Set(["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "LTCUSD", "ADAUSD", "DOTUSD", "DOGEUSD", "AVAXUSD", "LINKUSD"]);
     const cryptoOnly = openPositions.filter((p: any) => {
@@ -314,6 +323,14 @@ export async function propFirmEmergencyClose(
     const fxSkipped = openPositions.length - cryptoOnly.length;
     if (fxSkipped > 0) {
       console.log(`[prop-firm-emergency] FX market closed — skipping ${fxSkipped} FX position(s), only closing ${cryptoOnly.length} crypto position(s)`);
+      for (const position of openPositions.filter((p: any) =>
+        !cryptoOnly.some((crypto: any) => crypto.id === p.id)
+      )) {
+        unresolved.push({
+          positionId: position.position_id,
+          reason: "fx_market_closed",
+        });
+      }
     }
     positionsToClose = cryptoOnly;
   }
@@ -337,10 +354,31 @@ export async function propFirmEmergencyClose(
         console.error(
           `[prop-firm-emergency] Refusing to settle ${pos.symbol}: invalid P&L calculation (${pnlResult.reason})`,
         );
+        unresolved.push({
+          positionId: pos.position_id,
+          reason: `invalid_pnl_inputs:${pnlResult.reason}`,
+        });
         continue;
       }
       const { pnl } = pnlResult;
 
+      const brokerClose = await reconcileFullBrokerClose({
+        supabase,
+        userId,
+        botId: pos.bot_id || botId,
+        position: pos,
+        route: "prop_firm_emergency",
+        closeReason: "prop_firm_emergency",
+      });
+      if (!brokerClose.readyToFinalize) {
+        if (brokerClose.state !== "already_resolved") {
+          unresolved.push({
+            positionId: pos.position_id,
+            reason: brokerClose.reason || brokerClose.state,
+          });
+        }
+        continue;
+      }
       const finalization = await finalizePaperPositionClose(supabase, {
         positionRowId: pos.id,
         userId,
@@ -352,6 +390,12 @@ export async function propFirmEmergencyClose(
       });
       if (!finalization.closed) {
         console.log(`[prop-firm-emergency] Skipped ${pos.symbol}: ${finalization.code}`);
+        if (finalization.code !== "already_resolved") {
+          unresolved.push({
+            positionId: pos.position_id,
+            reason: finalization.reason || finalization.code,
+          });
+        }
         continue;
       }
 
@@ -359,13 +403,23 @@ export async function propFirmEmergencyClose(
       console.log(`[prop-firm-emergency] Closed ${pos.symbol} ${pos.direction} — PnL: $${pnl.toFixed(2)} — reason: ${reason}`);
     } catch (e: any) {
       console.warn(`[prop-firm-emergency] Failed to close ${pos.symbol}: ${e?.message}`);
+      unresolved.push({
+        positionId: pos.position_id,
+        reason: `close_exception:${e?.message || String(e)}`,
+      });
     }
   }
 
 
 
-  console.log(`[prop-firm-emergency] ${scanCycleId} | Closed ${closedCount}/${openPositions.length} positions — ${reason}`);
-  return closedCount;
+  const result = {
+    attemptedCount: openPositions.length,
+    closedCount,
+    complete: unresolved.length === 0,
+    unresolved,
+  };
+  console.log(`[prop-firm-emergency] ${scanCycleId} | Closed ${closedCount}/${openPositions.length} positions; ${unresolved.length} unresolved — ${reason}`);
+  return result;
 }
 
 // ─── Helper: Log prop firm event ──────────────────────────────────────────────

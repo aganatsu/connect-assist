@@ -3,13 +3,10 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, calcPnl, FALLBACK_RATES, SPECS, type Candle } from "../_shared/smcAnalysis.ts";
 import { parseTradeOverrides } from "../_shared/resolveTradeConfig.ts";
 import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts";
-import { metaFetch } from "../_shared/metaApiClient.ts";
-import {
-  classifyBrokerMutationHttpResponse,
-} from "../_shared/brokerExecutionLedger.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
+import { reconcileFullBrokerClose } from "../_shared/reconcileBrokerState.ts";
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
 
@@ -95,101 +92,6 @@ async function buildRateMap(): Promise<Record<string, number>> {
     console.warn(`[rateMap] Only ${liveCount}/${RATE_PAIRS.length} live rates fetched — using fallbacks for the rest`);
   }
   return map;
-}
-
-// ─── Close ONLY the broker connections this paper position was actually mirrored to ──
-// Critical fix: never iterate ALL active connections — only the ones recorded at open time.
-// If `mirroredConnectionIds` is empty, we close nothing on broker side (paper-only or pre-tracking position).
-async function closeBrokerPositions(
-  supabase: any,
-  userId: string,
-  positionId: string,
-  symbol: string,
-  mirroredConnectionIds: string[] | null | undefined,
-): Promise<string[]> {
-  const results: string[] = [];
-  try {
-    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
-    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
-
-    const ids = (mirroredConnectionIds || []).filter(Boolean);
-    if (ids.length === 0) {
-      console.log(`[broker-close] no mirrored connections for paper:${positionId} — skipping broker fan-out`);
-      return ["no_mirrored_connections"];
-    }
-
-    const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
-    if (!connections || connections.length === 0) return ["no_connection"];
-
-    for (const conn of connections) {
-      try {
-        let authToken = conn.api_key;
-        let metaAccountId = conn.account_id;
-        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          authToken = conn.account_id;
-          metaAccountId = conn.api_key;
-        }
-        // Use region-failover metaFetch instead of hardcoded London URL
-
-        // Find broker position by comment tag
-        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
-        const brokerPositions: any[] = JSON.parse(posBody);
-        // MT4 truncates comments to ~31 chars, so use startsWith on the short prefix
-        const commentTag = `paper:${positionId}`;
-        const shortTag = commentTag.slice(0, 28); // safe for MT4 truncation
-        let brokerPos = brokerPositions.find((p: any) =>
-          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-        );
-        let matchedBySymbol = false;
-        if (!brokerPos) {
-          // Fallback: match by resolved broker symbol
-          const base = symbol.replace("/", "");
-          const overrides = conn.symbol_overrides || {};
-          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
-          brokerPos = brokerPositions.find((p: any) =>
-            p.symbol === brokerSymbol || p.symbol === base ||
-            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
-          );
-          matchedBySymbol = Boolean(brokerPos);
-        }
-        if (!brokerPos) { results.push(`${conn.display_name}: position not found`); continue; }
-        const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id };
-        const { res, body: rawBody } = await metaFetch(
-          metaAccountId,
-          authToken,
-          (base) => `${base}/trade`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(closeBody),
-          },
-          { allowFailover: false },
-        );
-        const outcome = classifyBrokerMutationHttpResponse(
-          res,
-          rawBody,
-          "metaapi_trade",
-        );
-        const matchLabel = matchedBySymbol ? " (symbol match)" : "";
-        if (outcome.status === "succeeded") {
-          results.push(`${conn.display_name}: closed${matchLabel}`);
-          console.log(`Broker close [${conn.display_name}]: closed position for paper:${positionId}`);
-        } else {
-          results.push(`${conn.display_name}: ${outcome.status}: ${outcome.error || res.status}`);
-          console.warn(`Broker close [${conn.display_name}]: ${outcome.status}: ${outcome.error || rawBody.slice(0, 300)}`);
-        }
-      } catch (e: any) {
-        console.warn(`Broker close [${conn.display_name}] error: ${e?.message}`);
-        results.push(`${conn.display_name}: error`);
-      }
-    }
-  } catch (e: any) {
-    console.warn(`closeBrokerPositions error: ${e?.message}`);
-    results.push("error");
-  }
-  return results;
 }
 
 // ─── Structured close logging + audit row ───────────────────────────
@@ -366,6 +268,12 @@ Deno.serve(async (req) => {
       });
     }
     const user = { id: claimsData.claims.sub as string };
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const serviceSupabase = serviceRoleKey
+      ? createClient(Deno.env.get("SUPABASE_URL")!, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+      : null;
 
     const { action, ...payload } = await req.json().catch(() => ({ action: "status" }));
 
@@ -604,7 +512,27 @@ Deno.serve(async (req) => {
             }
             const { pnl, pnlPips } = pnlResult;
             const closeBotId = pos.bot_id || "smc";
-            const finalization = await finalizePaperPositionClose(supabase, {
+            if (!serviceSupabase) {
+              console.error(
+                `Auto-close refused [${pos.position_id}]: service authority is unavailable`,
+              );
+              continue;
+            }
+            const brokerClose = await reconcileFullBrokerClose({
+              supabase: serviceSupabase,
+              userId: user.id,
+              botId: closeBotId,
+              position: pos,
+              route: "paper_auto_exit",
+              closeReason,
+            });
+            if (!brokerClose.readyToFinalize) {
+              console.warn(
+                `Auto-close deferred [${pos.position_id}]: ${brokerClose.reason || brokerClose.state}`,
+              );
+              continue;
+            }
+            const finalization = await finalizePaperPositionClose(serviceSupabase, {
               positionRowId: pos.id,
               userId: user.id,
               botId: closeBotId,
@@ -633,10 +561,8 @@ Deno.serve(async (req) => {
 
             await logClose(supabase, user.id, pos, {
               closeReason, closeSource: "auto_engine", pnl, exitPrice,
+              extra: { brokerClose },
             });
-            // Mirror close to ONLY the brokers this position was mirrored to at open time
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
-            console.log(`Auto-close broker mirror [${pos.position_id}] ${closeReason}: ${brokerCloseResults.join("; ")}`);
           }
         }
 
@@ -1023,7 +949,39 @@ Deno.serve(async (req) => {
       const { pnl, pnlPips } = pnlResult;
       const closeReason = payload.reason || "manual";
 
-      const finalization = await finalizePaperPositionClose(supabase, {
+      if (!serviceSupabase) {
+        return respond({
+          success: false,
+          code: "service_authority_unavailable",
+          error: "Broker close authority is unavailable; the position remains open",
+        }, 503);
+      }
+      const brokerClose = await reconcileFullBrokerClose({
+        supabase: serviceSupabase,
+        userId: user.id,
+        botId: pos.bot_id || "smc",
+        position: pos,
+        route: "manual_close",
+        closeReason,
+      });
+      if (brokerClose.state === "already_resolved") {
+        return respond({
+          success: true,
+          alreadyClosed: true,
+          code: "already_resolved",
+          brokerClose,
+        });
+      }
+      if (!brokerClose.readyToFinalize) {
+        return respond({
+          success: false,
+          code: "broker_close_reconciliation_required",
+          error: brokerClose.reason || "Exact broker closure is not confirmed",
+          brokerClose,
+        }, 409);
+      }
+
+      const finalization = await finalizePaperPositionClose(serviceSupabase, {
         positionRowId: pos.id,
         userId: user.id,
         botId: pos.bot_id || "smc",
@@ -1033,7 +991,15 @@ Deno.serve(async (req) => {
         closeReason,
       });
       if (!finalization.closed) {
-        return respond({ success: true, alreadyClosed: true, code: finalization.code });
+        if (finalization.code === "already_resolved") {
+          return respond({ success: true, alreadyClosed: true, code: finalization.code });
+        }
+        return respond({
+          success: false,
+          code: finalization.code,
+          error: finalization.reason || "Internal close finalization failed",
+          brokerClose,
+        }, 409);
       }
 
       // Generate post-mortem
@@ -1052,13 +1018,14 @@ Deno.serve(async (req) => {
       });
 
       await logClose(supabase, user.id, pos, {
-        closeReason, closeSource: "user", pnl, exitPrice: ep,
+        closeReason,
+        closeSource: "user",
+        pnl,
+        exitPrice: ep,
+        extra: { brokerClose },
       });
-      // Mirror close ONLY to brokers this position was mirrored to at open time
-      const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
-      console.log(`Manual close broker mirror [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
 
-      return respond({ success: true, pnl, pnlPips, postMortem, brokerClose: brokerCloseResults });
+      return respond({ success: true, pnl, pnlPips, postMortem, brokerClose });
     }
 
     // ── Engine controls ──
@@ -1078,9 +1045,36 @@ Deno.serve(async (req) => {
     if (action === "kill_switch") {
       const active = payload.active;
       if (active) {
+        const halt = await persistPaperEngineHalt(supabase, user.id, {
+          paused: false,
+          killSwitchActive: true,
+        });
+        if (!halt.ok) {
+          return respond({
+            success: false,
+            code: "kill_switch_activation_failed",
+            error: halt.error,
+          }, 500);
+        }
+        if (!serviceSupabase) {
+          return respond({
+            success: false,
+            code: "service_authority_unavailable",
+            error: "Kill switch is active, but broker close authority is unavailable",
+          }, 503);
+        }
         // Close all open positions
-        const { data: positions } = await supabase.from("paper_positions").select("*")
+        const { data: positions, error: positionsError } = await supabase.from("paper_positions").select("*")
           .eq("user_id", user.id).eq("position_status", "open");
+        if (positionsError) {
+          return respond({
+            success: false,
+            code: "kill_switch_position_read_failed",
+            error:
+              `Kill switch is active, but open positions could not be verified: ${positionsError.message}`,
+          }, 503);
+        }
+        const unresolvedBrokerCloses: Array<Record<string, unknown>> = [];
         if (positions && positions.length > 0) {
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);
@@ -1089,10 +1083,32 @@ Deno.serve(async (req) => {
               console.error(
                 `Kill-switch accounting refused [${pos.position_id}]: invalid P&L calculation (${pnlResult.reason})`,
               );
+              unresolvedBrokerCloses.push({
+                positionId: pos.position_id,
+                reason: `invalid_pnl_inputs:${pnlResult.reason}`,
+              });
               continue;
             }
             const { pnl, pnlPips } = pnlResult;
-            const finalization = await finalizePaperPositionClose(supabase, {
+            const brokerClose = await reconcileFullBrokerClose({
+              supabase: serviceSupabase,
+              userId: user.id,
+              botId: pos.bot_id || "smc",
+              position: pos,
+              route: "kill_switch",
+              closeReason: "kill_switch",
+            });
+            if (!brokerClose.readyToFinalize) {
+              if (brokerClose.state !== "already_resolved") {
+                unresolvedBrokerCloses.push({
+                  positionId: pos.position_id,
+                  reason: brokerClose.reason || brokerClose.state,
+                  brokerClose,
+                });
+              }
+              continue;
+            }
+            const finalization = await finalizePaperPositionClose(serviceSupabase, {
               positionRowId: pos.id,
               userId: user.id,
               botId: pos.bot_id || "smc",
@@ -1103,6 +1119,12 @@ Deno.serve(async (req) => {
             });
             if (!finalization.closed) {
               console.log(`Kill-switch close skipped [${pos.position_id}]: ${finalization.code}`);
+              if (finalization.code !== "already_resolved") {
+                unresolvedBrokerCloses.push({
+                  positionId: pos.position_id,
+                  reason: finalization.reason || finalization.code,
+                });
+              }
               continue;
             }
 
@@ -1114,19 +1136,24 @@ Deno.serve(async (req) => {
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
             await logClose(supabase, user.id, pos, {
-              closeReason: "kill_switch", closeSource: "kill_switch", pnl, exitPrice: ep,
+              closeReason: "kill_switch",
+              closeSource: "kill_switch",
+              pnl,
+              exitPrice: ep,
+              extra: { brokerClose },
             });
-            // Mirror close ONLY to brokers this position was mirrored to at open time
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
-            console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
           }
 
 
         }
-
-        await supabase.from("paper_accounts").update({
-          kill_switch_active: true, is_running: false, is_paused: false,
-        }).eq("user_id", user.id);
+        if (unresolvedBrokerCloses.length > 0) {
+          return respond({
+            success: false,
+            code: "broker_close_reconciliation_required",
+            error: `${unresolvedBrokerCloses.length} position(s) remain open until broker closure is proven`,
+            unresolvedBrokerCloses,
+          }, 409);
+        }
       } else {
         await supabase.from("paper_accounts").update({ kill_switch_active: false }).eq("user_id", user.id);
       }
@@ -1177,6 +1204,55 @@ Deno.serve(async (req) => {
     if (action === "reset_account") {
       const startBal = await getConfiguredStartingBalance();
       const todayDate = new Date().toISOString().split("T")[0];
+      const halt = await persistPaperEngineHalt(supabase, user.id, {
+        paused: true,
+      });
+      if (!halt.ok) {
+        return respond({
+          success: false,
+          code: "account_reset_halt_failed",
+          error: halt.error,
+        }, 500);
+      }
+      const { data: positionsToReset, error: resetReadError } = await supabase
+        .from("paper_positions")
+        .select("*")
+        .eq("user_id", user.id)
+        .in("position_status", ["open", "pending"]);
+      if (resetReadError) throw resetReadError;
+      if ((positionsToReset || []).length > 0 && !serviceSupabase) {
+        return respond({
+          success: false,
+          code: "service_authority_unavailable",
+          error: "Account reset refused because broker close authority is unavailable",
+        }, 503);
+      }
+      const resetBrokerCloses = [];
+      for (const position of positionsToReset || []) {
+        const brokerClose = await reconcileFullBrokerClose({
+          supabase: serviceSupabase!,
+          userId: user.id,
+          botId: position.bot_id || "smc",
+          position,
+          route: "account_reset",
+          closeReason: "account_reset",
+        });
+        resetBrokerCloses.push({
+          positionId: position.position_id,
+          ...brokerClose,
+        });
+      }
+      const unresolved = resetBrokerCloses.filter((result) =>
+        !result.readyToFinalize && result.state !== "already_resolved"
+      );
+      if (unresolved.length > 0) {
+        return respond({
+          success: false,
+          code: "broker_close_reconciliation_required",
+          error: "Account reset refused while broker exposure remains unresolved",
+          unresolvedBrokerCloses: unresolved,
+        }, 409);
+      }
       await supabase.from("paper_positions").delete().eq("user_id", user.id);
       await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
       await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
@@ -1188,7 +1264,12 @@ Deno.serve(async (req) => {
         scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
         daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal, paused: true });
+      return respond({
+        success: true,
+        startingBalance: startBal,
+        paused: true,
+        brokerClose: resetBrokerCloses,
+      });
     }
 
     if (action === "set_execution_mode") {
@@ -1321,6 +1402,48 @@ async function ensureAccount(supabase: any, userId: string) {
   const { data } = await supabase.from("paper_accounts").select("id").eq("user_id", userId).maybeSingle();
   if (!data) {
     await supabase.from("paper_accounts").insert({ user_id: userId, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" });
+  }
+}
+
+async function persistPaperEngineHalt(
+  supabase: any,
+  userId: string,
+  options: { paused: boolean; killSwitchActive?: boolean },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const updates: Record<string, boolean> = {
+    is_running: false,
+    is_paused: options.paused,
+  };
+  if (options.killSwitchActive !== undefined) {
+    updates.kill_switch_active = options.killSwitchActive;
+  }
+  try {
+    const { data, error } = await supabase.from("paper_accounts")
+      .update(updates)
+      .eq("user_id", userId)
+      .select("is_running,is_paused,kill_switch_active")
+      .maybeSingle();
+    if (error) {
+      return { ok: false, error: error.message || String(error) };
+    }
+    if (!data) {
+      return { ok: false, error: "Trading account was not found" };
+    }
+    if (data.is_running !== false || data.is_paused !== options.paused) {
+      return { ok: false, error: "Engine halt was not persisted" };
+    }
+    if (
+      options.killSwitchActive !== undefined &&
+      data.kill_switch_active !== options.killSwitchActive
+    ) {
+      return { ok: false, error: "Kill-switch state was not persisted" };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

@@ -139,11 +139,10 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch, metaBaseUrl, META_REGIONS, regionCache } from "../_shared/metaApiClient.ts";
 import {
-  findOandaBrokerPosition, reconcileBrokerState, reconcilePartialClose,
+  reconcileBrokerState, reconcileFullBrokerClose, reconcilePartialClose,
   type ReconcilePosition, type BrokerConnection,
 } from "../_shared/reconcileBrokerState.ts";
 import {
-  classifyBrokerMutationHttpResponse,
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
 import {
@@ -2330,6 +2329,20 @@ async function runScanForUser(
         const { pnl, pnlPips } = pnlResult;
         const nowClose = new Date().toISOString();
 
+        const brokerClose = await reconcileFullBrokerClose({
+          supabase,
+          userId,
+          botId: pos.bot_id || BOT_ID,
+          position: pos,
+          route: "scanner_breach",
+          closeReason,
+        });
+        if (!brokerClose.readyToFinalize) {
+          console.warn(
+            `[breach-check] ${pos.position_id}: broker close deferred (${brokerClose.reason || brokerClose.state}); internal position remains open`,
+          );
+          continue;
+        }
         const finalization = await finalizePaperPositionClose(supabase, {
           positionRowId: pos.id,
           userId,
@@ -2365,93 +2378,6 @@ async function runScanForUser(
           await supabase.from("close_audit_log").insert(auditRows);
         } catch (auditErr: any) {
           console.warn(`[close] audit insert failed for ${closeReason} ${pos.position_id}: ${auditErr?.message}`);
-        }
-
-        // 5. Mirror close to broker if live mode + mirrored connections exist
-        if (account.execution_mode === "live" && mirroredIds.length > 0) {
-          const { data: closeConns } = await supabase.from("broker_connections")
-            .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
-            .eq("is_active", true).in("id", mirroredIds);
-          if (closeConns && closeConns.length > 0) {
-            for (const conn of closeConns) {
-              try {
-                if (conn.broker_type === "oanda") {
-                  const baseUrl = conn.is_live
-                    ? "https://api-fxtrade.oanda.com"
-                    : "https://api-fxpractice.oanda.com";
-                  const openRes = await fetch(
-                    `${baseUrl}/v3/accounts/${conn.account_id}/openTrades`,
-                    { headers: { Authorization: `Bearer ${conn.api_key}` } },
-                  );
-                  if (!openRes.ok) {
-                    console.warn(`SL/TP close [${conn.display_name}]: positions fetch failed ${openRes.status}`);
-                    continue;
-                  }
-                  const openBody = await openRes.json();
-                  const match = findOandaBrokerPosition(
-                    openBody.trades || [],
-                    pos,
-                    conn,
-                  );
-                  if (!match.trade) {
-                    console.warn(`SL/TP close [${conn.display_name}]: OANDA position match is ${match.match}`);
-                    continue;
-                  }
-                  const closeRes = await fetch(
-                    `${baseUrl}/v3/accounts/${conn.account_id}/trades/${match.trade.id}/close`,
-                    {
-                      method: "PUT",
-                      headers: {
-                        Authorization: `Bearer ${conn.api_key}`,
-                        "Content-Type": "application/json",
-                      },
-                      body: "{}",
-                    },
-                  );
-                  const rawBody = await closeRes.text();
-                  const outcome = classifyBrokerMutationHttpResponse(
-                    closeRes,
-                    rawBody,
-                    "oanda_order_fill",
-                  );
-                  console.log(`SL/TP close [${conn.display_name}]: ${outcome.status} paper:${pos.position_id}${outcome.error ? ` (${outcome.error})` : ""}`);
-                  continue;
-                }
-                let authToken = conn.api_key;
-                let metaAccountId = conn.account_id;
-                if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                  authToken = conn.account_id;
-                  metaAccountId = conn.api_key;
-                }
-                const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-                if (!posRes.ok) { console.warn(`SL/TP close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
-                const brokerPositions: any[] = JSON.parse(posBody);
-                const commentTag = `paper:${pos.position_id}`;
-                const shortTag = commentTag.slice(0, 28);
-                const brokerPos = brokerPositions.find((bp: any) =>
-                  bp.comment && (bp.comment.includes(commentTag) || bp.comment.startsWith(shortTag))
-                );
-                if (!brokerPos) {
-                  console.log(`SL/TP close [${conn.display_name}]: no matching comment-tagged position for paper:${pos.position_id} — skipping`);
-                  continue;
-                }
-                const { res: closeRes, body: closeBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
-                }, { allowFailover: false });
-                const outcome = classifyBrokerMutationHttpResponse(
-                  closeRes,
-                  closeBody,
-                  "metaapi_trade",
-                );
-                console.log(`SL/TP close [${conn.display_name}]: ${outcome.status} paper:${pos.position_id}${outcome.error ? ` (${outcome.error})` : ""}`);
-              } catch (brokerErr: any) {
-                console.warn(`SL/TP close [${conn.display_name}] error: ${brokerErr?.message}`);
-              }
-            }
-          }
-        } else if (account.execution_mode === "live" && mirroredIds.length === 0) {
-          console.log(`SL/TP close: paper:${pos.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
         }
 
         // 6. Telegram notification
@@ -3095,7 +3021,7 @@ async function runScanForUser(
       // Emergency close-all
       if (propFirmGateResult.shouldCloseAll && openPosArr.length > 0) {
         console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
-        const closedCount = await propFirmEmergencyClose(
+        const emergencyClose = await propFirmEmergencyClose(
           supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
           { fxMarketClosed, rateMap },
         );
@@ -3104,7 +3030,7 @@ async function runScanForUser(
           const pf: any = propFirmGateResult;
           const msg = `🚨 <b>PROP FIRM EMERGENCY</b>\n\n` +
             tgLine("Reason", pf.reason) +
-            tgLine("Positions Closed", closedCount) +
+            tgLine("Positions Closed", `${emergencyClose.closedCount}/${emergencyClose.attemptedCount}`) +
             tgLine("Account Mode", isLiveMode ? "LIVE" : "PAPER") +
             tgLine("Equity Used", brokerEquity != null ? `$${Number(brokerEquity).toFixed(2)} (broker)` : `$${Number(balance).toFixed(2)} (paper)`) +
             tgLine("Daily P&L", pf.dailyPnl != null ? `$${Number(pf.dailyPnl).toFixed(2)}` : null) +
@@ -3112,7 +3038,9 @@ async function runScanForUser(
             tgLine("Total Drawdown", pf.totalDrawdown != null ? `$${Number(pf.totalDrawdown).toFixed(2)}` : null) +
             tgLine("Max Drawdown", pf.maxDrawdownLimit != null ? `$${Number(pf.maxDrawdownLimit).toFixed(2)}` : null) +
             tgLine("Size Multiplier", pf.maxPositionSizeMultiplier) +
-            `\nAll exposure was flattened to protect the account.`;
+            (emergencyClose.complete
+              ? `\nAll managed exposure was confirmed closed.`
+              : `\n${emergencyClose.unresolved.length} position(s) remain open pending exact broker-close proof.`);
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -3129,10 +3057,21 @@ async function runScanForUser(
           scanned_at: new Date().toISOString(),
           mode: "prop_firm_emergency",
           reason: propFirmGateResult.reason,
-          positions_closed: closedCount,
+          positions_closed: emergencyClose.closedCount,
+          positions_unresolved: emergencyClose.unresolved,
+          complete: emergencyClose.complete,
         };
         await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
-        return new Response(JSON.stringify({ ok: true, mode: "prop_firm_emergency", reason: propFirmGateResult.reason, positions_closed: closedCount }), { headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({
+          ok: emergencyClose.complete,
+          mode: "prop_firm_emergency",
+          reason: propFirmGateResult.reason,
+          positions_closed: emergencyClose.closedCount,
+          positions_unresolved: emergencyClose.unresolved,
+        }), {
+          status: emergencyClose.complete ? 200 : 409,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       // Block new entries (soft lock / profit target reached)
@@ -9363,79 +9302,19 @@ async function runScanForUser(
             const { pnl: oppPnl, pnlPips: oppPnlPips } = oppPnlResult;
             const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
 
-            if (account.execution_mode === "live") {
-              let confirmedBrokerCloses = 0;
-              if (oppMirroredIds.length > 0) {
-                const { data: closeConns } = await supabase.from("broker_connections")
-                  .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
-                  .eq("is_active", true).in("id", oppMirroredIds);
-                for (const conn of closeConns || []) {
-                  try {
-                    if (conn.broker_type === "oanda") {
-                      const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-                      const openRes = await fetch(baseUrl + "/v3/accounts/" + conn.account_id + "/openTrades", {
-                        headers: { Authorization: "Bearer " + conn.api_key },
-                      });
-                      if (!openRes.ok) continue;
-                      const openTrades = (await openRes.json()).trades || [];
-                      const commentTag = "paper:" + opp.position_id;
-                      const brokerTrade = openTrades.find((trade: any) =>
-                        trade.clientExtensions?.id === opp.position_id ||
-                        trade.clientExtensions?.comment?.includes(commentTag)
-                      );
-                      if (!brokerTrade) continue;
-                      const closeRes = await fetch(baseUrl + "/v3/accounts/" + conn.account_id + "/trades/" + brokerTrade.id + "/close", {
-                        method: "PUT",
-                        headers: { Authorization: "Bearer " + conn.api_key, "Content-Type": "application/json" },
-                        body: "{}",
-                      });
-                      const closeBody = await closeRes.text();
-                      const outcome = classifyBrokerMutationHttpResponse(
-                        closeRes,
-                        closeBody,
-                        "oanda_order_fill",
-                      );
-                      if (outcome.status === "succeeded") confirmedBrokerCloses++;
-                      else console.warn("Reverse close [" + conn.display_name + "] " + outcome.status + ": " + (outcome.error || "reconciliation required"));
-                      continue;
-                    }
-                    let authToken = conn.api_key;
-                    let metaAccountId = conn.account_id;
-                    if (metaAccountId.startsWith("eyJ") && typeof authToken === "string" && authToken.length === 36) {
-                      authToken = conn.account_id; metaAccountId = conn.api_key;
-                    }
-                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => base + "/positions");
-                    if (!posRes.ok) continue;
-                    const brokerPositions: any[] = JSON.parse(posBody);
-                    const commentTag = "paper:" + opp.position_id;
-                    const shortTag = commentTag.slice(0, 28);
-                    const brokerPos = brokerPositions.find((p: any) => p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag)));
-                    if (!brokerPos) continue;
-                    const { res: closeRes, body: closeBody } = await metaFetch(metaAccountId, authToken, (base) => base + "/trade", {
-                      method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
-                    }, { allowFailover: false });
-                    const outcome = classifyBrokerMutationHttpResponse(
-                      closeRes,
-                      closeBody,
-                      "metaapi_trade",
-                    );
-                    if (outcome.status === "succeeded") confirmedBrokerCloses++;
-                    else console.warn("Reverse close [" + conn.display_name + "] " + outcome.status + ": " + (outcome.error || "reconciliation required"));
-                  } catch (e: any) {
-                    console.warn("Reverse close [" + conn.display_name + "] error: " + e?.message);
-                  }
-                }
-              }
-              if (confirmedBrokerCloses !== oppMirroredIds.length || oppMirroredIds.length === 0) {
-                const closeError = "Reverse close requires reconciliation (" + confirmedBrokerCloses + "/" + oppMirroredIds.length + " confirmed)";
-                await supabase.from("paper_positions").update({ broker_close_state: "reconciliation_required", broker_close_error: closeError })
-                  .eq("position_id", opp.position_id).eq("user_id", userId);
-                console.warn("[close] " + opp.position_id + ": " + closeError + "; internal position remains open");
-                continue;
-              }
-              await supabase.from("paper_positions").update({ broker_close_state: "confirmed", broker_close_error: null })
-                .eq("position_id", opp.position_id).eq("user_id", userId);
+            const brokerClose = await reconcileFullBrokerClose({
+              supabase,
+              userId,
+              botId: opp.bot_id || BOT_ID,
+              position: opp,
+              route: "reverse_signal",
+              closeReason: "reverse_signal",
+            });
+            if (!brokerClose.readyToFinalize) {
+              console.warn(
+                `[close] reverse ${opp.position_id}: ${brokerClose.reason || brokerClose.state}; internal position remains open`,
+              );
+              continue;
             }
 
             const finalization = await finalizePaperPositionClose(supabase, {

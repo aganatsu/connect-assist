@@ -1,4 +1,5 @@
 import {
+  assert,
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -11,7 +12,7 @@ function section(text: string, start: string, end: string): string {
   return text.split(start)[1]?.split(end)[0] || "";
 }
 
-Deno.test("every direct broker mutation requires positive confirmation", async () => {
+Deno.test("full closes have one broker writer and finalize only after reconciliation", async () => {
   const [paper, scanner, zone, reconcile] = await Promise.all([
     source("../../functions/paper-trading/index.ts"),
     source("../../functions/bot-scanner/index.ts"),
@@ -19,45 +20,103 @@ Deno.test("every direct broker mutation requires positive confirmation", async (
     source("../../functions/_shared/reconcileBrokerState.ts"),
   ]);
 
-  const manualOpen = section(
-    paper,
-    "async function mirrorToMT5",
-    "async function closeBrokerPositions",
-  );
-  assertEquals(manualOpen, "");
+  assertStringIncludes(paper, "reconcileFullBrokerClose");
+  assertEquals(paper.includes("async function closeBrokerPositions"), false);
+  assertEquals(paper.includes('actionType: "POSITION_CLOSE_ID"'), false);
   assertEquals(paper.includes("executeBrokerOrderWithLedger"), false);
 
-  const paperClose = section(
+  const statusEngine = section(
     paper,
-    "async function closeBrokerPositions",
-    "// ─── Get Live FX Rates",
+    'if (payload.processEngine === true',
+    "// Re-fetch positions after auto-closes",
   );
-  assertStringIncludes(paperClose, "classifyBrokerMutationHttpResponse(");
-  assertStringIncludes(paperClose, '"metaapi_trade"');
+  assertStringIncludes(statusEngine, 'route: "paper_auto_exit"');
+  assert(
+    statusEngine.indexOf("reconcileFullBrokerClose({") <
+      statusEngine.indexOf("finalizePaperPositionClose(serviceSupabase"),
+  );
+
+  const manual = section(
+    paper,
+    'if (action === "close_position")',
+    "// ── Engine controls",
+  );
+  assertStringIncludes(manual, 'route: "manual_close"');
+  assert(
+    manual.indexOf("reconcileFullBrokerClose({") <
+      manual.indexOf("finalizePaperPositionClose(serviceSupabase"),
+  );
+  assertStringIncludes(manual, 'code: "broker_close_reconciliation_required"');
+  assertStringIncludes(manual, 'finalization.code === "already_resolved"');
+  assertStringIncludes(manual, "Internal close finalization failed");
+
+  const kill = section(
+    paper,
+    'if (action === "kill_switch")',
+    "// Helper: read configured starting balance",
+  );
+  assertStringIncludes(kill, 'route: "kill_switch"');
+  assertStringIncludes(kill, "kill_switch_activation_failed");
+  assertStringIncludes(kill, "kill_switch_position_read_failed");
+  assert(
+    kill.indexOf("persistPaperEngineHalt(") <
+      kill.indexOf("reconcileFullBrokerClose({"),
+    "Kill switch must halt the engine before any broker close is attempted",
+  );
+  assert(
+    kill.indexOf("reconcileFullBrokerClose({") <
+      kill.indexOf("finalizePaperPositionClose(serviceSupabase"),
+  );
+  assertStringIncludes(kill, 'code: "broker_close_reconciliation_required"');
+  assert(
+    kill.indexOf('code: "broker_close_reconciliation_required"') <
+      kill.indexOf('kill_switch_active: false'),
+    "An unresolved close must return while the kill switch remains active",
+  );
+
+  const reset = section(
+    paper,
+    'if (action === "reset_account")',
+    'if (action === "set_execution_mode")',
+  );
+  assertStringIncludes(reset, 'route: "account_reset"');
+  assertStringIncludes(reset, "account_reset_halt_failed");
+  assert(
+    reset.indexOf("persistPaperEngineHalt(") <
+      reset.indexOf("reconcileFullBrokerClose({"),
+    "Account reset must halt the engine before broker reconciliation",
+  );
+  assert(
+    reset.indexOf("reconcileFullBrokerClose({") <
+      reset.indexOf('from("paper_positions").delete()'),
+  );
 
   const stopClose = section(
     scanner,
-    "// 5. Mirror close to broker if live mode + mirrored connections exist",
+    "if (hitPrice && closeReason)",
     "// 6. Telegram notification",
   );
-  assertStringIncludes(stopClose, '"oanda_order_fill"');
-  assertStringIncludes(stopClose, '"metaapi_trade"');
-  assertStringIncludes(stopClose, "{ allowFailover: false }");
-  assertEquals(stopClose.includes("closeRes.ok ? \"closed\""), false);
+  assertStringIncludes(stopClose, 'route: "scanner_breach"');
+  assert(
+    stopClose.indexOf("reconcileFullBrokerClose({") <
+      stopClose.indexOf("finalizePaperPositionClose(supabase"),
+  );
+  assertEquals(stopClose.includes('actionType: "POSITION_CLOSE_ID"'), false);
 
   const reversalClose = section(
     scanner,
     "const closeOppositePositionsAfterEntry = async () =>",
     "const orderId =",
   );
-  assertStringIncludes(reversalClose, '"oanda_order_fill"');
-  assertStringIncludes(reversalClose, '"metaapi_trade"');
-  assertStringIncludes(reversalClose, "{ allowFailover: false }");
-  assertEquals(reversalClose.includes("if (closeRes.ok)"), false);
+  assertStringIncludes(reversalClose, 'route: "reverse_signal"');
+  assert(
+    reversalClose.indexOf("reconcileFullBrokerClose({") <
+      reversalClose.indexOf("finalizePaperPositionClose(supabase"),
+  );
+  assertEquals(reversalClose.includes('actionType: "POSITION_CLOSE_ID"'), false);
 
   assertEquals(
-    (scanner.match(/confirmationMode: "metaapi_position_open"/g) || [])
-      .length,
+    (scanner.match(/confirmationMode: "metaapi_position_open"/g) || []).length,
     1,
   );
   assertEquals(
@@ -65,10 +124,26 @@ Deno.test("every direct broker mutation requires positive confirmation", async (
     1,
   );
 
+  assertStringIncludes(reconcile, "export async function reconcileFullBrokerClose");
+  assertStringIncludes(reconcile, "executeBrokerOrderWithLedger(");
+  assertStringIncludes(reconcile, '/trades?state=CLOSED&count=500');
+  assertStringIncludes(reconcile, '/history-deals/position/${encodeURIComponent(brokerPositionId)}');
   assertStringIncludes(reconcile, '"oanda_trade_orders"');
   assertStringIncludes(reconcile, '"oanda_order_fill"');
   assertStringIncludes(reconcile, '"metaapi_trade"');
-  assertEquals(reconcile.includes("if (res.ok) return { ok: true"), false);
+
+  const propEmergency = await source("../../functions/_shared/propFirmGate.ts");
+  const propClose = section(
+    propEmergency,
+    "export async function propFirmEmergencyClose",
+    "// ─── Helper: Log prop firm event",
+  );
+  assertStringIncludes(propClose, 'route: "prop_firm_emergency"');
+  assert(
+    propClose.indexOf("reconcileFullBrokerClose({") <
+      propClose.indexOf("finalizePaperPositionClose(supabase"),
+  );
+  assertStringIncludes(propClose, "complete: unresolved.length === 0");
 });
 
 Deno.test("manual live placement fails closed before creating a paper position", async () => {

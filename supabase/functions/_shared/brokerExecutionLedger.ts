@@ -12,6 +12,14 @@ export interface BrokerExecutionClaim {
   reason?: string;
 }
 
+export interface BrokerExecutionCompletion {
+  completed: boolean;
+  code: string;
+  status?: BrokerExecutionTerminalStatus;
+  brokerOrderId?: string;
+  reason?: string;
+}
+
 interface SupabaseRpcClient {
   rpc: (
     name: string,
@@ -69,8 +77,14 @@ export async function completeBrokerExecution(
     brokerOrderId?: string | null;
     lastError?: string | null;
   },
-): Promise<boolean> {
-  if (!claim.claimed || !claim.ledgerId || !claim.claimToken) return false;
+): Promise<BrokerExecutionCompletion> {
+  if (!claim.claimed || !claim.ledgerId || !claim.claimToken) {
+    return {
+      completed: false,
+      code: "claim_not_active",
+      reason: "Broker execution completion requires an active claim",
+    };
+  }
   try {
     const { data, error } = await supabase.rpc("complete_broker_execution", {
       p_ledger_id: claim.ledgerId,
@@ -81,9 +95,26 @@ export async function completeBrokerExecution(
       p_broker_order_id: input.brokerOrderId || null,
       p_last_error: input.lastError || null,
     });
-    return !error && data?.completed === true;
-  } catch {
-    return false;
+    if (error) {
+      return {
+        completed: false,
+        code: "completion_error",
+        reason: error.message || String(error),
+      };
+    }
+    return {
+      completed: data?.completed === true,
+      code: data?.code || "completion_error",
+      status: data?.status,
+      brokerOrderId: data?.broker_order_id,
+      reason: data?.reason,
+    };
+  } catch (error) {
+    return {
+      completed: false,
+      code: "completion_error",
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -395,7 +426,7 @@ export async function executeBrokerOrderWithLedger(
       brokerOrderId: outcome.brokerOrderId,
       lastError: outcome.error,
     });
-    if (!completed) {
+    if (!completed.completed) {
       return {
         sent: true,
         status: "uncertain",
@@ -406,9 +437,16 @@ export async function executeBrokerOrderWithLedger(
         rawBody: sendResult.rawBody,
       };
     }
+    const persistedStatus = completed.status || outcome.status;
     return {
       sent: true,
       ...outcome,
+      status: persistedStatus,
+      brokerOrderId: completed.brokerOrderId || outcome.brokerOrderId,
+      error: persistedStatus === outcome.status
+        ? outcome.error
+        : completed.reason ||
+          `Broker ledger persisted ${persistedStatus} instead of ${outcome.status}`,
       parsedBody: sendResult.parsedBody,
       rawBody: sendResult.rawBody,
     };

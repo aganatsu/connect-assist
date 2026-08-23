@@ -1,4 +1,7 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   claimBrokerExecution,
   classifyBrokerExecutionResponse,
@@ -83,8 +86,65 @@ Deno.test("broker execution completion requires an active claim", async () => {
     { claimed: false, code: "already_claimed" },
     { userId: "user-1", status: "uncertain" },
   );
-  assertEquals(completed, false);
+  assertEquals(completed, {
+    completed: false,
+    code: "claim_not_active",
+    reason: "Broker execution completion requires an active claim",
+  });
   assertEquals(called, false);
+});
+
+Deno.test("execution wrapper trusts the terminal status persisted by SQL", async () => {
+  const supabase = {
+    rpc: async (name: string) => {
+      if (name === "claim_broker_execution") {
+        return {
+          data: {
+            claimed: true,
+            code: "claimed",
+            ledger_id: "ledger-1",
+            claim_token: "token-1",
+          },
+          error: null,
+        };
+      }
+      return {
+        data: {
+          completed: true,
+          code: "broker_close_proof_missing",
+          status: "uncertain",
+          broker_order_id: "broker-position-1",
+        },
+        error: null,
+      };
+    },
+  };
+
+  const result = await executeBrokerOrderWithLedger(
+    supabase,
+    {
+      userId: "user-1",
+      botId: "smc",
+      positionId: "position-1",
+      brokerConnectionId: "connection-1",
+      action: "close",
+      route: "paper_auto_exit",
+      requestPayload: { brokerPositionId: "broker-position-1" },
+    },
+    async () => ({
+      ok: true,
+      httpStatus: 200,
+      parsedBody: {
+        ok: true,
+        brokerExecutionStatus: "succeeded",
+        brokerOrderId: "broker-position-1",
+      },
+    }),
+  );
+
+  assertEquals(result.status, "uncertain");
+  assertEquals(result.brokerOrderId, "broker-position-1");
+  assertStringIncludes(result.error || "", "persisted uncertain");
 });
 
 Deno.test("OANDA opens require a newly opened trade id", () => {

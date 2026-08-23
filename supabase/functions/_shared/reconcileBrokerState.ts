@@ -1,8 +1,9 @@
 /**
  * reconcileBrokerState.ts — Broker-Authoritative Reconciliation
  * ══════════════════════════════════════════════════════════════
- * Single broker-writer: only bot-scanner's manage cycle calls this.
- * Paper-trading is read-only (no broker pushes).
+ * Single broker-writer: all full-close callers delegate here before internal
+ * finalization. Partial-close and protective-order reconciliation also remain
+ * owned here.
  *
  * Design:
  *   1. Batch-fetch broker positions ONCE per connection (not per position)
@@ -19,8 +20,10 @@ import { SPECS, normalizeSymKey } from "./smcAnalysis.ts";
 import { resolveSymbol } from "./brokerSymbols.ts";
 import { metaFetch } from "./metaApiClient.ts";
 import {
+  type BrokerExecutionSendResult,
   type BrokerExecutionTerminalStatus,
   classifyBrokerMutationHttpResponse,
+  executeBrokerOrderWithLedger,
 } from "./brokerExecutionLedger.ts";
 
 // ─── OANDA Helpers ─────────────────────────────────────────────────────
@@ -188,6 +191,49 @@ export interface ReconcileOptions {
   telegramChatIds: string[];
   shouldNotify: (category: string) => boolean;
   scanCycleId?: string;
+}
+
+export type FullCloseRoute =
+  | "paper_auto_exit"
+  | "manual_close"
+  | "kill_switch"
+  | "account_reset"
+  | "scanner_breach"
+  | "prop_firm_emergency"
+  | "reverse_signal";
+
+export interface FullClosePosition extends ReconcilePosition {
+  position_status?: string | null;
+  broker_execution_state?: string | null;
+}
+
+export interface FullCloseConnectionResult {
+  connectionId: string;
+  brokerType?: "metaapi" | "oanda";
+  status:
+    | BrokerExecutionTerminalStatus
+    | "already_claimed"
+    | "claim_error"
+    | "unavailable";
+  sent: boolean;
+  brokerPositionId?: string;
+  error?: string;
+}
+
+export interface FullBrokerCloseResult {
+  required: boolean;
+  readyToFinalize: boolean;
+  state:
+    | "paper"
+    | "confirmed"
+    | "reconciliation_required"
+    | "already_resolved";
+  positionStatus?: string;
+  brokerExecutionState?: string;
+  executionMode?: string;
+  requiredConnectionIds: string[];
+  connections: FullCloseConnectionResult[];
+  reason?: string;
 }
 
 export function findOandaBrokerPosition(
@@ -768,6 +814,792 @@ export async function reconcilePartialClose(opts: {
     );
   }
   return results;
+}
+
+interface BrokerCloseContext {
+  positionFound: boolean;
+  positionStatus: string | null;
+  brokerExecutionState: string | null;
+  executionMode: string | null;
+  requiredConnectionIds: string[];
+  missingCloseConnectionIds: string[];
+  unknownIdentityConnectionIds: string[];
+  brokerPositionIds: Record<string, string>;
+}
+
+type ExactBrokerPositionState =
+  | { state: "open" }
+  | { state: "closed" }
+  | { state: "unknown"; error: string };
+
+function parseBrokerResponseBody(body: string): any | undefined {
+  if (!body.trim()) return undefined;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+}
+
+function metaCredentials(connection: BrokerConnection): {
+  accountId: string;
+  authToken: string;
+} {
+  let authToken = connection.api_key;
+  let accountId = connection.account_id;
+  if (
+    accountId.startsWith("eyJ") &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      .test(authToken)
+  ) {
+    authToken = connection.account_id;
+    accountId = connection.api_key;
+  }
+  return { accountId, authToken };
+}
+
+async function readExactOandaPositionState(
+  connection: BrokerConnection,
+  brokerPositionId: string,
+): Promise<ExactBrokerPositionState> {
+  try {
+    const response = await fetch(
+      `${getOandaBaseUrl(connection)}/v3/accounts/${connection.account_id}/trades/${
+        encodeURIComponent(brokerPositionId)
+      }`,
+      { headers: { Authorization: `Bearer ${connection.api_key}` } },
+    );
+    const body = await response.text();
+    if (!response.ok) {
+      if (response.status === 404) {
+        const closedResponse = await fetch(
+          `${getOandaBaseUrl(connection)}/v3/accounts/${connection.account_id}/trades?state=CLOSED&count=500`,
+          { headers: { Authorization: `Bearer ${connection.api_key}` } },
+        );
+        const closedBody = await closedResponse.text();
+        if (!closedResponse.ok) {
+          return {
+            state: "unknown",
+            error: `OANDA exact-trade readback returned 404 and closed-trade verification failed ${closedResponse.status}: ${closedBody.slice(0, 500)}`,
+          };
+        }
+        const closedPayload = parseBrokerResponseBody(closedBody);
+        const exactClosedTrade = Array.isArray(closedPayload?.trades)
+          ? closedPayload.trades.find((trade: any) =>
+            String(trade?.id || "") === brokerPositionId &&
+            String(trade?.state || "").toUpperCase() === "CLOSED"
+          )
+          : null;
+        return exactClosedTrade
+          ? { state: "closed" }
+          : {
+            state: "unknown",
+            error: `OANDA returned 404 for trade ${brokerPositionId}, but its exact ID was not present in closed-trade history`,
+          };
+      }
+      return {
+        state: "unknown",
+        error: `OANDA exact-trade readback failed ${response.status}: ${body.slice(0, 500)}`,
+      };
+    }
+    const parsed = parseBrokerResponseBody(body);
+    const trade = parsed?.trade || parsed;
+    if (String(trade?.id || "") !== brokerPositionId) {
+      return {
+        state: "unknown",
+        error: `OANDA readback did not return exact trade ${brokerPositionId}`,
+      };
+    }
+    const state = String(trade?.state || "").toUpperCase();
+    if (state === "OPEN") return { state: "open" };
+    if (state === "CLOSED") return { state: "closed" };
+    return {
+      state: "unknown",
+      error: `OANDA trade ${brokerPositionId} has unknown state ${state || "missing"}`,
+    };
+  } catch (error) {
+    return {
+      state: "unknown",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function fetchMetaPositionsForClose(
+  connection: BrokerConnection,
+): Promise<{ ok: true; positions: any[] } | { ok: false; error: string }> {
+  const { accountId, authToken } = metaCredentials(connection);
+  try {
+    const { res, body } = await metaFetch(
+      accountId,
+      authToken,
+      (base) => `${base}/positions`,
+    );
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: `MetaAPI positions readback failed ${res.status}: ${body.slice(0, 500)}`,
+      };
+    }
+    const positions = JSON.parse(body);
+    return Array.isArray(positions)
+      ? { ok: true, positions }
+      : { ok: false, error: "MetaAPI positions readback was not an array" };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function readExactMetaPositionState(
+  connection: BrokerConnection,
+  brokerPositionId: string,
+): Promise<ExactBrokerPositionState> {
+  const current = await fetchMetaPositionsForClose(connection);
+  if (!current.ok) return { state: "unknown", error: current.error };
+  if (
+    current.positions.some((position: any) =>
+      String(position?.id ?? position?.positionId ?? "") === brokerPositionId
+    )
+  ) {
+    return { state: "open" };
+  }
+
+  const { accountId, authToken } = metaCredentials(connection);
+  try {
+    const { res, body } = await metaFetch(
+      accountId,
+      authToken,
+      (base) => `${base}/history-deals/position/${encodeURIComponent(brokerPositionId)}`,
+    );
+    if (!res.ok) {
+      return {
+        state: "unknown",
+        error: `MetaAPI close-history readback failed ${res.status}: ${body.slice(0, 500)}`,
+      };
+    }
+    const parsed = parseBrokerResponseBody(body);
+    const deals = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.deals)
+      ? parsed.deals
+      : [];
+    const entryVolume = deals.reduce((sum: number, deal: any) => {
+      if (deal?.entryType !== "DEAL_ENTRY_IN") return sum;
+      const volume = Number(deal?.volume);
+      return sum + (Number.isFinite(volume) && volume > 0 ? volume : 0);
+    }, 0);
+    const exitVolume = deals.reduce((sum: number, deal: any) => {
+      if (
+        deal?.entryType !== "DEAL_ENTRY_OUT" &&
+        deal?.entryType !== "DEAL_ENTRY_OUT_BY"
+      ) return sum;
+      const volume = Number(deal?.volume);
+      return sum + (Number.isFinite(volume) && volume > 0 ? volume : 0);
+    }, 0);
+    const tolerance = Math.max(1e-8, entryVolume * 1e-8);
+    if (entryVolume > 0 && exitVolume + tolerance >= entryVolume) {
+      return { state: "closed" };
+    }
+    return {
+      state: "unknown",
+      error: `MetaAPI history does not prove full closure for ${brokerPositionId} (entry volume ${entryVolume}, exit volume ${exitVolume})`,
+    };
+  } catch (error) {
+    return {
+      state: "unknown",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function readExactBrokerPositionState(
+  connection: BrokerConnection,
+  brokerPositionId: string,
+): Promise<ExactBrokerPositionState> {
+  if (connection.broker_type === "oanda") {
+    return await readExactOandaPositionState(connection, brokerPositionId);
+  }
+  if (connection.broker_type === "metaapi") {
+    return await readExactMetaPositionState(connection, brokerPositionId);
+  }
+  return {
+    state: "unknown",
+    error: `Unsupported broker type: ${connection.broker_type}`,
+  };
+}
+
+function confirmedCloseResult(
+  brokerPositionId: string,
+  brokerResponse?: { parsedBody?: any; rawBody?: string },
+): BrokerExecutionSendResult {
+  return {
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      ok: true,
+      brokerExecutionStatus: "succeeded",
+      brokerOrderId: brokerPositionId,
+      close_confirmed: true,
+      broker_position_id: brokerPositionId,
+      broker_response: brokerResponse?.parsedBody ??
+        brokerResponse?.rawBody ?? null,
+    },
+  };
+}
+
+function uncertainCloseResult(message: string): BrokerExecutionSendResult {
+  return { ok: false, httpStatus: 0, rawBody: message };
+}
+
+async function sendFullCloseForConnection(input: {
+  connection: BrokerConnection;
+  brokerPositionId: string;
+}): Promise<BrokerExecutionSendResult> {
+  const { connection, brokerPositionId } = input;
+  const before = await readExactBrokerPositionState(
+    connection,
+    brokerPositionId,
+  );
+  if (before.state === "closed") {
+    return confirmedCloseResult(brokerPositionId);
+  }
+  if (before.state === "unknown") {
+    return uncertainCloseResult(before.error);
+  }
+
+  let response: Response | null = null;
+  let rawBody = "";
+  try {
+    if (connection.broker_type === "oanda") {
+      response = await fetch(
+        `${getOandaBaseUrl(connection)}/v3/accounts/${connection.account_id}/trades/${
+          encodeURIComponent(brokerPositionId)
+        }/close`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${connection.api_key}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        },
+      );
+      rawBody = await response.text();
+    } else if (connection.broker_type === "metaapi") {
+      const { accountId, authToken } = metaCredentials(connection);
+      const closed = await metaFetch(
+        accountId,
+        authToken,
+        (base) => `${base}/trade`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actionType: "POSITION_CLOSE_ID",
+            positionId: brokerPositionId,
+          }),
+        },
+        { allowFailover: false },
+      );
+      response = closed.res;
+      rawBody = closed.body;
+    } else {
+      return uncertainCloseResult(
+        `Unsupported broker type: ${connection.broker_type}`,
+      );
+    }
+  } catch (error) {
+    const afterError = await readExactBrokerPositionState(
+      connection,
+      brokerPositionId,
+    );
+    return afterError.state === "closed"
+      ? confirmedCloseResult(brokerPositionId)
+      : uncertainCloseResult(
+        `Broker close transport failed and closure was not proved: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+  }
+
+  const after = await readExactBrokerPositionState(
+    connection,
+    brokerPositionId,
+  );
+  if (after.state === "closed") {
+    return confirmedCloseResult(brokerPositionId, {
+      parsedBody: parseBrokerResponseBody(rawBody),
+      rawBody,
+    });
+  }
+  if (after.state === "unknown" || response?.ok) {
+    return uncertainCloseResult(
+      `Broker close response was not followed by exact closed-state proof: ${
+        after.state === "unknown" ? after.error : "position remains open"
+      }`,
+    );
+  }
+  return {
+    ok: false,
+    httpStatus: response?.status || 0,
+    parsedBody: parseBrokerResponseBody(rawBody),
+    rawBody,
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string =>
+      typeof item === "string" && item.length > 0
+    )
+    : [];
+}
+
+async function loadBrokerCloseContext(
+  supabase: any,
+  userId: string,
+  botId: string,
+  positionId: string,
+): Promise<BrokerCloseContext> {
+  const { data, error } = await supabase.rpc(
+    "load_paper_position_close_context",
+    {
+      p_user_id: userId,
+      p_bot_id: botId,
+      p_position_id: positionId,
+    },
+  );
+  if (error) throw error;
+  if (!data || typeof data.position_found !== "boolean") {
+    throw new Error("Paper-position close context returned an invalid response");
+  }
+  return {
+    positionFound: data.position_found,
+    positionStatus: data.position_status ?? null,
+    brokerExecutionState: data.broker_execution_state ?? null,
+    executionMode: data.execution_mode ?? null,
+    requiredConnectionIds: stringArray(data.required_connection_ids),
+    missingCloseConnectionIds: stringArray(
+      data.missing_close_connection_ids,
+    ),
+    unknownIdentityConnectionIds: stringArray(
+      data.unknown_identity_connection_ids,
+    ),
+    brokerPositionIds: data.broker_position_ids &&
+        typeof data.broker_position_ids === "object"
+      ? data.broker_position_ids
+      : {},
+  };
+}
+
+async function persistBrokerCloseState(
+  supabase: any,
+  userId: string,
+  botId: string,
+  position: FullClosePosition,
+  state: "pending" | "confirmed" | "reconciliation_required",
+  error: string | null,
+): Promise<void> {
+  const result = await supabase.from("paper_positions")
+    .update({ broker_close_state: state, broker_close_error: error })
+    .eq("id", position.id)
+    .eq("user_id", userId)
+    .eq("bot_id", botId)
+    .eq("position_id", position.position_id);
+  if (result?.error) throw result.error;
+}
+
+function unresolvedReason(results: FullCloseConnectionResult[]): string {
+  return results
+    .filter((result) => result.status !== "succeeded")
+    .map((result) =>
+      `${result.connectionId}: ${result.status}${
+        result.error ? ` (${result.error})` : ""
+      }`
+    )
+    .join("; ") || "Broker close could not be confirmed";
+}
+
+/**
+ * Establishes durable, exact broker-close proof for every connection tied to
+ * an internal position. It never finalizes the paper row; callers may do that
+ * only when readyToFinalize is true.
+ */
+export async function reconcileFullBrokerClose(opts: {
+  supabase: any;
+  userId: string;
+  botId: string;
+  position: FullClosePosition;
+  route: FullCloseRoute;
+  closeReason: string;
+}): Promise<FullBrokerCloseResult> {
+  const { supabase, userId, botId, position, route, closeReason } = opts;
+  let context: BrokerCloseContext;
+  try {
+    context = await loadBrokerCloseContext(
+      supabase,
+      userId,
+      botId,
+      position.position_id,
+    );
+  } catch (error) {
+    const reason = `Broker close context failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "reconciliation_required",
+      reason,
+    ).catch(() => undefined);
+    return {
+      required: true,
+      readyToFinalize: false,
+      state: "reconciliation_required",
+      requiredConnectionIds: [],
+      connections: [],
+      reason,
+    };
+  }
+
+  const resultContext = {
+    positionStatus: context.positionStatus || undefined,
+    brokerExecutionState: context.brokerExecutionState || undefined,
+    executionMode: context.executionMode || undefined,
+  };
+  if (!context.positionFound) {
+    return {
+      required: false,
+      readyToFinalize: false,
+      state: "already_resolved",
+      requiredConnectionIds: [],
+      connections: [],
+      reason: "Paper position is no longer open",
+      ...resultContext,
+    };
+  }
+
+  if (context.requiredConnectionIds.length === 0) {
+    if (context.brokerExecutionState === "paper") {
+      return {
+        required: false,
+        readyToFinalize: true,
+        state: "paper",
+        requiredConnectionIds: [],
+        connections: [],
+        ...resultContext,
+      };
+    }
+    const reason =
+      `Position execution state is ${context.brokerExecutionState || "unknown"}, but no exact broker identity is available`;
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "reconciliation_required",
+      reason,
+    ).catch(() => undefined);
+    return {
+      required: true,
+      readyToFinalize: false,
+      state: "reconciliation_required",
+      requiredConnectionIds: [],
+      connections: [],
+      reason,
+      ...resultContext,
+    };
+  }
+
+  try {
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "pending",
+      null,
+    );
+  } catch (error) {
+    const reason = `Could not persist broker-close claim state: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "reconciliation_required",
+      reason,
+    ).catch(() => undefined);
+    return {
+      required: true,
+      readyToFinalize: false,
+      state: "reconciliation_required",
+      requiredConnectionIds: context.requiredConnectionIds,
+      connections: [],
+      reason,
+      ...resultContext,
+    };
+  }
+
+  let connectionResult: { data: unknown; error: any };
+  try {
+    connectionResult = await supabase.from("broker_connections")
+      .select("*")
+      .eq("user_id", userId)
+      .in("id", context.requiredConnectionIds);
+  } catch (error) {
+    connectionResult = {
+      data: null,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+  if (connectionResult.error) {
+    const reason = `Broker connection read failed: ${
+      connectionResult.error.message || connectionResult.error
+    }`;
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "reconciliation_required",
+      reason,
+    ).catch(() => undefined);
+    return {
+      required: true,
+      readyToFinalize: false,
+      state: "reconciliation_required",
+      requiredConnectionIds: context.requiredConnectionIds,
+      connections: [],
+      reason,
+      ...resultContext,
+    };
+  }
+
+  const connections = (connectionResult.data || []) as BrokerConnection[];
+  const connectionById = new Map(
+    connections.map((connection) => [connection.id, connection]),
+  );
+  const transientResults = new Map<string, FullCloseConnectionResult>();
+  for (const connectionId of context.missingCloseConnectionIds) {
+    const connection = connectionById.get(connectionId);
+    if (!connection) {
+      transientResults.set(connectionId, {
+        connectionId,
+        status: "unavailable",
+        sent: false,
+        error: "Broker connection is unavailable",
+      });
+      continue;
+    }
+    if (
+      connection.broker_type !== "metaapi" &&
+      connection.broker_type !== "oanda"
+    ) {
+      transientResults.set(connectionId, {
+        connectionId,
+        status: "unavailable",
+        sent: false,
+        error: `Unsupported broker type: ${connection.broker_type}`,
+      });
+      continue;
+    }
+    if (context.unknownIdentityConnectionIds.includes(connectionId)) {
+      transientResults.set(connectionId, {
+        connectionId,
+        brokerType: connection.broker_type,
+        status: "uncertain",
+        sent: false,
+        error: "Exact broker position identity is unavailable",
+      });
+      continue;
+    }
+    const brokerPositionId = context.brokerPositionIds[connectionId];
+    if (!brokerPositionId) {
+      transientResults.set(connectionId, {
+        connectionId,
+        brokerType: connection.broker_type,
+        status: "uncertain",
+        sent: false,
+        error: "Exact broker position identity is unavailable",
+      });
+      continue;
+    }
+
+    try {
+      const execution = await executeBrokerOrderWithLedger(
+        supabase,
+        {
+          userId,
+          botId,
+          positionId: position.position_id,
+          brokerConnectionId: connectionId,
+          action: "close",
+          route,
+          requestPayload: {
+            symbol: position.symbol,
+            direction: position.direction,
+            closeReason,
+            brokerPositionId,
+          },
+        },
+        () =>
+          sendFullCloseForConnection({
+            connection,
+            brokerPositionId,
+          }),
+      );
+      transientResults.set(connectionId, {
+        connectionId,
+        brokerType: connection.broker_type,
+        status: execution.status,
+        sent: execution.sent,
+        brokerPositionId,
+        error: execution.error,
+      });
+    } catch (error) {
+      transientResults.set(connectionId, {
+        connectionId,
+        brokerType: connection.broker_type,
+        status: "uncertain",
+        sent: false,
+        brokerPositionId,
+        error: `Broker close ledger failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+  }
+
+  let finalContext: BrokerCloseContext;
+  try {
+    finalContext = await loadBrokerCloseContext(
+      supabase,
+      userId,
+      botId,
+      position.position_id,
+    );
+  } catch (error) {
+    const reason = `Broker close proof reload failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    await persistBrokerCloseState(
+      supabase,
+      userId,
+      botId,
+      position,
+      "reconciliation_required",
+      reason,
+    ).catch(() => undefined);
+    return {
+      required: true,
+      readyToFinalize: false,
+      state: "reconciliation_required",
+      requiredConnectionIds: context.requiredConnectionIds,
+      connections: Array.from(transientResults.values()),
+      reason,
+      ...resultContext,
+    };
+  }
+
+  const unresolvedIds = new Set(finalContext.missingCloseConnectionIds);
+  const connectionResults = context.requiredConnectionIds.map(
+    (connectionId): FullCloseConnectionResult => {
+      const transient = transientResults.get(connectionId);
+      if (!unresolvedIds.has(connectionId)) {
+        return {
+          connectionId,
+          brokerType: transient?.brokerType,
+          status: "succeeded",
+          sent: transient?.sent || false,
+          brokerPositionId: context.brokerPositionIds[connectionId],
+        };
+      }
+      return transient || {
+        connectionId,
+        status: "unavailable",
+        sent: false,
+        brokerPositionId: context.brokerPositionIds[connectionId],
+        error: "Broker close remains unresolved",
+      };
+    },
+  );
+  const readyToFinalize = finalContext.positionFound &&
+    finalContext.missingCloseConnectionIds.length === 0 &&
+    finalContext.unknownIdentityConnectionIds.length === 0;
+  if (readyToFinalize) {
+    try {
+      await persistBrokerCloseState(
+        supabase,
+        userId,
+        botId,
+        position,
+        "confirmed",
+        null,
+      );
+    } catch (error) {
+      const reason = `Broker closure was proved, but confirmation state could not be persisted: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      await persistBrokerCloseState(
+        supabase,
+        userId,
+        botId,
+        position,
+        "reconciliation_required",
+        reason,
+      ).catch(() => undefined);
+      return {
+        required: true,
+        readyToFinalize: false,
+        state: "reconciliation_required",
+        requiredConnectionIds: finalContext.requiredConnectionIds,
+        connections: connectionResults,
+        reason,
+        positionStatus: finalContext.positionStatus || undefined,
+        brokerExecutionState: finalContext.brokerExecutionState || undefined,
+        executionMode: finalContext.executionMode || undefined,
+      };
+    }
+    return {
+      required: true,
+      readyToFinalize: true,
+      state: "confirmed",
+      requiredConnectionIds: finalContext.requiredConnectionIds,
+      connections: connectionResults,
+      positionStatus: finalContext.positionStatus || undefined,
+      brokerExecutionState: finalContext.brokerExecutionState || undefined,
+      executionMode: finalContext.executionMode || undefined,
+    };
+  }
+
+  const reason = unresolvedReason(connectionResults);
+  await persistBrokerCloseState(
+    supabase,
+    userId,
+    botId,
+    position,
+    "reconciliation_required",
+    reason,
+  ).catch(() => undefined);
+  return {
+    required: true,
+    readyToFinalize: false,
+    state: "reconciliation_required",
+    requiredConnectionIds: finalContext.requiredConnectionIds,
+    connections: connectionResults,
+    reason,
+    positionStatus: finalContext.positionStatus || undefined,
+    brokerExecutionState: finalContext.brokerExecutionState || undefined,
+    executionMode: finalContext.executionMode || undefined,
+  };
 }
 
 // ─── Test Helpers (exported for unit tests only) ────────────────────────
