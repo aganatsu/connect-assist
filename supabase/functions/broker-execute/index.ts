@@ -9,6 +9,7 @@ import {
   type OandaDependentOrderTransaction,
 } from "../_shared/brokerExecutionLedger.ts";
 import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
+import { authorizeScopedCaller } from "../_shared/callerAuth.ts";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
@@ -94,23 +95,37 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
+    const body = await req.json();
+    const { action, connectionId, userId: requestedUserId, ...payload } = body;
+    const caller = await authorizeScopedCaller(req, requestedUserId);
+    if (!caller.authorized) {
+      return respond({ error: caller.error, fallback: false }, caller.status);
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ||
+      Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
+    const databaseKey = caller.serviceRole ? serviceRoleKey : anonKey;
+    if (!supabaseUrl || !databaseKey) {
+      return respond({ error: "Broker execution is not configured", fallback: false }, 500);
+    }
+
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing authorization");
-
-    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    // Use getClaims() for local JWT verification — prevents 150s hang on expired tokens
-    const token = authHeader.replace("Bearer ", "");
-    const { data: claimsData, error: authError } = await supabase.auth.getClaims(token);
-    if (authError || !claimsData?.claims?.sub) throw new Error("Unauthorized");
-    const user = { id: claimsData.claims.sub as string };
-
-    const { action, connectionId, ...payload } = await req.json();
+    const supabase = createClient(
+      supabaseUrl,
+      databaseKey,
+      caller.serviceRole
+        ? { auth: { persistSession: false } }
+        : {
+          auth: { persistSession: false },
+          global: { headers: { Authorization: authHeader! } },
+        },
+    );
 
     // Fetch the broker connection
     const { data: conn, error: connErr } = await supabase.from("broker_connections")
-      .select("*").eq("id", connectionId).eq("user_id", user.id).single();
+      .select("*").eq("id", connectionId).eq("user_id", caller.userId).single();
     if (connErr || !conn) throw new Error("Broker connection not found");
 
     // Auto-detect swapped fields for MetaAPI: JWT tokens start with "eyJ", account IDs are UUIDs

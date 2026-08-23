@@ -3,6 +3,7 @@
  */
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  authorizeScopedCaller,
   bearerToken,
   type ClaimsVerifier,
   isServiceRoleCaller,
@@ -100,4 +101,66 @@ Deno.test("resolveCallerScopedUserId: a trusted server caller keeps its explicit
     resolveCallerScopedUserId(null, undefined),
     { userId: null, forbidden: false },
   );
+});
+
+Deno.test("authorizeScopedCaller: exact service caller is scoped to its explicit user", async () => {
+  setup();
+  try {
+    assertEquals(
+      await authorizeScopedCaller(
+        req({ Authorization: `Bearer ${SERVICE_ROLE_KEY}` }),
+        "scheduled-user",
+      ),
+      {
+        authorized: true,
+        userId: "scheduled-user",
+        serviceRole: true,
+      },
+    );
+    assertEquals(
+      await authorizeScopedCaller(
+        req({ Authorization: `Bearer ${SERVICE_ROLE_KEY}` }),
+        undefined,
+      ),
+      {
+        authorized: false,
+        status: 400,
+        error: "Service caller must provide userId",
+      },
+    );
+  } finally {
+    teardown();
+  }
+});
+
+Deno.test("authorizeScopedCaller: user JWT cannot select another user", async () => {
+  setup();
+  try {
+    assertEquals(
+      await authorizeScopedCaller(
+        req({ Authorization: `Bearer ${VALID_JWT}` }),
+        "other-user",
+        verifier,
+      ),
+      {
+        authorized: false,
+        status: 403,
+        error: "Cannot operate another user's broker connection",
+      },
+    );
+    assertEquals(
+      await authorizeScopedCaller(
+        req({ Authorization: `Bearer ${VALID_JWT}` }),
+        undefined,
+        verifier,
+      ),
+      {
+        authorized: true,
+        userId: "user-abc",
+        serviceRole: false,
+      },
+    );
+  } finally {
+    teardown();
+  }
 });
