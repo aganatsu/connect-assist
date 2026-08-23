@@ -148,6 +148,7 @@ describe("OperationsDashboard", () => {
 
   it("renders live scan and lifecycle data and wires the safety control", async () => {
     renderDashboard();
+    expect(screen.getByText("SMC Trading Dashboard")).toBeInTheDocument();
 
     expect(await screen.findByRole("heading", { name: "Latest Scan" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Zone Setups" })).toBeInTheDocument();
