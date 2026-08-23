@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { brokerExecApi, invokeFunction, paperApi } from "./api";
+import { supabase } from "@/integrations/supabase/client";
+import {
+  botConfigApi,
+  brokerExecApi,
+  invokeFunction,
+  paperApi,
+} from "./api";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
@@ -34,17 +40,34 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
-function edgeResponse(status: number, body: Record<string, unknown>) {
+function edgeResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
-    statusText: status >= 500 ? "Service Unavailable" : "OK",
+    statusText: status >= 500 ? "Service Unavailable" : "Error",
     headers: { "Content-Type": "application/json" },
   });
 }
 
+const paperStatus = (mode: "paper" | "live" = "paper") => ({
+  ok: true,
+  state: "available",
+  executionMode: mode,
+  balance: 10_000,
+  positions: [],
+  tradeHistory: [],
+});
+
+function requestBody(call: unknown[]): Record<string, unknown> {
+  return JSON.parse(String((call[1] as RequestInit)?.body || "{}"));
+}
+
+function functionName(call: unknown[]): string {
+  return String(call[0]).split("/").pop() || "";
+}
+
 describe("edge function retry safety", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -52,42 +75,30 @@ describe("edge function retry safety", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    ["place_order", () =>
-      brokerExecApi.placeOrder("connection-1", {
-        symbol: "EUR/USD",
-        direction: "long",
-        size: 0.1,
-      })],
-    ["close_trade", () => brokerExecApi.closeTrade("connection-1", "trade-1")],
-    ["modify_trade", () =>
-      brokerExecApi.modifyTrade(
-        "connection-1",
-        "trade-1",
-        { stopLoss: 1.2 },
-      )],
-  ])(
+  it.each(["place_order", "close_trade", "modify_trade"])(
     "does not retry an uncertain broker %s mutation",
-    async (_action, invoke) => {
+    async (action) => {
       const fetchMock = vi.fn()
-        .mockResolvedValueOnce(
-          edgeResponse(503, { error: "worker terminated" }),
-        )
+        .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
         .mockResolvedValueOnce(edgeResponse(200, {
           ok: true,
           brokerExecutionStatus: "succeeded",
         }));
       vi.stubGlobal("fetch", fetchMock);
 
-      await expect(invoke()).rejects.toThrow(
+      await expect(invokeFunction("broker-execute", {
+        action,
+        connectionId: "connection-1",
+      })).rejects.toThrow(
         "Broker execution outcome is unknown. Check broker state before retrying.",
       );
       expect(fetchMock).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("does not retry an uncertain paper account mutation", async () => {
+  it("does not retry an uncertain paper account mutation after preflight", async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(edgeResponse(200, paperStatus()))
       .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
       .mockResolvedValueOnce(edgeResponse(200, { success: true }));
     vi.stubGlobal("fetch", fetchMock);
@@ -95,75 +106,220 @@ describe("edge function retry safety", () => {
     await expect(paperApi.startEngine()).rejects.toThrow(
       "Request outcome is unknown. Check account state before retrying.",
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    [
-      "paper status",
-      "paper-trading",
-      { action: "status" },
-      "Request outcome is unknown. Check account state before retrying.",
-    ],
-    [
-      "scheduled-task list",
-      "scheduled-tasks",
-      { action: "list" },
-      "Request outcome is unknown. Check current state before retrying.",
-    ],
-    [
-      "backtest status maintenance",
-      "backtest-engine",
-      { action: "status", runId: "run-1" },
-      "Request outcome is unknown. Check current state before retrying.",
-    ],
+    ["scheduled-task list", "scheduled-tasks", { action: "list" }],
+    ["backtest status maintenance", "backtest-engine", { action: "status", runId: "run-1" }],
   ])(
     "does not retry the stateful %s action",
-    async (_label, functionName, body, expectedMessage) => {
-      vi.useFakeTimers();
+    async (_label, edgeFunction, body) => {
       const fetchMock = vi.fn(async () =>
         edgeResponse(503, { error: "worker terminated" })
       );
       vi.stubGlobal("fetch", fetchMock);
 
-      const assertion = expect(invokeFunction(functionName, body)).rejects
-        .toThrow(expectedMessage);
-      await vi.runAllTimersAsync();
-      await assertion;
-
+      await expect(invokeFunction(edgeFunction, body)).rejects.toThrow(
+        "Request outcome is unknown. Check current state before retrying.",
+      );
       expect(fetchMock).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("does not retry an unclassified control mutation", async () => {
+  it("does not replay status processing that can close positions", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
+      .mockResolvedValueOnce(edgeResponse(200, paperStatus()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(invokeFunction("paper-trading", {
+      action: "status",
+      processEngine: true,
+    })).rejects.toThrow(
+      "Request outcome is unknown. Check account state before retrying.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a plain paper status read after a transient 503", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
+      .mockResolvedValueOnce(edgeResponse(200, paperStatus()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = paperApi.status();
+    await vi.runAllTimersAsync();
+
+    await expect(request).resolves.toMatchObject({ executionMode: "paper" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays a plain paper status read after refreshing app authentication", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(edgeResponse(401, { error: "Invalid JWT" }))
+      .mockResolvedValueOnce(edgeResponse(200, paperStatus()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(paperApi.status()).resolves.toMatchObject({ executionMode: "paper" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(supabase.auth.refreshSession).toHaveBeenCalledTimes(1);
+    expect(supabase.auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an OANDA upstream 401 as app authentication failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(edgeResponse(401, {
+      ok: false,
+      state: "unknown",
+      errorOrigin: "broker",
+      broker: "oanda",
+      brokerStatus: 401,
+      error: "OANDA error: 401",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(brokerExecApi.accountSummary("connection-1"))
+      .rejects.toThrow("OANDA error: 401");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(supabase.auth.refreshSession).not.toHaveBeenCalled();
+    expect(supabase.auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it("re-reads live broker truth before a nested position update", async () => {
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const body = requestBody(args);
+      const edgeFunction = functionName(args);
+      if (edgeFunction === "paper-trading" && body.action === "status") {
+        return edgeResponse(200, paperStatus("live"));
+      }
+      if (edgeFunction === "broker-connections") {
+        return edgeResponse(200, [{ id: "broker-1", is_active: true }]);
+      }
+      if (body.action === "connection_status") return edgeResponse(200, { ready: true });
+      if (body.action === "account_summary") return edgeResponse(200, { balance: 10_000 });
+      if (body.action === "open_trades") return edgeResponse(200, []);
+      if (edgeFunction === "paper-trading" && body.action === "update_position") {
+        return edgeResponse(200, { success: true });
+      }
+      throw new Error(`Unexpected request: ${edgeFunction}/${String(body.action)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(paperApi.updatePosition("position-1", { stopLoss: 1.2 }))
+      .resolves.toMatchObject({ success: true });
+    expect(fetchMock.mock.calls.map((call) => requestBody(call).action)).toEqual([
+      "status",
+      "list",
+      "connection_status",
+      "account_summary",
+      "open_trades",
+      "update_position",
+    ]);
+  });
+
+  it("blocks a live config mutation before dispatch when fresh broker truth fails", async () => {
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const body = requestBody(args);
+      const edgeFunction = functionName(args);
+      if (edgeFunction === "paper-trading") return edgeResponse(200, paperStatus("live"));
+      if (edgeFunction === "broker-connections") {
+        return edgeResponse(200, [{ id: "broker-1", is_active: true, display_name: "Primary" }]);
+      }
+      if (body.action === "connection_status") return edgeResponse(200, { ready: true });
+      if (body.action === "account_summary") {
+        return edgeResponse(424, {
+          errorOrigin: "broker",
+          brokerStatus: 401,
+          error: "OANDA error: 401",
+        });
+      }
+      if (body.action === "open_trades") return edgeResponse(200, []);
+      throw new Error(`Mutation was dispatched: ${edgeFunction}/${String(body.action)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(botConfigApi.update({ riskPerTrade: 1 }))
+      .rejects.toThrow("OANDA error: 401");
+    expect(fetchMock.mock.calls.some((call) =>
+      functionName(call) === "bot-config" && requestBody(call).action === "update"
+    )).toBe(false);
+  });
+
+  it.each([
+    ["pause_engine", () => paperApi.pauseEngine()],
+    ["stop_engine", () => paperApi.stopEngine()],
+    ["kill_switch", () => paperApi.killSwitch(true)],
+  ])("keeps emergency %s available without a truth preflight", async (action, mutate) => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(edgeResponse(200, { success: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mutate()).resolves.toMatchObject({ success: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requestBody(fetchMock.mock.calls[0]).action).toBe(action);
+  });
+
+  it("requires fresh truth before deactivating the kill switch", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(edgeResponse(200, paperStatus("paper")))
       .mockResolvedValueOnce(edgeResponse(200, { success: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(invokeFunction("scheduled-tasks", {
-      action: "update",
-      taskId: "task-1",
-    })).rejects.toThrow(
-      "Request outcome is unknown. Check current state before retrying.",
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await paperApi.killSwitch(false);
+    expect(fetchMock.mock.calls.map((call) => requestBody(call).action)).toEqual([
+      "status",
+      "kill_switch",
+    ]);
   });
 
-  it("treats a broker transport failure as an uncertain one-shot mutation", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(
-      new TypeError("Failed to fetch"),
-    );
+  it("checks brokers before enabling live while currently in paper mode", async () => {
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const body = requestBody(args);
+      const edgeFunction = functionName(args);
+      if (edgeFunction === "paper-trading" && body.action === "status") {
+        return edgeResponse(200, paperStatus("paper"));
+      }
+      if (edgeFunction === "broker-connections") {
+        return edgeResponse(200, [{ id: "broker-1", is_active: true }]);
+      }
+      if (body.action === "connection_status") return edgeResponse(200, { ready: true });
+      if (body.action === "account_summary") return edgeResponse(200, { balance: 10_000 });
+      if (body.action === "open_trades") return edgeResponse(200, []);
+      if (body.action === "set_execution_mode") {
+        return edgeResponse(200, { success: true, executionMode: "live" });
+      }
+      throw new Error(`Unexpected request: ${edgeFunction}/${String(body.action)}`);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(brokerExecApi.closeTrade("connection-1", "trade-1"))
-      .rejects.toThrow(
-        "Broker execution outcome is unknown. Check broker state before retrying.",
-      );
+    await expect(paperApi.setExecutionMode("live"))
+      .resolves.toMatchObject({ executionMode: "live" });
+    expect(fetchMock.mock.calls.map((call) => requestBody(call).action)).toEqual([
+      "status",
+      "list",
+      "connection_status",
+      "account_summary",
+      "open_trades",
+      "set_execution_mode",
+    ]);
+  });
+
+  it("does not replay a mutation after a dispatched app authentication rejection", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(edgeResponse(401, { error: "Invalid JWT" }))
+      .mockResolvedValueOnce(edgeResponse(200, { success: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(invokeFunction("broker-execute", {
+      action: "place_order",
+      connectionId: "connection-1",
+    })).rejects.toThrow(
+      "Request was not authorized. Your session is valid; retry the action manually.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("continues retrying a proven read after a transient failure", async () => {
+  it("continues retrying a proven broker read after a transient failure", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
@@ -177,49 +333,21 @@ describe("edge function retry safety", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not replay a mutation after a dispatched authentication rejection", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(edgeResponse(401, { error: "Invalid JWT" }))
-      .mockResolvedValueOnce(edgeResponse(200, {
-        ok: true,
-        brokerExecutionStatus: "succeeded",
-      }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(brokerExecApi.placeOrder("connection-1", {
-      symbol: "EUR/USD",
-      direction: "long",
-      size: 0.1,
-    })).rejects.toThrow(
-      "Request was not authorized. Your session is valid; retry the action manually.",
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not let a read cooldown suppress a later broker mutation", async () => {
+  it("returns an unavailable fallback after plain status retries are exhausted", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(200, {
-        ok: true,
-        brokerExecutionStatus: "succeeded",
-      }));
+    const fetchMock = vi.fn(async () =>
+      edgeResponse(503, { error: "worker terminated" })
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    const readRequest = brokerExecApi.openTrades("cooldown-connection")
-      .catch(() => undefined);
+    const request = invokeFunction("paper-trading", { action: "status" });
     await vi.runAllTimersAsync();
-    await readRequest;
 
-    await expect(brokerExecApi.placeOrder("cooldown-connection", {
-      symbol: "EUR/USD",
-      direction: "long",
-      size: 0.1,
-    })).resolves.toMatchObject({ brokerExecutionStatus: "succeeded" });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    await expect(request).resolves.toMatchObject({
+      state: "unknown",
+      executionMode: "unknown",
+      fallback: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });

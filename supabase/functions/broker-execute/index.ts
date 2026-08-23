@@ -54,6 +54,24 @@ function roundOandaPrice(symbol: string, price: number): string {
   return price.toFixed(precision);
 }
 
+function respondWithBrokerReadFailure(
+  broker: "oanda" | "metaapi",
+  upstreamStatus: number,
+  error: string,
+  details = "",
+) {
+  return respond({
+    ok: false,
+    state: "unknown",
+    errorOrigin: "broker",
+    broker,
+    brokerStatus: upstreamStatus,
+    error,
+    details: details ? details.slice(0, 1000) : undefined,
+    fallback: upstreamStatus >= 500,
+  }, upstreamStatus >= 500 ? 503 : 424);
+}
+
 function respondWithBrokerMutationOutcome(
   res: Response,
   body: string,
@@ -83,6 +101,7 @@ function respondWithBrokerMutationOutcome(
     : outcome.error || "Broker did not confirm the mutation";
   return respond({
     ok: false,
+    errorOrigin: "broker",
     brokerExecutionStatus: outcome.status,
     brokerCode: brokerCode || undefined,
     error: reason,
@@ -143,7 +162,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
@@ -159,7 +186,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/openTrades`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
@@ -181,10 +216,12 @@ Deno.serve(async (req) => {
         );
         if (!instrumentRes.ok) {
           const details = await instrumentRes.text();
-          return respond({
-            error: `OANDA instrument specification failed: ${instrumentRes.status}`, details,
-            fallback: instrumentRes.status >= 500,
-          }, instrumentRes.status);
+          return respondWithBrokerReadFailure(
+            "oanda",
+            instrumentRes.status,
+            `OANDA instrument specification failed: ${instrumentRes.status}`,
+            details,
+          );
         }
         const instrument = (await instrumentRes.json()).instruments?.[0];
         if (!instrument) {
@@ -272,7 +309,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         const acct = (await res.json()).account;
         return respond({
           balance: parseFloat(acct.balance ?? "0"),
@@ -335,9 +380,22 @@ Deno.serve(async (req) => {
         if (!res.ok) {
           const errText = await res.text();
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: oandaSym, status: res.status, error: errText.slice(0, 300) });
+            return respond({
+              ok: false,
+              errorOrigin: "broker",
+              broker: "oanda",
+              brokerStatus: res.status,
+              brokerSymbol: oandaSym,
+              status: res.status,
+              error: errText.slice(0, 300),
+            });
           }
-          throw new Error(`OANDA symbol_specs error: ${res.status}`);
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA symbol_specs error: ${res.status}`,
+            errText,
+          );
         }
         const data: any = await res.json();
         const inst = data.instruments?.[0];
@@ -389,7 +447,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) return respond({ ok: false, state: "unknown", error: `OANDA ${res.status}`, fallback: true }, 503);
+        if (!res.ok) {
+          const details = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA ${res.status}`,
+            details,
+          );
+        }
         const acct = (await res.json()).account;
         return respond({ ok: true, state: "DEPLOYED", connectionStatus: "CONNECTED", ready: true, name: acct.alias, login: acct.id });
       }
@@ -432,7 +498,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades?state=CLOSED&count=${limit}`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).trades || []);
       }
       if (conn.broker_type === "metaapi") {

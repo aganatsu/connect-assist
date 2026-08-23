@@ -4,6 +4,10 @@ import {
   requireConfirmedBrokerMutation,
 } from "@/lib/brokerMutationResult";
 import { requireAvailableCollection, requireAvailableObject } from "@/lib/remoteRead";
+import {
+  requireFreshTradingTruth,
+  type ExecutionMode,
+} from "@/lib/executionMode";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
 const functionCooldownUntil = new Map<string, number>();
@@ -52,6 +56,9 @@ function isRetryableReadRequest(
   functionName: string,
   body: Record<string, unknown>,
 ): boolean {
+  if (functionName === "paper-trading" && body?.action === "status") {
+    return body.processEngine !== true;
+  }
   return RETRYABLE_READ_ACTIONS[functionName]?.has(String(body?.action ?? "")) === true;
 }
 
@@ -243,6 +250,9 @@ async function invokeSupabaseFunction(functionName: string, body: Record<string,
 
 // Detect auth errors from the edge function (401 / Unauthorized / bad_jwt / missing sub claim)
 function isAuthError(error: any, data: any): boolean {
+  // A broker may reject its own API credentials with 401/403. That response is
+  // not evidence that the user's Supabase session expired.
+  if (data?.errorOrigin === "broker") return false;
   const msg = (error?.message || data?.error || "").toString().toLowerCase();
   const status = error?.context?.status ?? error?.status;
   if (status === 401 || status === 403) return true;
@@ -437,6 +447,74 @@ export async function invokeFunction<T = any>(
   return data as T;
 }
 
+function requireCompletePaperStatus(data: unknown) {
+  const status = requireAvailableObject<any>(data, "Trading account status");
+  const mode = status.executionMode ?? status.account?.execution_mode;
+  const rawBalance = status.balance;
+  const balanceAvailable =
+    (typeof rawBalance === "number" ||
+      (typeof rawBalance === "string" && rawBalance.trim() !== "")) &&
+    Number.isFinite(Number(rawBalance));
+  if (
+    (mode !== "paper" && mode !== "live") ||
+    !balanceAvailable ||
+    !Array.isArray(status.positions) ||
+    !Array.isArray(status.tradeHistory)
+  ) {
+    throw new Error("Trading account status is incomplete. Controls remain disabled.");
+  }
+  return status;
+}
+
+async function readFreshTradingTruth(options: { targetMode?: ExecutionMode } = {}) {
+  return requireFreshTradingTruth({
+    readPaperStatus: async () => requireCompletePaperStatus(
+      await invokeFunction("paper-trading", { action: "status" }),
+    ),
+    listBrokerConnections: async () => requireAvailableCollection<any>(
+      await invokeFunction("broker-connections", { action: "list" }),
+      "Broker connections",
+    ),
+    readBrokerConnectionStatus: async (connectionId) =>
+      requireAvailableObject<any>(
+        await invokeFunction("broker-execute", {
+          action: "connection_status",
+          connectionId,
+        }),
+        "Broker connection status",
+        (status) => typeof status.ready === "boolean",
+      ),
+    readBrokerAccount: async (connectionId) => requireAvailableObject<any>(
+      await invokeFunction("broker-execute", {
+        action: "account_summary",
+        connectionId,
+      }),
+      "Broker account",
+      (account) => [account.balance, account.equity].some((value) =>
+        (typeof value === "number" ||
+          (typeof value === "string" && value.trim() !== "")) &&
+        Number.isFinite(Number(value))
+      ),
+    ),
+    readBrokerOpenTrades: async (connectionId) =>
+      requireAvailableCollection<any>(
+        await invokeFunction("broker-execute", {
+          action: "open_trades",
+          connectionId,
+        }),
+        "Broker positions",
+      ),
+  }, options);
+}
+
+async function afterFreshTradingTruth<T>(
+  mutation: () => Promise<T>,
+  options: { targetMode?: ExecutionMode } = {},
+): Promise<T> {
+  await readFreshTradingTruth(options);
+  return mutation();
+}
+
 // ── Market Data ──
 export type CandleSource = "metaapi" | "oanda" | "twelvedata" | "polygon" | "kv_cache" | "scan_cache" | "none" | "unknown";
 export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
@@ -515,8 +593,12 @@ export const botConfigApi = {
       };
     }>("bot-config", { action: "effective", connectionId }),
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
-  update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
-  reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
+  update: (config: any, connectionId?: string) => afterFreshTradingTruth(
+    () => invokeFunction("bot-config", { action: "update", config, connectionId }),
+  ),
+  reset: (connectionId?: string) => afterFreshTradingTruth(
+    () => invokeFunction("bot-config", { action: "reset", connectionId }),
+  ),
   getICTScannerComparison: () => invokeFunction<{
     summary: {
       sampleSize: number; comparable: number; unavailable: number; coveragePercent: number;
@@ -591,9 +673,15 @@ export const brokerApi = {
   list: () => invokeFunction("broker-connections", { action: "list" })
     .then((data) => requireAvailableCollection<any>(data, "Broker connections")),
   create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string>; commission_per_lot?: number }) =>
-    invokeFunction("broker-connections", { action: "create", ...data }),
-  update: (data: any) => invokeFunction("broker-connections", { action: "update", ...data }),
-  delete: (id: string) => invokeFunction("broker-connections", { action: "delete", id }),
+    afterFreshTradingTruth(
+      () => invokeFunction("broker-connections", { action: "create", ...data }),
+    ),
+  update: (data: any) => afterFreshTradingTruth(
+    () => invokeFunction("broker-connections", { action: "update", ...data }),
+  ),
+  delete: (id: string) => afterFreshTradingTruth(
+    () => invokeFunction("broker-connections", { action: "delete", id }),
+  ),
   test: (id: string) => invokeFunction("broker-connections", { action: "test", id }),
   listSymbols: (id: string) => invokeFunction("broker-connections", { action: "list_symbols", id }),
   autoMapSymbols: (id: string) => invokeFunction("broker-connections", { action: "auto_map_symbols", id }),
@@ -615,44 +703,49 @@ export const smcApi = {
 // ── Paper Trading ──
 export const paperApi = {
   status: () => invokeFunction("paper-trading", { action: "status" })
-    .then((data) => {
-      const status = requireAvailableObject<any>(data, "Trading account status");
-      const mode = status.executionMode ?? status.account?.execution_mode;
-      const rawBalance = status.balance;
-      const balanceAvailable =
-        (typeof rawBalance === "number" ||
-          (typeof rawBalance === "string" && rawBalance.trim() !== "")) &&
-        Number.isFinite(Number(rawBalance));
-      if (
-        (mode !== "paper" && mode !== "live") ||
-        !balanceAvailable ||
-        !Array.isArray(status.positions) ||
-        !Array.isArray(status.tradeHistory)
-      ) {
-        throw new Error("Trading account status is incomplete. Controls remain disabled.");
-      }
-      return status;
-    }),
+    .then(requireCompletePaperStatus),
   placeOrder: (order: { symbol: string; direction: string; size: number; entryPrice: number; stopLoss?: number; takeProfit?: number; signalReason?: string; signalScore?: number }) =>
-    invokeFunction("paper-trading", { action: "place_order", ...order }),
+    afterFreshTradingTruth(
+      () => invokeFunction("paper-trading", { action: "place_order", ...order }),
+    ),
   closePosition: (positionId: string, exitPrice?: number, reason?: string) =>
-    invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
+    afterFreshTradingTruth(
+      () => invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
+    ),
   updatePosition: (positionId: string, updates: { stopLoss?: number | null; takeProfit?: number | null; tradeOverrides?: Record<string, any> | null }) =>
-    invokeFunction("paper-trading", { action: "update_position", positionId, ...updates }),
-  startEngine: () => invokeFunction("paper-trading", { action: "start_engine" }),
+    afterFreshTradingTruth(
+      () => invokeFunction("paper-trading", { action: "update_position", positionId, ...updates }),
+    ),
+  startEngine: () => afterFreshTradingTruth(
+    () => invokeFunction("paper-trading", { action: "start_engine" }),
+  ),
+  // Emergency halt controls remain callable when current broker truth cannot be read.
   pauseEngine: () => invokeFunction("paper-trading", { action: "pause_engine" }),
   stopEngine: () => invokeFunction("paper-trading", { action: "stop_engine" }),
-  killSwitch: (active: boolean) => invokeFunction("paper-trading", { action: "kill_switch", active }),
-  resetAccount: () => invokeFunction("paper-trading", { action: "reset_account" }),
-  resetBalanceOnly: () => invokeFunction("paper-trading", { action: "reset_balance_only" }),
-  setBalance: (balance: number) => invokeFunction("paper-trading", { action: "set_balance", balance }),
+  killSwitch: (active: boolean) => active
+    ? invokeFunction("paper-trading", { action: "kill_switch", active })
+    : afterFreshTradingTruth(
+      () => invokeFunction("paper-trading", { action: "kill_switch", active }),
+    ),
+  resetAccount: () => afterFreshTradingTruth(
+    () => invokeFunction("paper-trading", { action: "reset_account" }),
+  ),
+  resetBalanceOnly: () => afterFreshTradingTruth(
+    () => invokeFunction("paper-trading", { action: "reset_balance_only" }),
+  ),
+  setBalance: (balance: number) => afterFreshTradingTruth(
+    () => invokeFunction("paper-trading", { action: "set_balance", balance }),
+  ),
   setExecutionMode: (mode: "paper" | "live") =>
-    invokeFunction<{
-      success?: boolean;
-      executionMode?: "paper" | "live";
-      error?: string;
-      fallback?: boolean;
-    }>("paper-trading", { action: "set_execution_mode", mode }),
+    afterFreshTradingTruth(
+      () => invokeFunction<{
+        success?: boolean;
+        executionMode?: "paper" | "live";
+        error?: string;
+        fallback?: boolean;
+      }>("paper-trading", { action: "set_execution_mode", mode }),
+      { targetMode: mode },
+    ),
 };
 
 // ── Backtest Engine ──
@@ -839,7 +932,9 @@ export const manualImpulseApi = {
 };
 
 export const scannerApi = {
-  manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
+  manualScan: () => afterFreshTradingTruth(
+    () => invokeFunction("bot-scanner", { action: "manual_scan" }),
+  ),
   refreshGamePlan: () => invokeFunction<{
     success: boolean;
     generatedAt: string;
@@ -1202,17 +1297,23 @@ export const brokerExecApi = {
   validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
     invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
-    invokeFunction("broker-execute", { action: "place_order", connectionId, ...order })
-      .then(requireConfirmedBrokerMutation),
+    afterFreshTradingTruth(
+      () => invokeFunction("broker-execute", { action: "place_order", connectionId, ...order })
+        .then(requireConfirmedBrokerMutation),
+    ),
   closeTrade: (connectionId: string, tradeId: string) =>
-    invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
-      .then(requireConfirmedBrokerMutation),
+    afterFreshTradingTruth(
+      () => invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
+        .then(requireConfirmedBrokerMutation),
+    ),
   tradeHistory: (connectionId: string, limit = 50) =>
     invokeFunction("broker-execute", { action: "trade_history", connectionId, limit })
       .then((data) => requireAvailableCollection<any>(data, "Broker trade history")),
   modifyTrade: (connectionId: string, tradeId: string, updates: { stopLoss?: number; takeProfit?: number; symbol?: string }) =>
-    invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
-      .then(requireConfirmedBrokerMutation),
+    afterFreshTradingTruth(
+      () => invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
+        .then(requireConfirmedBrokerMutation),
+    ),
 };
 
 // ── Prop Firm ──

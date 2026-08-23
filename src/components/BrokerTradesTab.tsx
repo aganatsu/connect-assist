@@ -452,7 +452,7 @@ function OpenPositionsContent({
 }
 
 // ── Section: Sync Status ──
-function SyncStatusContent({
+export function SyncStatusContent({
   brokerPositions, paperPositions, isLoading, error,
 }: {
   brokerPositions: any[]; paperPositions: any[]; isLoading: boolean; error?: string;
@@ -770,7 +770,7 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   }), [handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop]);
 
   // Load broker connections
-  const { data: connections, isLoading: connsLoading, isError: connsUnavailable, error: connsError } = useQuery({
+  const { data: connections, isLoading: connsLoading, isFetching: connsFetching, isError: connsUnavailable, error: connsError } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     staleTime: 60000,
@@ -787,6 +787,7 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   const {
     data: connectionState,
     isLoading: connectionStateLoading,
+    isFetching: connectionStateFetching,
     isSuccess: connectionStateAvailable,
     isError: connectionStateUnavailable,
     error: connectionStateError,
@@ -797,14 +798,14 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
     refetchInterval: 30000,
   });
 
-  const { data: accountData, isLoading: accountLoading, isSuccess: accountAvailable, isError: accountUnavailable, error: accountError } = useQuery({
+  const { data: accountData, isLoading: accountLoading, isFetching: accountFetching, isSuccess: accountAvailable, isError: accountUnavailable, error: accountError } = useQuery({
     queryKey: ["broker-account", connId],
     queryFn: () => brokerExecApi.accountSummary(connId),
     enabled: !!connId,
     refetchInterval: 15000,
   });
 
-  const { data: brokerPositions, isLoading: positionsLoading, isSuccess: positionsAvailable, isError: positionsUnavailable, error: positionsError } = useQuery({
+  const { data: brokerPositions, isLoading: positionsLoading, isFetching: positionsFetching, isSuccess: positionsAvailable, isError: positionsUnavailable, error: positionsError } = useQuery({
     queryKey: ["broker-open-trades", connId],
     queryFn: () => brokerExecApi.openTrades(connId),
     enabled: !!connId,
@@ -819,7 +820,7 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   });
 
   // Load paper positions for sync comparison
-  const { data: paperStatus, isError: paperStatusUnavailable, error: paperStatusError } = useQuery({
+  const { data: paperStatus, isFetching: paperStatusFetching, isError: paperStatusUnavailable, error: paperStatusError } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 5000,
@@ -841,10 +842,16 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
     () => Array.isArray(tradeHistory) ? tradeHistory : [],
     [tradeHistory],
   );
-  const brokerMutationsEnabled = mutationsAllowed && canUseTradingControls("live", [
-    connectionStateAvailable && connectionState?.ready === true &&
-    accountAvailable && positionsAvailable,
-  ]);
+  const brokerTruthFetching = connsFetching || connectionStateFetching ||
+    accountFetching || positionsFetching || paperStatusFetching;
+  const brokerMutationsEnabled = !brokerTruthFetching && mutationsAllowed &&
+    canUseTradingControls("live", [
+      connectionStateAvailable && connectionState?.ready === true &&
+      accountAvailable && positionsAvailable,
+    ]);
+  const syncTruthPending = brokerTruthFetching;
+  const syncTruthUnavailable = connectionStateUnavailable || accountUnavailable ||
+    positionsUnavailable || paperStatusUnavailable;
   const mutationUnavailableMessage = !mutationsAllowed
     ? "Account mode or another active broker state is unavailable. Live position controls are disabled."
     : connectionStateUnavailable
@@ -933,25 +940,27 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
     },
     sync: {
       title: "Sync Status",
-      icon: positionsUnavailable || paperStatusUnavailable || syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
+      icon: syncTruthPending || syncTruthUnavailable || syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
         ? <AlertTriangle className="h-3 w-3 text-warning" />
         : <CheckCircle2 className="h-3 w-3 text-success" />,
       badge: (
         <div className="flex items-center gap-1">
-          {(positionsUnavailable || paperStatusUnavailable) && (
+          {syncTruthPending ? (
+            <span className="text-[8px] font-bold text-muted-foreground bg-muted/30 border border-border px-1 py-0.5 rounded">checking</span>
+          ) : syncTruthUnavailable ? (
             <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">unknown</span>
-          )}
-          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.syncedCount > 0 && (
+          ) : null}
+          {!syncTruthPending && !syncTruthUnavailable && syncBadges.syncedCount > 0 && (
             <span className="text-[8px] font-bold text-success bg-success/10 border border-success/20 px-1 py-0.5 rounded">
               {syncBadges.syncedCount} synced
             </span>
           )}
-          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.unsyncedCount > 0 && (
+          {!syncTruthPending && !syncTruthUnavailable && syncBadges.unsyncedCount > 0 && (
             <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">
               {syncBadges.unsyncedCount} unsynced
             </span>
           )}
-          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.mismatchCount > 0 && (
+          {!syncTruthPending && !syncTruthUnavailable && syncBadges.mismatchCount > 0 && (
             <span className="text-[8px] font-bold text-destructive bg-destructive/10 border border-destructive/20 px-1 py-0.5 rounded">
               {syncBadges.mismatchCount} SL mismatch
             </span>
@@ -962,12 +971,16 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
         <SyncStatusContent
           brokerPositions={brokerPos}
           paperPositions={paperPositions}
-          isLoading={positionsLoading}
-          error={positionsUnavailable
-            ? readErrorMessage(positionsError, "Broker position state is unavailable")
-            : paperStatusUnavailable
-              ? readErrorMessage(paperStatusError, "Paper position state is unavailable")
-              : undefined}
+          isLoading={syncTruthPending}
+          error={connectionStateUnavailable
+            ? readErrorMessage(connectionStateError, "Broker connection status is unavailable")
+            : accountUnavailable
+              ? readErrorMessage(accountError, "Broker account state is unavailable")
+              : positionsUnavailable
+                ? readErrorMessage(positionsError, "Broker position state is unavailable")
+                : paperStatusUnavailable
+                  ? readErrorMessage(paperStatusError, "Paper position state is unavailable")
+                  : undefined}
         />
       ),
     },

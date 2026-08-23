@@ -256,12 +256,6 @@ export default function BotView() {
       throw new Error("Current account and broker state must be available before trading controls can be used.");
     }
   };
-  const requireModeChangeTruth = () => {
-    if (!modeChangeEnabled) {
-      throw new Error("Current account and broker state must be available before execution mode can be changed.");
-    }
-  };
-
 
   const closePositionFromDashboard = async (positionId: string) => {
     try {
@@ -274,9 +268,9 @@ export default function BotView() {
   };
 
   const startMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.startEngine(); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); }, onError: accountControlError("Failed to start engine") });
-  const pauseMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.pauseEngine(); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); }, onError: accountControlError("Failed to pause engine") });
-  const stopMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.stopEngine(); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); }, onError: accountControlError("Failed to stop engine") });
-  const killMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.killSwitch(true); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); }, onError: accountControlError("Failed to activate kill switch") });
+  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); }, onError: accountControlError("Failed to pause engine") });
+  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); }, onError: accountControlError("Failed to stop engine") });
+  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); }, onError: accountControlError("Failed to activate kill switch") });
   const deactivateKill = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.killSwitch(false); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); }, onError: accountControlError("Failed to deactivate kill switch") });
   const resetMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetAccount(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to ${data?.startingBalance || "10,000"}`); }, onError: accountControlError("Failed to reset account") });
   const resetBalMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetBalanceOnly(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to ${data?.startingBalance || "10,000"} — history preserved`); }, onError: accountControlError("Failed to reset balance") });
@@ -292,40 +286,6 @@ export default function BotView() {
   });
   const modeMut = useMutation({
     mutationFn: async (mode: ExecutionMode) => {
-      requireModeChangeTruth();
-      const currentConnections = await brokerApi.list();
-      const currentActiveConnections = currentConnections.filter((connection: any) =>
-        connection.is_active
-      );
-      if (mode === "live" && currentActiveConnections.length === 0) {
-        throw new Error("Every active broker must be available before live execution can be enabled.");
-      }
-      const brokerSnapshots = await Promise.all(currentActiveConnections.map(async (connection: any) => {
-        const [connectionState, accountSnapshot, positionSnapshot] = await Promise.all([
-          brokerExecApi.connectionStatus(connection.id),
-          brokerExecApi.accountSummary(connection.id),
-          brokerExecApi.openTrades(connection.id),
-        ]);
-        if (mode === "live" && connectionState.ready !== true) {
-          throw new Error((connection.display_name || "Broker") + " is not ready for live execution.");
-        }
-        return { connection, connectionState, accountSnapshot, positionSnapshot };
-      }));
-      queryClient.setQueryData(["broker-connections"], currentConnections);
-      for (const snapshot of brokerSnapshots) {
-          queryClient.setQueryData(
-            ["broker-connection-status", snapshot.connection.id],
-            snapshot.connectionState,
-          );
-          queryClient.setQueryData(
-            ["broker-account", snapshot.connection.id],
-            snapshot.accountSnapshot,
-          );
-          queryClient.setQueryData(
-            ["broker-open-trades", snapshot.connection.id],
-            snapshot.positionSnapshot,
-          );
-      }
       const result = await paperApi.setExecutionMode(mode);
       const executionMode = await verifyExecutionModeChange(
         result,
@@ -595,8 +555,8 @@ export default function BotView() {
         {!accountStatusKnown && (
           <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
             {statusPending
-              ? "Loading account status. Trading controls are disabled."
-              : "Account status unavailable. Trading controls are disabled. " + (statusReadError instanceof Error ? statusReadError.message : "Refresh to retry.")}
+              ? "Loading account status. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available."
+              : "Account status unavailable. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available. " + (statusReadError instanceof Error ? statusReadError.message : "Refresh to retry.")}
           </div>
         )}
         {isLiveMode && !tradingControlsEnabled && (
@@ -638,10 +598,10 @@ export default function BotView() {
               <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!tradingControlsEnabled || !d.isRunning || d.isPaused} title="Pause">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))} title="Pause">
                 <Pause className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!tradingControlsEnabled || !d.isRunning} title="Stop">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)} title="Stop">
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
@@ -678,7 +638,7 @@ export default function BotView() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
-                    disabled={!tradingControlsEnabled || killMut.isPending}
+                    disabled={killMut.isPending}
                     onClick={() => {
                       if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
                     }}
@@ -695,10 +655,10 @@ export default function BotView() {
               <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)}>
                 <Play className="h-3 w-3 mr-1" /> Start
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!tradingControlsEnabled || !d.isRunning || d.isPaused}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))}>
                 <Pause className="h-3 w-3 mr-1" /> Pause
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!tradingControlsEnabled || !d.isRunning}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)}>
                 <Square className="h-3 w-3 mr-1" /> Stop
               </Button>
             </div>
@@ -798,7 +758,7 @@ export default function BotView() {
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Scan Now"}
               </Button>
               <div className="w-px h-5 bg-border" />
-              <Button size="sm" variant="destructive" className="h-7 text-[11px]" disabled={!tradingControlsEnabled || killMut.isPending} onClick={() => {
+              <Button size="sm" variant="destructive" className="h-7 text-[11px]" disabled={killMut.isPending} onClick={() => {
                 if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
               }}>
                 <AlertTriangle className="h-3 w-3 mr-1" /> Kill
