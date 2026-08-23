@@ -370,7 +370,7 @@ Deno.serve(async (req) => {
         const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
         const body = await res.text();
         if (!res.ok) {
-          return respond({ ok: false, error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 200);
+          return respond({ ok: false, state: "unknown", error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 503);
         }
         const info: any = JSON.parse(body);
         return respond({
@@ -389,7 +389,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) return respond({ ok: false, error: `OANDA ${res.status}`, fallback: true }, 200);
+        if (!res.ok) return respond({ ok: false, state: "unknown", error: `OANDA ${res.status}`, fallback: true }, 503);
         const acct = (await res.json()).account;
         return respond({ ok: true, state: "DEPLOYED", connectionStatus: "CONNECTED", ready: true, name: acct.alias, login: acct.id });
       }
@@ -537,7 +537,7 @@ Deno.serve(async (req) => {
     return respond({ error: "Unknown action" });
   } catch (error: any) {
     console.error("broker-execute error:", error?.message || error);
-    return new Response(JSON.stringify({ error: error.message, fallback: true }), {
+    return new Response(JSON.stringify({ ok: false, state: "unknown", error: error.message, fallback: true }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  canUseTradingControls,
   type ExecutionMode,
   requirePersistedExecutionMode,
   verifyExecutionModeChange,
 } from "./executionMode";
+
+describe("canUseTradingControls", () => {
+  it("fails closed when the account mode or live broker state is unknown", () => {
+    expect(canUseTradingControls("unknown", true)).toBe(false);
+    expect(canUseTradingControls("live", false)).toBe(false);
+  });
+
+  it("allows a known paper account or fully known live account", () => {
+    expect(canUseTradingControls("paper", false)).toBe(true);
+    expect(canUseTradingControls("live", true)).toBe(true);
+  });
+});
 
 describe("requirePersistedExecutionMode", () => {
   it.each<ExecutionMode>(["paper", "live"])(

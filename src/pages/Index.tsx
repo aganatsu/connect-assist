@@ -21,7 +21,7 @@ export default function Dashboard() {
   const { resolvedTheme } = useTheme();
   const ct = getChartTheme(resolvedTheme);
 
-  const { data: botStatus } = useQuery({
+  const { data: botStatus, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 10000,
@@ -66,7 +66,8 @@ export default function Dashboard() {
     refetchInterval: 30000,
   });
 
-  const balance = botStatus?.balance ?? 10000;
+  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!botStatus;
+  const balance = accountStatusKnown ? Number(botStatus.balance) : 0;
   // Derive actual starting balance from equity curve (balance minus all closed PnL)
   const startingBalance = useMemo(() => {
     const curve = botStatus?.equityCurve;
@@ -202,10 +203,10 @@ export default function Dashboard() {
             </p>
           </div>
           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
-            botStatus?.isRunning ? "text-success" : "text-muted-foreground"
+            !accountStatusKnown ? "text-warning" : botStatus?.isRunning ? "text-success" : "text-muted-foreground"
           }`}>
-            <span className={`${botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
-            {botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
+            <span className={`${accountStatusKnown && botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
+            {!accountStatusKnown ? "Bot Status Unknown" : botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
           </span>
         </div>
 
@@ -218,10 +219,10 @@ export default function Dashboard() {
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { label: "Balance", value: formatMoney(balance), sub: `${formatMoney(profit, true)} (${profitPct}%)`, color: profit >= 0 ? "text-success" : "text-destructive" },
-            { label: "Today P&L", value: formatMoney(dailyPnl, true), sub: `${totalTrades} trades`, color: dailyPnl >= 0 ? "text-success" : "text-destructive" },
-            { label: "Open Positions", value: String(positions.length), sub: `${formatMoney(positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0), true)} unrealized`, color: positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0) >= 0 ? "text-success" : "text-destructive" },
-            { label: "Win Rate", value: `${winRate.toFixed(1)}%`, sub: `${wins}W / ${losses}L`, color: winRate >= 50 ? "text-success" : "text-destructive" },
+            { label: "Balance", value: accountStatusKnown ? formatMoney(balance) : "—", sub: accountStatusKnown ? `${formatMoney(profit, true)} (${profitPct}%)` : "Account unavailable", color: accountStatusKnown ? (profit >= 0 ? "text-success" : "text-destructive") : "text-warning" },
+            { label: "Today P&L", value: accountStatusKnown ? formatMoney(dailyPnl, true) : "—", sub: accountStatusKnown ? `${totalTrades} trades` : "Account unavailable", color: accountStatusKnown ? (dailyPnl >= 0 ? "text-success" : "text-destructive") : "text-warning" },
+            { label: "Open Positions", value: accountStatusKnown ? String(positions.length) : "—", sub: accountStatusKnown ? `${formatMoney(positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0), true)} unrealized` : "Position state unavailable", color: accountStatusKnown ? (positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0) >= 0 ? "text-success" : "text-destructive") : "text-warning" },
+            { label: "Win Rate", value: accountStatusKnown ? `${winRate.toFixed(1)}%` : "—", sub: accountStatusKnown ? `${wins}W / ${losses}L` : "History unavailable", color: accountStatusKnown ? (winRate >= 50 ? "text-success" : "text-destructive") : "text-warning" },
           ].map((kpi) => (
             <Card key={kpi.label}>
               <CardContent className="pt-4 pb-3">
@@ -311,7 +312,12 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            {(!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
+            {!accountStatusKnown ? (
+              <div className="h-[240px] flex flex-col items-center justify-center text-warning border border-warning/30">
+                <AlertTriangle className="h-8 w-8 mb-2" />
+                <p className="text-sm font-medium">Account equity is unavailable</p>
+              </div>
+            ) : (!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
               <div className="h-[240px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
                 <TrendingUp className="h-10 w-10 mb-3 opacity-20" />
                 <p className="text-sm font-medium">No trade history yet</p>
@@ -377,10 +383,15 @@ export default function Dashboard() {
           {/* Active Positions */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Active Positions ({positions.length})</CardTitle>
+              <CardTitle className="text-sm">Active Positions ({accountStatusKnown ? positions.length : "unknown"})</CardTitle>
             </CardHeader>
             <CardContent>
-              {positions.length === 0 ? (
+              {!accountStatusKnown ? (
+                <div className="flex flex-col items-center justify-center py-8 text-warning">
+                  <AlertTriangle className="h-6 w-6 mb-2" />
+                  <p className="text-xs font-medium">Open-position state unavailable</p>
+                </div>
+              ) : positions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                   <Activity className="h-8 w-8 mb-2 opacity-20" />
                   <p className="text-xs font-medium">No open positions</p>
@@ -464,10 +475,10 @@ export default function Dashboard() {
           <CardHeader className="pb-2"><CardTitle className="text-sm">Bot Activity</CardTitle></CardHeader>
           <CardContent>
             <div className="flex gap-4 text-xs text-muted-foreground mb-3">
-              <span>Scans: <strong className="text-foreground">{botStatus?.scanCount ?? 0}</strong></span>
-              <span>Signals: <strong className="text-foreground">{botStatus?.signalCount ?? 0}</strong></span>
-              <span>Trades: <strong className="text-foreground">{botStatus?.totalTrades ?? 0}</strong></span>
-              <span>Rejected: <strong className="text-warning">{botStatus?.rejectedCount ?? 0}</strong></span>
+              <span>Scans: <strong className="text-foreground">{accountStatusKnown ? botStatus.scanCount : "—"}</strong></span>
+              <span>Signals: <strong className="text-foreground">{accountStatusKnown ? botStatus.signalCount : "—"}</strong></span>
+              <span>Trades: <strong className="text-foreground">{accountStatusKnown ? botStatus.totalTrades : "—"}</strong></span>
+              <span>Rejected: <strong className="text-warning">{accountStatusKnown ? botStatus.rejectedCount : "—"}</strong></span>
             </div>
             {activityLog.length > 0 ? (
                 <div className="space-y-1 max-h-48 overflow-y-auto">

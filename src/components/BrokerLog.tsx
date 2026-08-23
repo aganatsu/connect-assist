@@ -137,7 +137,7 @@ export function BrokerLog() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["broker-log"],
     queryFn: async () => {
       const [scanLogsRes, positionsRes, brokersRes] = await Promise.all([
@@ -159,6 +159,8 @@ export function BrokerLog() {
           .select("id, display_name"),
       ]);
       if (scanLogsRes.error) throw scanLogsRes.error;
+      if (positionsRes.error) throw positionsRes.error;
+      if (brokersRes.error) throw brokersRes.error;
 
       const brokerNameById = new Map<string, string>();
       for (const b of brokersRes.data || []) brokerNameById.set(b.id, b.display_name);
@@ -330,7 +332,7 @@ export function BrokerLog() {
     staleTime: 15000,
   });
 
-  const rows = data || [];
+  const rows = !isError && Array.isArray(data) ? data : [];
 
   const counts = useMemo(() => {
     const c = { success: 0, blocked: 0, skipped: 0, failed: 0 };
@@ -391,6 +393,17 @@ export function BrokerLog() {
     if (status === "failed") return "text-destructive";
     return "text-muted-foreground";
   };
+
+  if (isError) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center border border-warning/30 p-6 text-center text-warning">
+        <AlertTriangle className="mb-2 h-5 w-5" />
+        <p className="text-xs font-medium">Broker execution history is unavailable</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">{error instanceof Error ? error.message : "Refresh and try again."}</p>
+        <button className="mt-3 border border-border px-3 py-1 text-[10px] text-foreground" onClick={() => refetch()}>Retry</button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">

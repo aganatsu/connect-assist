@@ -127,12 +127,13 @@ export default function JournalView() {
     queryFn: () => tradesApi.reviews(500),
     refetchInterval: 60_000,
   });
-  const { data: accountStatus } = useQuery({
+  const { data: accountStatus, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
     queryKey: ["paper-status-journal"],
     queryFn: () => paperApi.status(),
     staleTime: 60_000,
   });
   const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : [];
+  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!accountStatus;
 
   const handleExportCSV = () => {
     const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Session", "Regime", "Score", "Notes"];
@@ -211,9 +212,10 @@ export default function JournalView() {
   }, [filteredTrades]);
 
   const equityCurveData = useMemo(() => {
+    if (!accountStatusKnown) return [];
     const closedTrades = filteredTrades.filter((t: any) => t.status === "closed");
     const totalClosedPnl = closedTrades.reduce((s: number, t: any) => s + parseFloat(t.pnl_amount || "0"), 0);
-    const currentBalance = accountStatus?.balance ?? 10000;
+    const currentBalance = Number(accountStatus.balance);
     let cum = currentBalance - totalClosedPnl;
     const sorted = [...closedTrades].sort((a: any, b: any) => {
       const da = a.exit_time || a.entry_time || "";
@@ -225,7 +227,7 @@ export default function JournalView() {
       const dateStr = (t.exit_time || t.entry_time)?.split("T")[0] ?? "";
       return { date: dateStr, equity: cum };
     });
-  }, [filteredTrades, accountStatus]);
+  }, [filteredTrades, accountStatus, accountStatusKnown]);
 
   const dailyPnlData = useMemo(() => {
     const map: Record<string, number> = {};
@@ -452,6 +454,11 @@ export default function JournalView() {
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-sm">Equity Curve</CardTitle></CardHeader>
                   <CardContent>
+                    {!accountStatusKnown ? (
+                      <div className="flex h-[200px] items-center justify-center border border-warning/30 text-xs text-warning">
+                        Account balance is unavailable; equity cannot be reconstructed.
+                      </div>
+                    ) : (
                     <div className="h-[200px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={equityCurveData}>
@@ -463,6 +470,7 @@ export default function JournalView() {
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
+                    )}
                   </CardContent>
                 </Card>
                 <Card>

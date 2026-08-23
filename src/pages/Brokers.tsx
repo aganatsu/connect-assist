@@ -59,10 +59,17 @@ export default function BrokersPage() {
   // Per-connection probe results from latest auto-map (in-memory only)
   const [probeByConn, setProbeByConn] = useState<Record<string, ProbeDetails>>({});
 
-  const { data: connections = [] } = useQuery<Connection[]>({
+  const {
+    data: connectionData,
+    isPending: connectionsPending,
+    isError: connectionsUnavailable,
+    error: connectionsError,
+    refetch: refetchConnections,
+  } = useQuery<Connection[]>({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
   });
+  const connections = !connectionsUnavailable && Array.isArray(connectionData) ? connectionData : [];
 
   const selected = useMemo(
     () => connections.find((c) => c.id === selectedId) ?? connections[0] ?? null,
@@ -185,7 +192,7 @@ export default function BrokersPage() {
               Manage broker connections and symbol mappings
             </p>
           </div>
-          <Button size="sm" onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
+          <Button size="sm" disabled={connectionsPending || connectionsUnavailable} onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
             <Plus className="h-4 w-4 mr-1.5" /> Add Connection
           </Button>
         </div>
@@ -196,12 +203,23 @@ export default function BrokersPage() {
           <Card className="w-full md:w-64 shrink-0 flex flex-col overflow-hidden max-h-48 md:max-h-none">
             <div className="px-3 py-2 border-b border-border">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Connections ({connections.length})
+                Connections ({connectionsUnavailable ? "unknown" : connections.length})
               </p>
             </div>
             <ScrollArea className="flex-1">
               <div className="p-1.5 space-y-0.5">
-                {connections.length === 0 && !showAddForm && (
+                {connectionsPending && (
+                  <div className="flex justify-center p-6">
+                    <Activity className="h-4 w-4 animate-pulse text-muted-foreground" />
+                  </div>
+                )}
+                {connectionsUnavailable && (
+                  <div className="p-4 text-center text-xs text-warning">
+                    <p className="font-medium">Broker connection state is unavailable.</p>
+                    <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" onClick={() => refetchConnections()}>Retry</Button>
+                  </div>
+                )}
+                {!connectionsPending && !connectionsUnavailable && connections.length === 0 && !showAddForm && (
                   <div className="p-6 text-center text-xs text-muted-foreground">
                     No brokers yet. Click <span className="text-foreground font-medium">Add Connection</span> to get started.
                   </div>
@@ -237,7 +255,19 @@ export default function BrokersPage() {
 
           {/* RIGHT: detail panel */}
           <div className="flex-1 min-w-0 overflow-auto min-h-0">
-            {showAddForm || connections.length === 0 ? (
+            {connectionsPending ? (
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                <Activity className="h-5 w-5 animate-pulse" />
+              </div>
+            ) : connectionsUnavailable ? (
+              <Card className="border-warning/40 bg-warning/5">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-warning">Broker connection state is unavailable</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{connectionsError instanceof Error ? connectionsError.message : "Refresh and try again."}</p>
+                  <Button size="sm" variant="outline" className="mt-4" onClick={() => refetchConnections()}>Retry</Button>
+                </CardContent>
+              </Card>
+            ) : showAddForm || connections.length === 0 ? (
               <AddConnectionForm
                 onCreated={(newId) => {
                   setShowAddForm(false);

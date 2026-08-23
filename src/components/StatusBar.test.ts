@@ -10,7 +10,13 @@ describe("StatusBar execution mode", () => {
     expect(getExecutionMode({ account: { execution_mode: "live" } })).toBe("live");
   });
 
-  it("defaults to paper mode", () => {
-    expect(getExecutionMode(undefined)).toBe("paper");
+  it("reports an unknown mode while status is unavailable", () => {
+    expect(getExecutionMode(undefined)).toBe("unknown");
+  });
+
+  it("does not trust a cached or fallback execution mode", () => {
+    expect(getExecutionMode({ executionMode: "live", fallback: true })).toBe("unknown");
+    expect(getExecutionMode({ executionMode: "paper", ok: false })).toBe("unknown");
+    expect(getExecutionMode({ executionMode: "live", state: "unknown" })).toBe("unknown");
   });
 });

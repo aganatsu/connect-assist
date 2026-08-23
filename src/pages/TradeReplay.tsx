@@ -26,6 +26,7 @@ import {
   Minimize2,
   Target,
   Hash,
+  AlertTriangle,
 } from "lucide-react";
 
 /* ─── Timeframe options ─── */
@@ -58,11 +59,13 @@ export default function TradeReplay() {
   const [detailsExpanded, setDetailsExpanded] = useState(true);
 
   /* ─── Fetch positions + history ─── */
-  const { data: status } = useQuery({
+  const { data: status, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
     queryKey: ["paper-status-replay"],
     queryFn: () => paperApi.status(),
     refetchInterval: 15000,
   });
+
+  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!status;
 
   /* ─── Fetch staged setups ─── */
   const { data: stagedSetups } = useQuery({
@@ -83,7 +86,7 @@ export default function TradeReplay() {
     const items: TradeItem[] = [];
 
     // Open positions
-    const positions = Array.isArray(status?.positions) ? status.positions : [];
+    const positions = accountStatusKnown && Array.isArray(status?.positions) ? status.positions : [];
     if (positions.length > 0) {
       for (const p of positions) {
         items.push({
@@ -103,7 +106,7 @@ export default function TradeReplay() {
     }
 
     // Closed trades
-    const history = Array.isArray(status?.tradeHistory) ? status.tradeHistory : [];
+    const history = accountStatusKnown && Array.isArray(status?.tradeHistory) ? status.tradeHistory : [];
     if (history.length > 0) {
       for (const t of history) {
         items.push({
@@ -146,7 +149,7 @@ export default function TradeReplay() {
     }
 
     return items;
-  }, [status, stagedSetups]);
+  }, [status, stagedSetups, accountStatusKnown]);
 
   /* ─── Selected trade ─── */
   const selectedTrade = useMemo(
@@ -473,6 +476,15 @@ export default function TradeReplay() {
           </button>
         </div>
       </div>
+
+      {!accountStatusKnown && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+          <AlertTriangle className="h-4 w-4" />
+          {accountStatusPending
+            ? "Loading account positions and trade history."
+            : "Account positions and trade history are unavailable. Only independently loaded staged setups can appear."}
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex min-h-0">

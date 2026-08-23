@@ -386,7 +386,16 @@ Deno.serve(async (req) => {
 
     // ── Get account state ──
     if (action === "status") {
-      const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+      const { data: account, error: accountReadError } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+      if (accountReadError) {
+        return respond({
+          ok: false,
+          state: "unknown",
+          executionMode: "unknown",
+          error: "Trading account status is unavailable: " + accountReadError.message,
+          code: "account_status_read_failed",
+        }, 503);
+      }
 
       // H17: Daily PnL base reset — if the day has changed, reset daily_pnl_base to current balance
       if (account) {
@@ -403,7 +412,16 @@ Deno.serve(async (req) => {
         }
       }
 
-      let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
+      let { data: positions, error: positionsReadError } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
+      if (positionsReadError) {
+        return respond({
+          ok: false,
+          state: "unknown",
+          executionMode: "unknown",
+          error: "Open-position status is unavailable: " + positionsReadError.message,
+          code: "position_status_read_failed",
+        }, 503);
+      }
       // ── Always refresh live prices on status poll ──
       // Without this, positions show stale entry-time prices ($0 PnL) between scanner cycles.
       // Uses the lightweight TwelveData /price endpoint (single quote per symbol).
@@ -631,10 +649,20 @@ Deno.serve(async (req) => {
           if (updatedAccount) Object.assign(account, updatedAccount);
         }
       }
-      const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
-      const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
+      const { data: pending, error: pendingReadError } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
+      const { data: history, error: historyReadError } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
       // Fetch post-mortems for closed trades (keyed by position_id)
-      const { data: postMortems } = await supabase.from("trade_post_mortems").select("position_id, what_worked, what_failed, lesson_learned, detail_json").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
+      const { data: postMortems, error: postMortemReadError } = await supabase.from("trade_post_mortems").select("position_id, what_worked, what_failed, lesson_learned, detail_json").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
+      const statusReadError = pendingReadError || historyReadError || postMortemReadError;
+      if (statusReadError) {
+        return respond({
+          ok: false,
+          state: "unknown",
+          executionMode: "unknown",
+          error: "Trading account history is unavailable: " + statusReadError.message,
+          code: "account_history_read_failed",
+        }, 503);
+      }
       const pmByPosId: Record<string, any> = {};
       for (const pm of (postMortems || [])) { pmByPosId[pm.position_id] = pm; }
 
@@ -721,6 +749,7 @@ Deno.serve(async (req) => {
       }
 
       return respond({
+        ok: true, state: "available",
         balance, equity: balance + unrealizedPnl, unrealizedPnl,
         positions: posArr, pendingOrders: pending || [],
         tradeHistory: histArr, isRunning: account?.is_running || false,

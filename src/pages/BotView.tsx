@@ -45,13 +45,22 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
-import { verifyExecutionModeChange, type ExecutionMode } from "@/lib/executionMode";
+import { canUseTradingControls, readExecutionMode, verifyExecutionModeChange, type ExecutionMode } from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { MobilePositionCard } from "@/components/MobilePositionCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+function ReadUnavailable({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center border border-warning/30 py-10 text-warning">
+      <AlertTriangle className="mb-2 h-5 w-5" />
+      <p className="text-xs font-medium">{label} is unavailable</p>
+    </div>
+  );
+}
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -112,7 +121,12 @@ export default function BotView() {
   const [orderReason, setOrderReason] = useState("");
   const [orderScore, setOrderScore] = useState("5");
 
-  const { data: status } = useQuery({
+  const {
+    data: status,
+    isPending: statusPending,
+    isError: statusReadFailed,
+    error: statusReadError,
+  } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     // Shared key with StatusBar and MobileTopBar; React Query refetches at the
@@ -133,30 +147,39 @@ export default function BotView() {
     queryFn: () => botConfigApi.get(),
   });
 
-  const { data: brokerConns } = useQuery({
+  const { data: brokerConns, isError: brokerConnectionsReadFailed } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     refetchInterval: 30000,
   });
-  const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
+  const brokerConnectionsKnown = !brokerConnectionsReadFailed && Array.isArray(brokerConns);
+  const activeConnections = brokerConnectionsKnown ? brokerConns.filter((c: any) => c.is_active) : [];
   const [selectedConnIdx, setSelectedConnIdx] = useState(0);
   const selectedConnection = activeConnections[selectedConnIdx] || activeConnections[0];
 
-  // Live broker account data (only when in live mode with an active connection)
-  const isLiveMode = status?.executionMode === "live";
-  const { data: brokerAccount } = useQuery({
+  // Live broker account data (only when the account mode is known to be live).
+  const executionMode = !statusPending && !statusReadFailed
+    ? readExecutionMode(status)
+    : "unknown";
+  const accountStatusKnown = executionMode !== "unknown";
+  const isLiveMode = executionMode === "live";
+  const { data: brokerAccount, isError: brokerAccountReadFailed, error: brokerAccountReadError } = useQuery({
     queryKey: ["broker-account", selectedConnection?.id],
     queryFn: () => brokerExecApi.accountSummary(selectedConnection.id),
     enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
 
-  const { data: brokerOpenTrades } = useQuery({
+  const { data: brokerOpenTrades, isError: brokerPositionsReadFailed, error: brokerPositionsReadError } = useQuery({
     queryKey: ["broker-open-trades", selectedConnection?.id],
     queryFn: () => brokerExecApi.openTrades(selectedConnection.id),
     enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
+  const liveBrokerStateKnown = brokerConnectionsKnown && !!selectedConnection &&
+    !brokerAccountReadFailed && !!brokerAccount &&
+    !brokerPositionsReadFailed && Array.isArray(brokerOpenTrades);
+  const liveMutationStateKnown = canUseTradingControls(executionMode, liveBrokerStateKnown);
 
   const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
   const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
@@ -325,10 +348,10 @@ export default function BotView() {
     onError: (err: any) => toast.error(err.message),
   });
 
-  const d = status || {
-    isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
+  const d = accountStatusKnown ? status : {
+    isRunning: false, isPaused: false, balance: 0, equity: 0, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
-    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
+    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "unknown",
     killSwitchActive: false, drawdown: 0,
   };
 
@@ -440,17 +463,33 @@ export default function BotView() {
   return (
     <AppShell>
       <div className="flex flex-col h-[calc(100dvh-7.5rem-env(safe-area-inset-bottom))] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden overflow-y-auto md:overflow-y-hidden">
+        {!accountStatusKnown && (
+          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
+            {statusPending
+              ? "Loading account status. Trading controls are disabled."
+              : "Account status unavailable. Trading controls are disabled. " + (statusReadError instanceof Error ? statusReadError.message : "Refresh to retry.")}
+          </div>
+        )}
+        {isLiveMode && !liveBrokerStateKnown && (
+          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
+            {!brokerConnectionsKnown
+              ? "Broker connection state is unavailable. Live trading controls are disabled."
+              : !selectedConnection
+                ? "No active broker connection is available. Live trading controls are disabled."
+                : "Broker account or position state is unavailable. Live trading controls are disabled."}
+          </div>
+        )}
         {/* Phase-1 cleanup: removed duplicate desktop stats strip.
             StatusBar (bottom of app shell) and the Account drawer already cover
             balance, equity, P&L, win rate, open positions, and engine status. */}
 
         {/* Live mode alert (compact, only when live) */}
-        {d.executionMode === "live" && (
+        {executionMode === "live" && (
           <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
             <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
             <button
               className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={modeMut.isPending}
+              disabled={!liveMutationStateKnown || modeMut.isPending}
               onClick={() => modeMut.mutate("paper")}
             >
               {modeMut.isPending ? "Verifying…" : "Switch to Paper"}
@@ -463,28 +502,28 @@ export default function BotView() {
           <div className="flex items-center justify-between gap-1.5 pb-2 border-b border-border min-w-0 overflow-hidden">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
             <div className="flex items-center gap-1 min-w-0">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={!liveMutationStateKnown || (d.isRunning && !d.isPaused)} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused} title="Pause">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!liveMutationStateKnown || !d.isRunning || d.isPaused} title="Pause">
                 <Pause className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!d.isRunning} title="Stop">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!liveMutationStateKnown || !d.isRunning} title="Stop">
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${!accountStatusKnown ? "text-warning" : d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                <span className="truncate">{d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
+                <span className="truncate">{!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
-              <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-                {d.executionMode === "live" ? "LIVE" : "PAPER"}
+              <span className={`text-[9px] font-medium px-1 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+                {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
               </span>
             </div>
 
             {/* Right: Scan + Overflow menu */}
             <div className="flex items-center gap-1 shrink-0">
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={!liveMutationStateKnown || scanMut.isPending || scanPolling} title="Scan Now">
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
               </Button>
               <DropdownMenu>
@@ -494,7 +533,7 @@ export default function BotView() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem onClick={() => setOrderFormOpen(!orderFormOpen)}>
+                  <DropdownMenuItem disabled={!liveMutationStateKnown} onClick={() => setOrderFormOpen(!orderFormOpen)}>
                     <Plus className="h-3.5 w-3.5 mr-2" /> New Order
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setConfigOpen(true)}>
@@ -506,6 +545,7 @@ export default function BotView() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
+                    disabled={!liveMutationStateKnown || killMut.isPending}
                     onClick={() => {
                       if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
                     }}
@@ -519,20 +559,20 @@ export default function BotView() {
         ) : (
           <div className="flex items-center gap-2 px-2 py-1.5 border border-border bg-card/40 flex-wrap text-[11px]">
             <div className="flex items-center gap-1">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={!liveMutationStateKnown || (d.isRunning && !d.isPaused)}>
                 <Play className="h-3 w-3 mr-1" /> Start
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!liveMutationStateKnown || !d.isRunning || d.isPaused}>
                 <Pause className="h-3 w-3 mr-1" /> Pause
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!liveMutationStateKnown || !d.isRunning}>
                 <Square className="h-3 w-3 mr-1" /> Stop
               </Button>
             </div>
 
             <div className="w-px h-5 bg-border" />
 
-            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
+            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)} disabled={!liveMutationStateKnown}>
               <Plus className="h-3 w-3 mr-1" /> Order
             </Button>
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
@@ -541,13 +581,13 @@ export default function BotView() {
 
             <div className="w-px h-5 bg-border" />
 
-            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-              {d.executionMode === "live" ? "LIVE" : "PAPER"}
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+              {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
             </span>
-            {d.executionMode !== "live" ? (
+            {executionMode === "paper" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={modeMut.isPending}
+                disabled={!accountStatusKnown || !brokerConnectionsKnown || modeMut.isPending}
                 onClick={() => {
                   if (window.confirm("Switch to LIVE mode? New bot trades will be mirrored to your active broker connection(s).")) {
                     modeMut.mutate("live");
@@ -556,11 +596,11 @@ export default function BotView() {
               >
                 {modeMut.isPending ? "Verifying…" : "→ Live"}
               </button>
-            ) : (
+            ) : executionMode === "live" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={modeMut.isPending || d.positions.length > 0}
-                title={d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
+                disabled={!liveMutationStateKnown || modeMut.isPending || d.positions.length > 0}
+                title={!liveMutationStateKnown ? "Broker or account status is unavailable" : d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
                 onClick={() => {
                   if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
                     modeMut.mutate("paper");
@@ -569,9 +609,11 @@ export default function BotView() {
               >
                 {modeMut.isPending ? "Verifying…" : "→ Paper"}
               </button>
+            ) : (
+              <span className="text-[9px] uppercase tracking-wider text-warning">Mode unavailable</span>
             )}
 
-            {activeConnections.length > 0 ? (
+            {brokerConnectionsKnown ? activeConnections.length > 0 ? (
               activeConnections.map((conn: any) => (
                 <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
                   <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
@@ -581,6 +623,10 @@ export default function BotView() {
               <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
                 <Monitor className="h-2.5 w-2.5" /> Connect Broker
               </button>
+            ) : (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 bg-warning/10 text-warning flex items-center gap-1">
+                <Monitor className="h-2.5 w-2.5" /> Broker status unknown
+              </span>
             )}
 
             {/* Trading Style Badge — the persisted runtime policy is authoritative */}
@@ -615,11 +661,11 @@ export default function BotView() {
             })()}
 
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!liveMutationStateKnown || scanMut.isPending || scanPolling}>
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Scan Now"}
               </Button>
               <div className="w-px h-5 bg-border" />
-              <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
+              <Button size="sm" variant="destructive" className="h-7 text-[11px]" disabled={!liveMutationStateKnown || killMut.isPending} onClick={() => {
                 if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
               }}>
                 <AlertTriangle className="h-3 w-3 mr-1" /> Kill
@@ -627,9 +673,9 @@ export default function BotView() {
 
               <div className="flex gap-3 text-[10px] text-muted-foreground font-mono">
                 <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
-                <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
-                <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
-                <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
+                <span>Scans: <strong className="text-foreground">{accountStatusKnown ? d.scanCount : "—"}</strong></span>
+                <span>Signals: <strong className="text-foreground">{accountStatusKnown ? d.signalCount : "—"}</strong></span>
+                <span>Trades: <strong className="text-foreground">{accountStatusKnown ? d.totalTrades : "—"}</strong></span>
               </div>
             </div>
           </div>
@@ -658,7 +704,7 @@ export default function BotView() {
               <div className="w-20"><Label className="text-[10px]">SL</Label><Input value={orderSL} onChange={e => setOrderSL(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-20"><Label className="text-[10px]">TP</Label><Input value={orderTP} onChange={e => setOrderTP(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-14"><Label className="text-[10px]">Score</Label><Input type="number" min={0} max={10} value={orderScore} onChange={e => setOrderScore(e.target.value)} className="h-7 text-[11px]" /></div>
-              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()}>
+              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()} disabled={!liveMutationStateKnown || orderMut.isPending}>
                 {orderDirection === "long" ? "BUY" : "SELL"} {orderSymbol}
               </Button>
             </div>
@@ -673,27 +719,27 @@ export default function BotView() {
           >
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Balance</div>
-              <div className="text-[12px] font-mono font-bold truncate">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              <div className="text-[12px] font-mono font-bold truncate">{accountStatusKnown ? "$" + (d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—"}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
               <div className={`text-[12px] font-mono font-bold truncate ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
-                {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
+                {accountStatusKnown ? ((d.equity - d.balance) >= 0 ? "+" : "") + formatMoney(d.equity - d.balance) : "—"}
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">WR</div>
               <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
-                {(d.winRate || 0).toFixed(0)}%
+                {accountStatusKnown ? (d.winRate || 0).toFixed(0) + "%" : "—"}
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
-              <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
+              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? d.totalTrades : "—"}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">DD</div>
-              <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
+              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? (d.drawdown || 0).toFixed(1) + "%" : "—"}</div>
             </div>
           </button>
         )}
@@ -746,7 +792,12 @@ export default function BotView() {
                 );
               })()}
               <TabsContent value="open" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                {(botPositions.length === 0) ? (
+                {!accountStatusKnown ? (
+                  <div className="flex flex-col items-center justify-center py-12 border border-warning/30 text-warning">
+                    <AlertTriangle className="h-6 w-6 mb-2" />
+                    <p className="text-xs font-medium">Open-position state unavailable</p>
+                  </div>
+                ) : botPositions.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
                     <p className="text-xs font-medium text-muted-foreground">No open positions</p>
@@ -872,13 +923,13 @@ export default function BotView() {
                 )}
               </TabsContent>
               <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={closedToday} />
+                {accountStatusKnown ? <TradeHistoryTable trades={closedToday} /> : <ReadUnavailable label="Trade history" />}
               </TabsContent>
               <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={botTradeHistory} />
+                {accountStatusKnown ? <TradeHistoryTable trades={botTradeHistory} /> : <ReadUnavailable label="Trade history" />}
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
-                <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
+                {brokerConnectionsKnown ? <CloseAuditLog brokerConns={brokerConns} /> : <ReadUnavailable label="Broker audit" />}
               </TabsContent>
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
@@ -924,6 +975,13 @@ export default function BotView() {
 
             {/* Account Summary */}
             {(() => {
+              if (!accountStatusKnown) {
+                return (
+                  <div className="border border-warning/30 bg-warning/5 p-3 text-[10px] text-warning">
+                    Account balances, exposure, and performance are unavailable.
+                  </div>
+                );
+              }
               const positions = botPositions;
               const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
               const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -996,7 +1054,7 @@ export default function BotView() {
             <FOTSIStrengthMeter
               strengths={fotsiStrengths}
               lastScanTime={currentScan?.scanned_at}
-              onRefresh={() => scanMut.mutate()}
+              onRefresh={liveMutationStateKnown ? () => scanMut.mutate() : undefined}
               isRefreshing={scanMut.isPending}
             />
 
@@ -1004,7 +1062,7 @@ export default function BotView() {
             <Card>
               <CardContent className="pt-3 pb-2 space-y-2 text-[11px]">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Engine</p>
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!liveMutationStateKnown || scanMut.isPending || scanPolling}>
                   {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                 </Button>
                 {/* Set Balance — inline expandable */}
@@ -1034,7 +1092,7 @@ export default function BotView() {
                     <Button
                       size="sm"
                       className="h-7 text-[11px] px-3 bg-cyan-600 hover:bg-cyan-700 text-white"
-                      disabled={setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
+                      disabled={!accountStatusKnown || setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
                       onClick={() => {
                         const val = parseFloat(customBalanceInput);
                         if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
@@ -1046,12 +1104,12 @@ export default function BotView() {
                 )}
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-warn hover:bg-badge-warn" onClick={() => {
                   if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
-                }} disabled={resetBalMut.isPending}>
+                }} disabled={!accountStatusKnown || resetBalMut.isPending}>
                   {resetBalMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Reset Balance
                 </Button>
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => {
                   if (window.confirm("⚠️ FULL RESET — This will:\n\n• Close all open positions\n• Delete ALL trade history\n• Delete ALL scan logs\n• Delete ALL reasonings & post-mortems\n• Reset balance to configured starting amount\n• Stop the engine\n\nThis CANNOT be undone. Are you sure?")) resetMut.mutate();
-                }} disabled={resetMut.isPending}>
+                }} disabled={!accountStatusKnown || resetMut.isPending}>
                   {resetMut.isPending ? <Loader2 className="h-3 w-3 mr-1" /> : null} Full Reset
                 </Button>
               </CardContent>
@@ -1073,7 +1131,9 @@ export default function BotView() {
                     </select>
                   )}
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {selectedConnection?.display_name}</p>
-                  {brokerAccount ? (
+                  {brokerAccountReadFailed ? (
+                    <p className="text-warning text-[10px]">{brokerAccountReadError instanceof Error ? brokerAccountReadError.message : "Broker account unavailable"}</p>
+                  ) : brokerAccount ? (
                     <>
                       <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
                       {brokerAccount.equity && <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{brokerAccount.equity} {brokerAccount.currency || ""}</span></div>}
@@ -1090,11 +1150,17 @@ export default function BotView() {
             )}
 
             {/* Live Broker Open Trades */}
-            {isLiveMode && selectedConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
+            {isLiveMode && selectedConnection && (
               <Card>
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions ({brokerOpenTrades.length})</p>
-                  {brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions</p>
+                  {brokerPositionsReadFailed ? (
+                    <p className="text-warning text-[10px]">{brokerPositionsReadError instanceof Error ? brokerPositionsReadError.message : "Broker positions unavailable"}</p>
+                  ) : !brokerOpenTrades ? (
+                    <p className="text-muted-foreground text-[10px]">Loading broker positions...</p>
+                  ) : brokerOpenTrades.length === 0 ? (
+                    <p className="text-muted-foreground text-[10px]">No open positions reported by broker</p>
+                  ) : brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
                     <div key={t.id || i} className="flex items-center justify-between text-[10px] py-0.5 border-b border-border/20 last:border-0">
                       <div className="flex items-center gap-1">
                         <span className={t.type === "SELL" || t.currentUnits < 0 || t.type === "POSITION_TYPE_SELL" ? "text-destructive" : "text-success"}>
@@ -1274,7 +1340,7 @@ export default function BotView() {
           <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
             <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
             <div className="flex gap-2 shrink-0">
-              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
+              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" disabled={!liveMutationStateKnown || deactivateKill.isPending} onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
           </div>
         )}
@@ -1293,6 +1359,13 @@ export default function BotView() {
             </SheetHeader>
             <div className="space-y-3 pb-4">
               {(() => {
+                if (!accountStatusKnown) {
+                  return (
+                    <div className="rounded border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+                      Account balances, exposure, and performance are unavailable.
+                    </div>
+                  );
+                }
                 const positions = botPositions;
                 const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
                 const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -1341,7 +1414,7 @@ export default function BotView() {
                     {/* Engine Controls */}
                     <div className="rounded-lg border border-border p-3 space-y-2 text-[12px]">
                       <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Engine Controls</p>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={scanMut.isPending || scanPolling}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={!liveMutationStateKnown || scanMut.isPending || scanPolling}>
                         {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                       </Button>
                       <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)}>
@@ -1356,15 +1429,15 @@ export default function BotView() {
                             onChange={e => setCustomBalanceInput(e.target.value)}
                             className="h-7 text-[11px] flex-1 pl-5"
                           />
-                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
+                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={!accountStatusKnown || setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
                             {setBalMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
                           </Button>
                         </div>
                       )}
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={!accountStatusKnown || resetBalMut.isPending}>
                         <RefreshCw className="h-3 w-3 mr-1" /> Reset Balance
                       </Button>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={!accountStatusKnown || resetMut.isPending}>
                         Full Reset
                       </Button>
                     </div>

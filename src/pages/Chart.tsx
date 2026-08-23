@@ -112,7 +112,7 @@ export default function Chart() {
     refetchInterval: refreshInterval,
   });
 
-  const { data: paperStatus } = useQuery({
+  const { data: paperStatus, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
     queryKey: ['paper-status'],
     queryFn: () => paperApi.status(),
     staleTime: 30000,
@@ -140,9 +140,10 @@ export default function Chart() {
 
   const session = getCurrentSession();
   const kz = isInKillzone();
-  const balance = paperStatus?.balance ?? 10000;
+  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!paperStatus;
+  const balance = accountStatusKnown ? Number(paperStatus.balance) : null;
   const riskPct = 1.5;
-  const riskAmount = balance * (riskPct / 100);
+  const riskAmount = balance === null ? null : balance * (riskPct / 100);
 
   const bias = analysis?.bias || 'neutral';
   const structure = analysis?.structure || {};
@@ -611,11 +612,12 @@ export default function Chart() {
                     </AccordionTrigger>
                     <AccordionContent className="px-3 pb-2">
                       <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
-                        <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">${balance.toFixed(2)}</span></div>
+                        {!accountStatusKnown && <p className="pb-1 text-warning">Account status unavailable; risk amounts are not calculated.</p>}
+                        <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">{balance === null ? "—" : "$" + balance.toFixed(2)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Risk %</span><span className="font-mono">{riskPct}%</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">${riskAmount.toFixed(2)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">${(riskAmount * 2).toFixed(2)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">${(riskAmount * 3).toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">{riskAmount === null ? "—" : "$" + riskAmount.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">{riskAmount === null ? "—" : "$" + (riskAmount * 2).toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">{riskAmount === null ? "—" : "$" + (riskAmount * 3).toFixed(2)}</span></div>
                       </div>
                     </AccordionContent>
                   </AccordionItem>

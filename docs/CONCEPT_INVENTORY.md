@@ -53,6 +53,20 @@ instead of arbitrating.
 
 ---
 
+## Runtime account and broker status truth
+
+`paper-trading` owns the aggregate account-status response. Database read failures return
+`ok: false`, `state: "unknown"`, and a non-success HTTP status; they never become an
+implicit Paper account, zero balance, or empty position/history collection. Broker connection,
+account, position, and history reads follow the same contract through `src/lib/remoteRead.ts`.
+A confirmed empty array means `none`; a failed or fallback read means `unknown`.
+
+`src/lib/executionMode.ts:readExecutionMode` is the frontend owner for interpreting the
+mode. Status surfaces render Unknown explicitly, and Bot/Live Broker controls fail closed until
+the current account mode, broker connection list, broker account, and broker position reads are
+available. Cached function fallbacks are not accepted as current truth for these safety-sensitive
+reads.
+
 ## Game Plan generation and consumption
 
 `_shared/gamePlan.ts:generateInstrumentGamePlan` is the single algorithm owner.

@@ -3,6 +3,7 @@ import {
   BROKER_MUTATION_UNCERTAIN_MESSAGE,
   requireConfirmedBrokerMutation,
 } from "@/lib/brokerMutationResult";
+import { requireAvailableCollection, requireAvailableObject } from "@/lib/remoteRead";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
 const functionCooldownUntil = new Map<string, number>();
@@ -137,7 +138,15 @@ function functionCacheKey(functionName: string, body: Record<string, any>) {
 
 function getFunctionFallback(functionName: string, body: Record<string, any>) {
   const cached = functionResponseCache.get(functionCacheKey(functionName, body));
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const action = body?.action;
+  const truthSensitiveRead =
+    (functionName === "paper-trading" && action === "status") ||
+    (functionName === "broker-connections" && action === "list") ||
+    (functionName === "broker-execute" &&
+      ["account_summary", "account_balance", "connection_status", "open_trades", "trade_history"].includes(action));
+  // React Query may retain old display data, but a failed current read cannot
+  // masquerade as current account or broker truth.
+  if (!truthSensitiveRead && cached && cached.expiresAt > Date.now()) return cached.data;
 
   if (functionName === "bot-scanner") {
     const action = body?.action;
@@ -157,19 +166,20 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
 
   if (functionName === "broker-execute") {
     const action = body?.action;
-    if (["open_trades", "trade_history"].includes(action)) return [];
-    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
+    if (["open_trades", "trade_history"].includes(action)) return { ok: false, state: "unknown", error: "Broker positions are temporarily unavailable. Please try again shortly.", fallback: true };
+    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, state: "unknown", error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
   }
 
   if (functionName === "broker-connections") {
     const action = body?.action;
-    if (["list", "list_symbols", "probe_symbols"].includes(action)) return [];
+    if (action === "list") return { ok: false, state: "unknown", error: "Broker connections are temporarily unavailable. Please retry shortly.", fallback: true };
+    if (["list_symbols", "probe_symbols"].includes(action)) return [];
     return { error: "Broker connections are temporarily unavailable. Please retry shortly.", fallback: true };
   }
 
   if (functionName === "paper-trading") {
     const action = body?.action;
-    if (action === "status") return { ok: false, error: "Paper trading service is temporarily unavailable. Please try again shortly.", fallback: true, engine_status: "unknown", positions: [], orders: [] };
+    if (action === "status") return { ok: false, state: "unknown", executionMode: "unknown", error: "Trading account status is temporarily unavailable. Please try again shortly.", fallback: true };
   }
 
   return undefined;
@@ -336,7 +346,14 @@ export async function invokeFunction<T = any>(
     isTransientServiceFailure(error, data, requestDispatched)
   ) {
     const action = body?.action;
-    if (["open_trades", "trade_history"].includes(action)) return [] as T;
+    if (["open_trades", "trade_history"].includes(action)) {
+      return {
+        ok: false,
+        state: "unknown",
+        error: "Broker positions are temporarily unavailable. Please try again shortly.",
+        fallback: true,
+      } as T;
+    }
     if (
       [
         "account_summary",
@@ -348,6 +365,7 @@ export async function invokeFunction<T = any>(
     ) {
       return {
         ok: false,
+        state: "unknown",
         error: "Broker service is temporarily unavailable. Please try again shortly.",
         fallback: true,
       } as T;
@@ -361,11 +379,10 @@ export async function invokeFunction<T = any>(
   ) {
     return {
       ok: false,
-      error: "Paper trading service is temporarily unavailable. Please try again shortly.",
+      state: "unknown",
+      executionMode: "unknown",
+      error: "Trading account status is temporarily unavailable. Please try again shortly.",
       fallback: true,
-      engine_status: "unknown",
-      positions: [],
-      orders: [],
     } as T;
   }
 

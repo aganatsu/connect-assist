@@ -45,6 +45,10 @@ function pnlColor(pnl: number): string {
   return "text-muted-foreground";
 }
 
+function readErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 // getDigits removed — formatPrice from @/lib/formatTime handles digit resolution
 // via the symbol string passed as 2nd argument
 
@@ -122,7 +126,17 @@ function CollapsibleSection({
 }
 
 // ── Section: Account Summary ──
-function AccountSummaryContent({ data, isLoading }: { data: any; isLoading: boolean }) {
+function UnavailableRead({ message }: { message: string }) {
+  return (
+    <div className="p-4 text-center text-warning">
+      <AlertTriangle className="mx-auto mb-2 h-4 w-4" />
+      <p className="text-xs font-medium">{message}</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">Live controls are disabled until this read succeeds.</p>
+    </div>
+  );
+}
+
+function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoading: boolean; error?: string }) {
   if (isLoading) {
     return (
       <div className="p-3 animate-pulse">
@@ -132,7 +146,8 @@ function AccountSummaryContent({ data, isLoading }: { data: any; isLoading: bool
       </div>
     );
   }
-  if (!data) return <div className="p-3 text-xs text-muted-foreground text-center">No account data</div>;
+  if (error) return <UnavailableRead message={error} />;
+  if (!data) return <UnavailableRead message="Broker account state is unavailable" />;
 
   const balance = parseFloat(data.balance ?? 0);
   const equity = parseFloat(data.equity ?? data.balance ?? 0);
@@ -183,9 +198,9 @@ function AccountSummaryContent({ data, isLoading }: { data: any; isLoading: bool
 
 // ── Section: Open Positions ──
 function OpenPositionsContent({
-  positions, paperPositions, connectionId, isLoading,
+  positions, paperPositions, connectionId, isLoading, error,
 }: {
-  positions: any[]; paperPositions: any[]; connectionId: string; isLoading: boolean;
+  positions: any[]; paperPositions: any[]; connectionId: string; isLoading: boolean; error?: string;
 }) {
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -220,6 +235,8 @@ function OpenPositionsContent({
       </div>
     );
   }
+
+  if (error) return <UnavailableRead message={error} />;
 
   if (positions.length === 0) {
     return (
@@ -417,9 +434,9 @@ function OpenPositionsContent({
 
 // ── Section: Sync Status ──
 function SyncStatusContent({
-  brokerPositions, paperPositions, isLoading,
+  brokerPositions, paperPositions, isLoading, error,
 }: {
-  brokerPositions: any[]; paperPositions: any[]; isLoading: boolean;
+  brokerPositions: any[]; paperPositions: any[]; isLoading: boolean; error?: string;
 }) {
   if (isLoading) {
     return (
@@ -428,6 +445,8 @@ function SyncStatusContent({
       </div>
     );
   }
+
+  if (error) return <UnavailableRead message={error} />;
 
   const syncResults = paperPositions.map((pp: any) => {
     const tag = `paper:${pp.id || pp.position_id}`;
@@ -492,9 +511,9 @@ function SyncStatusContent({
 
 // ── Section: Trade History ──
 function TradeHistoryContent({
-  trades, paperHistory, isLoading,
+  trades, paperHistory, isLoading, error,
 }: {
-  trades: any[]; paperHistory: any[]; isLoading: boolean;
+  trades: any[]; paperHistory: any[]; isLoading: boolean; error?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const displayed = showAll ? trades : trades.slice(0, 15);
@@ -506,6 +525,8 @@ function TradeHistoryContent({
       </div>
     );
   }
+
+  if (error) return <UnavailableRead message={error} />;
 
   const totalPnl = trades.reduce((s, t) => s + (t.netPnl ?? t.pnl ?? parseFloat(t.realizedPL ?? 0)), 0);
   const totalComm = trades.reduce((s, t) => s + (t.commission ?? 0), 0);
@@ -730,7 +751,7 @@ export default function BrokerTradesTab() {
   }), [handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop]);
 
   // Load broker connections
-  const { data: connections, isLoading: connsLoading } = useQuery({
+  const { data: connections, isLoading: connsLoading, isError: connsUnavailable, error: connsError } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     staleTime: 60000,
@@ -744,21 +765,21 @@ export default function BrokerTradesTab() {
   const connId = selectedConnId || activeConns[0]?.id;
 
   // Load broker data
-  const { data: accountData, isLoading: accountLoading } = useQuery({
+  const { data: accountData, isLoading: accountLoading, isError: accountUnavailable, error: accountError } = useQuery({
     queryKey: ["broker-account", connId],
     queryFn: () => brokerExecApi.accountSummary(connId),
     enabled: !!connId,
     refetchInterval: 15000,
   });
 
-  const { data: brokerPositions, isLoading: positionsLoading } = useQuery({
+  const { data: brokerPositions, isLoading: positionsLoading, isError: positionsUnavailable, error: positionsError } = useQuery({
     queryKey: ["broker-open-trades", connId],
     queryFn: () => brokerExecApi.openTrades(connId),
     enabled: !!connId,
     refetchInterval: 10000,
   });
 
-  const { data: tradeHistory, isLoading: historyLoading } = useQuery({
+  const { data: tradeHistory, isLoading: historyLoading, isError: historyUnavailable, error: historyError } = useQuery({
     queryKey: ["broker-trade-history", connId],
     queryFn: () => brokerExecApi.tradeHistory(connId),
     enabled: !!connId,
@@ -766,16 +787,28 @@ export default function BrokerTradesTab() {
   });
 
   // Load paper positions for sync comparison
-  const { data: paperStatus } = useQuery({
+  const { data: paperStatus, isError: paperStatusUnavailable, error: paperStatusError } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 5000,
   });
 
-  const paperPositions = paperStatus?.positions || [];
-  const paperHistory = paperStatus?.tradeHistory || [];
-  const brokerPos = Array.isArray(brokerPositions) ? brokerPositions : [];
-  const brokerHist = Array.isArray(tradeHistory) ? tradeHistory : [];
+  const paperPositions = useMemo(
+    () => Array.isArray(paperStatus?.positions) ? paperStatus.positions : [],
+    [paperStatus],
+  );
+  const paperHistory = useMemo(
+    () => Array.isArray(paperStatus?.tradeHistory) ? paperStatus.tradeHistory : [],
+    [paperStatus],
+  );
+  const brokerPos = useMemo(
+    () => Array.isArray(brokerPositions) ? brokerPositions : [],
+    [brokerPositions],
+  );
+  const brokerHist = useMemo(
+    () => Array.isArray(tradeHistory) ? tradeHistory : [],
+    [tradeHistory],
+  );
 
   // Sync status badges for the section header
   const syncBadges = useMemo(() => {
@@ -813,6 +846,10 @@ export default function BrokerTradesTab() {
     );
   }
 
+  if (connsUnavailable) {
+    return <UnavailableRead message={readErrorMessage(connsError, "Broker connection state is unavailable")} />;
+  }
+
   if (activeConns.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center">
@@ -830,10 +867,10 @@ export default function BrokerTradesTab() {
     account: {
       title: "Account Summary",
       icon: <DollarSign className="h-3 w-3" />,
-      content: <AccountSummaryContent data={accountData?.error ? null : accountData} isLoading={accountLoading} />,
+      content: <AccountSummaryContent data={accountData} isLoading={accountLoading} error={accountUnavailable ? readErrorMessage(accountError, "Broker account state is unavailable") : undefined} />,
     },
     positions: {
-      title: `Open Positions (${brokerPos.length})`,
+      title: positionsUnavailable ? "Open Positions" : `Open Positions (${brokerPos.length})`,
       icon: <Activity className="h-3 w-3" />,
       content: (
         <OpenPositionsContent
@@ -841,27 +878,31 @@ export default function BrokerTradesTab() {
           paperPositions={paperPositions}
           connectionId={connId}
           isLoading={positionsLoading}
+          error={positionsUnavailable ? readErrorMessage(positionsError, "Broker position state is unavailable") : undefined}
         />
       ),
     },
     sync: {
       title: "Sync Status",
-      icon: syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
+      icon: positionsUnavailable || paperStatusUnavailable || syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
         ? <AlertTriangle className="h-3 w-3 text-warning" />
         : <CheckCircle2 className="h-3 w-3 text-success" />,
       badge: (
         <div className="flex items-center gap-1">
-          {syncBadges.syncedCount > 0 && (
+          {(positionsUnavailable || paperStatusUnavailable) && (
+            <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">unknown</span>
+          )}
+          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.syncedCount > 0 && (
             <span className="text-[8px] font-bold text-success bg-success/10 border border-success/20 px-1 py-0.5 rounded">
               {syncBadges.syncedCount} synced
             </span>
           )}
-          {syncBadges.unsyncedCount > 0 && (
+          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.unsyncedCount > 0 && (
             <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">
               {syncBadges.unsyncedCount} unsynced
             </span>
           )}
-          {syncBadges.mismatchCount > 0 && (
+          {!positionsUnavailable && !paperStatusUnavailable && syncBadges.mismatchCount > 0 && (
             <span className="text-[8px] font-bold text-destructive bg-destructive/10 border border-destructive/20 px-1 py-0.5 rounded">
               {syncBadges.mismatchCount} SL mismatch
             </span>
@@ -873,17 +914,23 @@ export default function BrokerTradesTab() {
           brokerPositions={brokerPos}
           paperPositions={paperPositions}
           isLoading={positionsLoading}
+          error={positionsUnavailable
+            ? readErrorMessage(positionsError, "Broker position state is unavailable")
+            : paperStatusUnavailable
+              ? readErrorMessage(paperStatusError, "Paper position state is unavailable")
+              : undefined}
         />
       ),
     },
     history: {
-      title: `Trade History (${brokerHist.length})`,
+      title: historyUnavailable ? "Trade History" : `Trade History (${brokerHist.length})`,
       icon: <Clock className="h-3 w-3" />,
       content: (
         <TradeHistoryContent
           trades={brokerHist}
           paperHistory={paperHistory}
           isLoading={historyLoading}
+          error={historyUnavailable ? readErrorMessage(historyError, "Broker trade history is unavailable") : undefined}
         />
       ),
     },
@@ -922,12 +969,12 @@ export default function BrokerTradesTab() {
       </div>
 
       {/* Account error state */}
-      {accountData?.error && (
+      {accountUnavailable && (
         <div className="border border-destructive/30 bg-destructive/5 rounded-lg p-3 flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
           <div>
             <p className="text-xs font-medium text-destructive">Broker Connection Error</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{accountData.error}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{readErrorMessage(accountError, "Broker account state is unavailable")}</p>
           </div>
         </div>
       )}

@@ -1,4 +1,39 @@
 export type ExecutionMode = "paper" | "live";
+export type ExecutionModeState = ExecutionMode | "unknown";
+
+type ExecutionModePayload = {
+  executionMode?: unknown;
+  account?: { execution_mode?: unknown };
+  state?: unknown;
+  fallback?: unknown;
+  ok?: unknown;
+  error?: unknown;
+};
+
+/** Missing, failed, or fallback status is unknown, never implicitly paper. */
+export function readExecutionMode(status: unknown): ExecutionModeState {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return "unknown";
+  const candidate = status as ExecutionModePayload;
+  if (
+    candidate.state === "unknown" ||
+    candidate.state === "unavailable" ||
+    candidate.fallback === true ||
+    candidate.ok === false ||
+    candidate.error
+  ) {
+    return "unknown";
+  }
+  const mode = candidate.executionMode ?? candidate.account?.execution_mode;
+  return mode === "paper" || mode === "live" ? mode : "unknown";
+}
+
+/** Trading mutations require a known account mode and, for live mode, known broker state. */
+export function canUseTradingControls(
+  mode: ExecutionModeState,
+  liveBrokerStateKnown: boolean,
+): boolean {
+  return mode === "paper" || (mode === "live" && liveBrokerStateKnown);
+}
 
 export interface ExecutionModeResponse {
   success?: boolean;
