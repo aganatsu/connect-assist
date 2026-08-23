@@ -271,9 +271,21 @@
   font-size: 10px;
 }
 
+.apex-stale-notice.is-pending {
+  border-bottom-color: var(--cyan);
+  background: #e5f1f2;
+  color: var(--cyan);
+}
+
 .apex-stale-notice svg {
   width: 14px;
   height: 14px;
+  flex: 0 0 auto;
+}
+
+.apex-stale-notice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .apex-editorial-grid {
