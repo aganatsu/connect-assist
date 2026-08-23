@@ -68,6 +68,25 @@ Deno.test("XXX/USD: Long BTC/USD 0.01 lot, entry 60000, exit 61000 → $10.00", 
   assertAlmostEquals(result.pnlPips, 1000, 0.001);
 });
 
+Deno.test("Symbol aliases: slashless metals and crypto preserve contract size", () => {
+  assertEquals(
+    calcPnl("long", 2000, 2001, 0.1, "XAUUSD"),
+    calcPnl("long", 2000, 2001, 0.1, "XAU/USD"),
+  );
+  assertEquals(
+    calcPnl("long", 60000, 61000, 0.01, "BTCUSD"),
+    calcPnl("long", 60000, 61000, 0.01, "BTC/USD"),
+  );
+});
+
+Deno.test("Symbol aliases: slashless FX crosses preserve quote conversion", () => {
+  const rateMap = { "USD/JPY": 150 };
+  assertEquals(
+    calcPnl("long", 162, 162.5, 0.1, "EURJPY", rateMap),
+    calcPnl("long", 162, 162.5, 0.1, "EUR/JPY", rateMap),
+  );
+});
+
 Deno.test("XXX/USD: Short GBP/USD 0.5 lot, entry 1.2700, exit 1.2650 → $250.00", () => {
   // Calculation: diff = 1.2700 - 1.2650 = 0.0050
   // pnl = 0.0050 × 100000 × 0.5 × 1.0 = $250.00

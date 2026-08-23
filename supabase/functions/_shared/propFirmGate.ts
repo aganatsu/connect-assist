@@ -24,6 +24,7 @@ import {
   type EventSeverity,
 } from "./propFirmRisk.ts";
 import { finalizePaperPositionClose } from "./finalizePaperPositionClose.ts";
+import { calcPnl } from "./smcAnalysis.ts";
 
 export interface PropFirmGateResult {
   enabled: boolean;
@@ -62,6 +63,7 @@ export async function runPropFirmGate(
     isLiveAccount?: boolean; // Whether this is a live (broker-connected) account
     hasBrokerConnection?: boolean; // Whether a broker connection exists (even in paper mode)
     fxMarketClosed?: boolean; // Whether FX market is currently closed (weekends)
+    rateMap?: Record<string, number>; // Quote-currency conversion for paper P&L
   },
 ): Promise<PropFirmGateResult> {
   // ── 1. Load active prop firm config ──
@@ -116,12 +118,14 @@ export async function runPropFirmGate(
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
       if (entry > 0 && current > 0 && size > 0) {
-        const diff = pos.direction === "long" ? current - entry : entry - current;
-        // Approximate P&L in account currency (simplified — uses pip value estimation)
-        // For accurate P&L, we'd need lot units and quote-to-USD rate, but for the gate
-        // check we use the same approximation as the paper account balance tracking.
-        const pnlEstimate = diff * size * 100_000; // Assumes standard lot = 100K units
-        floatingPnL += pnlEstimate;
+        floatingPnL += calcPnl(
+          pos.direction,
+          entry,
+          current,
+          size,
+          pos.symbol,
+          opts?.rateMap,
+        ).pnl;
       }
     }
     currentEquity = paperBalance + floatingPnL;
@@ -282,7 +286,7 @@ export async function propFirmEmergencyClose(
   openPositions: any[],
   reason: string,
   scanCycleId: string,
-  opts?: { fxMarketClosed?: boolean },
+  opts?: { fxMarketClosed?: boolean; rateMap?: Record<string, number> },
 ): Promise<number> {
   // Weekend guard: when FX market is closed, only close crypto positions.
   // FX positions can't be executed on weekends anyway, and stale prices
@@ -308,8 +312,14 @@ export async function propFirmEmergencyClose(
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
-      const diff = pos.direction === "long" ? current - entry : entry - current;
-      const pnl = diff * size * 100_000; // Simplified P&L
+      const { pnl } = calcPnl(
+        pos.direction,
+        entry,
+        current,
+        size,
+        pos.symbol,
+        opts?.rateMap,
+      );
 
       const finalization = await finalizePaperPositionClose(supabase, {
         positionRowId: pos.id,
