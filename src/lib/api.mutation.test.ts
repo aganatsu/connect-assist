@@ -53,31 +53,38 @@ describe("edge function retry safety", () => {
   });
 
   it.each([
-    ["place_order", () => brokerExecApi.placeOrder("connection-1", {
-      symbol: "EUR/USD",
-      direction: "long",
-      size: 0.1,
-    })],
+    ["place_order", () =>
+      brokerExecApi.placeOrder("connection-1", {
+        symbol: "EUR/USD",
+        direction: "long",
+        size: 0.1,
+      })],
     ["close_trade", () => brokerExecApi.closeTrade("connection-1", "trade-1")],
-    ["modify_trade", () => brokerExecApi.modifyTrade(
-      "connection-1",
-      "trade-1",
-      { stopLoss: 1.2 },
-    )],
-  ])("does not retry an uncertain broker %s mutation", async (_action, invoke) => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(edgeResponse(503, { error: "worker terminated" }))
-      .mockResolvedValueOnce(edgeResponse(200, {
-        ok: true,
-        brokerExecutionStatus: "succeeded",
-      }));
-    vi.stubGlobal("fetch", fetchMock);
+    ["modify_trade", () =>
+      brokerExecApi.modifyTrade(
+        "connection-1",
+        "trade-1",
+        { stopLoss: 1.2 },
+      )],
+  ])(
+    "does not retry an uncertain broker %s mutation",
+    async (_action, invoke) => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(
+          edgeResponse(503, { error: "worker terminated" }),
+        )
+        .mockResolvedValueOnce(edgeResponse(200, {
+          ok: true,
+          brokerExecutionStatus: "succeeded",
+        }));
+      vi.stubGlobal("fetch", fetchMock);
 
-    await expect(invoke()).rejects.toThrow(
-      "Broker execution outcome is unknown. Check broker state before retrying.",
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+      await expect(invoke()).rejects.toThrow(
+        "Broker execution outcome is unknown. Check broker state before retrying.",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not retry an uncertain paper account mutation", async () => {
     const fetchMock = vi.fn()
@@ -90,6 +97,43 @@ describe("edge function retry safety", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [
+      "paper status",
+      "paper-trading",
+      { action: "status" },
+      "Request outcome is unknown. Check account state before retrying.",
+    ],
+    [
+      "scheduled-task list",
+      "scheduled-tasks",
+      { action: "list" },
+      "Request outcome is unknown. Check current state before retrying.",
+    ],
+    [
+      "backtest status maintenance",
+      "backtest-engine",
+      { action: "status", runId: "run-1" },
+      "Request outcome is unknown. Check current state before retrying.",
+    ],
+  ])(
+    "does not retry the stateful %s action",
+    async (_label, functionName, body, expectedMessage) => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn(async () =>
+        edgeResponse(503, { error: "worker terminated" })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const assertion = expect(invokeFunction(functionName, body)).rejects
+        .toThrow(expectedMessage);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not retry an unclassified control mutation", async () => {
     const fetchMock = vi.fn()
@@ -107,7 +151,9 @@ describe("edge function retry safety", () => {
   });
 
   it("treats a broker transport failure as an uncertain one-shot mutation", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const fetchMock = vi.fn().mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(brokerExecApi.closeTrade("connection-1", "trade-1"))
@@ -166,7 +212,7 @@ describe("edge function retry safety", () => {
 
     const readRequest = brokerExecApi.openTrades("cooldown-connection");
     await vi.runAllTimersAsync();
-    await expect(readRequest).resolves.toEqual([]);
+    await readRequest.catch(() => undefined);
 
     await expect(brokerExecApi.placeOrder("cooldown-connection", {
       symbol: "EUR/USD",

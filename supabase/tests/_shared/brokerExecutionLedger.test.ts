@@ -118,6 +118,30 @@ Deno.test("broker response never treats an unparseable 2xx as confirmed", () => 
   );
 });
 
+Deno.test("broker response requires positive normalized success evidence", () => {
+  assertEquals(
+    classifyBrokerExecutionResponse({
+      ok: true,
+      httpStatus: 200,
+      parsedBody: {},
+      rawBody: "{}",
+    }),
+    {
+      status: "uncertain",
+      error:
+        "Broker returned HTTP success without a recognized mutation confirmation",
+    },
+  );
+  assertEquals(
+    classifyBrokerExecutionResponse({
+      ok: true,
+      httpStatus: 200,
+      parsedBody: { ok: true, brokerExecutionStatus: "succeeded" },
+    }),
+    { status: "succeeded", brokerOrderId: undefined },
+  );
+});
+
 Deno.test("MetaAPI trade mutations require an explicit broker success code", () => {
   const invalid = classifyBrokerExecutionResponse({
     ok: true,
@@ -178,6 +202,108 @@ Deno.test("MetaAPI trade mutations require an explicit broker success code", () 
   assertEquals(confirmed, {
     status: "succeeded",
     brokerOrderId: "position-1",
+  });
+});
+
+Deno.test("OANDA market mutations require a fill transaction", () => {
+  const contradictory = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderFillTransaction: { id: "99" },
+      orderCancelTransaction: {
+        id: "100",
+        reason: "FOK_ORDER_PARTIALLY_FILLED",
+      },
+    },
+    confirmationMode: "oanda_order_fill",
+  });
+  assertEquals(contradictory, {
+    status: "uncertain",
+    error:
+      "OANDA returned both fill and cancellation transactions; reconcile broker state",
+  });
+
+  const cancelled = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderCreateTransaction: { id: "100" },
+      orderCancelTransaction: {
+        id: "101",
+        reason: "MARKET_HALTED",
+      },
+    },
+    confirmationMode: "oanda_order_fill",
+  });
+  assertEquals(cancelled, {
+    status: "rejected",
+    error: "MARKET_HALTED",
+  });
+
+  const missingFill = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: { orderCreateTransaction: { id: "100" } },
+    confirmationMode: "oanda_order_fill",
+  });
+  assertEquals(missingFill, {
+    status: "uncertain",
+    error: "OANDA returned HTTP success without an order fill confirmation",
+  });
+
+  const filled = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderFillTransaction: {
+        id: "102",
+        tradeOpened: { tradeID: "trade-1" },
+      },
+    },
+    confirmationMode: "oanda_order_fill",
+  });
+  assertEquals(filled, {
+    status: "succeeded",
+    brokerOrderId: "102",
+  });
+});
+
+Deno.test("OANDA dependent-order mutations confirm every requested order", () => {
+  const partial = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stopLossOrderTransaction: { id: "201" },
+    },
+    confirmationMode: "oanda_trade_orders",
+    requiredOandaTransactions: [
+      "stopLossOrderTransaction",
+      "takeProfitOrderTransaction",
+    ],
+  });
+  assertEquals(partial, {
+    status: "uncertain",
+    error:
+      "OANDA returned HTTP success without all requested dependent-order confirmations",
+  });
+
+  const confirmed = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stopLossOrderTransaction: { id: "201" },
+      takeProfitOrderTransaction: { id: "202" },
+    },
+    confirmationMode: "oanda_trade_orders",
+    requiredOandaTransactions: [
+      "stopLossOrderTransaction",
+      "takeProfitOrderTransaction",
+    ],
+  });
+  assertEquals(confirmed, {
+    status: "succeeded",
+    brokerOrderId: "201",
   });
 });
 

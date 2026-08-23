@@ -83,12 +83,23 @@ export async function completeBrokerExecution(
   return !error && data?.completed === true;
 }
 
+export type BrokerExecutionConfirmationMode =
+  | "default"
+  | "metaapi_trade"
+  | "oanda_order_fill"
+  | "oanda_trade_orders";
+
+export type OandaDependentOrderTransaction =
+  | "stopLossOrderTransaction"
+  | "takeProfitOrderTransaction";
+
 export function classifyBrokerExecutionResponse(input: {
   ok: boolean;
   httpStatus?: number;
   parsedBody?: any;
   rawBody?: string;
-  confirmationMode?: "default" | "metaapi_trade";
+  confirmationMode?: BrokerExecutionConfirmationMode;
+  requiredOandaTransactions?: readonly OandaDependentOrderTransaction[];
 }): {
   status: BrokerExecutionTerminalStatus;
   brokerOrderId?: string;
@@ -96,10 +107,26 @@ export function classifyBrokerExecutionResponse(input: {
 } {
   const statusCode = input.httpStatus || 0;
   const parsed = input.parsedBody;
+  const payload = parsed?.data && typeof parsed.data === "object"
+    ? parsed.data
+    : parsed;
   const brokerCode = parsed?.stringCode || parsed?.errorCode;
-  const explicitError = parsed?.error || parsed?.errorMessage;
+  const explicitError = parsed?.error || parsed?.errorMessage ||
+    payload?.orderRejectTransaction?.rejectReason ||
+    payload?.stopLossOrderRejectTransaction?.rejectReason ||
+    payload?.takeProfitOrderRejectTransaction?.rejectReason;
   const explicitSuccessCode = brokerCode === "TRADE_RETCODE_DONE" ||
     brokerCode === "ERR_NO_ERROR";
+  const extractBrokerOrderId = (): string | undefined => {
+    const brokerOrderId = parsed?.brokerOrderId ||
+      parsed?.orderId ||
+      parsed?.positionId ||
+      payload?.orderFillTransaction?.id ||
+      payload?.orderFillTransaction?.tradeOpened?.tradeID ||
+      payload?.stopLossOrderTransaction?.id ||
+      payload?.takeProfitOrderTransaction?.id;
+    return brokerOrderId ? String(brokerOrderId) : undefined;
+  };
 
   if (input.ok && !parsed) {
     return {
@@ -113,33 +140,92 @@ export function classifyBrokerExecutionResponse(input: {
   }
 
   if (
+    parsed?.brokerExecutionStatus === "rejected" ||
+    parsed?.brokerExecutionStatus === "uncertain"
+  ) {
+    return {
+      status: parsed.brokerExecutionStatus,
+      error: String(
+        explicitError || parsed?.message ||
+          "Broker mutation did not return a confirmed success",
+      ).slice(0, 1000),
+    };
+  }
+
+  if (input.ok && input.confirmationMode === "oanda_order_fill") {
+    const fill = payload?.orderFillTransaction;
+    const cancellation = payload?.orderCancelTransaction;
+    if (fill && cancellation) {
+      return {
+        status: "uncertain",
+        error:
+          "OANDA returned both fill and cancellation transactions; reconcile broker state",
+      };
+    }
+    if (cancellation) {
+      return {
+        status: "rejected",
+        error: String(
+          cancellation.reason || "OANDA cancelled the market order",
+        ).slice(0, 1000),
+      };
+    }
+    if (!explicitError && fill) {
+      return {
+        status: "succeeded",
+        brokerOrderId: extractBrokerOrderId(),
+      };
+    }
+    if (!explicitError) {
+      return {
+        status: "uncertain",
+        error: "OANDA returned HTTP success without an order fill confirmation",
+      };
+    }
+  }
+
+  if (input.ok && input.confirmationMode === "oanda_trade_orders") {
+    const required = input.requiredOandaTransactions || [];
+    const confirmed = required.length > 0 &&
+      required.every((key) => Boolean(payload?.[key]));
+    if (!explicitError && confirmed) {
+      return {
+        status: "succeeded",
+        brokerOrderId: extractBrokerOrderId(),
+      };
+    }
+    if (!explicitError) {
+      return {
+        status: "uncertain",
+        error:
+          "OANDA returned HTTP success without all requested dependent-order confirmations",
+      };
+    }
+  }
+
+  if (
     input.ok &&
     !explicitError &&
     (explicitSuccessCode ||
-      (input.confirmationMode !== "metaapi_trade" && !brokerCode))
+      (parsed?.ok === true &&
+        parsed?.brokerExecutionStatus === "succeeded"))
   ) {
-    const brokerOrderId = parsed?.orderId ||
-      parsed?.positionId ||
-      parsed?.orderFillTransaction?.id ||
-      parsed?.orderFillTransaction?.tradeOpened?.tradeID ||
-      parsed?.data?.orderFillTransaction?.id ||
-      parsed?.data?.orderFillTransaction?.tradeOpened?.tradeID;
     return {
       status: "succeeded",
-      brokerOrderId: brokerOrderId ? String(brokerOrderId) : undefined,
+      brokerOrderId: extractBrokerOrderId(),
     };
   }
 
   if (
     input.ok &&
-    input.confirmationMode === "metaapi_trade" &&
     !explicitError &&
     !brokerCode
   ) {
     return {
       status: "uncertain",
-      error:
-        "MetaAPI returned HTTP success without a recognized trade confirmation code",
+      error: input.confirmationMode === "metaapi_trade"
+        ? "MetaAPI returned HTTP success without a recognized trade confirmation code"
+        : "Broker returned HTTP success without a recognized mutation confirmation",
     };
   }
 

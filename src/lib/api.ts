@@ -25,8 +25,7 @@ const RETRYABLE_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   "user-settings": new Set(["get"]),
   "broker-connections": new Set(["list", "list_symbols"]),
   "smc-analysis": new Set(["full_analysis", "currency_strength", "correlation", "session"]),
-  "paper-trading": new Set(["status"]),
-  "backtest-engine": new Set(["status", "list", "mt5_list"]),
+  "backtest-engine": new Set(["list", "mt5_list"]),
   "bot-scanner": new Set([
     "scan_logs",
     "staged_setups",
@@ -45,7 +44,6 @@ const RETRYABLE_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     "trade_history",
   ]),
   "prop-firm": new Set(["status", "config.get", "events", "daily_history"]),
-  "scheduled-tasks": new Set(["list"]),
   "deploy-control": new Set(["status"]),
 };
 
