@@ -114,6 +114,9 @@ describe("OperationsDashboard safety integration", () => {
     api.connections.mockReturnValue(new Promise(() => undefined));
     renderDashboard();
 
+    expect(await screen.findByText(/Verifying operational data: Trading status, Broker connections\./i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
     const pause = await screen.findByRole("button", { name: "Pause engine" });
     expect(pause).toBeEnabled();
     expect(screen.getByRole("button", { name: "Stop engine" })).toBeEnabled();
@@ -123,6 +126,19 @@ describe("OperationsDashboard safety integration", () => {
 
     fireEvent.click(pause);
     await waitFor(() => expect(api.pauseEngine).toHaveBeenCalledTimes(1));
+  });
+
+  it("names the unavailable source without implicating healthy data", async () => {
+    api.logs.mockRejectedValue(new Error("Scan ledger unavailable"));
+    renderDashboard();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Operational data unavailable: Scan ledger.");
+    expect(alert).not.toHaveTextContent("Trading status");
+    expect(alert).not.toHaveTextContent("Zone setup ledger");
+    await waitFor(() => {
+      expect(screen.queryByText(/Verifying operational data:/i)).not.toBeInTheDocument();
+    });
   });
 
   it("shows known positions without claiming complete exposure when one broker is not ready", async () => {
@@ -147,6 +163,9 @@ describe("OperationsDashboard safety integration", () => {
 
     const modeButton = await screen.findByRole("button", { name: "→ Paper" });
     await waitFor(() => expect(modeButton).toBeDisabled());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Operational data unavailable: Small Live open positions.");
+    expect(alert).not.toHaveTextContent("FTMO open positions");
     fireEvent.click(screen.getByRole("button", { name: "Positions" }));
     expect(await screen.findByText(/Broker exposure could not be verified for every active connection/i)).toBeInTheDocument();
     expect(screen.getByText("EUR/USD")).toBeInTheDocument();

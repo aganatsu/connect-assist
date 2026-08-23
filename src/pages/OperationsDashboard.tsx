@@ -537,14 +537,16 @@ function OperationsDashboard() {
   );
   const connectionChecksPending = connectionsQuery.isPending ||
     activeConnections.some((_: any, index: number) => connectionStatusQueries[index]?.isPending);
-  const connectionChecksUnavailable = connectionsQuery.isError
+  const connectionListUnavailable = connectionsQuery.isError ||
+    (connectionsQuery.isSuccess && !Array.isArray(connectionsQuery.data));
+  const connectionChecksUnavailable = connectionListUnavailable
     || connectionStatusQueries.some((query) => query.isError || query.data?.fallback === true);
   const brokerExposurePending = connectionsQuery.isPending || activeConnections.some((_: any, index: number) => {
     const statusCheck = connectionStatusQueries[index];
     const positionsCheck = brokerTradeQueries[index];
     return statusCheck?.isPending || positionsCheck?.isPending;
   });
-  const brokerExposureUnavailable = connectionsQuery.isError || activeConnections.some((_: any, index: number) => {
+  const brokerExposureUnavailable = connectionListUnavailable || activeConnections.some((_: any, index: number) => {
     const positionsCheck = brokerTradeQueries[index];
     return positionsCheck?.isError ||
       (positionsCheck?.isSuccess && !Array.isArray(positionsCheck.data));
@@ -826,18 +828,53 @@ function OperationsDashboard() {
   };
 
   const avatar = (user?.email || "A").slice(0, 2).toUpperCase();
-  const dataStale = statusUnavailable
-    || scansQuery.isError
-    || pendingQuery.isError
-    || pendingSnapshot.fallback
-    || stagedQuery.isError
-    || connectionChecksUnavailable
-    || brokerExposurePending
-    || brokerExposureUnavailable
-    || brokerAccountQueries.some((query, index) => (
-      connectionStatusQueries[index]?.data?.ready === true
-      && (query.isPending || query.isError || query.data?.fallback === true)
-    ));
+  const pendingOperationalSources = Array.from(new Set([
+    ...(statusQuery.isPending ? ["Trading status"] : []),
+    ...(scansQuery.isPending ? ["Scan ledger"] : []),
+    ...(pendingQuery.isPending ? ["Zone setup ledger"] : []),
+    ...(stagedQuery.isPending ? ["Staged candidates"] : []),
+    ...(connectionsQuery.isPending ? ["Broker connections"] : []),
+    ...activeConnections.flatMap((connection: any, index: number) => {
+      const brokerName = String(connection.display_name || connection.broker_type || `Broker ${index + 1}`);
+      const sources: string[] = [];
+      if (connectionStatusQueries[index]?.isPending) sources.push(`${brokerName} connection status`);
+      if (brokerTradeQueries[index]?.isPending) sources.push(`${brokerName} open positions`);
+      if (
+        connectionStatusQueries[index]?.data?.ready === true
+        && brokerAccountQueries[index]?.isPending
+      ) {
+        sources.push(`${brokerName} account summary`);
+      }
+      return sources;
+    }),
+  ]));
+  const unavailableOperationalSources = Array.from(new Set([
+    ...(statusQuery.isError || (!statusQuery.isPending && statusUnavailable) ? ["Trading status"] : []),
+    ...(scansQuery.isError || (scansQuery.isSuccess && !Array.isArray(scansQuery.data)) ? ["Scan ledger"] : []),
+    ...(pendingQuery.isError || pendingSnapshot.fallback === true ? ["Zone setup ledger"] : []),
+    ...(stagedQuery.isError || (stagedQuery.isSuccess && !Array.isArray(stagedQuery.data)) ? ["Staged candidates"] : []),
+    ...(connectionListUnavailable ? ["Broker connections"] : []),
+    ...activeConnections.flatMap((connection: any, index: number) => {
+      const brokerName = String(connection.display_name || connection.broker_type || `Broker ${index + 1}`);
+      const sources: string[] = [];
+      const statusCheck = connectionStatusQueries[index];
+      const positionsCheck = brokerTradeQueries[index];
+      const accountCheck = brokerAccountQueries[index];
+      if (statusCheck?.isError || statusCheck?.data?.fallback === true) {
+        sources.push(`${brokerName} connection status`);
+      }
+      if (positionsCheck?.isError || (positionsCheck?.isSuccess && !Array.isArray(positionsCheck.data))) {
+        sources.push(`${brokerName} open positions`);
+      }
+      if (
+        statusCheck?.data?.ready === true
+        && (accountCheck?.isError || accountCheck?.data?.fallback === true)
+      ) {
+        sources.push(`${brokerName} account summary`);
+      }
+      return sources;
+    }),
+  ]));
 
   return (
     <AppShell variant="operations">
@@ -892,9 +929,16 @@ function OperationsDashboard() {
           </aside>
 
           <main className="apex-main">
-            {dataStale && (
-              <div className="apex-stale-notice" role="status">
-                <WifiOff aria-hidden="true" /> One or more operational sources are unavailable. Unknown values are labelled rather than assumed safe.
+            {unavailableOperationalSources.length > 0 && (
+              <div className="apex-stale-notice" role="alert">
+                <WifiOff aria-hidden="true" />
+                <span>Operational data unavailable: {unavailableOperationalSources.join(", ")}. Unknown values remain labelled.</span>
+              </div>
+            )}
+            {pendingOperationalSources.length > 0 && (
+              <div className="apex-stale-notice is-pending" role="status">
+                <Loader2 className="spin" aria-hidden="true" />
+                <span>Verifying operational data: {pendingOperationalSources.join(", ")}.</span>
               </div>
             )}
 
