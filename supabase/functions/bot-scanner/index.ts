@@ -10831,7 +10831,7 @@ async function runScanForUser(
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
-              }).eq("id", streamlinedStagedId);
+              }).eq("id", existingStaged.id);
               console.log(`[staging] Updated ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (cycle ${existingStaged.scan_cycles + 1})`);
             } catch (e: any) {
               console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
@@ -10957,7 +10957,7 @@ async function runScanForUser(
                       existingStaged.candidate_id || existingStaged.id,
                   },
                 }),
-              }).eq("id", streamlinedStagedId).eq("user_id", userId);
+              }).eq("id", existingStaged.id).eq("user_id", userId);
               console.log(
                 `[staging] Retained frozen ${pair} ${existingStaged.direction} candidate despite score drop to ${analysis.score.toFixed(1)}%`,
               );
