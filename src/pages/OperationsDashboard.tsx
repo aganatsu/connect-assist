@@ -36,7 +36,7 @@ import {
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/AppShell";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -48,6 +48,13 @@ import {
   type PendingOrderSnapshot,
   type StagedSetup,
 } from "@/lib/api";
+import {
+  canReturnToPaper,
+  canUseTradingControls,
+  readExecutionMode,
+  verifyExecutionModeChange,
+  type ExecutionMode,
+} from "@/lib/executionMode";
 import { formatPrice } from "@/lib/formatTime";
 import { getCurrentSession } from "@/lib/marketData";
 import { formatPipDisplay, getPipSize } from "@/lib/pipDisplay";
@@ -473,7 +480,11 @@ function OperationsDashboard() {
   });
 
   const status: any = statusQuery.data || {};
-  const statusUnavailable = statusQuery.isError || status?.fallback === true || status?.engine_status === "unknown";
+  const executionMode = !statusQuery.isPending && !statusQuery.isError
+    ? readExecutionMode(statusQuery.data)
+    : "unknown";
+  const accountStatusKnown = executionMode !== "unknown";
+  const statusUnavailable = !accountStatusKnown;
   const scans = Array.isArray(scansQuery.data) ? scansQuery.data : [];
   const pendingSnapshot: PendingOrderSnapshot = pendingQuery.data || {
     active: [],
@@ -485,7 +496,8 @@ function OperationsDashboard() {
     [pendingSnapshot.active],
   );
   const stagedSetups: StagedSetup[] = Array.isArray(stagedQuery.data) ? stagedQuery.data : [];
-  const connections = Array.isArray(connectionsQuery.data) ? connectionsQuery.data : [];
+  const brokerConnectionsKnown = connectionsQuery.isSuccess && Array.isArray(connectionsQuery.data);
+  const connections = brokerConnectionsKnown ? connectionsQuery.data : [];
   const activeConnections = connections.filter((connection: any) => connection.is_active);
   const connectionStatusQueries = useQueries({
     queries: activeConnections.map((connection: any) => ({
@@ -513,22 +525,67 @@ function OperationsDashboard() {
       retry: false,
     })),
   });
-  const connectedConnections = activeConnections.filter((_: any, index: number) => connectionStatusQueries[index]?.data?.ready === true);
-  const connectionChecksPending = activeConnections.length > 0 && connectionStatusQueries.some((query) => query.isPending);
+  const connectedConnections = activeConnections.filter((_: any, index: number) =>
+    connectionStatusQueries[index]?.isSuccess === true &&
+    connectionStatusQueries[index]?.data?.ready === true
+  );
+  const connectionChecksPending = connectionsQuery.isPending ||
+    activeConnections.some((_: any, index: number) => connectionStatusQueries[index]?.isPending);
   const connectionChecksUnavailable = connectionsQuery.isError
     || connectionStatusQueries.some((query) => query.isError || query.data?.fallback === true);
+  const brokerExposurePending = connectionsQuery.isPending || activeConnections.some((_: any, index: number) => {
+    const statusCheck = connectionStatusQueries[index];
+    const positionsCheck = brokerTradeQueries[index];
+    return statusCheck?.isPending ||
+      (statusCheck?.data?.ready === true && positionsCheck?.isPending);
+  });
+  const brokerExposureUnavailable = connectionsQuery.isError || activeConnections.some((_: any, index: number) => {
+    const statusCheck = connectionStatusQueries[index];
+    const positionsCheck = brokerTradeQueries[index];
+    if (statusCheck?.isError) return true;
+    if (statusCheck?.isSuccess && statusCheck.data?.ready !== true) return true;
+    return statusCheck?.data?.ready === true &&
+      (positionsCheck?.isError || (positionsCheck?.isSuccess && !Array.isArray(positionsCheck.data)));
+  });
+  const brokerExposureComplete = brokerConnectionsKnown &&
+    !brokerExposurePending &&
+    !brokerExposureUnavailable &&
+    activeConnections.every((_: any, index: number) =>
+      connectionStatusQueries[index]?.data?.ready === true &&
+      brokerTradeQueries[index]?.isSuccess === true &&
+      Array.isArray(brokerTradeQueries[index]?.data)
+    );
   const brokerTrades = activeConnections.flatMap((connection: any, index: number) => {
     const trades = brokerTradeQueries[index]?.data;
     if (!Array.isArray(trades)) return [];
     return trades.map((trade: any) => ({ trade, connection }));
   });
-  const brokerPositionsUnavailable = brokerTradeQueries.some((query, index) =>
-    connectionStatusQueries[index]?.data?.ready === true && (query.isError || query.data?.fallback === true),
-  );
   const brokerAccounts = activeConnections.map((connection: any, index: number) => ({
     connection,
     account: brokerAccountQueries[index]?.data,
   })).filter((item) => item.account && item.account.fallback !== true);
+  const liveBrokerStates = activeConnections.map((_: any, index: number) =>
+    connectionStatusQueries[index]?.isSuccess === true &&
+    connectionStatusQueries[index]?.data?.ready === true &&
+    brokerAccountQueries[index]?.isSuccess === true &&
+    !!brokerAccountQueries[index]?.data &&
+    brokerTradeQueries[index]?.isSuccess === true &&
+    Array.isArray(brokerTradeQueries[index]?.data)
+  );
+  const tradingControlsEnabled = canUseTradingControls(executionMode, liveBrokerStates);
+  const canSwitchBackToPaper = canReturnToPaper(
+    executionMode,
+    brokerConnectionsKnown,
+    activeConnections.map((_: any, index: number) => ({
+      available: brokerTradeQueries[index]?.isSuccess === true,
+      positions: brokerTradeQueries[index]?.data,
+    })),
+  );
+  const modeChangeEnabled = accountStatusKnown && (
+    executionMode === "paper"
+      ? brokerConnectionsKnown && activeConnections.length > 0
+      : canSwitchBackToPaper
+  );
 
   const safeScanIndex = Math.min(scanIndex, Math.max(0, scans.length - 1));
   const currentScan = scans[safeScanIndex];
@@ -580,6 +637,7 @@ function OperationsDashboard() {
   const scanBudgetHealth = meta?.creditBudget || null;
   const isRunning = Boolean(status.isRunning);
   const isPaused = Boolean(status.isPaused);
+  const engineAction: "start" | "pause" = !accountStatusKnown || (isRunning && !isPaused) ? "pause" : "start";
   const engineLabel = statusUnavailable
     ? "Status unavailable"
     : status.killSwitchActive
@@ -663,18 +721,40 @@ function OperationsDashboard() {
     onError: (error: any) => toast.error(error?.message || "Could not start scan"),
   });
   const engineMutation = useMutation({
-    mutationFn: () => isRunning && !isPaused ? paperApi.pauseEngine() : paperApi.startEngine(),
+    mutationFn: (action: "start" | "pause") => action === "pause" ? paperApi.pauseEngine() : paperApi.startEngine(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["paper-status"] }),
     onError: (error: any) => toast.error(error?.message || "Engine state did not change"),
   });
+  const engineControlDisabled = engineMutation.isPending || (engineAction === "start" && !tradingControlsEnabled);
   const stopEngineMutation = useMutation({
     mutationFn: () => paperApi.stopEngine(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["paper-status"] }),
     onError: (error: any) => toast.error(error?.message || "Engine did not stop"),
   });
   const modeMutation = useMutation({
-    mutationFn: (mode: "paper" | "live") => paperApi.setExecutionMode(mode),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["paper-status"] }),
+    mutationFn: async (mode: ExecutionMode) => {
+      const result = await paperApi.setExecutionMode(mode);
+      const verifiedMode = await verifyExecutionModeChange(
+        result,
+        mode,
+        async () => {
+          const persistedStatus = await paperApi.status();
+          return persistedStatus?.executionMode || persistedStatus?.account?.execution_mode;
+        },
+      );
+      return { ...result, executionMode: verifiedMode };
+    },
+    onSuccess: (result, mode) => {
+      queryClient.setQueryData(["paper-status"], (current: any) => ({
+        ...(current || {}),
+        executionMode: result.executionMode,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-connection-status"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-account"] });
+      toast.success(mode === "live" ? "Live execution enabled and verified" : "Paper execution enabled and verified");
+    },
     onError: (error: any) => toast.error(error?.message || "Execution mode did not change"),
   });
   const cancelPendingMutation = useMutation({
@@ -696,12 +776,20 @@ function OperationsDashboard() {
   });
   const paperCloseMutation = useMutation({
     mutationFn: (positionId: string) => paperApi.closePosition(positionId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["paper-status"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-account"] });
+      toast.success("Managed position close confirmed");
+    },
     onError: (error: any) => toast.error(error?.message || "Position close was not confirmed"),
   });
   const brokerCloseMutation = useMutation({
     mutationFn: ({ connectionId, tradeId }: { connectionId: string; tradeId: string }) => brokerExecApi.closeTrade(connectionId, tradeId),
-    onSuccess: (_result, variables) => queryClient.invalidateQueries({ queryKey: ["broker-open-trades", variables.connectionId] }),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["broker-open-trades", variables.connectionId] });
+      queryClient.invalidateQueries({ queryKey: ["broker-account", variables.connectionId] });
+    },
     onError: (error: any) => toast.error(error?.message || "Broker close was not confirmed"),
   });
   const killMutation = useMutation({
@@ -709,6 +797,8 @@ function OperationsDashboard() {
     onSuccess: () => {
       toast.error("Kill switch activated");
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
+      queryClient.invalidateQueries({ queryKey: ["broker-account"] });
     },
     onError: (error: any) => toast.error(error?.message || "Kill switch request failed"),
   });
@@ -732,10 +822,11 @@ function OperationsDashboard() {
     || pendingSnapshot.fallback
     || stagedQuery.isError
     || connectionChecksUnavailable
-    || brokerPositionsUnavailable
+    || brokerExposurePending
+    || brokerExposureUnavailable
     || brokerAccountQueries.some((query, index) => (
       connectionStatusQueries[index]?.data?.ready === true
-      && (query.isError || query.data?.fallback === true)
+      && (query.isPending || query.isError || query.data?.fallback === true)
     ));
 
   return (
@@ -815,7 +906,7 @@ function OperationsDashboard() {
                   <div className="apex-inline-actions">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button className="apex-icon-button" onClick={() => manualScan.mutate()} disabled={manualScan.isPending || scanPolling} aria-label="Run scan now">
+                        <button className="apex-icon-button" onClick={() => manualScan.mutate()} disabled={!tradingControlsEnabled || manualScan.isPending || scanPolling} aria-label="Run scan now">
                           {manualScan.isPending || scanPolling ? <Loader2 className="spin" /> : <RefreshCw />}
                         </button>
                       </TooltipTrigger>
@@ -1087,26 +1178,26 @@ function OperationsDashboard() {
             <em>{scanBudgetHealth ? `${scanBudgetHealth.refused || 0} refused · ${scanBudgetHealth.unenforced || 0} unenforced` : "Awaiting scan health"}</em>
           </div>
           <div className="apex-engine-suite">
-            <button className="apex-engine-control" onClick={() => engineMutation.mutate()} disabled={engineMutation.isPending || statusUnavailable}>
-              {isRunning && !isPaused ? <Pause /> : <Play />}
-              <span><strong>{engineLabel}</strong><small>{statusUnavailable ? "Execution mode unknown" : status.executionMode === "live" ? "Live execution" : "Paper execution"}</small></span>
+            <button className="apex-engine-control" aria-label={engineAction === "pause" ? "Pause engine" : "Start engine"} onClick={() => engineMutation.mutate(engineAction)} disabled={engineControlDisabled}>
+              {engineAction === "pause" ? <Pause /> : <Play />}
+              <span><strong>{engineLabel}</strong><small>{statusUnavailable ? "Pause remains available" : executionMode === "live" ? "Live execution" : "Paper execution"}</small></span>
             </button>
             <Tooltip><TooltipTrigger asChild>
-              <button className="apex-stop-control" aria-label="Stop engine" disabled={stopEngineMutation.isPending || statusUnavailable || !isRunning} onClick={() => {
+              <button className="apex-stop-control" aria-label="Stop engine" disabled={stopEngineMutation.isPending || (accountStatusKnown && !isRunning)} onClick={() => {
                 if (window.confirm("Stop the trading engine?")) stopEngineMutation.mutate();
               }}><Square /></button>
             </TooltipTrigger><TooltipContent>Stop engine</TooltipContent></Tooltip>
-            <button className="apex-mode-control" disabled={modeMutation.isPending || statusUnavailable || (status.executionMode === "live" && Array.isArray(status.positions) && status.positions.length > 0)} onClick={() => {
-              const nextMode = status.executionMode === "live" ? "paper" : "live";
+            <button className="apex-mode-control" disabled={modeMutation.isPending || !modeChangeEnabled} onClick={() => {
+              const nextMode: ExecutionMode = executionMode === "live" ? "paper" : "live";
               const warning = nextMode === "live"
                 ? "Enable LIVE execution? New authorized trades may be sent to connected brokers."
-                : "Switch to PAPER execution? Existing broker positions remain open.";
+                : "Switch to PAPER execution? Every active broker has been verified with no open positions.";
               if (window.confirm(warning)) modeMutation.mutate(nextMode);
-            }}>{statusUnavailable ? "Mode unknown" : status.executionMode === "live" ? "→ Paper" : "→ Live"}</button>
+            }}>{statusUnavailable ? "Mode unknown" : executionMode === "live" ? "→ Paper" : "→ Live"}</button>
           </div>
           <button
             className="apex-kill-switch"
-            disabled={killMutation.isPending || status.killSwitchActive}
+            disabled={killMutation.isPending || (accountStatusKnown && status.killSwitchActive)}
             onClick={() => {
               if (window.confirm("Activate the kill switch? This closes open positions and halts trading.")) killMutation.mutate();
             }}
@@ -1117,14 +1208,17 @@ function OperationsDashboard() {
 
         <Sheet open={positionsOpen} onOpenChange={setPositionsOpen}>
           <SheetContent side="right" className="apex-position-sheet">
-            <SheetHeader><SheetTitle>Open Positions</SheetTitle></SheetHeader>
+            <SheetHeader>
+              <SheetTitle>Open Positions</SheetTitle>
+              <SheetDescription className="sr-only">Verified broker exposure and managed position records.</SheetDescription>
+            </SheetHeader>
             <section className="apex-position-section">
-              <div className="apex-position-section-head"><h3>Broker positions</h3><span>{brokerTrades.length} returned</span></div>
-              {connectionChecksPending ? <div className="apex-empty"><Loader2 className="spin" /> Verifying broker connections…</div>
-              : connectionChecksUnavailable || brokerPositionsUnavailable ? <div className="apex-position-warning"><WifiOff /> Broker position state is unavailable. Verify the broker before assuming exposure is zero.</div>
-              : activeConnections.length === 0 ? <div className="apex-empty">No active broker connection returned.</div>
-              : brokerTrades.length === 0 ? <div className="apex-empty">Connected brokers report no open trades.</div>
-              : <div className="apex-position-list">{brokerTrades.map(({ trade, connection }: any) => {
+              <div className="apex-position-section-head"><h3>Broker positions</h3><span>{brokerTrades.length} verified</span></div>
+              {brokerExposurePending && <div className="apex-position-warning"><Loader2 className="spin" /> Broker exposure is still being verified. Known positions are shown below.</div>}
+              {brokerExposureUnavailable && <div className="apex-position-warning"><WifiOff /> Broker exposure could not be verified for every active connection. Do not assume unreported exposure is zero.</div>}
+              {brokerConnectionsKnown && activeConnections.length === 0 && <div className="apex-empty">No active broker connection configured.</div>}
+              {brokerExposureComplete && activeConnections.length > 0 && brokerTrades.length === 0 && <div className="apex-empty">All verified brokers report no open trades.</div>}
+              {brokerTrades.length > 0 && <div className="apex-position-list">{brokerTrades.map(({ trade, connection }: any) => {
                 const symbol = brokerTradeSymbol(trade);
                 const direction = brokerTradeDirection(trade);
                 const pnl = Number(trade.profit ?? trade.unrealizedPL ?? trade.unrealizedProfit ?? 0);
@@ -1144,7 +1238,7 @@ function OperationsDashboard() {
             </section>
 
             <section className="apex-position-section">
-              <div className="apex-position-section-head"><h3>Internal position ledger</h3><span>Paper / mirror records</span></div>
+              <div className="apex-position-section-head"><h3>Managed position ledger</h3><span>Broker-first close authority</span></div>
               {statusUnavailable ? (
                 <div className="apex-position-warning"><WifiOff /> Internal position state is unavailable. Open exposure has not been assumed to be zero.</div>
               ) : !Array.isArray(status.positions) || status.positions.length === 0 ? (
@@ -1158,8 +1252,8 @@ function OperationsDashboard() {
                     <div><dt>P&amp;L</dt><dd>{Number(position.pnl || 0).toFixed(2)}</dd></div>
                   </dl>
                   <button disabled={paperCloseMutation.isPending} onClick={() => {
-                    if (window.confirm(`Close ${position.symbol} internal position?`)) paperCloseMutation.mutate(position.id);
-                  }}><X /> Close internal position</button>
+                    if (window.confirm(`Close ${position.symbol} managed position? Linked live broker positions close first; the internal ledger finalizes only after broker confirmation.`)) paperCloseMutation.mutate(position.id);
+                  }}><X /> Close managed position</button>
                 </article>
               ))}</div>}
             </section>
