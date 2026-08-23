@@ -27,4 +27,12 @@ describe("remote read truthfulness", () => {
     expect(() => requireAvailableObject({ state: "unknown" }, "Broker account"))
       .toThrow("Broker account is unavailable");
   });
+
+  it("rejects successful-looking objects that omit required state", () => {
+    expect(() => requireAvailableObject(
+      { ok: true },
+      "Broker connection status",
+      (status) => typeof status.ready === "boolean",
+    )).toThrow("response is incomplete");
+  });
 });

@@ -63,9 +63,19 @@ A confirmed empty array means `none`; a failed or fallback read means `unknown`.
 
 `src/lib/executionMode.ts:readExecutionMode` is the frontend owner for interpreting the
 mode. Status surfaces render Unknown explicitly, and Bot/Live Broker controls fail closed until
-the current account mode, broker connection list, broker account, and broker position reads are
-available. Cached function fallbacks are not accepted as current truth for these safety-sensitive
-reads.
+the current account mode and broker connection list are available, and every active broker reports
+a ready connection plus readable account and open-position state. Position, balance, reset, and
+configuration mutations are disabled while that truth is unavailable. Cached function fallbacks are
+not accepted as current truth for these safety-sensitive reads.
+
+This frontend preflight is defense in depth, not an atomic execution guarantee. Live order fanout
+still has separate orchestrators in `paper-trading`, `bot-scanner`, and
+`zone-confirmation-scanner`; a server-side all-connections preflight remains required before a
+partial multi-account dispatch can be ruled out.
+
+All execution-mode mutations, including live-to-paper, remain disabled while aggregate broker truth
+is unknown. A zero internal-position count cannot rule out an uncertain or orphaned broker exposure;
+relaxing that guard requires a durable server-side unresolved-exposure ledger first.
 
 ## Game Plan generation and consumption
 

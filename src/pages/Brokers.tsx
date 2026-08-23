@@ -88,6 +88,7 @@ export default function BrokersPage() {
       toast.success("Connection removed");
       setSelectedId(null);
     },
+    onError: (error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to remove connection"),
   });
 
   const testMutation = useMutation({

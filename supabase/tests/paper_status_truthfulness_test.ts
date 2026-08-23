@@ -22,6 +22,17 @@ Deno.test("paper status does not flatten failed position reads", () => {
 });
 
 
+Deno.test("paper status does not flatten failed post-close refreshes", () => {
+  assertMatch(
+    source,
+    /data:\s*remaining,\s*error:\s*remainingReadError[\s\S]*position_status_refresh_failed/,
+  );
+  assertMatch(
+    source,
+    /data:\s*updatedAccount,\s*error:\s*accountRefreshError[\s\S]*account_status_refresh_failed/,
+  );
+});
+
 Deno.test("broker connection status reports upstream failures as unknown", () => {
   assertMatch(
     brokerSource,

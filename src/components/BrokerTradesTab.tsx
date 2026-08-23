@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatPrice } from "@/lib/formatTime";
+import { canUseTradingControls } from "@/lib/executionMode";
 
 // ── Persistence ──
 const STORAGE_KEY = "broker-tab-layout";
@@ -198,9 +199,15 @@ function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoadin
 
 // ── Section: Open Positions ──
 function OpenPositionsContent({
-  positions, paperPositions, connectionId, isLoading, error,
+  positions, paperPositions, connectionId, isLoading, error, mutationsEnabled, mutationUnavailableMessage,
 }: {
-  positions: any[]; paperPositions: any[]; connectionId: string; isLoading: boolean; error?: string;
+  positions: any[];
+  paperPositions: any[];
+  connectionId: string;
+  isLoading: boolean;
+  error?: string;
+  mutationsEnabled: boolean;
+  mutationUnavailableMessage?: string;
 }) {
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -208,7 +215,10 @@ function OpenPositionsContent({
   const [editTP, setEditTP] = useState("");
 
   const closeMut = useMutation({
-    mutationFn: (tradeId: string) => brokerExecApi.closeTrade(connectionId, tradeId),
+    mutationFn: (tradeId: string) => {
+      if (!mutationsEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
+      return brokerExecApi.closeTrade(connectionId, tradeId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
       queryClient.invalidateQueries({ queryKey: ["broker-account"] });
@@ -218,8 +228,10 @@ function OpenPositionsContent({
   });
 
   const modifyMut = useMutation({
-    mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) =>
-      brokerExecApi.modifyTrade(connectionId, tradeId, updates),
+    mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) => {
+      if (!mutationsEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
+      return brokerExecApi.modifyTrade(connectionId, tradeId, updates);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
       setEditingId(null);
@@ -248,6 +260,11 @@ function OpenPositionsContent({
 
   return (
     <>
+    {!mutationsEnabled && (
+      <div className="mx-2 mt-2 border border-warning/30 bg-warning/5 px-2 py-1.5 text-[10px] text-warning">
+        {mutationUnavailableMessage || "Broker state is unavailable. Live position controls are disabled."}
+      </div>
+    )}
     {/* Mobile: Stacked cards */}
     <div className="md:hidden space-y-1.5 p-2">
       {positions.map((pos: any) => {
@@ -384,8 +401,9 @@ function OpenPositionsContent({
                             updates.symbol = pos.symbol;
                             modifyMut.mutate({ tradeId: pos.id, updates });
                           }}
-                          className="text-success hover:bg-success/10 p-0.5 rounded transition-colors"
-                          disabled={modifyMut.isPending}
+                          className="text-success hover:bg-success/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!mutationsEnabled || modifyMut.isPending}
+                          title={!mutationsEnabled ? "Broker state unavailable" : "Save SL/TP"}
                         >
                           {modifyMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                         </button>
@@ -401,8 +419,9 @@ function OpenPositionsContent({
                             setEditSL(pos.stopLoss?.toString() || "");
                             setEditTP(pos.takeProfit?.toString() || "");
                           }}
-                          className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors"
-                          title="Edit SL/TP"
+                          className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!mutationsEnabled}
+                          title={!mutationsEnabled ? "Broker state unavailable" : "Edit SL/TP"}
                         >
                           <Edit3 className="h-3 w-3" />
                         </button>
@@ -412,9 +431,9 @@ function OpenPositionsContent({
                               closeMut.mutate(pos.id);
                             }
                           }}
-                          className="text-destructive hover:bg-destructive/10 p-0.5 rounded transition-colors"
-                          disabled={closeMut.isPending}
-                          title="Close position"
+                          className="text-destructive hover:bg-destructive/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!mutationsEnabled || closeMut.isPending}
+                          title={!mutationsEnabled ? "Broker state unavailable" : "Close position"}
                         >
                           <XCircle className="h-3 w-3" />
                         </button>
@@ -659,7 +678,7 @@ function TradeHistoryContent({
 }
 
 // ── Main Component ──
-export default function BrokerTradesTab() {
+export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed: boolean }) {
   const queryClient = useQueryClient();
   const [layout, setLayout] = useState<LayoutState>(loadLayout);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -765,14 +784,27 @@ export default function BrokerTradesTab() {
   const connId = selectedConnId || activeConns[0]?.id;
 
   // Load broker data
-  const { data: accountData, isLoading: accountLoading, isError: accountUnavailable, error: accountError } = useQuery({
+  const {
+    data: connectionState,
+    isLoading: connectionStateLoading,
+    isSuccess: connectionStateAvailable,
+    isError: connectionStateUnavailable,
+    error: connectionStateError,
+  } = useQuery({
+    queryKey: ["broker-connection-status", connId],
+    queryFn: () => brokerExecApi.connectionStatus(connId),
+    enabled: !!connId,
+    refetchInterval: 30000,
+  });
+
+  const { data: accountData, isLoading: accountLoading, isSuccess: accountAvailable, isError: accountUnavailable, error: accountError } = useQuery({
     queryKey: ["broker-account", connId],
     queryFn: () => brokerExecApi.accountSummary(connId),
     enabled: !!connId,
     refetchInterval: 15000,
   });
 
-  const { data: brokerPositions, isLoading: positionsLoading, isError: positionsUnavailable, error: positionsError } = useQuery({
+  const { data: brokerPositions, isLoading: positionsLoading, isSuccess: positionsAvailable, isError: positionsUnavailable, error: positionsError } = useQuery({
     queryKey: ["broker-open-trades", connId],
     queryFn: () => brokerExecApi.openTrades(connId),
     enabled: !!connId,
@@ -809,6 +841,21 @@ export default function BrokerTradesTab() {
     () => Array.isArray(tradeHistory) ? tradeHistory : [],
     [tradeHistory],
   );
+  const brokerMutationsEnabled = mutationsAllowed && canUseTradingControls("live", [
+    connectionStateAvailable && connectionState?.ready === true &&
+    accountAvailable && positionsAvailable,
+  ]);
+  const mutationUnavailableMessage = !mutationsAllowed
+    ? "Account mode or another active broker state is unavailable. Live position controls are disabled."
+    : connectionStateUnavailable
+      ? readErrorMessage(connectionStateError, "Broker connection status is unavailable")
+      : connectionState?.ready === false
+        ? "Broker connection is not ready. Live position controls are disabled."
+        : accountUnavailable
+          ? readErrorMessage(accountError, "Broker account state is unavailable")
+          : positionsUnavailable
+            ? readErrorMessage(positionsError, "Broker position state is unavailable")
+            : "Loading current broker state. Live position controls are disabled.";
 
   // Sync status badges for the section header
   const syncBadges = useMemo(() => {
@@ -879,6 +926,8 @@ export default function BrokerTradesTab() {
           connectionId={connId}
           isLoading={positionsLoading}
           error={positionsUnavailable ? readErrorMessage(positionsError, "Broker position state is unavailable") : undefined}
+          mutationsEnabled={brokerMutationsEnabled}
+          mutationUnavailableMessage={mutationUnavailableMessage}
         />
       ),
     },
@@ -968,13 +1017,13 @@ export default function BrokerTradesTab() {
         </button>
       </div>
 
-      {/* Account error state */}
-      {accountUnavailable && (
-        <div className="border border-destructive/30 bg-destructive/5 rounded-lg p-3 flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+      {/* Broker truth state */}
+      {!brokerMutationsEnabled && !connectionStateLoading && !accountLoading && !positionsLoading && (
+        <div className="border border-warning/30 bg-warning/5 rounded-lg p-3 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
           <div>
-            <p className="text-xs font-medium text-destructive">Broker Connection Error</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{readErrorMessage(accountError, "Broker account state is unavailable")}</p>
+            <p className="text-xs font-medium text-warning">Live controls unavailable</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{mutationUnavailableMessage}</p>
           </div>
         </div>
       )}

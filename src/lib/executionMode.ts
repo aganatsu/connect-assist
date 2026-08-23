@@ -27,12 +27,13 @@ export function readExecutionMode(status: unknown): ExecutionModeState {
   return mode === "paper" || mode === "live" ? mode : "unknown";
 }
 
-/** Trading mutations require a known account mode and, for live mode, known broker state. */
+/** Trading mutations require a known account mode and every active live broker to be ready. */
 export function canUseTradingControls(
   mode: ExecutionModeState,
-  liveBrokerStateKnown: boolean,
+  liveBrokerStates: readonly boolean[],
 ): boolean {
-  return mode === "paper" || (mode === "live" && liveBrokerStateKnown);
+  return mode === "paper" ||
+    (mode === "live" && liveBrokerStates.length > 0 && liveBrokerStates.every(Boolean));
 }
 
 export interface ExecutionModeResponse {

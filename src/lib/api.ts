@@ -588,7 +588,8 @@ export const settingsApi = {
 
 // ── Broker Connections ──
 export const brokerApi = {
-  list: () => invokeFunction("broker-connections", { action: "list" }),
+  list: () => invokeFunction("broker-connections", { action: "list" })
+    .then((data) => requireAvailableCollection<any>(data, "Broker connections")),
   create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string>; commission_per_lot?: number }) =>
     invokeFunction("broker-connections", { action: "create", ...data }),
   update: (data: any) => invokeFunction("broker-connections", { action: "update", ...data }),
@@ -613,7 +614,25 @@ export const smcApi = {
 
 // ── Paper Trading ──
 export const paperApi = {
-  status: () => invokeFunction("paper-trading", { action: "status" }),
+  status: () => invokeFunction("paper-trading", { action: "status" })
+    .then((data) => {
+      const status = requireAvailableObject<any>(data, "Trading account status");
+      const mode = status.executionMode ?? status.account?.execution_mode;
+      const rawBalance = status.balance;
+      const balanceAvailable =
+        (typeof rawBalance === "number" ||
+          (typeof rawBalance === "string" && rawBalance.trim() !== "")) &&
+        Number.isFinite(Number(rawBalance));
+      if (
+        (mode !== "paper" && mode !== "live") ||
+        !balanceAvailable ||
+        !Array.isArray(status.positions) ||
+        !Array.isArray(status.tradeHistory)
+      ) {
+        throw new Error("Trading account status is incomplete. Controls remain disabled.");
+      }
+      return status;
+    }),
   placeOrder: (order: { symbol: string; direction: string; size: number; entryPrice: number; stopLoss?: number; takeProfit?: number; signalReason?: string; signalScore?: number }) =>
     invokeFunction("paper-trading", { action: "place_order", ...order }),
   closePosition: (positionId: string, exitPrice?: number, reason?: string) =>
@@ -1161,11 +1180,25 @@ export const fundamentalsApi = {
 // ── Broker Execution ──
 export const brokerExecApi = {
   accountSummary: (connectionId: string) =>
-    invokeFunction("broker-execute", { action: "account_summary", connectionId }),
+    invokeFunction("broker-execute", { action: "account_summary", connectionId })
+      .then((data) => requireAvailableObject<any>(
+        data,
+        "Broker account",
+        (account) => [account.balance, account.equity].some((value) =>
+          (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
+          Number.isFinite(Number(value))
+        ),
+      )),
   openTrades: (connectionId: string) =>
-    invokeFunction("broker-execute", { action: "open_trades", connectionId }),
+    invokeFunction("broker-execute", { action: "open_trades", connectionId })
+      .then((data) => requireAvailableCollection<any>(data, "Broker positions")),
   connectionStatus: (connectionId: string) =>
-    invokeFunction("broker-execute", { action: "connection_status", connectionId }),
+    invokeFunction("broker-execute", { action: "connection_status", connectionId })
+      .then((data) => requireAvailableObject<any>(
+        data,
+        "Broker connection status",
+        (status) => typeof status.ready === "boolean",
+      )),
   validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
     invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
@@ -1175,7 +1208,8 @@ export const brokerExecApi = {
     invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
       .then(requireConfirmedBrokerMutation),
   tradeHistory: (connectionId: string, limit = 50) =>
-    invokeFunction("broker-execute", { action: "trade_history", connectionId, limit }),
+    invokeFunction("broker-execute", { action: "trade_history", connectionId, limit })
+      .then((data) => requireAvailableCollection<any>(data, "Broker trade history")),
   modifyTrade: (connectionId: string, tradeId: string, updates: { stopLoss?: number; takeProfit?: number; symbol?: string }) =>
     invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
       .then(requireConfirmedBrokerMutation),

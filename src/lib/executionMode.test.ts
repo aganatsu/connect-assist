@@ -7,14 +7,15 @@ import {
 } from "./executionMode";
 
 describe("canUseTradingControls", () => {
-  it("fails closed when the account mode or live broker state is unknown", () => {
-    expect(canUseTradingControls("unknown", true)).toBe(false);
-    expect(canUseTradingControls("live", false)).toBe(false);
+  it("fails closed when the account mode or any active broker state is unknown", () => {
+    expect(canUseTradingControls("unknown", [true])).toBe(false);
+    expect(canUseTradingControls("live", [])).toBe(false);
+    expect(canUseTradingControls("live", [true, false])).toBe(false);
   });
 
-  it("allows a known paper account or fully known live account", () => {
-    expect(canUseTradingControls("paper", false)).toBe(true);
-    expect(canUseTradingControls("live", true)).toBe(true);
+  it("allows a known paper account or fully known live accounts", () => {
+    expect(canUseTradingControls("paper", [])).toBe(true);
+    expect(canUseTradingControls("live", [true, true])).toBe(true);
   });
 });
 

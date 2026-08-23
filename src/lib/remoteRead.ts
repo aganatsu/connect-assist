@@ -27,13 +27,18 @@ export function requireAvailableCollection<T>(value: unknown, label: string): T[
 export function requireAvailableObject<T extends Record<string, unknown>>(
   value: unknown,
   label: string,
+  isComplete?: (candidate: T) => boolean,
 ): T {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(unavailableMessage(value, label));
   }
-  const candidate = value as RemoteReadFailure;
-  if (candidate.state === "unknown" || candidate.state === "unavailable" || candidate.fallback === true || candidate.ok === false || candidate.error) {
+  const failure = value as RemoteReadFailure;
+  if (failure.state === "unknown" || failure.state === "unavailable" || failure.fallback === true || failure.ok === false || failure.error) {
     throw new Error(unavailableMessage(value, label));
   }
-  return value as T;
+  const candidate = value as T;
+  if (isComplete && !isComplete(candidate)) {
+    throw new Error(label + " response is incomplete. Refresh and try again.");
+  }
+  return candidate;
 }

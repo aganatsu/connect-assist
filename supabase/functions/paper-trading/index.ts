@@ -642,10 +642,28 @@ Deno.serve(async (req) => {
 
         // Re-fetch positions after auto-closes
         if (closedIds.length > 0) {
-          const { data: remaining } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
-          positions = remaining || [];
+          const { data: remaining, error: remainingReadError } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
+          if (remainingReadError) {
+            return respond({
+              ok: false,
+              state: "unknown",
+              executionMode: "unknown",
+              error: "Open-position status is unavailable after closing positions: " + remainingReadError.message,
+              code: "position_status_refresh_failed",
+            }, 503);
+          }
+          positions = remaining;
           // Re-fetch account for updated balance
-          const { data: updatedAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+          const { data: updatedAccount, error: accountRefreshError } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+          if (accountRefreshError) {
+            return respond({
+              ok: false,
+              state: "unknown",
+              executionMode: "unknown",
+              error: "Trading account status is unavailable after closing positions: " + accountRefreshError.message,
+              code: "account_status_refresh_failed",
+            }, 503);
+          }
           if (updatedAccount) Object.assign(account, updatedAccount);
         }
       }
