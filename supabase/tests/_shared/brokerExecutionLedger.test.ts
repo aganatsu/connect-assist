@@ -205,6 +205,98 @@ Deno.test("execution wrapper downgrades success when ledger completion fails", a
   });
 });
 
+Deno.test("execution wrapper contains a rejected completion RPC after broker success", async () => {
+  const calls: string[] = [];
+  const supabase = {
+    rpc: async (name: string) => {
+      calls.push(name);
+      if (name === "claim_broker_execution") {
+        return {
+          data: {
+            claimed: true,
+            code: "claimed",
+            ledger_id: "ledger-1",
+            claim_token: "token-1",
+          },
+          error: null,
+        };
+      }
+      throw new Error("ledger completion transport failed");
+    },
+  };
+
+  const result = await executeBrokerOrderWithLedger(
+    supabase,
+    {
+      userId: "user-1",
+      botId: "smc",
+      positionId: "position-1",
+      brokerConnectionId: "connection-1",
+      route: "manual_place_order",
+      requestPayload: { symbol: "EUR/USD" },
+    },
+    async () => ({
+      ok: true,
+      httpStatus: 200,
+      parsedBody: {
+        stringCode: "TRADE_RETCODE_DONE",
+        positionId: "broker-position-1",
+      },
+      confirmationMode: "metaapi_position_open",
+    }),
+  );
+
+  assertEquals(result.sent, true);
+  assertEquals(result.status, "uncertain");
+  assertEquals(calls, [
+    "claim_broker_execution",
+    "complete_broker_execution",
+  ]);
+});
+
+Deno.test("execution wrapper contains a rejected completion RPC after broker send throws", async () => {
+  const calls: string[] = [];
+  const supabase = {
+    rpc: async (name: string) => {
+      calls.push(name);
+      if (name === "claim_broker_execution") {
+        return {
+          data: {
+            claimed: true,
+            code: "claimed",
+            ledger_id: "ledger-1",
+            claim_token: "token-1",
+          },
+          error: null,
+        };
+      }
+      throw new Error("ledger completion transport failed");
+    },
+  };
+
+  const result = await executeBrokerOrderWithLedger(
+    supabase,
+    {
+      userId: "user-1",
+      botId: "smc",
+      positionId: "position-1",
+      brokerConnectionId: "connection-1",
+      route: "manual_place_order",
+      requestPayload: { symbol: "EUR/USD" },
+    },
+    async () => {
+      throw new Error("broker request failed");
+    },
+  );
+
+  assertEquals(result.sent, true);
+  assertEquals(result.status, "uncertain");
+  assertEquals(calls, [
+    "claim_broker_execution",
+    "complete_broker_execution",
+  ]);
+});
+
 Deno.test("broker response classifies a broker rejection as terminal", () => {
   assertEquals(
     classifyBrokerExecutionResponse({

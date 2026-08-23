@@ -71,16 +71,20 @@ export async function completeBrokerExecution(
   },
 ): Promise<boolean> {
   if (!claim.claimed || !claim.ledgerId || !claim.claimToken) return false;
-  const { data, error } = await supabase.rpc("complete_broker_execution", {
-    p_ledger_id: claim.ledgerId,
-    p_user_id: input.userId,
-    p_claim_token: claim.claimToken,
-    p_status: input.status,
-    p_response_payload: input.responsePayload || null,
-    p_broker_order_id: input.brokerOrderId || null,
-    p_last_error: input.lastError || null,
-  });
-  return !error && data?.completed === true;
+  try {
+    const { data, error } = await supabase.rpc("complete_broker_execution", {
+      p_ledger_id: claim.ledgerId,
+      p_user_id: input.userId,
+      p_claim_token: claim.claimToken,
+      p_status: input.status,
+      p_response_payload: input.responsePayload || null,
+      p_broker_order_id: input.brokerOrderId || null,
+      p_last_error: input.lastError || null,
+    });
+    return !error && data?.completed === true;
+  } catch {
+    return false;
+  }
 }
 
 export type BrokerExecutionConfirmationMode =

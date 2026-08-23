@@ -24,9 +24,8 @@ Deno.test("every direct broker mutation requires positive confirmation", async (
     "async function mirrorToMT5",
     "async function closeBrokerPositions",
   );
-  assertStringIncludes(manualOpen, "executeBrokerOrderWithLedger(");
-  assertStringIncludes(manualOpen, 'route: "manual_place_order"');
-  assertStringIncludes(manualOpen, 'confirmationMode: "metaapi_position_open"');
+  assertEquals(manualOpen, "");
+  assertEquals(paper.includes("executeBrokerOrderWithLedger"), false);
 
   const paperClose = section(
     paper,
@@ -70,4 +69,27 @@ Deno.test("every direct broker mutation requires positive confirmation", async (
   assertStringIncludes(reconcile, '"oanda_order_fill"');
   assertStringIncludes(reconcile, '"metaapi_trade"');
   assertEquals(reconcile.includes("if (res.ok) return { ok: true"), false);
+});
+
+Deno.test("manual live placement fails closed before creating a paper position", async () => {
+  const paper = await source("../../functions/paper-trading/index.ts");
+  const manualPlace = section(
+    paper,
+    'if (action === "place_order")',
+    "// ── Update SL/TP on an open position",
+  );
+  const liveGuardAt = manualPlace.indexOf(
+    'if (executionMode === "live")',
+  );
+  const insertAt = manualPlace.indexOf(
+    'supabase.from("paper_positions").insert',
+  );
+  assertStringIncludes(manualPlace, "if (accountError) throw accountError;");
+  assertStringIncludes(manualPlace, "if (accountInsertError) throw accountInsertError;");
+  assertStringIncludes(manualPlace, 'code: "manual_live_order_requires_broker_first"');
+  assertEquals(manualPlace.includes("mt5Mirror"), false);
+  assertEquals(manualPlace.includes("mirrorToMT5"), false);
+  assertEquals(manualPlace.includes("finalize_live_broker_position"), false);
+  assertEquals(liveGuardAt >= 0, true);
+  assertEquals(insertAt > liveGuardAt, true);
 });

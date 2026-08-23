@@ -6,7 +6,6 @@ import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts"
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import {
   classifyBrokerMutationHttpResponse,
-  executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
@@ -98,123 +97,6 @@ async function buildRateMap(): Promise<Record<string, number>> {
   return map;
 }
 
-// ─── MT5 Mirror Helper ──────────────────────────────────────────────────────
-async function mirrorToMT5(supabase: any, userId: string, params: {
-  action: "open";
-  symbol: string;
-  direction?: string;
-  size?: number;
-  stopLoss?: number | null;
-  takeProfit?: number | null;
-  positionId?: string;
-}): Promise<{ success: boolean; mt5Result?: any; error?: string; connectionId?: string; connectionIds?: string[] }> {
-  try {
-    // Find ALL active metaapi broker connections (not just the first one)
-    const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
-    if (!connections || connections.length === 0) return { success: false, error: "no_connection" };
-
-    if (params.action === "open") {
-      if (!params.positionId) {
-        return { success: false, error: "position_id_required" };
-      }
-      const successIds: string[] = [];
-      let firstResult: any = null;
-      let lastError: string | null = null;
-
-      for (const conn of connections) {
-        try {
-          let authToken = conn.api_key;
-          let metaAccountId = conn.account_id;
-          if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-            authToken = conn.account_id;
-            metaAccountId = conn.api_key;
-          }
-
-          const body: any = {
-            actionType: params.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-            symbol: params.symbol.replace("/", ""),
-            volume: params.size,
-          };
-          if (params.stopLoss) body.stopLoss = params.stopLoss;
-          if (params.takeProfit) body.takeProfit = params.takeProfit;
-          if (params.positionId) body.comment = `paper:${params.positionId}`;
-
-          const execution = await executeBrokerOrderWithLedger(
-            supabase,
-            {
-              userId,
-              botId: "smc",
-              positionId: params.positionId,
-              brokerConnectionId: conn.id,
-              route: "manual_place_order",
-              requestPayload: {
-                symbol: params.symbol,
-                direction: params.direction,
-                volume: params.size,
-                stopLoss: params.stopLoss,
-                takeProfit: params.takeProfit,
-              },
-            },
-            async () => {
-              const { res, body: resBody } = await metaFetch(
-                metaAccountId,
-                authToken,
-                (base) => `${base}/trade`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(body),
-                },
-                { allowFailover: false },
-              );
-              let parsedBody: any = null;
-              try {
-                parsedBody = resBody ? JSON.parse(resBody) : null;
-              } catch {
-                // The shared classifier marks malformed success responses uncertain.
-              }
-              return {
-                ok: res.ok,
-                httpStatus: res.status,
-                parsedBody,
-                rawBody: resBody,
-                confirmationMode: "metaapi_position_open",
-              };
-            },
-          );
-          if (execution.status === "succeeded") {
-            const parsed = execution.parsedBody;
-            if (!firstResult) firstResult = parsed;
-            successIds.push(conn.id);
-            console.log(`MT5 mirror open [${conn.display_name}]: SUCCESS`);
-          } else {
-            lastError = `MT5 order ${execution.status} on ${conn.display_name}: ${execution.error || "reconciliation required"}`;
-            console.warn(`MT5 mirror open [${conn.display_name}] ${execution.status}: ${execution.error || "reconciliation required"}`);
-          }
-        } catch (connErr: any) {
-          lastError = connErr?.message || String(connErr);
-          console.warn(`MT5 mirror open [${conn.display_name}] error: ${lastError}`);
-        }
-      }
-
-      if (successIds.length > 0) {
-        return { success: true, mt5Result: firstResult, connectionId: successIds[0], connectionIds: successIds };
-      }
-      return { success: false, error: lastError || "all connections failed" };
-    }
-    return { success: false, error: "unsupported action" };
-
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
-      console.warn("MT5 mirror SSL issue \u2014 credentials saved, trade may still execute:", msg);
-      return { success: false, error: "SSL certificate issue \u2014 credentials are saved" };
-    }
-    console.error("MT5 mirror error:", msg);
-    return { success: false, error: msg };
-  }
-}
 // ─── Close ONLY the broker connections this paper position was actually mirrored to ──
 // Critical fix: never iterate ALL active connections — only the ones recorded at open time.
 // If `mirroredConnectionIds` is empty, we close nothing on broker side (paper-only or pre-tracking position).
@@ -865,9 +747,25 @@ Deno.serve(async (req) => {
     // ── Place order ──
     if (action === "place_order") {
       const { symbol, direction, size, stopLoss, takeProfit, signalReason, signalScore } = payload;
-      const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+      const { data: account, error: accountError } = await supabase.from("paper_accounts")
+        .select("*").eq("user_id", user.id).maybeSingle();
+      if (accountError) throw accountError;
+      let executionMode = account?.execution_mode ?? "paper";
       if (!account) {
-        await supabase.from("paper_accounts").insert({ user_id: user.id, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" });
+        const { data: createdAccount, error: accountInsertError } = await supabase
+          .from("paper_accounts")
+          .insert({ user_id: user.id, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" })
+          .select("execution_mode")
+          .single();
+        if (accountInsertError) throw accountInsertError;
+        executionMode = createdAccount?.execution_mode ?? "paper";
+      }
+      if (executionMode === "live") {
+        return respond({
+          success: false,
+          error: "Manual live orders require the broker-first execution path. Switch to paper mode to place this order.",
+          code: "manual_live_order_requires_broker_first",
+        }, 409);
       }
       const positionId = crypto.randomUUID().slice(0, 8);
       const orderId = crypto.randomUUID().slice(0, 8);
@@ -922,37 +820,16 @@ Deno.serve(async (req) => {
         }
       }
 
-      await supabase.from("paper_positions").insert({
+      const { error: positionInsertError } = await supabase.from("paper_positions").insert({
         user_id: user.id, position_id: positionId, symbol, direction, size: size.toString(),
         entry_price: entryPrice.toString(), current_price: entryPrice.toString(),
         stop_loss: adjustedSL?.toString() || null, take_profit: adjustedTP?.toString() || null,
         open_time: now, signal_reason: signalReason || "", signal_score: (signalScore || 0).toString(),
         order_id: orderId, position_status: "open",
       });
+      if (positionInsertError) throw positionInsertError;
 
-      // Mirror to MT5 if connected
-      let mt5Mirror: any = null;
-      const { data: acctForMode } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", user.id).maybeSingle();
-      if (acctForMode?.execution_mode === "live") {
-        mt5Mirror = await mirrorToMT5(supabase, user.id, {
-          action: "open", symbol, direction, size, stopLoss: adjustedSL, takeProfit: adjustedTP, positionId,
-        });
-        if (mt5Mirror.success) {
-          const mirroredIds = mt5Mirror.connectionIds || (mt5Mirror.connectionId ? [mt5Mirror.connectionId] : []);
-          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots on ${mirroredIds.length} connection(s)`);
-          // Record ALL broker connections this position was mirrored to so close
-          // fan-out targets only these connections.
-          if (mirroredIds.length > 0) {
-            await supabase.from("paper_positions")
-              .update({ mirrored_connection_ids: mirroredIds })
-              .eq("position_id", positionId).eq("user_id", user.id);
-          }
-        } else if (mt5Mirror.error !== "no_connection") {
-          console.warn(`MT5 mirror failed: ${mt5Mirror.error}`);
-        }
-      }
-
-      return respond({ success: true, positionId, orderId, mt5Mirror });
+      return respond({ success: true, positionId, orderId });
     }
 
     // ── Update SL/TP on an open position ──
