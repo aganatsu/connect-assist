@@ -1,9 +1,68 @@
 import { supabase } from "@/integrations/supabase/client";
-import { requireConfirmedBrokerMutation } from "@/lib/brokerMutationResult";
+import {
+  BROKER_MUTATION_UNCERTAIN_MESSAGE,
+  requireConfirmedBrokerMutation,
+} from "@/lib/brokerMutationResult";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
 const functionCooldownUntil = new Map<string, number>();
 const functionResponseCache = new Map<string, { data: any; expiresAt: number }>();
+
+const RETRYABLE_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  "market-data": new Set(["candles", "quote", "batch_quotes"]),
+  "bot-config": new Set([
+    "get",
+    "effective",
+    "defaults",
+    "ict_scanner.comparison",
+    "authority_outcome.comparison",
+    "single_ownership.comparison",
+    "streamlined_decision.comparison",
+    "dealing_range.comparison",
+    "presets.list",
+  ]),
+  "trades": new Set(["reviews", "list", "get", "stats", "equity_curve"]),
+  "user-settings": new Set(["get"]),
+  "broker-connections": new Set(["list", "list_symbols"]),
+  "smc-analysis": new Set(["full_analysis", "currency_strength", "correlation", "session"]),
+  "paper-trading": new Set(["status"]),
+  "backtest-engine": new Set(["status", "list", "mt5_list"]),
+  "bot-scanner": new Set([
+    "scan_logs",
+    "staged_setups",
+    "active_staged",
+    "pending_orders",
+    "active_pending",
+  ]),
+  "fundamentals": new Set(["data", "events_for_pair", "high_impact_check", "news_impact"]),
+  "broker-execute": new Set([
+    "account_summary",
+    "account_balance",
+    "connection_status",
+    "symbol_specs",
+    "validate_symbol",
+    "open_trades",
+    "trade_history",
+  ]),
+  "prop-firm": new Set(["status", "config.get", "events", "daily_history"]),
+  "scheduled-tasks": new Set(["list"]),
+  "deploy-control": new Set(["status"]),
+};
+
+function isRetryableReadRequest(
+  functionName: string,
+  body: Record<string, unknown>,
+): boolean {
+  return RETRYABLE_READ_ACTIONS[functionName]?.has(String(body?.action ?? "")) === true;
+}
+
+function mutationUncertainMessage(functionName: string): string {
+  if (functionName === "broker-execute") return BROKER_MUTATION_UNCERTAIN_MESSAGE;
+  if (functionName === "paper-trading") {
+    return "Request outcome is unknown. Check account state before retrying.";
+  }
+  return "Request outcome is unknown. Check current state before retrying.";
+}
 
 function jwtHasSubject(token?: string): boolean {
   if (!token) return false;
@@ -102,19 +161,6 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
     const action = body?.action;
     if (["open_trades", "trade_history"].includes(action)) return [];
     if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
-    if (action === "place_order") {
-      return {
-        error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.",
-        fallback: true,
-      };
-    }
-    if (["close_trade", "modify_trade"].includes(action)) {
-      return {
-        error: "Broker execution could not be confirmed. Verify broker state before retrying.",
-        fallback: true,
-        brokerExecutionStatus: "uncertain",
-      };
-    }
   }
 
   if (functionName === "broker-connections") {
@@ -126,7 +172,6 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
   if (functionName === "paper-trading") {
     const action = body?.action;
     if (action === "status") return { ok: false, error: "Paper trading service is temporarily unavailable. Please try again shortly.", fallback: true, engine_status: "unknown", positions: [], orders: [] };
-    if (["place_order", "close_position", "update_position", "start_engine", "pause_engine", "stop_engine", "kill_switch", "reset_account", "reset_balance_only", "set_balance", "set_execution_mode"].includes(action)) return { error: "Paper trading is temporarily unavailable. Please retry shortly.", fallback: true };
   }
 
   return undefined;
@@ -144,8 +189,10 @@ function cacheSuccessfulFunctionResponse(functionName: string, body: Record<stri
 
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
+    let requestDispatched = false;
     try {
       const token = await getAuthenticatedToken();
+      requestDispatched = true;
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
         method: "POST",
         headers: {
@@ -170,11 +217,12 @@ async function invokeSupabaseFunction(functionName: string, body: Record<string,
             status: response.status,
             context: { status: response.status, response },
           },
+          requestDispatched,
         };
       }
-      return { data, error: null };
+      return { data, error: null, requestDispatched };
     } catch (error) {
-      return { data: null, error };
+      return { data: null, error, requestDispatched };
     }
   };
   if (functionName !== "broker-execute") return run();
@@ -196,48 +244,72 @@ function isAuthError(error: any, data: any): boolean {
 // Helper to invoke edge functions with typed responses
 export async function invokeFunction<T = any>(
   functionName: string,
-  body: Record<string, any>
+  body: Record<string, any>,
 ): Promise<T> {
+  const retryableRead = isRetryableReadRequest(functionName, body);
   const cooldownUntil = functionCooldownUntil.get(functionName) || 0;
-  const cooldownFallback = getFunctionFallback(functionName, body);
+  const cooldownFallback = retryableRead
+    ? getFunctionFallback(functionName, body)
+    : undefined;
   if (cooldownFallback !== undefined && cooldownUntil > Date.now()) {
     return cooldownFallback as T;
   }
 
-  let { data, error } = await invokeSupabaseFunction(functionName, body);
+  let { data, error, requestDispatched } = await invokeSupabaseFunction(
+    functionName,
+    body,
+  );
 
-  // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry up to 2x with backoff.
-  const isTransient503 = (err: any, d: any): boolean => {
-    if (!err) return false;
+  const isTransientServiceFailure = (
+    err: any,
+    d: any,
+    dispatched: boolean,
+  ): boolean => {
+    if (!err || !dispatched || isAuthError(err, d)) return false;
     const ctx = err?.context;
-    const status =
-      ctx?.status ??
-      ctx?.response?.status ??
-      err?.status;
-    if (isAuthError(err, d)) return false;
+    const status = ctx?.status ?? ctx?.response?.status ?? err?.status;
     if (typeof status === "number" && status >= 500) return true;
+    if (typeof status !== "number") return true;
     const msg = (err?.message || d?.message || d?.error || "").toString();
-    // Cloudflare/gateway HTML error pages (520-527, e.g. "525: SSL handshake failed")
-    if (/<!DOCTYPE html|cf-error-details|SSL handshake failed|Cloudflare Ray ID|Error code 5\d\d/i.test(msg)) return true;
-    return /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 5\d\d|BOOT_ERROR|WORKER_LIMIT/i.test(msg);
+    return /<!DOCTYPE html|cf-error-details|SSL handshake failed|Cloudflare Ray ID|Error code 5\d\d|temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 5\d\d|BOOT_ERROR|WORKER_LIMIT/i
+      .test(msg);
   };
 
-  for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
-    await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
-    ({ data, error } = await invokeSupabaseFunction(functionName, body));
+  // Retrying writes can duplicate a broker order or mutate state twice when the
+  // first response is lost. Only explicitly classified reads may retry.
+  for (
+    let attempt = 0;
+    retryableRead && attempt < 4 &&
+    isTransientServiceFailure(error, data, requestDispatched);
+    attempt++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+    ({ data, error, requestDispatched } = await invokeSupabaseFunction(
+      functionName,
+      body,
+    ));
   }
 
-  if (isTransient503(error, data)) {
+  if (
+    !retryableRead &&
+    isTransientServiceFailure(error, data, requestDispatched)
+  ) {
+    throw new Error(mutationUncertainMessage(functionName));
+  }
+
+  if (
+    retryableRead &&
+    isTransientServiceFailure(error, data, requestDispatched)
+  ) {
     functionCooldownUntil.set(functionName, Date.now() + 15_000);
     const transientFallback = getFunctionFallback(functionName, body);
     if (transientFallback !== undefined) return transientFallback as T;
   }
 
-
-  // Bot scanner data is dashboard/polling data. If the hosted function is briefly
-  // unavailable even after retries, return a safe empty result instead of letting
-  // the Bot page crash into a blank screen.
-  if (functionName === "bot-scanner" && isTransient503(error, data)) {
+  if (
+    retryableRead && functionName === "bot-scanner" &&
+    isTransientServiceFailure(error, data, requestDispatched)
+  ) {
     const action = body?.action;
     if (action === "pending_orders" && body?.status === "snapshot") {
       return {
@@ -248,103 +320,85 @@ export async function invokeFunction<T = any>(
         error: "Zone Setup data is temporarily unavailable.",
       } as T;
     }
-    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) {
+    if (
+      [
+        "scan_logs",
+        "staged_setups",
+        "active_staged",
+        "pending_orders",
+        "active_pending",
+      ].includes(action)
+    ) {
       return [] as T;
     }
-    if (action === "manual_scan") {
-      return {
-        error: "Scanner is temporarily unavailable. Please try again shortly.",
-        started: false,
-        pairsScanned: 0,
-        signalsFound: 0,
-        tradesPlaced: 0,
-      } as T;
-    }
-    // Any other bot-scanner action (dismiss_staged, cancel_pending, etc.):
-    // return a structured fallback rather than throwing into a blank screen.
-    return {
-      ok: false,
-      error: "Scanner is temporarily unavailable. Please try again shortly.",
-      fallback: true,
-    } as T;
   }
 
-  // Broker execution can be polled from live dashboards. If the hosted runtime
-  // briefly returns a platform 503 after retries, keep read-only views alive and
-  // return a clear fallback for write actions instead of throwing into a blank screen.
-  if (functionName === "broker-execute" && isTransient503(error, data)) {
+  if (
+    retryableRead && functionName === "broker-execute" &&
+    isTransientServiceFailure(error, data, requestDispatched)
+  ) {
     const action = body?.action;
-    if (["open_trades", "trade_history"].includes(action)) {
-      return [] as T;
-    }
-    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) {
+    if (["open_trades", "trade_history"].includes(action)) return [] as T;
+    if (
+      [
+        "account_summary",
+        "account_balance",
+        "connection_status",
+        "symbol_specs",
+        "validate_symbol",
+      ].includes(action)
+    ) {
       return {
         ok: false,
         error: "Broker service is temporarily unavailable. Please try again shortly.",
         fallback: true,
       } as T;
     }
-    if (action === "place_order") {
-      return {
-        error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.",
-        fallback: true,
-      } as T;
-    }
-    if (["close_trade", "modify_trade"].includes(action)) {
-      return {
-        error: "Broker execution could not be confirmed. Verify broker state before retrying.",
-        fallback: true,
-        brokerExecutionStatus: "uncertain",
-      } as T;
-    }
   }
 
-  // Paper-trading is polled from the dashboard. If the hosted runtime briefly
-  // returns a platform 503 after retries, keep read-only views alive and return
-  // a clear fallback for write actions instead of crashing into a blank screen.
-  if (functionName === "paper-trading" && isTransient503(error, data)) {
-    const action = body?.action;
-    if (action === "status") {
-      return {
-        ok: false,
-        error: "Paper trading service is temporarily unavailable. Please try again shortly.",
-        fallback: true,
-        engine_status: "unknown",
-        positions: [],
-        orders: [],
-      } as T;
-    }
-    if ([
-      "place_order", "close_position", "update_position",
-      "start_engine", "pause_engine", "stop_engine",
-      "kill_switch", "reset_account", "reset_balance_only",
-      "set_balance", "set_execution_mode",
-    ].includes(action)) {
-      return {
-        error: "Paper trading is temporarily unavailable. Please retry shortly.",
-        fallback: true,
-      } as T;
-    }
+  if (
+    retryableRead && functionName === "paper-trading" &&
+    isTransientServiceFailure(error, data, requestDispatched) &&
+    body?.action === "status"
+  ) {
+    return {
+      ok: false,
+      error: "Paper trading service is temporarily unavailable. Please try again shortly.",
+      fallback: true,
+      engine_status: "unknown",
+      positions: [],
+      orders: [],
+    } as T;
   }
 
-  // If auth failed, try refreshing the session once and retry.
+  // Reads may be replayed after an authentication refresh. Mutations are not
+  // replayed after any dispatch; their next attempt must be user-directed.
   if (isAuthError(error, data)) {
     const refreshedToken = await refreshAccessToken();
-    if (refreshedToken) {
-      ({ data, error } = await invokeSupabaseFunction(functionName, body));
+    if (retryableRead && refreshedToken) {
+      ({ data, error, requestDispatched } = await invokeSupabaseFunction(
+        functionName,
+        body,
+      ));
     }
     if (isAuthError(error, data)) {
-      // Confirm the session is really gone before tearing the app down — a
-      // single 401 on an expired JWT must not blank the screen if the client
-      // still holds (or just obtained) a valid session.
       const { data: check } = await supabase.auth.getSession();
       const stillValid = jwtHasSubject(check.session?.access_token);
-      if (stillValid) {
-        ({ data, error } = await invokeSupabaseFunction(functionName, body));
+      if (retryableRead && stillValid) {
+        ({ data, error, requestDispatched } = await invokeSupabaseFunction(
+          functionName,
+          body,
+        ));
+      } else if (!retryableRead && stillValid) {
+        throw new Error(
+          "Request was not authorized. Your session is valid; retry the action manually.",
+        );
       }
     }
     if (isAuthError(error, data)) {
-      const authFallback = getFunctionFallback(functionName, body);
+      const authFallback = retryableRead
+        ? getFunctionFallback(functionName, body)
+        : undefined;
       await supabase.auth.signOut().catch(() => {});
       if (typeof window !== "undefined" && !signOutRedirectTriggered) {
         try {
@@ -363,7 +417,7 @@ export async function invokeFunction<T = any>(
 
   if (error) throw new Error(error.message || `${functionName} failed`);
   if (data?.error && !data?.fallback) throw new Error(data.error);
-  functionCooldownUntil.delete(functionName);
+  if (retryableRead) functionCooldownUntil.delete(functionName);
   cacheSuccessfulFunctionResponse(functionName, body, data);
   return data as T;
 }
@@ -1100,7 +1154,8 @@ export const brokerExecApi = {
   validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
     invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
-    invokeFunction("broker-execute", { action: "place_order", connectionId, ...order }),
+    invokeFunction("broker-execute", { action: "place_order", connectionId, ...order })
+      .then(requireConfirmedBrokerMutation),
   closeTrade: (connectionId: string, tradeId: string) =>
     invokeFunction("broker-execute", { action: "close_trade", connectionId, tradeId })
       .then(requireConfirmedBrokerMutation),

@@ -4,6 +4,9 @@ export type BrokerMutationResult = {
   fallback?: boolean;
 };
 
+export const BROKER_MUTATION_UNCERTAIN_MESSAGE =
+  "Broker execution outcome is unknown. Check broker state before retrying.";
+
 export function requireConfirmedBrokerMutation<T extends BrokerMutationResult>(
   result: T,
 ): T {
@@ -16,7 +19,7 @@ export function requireConfirmedBrokerMutation<T extends BrokerMutationResult>(
   const brokerStatus = result?.brokerExecutionStatus;
   const defaultMessage =
     brokerStatus === "uncertain" || result?.fallback === true
-      ? "Broker execution could not be confirmed. Verify broker state before retrying."
+      ? BROKER_MUTATION_UNCERTAIN_MESSAGE
       : "Broker rejected the request.";
   throw new Error(
     typeof result?.error === "string" && result.error.trim()

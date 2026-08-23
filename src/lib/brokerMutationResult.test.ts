@@ -63,6 +63,27 @@ describe("broker mutation result", () => {
     );
   });
 
+  it("routes an uncertain place-order response to the mutation error path", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        brokerResponse({
+          ok: false,
+          brokerExecutionStatus: "uncertain",
+          fallback: true,
+        })
+      ),
+    );
+
+    await expect(brokerExecApi.placeOrder("connection-1", {
+      symbol: "EUR/USD",
+      direction: "long",
+      size: 0.1,
+    })).rejects.toThrow(
+      "Broker execution outcome is unknown. Check broker state before retrying.",
+    );
+  });
+
   it("routes a rejected close response to the mutation error path", async () => {
     vi.stubGlobal(
       "fetch",
