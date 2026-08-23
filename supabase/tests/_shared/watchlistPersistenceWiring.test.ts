@@ -10,6 +10,16 @@ Deno.test("Watchlist updates never reference the later streamlined persistence v
   assertStringIncludes(source.slice(0, declaration), `.eq("id", existingStaged.id)`);
 });
 
+Deno.test("below-threshold staged refreshes use their guarded row id", () => {
+  const start = source.indexOf("// ── Setup Staging: Stage below-threshold setups that have potential ──");
+  const end = source.indexOf("// ── Final sync:", start);
+  assert(start >= 0 && end > start);
+
+  const section = source.slice(start, end);
+  assertEquals((section.match(/streamlinedStagedId/g) || []).length, 0);
+  assertEquals((section.match(/\.eq\("id", existingStaged\.id\)/g) || []).length, 2);
+});
+
 Deno.test("unified Watchlist persistence failure exposes its real error", () => {
   assertStringIncludes(source, `detail.status = "unified_watch_persist_failed"`);
   assertStringIncludes(source, `detail.error = error.message`);
