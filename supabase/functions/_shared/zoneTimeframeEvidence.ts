@@ -107,6 +107,8 @@ export interface SlotEvidence {
     comparator: string | null;
     explanation: string;
   }>;
+  /** Present only on confirmation-attempt evidence rows. */
+  confirmation?: ConfirmationObservation;
   impulses: Array<{
     impulseId: string;
     selected: boolean;

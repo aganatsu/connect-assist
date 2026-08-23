@@ -338,6 +338,13 @@ declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
 
+type ScannerConfluenceAnalysis = ReturnType<typeof runConfluenceAnalysis> & {
+  _canonicalDealingRangeAvailable?: boolean;
+  _canonicalDealingRangeEvaluation?: ReturnType<
+    typeof evaluateCanonicalDealingRange
+  >;
+};
+
 function canonicalEvidenceSnapshot(detail: Record<string, any>) {
   return {
     canonicalScannerState: detail.canonicalScannerState || null,
@@ -597,7 +604,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
 // ─── Safety Gates ───────────────────────────────────────────────────
 
 async function runSafetyGates(
-  supabase: any, userId: string, symbol: string, direction: string,
+  supabase: any, userId: string, symbol: string,
+  direction: "long" | "short",
   analysis: any, config: any, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
@@ -3712,7 +3720,12 @@ async function runScanForUser(
      }
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
-    const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
+    const analysis: ScannerConfluenceAnalysis = runConfluenceAnalysis(
+      candles,
+      dailyCandles.length >= 10 ? dailyCandles : null,
+      pairConfig,
+      hourlyCandles.length > 0 ? hourlyCandles : undefined,
+    );
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
 
@@ -7493,7 +7506,7 @@ async function runScanForUser(
           passed: ownedDecision.authorities.confirmation.passed,
           awaitingRetracement:
             (detail as any).postChochRetracement?.status === "waiting",
-          evidenceId: candidateConfirmationSignal?.evidenceId || null,
+          evidenceId: confirmationId,
           reasonCode: ownedDecision.authorities.confirmation.reasonCodes[0] || null,
         },
         thesis: ownedDecision.authorities.thesis,

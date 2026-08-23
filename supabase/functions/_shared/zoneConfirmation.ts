@@ -474,9 +474,11 @@ export function detectZoneConfirmation(
       if (direction === "long" && !isBullishCandle) continue;
 
       const supporting = detectSupportingSignals(candles5m, i, direction);
+      const patternProfile: CandlestickConfirmationProfile =
+        candlestickProfile === "legacy" ? "unified" : candlestickProfile;
       const pattern = evaluateCandlestickConfirmation({
         candles: candles5m, candleIndex: i, direction,
-        profile: candlestickProfile,
+        profile: patternProfile,
         minimumDisplacement: effectiveDisplacement,
         hasSweep: !!sweepEvent,
       });

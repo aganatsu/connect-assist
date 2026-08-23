@@ -25,7 +25,7 @@ export function buildICTConfirmationPolicy(input: {
   method: ConfirmationMethod;
   confirmationTimeframe: string;
   refinementTimeframe: string;
-  indicatorMinimum?: number;
+  indicatorMinimum?: unknown;
   maxAttempts?: number;
   liquiditySweep?: unknown;
   displacement?: unknown;

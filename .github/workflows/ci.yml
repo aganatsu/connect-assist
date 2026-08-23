@@ -59,5 +59,8 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Type-check bot scanner dependency graph
+        run: deno check supabase/functions/bot-scanner/index.ts
+
       - name: Shared-function tests
         run: deno task test

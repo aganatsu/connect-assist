@@ -221,7 +221,7 @@ export function evaluateICTKillZone(
     } else if (detection.isPrime) {
       reason = `[OFF] PRIME: ${detection.label} — would have applied +${config.primeKZBonus}`;
     } else if (!isAllowed) {
-      reason = `[OFF] Outside KZ: ${detection.label} — would have ${config.gateMode === "hard" ? "blocked" : "penalized"}`;
+      reason = `[OFF] Outside KZ: ${detection.label} — would have penalized`;
     } else {
       reason = `[OFF] In KZ: ${detection.label}`;
     }

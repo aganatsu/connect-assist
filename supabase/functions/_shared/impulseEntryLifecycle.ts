@@ -267,8 +267,9 @@ export function transitionImpulseEntryLifecycle(
     return next;
   }
   if (!active || !next.confirmation) return current;
-  next.confirmation.revisions ||= [];
-  next.confirmation.confirmedAt ??= null;
+  const previousConfirmation = next.confirmation;
+  previousConfirmation.revisions ||= [];
+  previousConfirmation.confirmedAt ??= null;
 
   if (event.type === "zone_touched") {
     if (active.state === "confirming") return current;
@@ -362,12 +363,12 @@ export function transitionImpulseEntryLifecycle(
   next.activeCandidateId = replacement.id;
   next.confirmation = newConfirmation(
     replacement.id,
-    current.confirmation.generation + 1,
+    previousConfirmation.generation + 1,
     {
-      method: current.confirmation.method,
-      timeframe: current.confirmation.timeframe,
-      refinementTimeframe: current.confirmation.refinementTimeframe,
-      expiresAt: current.confirmation.expiresAt,
+      method: previousConfirmation.method,
+      timeframe: previousConfirmation.timeframe,
+      refinementTimeframe: previousConfirmation.refinementTimeframe,
+      expiresAt: previousConfirmation.expiresAt,
     },
     event.at,
   );
