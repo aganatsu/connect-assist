@@ -1138,7 +1138,7 @@
 }
 
 @media (max-width: 520px) {
-  .apex-brand { padding: 0 10px; }
+  .apex-brand { padding: 0 10px; font-size: 14px; }
   .apex-brand-mark { width: 23px; height: 23px; }
   .apex-utilities > button:not(.apex-avatar) { width: 38px; }
   .apex-utilities .apex-avatar { width: 27px; height: 27px; margin: 0 7px; }

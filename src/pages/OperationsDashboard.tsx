@@ -332,7 +332,7 @@ function downloadScanCsv(details: any[], observedAt: string | undefined) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `apex-ledger-scan-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.download = `smc-trading-dashboard-scan-${new Date().toISOString().slice(0, 10)}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -844,8 +844,8 @@ function OperationsDashboard() {
       <div className="apex-ledger">
         <header className="apex-topbar">
           <button className="apex-brand" onClick={() => navigate("/")} aria-label="Open command center">
-            <span className="apex-brand-mark">A</span>
-            <span>Apex Ledger</span>
+            <span className="apex-brand-mark">S</span>
+            <span>SMC Trading Dashboard</span>
           </button>
           <span className="apex-section-tab"><Radar aria-hidden="true" /> Scanning</span>
           <time className="apex-date" dateTime={now.toISOString()}>{formatDate(now)}</time>
