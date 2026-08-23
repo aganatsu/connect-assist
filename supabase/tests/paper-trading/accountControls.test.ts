@@ -12,6 +12,7 @@ import {
   setPaperKillSwitch,
   startPaperEngine,
   stopPaperEngine,
+  updatePaperAccountState,
 } from "../../functions/_shared/paperAccountControls.ts";
 
 type QueryResult = { data: any; error: any };
@@ -114,6 +115,68 @@ Deno.test("account controls: ensure surfaces a resolved PostgREST insert error",
   );
   assertEquals(calls.map((call) => call.method), ["select", "insert"]);
   assert(calls[1].columns?.includes("kill_switch_active"));
+});
+
+Deno.test("account controls: a concurrent create conflict re-reads the saved account", async () => {
+  const { supabase, calls } = createMockSupabase([
+    { data: null, error: null },
+    {
+      data: null,
+      error: { code: "23505", message: "duplicate key" },
+    },
+    { data: account(), error: null },
+  ]);
+
+  const persisted = await ensurePaperAccount(supabase, "user-1");
+  assertEquals(persisted.id, "account-1");
+  assertEquals(
+    calls.map((call) => call.method),
+    ["select", "insert", "select"],
+  );
+  assertEquals(calls.filter((call) => call.method === "update").length, 0);
+});
+
+Deno.test("account controls: numeric reset fields are persisted and verified", async () => {
+  const persistedAccount = account({
+    balance: 10000,
+    peak_balance: 10000,
+    daily_pnl_base: 10000,
+    daily_pnl_base_date: "2026-08-23",
+    scan_count: 0,
+    signal_count: 0,
+    rejected_count: 0,
+  });
+  const { supabase, calls } = createMockSupabase([
+    { data: persistedAccount, error: null },
+  ]);
+
+  const persisted = await updatePaperAccountState(
+    supabase,
+    "user-1",
+    {
+      balance: "10000.00",
+      peak_balance: "10000.00",
+      daily_pnl_base: "10000.00",
+      daily_pnl_base_date: "2026-08-23",
+      scan_count: 0,
+      signal_count: 0,
+      rejected_count: 0,
+    },
+    {
+      balance: "10000.00",
+      peak_balance: "10000.00",
+      daily_pnl_base: "10000.00",
+      daily_pnl_base_date: "2026-08-23",
+      scan_count: 0,
+      signal_count: 0,
+      rejected_count: 0,
+    },
+    "Resetting account balance",
+  );
+
+  assertEquals(Number(persisted.balance), 10000);
+  assert(calls[0].columns?.includes("daily_pnl_base_date"));
+  assertEquals(calls[0].payload.scan_count, 0);
 });
 
 Deno.test("account controls: an update error cannot report success", async () => {
@@ -247,6 +310,85 @@ Deno.test("account controls: kill-switch arm and release verify returned rows", 
   assertEquals(released.kill_switch_active, false);
 });
 
+Deno.test("paper-trading arms and verifies the kill switch before reporting success", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
+  );
+  const start = source.indexOf('if (action === "kill_switch")');
+  const end = source.indexOf(
+    "// Helper: read configured starting balance",
+    start,
+  );
+  assert(start >= 0 && end > start, "kill-switch action block must exist");
+  const block = source.slice(start, end);
+  const arm = block.indexOf("setPaperKillSwitch(supabase, user.id, true)");
+  const positionsRead = block.indexOf('.from("paper_positions")');
+  assert(
+    arm >= 0 && arm < positionsRead,
+    "kill switch must persist before positions are read",
+  );
+  assert(
+    block.includes("positionsReadError"),
+    "positions read errors must be handled",
+  );
+  assert(
+    block.includes("closeVerificationError"),
+    "close-all must be verified with a final read",
+  );
+  assert(
+    block.includes("kill_switch_close_incomplete"),
+    "remaining positions must return a named failure",
+  );
+});
+
+Deno.test("paper-trading reset routes use the verified account-state owner", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
+  );
+  const actions = ["set_balance", "reset_balance_only", "reset_account"];
+  for (let index = 0; index < actions.length; index++) {
+    const action = actions[index];
+    const start = source.indexOf(`if (action === "${action}")`);
+    const nextStart = index + 1 < actions.length
+      ? source.indexOf(`if (action === "${actions[index + 1]}")`, start)
+      : source.indexOf('if (action === "set_execution_mode")', start);
+    assert(
+      start >= 0 && nextStart > start,
+      `${action} action block must exist`,
+    );
+    const block = source.slice(start, nextStart);
+    assert(
+      block.includes("updatePaperAccountState("),
+      `${action} must use the verified account-state owner`,
+    );
+    assert(
+      !block.includes('.from("paper_accounts").update('),
+      `${action} must not write account state directly`,
+    );
+  }
+});
+
+Deno.test("BotView reports account-control mutation failures", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../../src/pages/BotView.tsx", import.meta.url).pathname,
+  );
+  const handlerCount = source.split("onError: accountControlError(").length - 1;
+  assertEquals(handlerCount, 7);
+  for (
+    const fallback of [
+      "Failed to start engine",
+      "Failed to pause engine",
+      "Failed to stop engine",
+      "Failed to activate kill switch",
+      "Failed to deactivate kill switch",
+      "Failed to reset account",
+      "Failed to reset balance",
+    ]
+  ) {
+    assert(source.includes(`accountControlError("${fallback}")`));
+  }
+});
+
 Deno.test("paper-trading routes account controls through verified helpers", async () => {
   const source = await Deno.readTextFile(
     new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
@@ -258,6 +400,7 @@ Deno.test("paper-trading routes account controls through verified helpers", asyn
       "stopPaperEngine(",
       "requireKillSwitchState(payload.active)",
       "setPaperKillSwitch(",
+      "updatePaperAccountState(",
     ]
   ) {
     assert(source.includes(call), `paper-trading must call ${call}`);

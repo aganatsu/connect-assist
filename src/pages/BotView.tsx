@@ -53,6 +53,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { MobilePositionCard } from "@/components/MobilePositionCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+function accountControlError(fallback: string) {
+  return (error: unknown) =>
+    toast.error(error instanceof Error && error.message ? error.message : fallback);
+}
+
 export default function BotView() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -158,13 +163,13 @@ export default function BotView() {
     refetchInterval: 10000,
   });
 
-  const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
-  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
-  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
-  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); } });
-  const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
-  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); } });
-  const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); } });
+  const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); }, onError: accountControlError("Failed to start engine") });
+  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); }, onError: accountControlError("Failed to pause engine") });
+  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); }, onError: accountControlError("Failed to stop engine") });
+  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); }, onError: accountControlError("Failed to activate kill switch") });
+  const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); }, onError: accountControlError("Failed to deactivate kill switch") });
+  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); }, onError: accountControlError("Failed to reset account") });
+  const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); }, onError: accountControlError("Failed to reset balance") });
   const setBalMut = useMutation({
     mutationFn: (balance: number) => paperApi.setBalance(balance),
     onSuccess: (data: any) => {

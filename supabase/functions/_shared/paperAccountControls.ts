@@ -3,6 +3,15 @@ export type PaperAccountControlState = {
   is_running: boolean;
   is_paused: boolean;
   kill_switch_active: boolean;
+  balance: string | number;
+  peak_balance: string | number;
+  daily_pnl_base: string | number;
+  daily_pnl_base_date: string | null;
+  scan_count: number;
+  signal_count: number;
+  rejected_count: number;
+  execution_mode: "paper" | "live";
+  started_at: string | null;
 };
 
 export class PaperAccountControlError extends Error {
@@ -10,13 +19,30 @@ export class PaperAccountControlError extends Error {
     public readonly code: string,
     public readonly status: number,
     message: string,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "PaperAccountControlError";
   }
 }
 
-const ACCOUNT_CONTROL_COLUMNS = "id, is_running, is_paused, kill_switch_active";
+const ACCOUNT_CONTROL_COLUMNS =
+  "id, is_running, is_paused, kill_switch_active, balance, peak_balance, daily_pnl_base, daily_pnl_base_date, scan_count, signal_count, rejected_count, execution_mode, started_at";
+
+function persistedValueMatches(actual: unknown, expected: unknown): boolean {
+  if (actual === expected) return true;
+  if (
+    (typeof actual === "number" || typeof actual === "string") &&
+    (typeof expected === "number" || typeof expected === "string")
+  ) {
+    const actualNumber = Number(actual);
+    const expectedNumber = Number(expected);
+    return Number.isFinite(actualNumber) &&
+      Number.isFinite(expectedNumber) &&
+      actualNumber === expectedNumber;
+  }
+  return false;
+}
 
 function persistenceError(
   operation: string,
@@ -62,6 +88,25 @@ export async function ensurePaperAccount(
     .maybeSingle();
 
   if (insertError) {
+    if (insertError.code === "23505") {
+      const { data: concurrentAccount, error: rereadError } = await supabase
+        .from("paper_accounts")
+        .select(ACCOUNT_CONTROL_COLUMNS)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (rereadError) {
+        throw new PaperAccountControlError(
+          "account_read_failed",
+          500,
+          `Could not read concurrently created trading account: ${
+            rereadError.message || "database error"
+          }`,
+        );
+      }
+      if (concurrentAccount) {
+        return concurrentAccount as PaperAccountControlState;
+      }
+    }
     throw new PaperAccountControlError(
       "account_create_failed",
       500,
@@ -80,7 +125,7 @@ export async function ensurePaperAccount(
   return created as PaperAccountControlState;
 }
 
-async function updateAccountState(
+export async function updatePaperAccountState(
   supabase: any,
   userId: string,
   patch: Record<string, unknown>,
@@ -133,7 +178,7 @@ async function updateAccountState(
   }
 
   for (const [key, value] of Object.entries(expected)) {
-    if (persisted[key] !== value) {
+    if (!persistedValueMatches(persisted[key], value)) {
       throw new PaperAccountControlError(
         "account_control_verification_failed",
         409,
@@ -157,7 +202,7 @@ export async function startPaperEngine(
       "Release the kill switch before starting the trading engine",
     );
   }
-  return await updateAccountState(
+  return await updatePaperAccountState(
     supabase,
     userId,
     { is_running: true, is_paused: false, started_at: startedAt },
@@ -171,7 +216,7 @@ export async function pausePaperEngine(
   supabase: any,
   userId: string,
 ): Promise<PaperAccountControlState> {
-  return await updateAccountState(
+  return await updatePaperAccountState(
     supabase,
     userId,
     { is_paused: true },
@@ -184,7 +229,7 @@ export async function stopPaperEngine(
   supabase: any,
   userId: string,
 ): Promise<PaperAccountControlState> {
-  return await updateAccountState(
+  return await updatePaperAccountState(
     supabase,
     userId,
     { is_running: false, is_paused: false },
@@ -209,7 +254,7 @@ export async function setPaperKillSwitch(
   userId: string,
   active: boolean,
 ): Promise<PaperAccountControlState> {
-  return await updateAccountState(
+  return await updatePaperAccountState(
     supabase,
     userId,
     active

@@ -17,6 +17,7 @@ import {
   setPaperKillSwitch,
   startPaperEngine,
   stopPaperEngine,
+  updatePaperAccountState,
 } from "../_shared/paperAccountControls.ts";
 
 
@@ -1441,14 +1442,36 @@ Deno.serve(async (req) => {
     }
     if (action === "kill_switch") {
       const active = requireKillSwitchState(payload.active);
+      let account;
       if (active) {
-        // Close all open positions
-        const { data: positions } = await supabase.from("paper_positions").select("*")
-          .eq("user_id", user.id).eq("position_status", "open");
-        if (positions && positions.length > 0) {
-          for (const pos of positions) {
+        // Arm first so no new fills can race the close-all operation.
+        account = await setPaperKillSwitch(supabase, user.id, true);
+        const { data: positions, error: positionsReadError } = await supabase
+          .from("paper_positions")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("position_status", "open");
+        if (positionsReadError) {
+          throw new PaperAccountControlError(
+            "kill_switch_positions_read_failed",
+            500,
+            `Kill switch is armed, but open positions could not be read: ${
+              positionsReadError.message || "database error"
+            }`,
+          );
+        }
+
+        const closeFailures: Array<{ positionId: string; reason: string }> = [];
+        for (const pos of positions || []) {
+          try {
             const ep = parseFloat(pos.current_price);
-            const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
+            const { pnl, pnlPips } = calcPnl(
+              pos.direction,
+              parseFloat(pos.entry_price),
+              ep,
+              parseFloat(pos.size),
+              pos.symbol,
+            );
             const finalization = await finalizePaperPositionClose(supabase, {
               positionRowId: pos.id,
               userId: user.id,
@@ -1459,6 +1482,10 @@ Deno.serve(async (req) => {
               closeReason: "kill_switch",
             });
             if (!finalization.closed) {
+              closeFailures.push({
+                positionId: pos.position_id,
+                reason: finalization.code,
+              });
               console.log(`Kill-switch close skipped [${pos.position_id}]: ${finalization.code}`);
               continue;
             }
@@ -1476,13 +1503,49 @@ Deno.serve(async (req) => {
             // Mirror close ONLY to brokers this position was mirrored to at open time
             const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
+          } catch (closeError) {
+            closeFailures.push({
+              positionId: pos.position_id,
+              reason: closeError instanceof Error
+                ? closeError.message
+                : String(closeError),
+            });
+            console.error(`Kill-switch close failed [${pos.position_id}]:`, closeError);
           }
-
-
         }
 
+        const { data: remainingPositions, error: closeVerificationError } = await supabase
+          .from("paper_positions")
+          .select("id, position_id")
+          .eq("user_id", user.id)
+          .eq("position_status", "open");
+        if (closeVerificationError) {
+          throw new PaperAccountControlError(
+            "kill_switch_close_verification_failed",
+            500,
+            `Kill switch is armed, but position closure could not be verified: ${
+              closeVerificationError.message || "database error"
+            }`,
+            { closeFailures },
+          );
+        }
+        const openPositions = remainingPositions || [];
+        if (openPositions.length > 0) {
+          throw new PaperAccountControlError(
+            "kill_switch_close_incomplete",
+            409,
+            `Kill switch is armed, but ${openPositions.length} position(s) remain open`,
+            {
+              remainingPositionIds: openPositions.map((position) =>
+                position.position_id || position.id
+              ),
+              closeFailures,
+            },
+          );
+        }
+      } else {
+        account = await setPaperKillSwitch(supabase, user.id, false);
       }
-      const account = await setPaperKillSwitch(supabase, user.id, active);
       return respond({
         success: true,
         isRunning: account.is_running,
@@ -1512,23 +1575,44 @@ Deno.serve(async (req) => {
       // Reset peak_balance to the new balance — this is a fresh starting point
       // Prevents drawdown gate from triggering (e.g., setting $100 with old peak of $10k = 99% drawdown)
       const todayDate = new Date().toISOString().split("T")[0];
-      await supabase.from("paper_accounts").update({
-        balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
-        daily_pnl_base_date: todayDate, kill_switch_active: false,
-      }).eq("user_id", user.id);
-      return respond({ success: true, balance: balStr });
+      await ensurePaperAccount(supabase, user.id);
+      const account = await updatePaperAccountState(
+        supabase,
+        user.id,
+        {
+          balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
+          daily_pnl_base_date: todayDate, kill_switch_active: false,
+        },
+        {
+          balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
+          daily_pnl_base_date: todayDate, kill_switch_active: false,
+        },
+        "Setting account balance",
+      );
+      return respond({ success: true, balance: account.balance });
     }
 
     // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
     if (action === "reset_balance_only") {
       const startBal = await getConfiguredStartingBalance();
       const todayDate = new Date().toISOString().split("T")[0];
-      await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
-        daily_pnl_base_date: todayDate, scan_count: 0, signal_count: 0, rejected_count: 0,
-        kill_switch_active: false,
-      }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal });
+      await ensurePaperAccount(supabase, user.id);
+      const account = await updatePaperAccountState(
+        supabase,
+        user.id,
+        {
+          balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
+          daily_pnl_base_date: todayDate, scan_count: 0, signal_count: 0, rejected_count: 0,
+          kill_switch_active: false,
+        },
+        {
+          balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
+          daily_pnl_base_date: todayDate, scan_count: 0, signal_count: 0, rejected_count: 0,
+          kill_switch_active: false,
+        },
+        "Resetting account balance",
+      );
+      return respond({ success: true, startingBalance: account.balance });
     }
 
     // ── Full Reset: wipes everything and resets balance to configured starting balance ──
@@ -1541,12 +1625,27 @@ Deno.serve(async (req) => {
       await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
       await supabase.from("scan_logs").delete().eq("user_id", user.id);
       await supabase.from("trades").delete().eq("user_id", user.id);
-      await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, is_running: false, is_paused: true,
-        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
-        daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
-      }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal, paused: true });
+      await ensurePaperAccount(supabase, user.id);
+      const account = await updatePaperAccountState(
+        supabase,
+        user.id,
+        {
+          balance: startBal, peak_balance: startBal, is_running: false, is_paused: true,
+          scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
+          daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
+        },
+        {
+          balance: startBal, peak_balance: startBal, is_running: false, is_paused: true,
+          scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
+          daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
+        },
+        "Resetting trading account",
+      );
+      return respond({
+        success: true,
+        startingBalance: account.balance,
+        paused: account.is_paused,
+      });
     }
 
     if (action === "set_execution_mode") {
@@ -1674,6 +1773,7 @@ Deno.serve(async (req) => {
         success: false,
         error: error.message,
         code: error.code,
+        ...(error.details === undefined ? {} : { details: error.details }),
       }, error.status);
     }
     return new Response(JSON.stringify({ error: msg }), {
