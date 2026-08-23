@@ -8,21 +8,14 @@ import { useIsMobile } from "@/hooks/use-mobile";
 
 interface AppShellProps {
   children: React.ReactNode;
-  variant?: "default" | "operations";
 }
 
-export function AppShell({ children, variant = "default" }: AppShellProps) {
+export function AppShell({ children }: AppShellProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const isMobile = useIsMobile();
 
   const toggleSearch = useCallback(() => setSearchOpen((v) => !v), []);
   const closeSearch = useCallback(() => setSearchOpen(false), []);
-
-  // This workspace supplies its own navigation and status rail while still
-  // participating in the app's single-shell contract.
-  if (variant === "operations") {
-    return <div className="h-screen h-[100dvh] overflow-hidden">{children}</div>;
-  }
 
   if (isMobile) {
     return (

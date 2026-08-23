@@ -5,12 +5,10 @@ import { useNavigate } from "react-router-dom";
 import {
   Activity,
   AreaChart as AreaChartIcon,
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
   Download,
-  LayoutDashboard,
   Loader2,
   Pause,
   Play,
@@ -38,7 +36,6 @@ import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAuth } from "@/contexts/AuthContext";
 import {
   brokerApi,
   brokerExecApi,
@@ -89,15 +86,6 @@ const STATUS_PRIORITY: Record<string, number> = {
   below_threshold: 8,
   skipped: 9,
 };
-
-const NAV_ITEMS = [
-  { label: "Command Center", icon: LayoutDashboard, route: "/" },
-  { label: "Scanner", icon: Radar, route: "/bot" },
-  { label: "Zone Setups", icon: Target, route: "#zone-setups" },
-  { label: "Positions", icon: CircleDollarSign, route: "#positions" },
-  { label: "Risk Desk", icon: ShieldAlert, route: "/prop-firm" },
-  { label: "Journal", icon: BookOpen, route: "/journal" },
-] as const;
 
 function parseDetails(log: any): any[] {
   if (!log) return [];
@@ -204,15 +192,6 @@ function formatClock(value: string | null | undefined, includeSeconds = true): s
     minute: "2-digit",
     second: includeSeconds ? "2-digit" : undefined,
   });
-}
-
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
 }
 
 function timeRemaining(expiresAt: string | null | undefined): string {
@@ -429,7 +408,6 @@ function commentary(order: PendingOrder | null): string {
 function OperationsDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const [now, setNow] = useState(new Date());
   const [scanIndex, setScanIndex] = useState(0);
   const [scanFilter, setScanFilter] = useState<ScanFilter>("all");
@@ -815,19 +793,6 @@ function OperationsDashboard() {
     onError: (error: any) => toast.error(error?.message || "Kill switch request failed"),
   });
 
-  const navigateFromRail = (route: string) => {
-    if (route === "#positions") {
-      setPositionsOpen(true);
-      return;
-    }
-    if (route.startsWith("#")) {
-      document.querySelector(route)?.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    navigate(route);
-  };
-
-  const avatar = (user?.email || "A").slice(0, 2).toUpperCase();
   const pendingOperationalSources = Array.from(new Set([
     ...(statusQuery.isPending ? ["Trading status"] : []),
     ...(scansQuery.isPending ? ["Scan ledger"] : []),
@@ -877,58 +842,40 @@ function OperationsDashboard() {
   ]));
 
   return (
-    <AppShell variant="operations">
+    <AppShell>
       <div className="apex-ledger">
-        <header className="apex-topbar">
-          <button className="apex-brand" onClick={() => navigate("/")} aria-label="Open command center">
-            <span className="apex-brand-mark">S</span>
-            <span>SMC Trading Dashboard</span>
-          </button>
-          <span className="apex-section-tab"><Radar aria-hidden="true" /> Scanning</span>
-          <time className="apex-date" dateTime={now.toISOString()}>{formatDate(now)}</time>
-          <div className="apex-utilities">
+        <header className="apex-page-header">
+          <div className="apex-page-title">
+            <span className="apex-page-icon"><Radar aria-hidden="true" /></span>
+            <div>
+              <p className="apex-kicker">Bot operations</p>
+              <h1>SMC Trading Dashboard</h1>
+            </div>
+          </div>
+          <div className="apex-page-actions">
+            <div className="apex-header-connection">
+              <span className={connectedConnections.length ? "connection-dot live" : "connection-dot"} />
+              <span>{connectionChecksPending
+                ? "Checking brokers"
+                : connectionChecksUnavailable
+                ? "Broker state unavailable"
+                : connectedConnections.length
+                ? `${connectedConnections.length}/${activeConnections.length} connected`
+                : "No broker verified"}</span>
+            </div>
+            <button onClick={() => setPositionsOpen(true)}>
+              <CircleDollarSign aria-hidden="true" /> <span>Positions</span>
+            </button>
             <button onClick={() => downloadScanCsv(scanDetails, currentScan?.scanned_at)} disabled={!scanDetails.length}>
               <Download aria-hidden="true" /> <span>Export</span>
             </button>
             <button onClick={() => navigate("/bot-config")}>
-              <Settings aria-hidden="true" /> <span>Settings</span>
+              <Settings aria-hidden="true" /> <span>Bot settings</span>
             </button>
-            <button className="apex-avatar" onClick={() => navigate("/settings")} aria-label="Open profile settings">{avatar}</button>
           </div>
         </header>
 
-        <div className="apex-body">
-          <aside className="apex-sidebar" aria-label="Trading operations navigation">
-            <nav>
-              {NAV_ITEMS.map((item) => (
-                <button
-                  key={item.label}
-                  className={item.route === "/bot" ? "active" : ""}
-                  onClick={() => navigateFromRail(item.route)}
-                >
-                  <item.icon aria-hidden="true" />
-                  <span>{item.label}</span>
-                </button>
-              ))}
-            </nav>
-            <div className="apex-connection">
-              <span className={connectedConnections.length ? "connection-dot live" : "connection-dot"} />
-              <div>
-                <strong>{connectionChecksPending
-                  ? "Checking broker links"
-                  : connectionChecksUnavailable
-                  ? "Broker state unavailable"
-                  : connectedConnections.length
-                  ? `${connectedConnections.length}/${activeConnections.length} brokers connected`
-                  : "No broker verified"}</strong>
-                <span>{connectedConnections.length
-                  ? connectedConnections.map((connection: any) => connection.display_name).join(" · ")
-                  : activeConnections.length ? "Configured links are not ready" : "No active connection returned"}</span>
-              </div>
-            </div>
-          </aside>
-
-          <main className="apex-main">
+        <main className="apex-main">
             {unavailableOperationalSources.length > 0 && (
               <div className="apex-stale-notice" role="alert">
                 <WifiOff aria-hidden="true" />
@@ -947,7 +894,7 @@ function OperationsDashboard() {
                 <div className="apex-section-head">
                   <div>
                     <p className="apex-kicker">{getCurrentSession()} Session</p>
-                    <h1 id="latest-scan-title">Latest Scan</h1>
+                    <h2 id="latest-scan-title">Latest Scan</h2>
                   </div>
                   <div className="apex-processed">
                     <span className={scanIsRecent ? "connection-dot live" : "connection-dot"} />
@@ -1015,7 +962,7 @@ function OperationsDashboard() {
                               <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={sparkline}>
                                   <YAxis hide domain={[0, 100]} />
-                                  <Line type="linear" dataKey="value" stroke="#24231f" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+                                  <Line type="linear" dataKey="value" stroke="hsl(var(--foreground))" strokeWidth={1.2} dot={false} isAnimationActive={false} />
                                 </LineChart>
                               </ResponsiveContainer>
                             ) : <span />}
@@ -1092,7 +1039,7 @@ function OperationsDashboard() {
                         <ResponsiveContainer width="100%" height="100%">
                           <AreaChart data={priceHistory} margin={{ top: 10, right: 2, bottom: 0, left: 2 }}>
                             <YAxis hide domain={["dataMin", "dataMax"]} />
-                            <Area type="linear" dataKey="value" stroke="#2997a5" fill="#2997a5" fillOpacity={0.14} strokeWidth={2} dot={false} isAnimationActive={false} />
+                            <Area type="linear" dataKey="value" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.14} strokeWidth={2} dot={false} isAnimationActive={false} />
                           </AreaChart>
                         </ResponsiveContainer>
                       ) : (
@@ -1220,8 +1167,7 @@ function OperationsDashboard() {
                 </section>
               </aside>
             </div>
-          </main>
-        </div>
+        </main>
 
         <footer className="apex-bottom-strip">
           <div><span>Scans today</span><strong title="Computed from the latest 100 scan rows">{scansToday.length}{dailyLedgerTruncated ? "+" : ""}</strong></div>
