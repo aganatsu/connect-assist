@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Sun, Moon, Monitor } from "lucide-react";
 import { paperApi } from "@/lib/api";
+import { readExecutionMode } from "@/lib/executionMode";
 import { useTheme } from "@/contexts/ThemeContext";
 
 const TITLES: Record<string, string> = {
@@ -26,7 +27,7 @@ export function MobileTopBar() {
   const location = useLocation();
   const { theme, setTheme } = useTheme();
 
-  const { data: status } = useQuery({
+  const { data: status, isPending: statusPending, isError: statusError } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 10000,
@@ -36,7 +37,8 @@ export function MobileTopBar() {
   const path = "/" + (location.pathname.split("/")[1] || "");
   const title = TITLES[path] ?? "SMC";
   const isRoot = path === "/";
-  const isRunning = !!status?.isRunning;
+  const accountStatusKnown = !statusPending && !statusError && readExecutionMode(status) !== "unknown";
+  const isRunning = accountStatusKnown && !!status?.isRunning;
 
   const cycleTheme = () => {
     const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
@@ -62,8 +64,8 @@ export function MobileTopBar() {
         <div className="flex items-center gap-3 shrink-0">
           <span className="flex items-center gap-1.5 text-[10px] font-medium">
             <span className={isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-            <span className={isRunning ? "text-success" : "text-muted-foreground"}>
-              {isRunning ? "ON" : "OFF"}
+            <span className={isRunning ? "text-success" : accountStatusKnown ? "text-muted-foreground" : "text-warning"}>
+              {accountStatusKnown ? (isRunning ? "ON" : "OFF") : "UNKNOWN"}
             </span>
           </span>
           <button

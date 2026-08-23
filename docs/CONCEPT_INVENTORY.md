@@ -54,6 +54,33 @@ instead of arbitrating.
 
 ---
 
+## Runtime account and broker status truth
+
+`paper-trading` owns the aggregate account-status response. Database read failures return
+`ok: false`, `state: "unknown"`, and a non-success HTTP status; they never become an
+implicit Paper account, zero balance, or empty position/history collection. Broker connection,
+account, position, and history reads follow the same contract through `src/lib/remoteRead.ts`.
+A confirmed empty array means `none`; a failed or fallback read means `unknown`.
+
+`src/lib/executionMode.ts:readExecutionMode` is the frontend owner for interpreting the
+mode. Status surfaces render Unknown explicitly. Risk-increasing order, position, balance, reset,
+and configuration mutations fail closed until the current account mode and broker connection list
+are available, and every active broker reports a ready connection plus readable account and
+open-position state. Cached function fallbacks are not accepted as current truth for these
+safety-sensitive reads. Known-position closes and emergency halt controls remain available because
+they reduce exposure.
+
+Live-to-Paper is a separate de-risking transition. It requires a readable current Live mode, a fresh
+broker-connection list, and an exact empty `open_trades` array from every active broker. A fresh
+connection list with no active brokers is also exact empty exposure. Broker readiness, broker account
+details, and internal paper-position rows do not block this transition. Any failed or fallback
+open-trades read, or any non-empty broker position list, blocks it.
+
+This frontend preflight is defense in depth, not an atomic execution guarantee. Live order fanout
+still has separate orchestrators in `paper-trading`, `bot-scanner`, and
+`zone-confirmation-scanner`; a server-side all-connections preflight remains required before a
+partial multi-account dispatch can be ruled out.
+
 ## Game Plan generation and consumption
 
 `_shared/gamePlan.ts:generateInstrumentGamePlan` is the single algorithm owner.

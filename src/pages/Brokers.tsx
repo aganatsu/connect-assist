@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,8 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { brokerApi, brokerExecApi } from "@/lib/api";
+import { brokerApi, brokerExecApi, paperApi } from "@/lib/api";
+import { canUseTradingControls, readExecutionMode } from "@/lib/executionMode";
 import { BotConfigModal } from "@/components/BotConfigModal";
 
 type Connection = {
@@ -59,10 +60,65 @@ export default function BrokersPage() {
   // Per-connection probe results from latest auto-map (in-memory only)
   const [probeByConn, setProbeByConn] = useState<Record<string, ProbeDetails>>({});
 
-  const { data: connections = [] } = useQuery<Connection[]>({
+  const {
+    data: connectionData,
+    isPending: connectionsPending,
+    isError: connectionsUnavailable,
+    error: connectionsError,
+    refetch: refetchConnections,
+  } = useQuery<Connection[]>({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
   });
+  const connections = !connectionsUnavailable && Array.isArray(connectionData) ? connectionData : [];
+  const activeConnections = connections.filter((connection) => connection.is_active);
+
+  const {
+    data: paperStatus,
+    isSuccess: paperStatusAvailable,
+  } = useQuery({
+    queryKey: ["paper-status"],
+    queryFn: () => paperApi.status(),
+    refetchInterval: 10000,
+  });
+  const executionMode = paperStatusAvailable
+    ? readExecutionMode(paperStatus)
+    : "unknown";
+  const liveBrokerStatusQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-connection-status", connection.id],
+      queryFn: () => brokerExecApi.connectionStatus(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 30000,
+    })),
+  });
+  const liveBrokerAccountQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-account", connection.id],
+      queryFn: () => brokerExecApi.accountSummary(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 10000,
+    })),
+  });
+  const liveBrokerPositionQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-open-trades", connection.id],
+      queryFn: () => brokerExecApi.openTrades(connection.id),
+      enabled: executionMode === "live",
+      refetchInterval: 10000,
+    })),
+  });
+  const configurationMutationsEnabled = canUseTradingControls(
+    executionMode,
+    activeConnections.map((_, index) =>
+      liveBrokerStatusQueries[index]?.isSuccess === true &&
+      liveBrokerStatusQueries[index]?.data?.ready === true &&
+      liveBrokerAccountQueries[index]?.isSuccess === true &&
+      !!liveBrokerAccountQueries[index]?.data &&
+      liveBrokerPositionQueries[index]?.isSuccess === true &&
+      Array.isArray(liveBrokerPositionQueries[index]?.data)
+    ),
+  );
 
   const selected = useMemo(
     () => connections.find((c) => c.id === selectedId) ?? connections[0] ?? null,
@@ -81,6 +137,7 @@ export default function BrokersPage() {
       toast.success("Connection removed");
       setSelectedId(null);
     },
+    onError: (error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to remove connection"),
   });
 
   const testMutation = useMutation({
@@ -185,7 +242,7 @@ export default function BrokersPage() {
               Manage broker connections and symbol mappings
             </p>
           </div>
-          <Button size="sm" onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
+          <Button size="sm" disabled={connectionsPending || connectionsUnavailable} onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
             <Plus className="h-4 w-4 mr-1.5" /> Add Connection
           </Button>
         </div>
@@ -196,12 +253,23 @@ export default function BrokersPage() {
           <Card className="w-full md:w-64 shrink-0 flex flex-col overflow-hidden max-h-48 md:max-h-none">
             <div className="px-3 py-2 border-b border-border">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Connections ({connections.length})
+                Connections ({connectionsUnavailable ? "unknown" : connections.length})
               </p>
             </div>
             <ScrollArea className="flex-1">
               <div className="p-1.5 space-y-0.5">
-                {connections.length === 0 && !showAddForm && (
+                {connectionsPending && (
+                  <div className="flex justify-center p-6">
+                    <Activity className="h-4 w-4 animate-pulse text-muted-foreground" />
+                  </div>
+                )}
+                {connectionsUnavailable && (
+                  <div className="p-4 text-center text-xs text-warning">
+                    <p className="font-medium">Broker connection state is unavailable.</p>
+                    <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" onClick={() => refetchConnections()}>Retry</Button>
+                  </div>
+                )}
+                {!connectionsPending && !connectionsUnavailable && connections.length === 0 && !showAddForm && (
                   <div className="p-6 text-center text-xs text-muted-foreground">
                     No brokers yet. Click <span className="text-foreground font-medium">Add Connection</span> to get started.
                   </div>
@@ -237,7 +305,19 @@ export default function BrokersPage() {
 
           {/* RIGHT: detail panel */}
           <div className="flex-1 min-w-0 overflow-auto min-h-0">
-            {showAddForm || connections.length === 0 ? (
+            {connectionsPending ? (
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                <Activity className="h-5 w-5 animate-pulse" />
+              </div>
+            ) : connectionsUnavailable ? (
+              <Card className="border-warning/40 bg-warning/5">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-warning">Broker connection state is unavailable</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{connectionsError instanceof Error ? connectionsError.message : "Refresh and try again."}</p>
+                  <Button size="sm" variant="outline" className="mt-4" onClick={() => refetchConnections()}>Retry</Button>
+                </CardContent>
+              </Card>
+            ) : showAddForm || connections.length === 0 ? (
               <AddConnectionForm
                 onCreated={(newId) => {
                   setShowAddForm(false);
@@ -258,6 +338,7 @@ export default function BrokersPage() {
                   if (confirm(`Delete "${selected.display_name}"?`)) deleteMutation.mutate(selected.id);
                 }}
                 isAutoMapping={autoMapMutation.isPending}
+                configurationMutationsEnabled={configurationMutationsEnabled}
                 isListing={listSymbolsMutation.isPending}
                 isTesting={testMutation.isPending}
               />
@@ -327,9 +408,10 @@ export default function BrokersPage() {
 }
 
 // ─── Connection detail panel ─────────────────────────────────────────
-function ConnectionDetail({
+export function ConnectionDetail({
   connection: c, probeDetails, onTest, onCheckStatus, onAutoMap, onListSymbols,
-  onConfigOpen, onDelete, isAutoMapping, isListing, isTesting,
+  onConfigOpen, onDelete, isAutoMapping, configurationMutationsEnabled,
+  isListing, isTesting,
 }: {
   connection: Connection;
   probeDetails?: ProbeDetails;
@@ -340,6 +422,7 @@ function ConnectionDetail({
   onConfigOpen: () => void;
   onDelete: () => void;
   isAutoMapping: boolean;
+  configurationMutationsEnabled: boolean;
   isListing: boolean;
   isTesting: boolean;
 }) {
@@ -518,7 +601,13 @@ function ConnectionDetail({
             </Button>
             {isMetaApi && (
               <>
-                <Button size="sm" variant="outline" onClick={onAutoMap} disabled={isAutoMapping}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onAutoMap}
+                  disabled={!configurationMutationsEnabled || isAutoMapping}
+                  title={!configurationMutationsEnabled ? "Current trading state is unavailable" : undefined}
+                >
                   <Wand2 className="h-3.5 w-3.5 mr-1.5" />
                   {isAutoMapping ? "Mapping…" : "Auto-map symbols"}
                 </Button>

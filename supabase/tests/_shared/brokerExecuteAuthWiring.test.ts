@@ -66,3 +66,50 @@ Deno.test("automated broker-execute callers send the explicit owner id", () => {
     );
   }
 });
+
+Deno.test("broker read failures preserve upstream origin across the execution boundary", () => {
+  const helper = source.split("function respondWithBrokerReadFailure")[1]
+    ?.split("function respondWithBrokerMutationOutcome")[0] || "";
+  assertStringIncludes(helper, 'errorOrigin: "broker"');
+  assertStringIncludes(helper, "brokerStatus: upstreamStatus");
+  assertStringIncludes(helper, "upstreamStatus >= 500 ? 503 : 424");
+
+  const readSections = [
+    ['if (action === "account_summary")', 'if (action === "open_trades")'],
+    ['if (action === "open_trades")', 'if (action === "place_order")'],
+    [
+      'if (action === "account_balance")',
+      'if (action === "symbol_specs" || action === "validate_symbol")',
+    ],
+    [
+      'if (action === "symbol_specs" || action === "validate_symbol")',
+      'if (action === "connection_status")',
+    ],
+    ['if (action === "connection_status")', 'if (action === "close_trade")'],
+    ['if (action === "trade_history")', 'if (action === "modify_trade")'],
+  ] as const;
+
+  for (const [start, end] of readSections) {
+    const section = source.split(start)[1]?.split(end)[0] || "";
+    assertStringIncludes(
+      section,
+      'respondWithBrokerReadFailure(\n            "oanda",',
+      `${start} must distinguish upstream OANDA failures from app authentication failures`,
+    );
+    assertStringIncludes(
+      section,
+      'respondWithBrokerReadFailure(\n            "metaapi",',
+      `${start} must distinguish upstream MetaAPI failures from app authentication failures`,
+    );
+  }
+
+  const symbolSection = source.split(
+    'if (action === "symbol_specs" || action === "validate_symbol")',
+  )[1]?.split('if (action === "connection_status")')[0] || "";
+  const metaValidationFailure = symbolSection.split(
+    'if (action === "validate_symbol")',
+  )[1]?.split("return respondWithBrokerReadFailure")[0] || "";
+  assertStringIncludes(metaValidationFailure, 'errorOrigin: "broker"');
+  assertStringIncludes(metaValidationFailure, 'broker: "metaapi"');
+  assertStringIncludes(metaValidationFailure, "brokerStatus: res.status");
+});

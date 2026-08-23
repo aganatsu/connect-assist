@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,13 +45,33 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
-import { verifyExecutionModeChange, type ExecutionMode } from "@/lib/executionMode";
+import {
+  canReturnToPaper,
+  canUseTradingControls,
+  readExecutionMode,
+  verifyExecutionModeChange,
+  type ExecutionMode,
+} from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { MobilePositionCard } from "@/components/MobilePositionCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+function ReadUnavailable({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center border border-warning/30 py-10 text-warning">
+      <AlertTriangle className="mb-2 h-5 w-5" />
+      <p className="text-xs font-medium">{label} is unavailable</p>
+    </div>
+  );
+}
+
+function accountControlError(fallback: string) {
+  return (error: unknown) =>
+    toast.error(error instanceof Error && error.message ? error.message : fallback);
+}
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -112,7 +132,12 @@ export default function BotView() {
   const [orderReason, setOrderReason] = useState("");
   const [orderScore, setOrderScore] = useState("5");
 
-  const { data: status } = useQuery({
+  const {
+    data: status,
+    isPending: statusPending,
+    isError: statusReadFailed,
+    error: statusReadError,
+  } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     // Shared key with StatusBar and MobileTopBar; React Query refetches at the
@@ -133,40 +158,129 @@ export default function BotView() {
     queryFn: () => botConfigApi.get(),
   });
 
-  const { data: brokerConns } = useQuery({
+  const { data: brokerConns, isError: brokerConnectionsReadFailed } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     refetchInterval: 30000,
   });
-  const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
+  const brokerConnectionsKnown = !brokerConnectionsReadFailed && Array.isArray(brokerConns);
+  const activeConnections = brokerConnectionsKnown ? brokerConns.filter((c: any) => c.is_active) : [];
   const [selectedConnIdx, setSelectedConnIdx] = useState(0);
   const selectedConnection = activeConnections[selectedConnIdx] || activeConnections[0];
 
-  // Live broker account data (only when in live mode with an active connection)
-  const isLiveMode = status?.executionMode === "live";
-  const { data: brokerAccount } = useQuery({
-    queryKey: ["broker-account", selectedConnection?.id],
-    queryFn: () => brokerExecApi.accountSummary(selectedConnection.id),
-    enabled: !!selectedConnection && isLiveMode,
-    refetchInterval: 10000,
+  // Live controls stay disabled until every active destination has confirmed
+  // connectivity, account state, and open-position state. The selected account
+  // controls presentation only; it must not narrow the safety check.
+  const executionMode = !statusPending && !statusReadFailed
+    ? readExecutionMode(status)
+    : "unknown";
+  const accountStatusKnown = executionMode !== "unknown";
+  const isLiveMode = executionMode === "live";
+  const brokerConnectionStateQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-connection-status", connection.id],
+      queryFn: () => brokerExecApi.connectionStatus(connection.id),
+      enabled: isLiveMode,
+      refetchInterval: 30000,
+    })),
   });
-
-  const { data: brokerOpenTrades } = useQuery({
-    queryKey: ["broker-open-trades", selectedConnection?.id],
-    queryFn: () => brokerExecApi.openTrades(selectedConnection.id),
-    enabled: !!selectedConnection && isLiveMode,
-    refetchInterval: 10000,
+  const brokerAccountQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-account", connection.id],
+      queryFn: () => brokerExecApi.accountSummary(connection.id),
+      enabled: isLiveMode,
+      refetchInterval: 10000,
+    })),
   });
+  const brokerPositionQueries = useQueries({
+    queries: activeConnections.map((connection) => ({
+      queryKey: ["broker-open-trades", connection.id],
+      queryFn: () => brokerExecApi.openTrades(connection.id),
+      enabled: isLiveMode,
+      refetchInterval: 10000,
+    })),
+  });
+  const selectedConnectionIndex = selectedConnection
+    ? activeConnections.findIndex((connection) => connection.id === selectedConnection.id)
+    : -1;
+  const selectedConnectionStateQuery = selectedConnectionIndex >= 0
+    ? brokerConnectionStateQueries[selectedConnectionIndex]
+    : undefined;
+  const selectedBrokerAccountQuery = selectedConnectionIndex >= 0
+    ? brokerAccountQueries[selectedConnectionIndex]
+    : undefined;
+  const selectedBrokerPositionQuery = selectedConnectionIndex >= 0
+    ? brokerPositionQueries[selectedConnectionIndex]
+    : undefined;
+  const brokerAccount = selectedBrokerAccountQuery?.data;
+  const brokerAccountReadFailed = selectedBrokerAccountQuery?.isError === true;
+  const brokerAccountReadError = selectedBrokerAccountQuery?.error;
+  const brokerOpenTrades = selectedBrokerPositionQuery?.data;
+  const brokerPositionsReadFailed = selectedBrokerPositionQuery?.isError === true;
+  const brokerPositionsReadError = selectedBrokerPositionQuery?.error;
+  const liveBrokerReadPending = activeConnections.some((_, index) =>
+    brokerConnectionStateQueries[index]?.isPending ||
+    brokerAccountQueries[index]?.isPending ||
+    brokerPositionQueries[index]?.isPending
+  );
+  const liveBrokerReadFailed = activeConnections.some((_, index) =>
+    brokerConnectionStateQueries[index]?.isError ||
+    brokerAccountQueries[index]?.isError ||
+    brokerPositionQueries[index]?.isError
+  );
+  const liveBrokerStates = activeConnections.map((_, index) =>
+    brokerConnectionStateQueries[index]?.isSuccess === true &&
+    brokerConnectionStateQueries[index]?.data?.ready === true &&
+    brokerAccountQueries[index]?.isSuccess === true &&
+    !!brokerAccountQueries[index]?.data &&
+    brokerPositionQueries[index]?.isSuccess === true &&
+    Array.isArray(brokerPositionQueries[index]?.data)
+  );
+  const tradingControlsEnabled = canUseTradingControls(executionMode, liveBrokerStates);
+  const canSwitchBackToPaper = canReturnToPaper(
+    executionMode,
+    brokerConnectionsKnown,
+    activeConnections.map((_, index) => ({
+      available: brokerPositionQueries[index]?.isSuccess === true,
+      positions: brokerPositionQueries[index]?.data,
+    })),
+  );
+  const modeChangeEnabled = accountStatusKnown && (
+    executionMode === "paper" ? brokerConnectionsKnown : canSwitchBackToPaper
+  );
 
-  const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
-  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
-  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
-  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); } });
-  const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
-  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); } });
-  const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); } });
+  useEffect(() => {
+    if (tradingControlsEnabled) return;
+    setOrderFormOpen(false);
+    setShowSetBalance(false);
+    setConfigOpen(false);
+  }, [tradingControlsEnabled]);
+
+  const requireTradingControls = () => {
+    if (!tradingControlsEnabled) {
+      throw new Error("Current account and broker state must be available before trading controls can be used.");
+    }
+  };
+
+  const closePositionFromDashboard = async (positionId: string) => {
+    try {
+      if (!positionId) throw new Error("A known position is required to close.");
+      await paperApi.closePosition(positionId);
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to close position");
+    }
+  };
+
+  const startMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.startEngine(); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); }, onError: accountControlError("Failed to start engine") });
+  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); }, onError: accountControlError("Failed to pause engine") });
+  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); }, onError: accountControlError("Failed to stop engine") });
+  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); }, onError: accountControlError("Failed to activate kill switch") });
+  const deactivateKill = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.killSwitch(false); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); }, onError: accountControlError("Failed to deactivate kill switch") });
+  const resetMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetAccount(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to ${data?.startingBalance || "10,000"}`); }, onError: accountControlError("Failed to reset account") });
+  const resetBalMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetBalanceOnly(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to ${data?.startingBalance || "10,000"} — history preserved`); }, onError: accountControlError("Failed to reset balance") });
   const setBalMut = useMutation({
-    mutationFn: (balance: number) => paperApi.setBalance(balance),
+    mutationFn: (balance: number) => { requireTradingControls(); return paperApi.setBalance(balance); },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       toast.success(`Balance set to $${parseFloat(data?.balance || "0").toLocaleString()}`);
@@ -199,10 +313,10 @@ export default function BotView() {
         ? "Live execution enabled and verified"
         : "Paper execution enabled and verified");
     },
-    onError: (err: any) => toast.error(err.message || "Execution mode was not changed"),
+    onError: accountControlError("Execution mode was not changed"),
   });
   const scanMut = useMutation({
-    mutationFn: () => scannerApi.manualScan(),
+    mutationFn: () => { requireTradingControls(); return scannerApi.manualScan(); },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
@@ -314,21 +428,24 @@ export default function BotView() {
 
 
   const orderMut = useMutation({
-    mutationFn: () => paperApi.placeOrder({
+    mutationFn: () => {
+      requireTradingControls();
+      return paperApi.placeOrder({
       symbol: orderSymbol, direction: orderDirection, size: parseFloat(orderSize) || 0.01,
       entryPrice: parseFloat(orderTrigger) || 0,
       stopLoss: orderSL ? parseFloat(orderSL) : undefined,
       takeProfit: orderTP ? parseFloat(orderTP) : undefined,
       signalReason: orderReason, signalScore: parseInt(orderScore) || 5,
-    }),
+      });
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Order placed"); setOrderFormOpen(false); },
     onError: (err: any) => toast.error(err.message),
   });
 
-  const d = status || {
-    isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
+  const d = accountStatusKnown ? status : {
+    isRunning: false, isPaused: false, balance: 0, equity: 0, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
-    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
+    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "unknown",
     killSwitchActive: false, drawdown: 0,
   };
 
@@ -440,17 +557,37 @@ export default function BotView() {
   return (
     <AppShell>
       <div className="flex flex-col h-[calc(100dvh-7.5rem-env(safe-area-inset-bottom))] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden overflow-y-auto md:overflow-y-hidden">
+        {!accountStatusKnown && (
+          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
+            {statusPending
+              ? "Loading account status. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available."
+              : "Account status unavailable. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available. " + (statusReadError instanceof Error ? statusReadError.message : "Refresh to retry.")}
+          </div>
+        )}
+        {isLiveMode && !tradingControlsEnabled && (
+          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
+            {!brokerConnectionsKnown
+              ? "Broker connection state is unavailable. Live trading controls are disabled."
+              : activeConnections.length === 0
+                ? "No active broker connection is available. Live trading controls are disabled."
+                : liveBrokerReadPending
+                  ? "Loading every active broker account. Live trading controls are disabled."
+                  : liveBrokerReadFailed
+                    ? "At least one active broker account is unavailable. Live trading controls are disabled."
+                    : "At least one active broker connection is not ready. Live trading controls are disabled."}
+          </div>
+        )}
         {/* Phase-1 cleanup: removed duplicate desktop stats strip.
             StatusBar (bottom of app shell) and the Account drawer already cover
             balance, equity, P&L, win rate, open positions, and engine status. */}
 
         {/* Live mode alert (compact, only when live) */}
-        {d.executionMode === "live" && (
+        {executionMode === "live" && (
           <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
             <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
             <button
               className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={modeMut.isPending}
+              disabled={!modeChangeEnabled || modeMut.isPending}
               onClick={() => modeMut.mutate("paper")}
             >
               {modeMut.isPending ? "Verifying…" : "Switch to Paper"}
@@ -463,28 +600,28 @@ export default function BotView() {
           <div className="flex items-center justify-between gap-1.5 pb-2 border-b border-border min-w-0 overflow-hidden">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
             <div className="flex items-center gap-1 min-w-0">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused} title="Pause">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))} title="Pause">
                 <Pause className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!d.isRunning} title="Stop">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)} title="Stop">
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${!accountStatusKnown ? "text-warning" : d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                <span className="truncate">{d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
+                <span className="truncate">{!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
-              <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-                {d.executionMode === "live" ? "LIVE" : "PAPER"}
+              <span className={`text-[9px] font-medium px-1 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+                {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
               </span>
             </div>
 
             {/* Right: Scan + Overflow menu */}
             <div className="flex items-center gap-1 shrink-0">
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling} title="Scan Now">
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
               </Button>
               <DropdownMenu>
@@ -494,10 +631,10 @@ export default function BotView() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem onClick={() => setOrderFormOpen(!orderFormOpen)}>
+                  <DropdownMenuItem disabled={!tradingControlsEnabled} onClick={() => setOrderFormOpen(!orderFormOpen)}>
                     <Plus className="h-3.5 w-3.5 mr-2" /> New Order
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setConfigOpen(true)}>
+                  <DropdownMenuItem disabled={!tradingControlsEnabled} onClick={() => setConfigOpen(true)}>
                     <Settings className="h-3.5 w-3.5 mr-2" /> Bot Config
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setMobileAccountSheet(true)}>
@@ -506,6 +643,7 @@ export default function BotView() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
+                    disabled={killMut.isPending}
                     onClick={() => {
                       if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
                     }}
@@ -519,35 +657,35 @@ export default function BotView() {
         ) : (
           <div className="flex items-center gap-2 px-2 py-1.5 border border-border bg-card/40 flex-wrap text-[11px]">
             <div className="flex items-center gap-1">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)}>
                 <Play className="h-3 w-3 mr-1" /> Start
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))}>
                 <Pause className="h-3 w-3 mr-1" /> Pause
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)}>
                 <Square className="h-3 w-3 mr-1" /> Stop
               </Button>
             </div>
 
             <div className="w-px h-5 bg-border" />
 
-            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
+            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)} disabled={!tradingControlsEnabled}>
               <Plus className="h-3 w-3 mr-1" /> Order
             </Button>
-            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)} disabled={!tradingControlsEnabled}>
               <Settings className="h-3 w-3 mr-1" /> Config
             </Button>
 
             <div className="w-px h-5 bg-border" />
 
-            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-              {d.executionMode === "live" ? "LIVE" : "PAPER"}
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+              {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
             </span>
-            {d.executionMode !== "live" ? (
+            {executionMode === "paper" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={modeMut.isPending}
+                disabled={!modeChangeEnabled || activeConnections.length === 0 || modeMut.isPending}
                 onClick={() => {
                   if (window.confirm("Switch to LIVE mode? New bot trades will be mirrored to your active broker connection(s).")) {
                     modeMut.mutate("live");
@@ -556,11 +694,11 @@ export default function BotView() {
               >
                 {modeMut.isPending ? "Verifying…" : "→ Live"}
               </button>
-            ) : (
+            ) : executionMode === "live" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={modeMut.isPending || d.positions.length > 0}
-                title={d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
+                disabled={!canSwitchBackToPaper || modeMut.isPending}
+                title={!canSwitchBackToPaper ? "Broker positions must be confirmed empty before switching to Paper" : "Switch new execution back to Paper"}
                 onClick={() => {
                   if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
                     modeMut.mutate("paper");
@@ -569,9 +707,11 @@ export default function BotView() {
               >
                 {modeMut.isPending ? "Verifying…" : "→ Paper"}
               </button>
+            ) : (
+              <span className="text-[9px] uppercase tracking-wider text-warning">Mode unavailable</span>
             )}
 
-            {activeConnections.length > 0 ? (
+            {brokerConnectionsKnown ? activeConnections.length > 0 ? (
               activeConnections.map((conn: any) => (
                 <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
                   <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
@@ -581,6 +721,10 @@ export default function BotView() {
               <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
                 <Monitor className="h-2.5 w-2.5" /> Connect Broker
               </button>
+            ) : (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 bg-warning/10 text-warning flex items-center gap-1">
+                <Monitor className="h-2.5 w-2.5" /> Broker status unknown
+              </span>
             )}
 
             {/* Trading Style Badge — the persisted runtime policy is authoritative */}
@@ -615,11 +759,11 @@ export default function BotView() {
             })()}
 
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Scan Now"}
               </Button>
               <div className="w-px h-5 bg-border" />
-              <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
+              <Button size="sm" variant="destructive" className="h-7 text-[11px]" disabled={killMut.isPending} onClick={() => {
                 if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
               }}>
                 <AlertTriangle className="h-3 w-3 mr-1" /> Kill
@@ -627,9 +771,9 @@ export default function BotView() {
 
               <div className="flex gap-3 text-[10px] text-muted-foreground font-mono">
                 <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
-                <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
-                <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
-                <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
+                <span>Scans: <strong className="text-foreground">{accountStatusKnown ? d.scanCount : "—"}</strong></span>
+                <span>Signals: <strong className="text-foreground">{accountStatusKnown ? d.signalCount : "—"}</strong></span>
+                <span>Trades: <strong className="text-foreground">{accountStatusKnown ? d.totalTrades : "—"}</strong></span>
               </div>
             </div>
           </div>
@@ -658,7 +802,7 @@ export default function BotView() {
               <div className="w-20"><Label className="text-[10px]">SL</Label><Input value={orderSL} onChange={e => setOrderSL(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-20"><Label className="text-[10px]">TP</Label><Input value={orderTP} onChange={e => setOrderTP(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-14"><Label className="text-[10px]">Score</Label><Input type="number" min={0} max={10} value={orderScore} onChange={e => setOrderScore(e.target.value)} className="h-7 text-[11px]" /></div>
-              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()}>
+              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()} disabled={!tradingControlsEnabled || orderMut.isPending}>
                 {orderDirection === "long" ? "BUY" : "SELL"} {orderSymbol}
               </Button>
             </div>
@@ -673,27 +817,27 @@ export default function BotView() {
           >
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Balance</div>
-              <div className="text-[12px] font-mono font-bold truncate">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              <div className="text-[12px] font-mono font-bold truncate">{accountStatusKnown ? "$" + (d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—"}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
               <div className={`text-[12px] font-mono font-bold truncate ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
-                {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
+                {accountStatusKnown ? ((d.equity - d.balance) >= 0 ? "+" : "") + formatMoney(d.equity - d.balance) : "—"}
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">WR</div>
               <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
-                {(d.winRate || 0).toFixed(0)}%
+                {accountStatusKnown ? (d.winRate || 0).toFixed(0) + "%" : "—"}
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
-              <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
+              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? d.totalTrades : "—"}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">DD</div>
-              <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
+              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? (d.drawdown || 0).toFixed(1) + "%" : "—"}</div>
             </div>
           </button>
         )}
@@ -746,7 +890,12 @@ export default function BotView() {
                 );
               })()}
               <TabsContent value="open" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                {(botPositions.length === 0) ? (
+                {!accountStatusKnown ? (
+                  <div className="flex flex-col items-center justify-center py-12 border border-warning/30 text-warning">
+                    <AlertTriangle className="h-6 w-6 mb-2" />
+                    <p className="text-xs font-medium">Open-position state unavailable</p>
+                  </div>
+                ) : botPositions.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
                     <p className="text-xs font-medium text-muted-foreground">No open positions</p>
@@ -759,11 +908,13 @@ export default function BotView() {
                       <MobilePositionCard
                         key={p.id}
                         position={p}
+                        mutationsEnabled={tradingControlsEnabled}
+                        closeEnabled={Boolean(p.id)}
                         isExpanded={expandedPosition === p.id}
                         onToggle={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}
                         onClose={(id) => {
                           if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                            paperApi.closePosition(id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                            void closePositionFromDashboard(id);
                           }
                         }}
                         onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })}
@@ -848,19 +999,22 @@ export default function BotView() {
                             </td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
+                                disabled={!p.id}
                                 onClick={() => {
                                   if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                    void closePositionFromDashboard(p.id);
                                   }
                                 }}
-                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                               >✕ Close</button>
                             </td>
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
                               <td colSpan={15} className="border-b border-border p-2">
-                                <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
+                                <fieldset disabled={!tradingControlsEnabled} className="contents disabled:opacity-60">
+                                  <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
+                                </fieldset>
                               </td>
                             </tr>
                           )}
@@ -872,13 +1026,13 @@ export default function BotView() {
                 )}
               </TabsContent>
               <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={closedToday} />
+                {accountStatusKnown ? <TradeHistoryTable trades={closedToday} /> : <ReadUnavailable label="Trade history" />}
               </TabsContent>
               <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={botTradeHistory} />
+                {accountStatusKnown ? <TradeHistoryTable trades={botTradeHistory} /> : <ReadUnavailable label="Trade history" />}
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
-                <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
+                {brokerConnectionsKnown ? <CloseAuditLog brokerConns={brokerConns} /> : <ReadUnavailable label="Broker audit" />}
               </TabsContent>
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
@@ -887,7 +1041,7 @@ export default function BotView() {
                 <RecommendationsDashboard botId="smc" />
               </TabsContent>
               <TabsContent value="broker-live" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <BrokerTradesTab />
+                <BrokerTradesTab mutationsAllowed={tradingControlsEnabled} />
               </TabsContent>
               <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <WatchlistPanel confluenceGate={(() => {
@@ -924,6 +1078,13 @@ export default function BotView() {
 
             {/* Account Summary */}
             {(() => {
+              if (!accountStatusKnown) {
+                return (
+                  <div className="border border-warning/30 bg-warning/5 p-3 text-[10px] text-warning">
+                    Account balances, exposure, and performance are unavailable.
+                  </div>
+                );
+              }
               const positions = botPositions;
               const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
               const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -996,7 +1157,7 @@ export default function BotView() {
             <FOTSIStrengthMeter
               strengths={fotsiStrengths}
               lastScanTime={currentScan?.scanned_at}
-              onRefresh={() => scanMut.mutate()}
+              onRefresh={tradingControlsEnabled ? () => scanMut.mutate() : undefined}
               isRefreshing={scanMut.isPending}
             />
 
@@ -1004,11 +1165,11 @@ export default function BotView() {
             <Card>
               <CardContent className="pt-3 pb-2 space-y-2 text-[11px]">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Engine</p>
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
                   {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                 </Button>
                 {/* Set Balance — inline expandable */}
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)}>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)} disabled={!tradingControlsEnabled}>
                   <Settings className="h-3 w-3 mr-1" /> Set Balance
                 </Button>
                 {showSetBalance && (
@@ -1023,8 +1184,9 @@ export default function BotView() {
                         value={customBalanceInput}
                         onChange={(e) => setCustomBalanceInput(e.target.value)}
                         className="h-7 text-[11px] pl-5 font-mono"
+                        disabled={!tradingControlsEnabled}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") {
+                          if (e.key === "Enter" && tradingControlsEnabled) {
                             const val = parseFloat(customBalanceInput);
                             if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
                           }
@@ -1034,7 +1196,7 @@ export default function BotView() {
                     <Button
                       size="sm"
                       className="h-7 text-[11px] px-3 bg-cyan-600 hover:bg-cyan-700 text-white"
-                      disabled={setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
+                      disabled={!tradingControlsEnabled || setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
                       onClick={() => {
                         const val = parseFloat(customBalanceInput);
                         if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
@@ -1046,12 +1208,12 @@ export default function BotView() {
                 )}
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-warn hover:bg-badge-warn" onClick={() => {
                   if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
-                }} disabled={resetBalMut.isPending}>
+                }} disabled={!tradingControlsEnabled || resetBalMut.isPending}>
                   {resetBalMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Reset Balance
                 </Button>
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => {
                   if (window.confirm("⚠️ FULL RESET — This will:\n\n• Close all open positions\n• Delete ALL trade history\n• Delete ALL scan logs\n• Delete ALL reasonings & post-mortems\n• Reset balance to configured starting amount\n• Stop the engine\n\nThis CANNOT be undone. Are you sure?")) resetMut.mutate();
-                }} disabled={resetMut.isPending}>
+                }} disabled={!tradingControlsEnabled || resetMut.isPending}>
                   {resetMut.isPending ? <Loader2 className="h-3 w-3 mr-1" /> : null} Full Reset
                 </Button>
               </CardContent>
@@ -1073,7 +1235,13 @@ export default function BotView() {
                     </select>
                   )}
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {selectedConnection?.display_name}</p>
-                  {brokerAccount ? (
+                  {selectedConnectionStateQuery?.isError ? (
+                    <p className="text-warning text-[10px]">{selectedConnectionStateQuery.error instanceof Error ? selectedConnectionStateQuery.error.message : "Broker connection status unavailable"}</p>
+                  ) : selectedConnectionStateQuery?.data?.ready === false ? (
+                    <p className="text-warning text-[10px]">Broker connection is not ready</p>
+                  ) : brokerAccountReadFailed ? (
+                    <p className="text-warning text-[10px]">{brokerAccountReadError instanceof Error ? brokerAccountReadError.message : "Broker account unavailable"}</p>
+                  ) : brokerAccount ? (
                     <>
                       <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
                       {brokerAccount.equity && <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{brokerAccount.equity} {brokerAccount.currency || ""}</span></div>}
@@ -1090,11 +1258,17 @@ export default function BotView() {
             )}
 
             {/* Live Broker Open Trades */}
-            {isLiveMode && selectedConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
+            {isLiveMode && selectedConnection && (
               <Card>
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions ({brokerOpenTrades.length})</p>
-                  {brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions</p>
+                  {brokerPositionsReadFailed ? (
+                    <p className="text-warning text-[10px]">{brokerPositionsReadError instanceof Error ? brokerPositionsReadError.message : "Broker positions unavailable"}</p>
+                  ) : !brokerOpenTrades ? (
+                    <p className="text-muted-foreground text-[10px]">Loading broker positions...</p>
+                  ) : brokerOpenTrades.length === 0 ? (
+                    <p className="text-muted-foreground text-[10px]">No open positions reported by broker</p>
+                  ) : brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
                     <div key={t.id || i} className="flex items-center justify-between text-[10px] py-0.5 border-b border-border/20 last:border-0">
                       <div className="flex items-center gap-1">
                         <span className={t.type === "SELL" || t.currentUnits < 0 || t.type === "POSITION_TYPE_SELL" ? "text-destructive" : "text-success"}>
@@ -1274,13 +1448,13 @@ export default function BotView() {
           <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
             <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
             <div className="flex gap-2 shrink-0">
-              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
+              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" disabled={!tradingControlsEnabled || deactivateKill.isPending} onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
           </div>
         )}
 
         <BotConfigModal
-          open={configOpen}
+          open={configOpen && tradingControlsEnabled}
           onClose={() => setConfigOpen(false)}
           effectiveStylePolicy={effectiveRuntimeStylePolicy}
         />
@@ -1293,6 +1467,13 @@ export default function BotView() {
             </SheetHeader>
             <div className="space-y-3 pb-4">
               {(() => {
+                if (!accountStatusKnown) {
+                  return (
+                    <div className="rounded border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+                      Account balances, exposure, and performance are unavailable.
+                    </div>
+                  );
+                }
                 const positions = botPositions;
                 const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
                 const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -1341,10 +1522,10 @@ export default function BotView() {
                     {/* Engine Controls */}
                     <div className="rounded-lg border border-border p-3 space-y-2 text-[12px]">
                       <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Engine Controls</p>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={scanMut.isPending || scanPolling}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
                         {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                       </Button>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)} disabled={!tradingControlsEnabled}>
                         <Settings className="h-3 w-3 mr-1" /> Set Balance
                       </Button>
                       {showSetBalance && (
@@ -1354,17 +1535,18 @@ export default function BotView() {
                             placeholder="e.g. 10000"
                             value={customBalanceInput}
                             onChange={e => setCustomBalanceInput(e.target.value)}
+                            disabled={!tradingControlsEnabled}
                             className="h-7 text-[11px] flex-1 pl-5"
                           />
-                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
+                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={!tradingControlsEnabled || setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
                             {setBalMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
                           </Button>
                         </div>
                       )}
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={!tradingControlsEnabled || resetBalMut.isPending}>
                         <RefreshCw className="h-3 w-3 mr-1" /> Reset Balance
                       </Button>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={!tradingControlsEnabled || resetMut.isPending}>
                         Full Reset
                       </Button>
                     </div>

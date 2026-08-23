@@ -14,8 +14,13 @@ const CANONICAL_PAIRS = [
 
 const REGIONS = ["london", "new-york", "singapore"];
 
-async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Promise<{ symbols: string[]; region: string | null; error?: string }> {
+function brokerFailure(broker: "oanda" | "metaapi", brokerStatus: number) {
+  return { errorOrigin: "broker" as const, broker, brokerStatus };
+}
+
+async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Promise<{ symbols: string[]; region: string | null; error?: string; brokerStatus?: number }> {
   let lastError = "No region returned symbols";
+  let lastStatus = 0;
   for (const region of REGIONS) {
     const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
     try {
@@ -25,13 +30,15 @@ async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Pr
         const arr = JSON.parse(body);
         if (Array.isArray(arr)) return { symbols: arr.map(String), region };
       } else {
+        lastStatus = res.status;
         lastError = `${region}: ${res.status} ${body.slice(0, 120)}`;
       }
     } catch (e: any) {
+      lastStatus = 0;
       lastError = `${region}: ${e?.message || String(e)}`;
     }
   }
-  return { symbols: [], region: null, error: lastError };
+  return { symbols: [], region: null, error: lastError, brokerStatus: lastStatus };
 }
 
 function unswap(api_key: string, account_id: string): { authToken: string; metaAccountId: string } {
@@ -83,26 +90,33 @@ function makeMetaApiProbe(authToken: string, metaAccountId: string, region: stri
 
 /** Best-effort auto-mapping with tradability probe. Logs failures, never throws. */
 async function autoMapBrokerSymbols(api_key: string, account_id: string): Promise<{
+  success: true;
   symbol_suffix: string;
   symbol_overrides: Record<string, string>;
   mapped: number;
   unmapped: string[];
   details?: Record<string, { picked: string; candidates: any[] }>;
-} | null> {
+} | {
+  success: false;
+  brokerStatus: number;
+  error: string;
+}> {
   try {
     const { authToken, metaAccountId } = unswap(api_key, account_id);
-    const { symbols, region } = await fetchMetaApiSymbols(authToken, metaAccountId);
-    if (!symbols.length || !region) return null;
+    const { symbols, region, error, brokerStatus } = await fetchMetaApiSymbols(authToken, metaAccountId);
+    if (!symbols.length || !region) {
+      return { success: false, brokerStatus: brokerStatus ?? 0, error: error || "No MetaAPI region returned symbols" };
+    }
 
     // Use probe-aware mapper to distinguish EURUSD vs EURUSDr vs EURUSDm
     const probe = makeMetaApiProbe(authToken, metaAccountId, region);
     const { overrides, suffix, unmapped, details } = await buildBrokerSymbolMapProbed(
       CANONICAL_PAIRS, symbols, probe, { concurrency: 4 },
     );
-    return { symbol_suffix: suffix, symbol_overrides: overrides, mapped: Object.keys(overrides).length, unmapped, details };
+    return { success: true, symbol_suffix: suffix, symbol_overrides: overrides, mapped: Object.keys(overrides).length, unmapped, details };
   } catch (e: any) {
     console.warn(`[broker-connections] auto-map failed: ${e?.message}`);
-    return null;
+    return { success: false, brokerStatus: 0, error: e?.message || String(e) };
   }
 }
 
@@ -147,10 +161,12 @@ Deno.serve(async (req) => {
         Object.keys(symbol_overrides).length === 0
       ) {
         const mapped = await autoMapBrokerSymbols(payload.api_key, payload.account_id);
-        if (mapped) {
+        if (mapped.success) {
           symbol_suffix = symbol_suffix || mapped.symbol_suffix;
           symbol_overrides = mapped.symbol_overrides;
-          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped, details: mapped.details };
+          auto_map_info = { success: true, mapped: mapped.mapped, unmapped: mapped.unmapped, details: mapped.details };
+        } else {
+          auto_map_info = { success: false, ...brokerFailure("metaapi", mapped.brokerStatus), error: mapped.error };
         }
       }
 
@@ -198,7 +214,9 @@ Deno.serve(async (req) => {
       if (conn.broker_type !== "metaapi") throw new Error("auto_map_symbols only supported for MetaAPI");
 
       const mapped = await autoMapBrokerSymbols(conn.api_key, conn.account_id);
-      if (!mapped) return respond({ success: false, error: "Could not fetch symbols from broker" });
+      if (!mapped.success) {
+        return respond({ success: false, ...brokerFailure("metaapi", mapped.brokerStatus), error: mapped.error });
+      }
 
       const { error: upErr } = await supabase.from("broker_connections")
         .update({ symbol_suffix: mapped.symbol_suffix, symbol_overrides: mapped.symbol_overrides })
@@ -228,8 +246,10 @@ Deno.serve(async (req) => {
 
       const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
       // Find a reachable region (use the same approach as fetchMetaApiSymbols)
-      const { region } = await fetchMetaApiSymbols(authToken, metaAccountId);
-      if (!region) return respond({ success: false, error: "No reachable MetaAPI region" });
+      const { region, error: regionError, brokerStatus } = await fetchMetaApiSymbols(authToken, metaAccountId);
+      if (!region) {
+        return respond({ success: false, ...brokerFailure("metaapi", brokerStatus ?? 0), error: regionError || "No reachable MetaAPI region" });
+      }
 
       const probe = makeMetaApiProbe(authToken, metaAccountId, region);
       // Probe in parallel (small concurrency to be polite to MetaAPI)
@@ -252,12 +272,24 @@ Deno.serve(async (req) => {
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
-          headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-        });
-        if (!res.ok) throw new Error(`OANDA API error: ${res.status}`);
-        const data = await res.json();
-        return respond({ success: true, balance: data.account?.balance, currency: data.account?.currency });
+        try {
+          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
+            headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+          });
+          if (!res.ok) {
+            const details = await res.text();
+            return respond({
+              success: false,
+              ...brokerFailure("oanda", res.status),
+              error: `OANDA API error: ${res.status}`,
+              details: details.slice(0, 300),
+            }, res.status);
+          }
+          const data = await res.json();
+          return respond({ success: true, balance: data.account?.balance, currency: data.account?.currency });
+        } catch (error: any) {
+          return respond({ success: false, ...brokerFailure("oanda", 0), error: error?.message || String(error) });
+        }
       }
 
       if (conn.broker_type === "metaapi") {
@@ -274,6 +306,7 @@ Deno.serve(async (req) => {
             const errText = await provRes.text();
             return respond({
               success: false,
+              ...brokerFailure("metaapi", provRes.status),
               stage: "provisioning",
               error: `MetaAPI provisioning ${provRes.status}: ${errText.slice(0, 200)}`,
               hint: provRes.status === 404
@@ -286,9 +319,9 @@ Deno.serve(async (req) => {
         } catch (e: any) {
           const msg = e?.message || String(e);
           if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
-            return respond({ success: false, error: "SSL certificate issue connecting to MetaApi." });
+            return respond({ success: false, ...brokerFailure("metaapi", 0), error: "SSL certificate issue connecting to MetaApi." });
           }
-          return respond({ success: false, stage: "provisioning", error: msg });
+          return respond({ success: false, ...brokerFailure("metaapi", 0), stage: "provisioning", error: msg });
         }
 
         const regionResults = await Promise.all(REGIONS.map(async (region) => {
@@ -310,8 +343,11 @@ Deno.serve(async (req) => {
         }));
 
         const reachableRegion = regionResults.find((r) => r.ok)?.region ?? null;
+        const representativeFailure = regionResults.find((r) => r.status === 401 || r.status === 403)
+          ?? regionResults.find((r) => !r.ok);
         return respond({
           success: !!reachableRegion,
+          ...(!reachableRegion ? brokerFailure("metaapi", representativeFailure?.status ?? 0) : {}),
           name: provisioning?.name,
           type: provisioning?.type,
           platform: provisioning?.platform,
@@ -338,8 +374,10 @@ Deno.serve(async (req) => {
       if (conn.broker_type !== "metaapi") throw new Error("list_symbols only supported for MetaAPI");
 
       const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
-      const { symbols, region: usedRegion, error: lastError } = await fetchMetaApiSymbols(authToken, metaAccountId);
-      if (!usedRegion) return respond({ success: false, error: lastError });
+      const { symbols, region: usedRegion, error: lastError, brokerStatus } = await fetchMetaApiSymbols(authToken, metaAccountId);
+      if (!usedRegion) {
+        return respond({ success: false, ...brokerFailure("metaapi", brokerStatus ?? 0), error: lastError });
+      }
 
       const fx: string[] = [], crypto: string[] = [], metals: string[] = [], indices: string[] = [], other: string[] = [];
       for (const s of symbols) {
@@ -364,8 +402,9 @@ Deno.serve(async (req) => {
   }
 });
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }

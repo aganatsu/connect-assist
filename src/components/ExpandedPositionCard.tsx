@@ -543,7 +543,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               <div className="flex items-center gap-2 text-[10px] text-cyan-400/80">
                 <span>Watched {sr.watchlistOrigin.cyclesWatched} cycles</span>
                 {sr.watchlistOrigin.initialScore != null && (
-                  <span>\u00b7 Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
+                  <span>{"\u00b7"} Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
                 )}
               </div>
             )}

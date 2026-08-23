@@ -54,6 +54,24 @@ function roundOandaPrice(symbol: string, price: number): string {
   return price.toFixed(precision);
 }
 
+function respondWithBrokerReadFailure(
+  broker: "oanda" | "metaapi",
+  upstreamStatus: number,
+  error: string,
+  details = "",
+) {
+  return respond({
+    ok: false,
+    state: "unknown",
+    errorOrigin: "broker",
+    broker,
+    brokerStatus: upstreamStatus,
+    error,
+    details: details ? details.slice(0, 1000) : undefined,
+    fallback: upstreamStatus >= 500,
+  }, upstreamStatus >= 500 ? 503 : 424);
+}
+
 function respondWithBrokerMutationOutcome(
   res: Response,
   body: string,
@@ -83,6 +101,7 @@ function respondWithBrokerMutationOutcome(
     : outcome.error || "Broker did not confirm the mutation";
   return respond({
     ok: false,
+    errorOrigin: "broker",
     brokerExecutionStatus: outcome.status,
     brokerCode: brokerCode || undefined,
     error: reason,
@@ -143,12 +162,27 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         return respond(JSON.parse(body));
       }
     }
@@ -159,12 +193,27 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/openTrades`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/positions`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         return respond(JSON.parse(body));
       }
     }
@@ -181,10 +230,12 @@ Deno.serve(async (req) => {
         );
         if (!instrumentRes.ok) {
           const details = await instrumentRes.text();
-          return respond({
-            error: `OANDA instrument specification failed: ${instrumentRes.status}`, details,
-            fallback: instrumentRes.status >= 500,
-          }, instrumentRes.status);
+          return respondWithBrokerReadFailure(
+            "oanda",
+            instrumentRes.status,
+            `OANDA instrument specification failed: ${instrumentRes.status}`,
+            details,
+          );
         }
         const instrument = (await instrumentRes.json()).instruments?.[0];
         if (!instrument) {
@@ -272,7 +323,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         const acct = (await res.json()).account;
         return respond({
           balance: parseFloat(acct.balance ?? "0"),
@@ -282,7 +341,14 @@ Deno.serve(async (req) => {
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         const info: any = JSON.parse(body);
         return respond({
           balance: parseFloat(info.balance ?? "0"),
@@ -308,9 +374,22 @@ Deno.serve(async (req) => {
         const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: body.slice(0, 300) });
+            return respond({
+              ok: false,
+              errorOrigin: "broker",
+              broker: "metaapi",
+              brokerStatus: res.status,
+              brokerSymbol: brokerSym,
+              status: res.status,
+              error: body.slice(0, 300),
+            });
           }
-          return respond({ error: `MetaAPI symbol_specs error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI symbol_specs error: ${res.status}`,
+            body,
+          );
         }
         const spec: any = JSON.parse(body);
         if (action === "validate_symbol") {
@@ -335,9 +414,22 @@ Deno.serve(async (req) => {
         if (!res.ok) {
           const errText = await res.text();
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: oandaSym, status: res.status, error: errText.slice(0, 300) });
+            return respond({
+              ok: false,
+              errorOrigin: "broker",
+              broker: "oanda",
+              brokerStatus: res.status,
+              brokerSymbol: oandaSym,
+              status: res.status,
+              error: errText.slice(0, 300),
+            });
           }
-          throw new Error(`OANDA symbol_specs error: ${res.status}`);
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA symbol_specs error: ${res.status}`,
+            errText,
+          );
         }
         const data: any = await res.json();
         const inst = data.instruments?.[0];
@@ -370,7 +462,12 @@ Deno.serve(async (req) => {
         const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
         const body = await res.text();
         if (!res.ok) {
-          return respond({ ok: false, error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 200);
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI provisioning ${res.status}`,
+            body,
+          );
         }
         const info: any = JSON.parse(body);
         return respond({
@@ -389,7 +486,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) return respond({ ok: false, error: `OANDA ${res.status}`, fallback: true }, 200);
+        if (!res.ok) {
+          const details = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA ${res.status}`,
+            details,
+          );
+        }
         const acct = (await res.json()).account;
         return respond({ ok: true, state: "DEPLOYED", connectionStatus: "CONNECTED", ready: true, name: acct.alias, login: acct.id });
       }
@@ -432,7 +537,15 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades?state=CLOSED&count=${limit}`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        if (!res.ok) {
+          const errText = await res.text();
+          return respondWithBrokerReadFailure(
+            "oanda",
+            res.status,
+            `OANDA error: ${res.status}`,
+            errText,
+          );
+        }
         return respond((await res.json()).trades || []);
       }
       if (conn.broker_type === "metaapi") {
@@ -440,7 +553,14 @@ Deno.serve(async (req) => {
         const startTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const endTime = new Date().toISOString();
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/history-deals/time/${startTime}/${endTime}`);
-        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        if (!res.ok) {
+          return respondWithBrokerReadFailure(
+            "metaapi",
+            res.status,
+            `MetaAPI error: ${res.status}`,
+            body,
+          );
+        }
         const deals: any[] = JSON.parse(body);
         // Group deals by positionId to reconstruct trades
         const posMap = new Map<string, any[]>();
@@ -537,7 +657,7 @@ Deno.serve(async (req) => {
     return respond({ error: "Unknown action" });
   } catch (error: any) {
     console.error("broker-execute error:", error?.message || error);
-    return new Response(JSON.stringify({ error: error.message, fallback: true }), {
+    return new Response(JSON.stringify({ ok: false, state: "unknown", error: error.message, fallback: true }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

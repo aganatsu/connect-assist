@@ -1,4 +1,220 @@
 export type ExecutionMode = "paper" | "live";
+export type ExecutionModeState = ExecutionMode | "unknown";
+
+export interface ActiveBrokerConnection {
+  id: string;
+  is_active?: boolean;
+  display_name?: string;
+}
+
+export interface FreshTradingTruthReaders {
+  readPaperStatus: () => Promise<unknown>;
+  listBrokerConnections: () => Promise<readonly ActiveBrokerConnection[]>;
+  readBrokerConnectionStatus: (connectionId: string) => Promise<unknown>;
+  readBrokerAccount: (connectionId: string) => Promise<unknown>;
+  readBrokerOpenTrades: (connectionId: string) => Promise<unknown>;
+}
+
+export interface FreshTradingTruthSnapshot {
+  mode: ExecutionMode;
+  paperStatus: unknown;
+  activeConnections: readonly ActiveBrokerConnection[];
+  brokerSnapshots: readonly {
+    connection: ActiveBrokerConnection;
+    connectionStatus: unknown;
+    account: unknown;
+    openTrades: unknown;
+  }[];
+}
+
+export interface FreshTradingTruthOptions {
+  targetMode?: ExecutionMode;
+  targetConnectionId?: string;
+}
+
+export interface BrokerExposureState {
+  available: boolean;
+  positions: unknown;
+}
+
+type ExecutionModePayload = {
+  executionMode?: unknown;
+  account?: { execution_mode?: unknown };
+  state?: unknown;
+  fallback?: unknown;
+  ok?: unknown;
+  error?: unknown;
+};
+
+/** Missing, failed, or fallback status is unknown, never implicitly paper. */
+export function readExecutionMode(status: unknown): ExecutionModeState {
+  if (!status || typeof status !== "object" || Array.isArray(status)) return "unknown";
+  const candidate = status as ExecutionModePayload;
+  if (
+    candidate.state === "unknown" ||
+    candidate.state === "unavailable" ||
+    candidate.fallback === true ||
+    candidate.ok === false ||
+    candidate.error
+  ) {
+    return "unknown";
+  }
+  const mode = candidate.executionMode ?? candidate.account?.execution_mode;
+  return mode === "paper" || mode === "live" ? mode : "unknown";
+}
+
+/** Trading mutations require a known account mode and every active live broker to be ready. */
+export function canUseTradingControls(
+  mode: ExecutionModeState,
+  liveBrokerStates: readonly boolean[],
+): boolean {
+  return mode === "paper" ||
+    (mode === "live" && liveBrokerStates.length > 0 && liveBrokerStates.every(Boolean));
+}
+
+/** Returning to paper needs exact empty broker exposure, not broker readiness. */
+export function canReturnToPaper(
+  mode: ExecutionModeState,
+  brokerConnectionsKnown: boolean,
+  activeBrokerExposure: readonly BrokerExposureState[],
+): boolean {
+  return mode === "live" &&
+    brokerConnectionsKnown &&
+    activeBrokerExposure.every((state) =>
+      state.available &&
+      Array.isArray(state.positions) &&
+      state.positions.length === 0
+    );
+}
+
+function isAvailableObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  return payload.ok !== false && payload.fallback !== true &&
+    payload.state !== "unknown" && payload.state !== "unavailable" &&
+    !payload.error;
+}
+
+/**
+ * Re-read execution truth immediately before a risk-changing mutation.
+ * Cached UI query state is presentation only and must not authorize writes.
+ */
+export async function requireFreshTradingTruth(
+  readers: FreshTradingTruthReaders,
+  options: FreshTradingTruthOptions = {},
+): Promise<FreshTradingTruthSnapshot> {
+  const paperStatus = await readers.readPaperStatus();
+  const currentMode = readExecutionMode(paperStatus);
+  if (currentMode === "unknown") {
+    throw new Error(
+      "Current account state is unavailable. Refresh before changing trading state.",
+    );
+  }
+
+  const reducingToPaper = currentMode === "live" &&
+    options.targetMode === "paper";
+  const brokerTruthRequired = currentMode === "live" ||
+    options.targetMode === "live" ||
+    !!options.targetConnectionId;
+  if (!brokerTruthRequired) {
+    return {
+      mode: currentMode,
+      paperStatus,
+      activeConnections: [],
+      brokerSnapshots: [],
+    };
+  }
+
+  const connections = await readers.listBrokerConnections();
+  if (!Array.isArray(connections)) {
+    throw new Error(
+      "Broker connection state is unavailable. Refresh before changing trading state.",
+    );
+  }
+  const activeConnections = connections.filter((connection) =>
+    connection?.is_active === true
+  );
+
+  if (
+    options.targetConnectionId &&
+    !activeConnections.some((connection) =>
+      connection.id === options.targetConnectionId
+    )
+  ) {
+    throw new Error(
+      "The requested broker connection is not active. Refresh broker connections before retrying.",
+    );
+  }
+
+  if (reducingToPaper) {
+    const brokerSnapshots = await Promise.all(
+      activeConnections.map(async (connection) => {
+        const openTrades = await readers.readBrokerOpenTrades(connection.id);
+        if (!Array.isArray(openTrades)) {
+          throw new Error(
+            `${connection.display_name || "Broker"} current positions are unavailable.`,
+          );
+        }
+        return {
+          connection,
+          connectionStatus: null,
+          account: null,
+          openTrades,
+        };
+      }),
+    );
+
+    if (brokerSnapshots.some((snapshot) => snapshot.openTrades.length > 0)) {
+      throw new Error(
+        "Close all live broker positions before switching execution to paper.",
+      );
+    }
+
+    return {
+      mode: currentMode,
+      paperStatus,
+      activeConnections,
+      brokerSnapshots,
+    };
+  }
+
+  if (activeConnections.length === 0) {
+    throw new Error(
+      "At least one active broker connection is required for live execution.",
+    );
+  }
+
+  const brokerSnapshots = await Promise.all(activeConnections.map(async (connection) => {
+    const [connectionStatus, account, openTrades] = await Promise.all([
+      readers.readBrokerConnectionStatus(connection.id),
+      readers.readBrokerAccount(connection.id),
+      readers.readBrokerOpenTrades(connection.id),
+    ]);
+    const ready = isAvailableObject(connectionStatus) &&
+      connectionStatus.ready === true &&
+      isAvailableObject(account) &&
+      Array.isArray(openTrades);
+    if (!ready) {
+      throw new Error(
+        `${connection.display_name || "Broker"} is not ready or its current account state is unavailable.`,
+      );
+    }
+    return { connection, connectionStatus, account, openTrades };
+  }));
+
+  if (!canUseTradingControls("live", brokerSnapshots.map(() => true))) {
+    throw new Error(
+      "Current broker state is unavailable. Refresh before changing trading state.",
+    );
+  }
+
+  return {
+    mode: currentMode,
+    paperStatus,
+    activeConnections,
+    brokerSnapshots,
+  };
+}
 
 export interface ExecutionModeResponse {
   success?: boolean;
