@@ -9,7 +9,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Chart from "./pages/Chart";
 import IctAnalysis from "./pages/IctAnalysis";
-import BotView from "./pages/BotView";
+import OperationsDashboard from "./pages/OperationsDashboard";
 import Journal from "./pages/Journal";
 import Backtest from "./pages/Backtest";
 import SettingsPage from "./pages/Settings";
@@ -49,7 +49,7 @@ const App = () => (
                 <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
                 <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
                 <Route path="/game-plan" element={<ProtectedRoute><GamePlan /></ProtectedRoute>} />
-                <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><BotView /></ErrorBoundary></ProtectedRoute>} />
+                <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><OperationsDashboard /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
                 <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />

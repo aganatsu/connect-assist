@@ -23,7 +23,7 @@ describe("page layout", () => {
     const present = new Set(readdirSync(pagesDir));
     const missing = routed
       .filter((f) => present.has(f) && !NO_SHELL.has(f))
-      .filter((f) => !readFileSync(resolve(pagesDir, f), "utf8").includes("<AppShell>"));
+      .filter((f) => !readFileSync(resolve(pagesDir, f), "utf8").includes("<AppShell"));
     expect(
       missing,
       `Pages without AppShell (no nav — user is trapped): ${missing.join(", ")}`,
