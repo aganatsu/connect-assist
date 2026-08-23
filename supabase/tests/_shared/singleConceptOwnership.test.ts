@@ -53,6 +53,7 @@ const SINGLE_OWNER: string[] = [
   "computePositionSize",
   "calculateSLTP",
   "finalizePaperPositionClose",
+  "calcPnl",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",
   // ── Entry confirmation ──

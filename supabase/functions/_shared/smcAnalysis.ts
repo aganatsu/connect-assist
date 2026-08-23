@@ -2613,12 +2613,52 @@ export function calculatePositionSize(
 
 // ─── PnL Calculation ────────────────────────────────────────────────
 // rateMap: optional map for cross-pair PnL conversion to USD
-export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
+export type PnlCalculationResult =
+  | { valid: true; pnl: number; pnlPips: number }
+  | {
+    valid: false;
+    pnl: 0;
+    pnlPips: 0;
+    reason: "invalid_inputs" | "invalid_direction" | "unsupported_symbol";
+  };
+
+export function calcPnl(
+  dir: string,
+  entry: number,
+  current: number,
+  size: number,
+  symbol: string,
+  rateMap?: Record<string, number>,
+): PnlCalculationResult {
+  if (dir !== "long" && dir !== "short") {
+    console.warn(`[calcPnl] Invalid direction ${dir} for ${symbol}. Returning an invalid result.`);
+    return { valid: false, pnl: 0, pnlPips: 0, reason: "invalid_direction" };
+  }
+  if (
+    !Number.isFinite(entry) ||
+    !Number.isFinite(current) ||
+    !Number.isFinite(size) ||
+    entry <= 0 ||
+    current <= 0 ||
+    size <= 0
+  ) {
+    console.warn(`[calcPnl] Invalid inputs — entry=${entry}, current=${current}, size=${size}, symbol=${symbol}. Returning an invalid result.`);
+    return { valid: false, pnl: 0, pnlPips: 0, reason: "invalid_inputs" };
+  }
   const resolvedSymbol = resolveSupportedSpecSymbol(symbol);
-  const spec = SPECS[resolvedSymbol] || SPECS["EUR/USD"];
+  const spec = SPECS[resolvedSymbol];
+  if (!spec) {
+    console.warn(`[calcPnl] Unsupported symbol ${symbol}. Returning an invalid result.`);
+    return { valid: false, pnl: 0, pnlPips: 0, reason: "unsupported_symbol" };
+  }
   const diff = dir === "long" ? current - entry : entry - current;
   const quoteToUSD = getQuoteToUSDRate(resolvedSymbol, rateMap);
-  return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
+  const pnl = diff * spec.lotUnits * size * quoteToUSD;
+  const pnlPips = diff / spec.pipSize;
+  if (Math.abs(pnl) > 50000) {
+    console.warn(`[PnL SANITY] Suspicious PnL $${pnl.toFixed(2)} on ${symbol} (${size} lots, diff=${diff.toFixed(5)}, quoteToUSD=${quoteToUSD.toFixed(6)}). Check rate conversion.`);
+  }
+  return { valid: true, pnl, pnlPips };
 }
 
 // ─── Regime Transition Detection ──────────────────────────────────────────────

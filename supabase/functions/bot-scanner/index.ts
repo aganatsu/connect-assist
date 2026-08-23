@@ -107,7 +107,7 @@ import {
   calculatePDLevels,
   computeOpeningRange, calculateSLTP,
   // Position sizing & rate conversion
-  calculatePositionSize, getQuoteToUSDRate,
+  calculatePositionSize, calcPnl, getQuoteToUSDRate,
   // Confluence stacking, sweep reclaim, pullback decay
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
   type ConfluenceStack, type SweepReclaim, type PullbackDecay,
@@ -2312,10 +2312,21 @@ async function runScanForUser(
       if (hitPrice && closeReason) {
         const entry = parseFloat(pos.entry_price);
         const size = parseFloat(pos.size);
-        const diff = isLong ? hitPrice - entry : entry - hitPrice;
-        const quoteToUSD = getQuoteToUSDRate(pos.symbol, rateMap);
-        const pnl = diff * spec.lotUnits * size * quoteToUSD;
-        const pnlPips = diff / spec.pipSize;
+        const pnlResult = calcPnl(
+          pos.direction,
+          entry,
+          hitPrice,
+          size,
+          pos.symbol,
+          rateMap,
+        );
+        if (!pnlResult.valid) {
+          console.error(
+            `[breach-check] ${pos.symbol}: refusing to settle invalid P&L (${pnlResult.reason})`,
+          );
+          continue;
+        }
+        const { pnl, pnlPips } = pnlResult;
         const nowClose = new Date().toISOString();
 
         const finalization = await finalizePaperPositionClose(supabase, {
@@ -9281,11 +9292,21 @@ async function runScanForUser(
           for (const opp of oppositePositions) {
             const oppEntry = parseFloat(opp.entry_price);
             const oppSize = parseFloat(opp.size);
-            const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
-            const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
-            const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
-            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
-            const oppPnlPips = oppDiff / oppSpec.pipSize;
+            const oppPnlResult = calcPnl(
+              opp.direction,
+              oppEntry,
+              analysis.lastPrice,
+              oppSize,
+              opp.symbol,
+              rateMap,
+            );
+            if (!oppPnlResult.valid) {
+              console.error(
+                `[close] ${opp.symbol}: refusing reverse settlement with invalid P&L (${oppPnlResult.reason})`,
+              );
+              continue;
+            }
+            const { pnl: oppPnl, pnlPips: oppPnlPips } = oppPnlResult;
             const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
 
             if (account.execution_mode === "live") {

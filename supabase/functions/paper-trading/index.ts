@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
+import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, calcPnl, FALLBACK_RATES, SPECS, type Candle } from "../_shared/smcAnalysis.ts";
 import { parseTradeOverrides } from "../_shared/resolveTradeConfig.ts";
 import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
@@ -76,87 +76,6 @@ async function updatePositionPrices(supabase: any, positions: any[]): Promise<vo
   }));
 }
 
-// ─── Instrument Specs ───────────────────────────────────────────────
-const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: number }> = {
-  // Forex Majors
-  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
-  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  // Forex Crosses
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
-  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1200 },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1500 },
-  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
-  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
-  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
-  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
-  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
-  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
-  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
-  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
-  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 800 },
-  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
-  "AUD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "AUD/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "CAD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "CHF/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
-  "NZD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
-  "NZD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
-  "NZD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 700 },
-  // Indices
-  "US30": { pipSize: 1.0, lotUnits: 1, marginPerLot: 5000 },
-  "NAS100": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
-  "SPX500": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
-  // Commodities
-  "XAU/USD": { pipSize: 0.01, lotUnits: 100, marginPerLot: 2000 },
-  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, marginPerLot: 1500 },
-  "US Oil": { pipSize: 0.01, lotUnits: 1000, marginPerLot: 2000 },
-  // Crypto
-  "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
-  "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
-};
-
-// ─── Hardcoded fallback rates (approximate) — used when TwelveData is unavailable ──
-// These prevent catastrophic PnL miscalculation (e.g., treating JPY as USD = 142x error)
-const FALLBACK_RATES: Record<string, number> = {
-  "USD/JPY": 142.0,
-  "GBP/USD": 1.27,
-  "AUD/USD": 0.66,
-  "NZD/USD": 0.61,
-  "USD/CAD": 1.36,
-  "USD/CHF": 0.88,
-};
-
-// ─── Quote-to-USD conversion (matching shared/smcAnalysis.ts) ──
-function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  // Non-forex instruments are already USD-denominated
-  if (!symbol.includes("/")) return 1.0;
-  const parts = symbol.split("/");
-  const quote = parts[1];
-  if (quote === "USD") return 1.0;
-  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
-    "JPY": { pair: "USD/JPY", invert: true },
-    "GBP": { pair: "GBP/USD", invert: false },
-    "AUD": { pair: "AUD/USD", invert: false },
-    "NZD": { pair: "NZD/USD", invert: false },
-    "CAD": { pair: "USD/CAD", invert: true },
-    "CHF": { pair: "USD/CHF", invert: true },
-  };
-  const conv = QUOTE_CONVERSION[quote];
-  if (!conv) return 1.0;
-  // Try live rate first, then fallback to approximate hardcoded rate
-  const liveRate = rateMap?.[conv.pair];
-  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
-  if (!rate || rate <= 0) return 1.0;
-  return conv.invert ? (1 / rate) : rate;
-}
-
 // Module-level rateMap built once per invocation from live prices
 let _rateMap: Record<string, number> = {};
 
@@ -174,26 +93,6 @@ async function buildRateMap(): Promise<Record<string, number>> {
   }
   return map;
 }
-
-function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
-  // NaN guard: if entry or current is invalid, return zero P&L to prevent balance corruption
-  if (!Number.isFinite(entry) || !Number.isFinite(current) || !Number.isFinite(size) || entry <= 0 || current <= 0 || size <= 0) {
-    console.warn(`[calcPnl] Invalid inputs — entry=${entry}, current=${current}, size=${size}, symbol=${symbol}. Returning zero P&L.`);
-    return { pnl: 0, pnlPips: 0 };
-  }
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const diff = dir === "long" ? current - entry : entry - current;
-  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap || _rateMap);
-  const pnl = diff * spec.lotUnits * size * quoteToUSD;
-  const pnlPips = diff / spec.pipSize;
-  // Sanity check: warn if single trade PnL exceeds reasonable bounds
-  // This catches conversion errors (e.g., quoteToUSD=1.0 for JPY pairs = 142x inflation)
-  if (Math.abs(pnl) > 50000) {
-    console.warn(`[PnL SANITY] Suspicious PnL $${pnl.toFixed(2)} on ${symbol} (${size} lots, diff=${diff.toFixed(5)}, quoteToUSD=${quoteToUSD.toFixed(6)}). Check rate conversion.`);
-  }
-  return { pnl, pnlPips };
-}
-
 
 // ─── MT5 Mirror Helper ──────────────────────────────────────────────────────
 async function mirrorToMT5(supabase: any, userId: string, params: {
@@ -971,7 +870,14 @@ Deno.serve(async (req) => {
 
           // Close position if SL or TP triggered
           if (closeReason) {
-            const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
+            const pnlResult = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol, _rateMap);
+            if (!pnlResult.valid) {
+              console.error(
+                `Auto-close refused [${pos.position_id}]: invalid P&L calculation (${pnlResult.reason})`,
+              );
+              continue;
+            }
+            const { pnl, pnlPips } = pnlResult;
             const closeBotId = pos.bot_id || "smc";
             const finalization = await finalizePaperPositionClose(supabase, {
               positionRowId: pos.id,
@@ -1040,7 +946,7 @@ Deno.serve(async (req) => {
           id: p.position_id, symbol: p.symbol, direction: p.direction,
           size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
           currentPrice: parseFloat(p.current_price),
-          pnl: calcPnl(p.direction, parseFloat(p.entry_price), parseFloat(p.current_price), parseFloat(p.size), p.symbol).pnl,
+          pnl: calcPnl(p.direction, parseFloat(p.entry_price), parseFloat(p.current_price), parseFloat(p.size), p.symbol, _rateMap).pnl,
           stopLoss: p.stop_loss ? parseFloat(p.stop_loss) : null,
           takeProfit: p.take_profit ? parseFloat(p.take_profit) : null,
           openTime: p.open_time, signalReason: p.signal_reason || "",
@@ -1357,7 +1263,15 @@ Deno.serve(async (req) => {
       if (!pos) throw new Error("Position not found");
 
       const ep = Number(exitPrice || pos.current_price);
-      const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
+      const pnlResult = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol, _rateMap);
+      if (!pnlResult.valid) {
+        return respond({
+          success: false,
+          code: "invalid_pnl_inputs",
+          error: `Position cannot be closed until its accounting inputs are repaired (${pnlResult.reason})`,
+        }, 422);
+      }
+      const { pnl, pnlPips } = pnlResult;
       const closeReason = payload.reason || "manual";
 
       const finalization = await finalizePaperPositionClose(supabase, {
@@ -1421,7 +1335,14 @@ Deno.serve(async (req) => {
         if (positions && positions.length > 0) {
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);
-            const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
+            const pnlResult = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol, _rateMap);
+            if (!pnlResult.valid) {
+              console.error(
+                `Kill-switch accounting refused [${pos.position_id}]: invalid P&L calculation (${pnlResult.reason})`,
+              );
+              continue;
+            }
+            const { pnl, pnlPips } = pnlResult;
             const finalization = await finalizePaperPositionClose(supabase, {
               positionRowId: pos.id,
               userId: user.id,

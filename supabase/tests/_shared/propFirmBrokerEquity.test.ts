@@ -4,7 +4,7 @@
  * Verifies:
  * 1. propFirmGate supports brokerEquity when the caller marks a broker connection active
  * 2. bot-scanner only marks that broker connection active in live execution mode
- * 3. calcPnl returns zero when entry/current/size is NaN or invalid
+ * 3. calcPnl returns an explicit invalid result for unsafe accounting inputs
  */
 import {
   assertEquals,
@@ -70,28 +70,37 @@ Deno.test("bot-scanner fetches broker equity only in live mode", async () => {
   );
 });
 
-// ── Test 5: calcPnl NaN guard returns zero for NaN entry ──
-Deno.test("calcPnl NaN guard is present in paper-trading", async () => {
+// ── Test 5: calcPnl identifies invalid inputs without emitting NaN ──
+Deno.test("calcPnl invalid-input guard is owned by the shared calculator", async () => {
   const source = await Deno.readTextFile(
-    new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
+    new URL("../../functions/_shared/smcAnalysis.ts", import.meta.url).pathname,
   );
   assertStringIncludes(source, "Number.isFinite(entry)");
   assertStringIncludes(source, "Number.isFinite(current)");
-  assertStringIncludes(source, "Returning zero P&L");
+  assertStringIncludes(source, "Returning an invalid result.");
 });
 
-// ── Test 6: calcPnl NaN guard logic is correct ──
-Deno.test("calcPnl NaN guard catches all invalid input combinations", async () => {
+// ── Test 6: calcPnl invalid-input contract is explicit ──
+Deno.test("calcPnl invalid-input guard checks every accounting input", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../functions/_shared/smcAnalysis.ts", import.meta.url).pathname,
+  );
+  assertStringIncludes(source, "!Number.isFinite(entry)");
+  assertStringIncludes(source, "!Number.isFinite(current)");
+  assertStringIncludes(source, "!Number.isFinite(size)");
+  assertStringIncludes(source, "entry <= 0");
+  assertStringIncludes(source, "current <= 0");
+  assertStringIncludes(source, "size <= 0");
+  assertStringIncludes(
+    source,
+    `return { valid: false, pnl: 0, pnlPips: 0, reason: "invalid_inputs" };`,
+  );
+});
+
+Deno.test("paper-trading delegates PnL to the shared owner", async () => {
   const source = await Deno.readTextFile(
     new URL("../../functions/paper-trading/index.ts", import.meta.url).pathname,
   );
-  // Verify the guard checks all three critical inputs
-  assertStringIncludes(
-    source,
-    "!Number.isFinite(entry) || !Number.isFinite(current) || !Number.isFinite(size)",
-  );
-  // Verify it also checks for zero/negative values
-  assertStringIncludes(source, "entry <= 0 || current <= 0 || size <= 0");
-  // Verify it returns zero PnL (not NaN)
-  assertStringIncludes(source, "return { pnl: 0, pnlPips: 0 }");
+  assertStringIncludes(source, "calcPnl,");
+  assertEquals(/function\s+calcPnl\s*\(/.test(source), false, "paper-trading must not keep a private PnL implementation");
 });

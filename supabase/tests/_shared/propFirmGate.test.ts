@@ -583,3 +583,61 @@ Deno.test("propFirmGate: hasBrokerConnection without equity BLOCKS (fail-closed)
   assert(result.reason.includes("Broker equity unavailable"));
   assert(result.reason.includes("blocking"));
 });
+
+Deno.test("propFirmEmergencyClose: invalid PnL inputs never finalize at zero", async () => {
+  let rpcCalls = 0;
+  const supabase = {
+    rpc: async () => {
+      rpcCalls++;
+      return { data: { closed: true, code: "closed" }, error: null };
+    },
+  };
+
+  const closedCount = await propFirmEmergencyClose(
+    supabase as any,
+    "test-user",
+    "smc",
+    [{
+      id: "invalid-position",
+      symbol: "XAUUSD",
+      direction: "long",
+      entry_price: "NaN",
+      current_price: "2001",
+      size: "0.1",
+      position_id: "invalid-1",
+    }],
+    "test emergency",
+    "scan-invalid-pnl",
+  );
+
+  assertEquals(closedCount, 0);
+  assertEquals(rpcCalls, 0);
+});
+
+Deno.test("propFirmGate: invalid floating PnL blocks new entries", async () => {
+  const config = makeConfig();
+  const dailyState = makeDailyState();
+  const supabase = makeMockSupabase({ config, dailyState });
+
+  const result = await runPropFirmGate(
+    supabase,
+    "test-user",
+    "smc",
+    100_000,
+    [{
+      symbol: "UNSUPPORTED",
+      direction: "long",
+      entry_price: "100",
+      current_price: "101",
+      size: "0.1",
+    }],
+    "scan-invalid-floating-pnl",
+    { isLiveAccount: false },
+  );
+
+  assertEquals(result.enabled, true);
+  assertEquals(result.allowed, false);
+  assertEquals(result.maxPositionSizeMultiplier, 0);
+  assertEquals(result.shouldCloseAll, false);
+  assert(result.reason.includes("Paper equity unavailable"));
+});

@@ -162,7 +162,7 @@ export function computePartialCloseDecision(
   const executionPrice = input.executionPriceMode === "threshold"
     ? triggerPrice
     : finite(input.currentPrice, triggerPrice);
-  const { pnl: grossPnl, pnlPips } = calcPnl(
+  const pnlResult = calcPnl(
     input.direction,
     entryPrice,
     executionPrice,
@@ -170,6 +170,14 @@ export function computePartialCloseDecision(
     input.symbol,
     input.rateMap,
   );
+  if (!pnlResult.valid) {
+    return noAction(
+      `Partial TP P&L is invalid: ${pnlResult.reason}`,
+      rMultiple,
+      triggerPrice,
+    );
+  }
+  const { pnl: grossPnl, pnlPips } = pnlResult;
   const commission = closeSize * finite(input.commissionPerLot ?? 0, 0) * 2;
   const netPnl = grossPnl - commission;
 

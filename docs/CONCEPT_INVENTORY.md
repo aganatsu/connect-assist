@@ -30,6 +30,7 @@ instead of arbitrating.
 |---|---|---|---|
 | **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
 | **Paper final-close persistence** | 1 | `finalizePaperPositionClose` + `finalize_paper_position_close` RPC | 🟢 Single owner |
+| Instrument-aware P&L | 1 | `smcAnalysis.ts:calcPnl` | 🟢 Single owner |
 | Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
 | SMT divergence | 2 | scanner-local copy | 🔴 **DUPLICATE** |
 | Min-confluence threshold | 2 | both (raw + effective) | 🔴 **DUPLICATE, drifted** |
@@ -134,6 +135,16 @@ neutral current verdict keeps the setup waiting, while a fresh explicit opposite
 long/short verdict terminates it. Missing evidence never authorizes entry. The same
 policy is passed through `finalTradeAuthorization.ts`,
 `singleOwnershipFillAuthorization.ts`, the zone-confirmation scanner, and backtest.
+
+## Instrument-aware P&L
+
+`_shared/smcAnalysis.ts:calcPnl` is the single owner for realized, floating, and
+prop-firm-equity P&L. It resolves supported broker symbol aliases through the shared
+instrument specifications and uses the caller-provided quote conversion map when
+available. Invalid direction, instrument, or numeric inputs return an explicit invalid
+result. Display callers may render its zero values, but accounting mutations and
+simulations must reject it rather than settling a position at zero P&L. Orchestrators
+must delegate to this owner rather than keeping local contract-size or pip-size tables.
 
 ## Paper final-close persistence
 
