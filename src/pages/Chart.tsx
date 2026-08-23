@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
 import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
@@ -26,7 +27,11 @@ function getRefreshInterval(tf: Timeframe): number {
 }
 
 export default function Chart() {
-  const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
+  const [searchParams] = useSearchParams();
+  const requestedSymbol = searchParams.get('symbol');
+  const [selectedSymbol, setSelectedSymbol] = useState(() =>
+    requestedSymbol && INSTRUMENTS.some((instrument) => instrument.symbol === requestedSymbol) ? requestedSymbol : 'EUR/USD'
+  );
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('4h');
   const [chartMode, setChartMode] = useState<'evidence' | 'live'>('evidence');
   const [panelOpen, setPanelOpen] = useState(true);
