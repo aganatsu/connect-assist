@@ -13,10 +13,11 @@ const source = await Deno.readTextFile(
 Deno.test("manual broker mutations use the shared response classifier", () => {
   assertStringIncludes(
     source,
-    "classifyBrokerExecutionResponse,",
+    "classifyBrokerMutationHttpResponse,",
   );
   assertStringIncludes(source, '"metaapi_trade"');
-  assertStringIncludes(source, '"oanda_order_fill"');
+  assertStringIncludes(source, '"oanda_trade_open"');
+  assertStringIncludes(source, '"metaapi_position_open"');
   assertStringIncludes(source, '"oanda_trade_orders"');
 
   const placeSection = source.split('if (action === "place_order")')[1]

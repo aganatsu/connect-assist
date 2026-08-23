@@ -5,7 +5,7 @@ import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import {
   type BrokerExecutionConfirmationMode,
-  classifyBrokerExecutionResponse,
+  classifyBrokerMutationHttpResponse,
   type OandaDependentOrderTransaction,
 } from "../_shared/brokerExecutionLedger.ts";
 import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
@@ -59,21 +59,13 @@ function respondWithBrokerMutationOutcome(
   confirmationMode: BrokerExecutionConfirmationMode,
   requiredOandaTransactions?: readonly OandaDependentOrderTransaction[],
 ) {
-  let parsedBody: any = null;
-  try {
-    parsedBody = body ? JSON.parse(body) : null;
-  } catch {
-    // The shared classifier records malformed 2xx bodies as uncertain.
-  }
-
-  const outcome = classifyBrokerExecutionResponse({
-    ok: res.ok,
-    httpStatus: res.status,
-    parsedBody,
-    rawBody: body,
+  const outcome = classifyBrokerMutationHttpResponse(
+    res,
+    body,
     confirmationMode,
     requiredOandaTransactions,
-  });
+  );
+  const parsedBody = outcome.parsedBody;
   const brokerCode = parsedBody?.stringCode || parsedBody?.errorCode;
 
   if (outcome.status === "succeeded") {
@@ -227,7 +219,7 @@ Deno.serve(async (req) => {
         return respondWithBrokerMutationOutcome(
           res,
           body,
-          "oanda_order_fill",
+          "oanda_trade_open",
         );
       }
 
@@ -251,7 +243,11 @@ Deno.serve(async (req) => {
           },
           { allowFailover: false },
         );
-        return respondWithBrokerMutationOutcome(res, body, "metaapi_trade");
+        return respondWithBrokerMutationOutcome(
+          res,
+          body,
+          "metaapi_position_open",
+        );
       }
     }
 

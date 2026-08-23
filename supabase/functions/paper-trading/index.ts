@@ -4,6 +4,10 @@ import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, calcPnl, FALLBACK_R
 import { parseTradeOverrides } from "../_shared/resolveTradeConfig.ts";
 import { resolvePositionManagementPolicy } from "../_shared/managementPolicy.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
+import {
+  classifyBrokerMutationHttpResponse,
+  executeBrokerOrderWithLedger,
+} from "../_shared/brokerExecutionLedger.ts";
 import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
@@ -96,7 +100,7 @@ async function buildRateMap(): Promise<Record<string, number>> {
 
 // ─── MT5 Mirror Helper ──────────────────────────────────────────────────────
 async function mirrorToMT5(supabase: any, userId: string, params: {
-  action: "open" | "close";
+  action: "open";
   symbol: string;
   direction?: string;
   size?: number;
@@ -111,6 +115,9 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     if (!connections || connections.length === 0) return { success: false, error: "no_connection" };
 
     if (params.action === "open") {
+      if (!params.positionId) {
+        return { success: false, error: "position_id_required" };
+      }
       const successIds: string[] = [];
       let firstResult: any = null;
       let lastError: string | null = null;
@@ -133,17 +140,57 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
           if (params.takeProfit) body.takeProfit = params.takeProfit;
           if (params.positionId) body.comment = `paper:${params.positionId}`;
 
-          const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-          });
-          if (res.ok) {
-            const parsed = JSON.parse(resBody);
+          const execution = await executeBrokerOrderWithLedger(
+            supabase,
+            {
+              userId,
+              botId: "smc",
+              positionId: params.positionId,
+              brokerConnectionId: conn.id,
+              route: "manual_place_order",
+              requestPayload: {
+                symbol: params.symbol,
+                direction: params.direction,
+                volume: params.size,
+                stopLoss: params.stopLoss,
+                takeProfit: params.takeProfit,
+              },
+            },
+            async () => {
+              const { res, body: resBody } = await metaFetch(
+                metaAccountId,
+                authToken,
+                (base) => `${base}/trade`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(body),
+                },
+                { allowFailover: false },
+              );
+              let parsedBody: any = null;
+              try {
+                parsedBody = resBody ? JSON.parse(resBody) : null;
+              } catch {
+                // The shared classifier marks malformed success responses uncertain.
+              }
+              return {
+                ok: res.ok,
+                httpStatus: res.status,
+                parsedBody,
+                rawBody: resBody,
+                confirmationMode: "metaapi_position_open",
+              };
+            },
+          );
+          if (execution.status === "succeeded") {
+            const parsed = execution.parsedBody;
             if (!firstResult) firstResult = parsed;
             successIds.push(conn.id);
             console.log(`MT5 mirror open [${conn.display_name}]: SUCCESS`);
           } else {
-            lastError = `MT5 order failed on ${conn.display_name}: ${res.status}`;
-            console.warn(`MT5 mirror open [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
+            lastError = `MT5 order ${execution.status} on ${conn.display_name}: ${execution.error || "reconciliation required"}`;
+            console.warn(`MT5 mirror open [${conn.display_name}] ${execution.status}: ${execution.error || "reconciliation required"}`);
           }
         } catch (connErr: any) {
           lastError = connErr?.message || String(connErr);
@@ -156,73 +203,8 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
       }
       return { success: false, error: lastError || "all connections failed" };
     }
+    return { success: false, error: "unsupported action" };
 
-    if (params.action === "close") {
-      // H5 fix: Fan out close to ALL active connections (was only connections[0])
-      let anySuccess = false;
-      let lastResult: any = null;
-      let lastError: string | null = null;
-
-      for (const conn of connections) {
-        try {
-          let authToken = conn.api_key;
-          let metaAccountId = conn.account_id;
-          if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-            authToken = conn.account_id;
-            metaAccountId = conn.api_key;
-          }
-
-          const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-          if (!posRes.ok) {
-            console.warn(`MT5 close [${conn.display_name}]: positions fetch failed ${posRes.status}`);
-            lastError = `${conn.display_name}: positions fetch failed ${posRes.status}`;
-            continue;
-          }
-          const mt5Positions = JSON.parse(posBody);
-          const commentTag = `paper:${params.positionId}`;
-          const shortTag = commentTag.slice(0, 28);
-          let mt5Pos = mt5Positions.find((p: any) =>
-            p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-          );
-          if (!mt5Pos) {
-            // Fallback: match by symbol
-            const base = params.symbol?.replace("/", "") || "";
-            const overrides = conn.symbol_overrides || {};
-            const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
-            mt5Pos = mt5Positions.find((p: any) =>
-              p.symbol === brokerSymbol || p.symbol === base ||
-              p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
-            );
-          }
-          if (!mt5Pos) {
-            console.warn(`MT5 close [${conn.display_name}]: position not found`);
-            lastError = `${conn.display_name}: position not found`;
-            continue;
-          }
-
-          const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: mt5Pos.id };
-          const { res: closeRes, body: closeResBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody),
-          });
-          if (closeRes.ok) {
-            lastResult = JSON.parse(closeResBody);
-            anySuccess = true;
-            console.log(`MT5 close [${conn.display_name}]: SUCCESS`);
-          } else {
-            lastError = `${conn.display_name}: close failed ${closeRes.status}`;
-            console.warn(`MT5 close [${conn.display_name}] failed [${closeRes.status}]: ${closeResBody.slice(0, 300)}`);
-          }
-        } catch (connErr: any) {
-          lastError = `${conn.display_name}: ${connErr?.message || String(connErr)}`;
-          console.warn(`MT5 close [${conn.display_name}] error: ${lastError}`);
-        }
-      }
-
-      if (anySuccess) return { success: true, mt5Result: lastResult };
-      return { success: false, error: lastError || "all connections failed" };
-    }
-
-    return { success: false, error: "unknown action" };
   } catch (e: any) {
     const msg = e?.message || String(e);
     if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
@@ -275,29 +257,47 @@ async function closeBrokerPositions(
         // MT4 truncates comments to ~31 chars, so use startsWith on the short prefix
         const commentTag = `paper:${positionId}`;
         const shortTag = commentTag.slice(0, 28); // safe for MT4 truncation
-        const brokerPos = brokerPositions.find((p: any) =>
+        let brokerPos = brokerPositions.find((p: any) =>
           p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
         );
+        let matchedBySymbol = false;
         if (!brokerPos) {
           // Fallback: match by resolved broker symbol
           const base = symbol.replace("/", "");
           const overrides = conn.symbol_overrides || {};
           const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
-          const symMatch = brokerPositions.find((p: any) =>
+          brokerPos = brokerPositions.find((p: any) =>
             p.symbol === brokerSymbol || p.symbol === base ||
             p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
           );
-          if (!symMatch) { results.push(`${conn.display_name}: position not found`); continue; }
-          const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: symMatch.id };
-          const { res } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody) });
-          results.push(`${conn.display_name}: ${res.ok ? "closed (symbol match)" : "close failed " + res.status}`);
-          continue;
+          matchedBySymbol = Boolean(brokerPos);
         }
+        if (!brokerPos) { results.push(`${conn.display_name}: position not found`); continue; }
         const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id };
-        const { res } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody) });
-        results.push(`${conn.display_name}: ${res.ok ? "closed" : "close failed " + res.status}`);
-        if (res.ok) console.log(`Broker close [${conn.display_name}]: closed position for paper:${positionId}`);
-        else console.warn(`Broker close [${conn.display_name}]: failed ${res.status}`);
+        const { res, body: rawBody } = await metaFetch(
+          metaAccountId,
+          authToken,
+          (base) => `${base}/trade`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(closeBody),
+          },
+          { allowFailover: false },
+        );
+        const outcome = classifyBrokerMutationHttpResponse(
+          res,
+          rawBody,
+          "metaapi_trade",
+        );
+        const matchLabel = matchedBySymbol ? " (symbol match)" : "";
+        if (outcome.status === "succeeded") {
+          results.push(`${conn.display_name}: closed${matchLabel}`);
+          console.log(`Broker close [${conn.display_name}]: closed position for paper:${positionId}`);
+        } else {
+          results.push(`${conn.display_name}: ${outcome.status}: ${outcome.error || res.status}`);
+          console.warn(`Broker close [${conn.display_name}]: ${outcome.status}: ${outcome.error || rawBody.slice(0, 300)}`);
+        }
       } catch (e: any) {
         console.warn(`Broker close [${conn.display_name}] error: ${e?.message}`);
         results.push(`${conn.display_name}: error`);
@@ -305,181 +305,6 @@ async function closeBrokerPositions(
     }
   } catch (e: any) {
     console.warn(`closeBrokerPositions error: ${e?.message}`);
-    results.push("error");
-  }
-  return results;
-}
-
-// ─── Modify Broker SL/TP (sync trailing stop & break even to broker) ────────
-async function modifyBrokerSL(
-  supabase: any,
-  userId: string,
-  positionId: string,
-  symbol: string,
-  direction: string,
-  newSL: number,
-  mirroredConnectionIds: string[] | null | undefined,
-  existingTP?: number | null,
-): Promise<string[]> {
-  const results: string[] = [];
-  try {
-    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
-    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
-
-    const ids = (mirroredConnectionIds || []).filter(Boolean);
-    if (ids.length === 0) return ["no_mirrored_connections"];
-
-    const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
-    if (!connections || connections.length === 0) return ["no_connection"];
-
-    for (const conn of connections) {
-      try {
-        let authToken = conn.api_key;
-        let metaAccountId = conn.account_id;
-        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          authToken = conn.account_id;
-          metaAccountId = conn.api_key;
-        }
-
-        // Find broker position by comment tag
-        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
-        const brokerPositions: any[] = JSON.parse(posBody);
-        const commentTag = `paper:${positionId}`;
-        const shortTag = commentTag.slice(0, 28);
-        let brokerPos = brokerPositions.find((p: any) =>
-          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-        );
-        if (!brokerPos) {
-          // Fallback: match by symbol
-          const base = symbol.replace("/", "");
-          const overrides = conn.symbol_overrides || {};
-          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
-          brokerPos = brokerPositions.find((p: any) =>
-            p.symbol === brokerSymbol || p.symbol === base ||
-            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
-          );
-        }
-        if (!brokerPos) { results.push(`${conn.display_name}: position not found for SL modify`); continue; }
-
-        // Adjust SL for broker spread (same logic as bot-scanner open)
-        const spec = SPECS[symbol] || SPECS["EUR/USD"];
-        let adjustedSL = newSL;
-        if (brokerPos.currentPrice && brokerPos.openPrice) {
-          // Estimate spread from broker position data
-          // Use a conservative 1-pip buffer for safety
-          const safetyBuffer = spec.pipSize;
-          adjustedSL = direction === "long" ? newSL - safetyBuffer : newSL + safetyBuffer;
-        }
-
-        // H4 fix: Include TP in modify payload to prevent broker from dropping it
-        const modifyBody: any = {
-          actionType: "POSITION_MODIFY",
-          positionId: brokerPos.id,
-          stopLoss: adjustedSL,
-        };
-        if (existingTP != null && existingTP > 0) {
-          modifyBody.takeProfit = existingTP;
-        }
-        const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
-        });
-        if (res.ok) {
-          console.log(`Broker SL modify [${conn.display_name}]: SL updated to ${adjustedSL} for paper:${positionId}`);
-          results.push(`${conn.display_name}: SL modified to ${adjustedSL}`);
-        } else {
-          console.warn(`Broker SL modify [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
-          results.push(`${conn.display_name}: modify failed ${res.status}`);
-        }
-      } catch (e: any) {
-        console.warn(`Broker SL modify [${conn.display_name}] error: ${e?.message}`);
-        results.push(`${conn.display_name}: error`);
-      }
-    }
-  } catch (e: any) {
-    console.warn(`modifyBrokerSL error: ${e?.message}`);
-    results.push("error");
-  }
-  return results;
-}
-
-// ─── Partial Close on Broker (mirror partial TP) ────────────────────
-async function partialCloseBroker(
-  supabase: any,
-  userId: string,
-  positionId: string,
-  symbol: string,
-  closeVolumeFraction: number,
-  mirroredConnectionIds: string[] | null | undefined,
-): Promise<string[]> {
-  const results: string[] = [];
-  try {
-    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
-    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
-
-    const ids = (mirroredConnectionIds || []).filter(Boolean);
-    if (ids.length === 0) return ["no_mirrored_connections"];
-
-    const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
-    if (!connections || connections.length === 0) return ["no_connection"];
-
-    for (const conn of connections) {
-      try {
-        let authToken = conn.api_key;
-        let metaAccountId = conn.account_id;
-        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          authToken = conn.account_id;
-          metaAccountId = conn.api_key;
-        }
-
-        // Find broker position by comment tag
-        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
-        const brokerPositions: any[] = JSON.parse(posBody);
-        const commentTag = `paper:${positionId}`;
-        const shortTag = commentTag.slice(0, 28);
-        let brokerPos = brokerPositions.find((p: any) =>
-          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-        );
-        if (!brokerPos) {
-          const base = symbol.replace("/", "");
-          const overrides = conn.symbol_overrides || {};
-          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
-          brokerPos = brokerPositions.find((p: any) =>
-            p.symbol === brokerSymbol || p.symbol === base ||
-            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
-          );
-        }
-        if (!brokerPos) { results.push(`${conn.display_name}: position not found for partial close`); continue; }
-
-        // Calculate partial close volume: fraction of broker position volume
-        const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
-        const closeVolume = Math.max(0.01, Math.round(brokerVolume * closeVolumeFraction * 100) / 100);
-
-        const partialBody = {
-          actionType: "POSITION_CLOSE_ID",
-          positionId: brokerPos.id,
-          volume: closeVolume,  // MetaAPI supports partial close via volume parameter
-        };
-        const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(partialBody),
-        });
-        if (res.ok) {
-          console.log(`Broker partial close [${conn.display_name}]: closed ${closeVolume} lots (${(closeVolumeFraction * 100).toFixed(0)}%) of paper:${positionId}`);
-          results.push(`${conn.display_name}: partial closed ${closeVolume} lots`);
-        } else {
-          console.warn(`Broker partial close [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
-          results.push(`${conn.display_name}: partial close failed ${res.status}`);
-        }
-      } catch (e: any) {
-        console.warn(`Broker partial close [${conn.display_name}] error: ${e?.message}`);
-        results.push(`${conn.display_name}: error`);
-      }
-    }
-  } catch (e: any) {
-    console.warn(`partialCloseBroker error: ${e?.message}`);
     results.push("error");
   }
   return results;

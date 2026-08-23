@@ -86,7 +86,9 @@ export async function completeBrokerExecution(
 export type BrokerExecutionConfirmationMode =
   | "default"
   | "metaapi_trade"
+  | "metaapi_position_open"
   | "oanda_order_fill"
+  | "oanda_trade_open"
   | "oanda_trade_orders";
 
 export type OandaDependentOrderTransaction =
@@ -119,10 +121,10 @@ export function classifyBrokerExecutionResponse(input: {
     brokerCode === "ERR_NO_ERROR";
   const extractBrokerOrderId = (): string | undefined => {
     const brokerOrderId = parsed?.brokerOrderId ||
-      parsed?.orderId ||
       parsed?.positionId ||
-      payload?.orderFillTransaction?.id ||
       payload?.orderFillTransaction?.tradeOpened?.tradeID ||
+      parsed?.orderId ||
+      payload?.orderFillTransaction?.id ||
       payload?.stopLossOrderTransaction?.id ||
       payload?.takeProfitOrderTransaction?.id;
     return brokerOrderId ? String(brokerOrderId) : undefined;
@@ -150,6 +152,71 @@ export function classifyBrokerExecutionResponse(input: {
           "Broker mutation did not return a confirmed success",
       ).slice(0, 1000),
     };
+  }
+
+  if (input.ok && input.confirmationMode === "metaapi_position_open") {
+    if (!explicitError && explicitSuccessCode && parsed?.positionId) {
+      return {
+        status: "succeeded",
+        brokerOrderId: String(parsed.positionId),
+      };
+    }
+    if (!explicitError && explicitSuccessCode) {
+      return {
+        status: "uncertain",
+        error:
+          "MetaAPI confirmed the order but did not return the opened position ID",
+      };
+    }
+  }
+
+  if (input.ok && input.confirmationMode === "oanda_trade_open") {
+    const fill = payload?.orderFillTransaction;
+    const cancellation = payload?.orderCancelTransaction;
+    const changedExistingExposure = Boolean(
+      fill?.tradeReduced ||
+        (Array.isArray(fill?.tradesClosed) && fill.tradesClosed.length > 0),
+    );
+    if (fill && cancellation) {
+      return {
+        status: "uncertain",
+        error:
+          "OANDA returned both fill and cancellation transactions; reconcile broker state",
+      };
+    }
+    if (cancellation) {
+      return {
+        status: "rejected",
+        error: String(
+          cancellation.reason || "OANDA cancelled the market order",
+        ).slice(0, 1000),
+      };
+    }
+    if (
+      !explicitError &&
+      fill?.tradeOpened?.tradeID &&
+      !changedExistingExposure
+    ) {
+      return {
+        status: "succeeded",
+        brokerOrderId: String(fill.tradeOpened.tradeID),
+      };
+    }
+    if (!explicitError && fill) {
+      return {
+        status: "uncertain",
+        error:
+          changedExistingExposure
+            ? "OANDA filled the open request but also changed existing exposure; reconcile broker state"
+            : "OANDA filled the open request without confirming a newly opened trade; reconcile broker state",
+      };
+    }
+    if (!explicitError) {
+      return {
+        status: "uncertain",
+        error: "OANDA returned HTTP success without an order fill confirmation",
+      };
+    }
   }
 
   if (input.ok && input.confirmationMode === "oanda_order_fill") {
@@ -248,11 +315,45 @@ export function classifyBrokerExecutionResponse(input: {
   };
 }
 
+export function classifyBrokerMutationHttpResponse(
+  response: { ok: boolean; status: number },
+  rawBody: string,
+  confirmationMode: BrokerExecutionConfirmationMode,
+  requiredOandaTransactions?: readonly OandaDependentOrderTransaction[],
+): {
+  status: BrokerExecutionTerminalStatus;
+  brokerOrderId?: string;
+  error?: string;
+  parsedBody: any;
+  rawBody: string;
+} {
+  let parsedBody: any = null;
+  try {
+    parsedBody = rawBody ? JSON.parse(rawBody) : null;
+  } catch {
+    // The classifier deliberately marks malformed successful responses uncertain.
+  }
+  return {
+    ...classifyBrokerExecutionResponse({
+      ok: response.ok,
+      httpStatus: response.status,
+      parsedBody,
+      rawBody,
+      confirmationMode,
+      requiredOandaTransactions,
+    }),
+    parsedBody,
+    rawBody,
+  };
+}
+
 export interface BrokerExecutionSendResult {
   ok: boolean;
   httpStatus?: number;
   parsedBody?: any;
   rawBody?: string;
+  confirmationMode?: BrokerExecutionConfirmationMode;
+  requiredOandaTransactions?: readonly OandaDependentOrderTransaction[];
 }
 
 export async function executeBrokerOrderWithLedger(
@@ -279,7 +380,7 @@ export async function executeBrokerOrderWithLedger(
   try {
     const sendResult = await send();
     const outcome = classifyBrokerExecutionResponse(sendResult);
-    await completeBrokerExecution(supabase, claim, {
+    const completed = await completeBrokerExecution(supabase, claim, {
       userId: input.userId,
       status: outcome.status,
       responsePayload: sendResult.parsedBody
@@ -290,6 +391,17 @@ export async function executeBrokerOrderWithLedger(
       brokerOrderId: outcome.brokerOrderId,
       lastError: outcome.error,
     });
+    if (!completed) {
+      return {
+        sent: true,
+        status: "uncertain",
+        brokerOrderId: outcome.brokerOrderId,
+        error:
+          "Broker mutation response was received but ledger completion was not persisted; reconcile broker state",
+        parsedBody: sendResult.parsedBody,
+        rawBody: sendResult.rawBody,
+      };
+    }
     return {
       sent: true,
       ...outcome,

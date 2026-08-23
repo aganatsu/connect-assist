@@ -39,6 +39,37 @@ Deno.test("broker execution claim maps RPC response", async () => {
   assertEquals(calls[0].args.p_action, "open");
 });
 
+Deno.test("MetaAPI opens require the exact broker position id", () => {
+  const orderTicketOnly = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stringCode: "TRADE_RETCODE_DONE",
+      orderId: "order-1",
+    },
+    confirmationMode: "metaapi_position_open",
+  });
+  assertEquals(orderTicketOnly, {
+    status: "uncertain",
+    error: "MetaAPI confirmed the order but did not return the opened position ID",
+  });
+
+  const opened = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stringCode: "TRADE_RETCODE_DONE",
+      orderId: "order-1",
+      positionId: "position-1",
+    },
+    confirmationMode: "metaapi_position_open",
+  });
+  assertEquals(opened, {
+    status: "succeeded",
+    brokerOrderId: "position-1",
+  });
+});
+
 Deno.test("broker execution completion requires an active claim", async () => {
   let called = false;
   const supabase = {
@@ -56,6 +87,59 @@ Deno.test("broker execution completion requires an active claim", async () => {
   assertEquals(called, false);
 });
 
+Deno.test("OANDA opens require a newly opened trade id", () => {
+  const reducedOnly = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderFillTransaction: {
+        id: "102",
+        tradeReduced: { tradeID: "old-trade-1", units: "100" },
+      },
+    },
+    confirmationMode: "oanda_trade_open",
+  });
+  assertEquals(reducedOnly, {
+    status: "uncertain",
+    error:
+      "OANDA filled the open request but also changed existing exposure; reconcile broker state",
+  });
+
+  const mixedFill = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderFillTransaction: {
+        id: "103",
+        tradeOpened: { tradeID: "trade-2" },
+        tradesClosed: [{ tradeID: "old-trade-2", units: "50" }],
+      },
+    },
+    confirmationMode: "oanda_trade_open",
+  });
+  assertEquals(mixedFill, {
+    status: "uncertain",
+    error:
+      "OANDA filled the open request but also changed existing exposure; reconcile broker state",
+  });
+
+  const opened = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 201,
+    parsedBody: {
+      orderFillTransaction: {
+        id: "102",
+        tradeOpened: { tradeID: "trade-1" },
+      },
+    },
+    confirmationMode: "oanda_trade_open",
+  });
+  assertEquals(opened, {
+    status: "succeeded",
+    brokerOrderId: "trade-1",
+  });
+});
+
 Deno.test("broker response classifies MetaAPI success and extracts order id", () => {
   assertEquals(
     classifyBrokerExecutionResponse({
@@ -68,6 +152,57 @@ Deno.test("broker response classifies MetaAPI success and extracts order id", ()
     }),
     { status: "succeeded", brokerOrderId: "broker-position-1" },
   );
+});
+
+Deno.test("execution wrapper downgrades success when ledger completion fails", async () => {
+  const supabase = {
+    rpc: async (name: string) => {
+      if (name === "claim_broker_execution") {
+        return {
+          data: {
+            claimed: true,
+            code: "claimed",
+            ledger_id: "ledger-1",
+            claim_token: "token-1",
+          },
+          error: null,
+        };
+      }
+      return { data: { completed: false }, error: null };
+    },
+  };
+  const result = await executeBrokerOrderWithLedger(
+    supabase,
+    {
+      userId: "user-1",
+      botId: "smc",
+      positionId: "position-1",
+      brokerConnectionId: "connection-1",
+      route: "direct_market",
+      requestPayload: { symbol: "EUR/USD" },
+    },
+    async () => ({
+      ok: true,
+      httpStatus: 200,
+      parsedBody: {
+        stringCode: "TRADE_RETCODE_DONE",
+        positionId: "broker-position-1",
+      },
+      confirmationMode: "metaapi_position_open",
+    }),
+  );
+  assertEquals(result, {
+    sent: true,
+    status: "uncertain",
+    brokerOrderId: "broker-position-1",
+    error:
+      "Broker mutation response was received but ledger completion was not persisted; reconcile broker state",
+    parsedBody: {
+      stringCode: "TRADE_RETCODE_DONE",
+      positionId: "broker-position-1",
+    },
+    rawBody: undefined,
+  });
 });
 
 Deno.test("broker response classifies a broker rejection as terminal", () => {
@@ -265,7 +400,7 @@ Deno.test("OANDA market mutations require a fill transaction", () => {
   });
   assertEquals(filled, {
     status: "succeeded",
-    brokerOrderId: "102",
+    brokerOrderId: "trade-1",
   });
 });
 
@@ -304,6 +439,29 @@ Deno.test("OANDA dependent-order mutations confirm every requested order", () =>
   assertEquals(confirmed, {
     status: "succeeded",
     brokerOrderId: "201",
+  });
+});
+
+Deno.test("OANDA dependent-order mutation rejects mixed success and rejection", () => {
+  const outcome = classifyBrokerExecutionResponse({
+    ok: true,
+    httpStatus: 200,
+    parsedBody: {
+      stopLossOrderTransaction: { id: "201" },
+      takeProfitOrderRejectTransaction: {
+        id: "202",
+        rejectReason: "TAKE_PROFIT_ON_FILL_PRICE_INVALID",
+      },
+    },
+    confirmationMode: "oanda_trade_orders",
+    requiredOandaTransactions: [
+      "stopLossOrderTransaction",
+      "takeProfitOrderTransaction",
+    ],
+  });
+  assertEquals(outcome, {
+    status: "rejected",
+    error: "TAKE_PROFIT_ON_FILL_PRICE_INVALID",
   });
 });
 
