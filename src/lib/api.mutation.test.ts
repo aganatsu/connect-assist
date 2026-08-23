@@ -627,4 +627,45 @@ describe("edge function retry safety", () => {
     expect(supabase.auth.refreshSession).not.toHaveBeenCalled();
     expect(supabase.auth.signOut).not.toHaveBeenCalled();
   });
+
+  it("does not let one broker-origin read failure suppress a different broker read", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const body = requestBody(args);
+      if (body.action === "connection_status") {
+        return edgeResponse(503, {
+          ok: false,
+          state: "unknown",
+          errorOrigin: "broker",
+          broker: "metaapi",
+          brokerStatus: 503,
+          error: "MetaAPI error: 503",
+          details: "Service unavailable",
+          fallback: true,
+        });
+      }
+      if (body.action === "open_trades") {
+        return edgeResponse(200, []);
+      }
+      throw new Error(`Unexpected broker action: ${String(body.action)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const statusRequest = brokerExecApi.connectionStatus("connection-1");
+    const statusAssertion = expect(statusRequest).rejects.toThrow(
+      "Broker service is temporarily unavailable",
+    );
+    await vi.runAllTimersAsync();
+    await statusAssertion;
+
+    await expect(brokerExecApi.openTrades("connection-1")).resolves.toEqual([]);
+    expect(fetchMock.mock.calls.map((call) => requestBody(call).action)).toEqual([
+      "connection_status",
+      "connection_status",
+      "connection_status",
+      "connection_status",
+      "connection_status",
+      "open_trades",
+    ]);
+  });
 });

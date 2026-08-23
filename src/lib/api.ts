@@ -265,7 +265,11 @@ export async function invokeFunction<T = any>(
   body: Record<string, any>,
 ): Promise<T> {
   const retryableRead = isRetryableReadRequest(functionName, body);
-  const cooldownUntil = functionCooldownUntil.get(functionName) || 0;
+  const requestCooldownKey = functionCacheKey(functionName, body);
+  const cooldownUntil = Math.max(
+    functionCooldownUntil.get(functionName) || 0,
+    functionCooldownUntil.get(requestCooldownKey) || 0,
+  );
   const cooldownFallback = retryableRead
     ? getFunctionFallback(functionName, body)
     : undefined;
@@ -319,7 +323,10 @@ export async function invokeFunction<T = any>(
     retryableRead &&
     isTransientServiceFailure(error, data, requestDispatched)
   ) {
-    functionCooldownUntil.set(functionName, Date.now() + 15_000);
+    const cooldownKey = data?.errorOrigin === "broker"
+      ? requestCooldownKey
+      : functionName;
+    functionCooldownUntil.set(cooldownKey, Date.now() + 15_000);
     const transientFallback = getFunctionFallback(functionName, body);
     if (transientFallback !== undefined) return transientFallback as T;
   }
@@ -442,6 +449,7 @@ export async function invokeFunction<T = any>(
 
   if (error) throw new Error(error.message || `${functionName} failed`);
   if (data?.error && !data?.fallback) throw new Error(data.error);
+  if (retryableRead) functionCooldownUntil.delete(requestCooldownKey);
   if (retryableRead) functionCooldownUntil.delete(functionName);
   cacheSuccessfulFunctionResponse(functionName, body, data);
   return data as T;
