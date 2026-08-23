@@ -1275,7 +1275,13 @@ function processExits(
     }
 
     if (closeReason) {
-      const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, exitPrice, pos.size, pos.symbol, btRateMap);
+      const pnlResult = calcPnl(pos.direction, pos.entryPrice, exitPrice, pos.size, pos.symbol, btRateMap);
+      if (!pnlResult.valid) {
+        throw new Error(
+          `Backtest P&L is invalid for ${pos.symbol}: ${pnlResult.reason}`,
+        );
+      }
+      const { pnl: rawPnl, pnlPips } = pnlResult;
       const comm = pos.size * commissionPerLot * 2;
       const pnl = rawPnl - comm;
       closedTrades.push({
@@ -4603,7 +4609,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       const closePrice = lastCandle ? lastCandle.close : pos.entryPrice;
       const closeTime = lastCandle ? lastCandle.datetime : new Date(endMs).toISOString();
       {
-        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, closePrice, pos.size, pos.symbol, btRateMap);
+        const pnlResult = calcPnl(pos.direction, pos.entryPrice, closePrice, pos.size, pos.symbol, btRateMap);
+        if (!pnlResult.valid) {
+          throw new Error(
+            `Backtest P&L is invalid for ${pos.symbol}: ${pnlResult.reason}`,
+          );
+        }
+        const { pnl: rawPnl, pnlPips } = pnlResult;
         const comm = pos.size * commissionPerLot * 2;
         allTrades.push({
           id: pos.id,

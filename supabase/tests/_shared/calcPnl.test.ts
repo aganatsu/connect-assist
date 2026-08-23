@@ -87,6 +87,38 @@ Deno.test("Symbol aliases: slashless FX crosses preserve quote conversion", () =
   );
 });
 
+Deno.test("Invalid PnL inputs fail closed without propagating NaN", () => {
+  for (const result of [
+    calcPnl("long", Number.NaN, 1.1, 0.1, "EUR/USD"),
+    calcPnl("long", 1.1, Number.NaN, 0.1, "EUR/USD"),
+    calcPnl("long", 1.1, 1.2, Number.NaN, "EUR/USD"),
+    calcPnl("long", 0, 1.2, 0.1, "EUR/USD"),
+    calcPnl("long", 1.1, 1.2, 0, "EUR/USD"),
+  ]) {
+    assertEquals(result, {
+      valid: false,
+      pnl: 0,
+      pnlPips: 0,
+      reason: "invalid_inputs",
+    });
+  }
+});
+
+Deno.test("Invalid PnL direction and unsupported symbols are explicit", () => {
+  assertEquals(calcPnl("neutral", 1.1, 1.2, 0.1, "EUR/USD"), {
+    valid: false,
+    pnl: 0,
+    pnlPips: 0,
+    reason: "invalid_direction",
+  });
+  assertEquals(calcPnl("long", 1.1, 1.2, 0.1, "UNKNOWN"), {
+    valid: false,
+    pnl: 0,
+    pnlPips: 0,
+    reason: "unsupported_symbol",
+  });
+});
+
 Deno.test("XXX/USD: Short GBP/USD 0.5 lot, entry 1.2700, exit 1.2650 → $250.00", () => {
   // Calculation: diff = 1.2700 - 1.2650 = 0.0050
   // pnl = 0.0050 × 100000 × 0.5 × 1.0 = $250.00
@@ -373,4 +405,42 @@ Deno.test("getQuoteToUSDRate: Unknown quote currency → 1.0", () => {
   // Hypothetical pair with unknown quote
   const rate = getQuoteToUSDRate("EUR/XYZ", { "USD/JPY": 150 });
   assertEquals(rate, 1.0);
+});
+
+
+const scannerSource = await Deno.readTextFile(
+  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+);
+
+Deno.test("bot-scanner paper exits delegate instrument-aware PnL to calcPnl", () => {
+  const blockStart = scannerSource.indexOf("if (hitPrice && closeReason)");
+  const blockEnd = scannerSource.indexOf(
+    "const finalization = await finalizePaperPositionClose",
+    blockStart,
+  );
+  assert(blockStart >= 0 && blockEnd > blockStart, "paper exit finalization block must remain discoverable");
+  const closeBlock = scannerSource.slice(blockStart, blockEnd);
+  assert(
+    closeBlock.includes("calcPnl("),
+    "paper exit finalization must delegate to the shared instrument-aware PnL owner",
+  );
+  assert(
+    !closeBlock.includes("diff * spec.lotUnits * size * quoteToUSD"),
+    "paper exit finalization must not retain a private PnL formula",
+  );
+});
+
+Deno.test("bot-scanner close-on-reverse delegates instrument-aware PnL to calcPnl", () => {
+  const blockStart = scannerSource.indexOf("const closeOppositePositionsAfterEntry = async () =>");
+  const blockEnd = scannerSource.indexOf("if (account.execution_mode === \"live\")", blockStart);
+  assert(blockStart >= 0 && blockEnd > blockStart, "close-on-reverse accounting block must remain discoverable");
+  const closeBlock = scannerSource.slice(blockStart, blockEnd);
+  assert(
+    closeBlock.includes("calcPnl("),
+    "close-on-reverse must delegate to the shared instrument-aware PnL owner",
+  );
+  assert(
+    !/Pnl\s*=.*lotUnits/.test(closeBlock),
+    "close-on-reverse must not retain a private PnL formula",
+  );
 });

@@ -183,3 +183,13 @@ Deno.test("structure evidence excludes the still-open daily candle", () => {
 
   assertEquals(evidence.regimeCandleCount, 20);
 });
+
+Deno.test("partial close refuses unsupported-instrument accounting", () => {
+  const decision = computePartialCloseDecision(
+    partialInput({ symbol: "UNSUPPORTED" }),
+  );
+
+  assertEquals(decision.triggered, false);
+  assertEquals(decision.reason, "Partial TP P&L is invalid: unsupported_symbol");
+  assertEquals(decision.netPnl, 0);
+});

@@ -117,16 +117,29 @@ export async function runPropFirmGate(
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
-      if (entry > 0 && current > 0 && size > 0) {
-        floatingPnL += calcPnl(
-          pos.direction,
-          entry,
-          current,
-          size,
-          pos.symbol,
-          opts?.rateMap,
-        ).pnl;
+      const pnlResult = calcPnl(
+        pos.direction,
+        entry,
+        current,
+        size,
+        pos.symbol,
+        opts?.rateMap,
+      );
+      if (!pnlResult.valid) {
+        console.error(
+          `[prop-firm-gate] Cannot calculate paper equity for ${pos.symbol}: ${pnlResult.reason}. BLOCKING new trades.`,
+        );
+        return {
+          enabled: true,
+          allowed: false,
+          reason: "Paper equity unavailable — an open position has invalid P&L inputs (blocking)",
+          maxPositionSizeMultiplier: 0,
+          shouldCloseAll: false,
+          compliance: null,
+          configId: config.id,
+        };
       }
+      floatingPnL += pnlResult.pnl;
     }
     currentEquity = paperBalance + floatingPnL;
   }
@@ -312,7 +325,7 @@ export async function propFirmEmergencyClose(
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
-      const { pnl } = calcPnl(
+      const pnlResult = calcPnl(
         pos.direction,
         entry,
         current,
@@ -320,6 +333,13 @@ export async function propFirmEmergencyClose(
         pos.symbol,
         opts?.rateMap,
       );
+      if (!pnlResult.valid) {
+        console.error(
+          `[prop-firm-emergency] Refusing to settle ${pos.symbol}: invalid P&L calculation (${pnlResult.reason})`,
+        );
+        continue;
+      }
+      const { pnl } = pnlResult;
 
       const finalization = await finalizePaperPositionClose(supabase, {
         positionRowId: pos.id,
