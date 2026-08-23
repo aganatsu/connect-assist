@@ -20,7 +20,7 @@
  *   // result.lots, result.riskUSD, result.adjustments[]
  */
 
-import { calculatePositionSize, getQuoteToUSDRate, SPECS } from "./smcAnalysis.ts";
+import { calculatePositionSize, getQuoteToUSDRate, normalizeSymKey, SPECS } from "./smcAnalysis.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -130,6 +130,63 @@ export interface FinalCandidateSizeResult {
   afterCorrelationLots: number;
   correlationMultiplier: number;
   signalSourceMultiplier: number;
+}
+
+export interface OandaUnitConversionInput {
+  symbol: string;
+  lots: number;
+  direction: "long" | "short";
+  tradeUnitsPrecision: number;
+  minimumTradeSize: number;
+  maximumOrderUnits: number;
+}
+
+export type OandaUnitConversionResult =
+  | { ok: true; units: string; unsignedUnits: number; lotUnits: number }
+  | { ok: false; error: string };
+
+/** Convert the sizing engine's lots into OANDA native instrument units. */
+export function convertLotsToOandaUnits(input: OandaUnitConversionInput): OandaUnitConversionResult {
+  const normalizedSymbol = normalizeSymKey(input.symbol);
+  const specEntry = Object.entries(SPECS).find(([symbol]) => normalizeSymKey(symbol) === normalizedSymbol);
+  if (!specEntry) return { ok: false, error: `Unsupported sizing symbol: ${input.symbol}` };
+  if (!Number.isFinite(input.lots) || input.lots <= 0) {
+    return { ok: false, error: "Lot size must be a positive finite number" };
+  }
+  if (input.direction !== "long" && input.direction !== "short") {
+    return { ok: false, error: `Unsupported direction: ${input.direction}` };
+  }
+  if (!Number.isInteger(input.tradeUnitsPrecision) || input.tradeUnitsPrecision < 0 || input.tradeUnitsPrecision > 10) {
+    return { ok: false, error: "Invalid OANDA trade-units precision" };
+  }
+  if (!Number.isFinite(input.minimumTradeSize) || input.minimumTradeSize <= 0 ||
+      !Number.isFinite(input.maximumOrderUnits) || input.maximumOrderUnits <= 0 ||
+      input.maximumOrderUnits < input.minimumTradeSize) {
+    return { ok: false, error: "Invalid OANDA trade-size constraints" };
+  }
+
+  const lotUnits = specEntry[1].lotUnits;
+  const rawUnits = input.lots * lotUnits;
+  if (!Number.isFinite(rawUnits) || rawUnits <= 0) {
+    return { ok: false, error: "Lot conversion produced invalid OANDA units" };
+  }
+
+  const precisionFactor = 10 ** input.tradeUnitsPrecision;
+  const scaledUnits = rawUnits * precisionFactor;
+  const floatingPointTolerance = Number.EPSILON * Math.max(1, Math.abs(scaledUnits)) * 4;
+  const unsignedUnits = Math.floor(scaledUnits + floatingPointTolerance) / precisionFactor;
+  if (unsignedUnits < input.minimumTradeSize) {
+    return { ok: false, error: `Converted size ${unsignedUnits} is below OANDA minimum ${input.minimumTradeSize}` };
+  }
+  if (unsignedUnits > input.maximumOrderUnits) {
+    return { ok: false, error: `Converted size ${unsignedUnits} exceeds OANDA maximum ${input.maximumOrderUnits}` };
+  }
+
+  const signedUnits = input.direction === "long" ? unsignedUnits : -unsignedUnits;
+  const units = input.tradeUnitsPrecision === 0
+    ? signedUnits.toFixed(0)
+    : signedUnits.toFixed(input.tradeUnitsPrecision).replace(/0+$/, "").replace(/\.$/, "");
+  return { ok: true, units, unsignedUnits, lotUnits };
 }
 
 // ─── Correlation Map ─────────────────────────────────────────────────
