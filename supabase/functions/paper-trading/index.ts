@@ -9,6 +9,15 @@ import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
 import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
+import {
+  ensurePaperAccount,
+  PaperAccountControlError,
+  pausePaperEngine,
+  requireKillSwitchState,
+  setPaperKillSwitch,
+  startPaperEngine,
+  stopPaperEngine,
+} from "../_shared/paperAccountControls.ts";
 
 
 setCreditCallerContext("paper-trading");
@@ -1400,20 +1409,38 @@ Deno.serve(async (req) => {
 
     // ── Engine controls ──
     if (action === "start_engine") {
-      await ensureAccount(supabase, user.id);
-      await supabase.from("paper_accounts").update({ is_running: true, is_paused: false, started_at: new Date().toISOString() }).eq("user_id", user.id);
-      return respond({ success: true });
+      const account = await startPaperEngine(
+        supabase,
+        user.id,
+        new Date().toISOString(),
+      );
+      return respond({
+        success: true,
+        isRunning: account.is_running,
+        isPaused: account.is_paused,
+        killSwitchActive: account.kill_switch_active,
+      });
     }
     if (action === "pause_engine") {
-      await supabase.from("paper_accounts").update({ is_paused: true }).eq("user_id", user.id);
-      return respond({ success: true });
+      const account = await pausePaperEngine(supabase, user.id);
+      return respond({
+        success: true,
+        isRunning: account.is_running,
+        isPaused: account.is_paused,
+        killSwitchActive: account.kill_switch_active,
+      });
     }
     if (action === "stop_engine") {
-      await supabase.from("paper_accounts").update({ is_running: false, is_paused: false }).eq("user_id", user.id);
-      return respond({ success: true });
+      const account = await stopPaperEngine(supabase, user.id);
+      return respond({
+        success: true,
+        isRunning: account.is_running,
+        isPaused: account.is_paused,
+        killSwitchActive: account.kill_switch_active,
+      });
     }
     if (action === "kill_switch") {
-      const active = payload.active;
+      const active = requireKillSwitchState(payload.active);
       if (active) {
         // Close all open positions
         const { data: positions } = await supabase.from("paper_positions").select("*")
@@ -1454,13 +1481,14 @@ Deno.serve(async (req) => {
 
         }
 
-        await supabase.from("paper_accounts").update({
-          kill_switch_active: true, is_running: false, is_paused: false,
-        }).eq("user_id", user.id);
-      } else {
-        await supabase.from("paper_accounts").update({ kill_switch_active: false }).eq("user_id", user.id);
       }
-      return respond({ success: true });
+      const account = await setPaperKillSwitch(supabase, user.id, active);
+      return respond({
+        success: true,
+        isRunning: account.is_running,
+        isPaused: account.is_paused,
+        killSwitchActive: account.kill_switch_active,
+      });
     }
 
     // Helper: read configured starting balance from bot_configs (falls back to 10000)
@@ -1530,7 +1558,7 @@ Deno.serve(async (req) => {
         }, 400);
       }
 
-      await ensureAccount(supabase, user.id);
+      await ensurePaperAccount(supabase, user.id);
       const { data: currentAccount, error: accountReadError } = await supabase
         .from("paper_accounts")
         .select("execution_mode")
@@ -1641,18 +1669,18 @@ Deno.serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    if (error instanceof PaperAccountControlError) {
+      return respond({
+        success: false,
+        error: error.message,
+        code: error.code,
+      }, error.status);
+    }
     return new Response(JSON.stringify({ error: msg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
-
-async function ensureAccount(supabase: any, userId: string) {
-  const { data } = await supabase.from("paper_accounts").select("id").eq("user_id", userId).maybeSingle();
-  if (!data) {
-    await supabase.from("paper_accounts").insert({ user_id: userId, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" });
-  }
-}
 
 function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
