@@ -10,9 +10,11 @@ import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClos
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
 import {
+  assertPaperAccountResetDeletesSucceeded,
   ensurePaperAccount,
   PaperAccountControlError,
   pausePaperEngine,
+  readConfiguredStartingBalance,
   requireKillSwitchState,
   setPaperKillSwitch,
   startPaperEngine,
@@ -356,7 +358,10 @@ async function closeBrokerPositions(
 ): Promise<string[]> {
   const results: string[] = [];
   try {
-    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
+    const { data: account, error: accountReadError } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
+    if (accountReadError) {
+      return [`account read failed: ${accountReadError.message || "database error"}`];
+    }
     if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
 
     const ids = (mirroredConnectionIds || []).filter(Boolean);
@@ -1462,6 +1467,10 @@ Deno.serve(async (req) => {
         }
 
         const closeFailures: Array<{ positionId: string; reason: string }> = [];
+        const brokerCloseUncertainties: Array<{
+          positionId: string;
+          results: string[];
+        }> = [];
         for (const pos of positions || []) {
           try {
             const ep = parseFloat(pos.current_price);
@@ -1503,6 +1512,12 @@ Deno.serve(async (req) => {
             // Mirror close ONLY to brokers this position was mirrored to at open time
             const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
+            if (brokerCloseResults.some((result) => result !== "skipped_paper_mode")) {
+              brokerCloseUncertainties.push({
+                positionId: pos.position_id,
+                results: brokerCloseResults,
+              });
+            }
           } catch (closeError) {
             closeFailures.push({
               positionId: pos.position_id,
@@ -1543,6 +1558,20 @@ Deno.serve(async (req) => {
             },
           );
         }
+        if (
+          brokerCloseUncertainties.length > 0 || closeFailures.length > 0
+        ) {
+          throw new PaperAccountControlError(
+            "kill_switch_broker_close_unverified",
+            409,
+            "Kill switch is armed and local positions are closed, but mirrored broker exposure could not be verified",
+            {
+              paperPositionsClosed: true,
+              brokerCloseUncertainties,
+              closeFailures,
+            },
+          );
+        }
       } else {
         account = await setPaperKillSwitch(supabase, user.id, false);
       }
@@ -1552,17 +1581,6 @@ Deno.serve(async (req) => {
         isPaused: account.is_paused,
         killSwitchActive: account.kill_switch_active,
       });
-    }
-
-    // Helper: read configured starting balance from bot_configs (falls back to 10000)
-    async function getConfiguredStartingBalance(): Promise<string> {
-      try {
-        const { data: cfgRow } = await supabase.from("bot_configs").select("config_json")
-          .eq("user_id", user.id).is("connection_id", null).maybeSingle();
-        const bal = cfgRow?.config_json?.account?.startingBalance;
-        if (typeof bal === "number" && bal > 0) return bal.toFixed(2);
-      } catch (_) { /* ignore — fall back to default */ }
-      return "10000";
     }
 
     // ── Set Balance: set account balance to any custom amount ──
@@ -1594,7 +1612,7 @@ Deno.serve(async (req) => {
 
     // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
     if (action === "reset_balance_only") {
-      const startBal = await getConfiguredStartingBalance();
+      const startBal = await readConfiguredStartingBalance(supabase, user.id);
       const todayDate = new Date().toISOString().split("T")[0];
       await ensurePaperAccount(supabase, user.id);
       const account = await updatePaperAccountState(
@@ -1617,14 +1635,40 @@ Deno.serve(async (req) => {
 
     // ── Full Reset: wipes everything and resets balance to configured starting balance ──
     if (action === "reset_account") {
-      const startBal = await getConfiguredStartingBalance();
+      const startBal = await readConfiguredStartingBalance(supabase, user.id);
       const todayDate = new Date().toISOString().split("T")[0];
-      await supabase.from("paper_positions").delete().eq("user_id", user.id);
-      await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
-      await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
-      await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
-      await supabase.from("scan_logs").delete().eq("user_id", user.id);
-      await supabase.from("trades").delete().eq("user_id", user.id);
+      const resetDeleteResults = [
+        {
+          table: "paper_positions",
+          result: await supabase.from("paper_positions").delete().eq("user_id", user.id),
+        },
+        {
+          table: "paper_trade_history",
+          result: await supabase.from("paper_trade_history").delete().eq("user_id", user.id),
+        },
+        {
+          table: "trade_reasonings",
+          result: await supabase.from("trade_reasonings").delete().eq("user_id", user.id),
+        },
+        {
+          table: "trade_post_mortems",
+          result: await supabase.from("trade_post_mortems").delete().eq("user_id", user.id),
+        },
+        {
+          table: "scan_logs",
+          result: await supabase.from("scan_logs").delete().eq("user_id", user.id),
+        },
+        {
+          table: "trades",
+          result: await supabase.from("trades").delete().eq("user_id", user.id),
+        },
+      ];
+      assertPaperAccountResetDeletesSucceeded(
+        resetDeleteResults.map(({ table, result }) => ({
+          table,
+          error: result.error,
+        })),
+      );
       await ensurePaperAccount(supabase, user.id);
       const account = await updatePaperAccountState(
         supabase,

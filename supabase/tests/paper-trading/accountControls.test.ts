@@ -5,9 +5,11 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  assertPaperAccountResetDeletesSucceeded,
   ensurePaperAccount,
   PaperAccountControlError,
   pausePaperEngine,
+  readConfiguredStartingBalance,
   requireKillSwitchState,
   setPaperKillSwitch,
   startPaperEngine,
@@ -32,6 +34,10 @@ function createMockSupabase(results: QueryResult[]) {
     calls.push(call);
     const chain: any = {
       eq(column: string, value: unknown) {
+        call.filters.push([column, value]);
+        return chain;
+      },
+      is(column: string, value: unknown) {
         call.filters.push([column, value]);
         return chain;
       },
@@ -87,6 +93,58 @@ async function expectControlError(
   assertEquals(error.code, code);
   assertEquals(error.status, status);
 }
+
+Deno.test("account controls: configured starting-balance reads fail closed", async () => {
+  const { supabase, calls } = createMockSupabase([
+    { data: null, error: { message: "config read denied" } },
+  ]);
+
+  const error = await assertRejects(
+    () => readConfiguredStartingBalance(supabase, "user-1"),
+    PaperAccountControlError,
+  );
+  assertEquals(error.code, "starting_balance_read_failed");
+  assertEquals(error.status, 500);
+  assertEquals(calls[0].table, "bot_configs");
+  assertEquals(calls[0].filters, [
+    ["user_id", "user-1"],
+    ["connection_id", null],
+  ]);
+});
+
+Deno.test("account controls: absent starting-balance config uses the documented default", async () => {
+  const { supabase } = createMockSupabase([
+    { data: null, error: null },
+  ]);
+
+  assertEquals(
+    await readConfiguredStartingBalance(supabase, "user-1"),
+    "10000",
+  );
+});
+
+Deno.test("account controls: partial reset deletes cannot report success", () => {
+  const error = assertThrows(
+    () =>
+      assertPaperAccountResetDeletesSucceeded([
+        { table: "paper_positions", error: null },
+        {
+          table: "trade_post_mortems",
+          error: { code: "42501", message: "delete denied" },
+        },
+      ]),
+    PaperAccountControlError,
+  );
+  assertEquals(error.code, "account_reset_delete_incomplete");
+  assertEquals(error.status, 500);
+  assertEquals(error.details, {
+    failedDeletes: [{
+      table: "trade_post_mortems",
+      code: "42501",
+      message: "delete denied",
+    }],
+  });
+});
 
 Deno.test("account controls: ensure surfaces a resolved PostgREST select error", async () => {
   const { supabase, calls } = createMockSupabase([
@@ -316,7 +374,7 @@ Deno.test("paper-trading arms and verifies the kill switch before reporting succ
   );
   const start = source.indexOf('if (action === "kill_switch")');
   const end = source.indexOf(
-    "// Helper: read configured starting balance",
+    "// ── Set Balance",
     start,
   );
   assert(start >= 0 && end > start, "kill-switch action block must exist");
@@ -338,6 +396,18 @@ Deno.test("paper-trading arms and verifies the kill switch before reporting succ
   assert(
     block.includes("kill_switch_close_incomplete"),
     "remaining positions must return a named failure",
+  );
+  assert(
+    block.includes("brokerCloseUncertainties"),
+    "mirrored broker closes must remain explicitly unverified",
+  );
+  assert(
+    block.includes("kill_switch_broker_close_unverified"),
+    "unverified broker exposure must return a named failure",
+  );
+  assert(
+    /"kill_switch_broker_close_unverified",\s*409,/.test(block),
+    "broker-close uncertainty must not use a retryable 5xx response",
   );
 });
 
@@ -366,6 +436,23 @@ Deno.test("paper-trading reset routes use the verified account-state owner", asy
       `${action} must not write account state directly`,
     );
   }
+
+  const resetBalanceStart = source.indexOf(
+    'if (action === "reset_balance_only")',
+  );
+  const fullResetStart = source.indexOf('if (action === "reset_account")');
+  const fullResetEnd = source.indexOf(
+    'if (action === "set_execution_mode")',
+    fullResetStart,
+  );
+  const resetBalanceBlock = source.slice(resetBalanceStart, fullResetStart);
+  const fullResetBlock = source.slice(fullResetStart, fullResetEnd);
+  assert(resetBalanceBlock.includes("readConfiguredStartingBalance("));
+  assert(fullResetBlock.includes("readConfiguredStartingBalance("));
+  assert(
+    fullResetBlock.includes("assertPaperAccountResetDeletesSucceeded("),
+    "full reset must verify every destructive delete before reporting success",
+  );
 });
 
 Deno.test("BotView reports account-control mutation failures", async () => {

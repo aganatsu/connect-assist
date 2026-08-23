@@ -26,6 +26,16 @@ export class PaperAccountControlError extends Error {
   }
 }
 
+type PostgrestFailure = {
+  message?: string;
+  code?: string;
+};
+
+export type PaperAccountResetDeleteResult = {
+  table: string;
+  error: PostgrestFailure | null | undefined;
+};
+
 const ACCOUNT_CONTROL_COLUMNS =
   "id, is_running, is_paused, kill_switch_active, balance, peak_balance, daily_pnl_base, daily_pnl_base_date, scan_count, signal_count, rejected_count, execution_mode, started_at";
 
@@ -53,6 +63,54 @@ function persistenceError(
     500,
     `${operation} failed: ${error?.message || "database error"}`,
   );
+}
+
+export async function readConfiguredStartingBalance(
+  supabase: any,
+  userId: string,
+): Promise<string> {
+  const { data: config, error } = await supabase
+    .from("bot_configs")
+    .select("config_json")
+    .eq("user_id", userId)
+    .is("connection_id", null)
+    .maybeSingle();
+
+  if (error) {
+    throw new PaperAccountControlError(
+      "starting_balance_read_failed",
+      500,
+      `Could not read configured starting balance: ${
+        error.message || "database error"
+      }`,
+    );
+  }
+
+  const balance = config?.config_json?.account?.startingBalance;
+  return typeof balance === "number" && Number.isFinite(balance) && balance > 0
+    ? balance.toFixed(2)
+    : "10000";
+}
+
+export function assertPaperAccountResetDeletesSucceeded(
+  results: PaperAccountResetDeleteResult[],
+): void {
+  const failures = results
+    .filter((result) => result.error)
+    .map((result) => ({
+      table: result.table,
+      code: result.error?.code,
+      message: result.error?.message || "database error",
+    }));
+
+  if (failures.length > 0) {
+    throw new PaperAccountControlError(
+      "account_reset_delete_incomplete",
+      500,
+      `Account reset was only partially applied: ${failures.length} delete operation(s) failed`,
+      { failedDeletes: failures },
+    );
+  }
 }
 
 export async function ensurePaperAccount(
