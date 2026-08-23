@@ -4,6 +4,7 @@ import {
   calculatePositionRisk,
   canOpenNewTrade,
   computePositionSize,
+  convertLotsToOandaUnits,
   type OpenPositionRisk,
   type PortfolioContext,
   type PropFirmContext,
@@ -12,6 +13,57 @@ import {
   type SizingInput,
   type VolatilityContext,
 } from "../../functions/_shared/unifiedPositionSizing.ts";
+
+// ─── OANDA Native Unit Conversion Tests ─────────────────────────────
+
+Deno.test("OANDA conversion preserves FX lot behavior", () => {
+  const result = convertLotsToOandaUnits({
+    symbol: "EUR/USD", lots: 0.1, direction: "long", tradeUnitsPrecision: 0,
+    minimumTradeSize: 1, maximumOrderUnits: 100_000_000,
+  });
+  assertEquals(result.ok, true);
+  if (result.ok) assertEquals(result.units, "10000");
+});
+
+Deno.test("OANDA conversion uses each instrument contract size", () => {
+  const cases = [
+    { symbol: "XAU/USD", lots: 0.29, precision: 0, expected: "29" },
+    { symbol: "XAG/USD", lots: 0.1, precision: 0, expected: "500" },
+    { symbol: "US Oil", lots: 0.1, precision: 0, expected: "100" },
+    { symbol: "BTC/USD", lots: 0.1, precision: 2, expected: "0.1" },
+    { symbol: "NAS100", lots: 2, precision: 0, expected: "2" },
+  ];
+  for (const testCase of cases) {
+    const result = convertLotsToOandaUnits({
+      symbol: testCase.symbol, lots: testCase.lots, direction: "long",
+      tradeUnitsPrecision: testCase.precision,
+      minimumTradeSize: testCase.precision === 0 ? 1 : 0.01,
+      maximumOrderUnits: 100_000_000,
+    });
+    assertEquals(result.ok, true, testCase.symbol);
+    if (result.ok) assertEquals(result.units, testCase.expected, testCase.symbol);
+  }
+});
+
+Deno.test("OANDA conversion floors to broker precision and preserves short sign", () => {
+  const result = convertLotsToOandaUnits({
+    symbol: "BTC_USD", lots: 0.129, direction: "short", tradeUnitsPrecision: 2,
+    minimumTradeSize: 0.01, maximumOrderUnits: 100,
+  });
+  assertEquals(result.ok, true);
+  if (result.ok) assertEquals(result.units, "-0.12");
+});
+
+Deno.test("OANDA conversion fails closed for unknown or invalid sizes", () => {
+  const defaults = {
+    lots: 0.1, direction: "long" as const, tradeUnitsPrecision: 0,
+    minimumTradeSize: 1, maximumOrderUnits: 1_000,
+  };
+  assertEquals(convertLotsToOandaUnits({ ...defaults, symbol: "UNKNOWN" }).ok, false);
+  assertEquals(convertLotsToOandaUnits({ ...defaults, symbol: "EUR/USD", lots: 0 }).ok, false);
+  assertEquals(convertLotsToOandaUnits({ ...defaults, symbol: "BTC/USD", minimumTradeSize: 1 }).ok, false);
+  assertEquals(convertLotsToOandaUnits({ ...defaults, symbol: "EUR/USD", maximumOrderUnits: 9_999 }).ok, false);
+});
 
 // ─── Base Sizing Tests ───────────────────────────────────────────────
 

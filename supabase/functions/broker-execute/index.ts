@@ -4,6 +4,7 @@ import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { classifyBrokerExecutionResponse } from "../_shared/brokerExecutionLedger.ts";
+import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
@@ -185,13 +186,38 @@ Deno.serve(async (req) => {
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const units = direction === "long" ? Math.round(size * 100000) : -Math.round(size * 100000);
         const oandaInstrument = resolveOandaSymbol(symbol, conn);
+        const instrumentRes = await fetch(
+          `${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaInstrument)}`,
+          { headers: { Authorization: `Bearer ${conn.api_key}` } },
+        );
+        if (!instrumentRes.ok) {
+          const details = await instrumentRes.text();
+          return respond({
+            error: `OANDA instrument specification failed: ${instrumentRes.status}`, details,
+            fallback: instrumentRes.status >= 500,
+          }, instrumentRes.status);
+        }
+        const instrument = (await instrumentRes.json()).instruments?.[0];
+        if (!instrument) {
+          return respond({ error: `OANDA instrument not found: ${oandaInstrument}`, fallback: false }, 400);
+        }
+        const unitConversion = convertLotsToOandaUnits({
+          symbol,
+          lots: Number(size),
+          direction,
+          tradeUnitsPrecision: Number(instrument.tradeUnitsPrecision),
+          minimumTradeSize: Number(instrument.minimumTradeSize),
+          maximumOrderUnits: Number(instrument.maximumOrderUnits),
+        });
+        if (!unitConversion.ok) {
+          return respond({ error: `OANDA size rejected: ${unitConversion.error}`, fallback: false }, 400);
+        }
         // H10: Round prices to correct OANDA precision
         const slPrice = stopLoss ? roundOandaPrice(symbol, stopLoss) : null;
         const tpPrice = takeProfit ? roundOandaPrice(symbol, takeProfit) : null;
         const orderBody: any = {
-          order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
+          order: { type: "MARKET", instrument: oandaInstrument, units: unitConversion.units, timeInForce: "FOK", positionFill: "DEFAULT" },
         };
         if (positionId) {
           const clientId = String(positionId).slice(0, 128);
