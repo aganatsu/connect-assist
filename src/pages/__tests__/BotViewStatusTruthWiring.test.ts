@@ -12,11 +12,16 @@ describe("live mutation status truth wiring", () => {
     expect(botView).toContain("brokerAccountQueries[index]?.isSuccess === true");
     expect(botView).toContain("brokerPositionQueries[index]?.isSuccess === true");
     expect(botView).toContain("canUseTradingControls(executionMode, liveBrokerStates)");
+    expect(botView).toContain("const currentConnections = await brokerApi.list()");
+    expect(botView).toContain("currentActiveConnections.map(async (connection: any) =>");
   });
 
   it("rechecks status at mutation boundaries and surfaces account-control failures", () => {
-    expect(botView.split("requireTradingControls();").length - 1).toBeGreaterThanOrEqual(12);
-    expect(botView.split("onError: accountControlError(").length - 1).toBe(7);
+    expect(botView.split("requireTradingControls();").length - 1).toBeGreaterThanOrEqual(11);
+    expect(botView).toContain("requireModeChangeTruth();");
+    expect(botView).toContain("executionMode === \"paper\" ? brokerConnectionsKnown : liveBrokerTruthKnown");
+    expect(botView.split("onError: accountControlError(").length - 1).toBe(8);
+    expect(botView).toContain('onError: accountControlError("Execution mode was not changed")');
     expect(botView).toContain("open={configOpen && tradingControlsEnabled}");
   });
 

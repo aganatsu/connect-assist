@@ -210,9 +210,10 @@ describe("edge function retry safety", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const readRequest = brokerExecApi.openTrades("cooldown-connection");
+    const readRequest = brokerExecApi.openTrades("cooldown-connection")
+      .catch(() => undefined);
     await vi.runAllTimersAsync();
-    await readRequest.catch(() => undefined);
+    await readRequest;
 
     await expect(brokerExecApi.placeOrder("cooldown-connection", {
       symbol: "EUR/USD",

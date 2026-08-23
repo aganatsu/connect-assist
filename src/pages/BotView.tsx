@@ -222,6 +222,15 @@ export default function BotView() {
     brokerAccountQueries[index]?.isError ||
     brokerPositionQueries[index]?.isError
   );
+  const liveBrokerTruthKnown = brokerConnectionsKnown && activeConnections.every((_, index) =>
+    brokerConnectionStateQueries[index]?.isSuccess === true &&
+    typeof brokerConnectionStateQueries[index]?.data?.ready === "boolean" &&
+    brokerAccountQueries[index]?.isSuccess === true &&
+    !!brokerAccountQueries[index]?.data &&
+    brokerPositionQueries[index]?.isSuccess === true &&
+    Array.isArray(brokerPositionQueries[index]?.data)
+  );
+
   const liveBrokerStates = activeConnections.map((_, index) =>
     brokerConnectionStateQueries[index]?.isSuccess === true &&
     brokerConnectionStateQueries[index]?.data?.ready === true &&
@@ -231,6 +240,9 @@ export default function BotView() {
     Array.isArray(brokerPositionQueries[index]?.data)
   );
   const tradingControlsEnabled = canUseTradingControls(executionMode, liveBrokerStates);
+  const modeChangeEnabled = accountStatusKnown && (
+    executionMode === "paper" ? brokerConnectionsKnown : liveBrokerTruthKnown
+  );
 
   useEffect(() => {
     if (tradingControlsEnabled) return;
@@ -244,6 +256,12 @@ export default function BotView() {
       throw new Error("Current account and broker state must be available before trading controls can be used.");
     }
   };
+  const requireModeChangeTruth = () => {
+    if (!modeChangeEnabled) {
+      throw new Error("Current account and broker state must be available before execution mode can be changed.");
+    }
+  };
+
 
   const closePositionFromDashboard = async (positionId: string) => {
     try {
@@ -274,23 +292,27 @@ export default function BotView() {
   });
   const modeMut = useMutation({
     mutationFn: async (mode: ExecutionMode) => {
-      requireTradingControls();
-      if (mode === "live") {
-        if (!brokerConnectionsKnown || activeConnections.length === 0) {
-          throw new Error("Every active broker must be available before live execution can be enabled.");
+      requireModeChangeTruth();
+      const currentConnections = await brokerApi.list();
+      const currentActiveConnections = currentConnections.filter((connection: any) =>
+        connection.is_active
+      );
+      if (mode === "live" && currentActiveConnections.length === 0) {
+        throw new Error("Every active broker must be available before live execution can be enabled.");
+      }
+      const brokerSnapshots = await Promise.all(currentActiveConnections.map(async (connection: any) => {
+        const [connectionState, accountSnapshot, positionSnapshot] = await Promise.all([
+          brokerExecApi.connectionStatus(connection.id),
+          brokerExecApi.accountSummary(connection.id),
+          brokerExecApi.openTrades(connection.id),
+        ]);
+        if (mode === "live" && connectionState.ready !== true) {
+          throw new Error((connection.display_name || "Broker") + " is not ready for live execution.");
         }
-        const brokerSnapshots = await Promise.all(activeConnections.map(async (connection) => {
-          const [connectionState, accountSnapshot, positionSnapshot] = await Promise.all([
-            brokerExecApi.connectionStatus(connection.id),
-            brokerExecApi.accountSummary(connection.id),
-            brokerExecApi.openTrades(connection.id),
-          ]);
-          if (connectionState.ready !== true) {
-            throw new Error((connection.display_name || "Broker") + " is not ready for live execution.");
-          }
-          return { connection, connectionState, accountSnapshot, positionSnapshot };
-        }));
-        for (const snapshot of brokerSnapshots) {
+        return { connection, connectionState, accountSnapshot, positionSnapshot };
+      }));
+      queryClient.setQueryData(["broker-connections"], currentConnections);
+      for (const snapshot of brokerSnapshots) {
           queryClient.setQueryData(
             ["broker-connection-status", snapshot.connection.id],
             snapshot.connectionState,
@@ -303,7 +325,6 @@ export default function BotView() {
             ["broker-open-trades", snapshot.connection.id],
             snapshot.positionSnapshot,
           );
-        }
       }
       const result = await paperApi.setExecutionMode(mode);
       const executionMode = await verifyExecutionModeChange(
@@ -327,6 +348,7 @@ export default function BotView() {
         ? "Live execution enabled and verified"
         : "Paper execution enabled and verified");
     },
+    onError: accountControlError("Execution mode was not changed"),
   });
   const scanMut = useMutation({
     mutationFn: () => { requireTradingControls(); return scannerApi.manualScan(); },
@@ -600,7 +622,7 @@ export default function BotView() {
             <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
             <button
               className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!tradingControlsEnabled || modeMut.isPending}
+              disabled={!modeChangeEnabled || modeMut.isPending}
               onClick={() => modeMut.mutate("paper")}
             >
               {modeMut.isPending ? "Verifying…" : "Switch to Paper"}
@@ -698,7 +720,7 @@ export default function BotView() {
             {executionMode === "paper" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!accountStatusKnown || !brokerConnectionsKnown || activeConnections.length === 0 || modeMut.isPending}
+                disabled={!modeChangeEnabled || activeConnections.length === 0 || modeMut.isPending}
                 onClick={() => {
                   if (window.confirm("Switch to LIVE mode? New bot trades will be mirrored to your active broker connection(s).")) {
                     modeMut.mutate("live");
@@ -710,8 +732,8 @@ export default function BotView() {
             ) : executionMode === "live" ? (
               <button
                 className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!tradingControlsEnabled || modeMut.isPending || d.positions.length > 0}
-                title={!tradingControlsEnabled ? "Broker or account status is unavailable" : d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
+                disabled={!modeChangeEnabled || modeMut.isPending || d.positions.length > 0}
+                title={!modeChangeEnabled ? "Broker or account status is unavailable" : d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
                 onClick={() => {
                   if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
                     modeMut.mutate("paper");
