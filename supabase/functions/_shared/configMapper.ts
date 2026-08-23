@@ -23,6 +23,7 @@
  */
 
 import { normalizeSessionFilter } from "./sessions.ts";
+import type { ImpulseEntryLifecycleMode } from "./impulseEntryLifecycle.ts";
 
 /**
  * SMC Video Enhancement configuration — opt-in module toggles.
@@ -89,7 +90,7 @@ export const RUNTIME_DEFAULTS = {
   onlyBuyInDiscount: false,
   onlySellInPremium: false,
   dealingRangeMode: "avoid_wrong_side",
-  impulseEntryLifecycleMode: "observe",
+  impulseEntryLifecycleMode: "observe" as ImpulseEntryLifecycleMode,
   zoneSetupStopPolicyMode: "observe" as "observe" | "enforce_paper" | "enforce_live",
   singleOwnershipMode: "observe",
   directionUnavailableMode: "observe_fail_closed",

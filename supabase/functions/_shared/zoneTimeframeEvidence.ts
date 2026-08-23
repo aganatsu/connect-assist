@@ -27,6 +27,7 @@ import type {
   ZoneCandidateModelObservation,
 } from "./zoneCandidateModel.ts";
 import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
+import type { ConfirmationAuthorityObservation } from "./confirmationAuthority.ts";
 
 export const ZONE_TF_EVIDENCE_CONTRACT_VERSION = "zone-tf-evidence.v1";
 
@@ -99,6 +100,7 @@ export interface SlotEvidence {
       structureIntact: boolean;
     } | null;
   } | null;
+  confirmation?: ConfirmationObservation;
   rejections: Array<{
     stage: "impulse" | "mapping" | "qualification" | "fib" | "bounds" | "quality" | "ranking";
     code: string;
@@ -811,7 +813,7 @@ export interface ConfirmationObservation {
   zoneHigh: number | null;
   zoneLow: number | null;
   currentPrice: number | null;
-  authority?: Record<string, unknown> | null;
+  authority?: ConfirmationAuthorityObservation | null;
 }
 
 /**

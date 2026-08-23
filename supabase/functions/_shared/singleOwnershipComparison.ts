@@ -29,10 +29,13 @@ export function buildSingleOwnershipComparison(
   closed: Record<string, any>[],
   rejected: Record<string, any>[],
 ) {
-  const rows = [
+  const sourcedRows: Array<
+    Record<string, any> & { source: "closed" | "rejected" }
+  > = [
     ...closed.map((row) => ({ ...row, source: "closed" as const })),
     ...rejected.map((row) => ({ ...row, source: "rejected" as const })),
-  ].map((row) => {
+  ];
+  const rows = sourcedRows.map((row) => {
     const observation = decisionFrom(row);
     const legacyDecision = row.source === "closed" ? "allow" : "block";
     const proposedDecision = observation?.decision ?? null;

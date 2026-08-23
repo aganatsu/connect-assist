@@ -13,6 +13,9 @@ import {
 
 // ─── Types ──────────────────────────────────────────────────
 export type AdvisorMode = "on_demand" | "daily" | "weekly";
+export type AdvisorSupabaseClient = ReturnType<
+  typeof import("https://esm.sh/@supabase/supabase-js@2").createClient<any, "public">
+>;
 
 export interface TradeRecord {
   id: string;
@@ -889,7 +892,7 @@ export async function callLLM(systemPrompt: string, userPrompt: string): Promise
 
 // ─── Notification Helper ────────────────────────────────────
 export async function sendTelegramNotification(
-  supabase: ReturnType<typeof import("https://esm.sh/@supabase/supabase-js@2").createClient>,
+  supabase: AdvisorSupabaseClient,
   userId: string,
   category: string,
   message: string,

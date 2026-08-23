@@ -266,7 +266,8 @@ export function transitionImpulseEntryLifecycle(
     next.lastTransitionReason = "Impulse entry lifecycle expired";
     return next;
   }
-  if (!active || !next.confirmation) return current;
+  const currentConfirmation = current.confirmation;
+  if (!active || !currentConfirmation || !next.confirmation) return current;
   next.confirmation.revisions ||= [];
   next.confirmation.confirmedAt ??= null;
 
@@ -362,12 +363,12 @@ export function transitionImpulseEntryLifecycle(
   next.activeCandidateId = replacement.id;
   next.confirmation = newConfirmation(
     replacement.id,
-    current.confirmation.generation + 1,
+    currentConfirmation.generation + 1,
     {
-      method: current.confirmation.method,
-      timeframe: current.confirmation.timeframe,
-      refinementTimeframe: current.confirmation.refinementTimeframe,
-      expiresAt: current.confirmation.expiresAt,
+      method: currentConfirmation.method,
+      timeframe: currentConfirmation.timeframe,
+      refinementTimeframe: currentConfirmation.refinementTimeframe,
+      expiresAt: currentConfirmation.expiresAt,
     },
     event.at,
   );
