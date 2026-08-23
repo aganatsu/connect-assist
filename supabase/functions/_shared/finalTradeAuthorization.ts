@@ -26,6 +26,8 @@ export type FinalAuthorizationCode =
   | "bot_paused"
   | "kill_switch"
   | "execution_mode"
+  | "live_broker_connection_required"
+  | "multiple_live_connections_require_per_connection_sizing"
   | "invalid_price"
   | "invalid_orientation"
   | "price_or_candle_stale"
@@ -213,6 +215,14 @@ export function evaluateFinalTradeAuthorization(
     gate: AdditionalAuthorizationGate;
   }> = [
     { code: "execution_mode", gate: input.runtimeGates.executionMode },
+    {
+      code: "live_broker_connection_required",
+      gate: input.runtimeGates.brokerConnectionAvailability,
+    },
+    {
+      code: "multiple_live_connections_require_per_connection_sizing",
+      gate: input.runtimeGates.brokerConnectionSizing,
+    },
     {
       code: "price_or_candle_stale",
       gate: input.runtimeGates.freshness,

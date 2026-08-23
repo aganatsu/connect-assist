@@ -60,6 +60,14 @@ function baseInput(): FinalTradeAuthorizationInput {
     },
     runtimeGates: {
       executionMode: { passed: true, reason: "Execution mode is paper" },
+      brokerConnectionAvailability: {
+        passed: true,
+        reason: "Paper execution does not require a broker connection",
+      },
+      brokerConnectionSizing: {
+        passed: true,
+        reason: "Paper execution does not fan out to brokers",
+      },
       portfolioHeat: {
         passed: true,
         reason: "Portfolio heat is within limit",
@@ -84,6 +92,26 @@ Deno.test("final authorization allows a fully valid candidate", () => {
   const result = evaluateFinalTradeAuthorization(baseInput());
   assertEquals(result.authorized, true);
   assertEquals(result.code, "authorized");
+});
+
+Deno.test("final authorization blocks live execution without a broker connection", () => {
+  const input = baseInput();
+  input.runtimeGates.brokerConnectionAvailability = {
+    passed: false,
+    reason: "live_broker_connection_required",
+  };
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.code, "live_broker_connection_required");
+});
+
+Deno.test("final authorization blocks shared sizing across live connections", () => {
+  const input = baseInput();
+  input.runtimeGates.brokerConnectionSizing = {
+    passed: false,
+    reason: "multiple_live_connections_require_per_connection_sizing",
+  };
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.code, "multiple_live_connections_require_per_connection_sizing");
 });
 
 Deno.test("final authorization fails closed when Cross-TF authority is required but missing", () => {

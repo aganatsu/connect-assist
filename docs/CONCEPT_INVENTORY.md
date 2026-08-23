@@ -31,6 +31,7 @@ instead of arbitrating.
 | **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
 | **Paper final-close persistence** | 1 | `finalizePaperPositionClose` + `finalize_paper_position_close` RPC | 🟢 Single owner |
 | Instrument-aware P&L | 1 | `smcAnalysis.ts:calcPnl` | 🟢 Single owner |
+| Live broker target-count safety | 1 | `finalRuntimeGates.ts` | 🟢 Single owner |
 | Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
 | SMT divergence | 2 | scanner-local copy | 🔴 **DUPLICATE** |
 | Min-confluence threshold | 2 | both (raw + effective) | 🔴 **DUPLICATE, drifted** |
@@ -135,6 +136,18 @@ neutral current verdict keeps the setup waiting, while a fresh explicit opposite
 long/short verdict terminates it. Missing evidence never authorizes entry. The same
 policy is passed through `finalTradeAuthorization.ts`,
 `singleOwnershipFillAuthorization.ts`, the zone-confirmation scanner, and backtest.
+
+## Live broker target-count safety
+
+`_shared/finalRuntimeGates.ts` owns the pre-mutation broker target-count checks used
+by final trade authorization. Live execution fails closed when no active execution
+connection is available. It also rejects more than one target connection with
+`multiple_live_connections_require_per_connection_sizing` while the execution
+routes still reuse one account-derived position size across brokers. Paper execution
+and authorization stages that cannot send a broker order do not invoke this guard.
+
+Both live scanners pass the same connection set that their downstream broker loop
+will consume, and authorization runs before either internal position-finalization RPC.
 
 ## Instrument-aware P&L
 

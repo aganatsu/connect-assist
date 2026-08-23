@@ -79,6 +79,14 @@ Deno.test("normalizeRejectedGate collapses dynamic duplicate and loss-limit mess
     normalizeRejectedGate("Gameplan hard block: bearish 64% vs LONG"),
     "gameplan_alignment",
   );
+  assertEquals(
+    normalizeRejectedGate("live_broker_connection_required"),
+    "live_broker_connection_required",
+  );
+  assertEquals(
+    normalizeRejectedGate("multiple_live_connections_require_per_connection_sizing"),
+    "multiple_live_connections_require_per_connection_sizing",
+  );
 });
 
 Deno.test("buildRejectedOpportunityKey is stable across dynamic gate wording", () => {

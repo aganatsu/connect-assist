@@ -49,6 +49,8 @@ const OWNERS: Record<string, AuthorityGateOwner> = {
   invalid_sl_tp: "operational_safety",
   account: "operational_safety",
   execution_mode: "operational_safety",
+  live_broker_connection_required: "operational_safety",
+  multiple_live_connections_require_per_connection_sizing: "operational_safety",
   freshness: "operational_safety",
   prop_firm: "operational_safety",
   cross_timeframe_authority: "zone_story",

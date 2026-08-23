@@ -11,6 +11,8 @@ export interface FinalRuntimeGate {
 
 export interface FinalRuntimeGateStates {
   executionMode: FinalRuntimeGate;
+  brokerConnectionAvailability: FinalRuntimeGate;
+  brokerConnectionSizing: FinalRuntimeGate;
   portfolioHeat: FinalRuntimeGate;
   correlation: FinalRuntimeGate;
   cooldown: FinalRuntimeGate;
@@ -45,6 +47,8 @@ export interface BuildFinalRuntimeGateStatesInput {
   supabase: any;
   userId: string;
   accountExecutionMode?: string | null;
+  /** Null when this authorization stage cannot send a broker order. */
+  brokerExecutionConnectionCount: number | null;
   symbol: string;
   direction: "long" | "short";
   currentPrice: number;
@@ -57,6 +61,11 @@ export interface BuildFinalRuntimeGateStatesInput {
   now?: Date;
   newsFetcher?: typeof fetch;
 }
+
+export const LIVE_BROKER_CONNECTION_REQUIRED =
+  "live_broker_connection_required";
+export const MULTIPLE_LIVE_CONNECTIONS_REQUIRE_PER_CONNECTION_SIZING =
+  "multiple_live_connections_require_per_connection_sizing";
 
 function asFiniteNumber(value: unknown, fallback = 0): number {
   const parsed = typeof value === "number" ? value : Number(value);
@@ -83,6 +92,59 @@ export function checkExecutionMode(mode: unknown): FinalRuntimeGate {
     };
   }
   return { passed: true, reason: `Execution mode is ${mode}` };
+}
+
+export function checkBrokerConnectionAvailabilityAtExecution(input: {
+  executionMode: unknown;
+  executionConnectionCount: number | null;
+}): FinalRuntimeGate {
+  if (
+    input.executionMode !== "live" ||
+    input.executionConnectionCount === null ||
+    input.executionConnectionCount > 0
+  ) {
+    return {
+      passed: true,
+      reason: input.executionMode === "live"
+        ? "A live broker execution connection is available"
+        : "Broker connection availability does not apply to paper execution",
+    };
+  }
+  return { passed: false, reason: LIVE_BROKER_CONNECTION_REQUIRED };
+}
+
+/**
+ * Blocks live fan-out while a route still reuses one position size for every
+ * broker. Paper execution and non-executing authorization stages are outside
+ * this operational guard.
+ */
+export function checkBrokerConnectionSizingAtExecution(input: {
+  executionMode: unknown;
+  executionConnectionCount: number | null;
+}): FinalRuntimeGate {
+  if (input.executionMode !== "live") {
+    return {
+      passed: true,
+      reason: "Broker sizing fan-out does not apply to paper execution",
+    };
+  }
+  if (input.executionConnectionCount === null) {
+    return {
+      passed: true,
+      reason: "This authorization stage does not send a broker order",
+    };
+  }
+  if (input.executionConnectionCount > 1) {
+    return {
+      passed: false,
+      reason: MULTIPLE_LIVE_CONNECTIONS_REQUIRE_PER_CONNECTION_SIZING,
+    };
+  }
+  return {
+    passed: true,
+    reason:
+      `Live execution targets ${input.executionConnectionCount} broker connection(s)`,
+  };
 }
 
 export function checkPortfolioHeatAtExecution(input: {
@@ -351,6 +413,14 @@ export async function buildFinalRuntimeGateStates(
 
   return {
     executionMode: checkExecutionMode(input.accountExecutionMode),
+    brokerConnectionAvailability: checkBrokerConnectionAvailabilityAtExecution({
+      executionMode: input.accountExecutionMode,
+      executionConnectionCount: input.brokerExecutionConnectionCount,
+    }),
+    brokerConnectionSizing: checkBrokerConnectionSizingAtExecution({
+      executionMode: input.accountExecutionMode,
+      executionConnectionCount: input.brokerExecutionConnectionCount,
+    }),
     portfolioHeat: checkPortfolioHeatAtExecution({
       balance: input.accountBalance,
       openPositions: input.openPositions,

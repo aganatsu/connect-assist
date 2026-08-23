@@ -1423,6 +1423,7 @@ Deno.serve(async (req) => {
           supabase,
           userId,
           accountExecutionMode: account.execution_mode,
+          brokerExecutionConnectionCount: approvedBrokerConnections.length,
           symbol: pending.symbol,
           direction: pending.direction as "long" | "short",
           currentPrice: actualFillPrice,

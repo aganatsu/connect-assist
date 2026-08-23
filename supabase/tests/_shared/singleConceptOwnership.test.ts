@@ -54,6 +54,8 @@ const SINGLE_OWNER: string[] = [
   "calculateSLTP",
   "finalizePaperPositionClose",
   "calcPnl",
+  "checkBrokerConnectionAvailabilityAtExecution",
+  "checkBrokerConnectionSizingAtExecution",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",
   // ── Entry confirmation ──

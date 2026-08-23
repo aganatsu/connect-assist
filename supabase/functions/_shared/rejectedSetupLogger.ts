@@ -65,6 +65,8 @@ export interface RejectedSetupParams {
 
 export function normalizeRejectedGate(reason: string): string {
   const gate = reason.trim().toLowerCase();
+  if (gate.includes("live_broker_connection_required")) return "live_broker_connection_required";
+  if (gate.includes("multiple_live_connections_require_per_connection_sizing")) return "multiple_live_connections_require_per_connection_sizing";
   if (gate.includes("already long") || gate.includes("already short") || gate.includes("duplicate")) return "duplicate_position";
   if (gate.includes("direction blocked")) return "direction_verdict";
   if (gate.includes("htf hard veto") || gate.includes("htf bias mismatch") || gate.includes("htf regime veto")) return "htf_alignment";

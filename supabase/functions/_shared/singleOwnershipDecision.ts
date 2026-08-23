@@ -90,7 +90,8 @@ const OPERATIONAL_SAFETY_CODES = new Set([
   "duplicate_position", "portfolio_heat", "daily_loss_limit",
   "drawdown_limit", "consecutive_loss_limit", "cooldown",
   "high_impact_news", "correlation", "minimum_risk_reward",
-  "spread", "invalid_sl_tp",
+  "spread", "invalid_sl_tp", "live_broker_connection_required",
+  "multiple_live_connections_require_per_connection_sizing",
 ]);
 
 export function operationalSafetyChecks(
