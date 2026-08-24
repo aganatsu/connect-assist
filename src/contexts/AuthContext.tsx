@@ -36,10 +36,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Tracks whether a live auth event (e.g. OAuth sign-in) already delivered a
+    // session. The slower initial getSession() check must never clobber it.
+    let liveSession: Session | null = null;
+    let sawLiveEvent = false;
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       // Never expose a malformed persisted token to protected routes. Public
       // app keys are valid JWTs but intentionally have no user `sub` claim.
-      setSession(session && jwtHasSubject(session.access_token) ? session : null);
+      const next = session && jwtHasSubject(session.access_token) ? session : null;
+      sawLiveEvent = true;
+      liveSession = next;
+      setSession(next);
+      setLoading(false);
     });
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -51,7 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .catch(() => ({ error: new Error("network error") } as any));
         const transient = !!error &&
           /network|fetch|timeout|failed to fetch/i.test(error.message ?? "");
-        if (error && !transient) {
+        if (error && !transient && !(sawLiveEvent && liveSession)) {
           console.warn("[Auth] Invalid session detected, signing out:", error.message);
           await supabase.auth.signOut();
           try {
@@ -66,16 +75,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
       } else if (session) {
-        await supabase.auth.signOut().catch(() => {});
+        if (!(sawLiveEvent && liveSession)) await supabase.auth.signOut().catch(() => {});
         session = null;
       }
-      setSession(session);
+      // A sign-in that landed while this check was in flight wins.
+      if (sawLiveEvent) {
+        setSession(liveSession);
+      } else {
+        setSession(session);
+      }
       setLoading(false);
     });
 
 
     return () => subscription.unsubscribe();
   }, []);
+
 
   const signOut = async () => {
     await supabase.auth.signOut();
