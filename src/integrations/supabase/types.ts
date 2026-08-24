@@ -4437,6 +4437,41 @@ export type Database = {
         }
         Returns: number
       }
+      broker_close_has_terminal_proof: {
+        Args: {
+          p_request_payload: Json
+          p_response_payload: Json
+          p_status: string
+        }
+        Returns: boolean
+      }
+      broker_close_resolves_open: {
+        Args: {
+          p_close_request_payload: Json
+          p_close_response_payload: Json
+          p_close_started_at: string
+          p_close_status: string
+          p_open_completed_at: string
+          p_open_position_id: string
+        }
+        Returns: boolean
+      }
+      broker_connection_effective_account_identity: {
+        Args: { p_account_id: string; p_api_key: string; p_broker_type: string }
+        Returns: string
+      }
+      broker_connection_has_unresolved_managed_exposure: {
+        Args: { p_connection_id: string; p_user_id: string }
+        Returns: boolean
+      }
+      broker_connection_mutation_preflight: {
+        Args: { p_connection_id: string; p_user_id: string }
+        Returns: Json
+      }
+      broker_open_exact_position_id: {
+        Args: { p_broker_type: string; p_response_payload: Json }
+        Returns: string
+      }
       claim_broker_execution: {
         Args: {
           p_action: string
@@ -4534,6 +4569,40 @@ export type Database = {
           p_user_id: string
         }
         Returns: boolean
+      }
+      list_unresolved_broker_open_orphans: {
+        Args: { p_bot_id: string; p_limit?: number; p_user_id: string }
+        Returns: {
+          bot_id: string
+          broker_connection_id: string
+          broker_order_id: string
+          broker_position_id: string
+          open_ledger_id: string
+          position_id: string
+          request_payload: Json
+          response_payload: Json
+          status: string
+          updated_at: string
+          user_id: string
+        }[]
+      }
+      load_paper_position_close_context: {
+        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
+        Returns: Json
+      }
+      paper_account_has_unresolved_managed_exposure: {
+        Args: { p_bot_id: string; p_user_id: string }
+        Returns: boolean
+      }
+      paper_position_broker_close_requirements: {
+        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
+        Returns: {
+          broker_position_ids: Json
+          missing_close_connection_ids: string[]
+          position_found: boolean
+          required_connection_ids: string[]
+          unknown_identity_connection_ids: string[]
+        }[]
       }
       publish_strategy_evidence_certificate: {
         Args: {
