@@ -462,25 +462,6 @@ export async function invokeFunction<T = any>(
 
   }
 
-  // A broker-origin failure (account not found, broker outage) is not an app
-  // failure: surface it as an unavailable read instead of crashing the view.
-  if (error && retryableRead && data?.errorOrigin === "broker") {
-    functionCooldownUntil.set(requestCooldownKey, Date.now() + 15_000);
-    const brokerFallback = getFunctionFallback(functionName, body);
-    if (brokerFallback && typeof brokerFallback === "object") {
-      return {
-        ...(brokerFallback as Record<string, unknown>),
-        error: typeof data?.error === "string" && data.error.trim()
-          ? data.error
-          : (brokerFallback as any).error,
-        brokerStatus: data?.brokerStatus,
-        broker: data?.broker,
-        errorOrigin: "broker",
-        fallback: true,
-      } as T;
-    }
-  }
-
   if (error) throw new Error(error.message || `${functionName} failed`);
 
   if (data?.error && !data?.fallback) throw new Error(data.error);
