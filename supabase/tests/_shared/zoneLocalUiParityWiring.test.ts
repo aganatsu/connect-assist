@@ -11,6 +11,7 @@ function source(relativePath: string): string {
 }
 
 const panel = source("src/components/ZoneStoryPanel.tsx");
+const detailBreakdown = source("src/components/ScanDetailBreakdown.tsx");
 const botView = source("src/pages/BotView.tsx");
 const ictAnalysis = source("src/pages/IctAnalysis.tsx");
 const rejectedSetups = source("src/pages/RejectedSetups.tsx");
@@ -31,7 +32,11 @@ Deno.test("all zone story surfaces receive ranking and effective policy evidence
   const botWiring = botView.match(
     /zoneLocalEnforcement=\{(?:sr|d)\.zoneLocalEnforcement\}/g,
   ) || [];
-  assertEquals(botWiring.length, 3);
+  const detailWiring = detailBreakdown.match(
+    /zoneLocalEnforcement=\{(?:sr|d)\.zoneLocalEnforcement\}/g,
+  ) || [];
+  assertEquals(botWiring.length, 2);
+  assertEquals(detailWiring.length, 1);
   assertStringIncludes(
     ictAnalysis,
     "zoneLocalEnforcement={d.zoneLocalEnforcement}",

@@ -88,7 +88,39 @@ describe("OperationsDashboard", () => {
       trades_placed: 0,
       details_json: [
         { __meta: true, activeStyle: "scalper", creditBudget: { refused: 0, unenforced: 0 } },
-        { pair: "AUD/JPY", direction: "long", score: 33.7, status: "zone_setup_active", reason: "Price at zone", currentPrice: 112.991 },
+        {
+          pair: "AUD/JPY",
+          direction: "long",
+          score: 33.7,
+          status: "zone_setup_active",
+          reason: "Price at zone",
+          currentPrice: 112.991,
+          unifiedZone: {
+            hasZone: true,
+            state: "watching",
+            selectedTF: "5m",
+            unifiedScore: 5.5,
+            scoreBreakdown: { baseScore: 4.5, liquidityBonus: 0, confirmationBonus: 0, tfBonus: 1, total: 5.5 },
+            impulse: {
+              direction: "bullish",
+              high: 112.95,
+              low: 112.32,
+              pips: 63,
+              timeframe: "5m",
+              startDate: "2026-08-23T13:00:00Z",
+              endDate: "2026-08-23T14:00:00Z",
+              spanBars: 12,
+              bosPrice: 112.90,
+            },
+            zone: { type: "OB", high: 112.58252, low: 112.32812, fibLevel: 0.618, fibLabel: "61.8%", srConfirmed: false, htfLayers: [], ltfRefined: true, totalScore: 4.5, zonesFound: 1 },
+            price: { currentPrice: 112.991, atZone: true, atZoneStrict: true, insideZone: true, distancePips: 0, sideOk: true },
+            liquidity: null,
+            confirmation: null,
+            entry: null,
+            storySummary: "Bullish impulse into order block watch.",
+            reason: "Waiting for confirmation",
+          },
+        },
       ],
     }]);
     api.pendingSnapshot.mockResolvedValue({
@@ -154,7 +186,23 @@ describe("OperationsDashboard", () => {
     expect(screen.getByRole("heading", { name: "Zone Setups" })).toBeInTheDocument();
     expect((await screen.findAllByText("AUD/JPY")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("33.7%").length).toBeGreaterThan(0);
+
+    const detailTab = screen.getByRole("tab", { name: "Detail Breakdown" });
+    const lifecycleTab = screen.getByRole("tab", { name: "Lifecycle" });
+    expect(detailTab).toHaveAttribute("aria-selected", "true");
+    expect(detailTab).toHaveAttribute("tabindex", "0");
+    expect(lifecycleTab).toHaveAttribute("tabindex", "-1");
+    expect(await screen.findByText("ICT Setup Model")).toBeInTheDocument();
+    expect(screen.getByText("Impulse")).toBeInTheDocument();
+
+    detailTab.focus();
+    fireEvent.keyDown(detailTab, { key: "ArrowRight" });
+    expect(lifecycleTab).toHaveFocus();
+    expect(lifecycleTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "What’s happening now" })).toBeInTheDocument();
     expect(screen.getAllByText(/frozen OB/i).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /AUD\/JPY 33\.7% Watchlist/i }));
+    expect(screen.getByRole("tab", { name: "Detail Breakdown" })).toHaveAttribute("aria-selected", "true");
 
     fireEvent.click(screen.getByRole("button", { name: /^Kill Switch$/i }));
     await waitFor(() => expect(api.killSwitch).toHaveBeenCalledWith(true));
