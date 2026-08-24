@@ -1,17 +1,17 @@
 import { AppShell } from "@/components/AppShell";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
+import { Map } from "lucide-react";
 
 export default function GamePlan() {
   return (
     <AppShell>
-      <div className="h-full flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h1 className="text-lg font-bold font-mono text-foreground">Pre-Session Game Plan</h1>
-        </div>
-        <div className="flex-1 overflow-auto">
+      <WorkspacePage layout="canvas">
+        <WorkspaceHeader icon={Map} eyebrow="Session preparation" title="Pre-Session Game Plan" />
+        <WorkspaceBody padded={false} scroll>
           <GamePlanPanel />
-        </div>
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

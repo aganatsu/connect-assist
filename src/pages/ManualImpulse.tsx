@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Crosshair, RefreshCw, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -156,16 +157,14 @@ export default function ManualImpulse() {
 
   return (
     <AppShell>
-    <div className="p-3 sm:p-4 space-y-4 max-w-5xl">
-      <div className="flex items-center gap-2">
-        <Crosshair className="h-5 w-5 text-primary" />
-        <div>
-          <h1 className="text-lg sm:text-xl font-bold text-foreground">Manual Impulse</h1>
-          <p className="text-[11px] text-muted-foreground">
-            Mark the impulse yourself; the bot does the rest — zones, confluence, gates, sizing, execution.
-          </p>
-        </div>
-      </div>
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={Crosshair}
+          eyebrow="Operator input"
+          title="Manual Impulse"
+          description="Mark an impulse directly; the bot retains control of zones, gates, sizing, and execution."
+        />
+        <WorkspaceBody className="max-w-5xl space-y-4">
 
       <Card className="border-primary/30 bg-primary/5">
         <CardContent className="p-3">
@@ -400,7 +399,8 @@ export default function ManualImpulse() {
           )}
         </CardContent>
       </Card>
-    </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

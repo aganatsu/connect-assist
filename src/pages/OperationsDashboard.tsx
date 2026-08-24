@@ -34,6 +34,7 @@ import {
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -843,37 +844,35 @@ function OperationsDashboard() {
 
   return (
     <AppShell>
-      <div className="apex-ledger">
-        <header className="apex-page-header">
-          <div className="apex-page-title">
-            <span className="apex-page-icon"><Radar aria-hidden="true" /></span>
-            <div>
-              <p className="apex-kicker">Bot operations</p>
-              <h1>SMC Trading Dashboard</h1>
-            </div>
-          </div>
-          <div className="apex-page-actions">
-            <div className="apex-header-connection">
-              <span className={connectedConnections.length ? "connection-dot live" : "connection-dot"} />
-              <span>{connectionChecksPending
-                ? "Checking brokers"
-                : connectionChecksUnavailable
-                ? "Broker state unavailable"
-                : connectedConnections.length
-                ? `${connectedConnections.length}/${activeConnections.length} connected`
-                : "No broker verified"}</span>
-            </div>
-            <button onClick={() => setPositionsOpen(true)}>
-              <CircleDollarSign aria-hidden="true" /> <span>Positions</span>
-            </button>
-            <button onClick={() => downloadScanCsv(scanDetails, currentScan?.scanned_at)} disabled={!scanDetails.length}>
-              <Download aria-hidden="true" /> <span>Export</span>
-            </button>
-            <button onClick={() => navigate("/bot-config")}>
-              <Settings aria-hidden="true" /> <span>Bot settings</span>
-            </button>
-          </div>
-        </header>
+      <WorkspacePage layout="canvas" className="apex-ledger">
+        <WorkspaceHeader
+          icon={Radar}
+          eyebrow="Bot operations"
+          title="SMC Trading Dashboard"
+          actions={
+            <>
+              <div className="apex-header-connection">
+                <span className={connectedConnections.length ? "connection-dot live" : "connection-dot"} />
+                <span>{connectionChecksPending
+                  ? "Checking brokers"
+                  : connectionChecksUnavailable
+                  ? "Broker state unavailable"
+                  : connectedConnections.length
+                  ? `${connectedConnections.length}/${activeConnections.length} connected`
+                  : "No broker verified"}</span>
+              </div>
+              <button className="workspace-page__action" onClick={() => setPositionsOpen(true)}>
+                <CircleDollarSign aria-hidden="true" /> <span>Positions</span>
+              </button>
+              <button className="workspace-page__action" onClick={() => downloadScanCsv(scanDetails, currentScan?.scanned_at)} disabled={!scanDetails.length}>
+                <Download aria-hidden="true" /> <span>Export</span>
+              </button>
+              <button className="workspace-page__action" onClick={() => navigate("/bot-config")}>
+                <Settings aria-hidden="true" /> <span>Bot settings</span>
+              </button>
+            </>
+          }
+        />
 
         <main className="apex-main">
             {unavailableOperationalSources.length > 0 && (
@@ -1261,7 +1260,7 @@ function OperationsDashboard() {
             </section>
           </SheetContent>
         </Sheet>
-      </div>
+      </WorkspacePage>
     </AppShell>
   );
 }

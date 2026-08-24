@@ -1,5 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
+import { SlidersHorizontal } from "lucide-react";
 
 /**
  * Bot configuration as a route rather than a dialog.
@@ -17,9 +19,12 @@ import { BotConfigModal } from "@/components/BotConfigModal";
 export default function BotConfig() {
   return (
     <AppShell>
-      <div className="p-3 sm:p-4">
-        <BotConfigModal open variant="page" onClose={() => {}} />
-      </div>
+      <WorkspacePage>
+        <WorkspaceHeader icon={SlidersHorizontal} eyebrow="Automation" title="Bot Configuration" />
+        <WorkspaceBody>
+          <BotConfigModal open variant="page" onClose={() => {}} />
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

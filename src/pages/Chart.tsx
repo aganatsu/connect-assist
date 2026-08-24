@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
 import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
@@ -340,7 +341,15 @@ export default function Chart() {
 
   return (
     <AppShell>
-      <div className="flex flex-col lg:flex-row gap-0 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <WorkspacePage layout="canvas">
+        <WorkspaceHeader
+          icon={Activity}
+          eyebrow="Market workspace"
+          title="SMC Chart"
+          actions={<span className="workspace-page__action font-mono">{selectedSymbol} · {selectedTimeframe}</span>}
+        />
+        <WorkspaceBody padded={false}>
+      <div className="flex h-full min-h-0 flex-col gap-0 lg:flex-row">
         {/* ═══════ Chart Area ═══════ */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top toolbar */}
@@ -651,6 +660,8 @@ export default function Chart() {
           </div>
         )}
       </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

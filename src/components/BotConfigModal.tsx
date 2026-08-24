@@ -335,8 +335,16 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 md:px-6 py-2 md:py-4 border-b border-border">
           <div className="min-w-0">
-            <h2 className="text-sm md:text-base font-bold truncate">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
-            {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
+            {asPage ? (
+              <p className="font-mono text-[10px] font-semibold uppercase text-muted-foreground">
+                {connectionName ? `Connection · ${connectionName}` : "Global settings"}
+              </p>
+            ) : (
+              <>
+                <h2 className="truncate text-sm font-bold md:text-base">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
+                {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
+              </>
+            )}
           </div>
           <div className="flex items-center justify-end gap-1 md:gap-2 shrink-0">
             {connectionId && (

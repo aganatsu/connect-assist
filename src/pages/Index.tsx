@@ -5,6 +5,7 @@ import {
   ComposedChart, Line, CartesianGrid, ReferenceLine, BarChart, Bar, Cell,
 } from "recharts";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
 import { paperApi, marketApi, smcApi, scannerApi } from "@/lib/api";
@@ -193,28 +194,22 @@ export default function Dashboard() {
 
   return (
     <AppShell>
-      <div className="space-y-3 md:space-y-4">
-        <div className="hidden md:flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold">SMC Trading Dashboard</h1>
-            <p className="text-muted-foreground text-xs flex items-center gap-2">
-              <Clock className="h-3 w-3" /> {session}
-              {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
-            </p>
-          </div>
-          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
-            !accountStatusKnown ? "text-warning" : botStatus?.isRunning ? "text-success" : "text-muted-foreground"
-          }`}>
-            <span className={`${accountStatusKnown && botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
-            {!accountStatusKnown ? "Bot Status Unknown" : botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
-          </span>
-        </div>
-
-        {/* Mobile session strip */}
-        <div className="md:hidden flex items-center justify-between text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1.5"><Clock className="h-3 w-3" /> {session}</span>
-          {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
-        </div>
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={Activity}
+          eyebrow="Portfolio overview"
+          title="SMC Trading Dashboard"
+          description={`${session}${kz.active ? ` · ${kz.name}` : ""}`}
+          actions={(
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
+              !accountStatusKnown ? "text-warning" : botStatus?.isRunning ? "text-success" : "text-muted-foreground"
+            }`}>
+              <span className={`${accountStatusKnown && botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
+              {!accountStatusKnown ? "Bot Status Unknown" : botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
+            </span>
+          )}
+        />
+        <WorkspaceBody className="space-y-3 md:space-y-4">
 
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -499,7 +494,8 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }
