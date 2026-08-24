@@ -423,13 +423,31 @@ Deno.serve(async (req) => {
       marketScope,
     });
   } catch (error: any) {
+    const message = String(error?.message || error || "");
+    // A market-data outage (provider DNS failure, exhausted credit budget, no
+    // candles) is upstream unavailability, not an app fault: answer 503 so the
+    // caller retries and keeps the previous complete plan, instead of 500.
+    const upstreamUnavailable =
+      /dns error|failed to lookup address|all sources failed|insufficient candle history|budget exhausted|rate limit|429|timeout|network error|fetch failed/i
+        .test(message);
     if (refreshAdmin && refreshUserId) {
-      await recordRefreshFailure(refreshAdmin, refreshUserId, "refresh_failed", String(error?.message || error));
+      await recordRefreshFailure(
+        refreshAdmin,
+        refreshUserId,
+        upstreamUnavailable ? "incomplete_market_data" : "refresh_failed",
+        message,
+      );
     }
-    console.error("[game-plan-refresh] Failed:", error?.message || error);
+    console.error("[game-plan-refresh] Failed:", message);
     return respond(
-      { error: error?.message || "Game Plan refresh failed" },
-      500,
+      {
+        error: upstreamUnavailable
+          ? `Market data is temporarily unavailable; the previous plan remains active (${message})`
+          : (message || "Game Plan refresh failed"),
+        transient: upstreamUnavailable,
+      },
+      upstreamUnavailable ? 503 : 500,
     );
   }
+
 });
