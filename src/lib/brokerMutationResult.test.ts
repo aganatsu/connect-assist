@@ -23,7 +23,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
-function brokerResponse(body: Record<string, unknown>) {
+function brokerResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "Content-Type": "application/json" },
