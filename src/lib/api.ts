@@ -1273,6 +1273,22 @@ export interface PendingOrder {
     reason: string;
   } | null;
   post_confirmation_observation?: any;
+  pending_authorization_observation?: {
+    contractVersion?: string;
+    confirmation?: {
+      latest?: {
+        sampledAt?: string;
+        method?: string;
+        lifecycleMode?: "off" | "observe" | "enforce";
+        detectorPassed?: boolean;
+        lifecyclePassed?: boolean;
+        lifecycleGatePassed?: boolean;
+      } | null;
+    } | null;
+    finalAuthorization?: {
+      evaluatedAt?: string;
+    } | null;
+  } | null;
   staged_cycles: number;
   staged_initial_score: number | null;
   exit_flags: any;
