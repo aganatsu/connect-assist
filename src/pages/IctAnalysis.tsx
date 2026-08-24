@@ -120,7 +120,7 @@ export default function IctAnalysis() {
     return result.sort((a, b) => b.score - a.score);
   }, [strengthData, liveQuotes]);
 
-  const d = selectedDetail; // shorthand
+  const d = selectedDetail as any; // shorthand (scan details are dynamic JSON)
   const selectedScanTime = useMemo(() => {
     if (typeof d?.scanObservedAt !== "string") return null;
     const observedAt = new Date(d.scanObservedAt);
@@ -160,7 +160,7 @@ export default function IctAnalysis() {
             {scanTime && <span className="text-[9px] text-muted-foreground font-mono">Latest {scanTime}</span>}
           </div>
           {SYMBOLS.map(s => {
-            const pd = pairDetails.find((p: any) => p?.pair === s);
+            const pd: any = pairDetails.find((p: any) => p?.pair === s);
             const score = pd?.score;
             const dir = pd?.direction;
             return (
