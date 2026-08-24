@@ -160,7 +160,7 @@ export default function IctAnalysis() {
             {scanTime && <span className="text-[9px] text-muted-foreground font-mono">Latest {scanTime}</span>}
           </div>
           {SYMBOLS.map(s => {
-            const pd = pairDetails.find((p: any) => p?.pair === s);
+            const pd: any = pairDetails.find((p: any) => p?.pair === s);
             const score = pd?.score;
             const dir = pd?.direction;
             return (
