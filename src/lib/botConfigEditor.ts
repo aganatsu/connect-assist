@@ -8,6 +8,7 @@ export function normalizeBotConfigForEditor(rawConfig: any): any {
   const parsed = JSON.parse(JSON.stringify(rawConfig ?? {}));
 
   parsed.strategy = { ...(parsed.strategy || {}) };
+  parsed.entry = { ...(parsed.entry || {}) };
   parsed.instruments = { ...(parsed.instruments || {}) };
   parsed.sessions = { ...(parsed.sessions || {}) };
   parsed.openingRange = { ...(parsed.openingRange || {}) };
@@ -54,6 +55,16 @@ export function normalizeBotConfigForEditor(rawConfig: any): any {
 
   parsed.openingRange.useJudasSwing ??= parsed.openingRange.judasSwing;
   parsed.openingRange.useKeyLevels ??= parsed.openingRange.keyLevels;
+
+  const nestedPoiMode = parsed.entry.nestedPoiMarketMode ??
+    parsed.nestedPoiMarketMode;
+  parsed.entry.nestedPoiMarketMode = [
+      "observe",
+      "enforce_paper",
+      "enforce_live",
+    ].includes(nestedPoiMode)
+    ? nestedPoiMode
+    : "off";
 
   if (parsed.exit.stopLossMethod === undefined) {
     parsed.exit.stopLossMethod = parsed.exit.slMethod;

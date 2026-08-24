@@ -12,6 +12,8 @@ import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { resolveZoneStopPolicyMode } from "../_shared/stopPolicyMode.ts";
 import {
   observePreArmReachability,
+  resolveFrozenNestedPoiMarketRoute,
+  resolveNestedPoiMarketActivation,
   shouldCreatePendingZoneOrder,
   shouldSupersedePendingOrder,
 } from "../_shared/botConfigBehavior.ts";
@@ -153,16 +155,24 @@ import {
   resolvePendingConfirmationMethod,
   resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
+  resolvePendingNestedPoiEntryPlanState,
   resolvePendingStylePolicy,
   THESIS_VALIDATION_VERSION,
   transitionStagedSetup,
   validateFrozenSetupIdentity,
-  type SetupLifecycleEvidence, resolveLifecycleCandidateId } from "../_shared/setupLifecycle.ts";
+  type FrozenNestedPoiEntryPlan,
+  type SetupLifecycleEvidence,
+  resolveLifecycleCandidateId,
+} from "../_shared/setupLifecycle.ts";
 import {
   deriveWatchlistInvalidation,
   isWatchlistInvalidated,
   type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
-import { cursorAfterLatestTouchCandle, findEarliestPendingZoneTouch } from "../_shared/pendingZoneTouch.ts";
+import {
+  closedCandleTouchesNestedPoiOuterZone,
+  cursorAfterLatestTouchCandle,
+  findEarliestPendingZoneTouch,
+} from "../_shared/pendingZoneTouch.ts";
 import {
   buildPendingOrderPlan,
   buildPreArmedPositionPlan,
@@ -216,7 +226,11 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
+import {
+  buildNestedPoiEntryPlan,
+  type HTFConfluenceData,
+  type TFSlotLabels,
+} from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
@@ -2829,10 +2843,73 @@ async function runScanForUser(
 
         // ── Branch A: Order is in "pending" status — check if price touched zone ──
         if (pending.status === "pending") {
+          const pendingNestedPlanState =
+            resolvePendingNestedPoiEntryPlanState(pending);
+          if (!pendingNestedPlanState.valid) {
+            const reason = pendingNestedPlanState.reason;
+            const { data: invalidatedPending } = await supabase
+              .from("pending_orders")
+              .update({
+                status: "invalidated",
+                cancel_reason: reason,
+                resolved_at: new Date().toISOString(),
+              })
+              .eq("id", pending.id)
+              .eq("user_id", userId)
+              .eq("status", "pending")
+              .select("id")
+              .maybeSingle();
+            if (!invalidatedPending) continue;
+            pendingCancelled++;
+            console.warn(
+              "[pending] " + pending.symbol + " invalidated: " + reason,
+            );
+            continue;
+          }
+          const pendingNestedPoiEntry = pendingNestedPlanState.plan;
+          const pendingNestedActivation = pendingNestedPoiEntry
+            ? resolveFrozenNestedPoiMarketRoute({
+              mode: pendingNestedPoiEntry.mode,
+              route: pendingNestedPoiEntry.route,
+              runtimeTarget: account.execution_mode === "live"
+                ? "live"
+                : "paper",
+            })
+            : null;
+          if (pendingNestedActivation?.runtimeTargetMismatch === true) {
+            const reason =
+              "nested_poi_runtime_target_mismatch: paper-only setup cannot execute live";
+            const { data: cancelledPending } = await supabase
+              .from("pending_orders")
+              .update({
+                status: "cancelled",
+                cancel_reason: reason,
+                resolved_at: new Date().toISOString(),
+              })
+              .eq("id", pending.id)
+              .eq("user_id", userId)
+              .eq("status", "pending")
+              .select("id")
+              .maybeSingle();
+            if (!cancelledPending) continue;
+            pendingCancelled++;
+            console.warn(
+              "[pending] " + pending.symbol + " cancelled: " + reason,
+            );
+            continue;
+          }
+          const nestedPoiEnforced =
+            pendingNestedActivation?.enforced === true;
           const touch = findEarliestPendingZoneTouch({
             candles: pendingCandles,
             direction: pending.direction as "long" | "short",
             entryPrice,
+            zoneLow: nestedPoiEnforced
+              ? pendingNestedPoiEntry!.outerZone.low
+              : undefined,
+            zoneHigh: nestedPoiEnforced
+              ? pendingNestedPoiEntry!.outerZone.high
+              : undefined,
             observedAfter: pending.last_touch_checked_at || pending.placed_at || pending.created_at,
             interval: pendingTimeframeAuthority.runtimeEntry,
           });
@@ -2851,7 +2928,15 @@ async function runScanForUser(
             if (!transitionedTouch) continue;
             pendingConfirmationHunting++;
             lifecycleDeepScanSymbols.add(pending.symbol);
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice} on ${touch.touchTime}, entering confirmation hunt mode (${pendingConfirmationLabel})`);
+            console.log(
+              "[pending] " + pending.symbol + " " + pending.direction +
+                " — OUTER ZONE TOUCHED on " + touch.touchTime +
+                (nestedPoiEnforced
+                  ? "; waiting for frozen nested " +
+                    pendingNestedPoiEntry!.selected!.type + " trigger"
+                  : ", entering confirmation hunt mode (" +
+                    pendingConfirmationLabel + ")"),
+            );
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
@@ -2864,7 +2949,15 @@ async function runScanForUser(
                 tgLine("Planned SL", fmtPx(pending.stop_loss, pending.symbol)) +
                 tgLine("Planned TP", fmtPx(pending.take_profit, pending.symbol)) +
                 tgLine("Size", pending.size ? `${pending.size} lots` : null) +
-                tgLine("Waiting for", (pending.direction === "short" ? "Bearish " : "Bullish ") + pendingConfirmationLabel) +
+                tgLine(
+                  "Waiting for",
+                  nestedPoiEnforced
+                    ? "Frozen nested " +
+                      pendingNestedPoiEntry!.selected!.type.toUpperCase() +
+                      " touch"
+                    : (pending.direction === "short" ? "Bearish " : "Bullish ") +
+                      pendingConfirmationLabel,
+                ) +
                 tgLine("Waited in Zone Setup", durationLabel(pending.created_at)) +
                 "\n" +
                 tradeAuthorityLines(touchSR) +
@@ -4191,6 +4284,12 @@ async function runScanForUser(
     //   Swing:       h1=4H, h4=Daily, entry=1H, daily=Weekly, confirm=Daily, ltfConfirm=4H
     // The slot names (h1, h4, daily) are just positional — the engine is TF-agnostic.
     const hasMinZoneCandles = roleCandles.setup.length >= 20;
+    const nestedPoiActivation = resolveNestedPoiMarketActivation({
+      marketFillAtZone: pairConfig.marketFillAtZone === true,
+      mode: (pairConfig as any).nestedPoiMarketMode,
+      runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+    });
+
     if (effectiveDirection && hasMinZoneCandles) {
       try {
         const unifiedDir = effectiveDirection === "long" ? "bullish" : "bearish";
@@ -4283,6 +4382,7 @@ async function runScanForUser(
           {
             manualImpulse: manualImpulseLeg,
             collectEvidence: true,
+            collectNestedPoiEvidence: nestedPoiActivation.enabled,
             structureAuthorityMode: pairConfig.canonicalStructureMode === "enforce" &&
                 pairConfig.singleOwnershipMode === "enforce"
               ? "enforce"
@@ -4300,6 +4400,7 @@ async function runScanForUser(
               timeframe: zoneTFLabels.low,
               observedAt: candles[candles.length - 1]?.datetime,
             },
+            entryTimeframe: timeframeAuthority.runtimeEntry,
           },
           zoneDailyCandles,
           zoneConfirmCandles,
@@ -4371,6 +4472,10 @@ async function runScanForUser(
         // Derive izData (detail.impulseZone) from the unified result's multiTFResult
         // for backward compatibility with the 58 downstream references to izData.*
         const multiTF = unifiedResult.multiTFResult;
+        const nestedPoiEntry =
+          nestedPoiActivation.enabled && multiTF.bestZone
+            ? buildNestedPoiEntryPlan(multiTF.bestZone.zone)
+            : null;
         (detail as any).impulseZone = {
           hasZone: !!multiTF.bestZone,
           selectedTF: multiTF.selectedTF,
@@ -4441,6 +4546,7 @@ async function runScanForUser(
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
           candidateAuthorityObservation:
             unifiedResult.candidateAuthorityObservation ?? null,
+          nestedPoiEntry,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
 
@@ -4927,6 +5033,42 @@ async function runScanForUser(
       (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
     const selectedZoneLocalEnforcement = () =>
       (detail as any).zoneLocalEnforcement ?? null;
+    const nestedPoiSelection =
+      (detail as any).impulseZone?.nestedPoiEntry || null;
+    const frozenNestedPoiEntry: FrozenNestedPoiEntryPlan | null =
+      nestedPoiActivation.enabled && nestedPoiSelection?.selected
+        ? {
+          ...nestedPoiSelection,
+          mode: nestedPoiActivation.mode,
+          route: nestedPoiActivation.enforced
+            ? "nested_poi_market"
+            : "observe",
+          monitoringTimeframe: timeframeAuthority.runtimeEntry,
+          direction: analysis.direction as "long" | "short",
+          frozenAt: new Date().toISOString(),
+        }
+        : null;
+    const nestedPoiExecutableZone = frozenNestedPoiEntry?.selected
+      ? {
+        candidateId: frozenNestedPoiEntry.selected.id,
+        type: frozenNestedPoiEntry.selected.type,
+        displayType:
+          "NESTED-" + frozenNestedPoiEntry.selected.type.toUpperCase(),
+        low: frozenNestedPoiEntry.selected.low,
+        high: frozenNestedPoiEntry.selected.high,
+        entry: frozenNestedPoiEntry.selected.entryPrice,
+        timeframe: frozenNestedPoiEntry.selected.timeframe,
+        triggerKind: frozenNestedPoiEntry.selected.geometry,
+        parentZone: frozenNestedPoiEntry.outerZone,
+      }
+      : null;
+    const nestedPoiLifecycleEnforced =
+      nestedPoiActivation.enforced && nestedPoiExecutableZone !== null;
+    (detail as any).nestedPoiMarket = {
+      ...nestedPoiActivation,
+      plan: frozenNestedPoiEntry,
+      reason: nestedPoiSelection?.reason || "zone_unavailable",
+    };
     const watchlistInvalidationFor = (
       direction: WatchlistDirection,
       originatingZone: unknown,
@@ -4941,7 +5083,10 @@ async function runScanForUser(
         bufferPrice: adjustedSlBuffer *
           (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
       });
-    const selectedCrossTimeframeContext = (executableZone?: Record<string, unknown> | null) =>
+    const selectedCrossTimeframeContext = (
+      executableZone?: Record<string, unknown> | null,
+      impulseEntryMode: "confirmation" | "nested_poi_market" = "confirmation",
+    ) =>
       buildFrozenCrossTimeframeContext({
         timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
         symbol: pair,
@@ -4955,13 +5100,24 @@ async function runScanForUser(
         timeframeEvidence: zoneEvidenceRows.find((row) =>
           row.id === (detail as any).timeframeEvidenceId
         ) || null,
-        impulseEntryLifecycleMode:
-          impulseLifecycleEnforcement.effectiveMode,
+        impulseEntryLifecycleMode: nestedPoiLifecycleEnforced
+          ? "enforce"
+          : impulseLifecycleEnforcement.effectiveMode,
+        impulseEntryMode,
+        nestedPoiMonitoringTimeframe: impulseEntryMode === "nested_poi_market"
+          ? timeframeAuthority.runtimeEntry
+          : pairStylePolicy.timeframes.roles.confirmation,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
       });
-    const validatePendingLifecycle = (frozenStrategyContext: any, executableZone: unknown) =>
+    const validatePendingLifecycle = (
+      frozenStrategyContext: any,
+      executableZone: unknown,
+      nestedEntryEnforced = nestedPoiLifecycleEnforced,
+    ) =>
       validateImpulseLifecycleExecutableZone({
-        mode: impulseLifecycleEnforcement.effectiveMode,
+        mode: nestedEntryEnforced
+          ? "enforce"
+          : impulseLifecycleEnforcement.effectiveMode,
         context: frozenStrategyContext?.crossTimeframeContext || null,
         executableZone,
       });
@@ -5028,7 +5184,15 @@ async function runScanForUser(
         zoneLocalConfluence: selectedZoneLocalConfluence(),
         zoneCandidateShadowRanking: selectedZoneShadowRanking(),
         zoneLocalEnforcement: selectedZoneLocalEnforcement(),
-        crossTimeframeContext: selectedCrossTimeframeContext(originatingZone),
+        crossTimeframeContext: selectedCrossTimeframeContext(
+          nestedPoiActivation.enforced && nestedPoiExecutableZone
+            ? nestedPoiExecutableZone
+            : originatingZone,
+          nestedPoiLifecycleEnforced
+            ? "nested_poi_market"
+            : "confirmation",
+        ),
+        nestedPoiEntry: frozenNestedPoiEntry,
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -5124,8 +5288,81 @@ async function runScanForUser(
         lifecycle_evidence: lifecycleEvidence,
       };
     };
+    const currentPendingCandidate = (activePendingOrders || []).find((pending: any) =>
+      pending.symbol === pair && pending.direction === analysis.direction &&
+      ["pending", "awaiting_confirmation"].includes(pending.status)
+    );
+    const currentNestedPendingCandidate = (activePendingOrders || []).find(
+      (pending: any) =>
+        pending.symbol === pair &&
+        ["pending", "awaiting_confirmation"].includes(pending.status) &&
+        resolvePendingNestedPoiEntryPlanState(pending).declared,
+    );
+    const currentPendingNestedPoiPlanState = currentNestedPendingCandidate
+      ? resolvePendingNestedPoiEntryPlanState(currentNestedPendingCandidate)
+      : null;
+    const currentPendingOwnsNestedPoiRoute =
+      currentPendingNestedPoiPlanState?.declared === true;
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
+    const stagedNestedPoiPlanState = existingStaged
+      ? resolvePendingNestedPoiEntryPlanState(existingStaged)
+      : null;
+    const stagedFrozenNestedPoiEntry = stagedNestedPoiPlanState?.valid
+      ? stagedNestedPoiPlanState.plan
+      : null;
+    const stagedNestedPoiActivation = stagedFrozenNestedPoiEntry
+      ? resolveFrozenNestedPoiMarketRoute({
+        mode: stagedFrozenNestedPoiEntry.mode,
+        route: stagedFrozenNestedPoiEntry.route,
+        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+      })
+      : resolveFrozenNestedPoiMarketRoute({
+        mode: "off",
+        route: null,
+        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+      });
+    // Existing setup identity owns its rollout mode. Runtime settings only
+    // select the mode for a setup created by this scan.
+    const effectiveNestedPoiActivation = existingStaged
+      ? stagedNestedPoiActivation
+      : nestedPoiActivation;
+    const effectiveFrozenNestedPoiEntry = existingStaged
+      ? stagedFrozenNestedPoiEntry
+      : frozenNestedPoiEntry;
+    const effectiveNestedPoiExecutableZone =
+      effectiveFrozenNestedPoiEntry?.selected
+        ? {
+          candidateId: effectiveFrozenNestedPoiEntry.selected.id,
+          type: effectiveFrozenNestedPoiEntry.selected.type,
+          displayType: "NESTED-" +
+            effectiveFrozenNestedPoiEntry.selected.type.toUpperCase(),
+          low: effectiveFrozenNestedPoiEntry.selected.low,
+          high: effectiveFrozenNestedPoiEntry.selected.high,
+          entry: effectiveFrozenNestedPoiEntry.selected.entryPrice,
+          timeframe: effectiveFrozenNestedPoiEntry.selected.timeframe,
+          triggerKind: effectiveFrozenNestedPoiEntry.selected.geometry,
+          parentZone: effectiveFrozenNestedPoiEntry.outerZone,
+        }
+        : null;
+    const effectiveNestedPoiLifecycleEnforced =
+      effectiveNestedPoiActivation.enforced &&
+      effectiveNestedPoiExecutableZone !== null;
+    const stagedNestedPoiRuntimeMismatch = existingStaged &&
+      stagedNestedPoiActivation?.runtimeTargetMismatch === true;
+    if (stagedNestedPoiPlanState && !stagedNestedPoiPlanState.valid) {
+      detail.status = "skipped_nested_poi_frozen_plan_unavailable";
+      detail.skipReason = stagedNestedPoiPlanState.reason;
+      scanDetails.push(detail);
+      continue;
+    }
+    if (stagedNestedPoiRuntimeMismatch) {
+      detail.status = "skipped_nested_poi_runtime_target_mismatch";
+      detail.skipReason =
+        "Frozen nested POI setup is paper-only and cannot be converted to live execution";
+      scanDetails.push(detail);
+      continue;
+    }
     const stagedCandidatesForPair = stagedByPair.get(pair) || [];
 
     // A fresh direction disagreement is evidence for the next scan, not proof
@@ -5582,6 +5819,21 @@ async function runScanForUser(
       }
     }
 
+    // An armed nested route owns its frozen candidate until its lifecycle
+    // reaches a terminal state. Current settings or a newly ranked zone may
+    // refresh diagnostics, but must not stage, claim, or supersede that order.
+    if (currentPendingOwnsNestedPoiRoute) {
+      detail.status = currentNestedPendingCandidate?.status ===
+          "awaiting_confirmation"
+        ? "hunting_confirmation"
+        : "watching_zone";
+      detail.skipReason = currentPendingNestedPoiPlanState?.valid
+        ? "Existing frozen Nested POI pending order retained; current settings and geometry cannot replace it"
+        : "Existing Nested POI route failed closed earlier this scan; legacy entry fallback is disabled";
+      scanDetails.push(detail);
+      continue;
+    }
+
     const stageUnifiedWatch = async (
       executionEligible: boolean,
     ): Promise<"created" | "updated" | "handoff" | "failed"> => {
@@ -6002,8 +6254,17 @@ async function runScanForUser(
         scanDetails.push(detail);
         continue;
       }
+      if (effectiveNestedPoiActivation.enforced &&
+        !effectiveFrozenNestedPoiEntry?.selected) {
+        detail.status = "skipped_nested_poi_unavailable";
+        detail.skipReason =
+          "Nested POI Market Trigger: no strictly-contained OB, FVG, active breaker, S/R, or Fib trigger is available; midpoint fallback is disabled";
+        scanDetails.push(detail);
+        continue;
+      }
       const preparePreArmLifecycle = pairConfig.preArmZoneSetups === true &&
-        config.limitOrderEnabled && !config.marketFillAtZone;
+        ((config.limitOrderEnabled && !config.marketFillAtZone) ||
+          effectiveNestedPoiActivation.enforced);
       if (!izData.bestZone?.priceAtZone || preparePreArmLifecycle) {
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
@@ -6022,7 +6283,7 @@ async function runScanForUser(
               const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const ts = analysis.tieredScoring;
               const styleTTL = stagingTTLMinutes;
-              const zoneWatchOrigin = {
+              const outerZoneWatchOrigin = {
                 type: izData.bestZone.type || "impulse_zone",
                 low: izData.bestZone.low,
                 high: izData.bestZone.high,
@@ -6031,9 +6292,17 @@ async function runScanForUser(
                 fibDepth: izData.bestZone.fibDepth || null,
                 selectedTimeframe: izData.selectedTF || null,
               };
+              const zoneWatchOrigin = effectiveNestedPoiActivation.enforced &&
+                  effectiveNestedPoiExecutableZone
+                ? {
+                  ...effectiveNestedPoiExecutableZone,
+                  fibDepth: izData.bestZone.fibDepth || null,
+                  selectedTimeframe: izData.selectedTF || null,
+                }
+                : outerZoneWatchOrigin;
               const zoneWatchInvalidation = watchlistInvalidationFor(
                 analysis.direction as WatchlistDirection,
-                zoneWatchOrigin,
+                outerZoneWatchOrigin,
                 analysis.direction === "long"
                   ? izData.impulse.low
                   : izData.impulse.high,
@@ -6051,7 +6320,11 @@ async function runScanForUser(
                 initial_factors: presentFactors,
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
+                entry_price: effectiveNestedPoiActivation.enforced &&
+                    effectiveFrozenNestedPoiEntry?.selected
+                  ? effectiveFrozenNestedPoiEntry.selected.entryPrice
+                  : izData.bestZone.refinedEntry ??
+                    ((izData.bestZone.high + izData.bestZone.low) / 2),
                 sl_level: zoneWatchInvalidation.level,
                 tp_level: analysis.takeProfit,
                 ...zoneWatchDecision,
@@ -6066,7 +6339,7 @@ async function runScanForUser(
                 analysis_snapshot: {
                   score: analysis.score,
                   direction: analysis.direction,
-                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
+                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse, nestedPoiEntry: effectiveFrozenNestedPoiEntry },
                 },
               };
               frozenZoneWatch = zoneWatchRow;
@@ -6079,16 +6352,23 @@ async function runScanForUser(
               }
               console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
             } else {
-              // Update existing staged with latest zone data
+              // Update observation fields without rewriting frozen executable geometry.
+              const existingNestedPoiEntry =
+                readFrozenSetupStrategyContext(existingStagedForZone)?.nestedPoiEntry || null;
+              const stagedEntryPrice = effectiveNestedPoiActivation.enforced
+                ? existingNestedPoiEntry?.selected?.entryPrice ??
+                  existingStagedForZone.entry_price
+                : izData.bestZone.refinedEntry ??
+                  ((izData.bestZone.high + izData.bestZone.low) / 2);
               const { error: zoneWatchUpdateError } = await supabase.from("staged_setups").update({
                 current_score: analysis.score,
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
+                entry_price: stagedEntryPrice,
               }).eq("id", existingStagedForZone.id);
               if (zoneWatchUpdateError) throw zoneWatchUpdateError;
-              frozenZoneWatch = existingStagedForZone;
-              preparedZoneWatch = existingStagedForZone;
+              frozenZoneWatch = { ...existingStagedForZone, entry_price: stagedEntryPrice };
+              preparedZoneWatch = frozenZoneWatch;
               zoneWatchPersisted = true;
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
@@ -6106,8 +6386,19 @@ async function runScanForUser(
         if (
           !izData.bestZone?.priceAtZone && zoneWatchPersisted && frozenZoneWatch &&
           pairConfig.preArmZoneSetups === true &&
-          config.limitOrderEnabled && !config.marketFillAtZone
+          ((config.limitOrderEnabled && !config.marketFillAtZone) ||
+            effectiveNestedPoiActivation.enforced)
         ) {
+          const frozenWatchContext =
+            readFrozenSetupStrategyContext(frozenZoneWatch);
+          const preArmNestedPlan = frozenWatchContext?.nestedPoiEntry || null;
+          const routedPreArmNestedPlan = effectiveNestedPoiActivation.enforced
+            ? preArmNestedPlan
+            : null;
+          if (effectiveNestedPoiActivation.enforced && !preArmNestedPlan?.selected) {
+            preArmPlanRejectionReason =
+              "nested_poi_unavailable: staged setup has no frozen nested trigger";
+          } else {
           const zone = frozenZoneWatch.originating_zone;
           const entryPrice = Number(frozenZoneWatch.entry_price ?? zone?.entry);
           const structuralStop = Number(frozenZoneWatch.sl_level);
@@ -6129,6 +6420,7 @@ async function runScanForUser(
             lifecycleDecision: validatePendingLifecycle(
               readFrozenSetupStrategyContext(frozenZoneWatch),
               zone,
+              effectiveNestedPoiLifecycleEnforced,
             ),
           });
           if (plan.valid) {
@@ -6190,9 +6482,13 @@ async function runScanForUser(
               stop_loss: plan.plan.stopLoss,
               take_profit: plan.plan.takeProfit,
               size: null,
-              entry_zone_type: plan.plan.zone.zoneType,
-              entry_zone_low: plan.plan.zone.zoneLow,
-              entry_zone_high: plan.plan.zone.zoneHigh,
+              entry_zone_type: routedPreArmNestedPlan
+                ? "PARENT-" + String(izData.bestZone.type || "ZONE").toUpperCase()
+                : plan.plan.zone.zoneType,
+              entry_zone_low: routedPreArmNestedPlan?.outerZone.low ??
+                plan.plan.zone.zoneLow,
+              entry_zone_high: routedPreArmNestedPlan?.outerZone.high ??
+                plan.plan.zone.zoneHigh,
               status: "pending",
               expiry_minutes: ttlMinutes,
               expires_at: absoluteExpiry,
@@ -6207,6 +6503,7 @@ async function runScanForUser(
                 zoneSetupStopPolicyBufferQuoteDistance:
                   adjustedSlBuffer * zoneStopPolicySpec.pipSize,
                 zoneSetupStopPolicy: plan.stopPolicy || null,
+                nestedPoiEntry: preArmNestedPlan,
               },
               signal_score: analysis.score,
               from_watchlist: true,
@@ -6217,7 +6514,12 @@ async function runScanForUser(
               originating_zone: zone,
               frozen_strategy_context: frozenZoneWatch.frozen_strategy_context,
               confirmation_method: frozenZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
-              confirmation_config: frozenZoneWatch.confirmation_config,
+              confirmation_config: {
+                ...(frozenZoneWatch.confirmation_config || {}),
+                entryMode: routedPreArmNestedPlan
+                  ? "nested_poi_market"
+                  : "confirmation",
+              },
               placed_at: placedAt,
             });
             if (preArmError && !/duplicate key/i.test(preArmError.message)) {
@@ -6232,6 +6534,7 @@ async function runScanForUser(
             }
           } else {
             preArmPlanRejectionReason = plan.reason;
+          }
           }
         }
         if (!izData.bestZone?.priceAtZone) {
@@ -7238,10 +7541,6 @@ async function runScanForUser(
         null;
       const streamlinedConviction =
         streamlinedDecisionContext?.thesisConviction?.evidence;
-      const currentPendingCandidate = (activePendingOrders || []).find((pending: any) =>
-        pending.symbol === pair && pending.direction === analysis.direction &&
-        ["pending", "awaiting_confirmation"].includes(pending.status)
-      );
       const marketLocationObservation =
         (detail as any).canonicalDealingRangeObservation?.canonical || null;
       const frozenEntryPrice = Number(currentPendingCandidate?.entry_price ??
@@ -8137,7 +8436,9 @@ async function runScanForUser(
         // Priority: unified > impulse > legacy. Only compute legacy if no zone engine fired.
         const zoneEngineWillOverride = (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice)
           || (izGateMode === "hard" && izData?.bestZone);
-        let limitEntry = zoneEngineWillOverride ? null : computeLimitEntryPrice(analysis, pair, analysis.direction);
+        let limitEntry: any = zoneEngineWillOverride
+          ? null
+          : computeLimitEntryPrice(analysis, pair, analysis.direction);
         // ── Impulse Zone Entry Override ──
         // When hard gate is active and zone has a refined entry, use the zone's entry level
         // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
@@ -8189,6 +8490,39 @@ async function runScanForUser(
           console.log(`[${pair}] Unified Zone entry override: limit at ${unifiedEntry.toFixed(5)} (${unifiedZoneData.selectedTF} story, score ${unifiedZoneData.unifiedScore}/14)`);
         }
 
+        const observedNestedPoiEntry = effectiveFrozenNestedPoiEntry;
+        const routedNestedPoiEntry = effectiveNestedPoiActivation.enforced
+          ? observedNestedPoiEntry
+          : null;
+        if (effectiveNestedPoiActivation.enforced &&
+          !routedNestedPoiEntry?.selected) {
+          detail.status = "skipped_nested_poi_unavailable";
+          detail.skipReason = existingStaged
+            ? "Nested POI Market Trigger: existing setup has no frozen nested trigger; waiting for a new setup"
+            : "Nested POI Market Trigger: no strictly-contained trigger is available; midpoint fallback is disabled";
+          scanDetails.push(detail);
+          continue;
+        }
+        if (effectiveNestedPoiActivation.enforced &&
+          routedNestedPoiEntry?.selected) {
+          const trigger = routedNestedPoiEntry.selected;
+          limitEntry = {
+            price: trigger.entryPrice,
+            zoneType: "NESTED-" + trigger.type.toUpperCase(),
+            lifecycleCandidateType: trigger.type,
+            candidateId: trigger.id,
+            zoneLow: trigger.low,
+            zoneHigh: trigger.high,
+            timeframe: trigger.timeframe,
+            triggerKind: trigger.geometry,
+          };
+          console.log(
+            "[nested-poi] " + pair + " armed " + trigger.type +
+              " " + trigger.low + "-" + trigger.high +
+              "; outer zone only arms",
+          );
+        }
+
         // ── Market Fill at Zone (Option C) ──────────────────────────────────
         // When izGateMode="hard" AND price IS at the zone (STRICT) AND marketFillAtZone
         // is enabled, skip the pending order path and fill at market price immediately.
@@ -8235,7 +8569,9 @@ async function runScanForUser(
         }
         // Standalone trades MUST go through CHoCH confirmation — market fill only for unified/cascade
         const isStandaloneSignal = (detail as any).signalSource === "standalone";
-        let useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide && !isStandaloneSignal;
+        let useMarketFillAtZone = !effectiveNestedPoiActivation.enforced &&
+          priceIsAtValidatedZone && config.marketFillAtZone &&
+          priceOnCorrectSide && !isStandaloneSignal;
         // A user can enable Market Fill after a setup was pre-armed. Claim the
         // market route by conditionally cancelling that candidate's active
         // pending representation. If another scanner already moved it, market
@@ -8270,7 +8606,8 @@ async function runScanForUser(
         // Pending Zone Orders is the sole authority for creating a limit order.
         // A hard impulse-zone gate must not silently override the visible Bot Config toggle.
         const effectiveLimitEnabled = shouldCreatePendingZoneOrder({
-          pendingZoneOrdersEnabled: config.limitOrderEnabled,
+          pendingZoneOrdersEnabled:
+            config.limitOrderEnabled || effectiveNestedPoiActivation.enforced,
           useMarketFillAtZone,
           hasLimitEntry: !!limitEntry,
         });
@@ -8349,11 +8686,14 @@ async function runScanForUser(
           const limitSL = pendingPlan.stopLoss;
           const limitTP = pendingPlan.takeProfit;
           const pendingOriginatingZone = {
+            candidateId: limitEntry.candidateId,
             type: limitEntry.lifecycleCandidateType,
             displayType: limitEntry.zoneType,
             low: limitEntry.zoneLow,
             high: limitEntry.zoneHigh,
             entry: limitEntry.price,
+            timeframe: limitEntry.timeframe,
+            triggerKind: limitEntry.triggerKind,
             refinedLow: izData?.bestZone?.ltfRefined
                 ? Math.min(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
                 : null,
@@ -8364,10 +8704,17 @@ async function runScanForUser(
           };
           const pendingFrozenCrossTimeframeContext =
             readFrozenSetupStrategyContext(existingStaged)?.crossTimeframeContext ||
-            selectedCrossTimeframeContext(pendingOriginatingZone);
+            selectedCrossTimeframeContext(
+              pendingOriginatingZone,
+              effectiveNestedPoiActivation.enforced
+                ? "nested_poi_market"
+                : "confirmation",
+            );
           const prospectiveLifecycleValidation =
             validateImpulseLifecycleExecutableZone({
-              mode: impulseLifecycleEnforcement.effectiveMode,
+              mode: effectiveNestedPoiActivation.enforced
+                ? "enforce"
+                : impulseLifecycleEnforcement.effectiveMode,
               context: pendingFrozenCrossTimeframeContext,
               executableZone: pendingOriginatingZone,
             });
@@ -8600,6 +8947,7 @@ async function runScanForUser(
               zoneLocalConfluence: selectedZoneLocalConfluence(),
               zoneCandidateShadowRanking: selectedZoneShadowRanking(),
               crossTimeframeContext: pendingFrozenCrossTimeframeContext,
+              nestedPoiEntry: observedNestedPoiEntry,
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -8614,6 +8962,7 @@ async function runScanForUser(
           const pendingLifecycleValidation = validatePendingLifecycle(
             pendingFrozenStrategyContext,
             pendingOriginatingZone,
+            effectiveNestedPoiLifecycleEnforced,
           );
           if (!pendingLifecycleValidation.valid) {
             detail.status = "zone_setup_rejected_lifecycle_identity";
@@ -8695,6 +9044,29 @@ async function runScanForUser(
                 orderId: pendingOrderId,
               },
             });
+          const placedAt = new Date().toISOString();
+          const latestClosedEntryCandle =
+            (fetchedByInterval.get(timeframeAuthority.runtimeEntry) || candles).at(-1) || null;
+          const nestedOuterZoneTouchedAtCreation = !!(
+            routedNestedPoiEntry &&
+            latestClosedEntryCandle &&
+            closedCandleTouchesNestedPoiOuterZone(
+              latestClosedEntryCandle,
+              routedNestedPoiEntry.outerZone,
+            )
+          );
+          const nestedOuterZoneTouchTime = nestedOuterZoneTouchedAtCreation
+            ? latestClosedEntryCandle!.datetime
+            : null;
+          // A staged setup froze its trigger before this candle existed, so the
+          // touch bar is eligible for replay. A setup first discovered on this
+          // bar must begin monitoring only after it was frozen.
+          const nestedConfirmationCursor = existingStaged && nestedOuterZoneTouchTime
+            ? nestedOuterZoneTouchTime
+            : placedAt;
+          const initialPendingStatus = nestedOuterZoneTouchedAtCreation
+            ? "awaiting_confirmation"
+            : "pending";
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
@@ -8707,17 +9079,39 @@ async function runScanForUser(
             stop_loss: limitSL,
             take_profit: limitTP,
             size: limitSize,
-            entry_zone_type: limitEntry.zoneType,
-            entry_zone_low: limitEntry.zoneLow,
-            entry_zone_high: limitEntry.zoneHigh,
-            refined_zone_low: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
-              ? Math.min(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
-            refined_zone_high: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
-              ? Math.max(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
-            status: "pending",
+            entry_zone_type: routedNestedPoiEntry
+              ? "PARENT-" + String(izData?.bestZone?.type || "ZONE").toUpperCase()
+              : limitEntry.zoneType,
+            entry_zone_low: routedNestedPoiEntry?.outerZone.low ??
+              limitEntry.zoneLow,
+            entry_zone_high: routedNestedPoiEntry?.outerZone.high ??
+              limitEntry.zoneHigh,
+            refined_zone_low: routedNestedPoiEntry
+              ? null
+              : izData?.bestZone?.ltfRefined &&
+                  izData.bestZone.refinedEntry != null &&
+                  izData.bestZone.refinedSL != null
+              ? Math.min(izData.bestZone.refinedEntry, izData.bestZone.refinedSL)
+              : null,
+            refined_zone_high: routedNestedPoiEntry
+              ? null
+              : izData?.bestZone?.ltfRefined &&
+                  izData.bestZone.refinedEntry != null &&
+                  izData.bestZone.refinedSL != null
+              ? Math.max(izData.bestZone.refinedEntry, izData.bestZone.refinedSL)
+              : null,
+            status: initialPendingStatus,
+            ...(nestedOuterZoneTouchedAtCreation
+              ? {
+                zone_touch_time: nestedOuterZoneTouchTime,
+                last_touch_checked_at: placedAt,
+                last_confirmation_checked_at: nestedConfirmationCursor,
+                confirmation_attempts: 0,
+              }
+              : {}),
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, ...canonicalEvidenceSnapshot(detail), setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, ...canonicalEvidenceSnapshot(detail), setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, nestedPoiEntry: observedNestedPoiEntry, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -8746,12 +9140,15 @@ async function runScanForUser(
                 pairConfig.afterChochExpiryMinutes || 30,
               maxConfirmationAttempts:
                 pendingFrozenStrategyContext.confirmation.maxAttempts,
+              entryMode: effectiveNestedPoiActivation.enforced
+                ? "nested_poi_market"
+                : "confirmation",
             },
             frozen_strategy_context: pendingFrozenStrategyContext,
             staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
             staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
-            placed_at: new Date().toISOString(),
+            placed_at: placedAt,
           });
 
           if (pendingInsertErr) {

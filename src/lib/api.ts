@@ -1237,6 +1237,7 @@ export interface PendingOrder {
   cancel_reason: string | null;
   filled_at: string | null;
   resolved_at: string | null;
+  zone_touch_time?: string | null;
   signal_reason: any;
   signal_score: number;
   setup_type: string | null;
@@ -1251,7 +1252,11 @@ export interface PendingOrder {
     indicatorMinCount?: number;
     afterChochMode?: "confirmation_close" | "observe_retracement" | "wait_retracement";
     afterChochExpiryMinutes?: number;
+    entryMode?: "confirmation" | "nested_poi_market";
+    nestedPoiEntry?: unknown;
   };
+  frozen_strategy_context?: { nestedPoiEntry?: unknown } | null;
+  nested_poi_entry?: unknown;
   confirmation_build_diagnostic?: {
     contractVersion: string;
     reasonCode: "inactive_contract" | "insufficient_history" |
@@ -1318,6 +1323,7 @@ export interface PendingOrder {
   impulse_entry_lifecycle_id?: string | null;
   impulse_entry_lifecycle?: {
     mode: "off" | "observe" | "enforce";
+    entryMode?: "confirmation" | "nested_poi_market";
     status: string;
     activeCandidateId: string | null;
     impulse: { timeframe: string; protectedLevel: number };

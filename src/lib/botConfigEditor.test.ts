@@ -49,4 +49,11 @@ describe("normalizeBotConfigForEditor", () => {
     expect(result.openingRange.useKeyLevels).toBe(false);
     expect(result.smcEnhancements.enableFibExtension3Point).toBe(true);
   });
+
+  it("normalizes nested POI market mode into the entry section", () => {
+    expect(normalizeBotConfigForEditor({}).entry.nestedPoiMarketMode).toBe("off");
+    expect(normalizeBotConfigForEditor({ nestedPoiMarketMode: "observe" }).entry.nestedPoiMarketMode).toBe("observe");
+    expect(normalizeBotConfigForEditor({ entry: { nestedPoiMarketMode: "enforce_live" } }).entry.nestedPoiMarketMode).toBe("enforce_live");
+    expect(normalizeBotConfigForEditor({ entry: { nestedPoiMarketMode: "invalid" } }).entry.nestedPoiMarketMode).toBe("off");
+  });
 });

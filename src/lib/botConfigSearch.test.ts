@@ -118,6 +118,7 @@ describe("Bot Config search catalog", () => {
     ["break even", "exit:Auto Break-Even"],
     ["position sizing", "risk:Position Sizing"],
     ["starting balance", "risk:Starting Balance ($)"],
+    ["nested poi", "enter:Nested POI Market Trigger"],
   ])("finds %s in the correct tab", (query, expected) => {
     expect(resultPairs(query)).toContain(expected);
   });
@@ -128,6 +129,7 @@ describe("Bot Config search catalog", () => {
     ["normalized scoring", "enter:Score Normalization"],
     ["fixed sl pips", "exit:Fixed SL (pips)"],
     ["same direction stacking", "risk:Allow Same-Direction Stacking"],
+    ["no midpoint", "enter:Nested POI Market Trigger"],
   ])("keeps the old search phrase %s working", (query, expected) => {
     expect(resultPairs(query)).toContain(expected);
   });

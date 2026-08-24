@@ -5,6 +5,111 @@
  * silently overridden inside a scanner route.
  */
 
+export type NestedPoiMarketMode =
+  | "off"
+  | "observe"
+  | "enforce_paper"
+  | "enforce_live";
+
+/** Route frozen with a setup after rollout scope is resolved. */
+export type NestedPoiMarketRoute = "observe" | "nested_poi_market";
+
+export function normalizeNestedPoiMarketMode(
+  value: unknown,
+): NestedPoiMarketMode {
+  return value === "observe" || value === "enforce_paper" ||
+      value === "enforce_live"
+    ? value
+    : "off";
+}
+
+export interface NestedPoiMarketActivation {
+  mode: NestedPoiMarketMode;
+  enabled: boolean;
+  observing: boolean;
+  enforced: boolean;
+  route: "legacy" | NestedPoiMarketRoute;
+  runtimeTarget: "paper" | "live";
+}
+
+/**
+ * Resolves the one rollout policy shared by live scanning and backtest.
+ * Paper+Live is explicit; Paper never changes live execution.
+ */
+export function resolveNestedPoiMarketActivation(input: {
+  marketFillAtZone: boolean;
+  mode: unknown;
+  runtimeTarget: "paper" | "live";
+}): NestedPoiMarketActivation {
+  const mode = normalizeNestedPoiMarketMode(input.mode);
+  const enabled = input.marketFillAtZone && mode !== "off";
+  const enforced = enabled &&
+    (mode === "enforce_live" ||
+      (mode === "enforce_paper" && input.runtimeTarget === "paper"));
+  const route = !enabled
+    ? "legacy"
+    : enforced
+    ? "nested_poi_market"
+    : "observe";
+  return {
+    mode,
+    enabled,
+    observing: route === "observe",
+    enforced,
+    route,
+    runtimeTarget: input.runtimeTarget,
+  };
+}
+
+export function normalizeNestedPoiMarketRoute(
+  value: unknown,
+): NestedPoiMarketRoute | null {
+  return value === "observe" || value === "nested_poi_market" ? value : null;
+}
+
+export function isNestedPoiMarketRouteCompatible(input: {
+  mode: unknown;
+  route: unknown;
+}): boolean {
+  const mode = normalizeNestedPoiMarketMode(input.mode);
+  const route = normalizeNestedPoiMarketRoute(input.route);
+  return !!route && mode !== "off" &&
+    !(mode === "observe" && route !== "observe") &&
+    !(mode === "enforce_live" && route !== "nested_poi_market");
+}
+
+/**
+ * A frozen route never upgrades because the account target or settings change.
+ * A paper-only executable route still fails closed if the account later turns live.
+ */
+export function resolveFrozenNestedPoiMarketRoute(input: {
+  mode: unknown;
+  route: unknown;
+  runtimeTarget: "paper" | "live";
+}): {
+  mode: NestedPoiMarketMode;
+  route: NestedPoiMarketRoute | null;
+  observing: boolean;
+  enforced: boolean;
+  runtimeTargetMismatch: boolean;
+} {
+  const mode = normalizeNestedPoiMarketMode(input.mode);
+  const normalizedRoute = normalizeNestedPoiMarketRoute(input.route);
+  const route =
+    isNestedPoiMarketRouteCompatible({ mode, route: normalizedRoute })
+      ? normalizedRoute
+      : null;
+  const runtimeTargetMismatch = route === "nested_poi_market" &&
+    mode === "enforce_paper" && input.runtimeTarget === "live";
+  return {
+    mode,
+    route,
+    observing: route === "observe",
+    enforced: route === "nested_poi_market" && !runtimeTargetMismatch,
+    runtimeTargetMismatch,
+  };
+}
+
 export interface PendingZoneOrderDecisionInput {
   pendingZoneOrdersEnabled: boolean;
   useMarketFillAtZone: boolean;
@@ -76,7 +181,9 @@ const SUPERSEDE_SCORE_DELTA = 5;
 export function shouldSupersedePendingOrder(
   input: SupersedeDecisionInput,
 ): SupersedeDecision {
-  const width = Number.isFinite(input.zoneWidth) && input.zoneWidth > 0 ? input.zoneWidth : 0;
+  const width = Number.isFinite(input.zoneWidth) && input.zoneWidth > 0
+    ? input.zoneWidth
+    : 0;
   // Fall back to a relative epsilon when zone width is unavailable, so a
   // missing zone cannot make the tolerance zero and reinstate the churn.
   const tolerance = width > 0
@@ -102,7 +209,10 @@ export function shouldSupersedePendingOrder(
     return { supersede: true, reason: "score changed materially" };
   }
 
-  return { supersede: false, reason: "unchanged setup — existing order retained" };
+  return {
+    supersede: false,
+    reason: "unchanged setup — existing order retained",
+  };
 }
 
 export interface PreArmReachabilityInput {

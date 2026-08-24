@@ -147,9 +147,14 @@ Deno.test("fast confirmation respects the setup's frozen confirmation method and
   const source = await Deno.readTextFile(fastScannerUrl.pathname);
   assertStringIncludes(
     source,
-    "const confirmationMethod = resolvePendingConfirmationMethod(",
+    "const legacyConfirmationMethod = resolvePendingConfirmationMethod(",
   );
   assertStringIncludes(source, "pending,");
+  assertStringIncludes(
+    source,
+    "const confirmationMethod = nestedPoiEnforced",
+  );
+  assertStringIncludes(source, ": legacyConfirmationMethod;");
   assertStringIncludes(source, "config,");
   assertStringIncludes(source, "checkIndicatorConfirmation(");
   assertStringIncludes(source, "brokerConn: BrokerConn | null;");

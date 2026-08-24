@@ -7,6 +7,7 @@ import {
   buildTimeframeCandleMap,
   directionTimeframeLabels,
   normalizeAnalysisTimeframe,
+  normalizeAnalysisTimeframeOrNull,
   resolveTimeframeAuthority,
   zoneTimeframeLabels,
 } from "../../functions/_shared/timeframeAuthority.ts";
@@ -136,4 +137,6 @@ Deno.test("normalization accepts provider and display aliases", () => {
   assertEquals(normalizeAnalysisTimeframe("1M"), "1M");
   assertEquals(normalizeAnalysisTimeframe("1m"), "1m");
   assertEquals(normalizeAnalysisTimeframe("unknown", "4h"), "4h");
+  assertEquals(normalizeAnalysisTimeframeOrNull("15min"), "15m");
+  assertEquals(normalizeAnalysisTimeframeOrNull("unknown"), null);
 });

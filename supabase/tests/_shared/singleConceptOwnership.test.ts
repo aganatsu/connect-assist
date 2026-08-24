@@ -58,10 +58,15 @@ const SINGLE_OWNER: string[] = [
   "calcPnl",
   "checkBrokerConnectionAvailabilityAtExecution",
   "checkBrokerConnectionSizingAtExecution",
+  "checkPortfolioHeatAtExecution",
+  "checkCorrelationExposure",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",
   // ── Entry confirmation ──
   "detectZoneConfirmation",
+  "selectICTEntryZone",
+  "buildNestedPoiEntryPlan",
+  "closedCandleTouchesRange",
 ];
 
 /**
@@ -167,6 +172,43 @@ Deno.test("single ownership: each locked concept has exactly one implementation"
   );
 });
 
+Deno.test("single ownership: nested POI adapter delegates eligibility and ranking", () => {
+  const source = Deno.readTextFileSync(
+    new URL("_shared/impulseZoneEngine.ts", functionsRoot),
+  );
+  const start = source.indexOf("export function buildNestedPoiEntryPlan");
+  const end = source.indexOf("export function findStructuralLeg", start);
+  const adapter = start >= 0 && end > start ? source.slice(start, end) : "";
+
+  assertEquals(adapter.includes("selectICTEntryZone({"), true);
+  assertEquals(adapter.includes(".sort("), false);
+  assertEquals(adapter.includes("legacyScoreContribution"), false);
+  assertEquals(adapter.includes("lifecycle ==="), false);
+});
+
+Deno.test("single ownership: nested POI touch delegates to the pending-zone owner", () => {
+  const pending = Deno.readTextFileSync(
+    new URL("_shared/pendingZoneTouch.ts", functionsRoot),
+  );
+  const lifecycle = Deno.readTextFileSync(
+    new URL("_shared/tradeLifecycleAuthority.ts", functionsRoot),
+  );
+  const engine = Deno.readTextFileSync(
+    new URL("_shared/impulseZoneEngine.ts", functionsRoot),
+  );
+
+  assertEquals(
+    pending.includes("export function closedCandleTouchesRange"),
+    true,
+  );
+  assertEquals(
+    lifecycle.includes("closedCandleTouchesRange(input.candle, active)"),
+    true,
+  );
+  assertEquals(lifecycle.includes("input.candle.high >= active.low"), false);
+  assertEquals(engine.includes("nestedPoiTriggerTouchedByClosedCandle"), false);
+});
+
 Deno.test("single ownership: deliberately-distinct concepts keep their documented count", () => {
   for (const [fnName, spec] of Object.entries(DELIBERATELY_DISTINCT)) {
     const sites = definitionSites(fnName, sourceFiles);
@@ -174,7 +216,9 @@ Deno.test("single ownership: deliberately-distinct concepts keep their documente
       sites.length,
       spec.count,
       `${fnName} should have exactly ${spec.count} implementations ` +
-        `(found ${sites.length} at ${sites.join(", ")}).\nWhy ${spec.count}: ${spec.why}`,
+        `(found ${sites.length} at ${
+          sites.join(", ")
+        }).\nWhy ${spec.count}: ${spec.why}`,
     );
   }
 });
@@ -184,6 +228,8 @@ Deno.test("single ownership: locked concepts are not also listed as deliberately
   assertEquals(
     overlap,
     [],
-    `A concept cannot be both single-owner and deliberately distinct: ${overlap.join(", ")}`,
+    `A concept cannot be both single-owner and deliberately distinct: ${
+      overlap.join(", ")
+    }`,
   );
 });

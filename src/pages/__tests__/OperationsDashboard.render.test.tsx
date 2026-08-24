@@ -214,4 +214,103 @@ describe("OperationsDashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Kill Switch$/i }));
     await waitFor(() => expect(api.killSwitch).toHaveBeenCalledWith(true));
   });
+
+  it("renders the frozen nested POI route instead of CHoCH and retracement", async () => {
+    api.pendingSnapshot.mockResolvedValue({
+      fetchedAt: "2026-08-23T14:31:20Z",
+      history: [],
+      active: [{
+        order_id: "nested-order-1",
+        symbol: "AUD/JPY",
+        direction: "long",
+        order_type: "limit_ob",
+        entry_price: 112.48,
+        current_price: 112.50,
+        stop_loss: 112.27,
+        take_profit: 112.77,
+        size: null,
+        entry_zone_type: "ob",
+        entry_zone_low: 112.32812,
+        entry_zone_high: 112.58252,
+        status: "awaiting_confirmation",
+        expiry_minutes: 2160,
+        expires_at: "2026-08-24T16:00:00Z",
+        fill_reason: null,
+        cancel_reason: null,
+        filled_at: null,
+        resolved_at: null,
+        signal_reason: {},
+        signal_score: 33.7,
+        setup_type: "ob",
+        setup_confidence: null,
+        from_watchlist: true,
+        candidate_id: "ea2b21ab-02f9-4015-9560-f63d98617983",
+        confirmation_method: "choch",
+        confirmation_config: {
+          afterChochMode: "wait_retracement",
+          entryMode: "nested_poi_market",
+        },
+        frozen_strategy_context: {
+          contractVersion: "setup-policy-freeze.v1",
+          nestedPoiEntry: {
+            contractVersion: "nested-poi-entry.v1",
+            enforcement: "observe_only",
+            mode: "enforce_paper",
+            route: "nested_poi_market",
+            monitoringTimeframe: "5m",
+            direction: "long",
+            frozenAt: "2026-08-23T14:00:00Z",
+            outerCandidateId: "outer-1",
+            outerZone: { low: 112.32812, high: 112.58252, direction: "bullish" },
+            selected: {
+              id: "inner-breaker",
+              type: "breaker",
+              geometry: "range",
+              low: 112.45,
+              high: 112.48,
+              entryPrice: 112.48,
+              timeframe: "5m",
+            },
+            candidates: [],
+            reason: "selected",
+          },
+        },
+        post_confirmation_entry: {
+          state: "awaiting_retracement",
+          zone: { type: "micro_ob", low: 112.6, high: 112.7, midpoint: 112.65 },
+          protectedLevel: 112.3,
+          expiresAt: "2026-08-23T15:00:00Z",
+          reason: "stale legacy artifact",
+        },
+        impulse_entry_lifecycle: {
+          mode: "enforce",
+          entryMode: "nested_poi_market",
+          status: "active",
+          activeCandidateId: "inner-breaker",
+          impulse: { timeframe: "5m", protectedLevel: 112.27 },
+          candidates: [],
+          confirmation: null,
+          lastTransitionReason: "Outer zone touched",
+        },
+        staged_cycles: 2,
+        staged_initial_score: 33.7,
+        exit_flags: {},
+        final_authorization: null,
+        decision_context: null,
+        placed_at: "2026-08-23T14:00:00Z",
+        created_at: "2026-08-23T14:00:00Z",
+        updated_at: "2026-08-23T14:31:00Z",
+      }],
+    });
+
+    renderDashboard();
+    fireEvent.click(await screen.findByRole("tab", { name: "Lifecycle" }));
+
+    expect(screen.getByText("Nested POI market route frozen at setup")).toBeInTheDocument();
+    expect(screen.getByText("Outer zone entered")).toBeInTheDocument();
+    expect(screen.getByText("Nested POI trigger")).toBeInTheDocument();
+    expect(screen.getAllByText(/Active breaker 112.45 - 112.48 on 5m/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Displaced MSS / CHoCH")).not.toBeInTheDocument();
+    expect(screen.queryByText("Micro OB retracement")).not.toBeInTheDocument();
+  });
 });

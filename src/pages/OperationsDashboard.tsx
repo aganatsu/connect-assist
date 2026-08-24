@@ -60,6 +60,8 @@ import { formatPipDisplay, getPipSize } from "@/lib/pipDisplay";
 import {
   pendingOrderConfirmationPresentation,
   pendingOrderDisplayStage,
+  pendingOrderDistancePrice,
+  pendingOrderNestedPoiPresentation,
   pendingOrderPostConfirmationPresentation,
 } from "@/lib/pendingOrderDisplay";
 import "@/styles/operations-dashboard.css";
@@ -210,12 +212,15 @@ function timeRemaining(expiresAt: string | null | undefined): string {
   return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
-function formatDistance(order: PendingOrder): string {
-  const current = Number(order.current_price);
-  const entry = Number(order.entry_price);
-  if (!Number.isFinite(current) || !Number.isFinite(entry)) return "—";
-  const pips = Math.abs(current - entry) / getPipSize(order.symbol);
-  return formatPipDisplay(pips, order.symbol, { showSign: false });
+function formatDistance(
+  order: PendingOrder,
+  target: "entry" | "outer_zone" = "entry",
+): string {
+  const distance = pendingOrderDistancePrice(order, target);
+  if (distance === null) return "—";
+  return formatPipDisplay(distance / getPipSize(order.symbol), order.symbol, {
+    showSign: false,
+  });
 }
 
 function zoneType(order: PendingOrder): string {
@@ -344,33 +349,57 @@ function buildPipeline(order: PendingOrder | null): Array<{ label: string; detai
       { label: "Position ownership", detail: "Do not retry until broker state is confirmed", state: "pending" },
     ];
   }
+  const nestedPoi = pendingOrderNestedPoiPresentation(order);
   const confirmationStep = pendingOrderConfirmationPresentation(order);
   const confirmationDone = confirmationStep.complete;
   const zoneEntered = stage !== "watching";
   const finalAuthorized = order.final_authorization?.authorized === true;
-  const postConfirmation =
-    pendingOrderPostConfirmationPresentation(order, confirmationDone);
 
   const steps: Array<{ label: string; detail: string; state: PipelineState }> = [
     {
-      label: "Zone entered",
-      detail: zoneEntered ? `Frozen ${zoneType(order)} engaged` : `${formatDistance(order)} from entry`,
+      label: nestedPoi.route === "none" ? "Zone entered" : "Outer zone entered",
+      detail: zoneEntered ? `Frozen ${zoneType(order)} engaged` : `${formatDistance(order, nestedPoi.route === "enforce" ? "outer_zone" : "entry")} from ${nestedPoi.route === "enforce" ? "outer zone" : "entry"}`,
       state: zoneEntered ? "complete" : "active",
     },
-    {
-      label: confirmationStep.label,
-      detail: confirmationStep.detail,
-      state: confirmationDone ? "complete" : zoneEntered ? "active" : "pending",
-    },
   ];
+
+  if (nestedPoi.route === "enforce") {
+    steps.push({
+      label: nestedPoi.label,
+      detail: nestedPoi.detail,
+      state: nestedPoi.complete ? "complete" : zoneEntered ? "active" : "pending",
+    });
+    steps.push({
+      label: "Final authorization",
+      detail: finalAuthorized ? "Risk and execution checks passed" : "Awaiting fresh price, risk, and broker checks",
+      state: finalAuthorized ? "complete" : nestedPoi.entryReady ? "active" : "pending",
+    });
+    return steps;
+  }
+
+  if (nestedPoi.route === "observe") {
+    steps.push({
+      label: nestedPoi.label,
+      detail: nestedPoi.detail,
+      state: "complete",
+    });
+  }
+
+  steps.push({
+    label: confirmationStep.label,
+    detail: confirmationStep.detail,
+    state: confirmationDone ? "complete" : zoneEntered ? "active" : "pending",
+  });
+  const postConfirmation =
+    pendingOrderPostConfirmationPresentation(order, confirmationDone);
   if (postConfirmation.step) {
     steps.push(postConfirmation.step);
   }
   const entryReady = postConfirmation.entryReady;
   steps.push({
-      label: "Final authorization",
-      detail: finalAuthorized ? "Risk and execution checks passed" : "Awaiting fresh price, risk, and broker checks",
-      state: finalAuthorized ? "complete" : entryReady ? "active" : "pending",
+    label: "Final authorization",
+    detail: finalAuthorized ? "Risk and execution checks passed" : "Awaiting fresh price, risk, and broker checks",
+    state: finalAuthorized ? "complete" : entryReady ? "active" : "pending",
   });
   return steps;
 }
@@ -385,6 +414,12 @@ function commentary(order: PendingOrder | null): string {
     return `${order.symbol} requires broker reconciliation. The execution outcome is uncertain, so verify the broker position before retrying or changing this setup.`;
   }
   if (stage === "confirmation") {
+    const nestedPoi = pendingOrderNestedPoiPresentation(order);
+    if (nestedPoi.route === "enforce") {
+      return nestedPoi.complete
+        ? `${order.symbol} touched its frozen nested POI on a closed candle. Fresh price, risk, direction, and broker checks now decide whether a market order may be sent.`
+        : `${order.symbol} entered its outer ${zoneType(order)}. ${nestedPoi.detail}. No order is sent from the broad zone alone.`;
+    }
     const confirmation = pendingOrderConfirmationPresentation(order);
     const contractDescription = confirmation.frozenAtSetup
       ? `the frozen ${confirmation.label} contract`
@@ -400,7 +435,9 @@ function commentary(order: PendingOrder | null): string {
   if (stage === "retracement") {
     return `${order.symbol} completed its ${direction} confirmation contract and is now waiting for price to return to its frozen retracement zone before final authorization.`;
   }
-  return `${order.symbol} remains pre-armed ${formatDistance(order)} from its frozen ${zoneType(order)}. Lightweight monitoring continues until price approaches the zone; deeper confirmation analysis starts before touch.`;
+  const nestedPoi = pendingOrderNestedPoiPresentation(order);
+  const distanceTarget = nestedPoi.route === "enforce" ? "outer_zone" : "entry";
+  return `${order.symbol} remains pre-armed ${formatDistance(order, distanceTarget)} from its frozen ${zoneType(order)}. Lightweight monitoring continues until price approaches the zone; deeper confirmation analysis starts before touch.`;
 }
 
 function OperationsDashboard() {
@@ -618,10 +655,17 @@ function OperationsDashboard() {
   const watchingOrders = activeOrders.filter((order) => pendingOrderDisplayStage(order) === "watching");
   const priceHistory = focusedOrder ? scanPriceHistory(scans, focusedOrder.symbol) : [];
   const pipeline = buildPipeline(focusedOrder);
+  const focusedNestedPoi = focusedOrder
+    ? pendingOrderNestedPoiPresentation(focusedOrder)
+    : null;
   const focusedConfirmation = focusedOrder
     ? pendingOrderConfirmationPresentation(focusedOrder)
     : null;
-  const focusedConfirmationContext = focusedConfirmation?.frozenAtSetup
+  const focusedConfirmationContext = focusedNestedPoi?.route === "enforce"
+    ? "Nested POI market route frozen at setup"
+    : focusedNestedPoi?.route === "observe"
+    ? "Nested POI observed only; confirmation route still controls entry"
+    : focusedConfirmation?.frozenAtSetup
     ? "Confirmation and entry modes frozen at setup"
     : focusedConfirmation?.methodSource === "frozen"
     ? "Confirmation method frozen; entry mode unavailable"
@@ -1122,7 +1166,12 @@ function OperationsDashboard() {
                       <td><button className="apex-row-select" onClick={() => setSelectedOrderId(order.order_id)}>{order.symbol}</button></td>
                       <td><span className={order.direction}>{order.direction}</span></td>
                       <td>{zoneType(order)}</td>
-                      <td className="distance">{formatDistance(order)}</td>
+                      <td className="distance">{formatDistance(
+                        order,
+                        pendingOrderNestedPoiPresentation(order).route === "enforce"
+                          ? "outer_zone"
+                          : "entry",
+                      )}</td>
                       <td><button className="apex-row-cancel" aria-label={`Cancel ${order.symbol} setup`} disabled={cancelPendingMutation.isPending} onClick={() => {
                         if (window.confirm(`Cancel ${order.symbol} zone setup?`)) cancelPendingMutation.mutate(order.order_id);
                       }}><X /></button></td>

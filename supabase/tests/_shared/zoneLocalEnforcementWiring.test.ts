@@ -1,5 +1,6 @@
 import {
   assert,
+  assertMatch,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
@@ -21,8 +22,12 @@ Deno.test("live and backtest use the same evidence-capped policy helper", () => 
     assertStringIncludes(source, "evaluateZoneLocalEnforcement({");
     assertStringIncludes(source, "loadZoneLocalActivation");
     assertStringIncludes(source, "zoneLocalDecision.scoreAdjustment");
-    assertStringIncludes(source, "if (!zoneLocalDecision.allowed)");
   }
+  assertStringIncludes(scanner, "if (!zoneLocalDecision.allowed)");
+  assertMatch(
+    backtest,
+    /if \(!frozenNestedAuthorizationRoute && !zoneLocalDecision\.allowed\)/,
+  );
   assertStringIncludes(
     scanner,
     'runtimeTarget: account.execution_mode === "live"',

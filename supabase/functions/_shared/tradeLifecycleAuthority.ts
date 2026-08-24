@@ -7,6 +7,7 @@ import {
   type ImpulseEntryLifecycle,
   type ImpulseEntryLifecycleEvent,
 } from "./impulseEntryLifecycle.ts";
+import { closedCandleTouchesRange } from "./pendingZoneTouch.ts";
 
 export const TRADE_LIFECYCLE_AUTHORITY_VERSION = "trade-lifecycle-authority.v1";
 
@@ -47,8 +48,19 @@ export function advanceTradeLifecycle(input: {
   else if (candidateFailedByClose(after, input.candle.close)) emit({ type: "candidate_failed", at, reason: `Close ${input.candle.close} failed active entry zone` });
   else {
     const active = after.candidates.find((candidate) => candidate.id === after.activeCandidateId);
-    if (active && active.state === "active" && input.candle.high >= active.low && input.candle.low <= active.high) emit({ type: "zone_touched", at });
-    confirmationPlan = deriveConfirmationTriggerPlan({ lifecycle: after, candles: input.completedCandles, diagnosticSink });
+    const activeTouched = active && active.state === "active" &&
+      closedCandleTouchesRange(input.candle, active);
+    if (activeTouched) {
+      emit({
+        type: (after.entryMode ?? "confirmation") === "nested_poi_market"
+          ? "entry_trigger_touched"
+          : "zone_touched",
+        at,
+      });
+    }
+    if ((after.entryMode ?? "confirmation") === "confirmation" && after.status === "active") {
+      confirmationPlan = deriveConfirmationTriggerPlan({ lifecycle: after, candles: input.completedCandles, diagnosticSink });
+    }
     if (confirmationPlan && after.confirmation?.status === "building") {
       emit({ type: "trigger_revised", at: confirmationPlan.evaluatedAt, protectedLevel: confirmationPlan.protectedLevel, breakLevel: confirmationPlan.breakLevel, reason: confirmationPlan.explanation });
       if (confirmationPlan.shouldLock && after.confirmation?.status === "building") emit({ type: "trigger_locked", at: confirmationPlan.evaluatedAt, protectedLevel: confirmationPlan.protectedLevel, breakLevel: confirmationPlan.breakLevel });

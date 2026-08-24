@@ -30,6 +30,7 @@ export interface ConfigTabProps {
   setConfig: React.Dispatch<React.SetStateAction<any>>;
   updateField: (section: string, key: string, value: any) => void;
   highlightedLabels?: Set<string>;
+  connectionScoped?: boolean;
 }
 
 export function FeatureStateBadge({ state, reason }: { state: FeatureState; reason?: string }) {

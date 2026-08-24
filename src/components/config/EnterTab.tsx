@@ -7,6 +7,16 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { toast } from "sonner";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
@@ -68,11 +78,31 @@ const OVERRIDE_FIELDS = [
   { key: 'maxConsecutiveLosses', label: 'Max Consec Losses', type: 'number', min: 1, max: 15, step: 1, description: 'Pair-specific consecutive loss cooldown' },
 ] as const;
 
+type NestedPoiMarketMode =
+  | "off"
+  | "observe"
+  | "enforce_paper"
+  | "enforce_live";
+
 // ─── Component ────────────────────────────────────────────────────────────────
-export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
+export function EnterTab({
+  config,
+  setConfig,
+  updateField,
+  connectionScoped = false,
+}: ConfigTabProps) {
   const impulseZoneAvailable = (config.strategy?.impulseZoneGateMode ?? "hard") !== "off";
   const pendingZoneOrdersEnabled = config.entry?.pendingZoneOrders ?? false;
   const marketFillEnabled = config.entry?.marketFillAtZone ?? true;
+  const nestedPoiMarketMode = (config.entry?.nestedPoiMarketMode ?? "off") as NestedPoiMarketMode;
+  const nestedPoiEnforced = !connectionScoped && marketFillEnabled &&
+    (nestedPoiMarketMode === "enforce_paper" ||
+      nestedPoiMarketMode === "enforce_live");
+  const preArmAvailable = nestedPoiEnforced ||
+    (pendingZoneOrdersEnabled && !marketFillEnabled);
+  const zoneLifecycleAvailable = pendingZoneOrdersEnabled || nestedPoiEnforced;
+  const confirmationControlsAvailable = pendingZoneOrdersEnabled &&
+    !nestedPoiEnforced;
   const thesisEnabled = config.strategy?.thesisConvictionEnabled ?? true;
   const thesisDisplay = getLiveThesisConvictionDisplay(
     thesisEnabled,
@@ -81,6 +111,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
   const weights: Record<string, number> = config.factorWeights || {};
   const hasWeightOverrides = Object.keys(weights).length > 0;
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
+  const [confirmLiveNestedPoi, setConfirmLiveNestedPoi] = useState(false);
   const overrides: Record<string, Record<string, any>> = config.pairGateOverrides || {};
 
   const crossTfStatus = useMemo(() => {
@@ -107,6 +138,14 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
       delete next[key];
       return { ...prev, factorWeights: next };
     });
+  };
+
+  const selectNestedPoiMarketMode = (value: NestedPoiMarketMode) => {
+    if (value === "enforce_live") {
+      setConfirmLiveNestedPoi(true);
+      return;
+    }
+    updateField("entry", "nestedPoiMarketMode", value);
   };
 
   // Pair override helpers
@@ -603,22 +642,81 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={false}
       >
         <ToggleField label="Pending Zone Orders" description="Place limit orders at zone instead of waiting for market fill" checked={pendingZoneOrdersEnabled} onChange={v => updateField('entry', 'pendingZoneOrders', v)} status={pendingZoneOrdersEnabled ? "active" : "disabled"} />
-        <ToggleField label="Pre-arm Zone Setups" description="Create the linked zone setup before price arrives; it still waits for your configured confirmation" checked={config.entry?.preArmZoneSetups ?? false} onChange={v => updateField('entry', 'preArmZoneSetups', v)} status={pendingZoneOrdersEnabled && !marketFillEnabled ? "active" : "unavailable"} />
-        <ToggleField label="Market Fill at Zone" description="Enter at market when price touches zone" checked={marketFillEnabled} onChange={v => updateField('entry', 'marketFillAtZone', v)} status={marketFillEnabled ? "active" : "disabled"} />
+        <ToggleField
+          label="Pre-arm Zone Setups"
+          description={nestedPoiEnforced
+            ? "Create the linked setup before price reaches the outer zone; the frozen nested POI still controls entry."
+            : "Create the linked zone setup before price arrives; it still waits for your configured confirmation"}
+          checked={config.entry?.preArmZoneSetups ?? false}
+          onChange={v => updateField('entry', 'preArmZoneSetups', v)}
+          status={preArmAvailable ? "active" : "unavailable"}
+        />
+        <ToggleField
+          label="Market Fill at Zone"
+          description={nestedPoiEnforced
+            ? "Use the outer zone to arm a market-entry setup; only the frozen nested POI can trigger authorization."
+            : "Enter at market when price touches zone"}
+          checked={marketFillEnabled}
+          onChange={v => updateField('entry', 'marketFillAtZone', v)}
+          status={marketFillEnabled ? "active" : "disabled"}
+        />
+        {(marketFillEnabled || connectionScoped) && (
+          <FieldGroup
+            label="Nested POI Market Trigger"
+            description={connectionScoped
+              ? "This execution route is owned by Global Bot Config. Broker-specific overrides cannot change scanner behavior."
+              : "Optional rollout for newly armed setups: the outer zone only arms the setup. Entry requires a frozen nested OB, FVG, active breaker, S/R, or Fib trigger; there is no midpoint fallback. Active setups keep their frozen route."}
+            status={connectionScoped
+              ? "unavailable"
+              : nestedPoiMarketMode === "off"
+              ? "disabled"
+              : nestedPoiMarketMode === "observe"
+              ? "monitoring"
+              : "active"}
+          >
+            <Select
+              value={connectionScoped ? "off" : nestedPoiMarketMode}
+              disabled={connectionScoped}
+              onValueChange={value => selectNestedPoiMarketMode(value as NestedPoiMarketMode)}
+            >
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off — Existing Entry Behavior</SelectItem>
+                <SelectItem value="observe">Observe Only</SelectItem>
+                <SelectItem value="enforce_paper">Enforce on Paper</SelectItem>
+                <SelectItem value="enforce_live">Enforce on Paper + Live</SelectItem>
+              </SelectContent>
+            </Select>
+          </FieldGroup>
+        )}
         <FieldGroup label="Zone Proximity (ATR)" description={marketFillEnabled ? "How close price must be to zone for entry" : "Enable Market Fill at Zone; proximity is not used when market-fill entry is off."} status={marketFillEnabled ? "active" : "unavailable"}>
           <div className="flex items-center gap-4">
             <Slider value={[config.entry?.zoneProximityATR ?? 0.30]} onValueChange={v => updateField('entry', 'zoneProximityATR', v[0])} min={0.05} max={1.0} step={0.05} className="flex-1" />
             <span className="text-sm font-mono font-bold w-12 text-right">{(config.entry?.zoneProximityATR ?? 0.30).toFixed(2)}×</span>
           </div>
         </FieldGroup>
-        <FieldGroup label="Zone Setup Expiry (hours)" description={pendingZoneOrdersEnabled ? "One clock from Watchlist discovery through confirmation. Applies to new setups; active setups retain the expiry frozen when they were created." : "Enable Pending Zone Orders; no pending-zone expiry exists while that route is off."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+        <FieldGroup
+          label="Zone Setup Expiry (hours)"
+          description={zoneLifecycleAvailable
+            ? "One clock from Watchlist discovery through entry authorization. Applies to new setups; active setups retain their frozen expiry."
+            : "Enable Pending Zone Orders; no pending-zone expiry exists while that route is off."}
+          status={zoneLifecycleAvailable ? "active" : "unavailable"}
+        >
           <Input type="number" value={config.entry?.zoneWatchExpiry ?? 4} onChange={e => updateField('entry', 'zoneWatchExpiry', parseInt(e.target.value) || 4)} min={1} max={48} step={1} className="h-9 text-sm" />
         </FieldGroup>
         <FieldGroup label="Cooldown (minutes)" description="Minimum time between trades on same pair">
           <Input type="number" value={config.entry?.cooldownMinutes ?? 60} onChange={e => updateField('entry', 'cooldownMinutes', parseInt(e.target.value) || 0)} min={0} max={480} step={15} className="h-9 text-sm" />
         </FieldGroup>
         <div className="border-t border-border pt-3 space-y-3">
-          <FieldGroup label="Entry Confirmation" description={pendingZoneOrdersEnabled ? "How entry is confirmed once price reaches zone" : "Enable Pending Zone Orders to configure confirmation for that route; market entries use their active authority contract."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+          <FieldGroup
+            label="Entry Confirmation"
+            description={nestedPoiEnforced
+              ? "Nested POI enforcement replaces CHoCH/indicator confirmation for newly armed setups."
+              : pendingZoneOrdersEnabled
+              ? "How entry is confirmed once price reaches zone"
+              : "Enable Pending Zone Orders to configure confirmation for that route; market entries use their active authority contract."}
+            status={confirmationControlsAvailable ? "active" : "unavailable"}
+          >
             <Select value={config.entry?.confirmationMethod ?? "choch"} onValueChange={v => updateField('entry', 'confirmationMethod', v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -630,7 +728,15 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </FieldGroup>
           {(config.entry?.confirmationMethod ?? "choch") !== "indicators" && (
             <>
-              <FieldGroup label="After CHoCH" description={pendingZoneOrdersEnabled ? "Choose whether CHoCH fills immediately or waits for its displacement FVG/OB retracement" : "Enable Pending Zone Orders; post-CHoCH retracement does not control a disabled pending route."} status={pendingZoneOrdersEnabled ? "active" : "unavailable"}>
+              <FieldGroup
+                label="After CHoCH"
+                description={nestedPoiEnforced
+                  ? "Nested POI enforcement does not use the post-CHoCH retracement route."
+                  : pendingZoneOrdersEnabled
+                  ? "Choose whether CHoCH fills immediately or waits for its displacement FVG/OB retracement"
+                  : "Enable Pending Zone Orders; post-CHoCH retracement does not control a disabled pending route."}
+                status={confirmationControlsAvailable ? "active" : "unavailable"}
+              >
                 <Select value={config.entry?.afterChochMode ?? "confirmation_close"} onValueChange={v => updateField("entry", "afterChochMode", v)}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -649,6 +755,26 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           )}
         </div>
       </CollapsibleSection>
+
+      <AlertDialog open={confirmLiveNestedPoi} onOpenChange={setConfirmLiveNestedPoi}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Enable nested POI entries for live money?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This changes when Market Fill at Zone may execute on FTMO and other live accounts. The outer zone will only arm the setup; a frozen nested POI must be touched before fresh final authorization. No midpoint fallback is allowed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Current Mode</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => updateField("entry", "nestedPoiMarketMode", "enforce_live")}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Enable Paper + Live
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Per-Pair Gate Overrides (Full) ── */}
       <CollapsibleSection

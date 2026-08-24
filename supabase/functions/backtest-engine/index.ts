@@ -85,12 +85,18 @@ import {
 } from "../_shared/zoneTimeframeEvidence.ts";
 import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
 import {
+  activeBacktestFrozenAnalysisSnapshot,
+  activeBacktestFrozenExecutionCandidate,
+  activeBacktestFrozenNestedPoiEntryPlan,
+  activeBacktestFrozenSignalSource,
   advanceBacktestTradeLifecycle,
+  cancelBacktestTradeLifecycle,
   consumeBacktestTradeLifecycleEntry,
   discoverBacktestTradeLifecycle,
   emptyBacktestTradeLifecycleState,
   isBacktestTradeLifecycleEntryReady,
   prepareBacktestPostConfirmationEntry,
+  restoreBacktestFrozenTarget,
   type BacktestTradeLifecycleState,
 } from "../_shared/backtestTradeLifecycle.ts";
 import { replayImpulseEntryLifecycle } from "../_shared/impulseLifecycleReplay.ts";
@@ -109,6 +115,7 @@ import {
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
 import { RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
+import { resolveNestedPoiMarketActivation } from "../_shared/botConfigBehavior.ts";
 import {
   resolveEffectiveRuntimeConfig,
   resolveEffectiveTradingStyle,
@@ -143,7 +150,7 @@ import {
 import {
   buildStyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
+import { buildNestedPoiEntryPlan, findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type NestedPoiEntryPlan, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
@@ -193,13 +200,14 @@ import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
+import { checkCorrelationExposure } from "../_shared/gateCorrelation.ts";
+import {
+  checkPortfolioHeatAtExecution,
+  type FinalRuntimeGate,
+} from "../_shared/finalRuntimeGates.ts";
 import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
-import {
-  checkPortfolioConflict,
-  getCorrelation,
-  getDirectionalCorrelation,
-} from "../_shared/portfolioCorrelation.ts";
+import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import {
@@ -233,6 +241,8 @@ import {
 import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateFinalTradeAuthorization } from "../_shared/finalTradeAuthorization.ts";
+import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
+import { buildPendingOrderPlan } from "../_shared/pendingOrderPlan.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import {
   detectZoneConfirmation,
@@ -607,6 +617,15 @@ async function loadImportedMT5History(db: any, userId: string, symbols: string[]
   return { candles, datasets };
 }
 
+interface BacktestSafetyGateEvaluation {
+  gates: FinalRuntimeGate[];
+  runtimeGates: {
+    cooldown: FinalRuntimeGate;
+    correlation: FinalRuntimeGate;
+    portfolioHeat: FinalRuntimeGate;
+  };
+}
+
 // ─── Safety Gates (29 gates + 2 pre-gates — mirrors bot-scanner runSafetyGates) ──
 function runBacktestSafetyGates(
   symbol: string,
@@ -631,8 +650,9 @@ function runBacktestSafetyGates(
   ictJudasResult: JudasSwingResult | null = null,
   ictFVGCounts: { invalidated: number; exhausted: number; total: number; valid: number } | null = null,
   ictKZResult: ICTKillZoneResult | null = null,
-): { passed: boolean; reason: string }[] {
-  const gates: { passed: boolean; reason: string }[] = [];
+  rateMap: Record<string, number> = {},
+): BacktestSafetyGateEvaluation {
+  const gates: FinalRuntimeGate[] = [];
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
 
   // Gate 1: Max open positions
@@ -678,30 +698,35 @@ function runBacktestSafetyGates(
   const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
   gates.push(checkDailyLossLimit({ dailyLossPercent: dailyLossPct, maxDailyLoss: config.maxDailyLoss }));
 
-  // Gate 7: Portfolio heat
-  const totalRisk = openPositions.reduce((s, p) => {
-    const pSpec = SPECS[p.symbol] || SPECS["EUR/USD"];
-    const risk = Math.abs(p.entryPrice - p.currentSL) * (pSpec.lotUnits || 100000) * p.size;
-    return s + risk;
-  }, 0);
-  const heatPct = balance > 0 ? (totalRisk / balance) * 100 : 0;
-  gates.push({
-    passed: heatPct < config.portfolioHeat,
-    reason: `Portfolio heat: ${heatPct.toFixed(1)}% (max: ${config.portfolioHeat}%)`,
+  // Gate 7: Portfolio heat — shared final-authorization owner.
+  const portfolioHeatGate = checkPortfolioHeatAtExecution({
+    balance,
+    openPositions: openPositions.map((position) => ({
+      symbol: position.symbol,
+      direction: position.direction,
+      entry_price: position.entryPrice,
+      stop_loss: position.currentSL,
+      size: position.size,
+    })),
+    maximumPercent: config.portfolioHeat,
+    riskPerTradeFallback: config.riskPerTrade,
+    rateMap,
   });
+  gates.push(portfolioHeatGate);
 
-  // Gate 8: Cooldown (use candle time, not wall-clock)
-  if (config.cooldownMinutes > 0) {
-    const lastTradeOnSymbol = recentTrades.filter(t => t.symbol === symbol).slice(-1)[0];
-    const elapsedMinutes = lastTradeOnSymbol
-      ? (currentCandleMs - new Date(lastTradeOnSymbol.exitTime).getTime()) / 60000
-      : null;
-    gates.push(checkCooldown({
-      elapsedMinutes,
-      cooldownMinutes: config.cooldownMinutes,
-      symbol,
-    }));
-  }
+  // Gate 8: Cooldown (use candle time, not wall-clock).
+  const lastTradeOnSymbol = recentTrades.filter((trade) =>
+    trade.symbol === symbol
+  ).slice(-1)[0];
+  const elapsedMinutes = lastTradeOnSymbol
+    ? (currentCandleMs - new Date(lastTradeOnSymbol.exitTime).getTime()) / 60000
+    : null;
+  const cooldownGate = checkCooldown({
+    elapsedMinutes,
+    cooldownMinutes: config.cooldownMinutes,
+    symbol,
+  });
+  if (config.cooldownMinutes > 0) gates.push(cooldownGate);
 
   // Gate 9: Consecutive losses (no auto-reset in backtest — see gateConsecutiveLosses.ts)
   if (config.maxConsecutiveLosses > 0) {
@@ -836,107 +861,16 @@ function runBacktestSafetyGates(
     }
   }
 
-  // Gate 20: Correlation filter — numeric coefficient matrix (mirrors bot-scanner Gate 22)
-  if (config.correlationFilterEnabled) {
-    const maxCorrelatedPos = Number(config.maxCorrelatedPositions) || 1;
-    const threshold = Number(config.maxCorrelation) || 0.8;
-    const newPairCurrencies = parsePairCurrencies(symbol);
-    const smtPair = SMT_PAIRS[symbol];
-
-    type Hit = { detail: string; kind: "doubling" | "hedge"; effCorr: number };
-    const hits: Hit[] = [];
-
-    for (const pos of openPositions) {
-      if (pos.symbol === symbol) continue; // same-symbol handled by Gate 2
-      const posDir = pos.direction;
-
-      // Numeric correlation from static matrix (returns 0 if pair unknown)
-      const rawCorr = getCorrelation(symbol, pos.symbol);
-      const effCorr = getDirectionalCorrelation(
-        { symbol, direction },
-        { symbol: pos.symbol, direction: posDir },
-      );
-
-      let matched = false;
-      if (Math.abs(rawCorr) >= threshold) {
-        if (effCorr >= threshold) {
-          hits.push({
-            kind: "doubling",
-            effCorr,
-            detail: `${pos.symbol} ${posDir} (raw \u03C1=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) \u2014 doubling`,
-          });
-          matched = true;
-        } else if (effCorr <= -threshold) {
-          hits.push({
-            kind: "hedge",
-            effCorr,
-            detail: `${pos.symbol} ${posDir} (raw \u03C1=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) \u2014 hedge conflict`,
-          });
-          matched = true;
-        }
-      }
-
-      // Fallback 1: SMT pair (positive-correlation proxy for pairs the matrix may miss)
-      if (!matched && smtPair && pos.symbol === smtPair) {
-        hits.push({
-          kind: posDir === direction ? "doubling" : "hedge",
-          effCorr: posDir === direction ? 0.85 : -0.85,
-          detail: `${pos.symbol} ${posDir} \u2014 SMT pair ${posDir === direction ? "doubling" : "hedge"}`,
-        });
-        matched = true;
-      }
-
-      // Fallback 2: currency decomposition \u2014 full opposite exposure on same two currencies
-      if (!matched && newPairCurrencies) {
-        const posCurrencies = parsePairCurrencies(pos.symbol);
-        if (posCurrencies) {
-          const [nb, nq] = newPairCurrencies;
-          const [pb, pq] = posCurrencies;
-          const newBuying = direction === "long" ? nb : nq;
-          const newSelling = direction === "long" ? nq : nb;
-          const posBuying = posDir === "long" ? pb : pq;
-          const posSelling = posDir === "long" ? pq : pb;
-          if (newBuying === posSelling && newSelling === posBuying) {
-            hits.push({
-              kind: "hedge",
-              effCorr: -1,
-              detail: `${pos.symbol} ${posDir} \u2014 perfect currency hedge on ${newBuying}/${newSelling}`,
-            });
-          } else if (newBuying === posBuying && newSelling === posSelling) {
-            hits.push({
-              kind: "doubling",
-              effCorr: 1,
-              detail: `${pos.symbol} ${posDir} \u2014 identical currency exposure`,
-            });
-          }
-        }
-      }
-    }
-
-    const hedgeHits = hits.filter(h => h.kind === "hedge");
-    const doublingHits = hits.filter(h => h.kind === "doubling");
-
-    if (hedgeHits.length > 0) {
-      // Hedges bet against yourself on correlated pairs \u2014 always block, regardless of cap.
-      gates.push({
-        passed: false,
-        reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
-      });
-    } else if (doublingHits.length >= maxCorrelatedPos) {
-      // Same-direction correlated exposure exceeds the concentration cap.
-      gates.push({
-        passed: false,
-        reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} \u2014 ${doublingHits.map(h => h.detail).join("; ")}`,
-      });
-    } else if (doublingHits.length > 0) {
-      gates.push({
-        passed: true,
-        reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} \u2014 ${doublingHits.map(h => h.detail).join("; ")}`,
-      });
-    } else {
-      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
-    }
-  }
+  // Gate 20: Correlation filter — shared final-authorization owner.
+  const correlationGate = checkCorrelationExposure({
+    enabled: config.correlationFilterEnabled,
+    symbol,
+    direction,
+    openPositions,
+    maxCorrelation: config.maxCorrelation,
+    maxCorrelatedPositions: config.maxCorrelatedPositions,
+  });
+  if (config.correlationFilterEnabled) gates.push(correlationGate);
 
   // Gate 21: Daily dollar loss limit
   if (config.protectionMaxDailyLossDollar > 0) {
@@ -1043,13 +977,20 @@ function runBacktestSafetyGates(
     gates.push({ passed: false, reason: `ICT KZ BLOCKED: ${ictKZResult.reason}` });
   }
 
-  return applyAuthorityOwnershipToGateResults({
-    gates,
-    requestedMode: config.singleOwnershipMode,
-    runtimeTarget: "paper",
-    canonicalRangeAvailable: analysis._canonicalDealingRangeAvailable === true,
-    normalizeCode: normalizeRejectedGate,
-  });
+  return {
+    gates: applyAuthorityOwnershipToGateResults({
+      gates,
+      requestedMode: config.singleOwnershipMode,
+      runtimeTarget: "paper",
+      canonicalRangeAvailable: analysis._canonicalDealingRangeAvailable === true,
+      normalizeCode: normalizeRejectedGate,
+    }),
+    runtimeGates: {
+      cooldown: cooldownGate,
+      correlation: correlationGate,
+      portfolioHeat: portfolioHeatGate,
+    },
+  };
 }
 
 
@@ -2435,15 +2376,24 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         });
         let lifecycleEntryReady =
           isBacktestTradeLifecycleEntryReady(tradeLifecycleState);
+        const frozenNestedLifecyclePlan =
+          activeBacktestFrozenNestedPoiEntryPlan(tradeLifecycleState);
 
         // ── Skip weekends ──
         const candleDow = new Date(candleMs).getUTCDay();
-        if (candleDow === 0 || candleDow === 6) { diagnostics.skippedWeekend++; continue; }
+        if ((candleDow === 0 || candleDow === 6) &&
+          !frozenNestedLifecyclePlan) {
+          diagnostics.skippedWeekend++;
+          continue;
+        }
 
         // ── Session detection ──
         const session: SessionResult = detectSession(candleMs);
+        const finalSessionPassed = !config.enabledSessions ||
+          config.enabledSessions.length === 0 ||
+          isSessionEnabled(session, config.enabledSessions);
         if (config.enabledSessions && config.enabledSessions.length > 0) {
-          if (!isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
+          if (!frozenNestedLifecyclePlan && !isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
         }
 
         // ── Thesis Conviction: reset on session change (mimics 8h TTL) ──
@@ -2555,7 +2505,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
           return null;
         })();
-        if (preGateFailed) {
+        const frozenNestedLifecycleWaiting =
+          !!frozenNestedLifecyclePlan && !lifecycleEntryReady;
+        if (preGateFailed && !frozenNestedLifecycleWaiting) {
           diagnostics.skippedByPreGate = (diagnostics.skippedByPreGate || 0) + 1;
           continue;
         }
@@ -2641,6 +2593,20 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // Apply per-pair gate overrides (if configured for this symbol)
         applyPairOverrides(pairConfig, symbol);
         pairConfig._currentSymbol = symbol;
+        const nestedPoiMarketActivation = resolveNestedPoiMarketActivation({
+          marketFillAtZone: pairConfig.marketFillAtZone === true,
+          mode: pairConfig.nestedPoiMarketMode,
+          runtimeTarget: "paper",
+        });
+        const activeFrozenNestedPoiEntry = frozenNestedLifecyclePlan;
+        const activeFrozenAnalysis =
+          activeBacktestFrozenAnalysisSnapshot(tradeLifecycleState);
+        const nestedPoiMarketEnforced =
+          activeFrozenNestedPoiEntry !== null ||
+          nestedPoiMarketActivation.enforced;
+        const lifecycleMode = nestedPoiMarketEnforced
+          ? "enforce"
+          : pairConfig.impulseEntryLifecycleMode || "observe";
         // Inject direction override
         if (directionResult) {
           if (directionResult.direction !== null) {
@@ -2711,10 +2677,30 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           if (!diagnostics.firstConfluenceError) {
             diagnostics.firstConfluenceError = String(e?.message || e);
           }
-          continue;
+          analysis = activeFrozenAnalysis
+            ? { ...activeFrozenAnalysis, lastPrice: candle.close }
+            : null;
         }
 
-        if (!analysis || !analysis.direction) {
+        if (!analysis && activeFrozenAnalysis) {
+          analysis = { ...activeFrozenAnalysis, lastPrice: candle.close };
+        }
+        if (!analysis) {
+          diagnostics.skippedNoDirection++;
+          continue;
+        }
+        const frozenLifecycleExecution =
+          activeBacktestFrozenExecutionCandidate(tradeLifecycleState);
+        if (frozenLifecycleExecution) {
+          analysis = {
+            ...analysis,
+            direction: frozenLifecycleExecution.direction,
+            stopLoss: frozenLifecycleExecution.stopLoss,
+            takeProfit: frozenLifecycleExecution.takeProfit,
+            lastPrice: candle.close,
+          };
+        }
+        if (!analysis.direction) {
           diagnostics.skippedNoDirection++;
           continue;
         }
@@ -2724,9 +2710,26 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         let unifiedResult: UnifiedZoneResult | null = null;
         let cascadeResult: CascadeResult | null = null;
         let signalSource: "cascade" | "unified" | "standalone" =
-          "standalone";
+          activeBacktestFrozenSignalSource(tradeLifecycleState) ?? "standalone";
         let selectedCrossTfCandidate: any = null;
+        let nestedPoiEntryPlan: NestedPoiEntryPlan | null =
+          activeFrozenNestedPoiEntry;
+        let pendingNestedLifecycleDiscovery: Omit<
+          Parameters<typeof discoverBacktestTradeLifecycle>[0],
+          "state" | "executionCandidate"
+        > | null = null;
         let canonicalDealingRangeEvaluation: DealingRangeEvaluation | null = null;
+        if (activeFrozenNestedPoiEntry) {
+          canonicalDealingRangeEvaluation = evaluateCanonicalDealingRange({
+            range: tradeLifecycleState.frozenCanonicalLocation?.range ?? null,
+            direction: analysis.direction,
+            price: candle.close,
+            mode: normalizeDealingRangeMode(pairConfig.dealingRangeMode, {
+              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+              onlySellInPremium: pairConfig.onlySellInPremium,
+            }),
+          });
+        }
         const pipSize = (SPECS[symbol] || SPECS["EUR/USD"]).pipSize;
 
         if (analysis.direction && relevantH1.length >= 20) {
@@ -2780,6 +2783,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
               collectEvidence: true,
+              collectNestedPoiEvidence: nestedPoiMarketActivation.enabled,
               structureAuthorityMode: config.canonicalStructureMode === "enforce" &&
                   config.singleOwnershipMode === "enforce"
                 ? "enforce"
@@ -2792,6 +2796,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               pipSize,
               fibMaxRetracement: config.fibMaxRetracement,
               originOBRetest: config.originOBRetest,
+              entryTimeframe: timeframeAuthority.runtimeEntry,
               evidenceContext: {
                 symbol,
                 timeframe: zoneTFLabels.low,
@@ -2816,9 +2821,50 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               zoneTFLabels,
             );
 
+            // ── Cascade Zone Engine (swing_trader only — priority entry path) ──
+            if (resolvedTradingStyle === "swing_trader" && relevantDaily.length >= 30 && relevantH4.length >= 20) {
+              try {
+                cascadeResult = findCascadeZone(
+                  relevantDaily.slice(-60),
+                  relevantH4.slice(-60),
+                  relevantH1.slice(-120),
+                  analysisCandles,
+                  zoneDirection as "bullish" | "bearish",
+                  analysis.lastPrice,
+                  {
+                    htfData: htfConfluenceData,
+                    zoneEngineOpts: zoneOpts,
+                  },
+                );
+              } catch { /* cascade non-fatal */ }
+            }
+            if (!activeFrozenNestedPoiEntry) {
+              if (
+                resolvedTradingStyle === "swing_trader" &&
+                cascadeResult?.state === "triggered" &&
+                cascadeResult.priceAtEntry
+              ) {
+                signalSource = "cascade";
+              } else if (
+                unifiedResult.hasZone &&
+                (unifiedResult.state === "triggered" ||
+                  unifiedResult.state === "confirmed") &&
+                unifiedResult.confirmation?.entryReady === true
+              ) {
+                signalSource = "unified";
+              } else {
+                signalSource = "standalone";
+              }
+            }
             // ── Derive izData from unified result (backward compat with downstream code) ──
             const multiTF = unifiedResult.multiTFResult;
             selectedCrossTfCandidate = multiTF.bestZone?.zone || null;
+            if (
+              !nestedPoiEntryPlan && nestedPoiMarketActivation.enabled &&
+              multiTF.bestZone
+            ) {
+              nestedPoiEntryPlan = buildNestedPoiEntryPlan(multiTF.bestZone.zone);
+            }
             const canonicalEvidence = buildScanEvidenceRow(
               multiTF,
               {
@@ -2848,10 +2894,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               childTimeframe: multiTF.selectedTF || "",
               frozenAt: canonicalEvidence.observed_at,
             });
-            canonicalDealingRangeEvaluation = evaluateCanonicalDealingRange({
+            const discoveredCanonicalDealingRangeEvaluation = evaluateCanonicalDealingRange({
               range: canonicalSelection.range,
               direction: analysis.direction as "long" | "short",
-              price: config.limitOrderEnabled && !config.marketFillAtZone
+              price: nestedPoiMarketEnforced && nestedPoiEntryPlan?.selected
+                ? nestedPoiEntryPlan.selected.entryPrice
+                : config.limitOrderEnabled && !config.marketFillAtZone
                 ? (unifiedResult.entry?.entryPrice ??
                   multiTF.bestZone?.zone.refinedEntry ?? analysis.lastPrice)
                 : analysis.lastPrice,
@@ -2863,8 +2911,28 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 },
               ),
             });
+            canonicalDealingRangeEvaluation ??=
+              discoveredCanonicalDealingRangeEvaluation;
             analysis._canonicalDealingRangeAvailable = canonicalSelection.available;
-            const lifecycleExecutableZone = multiTF.bestZone
+            const nestedTrigger = nestedPoiMarketEnforced
+              ? nestedPoiEntryPlan?.selected ?? null
+              : null;
+            // Enforced nested entry has no midpoint or outer-zone fallback.
+            const lifecycleExecutableZone = nestedPoiMarketEnforced
+              ? nestedTrigger
+                ? {
+                  id: nestedTrigger.id,
+                  type: nestedTrigger.type,
+                  low: nestedTrigger.low,
+                  high: nestedTrigger.high,
+                  timeframe: nestedTrigger.timeframe,
+                  impulseId: canonicalSelection.available
+                    ? canonicalSelection.range.impulseId
+                    : "",
+                  triggerKind: nestedTrigger.geometry,
+                }
+                : null
+              : multiTF.bestZone
               ? {
                 id: multiTF.bestZone.zone.candidateModel?.candidateId ||
                   multiTF.bestZone.zone.localConfluence?.candidateId ||
@@ -2894,31 +2962,86 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 Date.parse(canonicalSelection.range.frozenAt) +
                   Math.max(1, expiryMinutes) * 60_000,
               ).toISOString();
-              tradeLifecycleState = discoverBacktestTradeLifecycle({
-                state: tradeLifecycleState,
+              const nestedCrossTimeframeDecision = nestedPoiMarketEnforced
+                ? evaluateCrossTimeframeEntryAuthority({
+                  authorityResolution: crossTimeframeAuthority,
+                  evaluation: selectedCrossTfCandidate
+                    ? evaluateCrossTimeframeShadowCandidate(
+                      selectedCrossTfCandidate,
+                      crossTimeframeAuthority.policy,
+                    )
+                    : null,
+                  candidateId:
+                    selectedCrossTfCandidate?.candidateModel?.candidateId ||
+                    selectedCrossTfCandidate?.localConfluence?.candidateId ||
+                    null,
+                })
+                : null;
+              const lifecycleDiscoveryInput: Omit<
+                Parameters<typeof discoverBacktestTradeLifecycle>[0],
+                "state" | "executionCandidate"
+              > = {
                 range: canonicalSelection.range,
                 authority: unifiedResult.candidateAuthorityObservation,
                 executableZone: lifecycleExecutableZone,
-                mode: pairConfig.impulseEntryLifecycleMode || "observe",
+                mode: lifecycleMode,
+                nestedPoiEntryPlan: nestedPoiMarketEnforced
+                  ? nestedPoiEntryPlan
+                  : null,
+                nestedPoiMonitoringTimeframe: nestedPoiMarketEnforced
+                  ? timeframeAuthority.runtimeEntry
+                  : null,
+                entryMode: nestedPoiMarketEnforced
+                  ? "nested_poi_market" as const
+                  : "confirmation" as const,
                 now: candle.datetime,
                 expiresAt,
                 confirmationMethod: pairConfig.confirmationMethod || "choch",
-                confirmationTimeframe: timeframeAuthority.roles.confirmation,
+                confirmationTimeframe: nestedPoiMarketEnforced
+                  ? timeframeAuthority.runtimeEntry
+                  : timeframeAuthority.roles.confirmation,
                 refinementTimeframe: timeframeAuthority.roles.refinement,
-              });
-              if (!tradeLifecycleState.lastStep &&
-                tradeLifecycleState.lifecycle?.status === "active") {
-                tradeLifecycleState = advanceBacktestTradeLifecycle({
-                  state: tradeLifecycleState, candle,
+                analysisSnapshot: nestedPoiMarketEnforced ? analysis : null,
+                canonicalLocation: nestedPoiMarketEnforced
+                  ? canonicalDealingRangeEvaluation
+                  : null,
+                crossTimeframeDecision: nestedPoiMarketEnforced
+                  ? nestedCrossTimeframeDecision
+                  : null,
+              };
+              if (nestedPoiMarketEnforced) {
+                if (!activeFrozenNestedPoiEntry) {
+                  pendingNestedLifecycleDiscovery = lifecycleDiscoveryInput;
+                }
+              } else {
+                tradeLifecycleState = discoverBacktestTradeLifecycle({
+                  state: tradeLifecycleState,
+                  ...lifecycleDiscoveryInput,
+                  executionCandidate: {
+                    signalSource,
+                    direction: analysis.direction,
+                    stopLoss: Number(analysis.stopLoss),
+                    takeProfit: Number(analysis.takeProfit),
+                    frozenAt: candle.datetime,
+                  },
+                });
+                if (!tradeLifecycleState.lastStep &&
+                  tradeLifecycleState.lifecycle?.status === "active") {
+                  tradeLifecycleState = advanceBacktestTradeLifecycle({
+                    state: tradeLifecycleState, candle,
+                    completedCandles: analysisCandles,
+                  });
+                }
+                tradeLifecycleState = prepareBacktestPostConfirmationEntry({
+                  state: tradeLifecycleState,
                   completedCandles: analysisCandles,
+                  mode: pairConfig.afterChochMode || "confirmation_close",
+                  expiryMinutes: pairConfig.afterChochExpiryMinutes ?? 30,
                 });
               }
-              tradeLifecycleState = prepareBacktestPostConfirmationEntry({
-                state: tradeLifecycleState,
-                completedCandles: analysisCandles,
-                mode: pairConfig.afterChochMode || "confirmation_close",
-                expiryMinutes: pairConfig.afterChochExpiryMinutes ?? 30,
-              });
+              nestedPoiEntryPlan =
+                activeBacktestFrozenNestedPoiEntryPlan(tradeLifecycleState) ??
+                  nestedPoiEntryPlan;
               lifecycleEntryReady =
                 isBacktestTradeLifecycleEntryReady(tradeLifecycleState);
             }
@@ -3012,6 +3135,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               selectedTF: multiTF.selectedTF,
               impulseQualification: unifiedResult.impulse?.qualification ?? null,
               reason: multiTF.reason,
+              nestedPoiEntry: nestedPoiEntryPlan,
               impulse: multiTF.bestZone?.impulse ? {
                 high: multiTF.bestZone.impulse.high,
                 low: multiTF.bestZone.impulse.low,
@@ -3062,23 +3186,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               dailyHasZone: !!multiTF.dailyResult?.bestZone,
             };
 
-            // ── Cascade Zone Engine (swing_trader only — priority entry path) ──
-            if (resolvedTradingStyle === "swing_trader" && relevantDaily.length >= 30 && relevantH4.length >= 20) {
-              try {
-                cascadeResult = findCascadeZone(
-                  relevantDaily.slice(-60),
-                  relevantH4.slice(-60),
-                  relevantH1.slice(-120),
-                  analysisCandles,
-                  zoneDirection as "bullish" | "bearish",
-                  analysis.lastPrice,
-                  {
-                    htfData: htfConfluenceData,
-                    zoneEngineOpts: zoneOpts,
-                  },
-                );
-              } catch { /* cascade non-fatal */ }
-            }
           } catch { /* zone engine non-fatal */ }
         }
 
@@ -3111,7 +3218,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // Mirrors bot-scanner: cascade has priority for swing, then unified story,
         // then falls back to standalone impulse zone gate.
         const izGateMode = config.impulseZoneGateMode || "hard";
-        const lifecycleMode = pairConfig.impulseEntryLifecycleMode || "observe";
         const lifecycle = tradeLifecycleState.lifecycle;
         const activeLifecycleCandidate = lifecycle?.candidates.find(
           (candidate) => candidate.id === lifecycle.activeCandidateId,
@@ -3133,7 +3239,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           diagnostics.lifecycleTransitionCounts[event.type] =
             (diagnostics.lifecycleTransitionCounts[event.type] || 0) + 1;
         }
-        if (lifecycleMode === "enforce" && !lifecycleEntryReady) {
+        const prospectiveNestedLifecycle =
+          pendingNestedLifecycleDiscovery !== null;
+        if (lifecycleMode === "enforce" && !lifecycleEntryReady &&
+          !prospectiveNestedLifecycle) {
           if (["invalidated", "expired", "exhausted"].includes(lifecycleStage)) {
             diagnostics.skippedGateBlocked++;
             const terminalReason = `Lifecycle ${lifecycleStage}`;
@@ -3146,15 +3255,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
         let impulseZonePenaltyVal = 0;
         let unifiedGatePassed = false;
+        const frozenNestedAuthorizationPlan =
+          lifecycle?.entryMode === "nested_poi_market" && lifecycleEntryReady
+            ? activeBacktestFrozenNestedPoiEntryPlan(tradeLifecycleState)
+            : null;
+        const frozenNestedAuthorizationRoute =
+          !!frozenNestedAuthorizationPlan?.selected;
 
         // Tier 1: Cascade (swing_trader only)
-        if (resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry &&
+        if (!frozenNestedAuthorizationRoute && resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry &&
             (!requiresStructuralConfirmation || lifecycleEntryReady || !!cascadeResult.confirmation || !!backtestConfirmationSignal)) {
           unifiedGatePassed = true;
           signalSource = "cascade";
         }
         // Tier 2: Unified zone (confirmed/triggered + entryReady)
-        else if (unifiedResult?.hasZone &&
+        else if (!frozenNestedAuthorizationRoute && unifiedResult?.hasZone &&
             (unifiedResult.state === "triggered" || unifiedResult.state === "confirmed") &&
             (unifiedResult.confirmation?.entryReady === true ||
               (!requiresStructuralConfirmation || lifecycleEntryReady || !!backtestConfirmationSignal))) {
@@ -3163,7 +3278,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // Apply gate decision
-        if (unifiedGatePassed) {
+        if (frozenNestedAuthorizationRoute || prospectiveNestedLifecycle) {
+          // A persisted route owns prior admission; a prospective route must
+          // complete admission below before its lifecycle is retained.
+        } else if (unifiedGatePassed) {
           // Unified/cascade story is complete — bypass impulse zone hard gate, apply bonus
           impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
         } else if (config.requireUnifiedZone) {
@@ -3514,7 +3632,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           softPenalty: config.zoneLocalSoftPenalty,
           minimumLocalScore: config.zoneLocalMinimumScore,
         });
-        const crossTimeframeDecision =
+        const discoveredCrossTimeframeDecision =
           evaluateCrossTimeframeEntryAuthority({
             authorityResolution: crossTimeframeAuthority,
             evaluation: selectedCrossTfCandidate
@@ -3528,6 +3646,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               selectedCrossTfCandidate?.localConfluence?.candidateId ||
               null,
           });
+        const crossTimeframeDecision = activeFrozenNestedPoiEntry
+          ? tradeLifecycleState.frozenCrossTimeframeDecision ??
+            discoveredCrossTimeframeDecision
+          : discoveredCrossTimeframeDecision;
 
         // ── Effective Score (now matches live scanner formula) ──
         let effectiveScore = analysis.score + fotsiPenalty +
@@ -3535,7 +3657,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           crossTimeframeDecision.scoreAdjustment +
           ictTotalAdj + verdictScoreAdj;
 
-        if (!zoneLocalDecision.allowed) {
+        if (!frozenNestedAuthorizationRoute && !zoneLocalDecision.allowed) {
           diagnostics.skippedGateBlocked++;
           const label = "Zone-Local Confluence";
           diagnostics.gateBlockReasons[label] =
@@ -3572,7 +3694,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
           continue;
         }
-        if (!crossTimeframeDecision.allowed) {
+        if (!frozenNestedAuthorizationRoute && !crossTimeframeDecision.allowed) {
           diagnostics.skippedGateBlocked++;
           const label = "Cross-Timeframe Authority";
           diagnostics.gateBlockReasons[label] =
@@ -3713,7 +3835,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         };
 
         // ── Conflict hard block ──
-        if (backtestLegacyGateBlocks("conflict_count", !conflictHardBlock,
+        if (!frozenNestedAuthorizationRoute && backtestLegacyGateBlocks("conflict_count", !conflictHardBlock,
             "Conflict counter: " + opposingCount + " opposing factors")) {
           diagnostics.skippedGateBlocked++;
           if (researchMode && analysis.stopLoss && analysis.takeProfit) {
@@ -3732,7 +3854,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Threshold check ──
-        if (effectiveScore < conflictAdjustedMinConfluence &&
+        if (!frozenNestedAuthorizationRoute && effectiveScore < conflictAdjustedMinConfluence &&
             !["enforce", "enforce_live"].includes(pairConfig.singleOwnershipMode)) {
           diagnostics.skippedBelowThreshold++;
           continue;
@@ -3745,7 +3867,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Zone Score Gate (pre-gate: reject weak impulse zones) ──
-        if (izData?.bestZone) {
+        if (!frozenNestedAuthorizationRoute && izData?.bestZone) {
           const minZoneScore = config.minZoneScore ?? 4;
           const zoneScoreReason = "Zone Score Gate: zone score " +
             izData.bestZone.totalScore.toFixed(1) + "/9 < minimum " + minZoneScore;
@@ -3768,7 +3890,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           };
           const minTpPips = MIN_TP_PIPS[symbol] ?? 12;
           const actualTpPips = Math.abs(analysis.takeProfit - analysis.lastPrice) / spec.pipSize;
-          if (actualTpPips < minTpPips) {
+          if (!frozenNestedAuthorizationRoute && actualTpPips < minTpPips) {
             diagnostics.skippedGateBlocked++;
             const label = "Min TP Distance";
             diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
@@ -3785,16 +3907,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           total: ictFVGTotalCount,
           valid: ictFVGTotalCount - ictFVGInvalidatedCount - ictFVGExhaustedCount,
         } : null;
-        const gates = runBacktestSafetyGates(
+        const safetyGateEvaluation = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, pairConfig, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
-          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
+          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult,
+          session,
           roleCandles.structure.length >= 20 ? roleCandles.structure : null,
           barDecisionEvidence.labels.structure,
-          directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
+          directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult,
+          ictFVGCounts, ictKZResult, btRateMap,
         );
+        const gates = frozenNestedAuthorizationRoute
+          ? []
+          : safetyGateEvaluation.gates;
 
-        if (canonicalDealingRangeEvaluation) {
+        if (!frozenNestedAuthorizationRoute && canonicalDealingRangeEvaluation) {
           gates.push({
             passed: true,
             reason: "[observe:canonical-dealing-range] " +
@@ -3842,18 +3969,41 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             roleCandles,
             runtimeConfig: pairConfig,
           });
-        const replayZone = unifiedResult?.hasZone
+        const replayNestedPlan = frozenNestedAuthorizationPlan ??
+          pendingNestedLifecycleDiscovery?.nestedPoiEntryPlan ?? null;
+        const replayNestedTrigger = replayNestedPlan?.selected ?? null;
+        const replayZone = replayNestedTrigger
+          ? {
+            source: signalSource,
+            state: frozenNestedAuthorizationRoute
+              ? "frozen_nested_poi_trigger_touched"
+              : "nested_poi_setup_admission",
+            hasZone: true,
+            entryReady: frozenNestedAuthorizationRoute,
+            score: null,
+            timeframe: frozenNestedAuthorizationRoute
+              ? tradeLifecycleState.nestedTriggerTimeframe
+              : pendingNestedLifecycleDiscovery?.nestedPoiMonitoringTimeframe ||
+                null,
+            low: replayNestedTrigger.low,
+            high: replayNestedTrigger.high,
+            entry: replayNestedTrigger.entryPrice,
+            confirmationAuthority: replayNestedPlan,
+          }
+          : unifiedResult?.hasZone
           ? {
             source: signalSource,
             state: unifiedResult.state || null,
             hasZone: true,
-            entryReady: unifiedResult.confirmation?.entryReady === true || !!backtestConfirmationSignal,
+            entryReady: unifiedResult.confirmation?.entryReady === true ||
+              !!backtestConfirmationSignal,
             score: unifiedResult.unifiedScore ?? null,
             timeframe: unifiedResult.selectedTF ?? null,
             low: unifiedResult.zone?.low ?? null,
             high: unifiedResult.zone?.high ?? null,
             entry: unifiedResult.entry?.entryPrice ?? null,
-            confirmationAuthority: backtestConfirmationSignal?.authority || unifiedResult.confirmation || null,
+            confirmationAuthority: backtestConfirmationSignal?.authority ||
+              unifiedResult.confirmation || null,
           }
           : {
             source: signalSource,
@@ -3863,13 +4013,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 : "waiting_for_price")
               : "no_zone",
             hasZone: izData?.hasZone === true,
-            entryReady: izData?.bestZone?.priceAtZone === true && (!requiresStructuralConfirmation || lifecycleEntryReady || !!backtestConfirmationSignal),
+            entryReady: izData?.bestZone?.priceAtZone === true &&
+              (!requiresStructuralConfirmation || lifecycleEntryReady ||
+                !!backtestConfirmationSignal),
             score: izData?.bestZone?.totalScore ?? null,
             timeframe: izData?.selectedTF ?? null,
             low: izData?.bestZone?.low ?? null,
             high: izData?.bestZone?.high ?? null,
             entry: izData?.bestZone?.refinedEntry ?? null,
-            confirmationAuthority: backtestConfirmationSignal?.authority || null,
+            confirmationAuthority: backtestConfirmationSignal?.authority ||
+              null,
           };
         let replaySnapshot = await buildGoldenReplaySnapshot({
           surface: "backtest",
@@ -3934,6 +4087,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           },
           managementContractVersion: "management-policy.v1",
         });
+        if (frozenNestedAuthorizationPlan) {
+          (replaySnapshot as any).frozenNestedPoiEntry = replayNestedPlan;
+          (replaySnapshot as any).frozenSignalSource = signalSource;
+        }
         (replaySnapshot as any).streamlinedTradeDecision =
           buildStreamlinedTradeDecisionObservation({
             evaluatedAt: candle.datetime,
@@ -3976,7 +4133,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             zoneStory: {
               available: replayZone.hasZone,
               valid: replayZone.hasZone ? true : null,
-              entryReady: replayZone.hasZone ? replayZone.entryReady : null,
+              entryReady: prospectiveNestedLifecycle
+                ? true
+                : replayZone.hasZone
+                ? replayZone.entryReady
+                : null,
               source: replayZone.source,
               reasonCodes: replayZone.hasZone ? ["zone_story_available"] : ["zone_story_unavailable"],
             },
@@ -3989,7 +4150,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               reasonCode: canonicalDealingRangeEvaluation?.code || null,
             },
             confirmation: {
-              required: replayZone.hasZone, passed: replayZone.entryReady,
+              required: prospectiveNestedLifecycle ? false : replayZone.hasZone,
+              passed: prospectiveNestedLifecycle ? null : replayZone.entryReady,
               authorityVersion: "confirmation-authority.v1",
               reasonCodes: backtestConfirmationSignal?.authority?.reasonCodes || (replayZone.entryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"]),
             },
@@ -4031,11 +4193,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         (replaySnapshot as any).canonicalStructureEnforcement = canonicalStructureEnforcement;
         (replaySnapshot as any).singleOwnershipEnforcement =
           singleOwnershipEnforcement;
-        if (singleOwnershipEnforcement.effectiveMode === "enforce") {
+        if (!frozenNestedAuthorizationRoute &&
+          singleOwnershipEnforcement.effectiveMode === "enforce") {
           allPassed = singleOwnershipEnforcement.authorized;
           replaySnapshot.decision.execution.eligible = allPassed;
         }
-        if (canonicalStructureEnforcement.effectiveMode === "enforce") {
+        if (!frozenNestedAuthorizationRoute &&
+          canonicalStructureEnforcement.effectiveMode === "enforce") {
           allPassed = allPassed && canonicalStructureEnforcement.authorized;
           replaySnapshot.decision.execution.eligible = allPassed;
           if (!canonicalStructureEnforcement.authorized) {
@@ -4136,7 +4300,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
         // This gives structural protection: SL is below where the impulse started (for longs)
         // or above where it started (for shorts).
-        if (izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone && izData.impulse) {
+        if (!frozenNestedAuthorizationRoute && izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone && izData.impulse) {
           const slBufferPips = config.slBufferPips ?? 2;
           const impulseSL = analysis.direction === "long"
             ? izData.impulse.low - (slBufferPips * spec.pipSize)
@@ -4157,6 +4321,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               : candle.close - newRisk * (config.tpRatio ?? 2);
           }
         }
+
+        analysis = restoreBacktestFrozenTarget(
+          tradeLifecycleState,
+          analysis,
+        );
 
         if (!analysis.takeProfit) {
           diagnostics.skippedNoSLTP++;
@@ -4183,6 +4352,100 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               analysis.takeProfit = tpAdjust.adjustedTP;
             }
           } catch { /* non-fatal */ }
+        }
+
+        // Stops are re-evaluated at authorization, but the setup target is frozen.
+        analysis = restoreBacktestFrozenTarget(
+          tradeLifecycleState,
+          analysis,
+        );
+
+        if (pendingNestedLifecycleDiscovery) {
+          const nestedTrigger =
+            pendingNestedLifecycleDiscovery.nestedPoiEntryPlan?.selected;
+          if (!nestedTrigger) {
+            diagnostics.skippedGateBlocked++;
+            diagnostics.gateBlockReasons["Nested POI Plan"] =
+              (diagnostics.gateBlockReasons["Nested POI Plan"] || 0) + 1;
+            continue;
+          }
+          const gamePlanContext = (pairConfig as any)._gamePlanContext;
+          const dolTargets =
+            (pairConfig as any).dolTPExtensionEnabled !== false &&
+              gamePlanContext?.dol
+              ? (Array.isArray(gamePlanContext.dol)
+                ? gamePlanContext.dol
+                : [gamePlanContext.dol])
+              : undefined;
+          const pendingPlanResult = buildPendingOrderPlan({
+            direction: analysis.direction,
+            zone: {
+              price: nestedTrigger.entryPrice,
+              zoneType: "NESTED-" + nestedTrigger.type.toUpperCase(),
+              zoneLow: nestedTrigger.low,
+              zoneHigh: nestedTrigger.high,
+            },
+            stopLoss: analysis.stopLoss,
+            takeProfitFor: (entryPrice, stopLoss, direction) =>
+              calculateSLTP({
+                direction,
+                lastPrice: entryPrice,
+                pipSize: spec.pipSize,
+                config: pairConfig,
+                swings: analysis.structure?.swingPoints || [],
+                orderBlocks: analysis.orderBlocks || [],
+                liquidityPools: analysis.liquidityPools || [],
+                pdLevels: analysis.pdLevels || null,
+                atrValue: Number((analysis as any).atrValue) || 0,
+                fvgs: analysis.fvgs || [],
+                fibExtensions: analysis.fibLevels?.extensions,
+                dolTargets,
+                resolvedStopLoss: stopLoss,
+              }).takeProfit ?? Number.NaN,
+          });
+          if (!pendingPlanResult.valid) {
+            diagnostics.skippedNoSLTP++;
+            diagnostics.gateBlockReasons["Nested POI Order Plan"] =
+              (diagnostics.gateBlockReasons["Nested POI Order Plan"] || 0) + 1;
+            continue;
+          }
+          const pendingPlan = pendingPlanResult.plan;
+          const frozenCanonicalLocation = evaluateCanonicalDealingRange({
+            range: pendingNestedLifecycleDiscovery.range,
+            direction: pendingPlan.direction,
+            price: pendingPlan.entryPrice,
+            mode: normalizeDealingRangeMode(pairConfig.dealingRangeMode, {
+              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
+              onlySellInPremium: pairConfig.onlySellInPremium,
+            }),
+          });
+          const armedNestedState = discoverBacktestTradeLifecycle({
+            state: tradeLifecycleState,
+            ...pendingNestedLifecycleDiscovery,
+            executionCandidate: {
+              signalSource,
+              direction: pendingPlan.direction,
+              stopLoss: pendingPlan.stopLoss,
+              takeProfit: pendingPlan.takeProfit,
+              frozenAt: candle.datetime,
+            },
+            analysisSnapshot: {
+              ...analysis,
+              direction: pendingPlan.direction,
+              stopLoss: pendingPlan.stopLoss,
+              takeProfit: pendingPlan.takeProfit,
+            },
+            canonicalLocation: frozenCanonicalLocation,
+          });
+          if (!activeBacktestFrozenNestedPoiEntryPlan(armedNestedState)) {
+            diagnostics.skippedGateBlocked++;
+            diagnostics.gateBlockReasons["Nested POI Lifecycle"] =
+              (diagnostics.gateBlockReasons["Nested POI Lifecycle"] || 0) + 1;
+            continue;
+          }
+          tradeLifecycleState = armedNestedState;
+          diagnostics.skippedLifecycleWaiting++;
+          continue;
         }
 
         // ── Final fill authorization: same shared authority as live ──
@@ -4236,14 +4499,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           entryConfirmation: {
             required: true,
             passed: entryConfirmationPassed,
-            method: pairConfig.confirmationMethod || "choch",
+            method: frozenNestedAuthorizationRoute
+              ? "nested_poi_market"
+              : pairConfig.confirmationMethod || "choch",
             reason: entryConfirmationPassed
-              ? "Historical candle passed the frozen confirmation contract"
+              ? frozenNestedAuthorizationRoute
+                ? "Historical candle touched the frozen nested POI trigger"
+                : "Historical candle passed the frozen confirmation contract"
+              : frozenNestedAuthorizationRoute
+              ? "Frozen nested POI trigger is not ready"
               : "Frozen confirmation contract is not ready",
             evidence: {
               lifecycleRevision: tradeLifecycleState.lifecycle?.revision || null,
               lifecycleCandidateId:
                 tradeLifecycleState.lifecycle?.activeCandidateId || null,
+              nestedPoiEntry: frozenNestedAuthorizationRoute
+                ? replayNestedPlan
+                : null,
             },
             evaluatedAt: candle.datetime,
           },
@@ -4266,11 +4538,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               reason: "Broker connection sizing is live operational safety only",
             },
             freshness: { passed: true, reason: "Current replay candle is the fill authority" },
-            session: { passed: true, reason: `${session.name} session passed historical gates` },
+            session: {
+              passed: finalSessionPassed,
+              reason: finalSessionPassed
+                ? `${session.name} session passed historical gates`
+                : `${session.name} session is disabled`,
+            },
             news: { passed: true, reason: "Historical news gate passed" },
-            cooldown: { passed: true, reason: "Historical cooldown gate passed" },
-            correlation: { passed: true, reason: "Historical correlation gate passed" },
-            portfolioHeat: { passed: true, reason: "Historical portfolio heat gate passed" },
+            cooldown: safetyGateEvaluation.runtimeGates.cooldown,
+            correlation: safetyGateEvaluation.runtimeGates.correlation,
+            portfolioHeat: safetyGateEvaluation.runtimeGates.portfolioHeat,
           },
           crossTimeframeAuthority: crossTimeframeDecision,
           requireCrossTimeframeAuthority: true,
@@ -4305,10 +4582,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           },
           confirmation: {
             passed: entryConfirmationPassed,
-            authorityVersion: "confirmation-authority.v1",
+            authorityVersion: frozenNestedAuthorizationRoute
+              ? replayNestedPlan?.contractVersion || "nested-poi-entry.v1"
+              : "confirmation-authority.v1",
             reasonCodes: entryConfirmationPassed
-              ? ["frozen_confirmation_ready"]
-              : ["frozen_confirmation_waiting"],
+              ? [frozenNestedAuthorizationRoute
+                ? "frozen_nested_poi_trigger_touched"
+                : "frozen_confirmation_ready"]
+              : [frozenNestedAuthorizationRoute
+                ? "frozen_nested_poi_trigger_waiting"
+                : "frozen_confirmation_waiting"],
           },
           thesis: {
             valid: backtestThesis?.valid ?? null,
@@ -4319,6 +4602,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           requestedMode: pairConfig.singleOwnershipMode,
           runtimeTarget: "paper",
         });
+        const finalAuthorizationRetryable =
+          pendingFinalAuthorizationRetryable({
+            raw: finalAuthorization,
+            ownership: ownershipFill.decision,
+          });
         const scannerState = projectCanonicalScannerState({
           evaluatedAt: candle.datetime,
           identity: ownershipFill.decision.identity,
@@ -4364,7 +4652,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           confirmation: {
             required: true,
             passed: entryConfirmationPassed,
-            source: "frozen_confirmation_contract",
+            source: frozenNestedAuthorizationRoute
+              ? "frozen_nested_poi_trigger"
+              : "frozen_confirmation_contract",
           },
           thesis: ownershipFill.decision.authorities.thesis,
           safety: {
@@ -4386,6 +4676,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         (replaySnapshot as any).canonicalScannerState = scannerState;
         replaySnapshot.decision.execution.eligible = ownershipFill.authorized;
         if (!ownershipFill.authorized) {
+          if (frozenNestedAuthorizationRoute &&
+            !finalAuthorizationRetryable) {
+            tradeLifecycleState = cancelBacktestTradeLifecycle({
+              state: tradeLifecycleState,
+              at: candle.datetime,
+              reason: `[final-auth:${finalAuthorization.code}] ${
+                finalAuthorization.reason || ownershipFill.reason
+              }`,
+            });
+          }
           replaySnapshot = await finalizeGoldenReplaySnapshot(replaySnapshot, {
             execution: replaySnapshot.decision.execution,
             lifecycle: {
