@@ -787,6 +787,14 @@
   list-style: none;
 }
 
+.apex-pipeline-frozen {
+  margin: 3px 0 0;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
 .apex-pipeline li {
   position: relative;
   display: grid;

@@ -57,7 +57,11 @@ import {
 import { formatPrice } from "@/lib/formatTime";
 import { getCurrentSession } from "@/lib/marketData";
 import { formatPipDisplay, getPipSize } from "@/lib/pipDisplay";
-import { pendingOrderDisplayStage } from "@/lib/pendingOrderDisplay";
+import {
+  pendingOrderConfirmationPresentation,
+  pendingOrderDisplayStage,
+  pendingOrderPostConfirmationPresentation,
+} from "@/lib/pendingOrderDisplay";
 import "@/styles/operations-dashboard.css";
 
 type ScanFilter = "all" | "signals" | "qualified";
@@ -323,8 +327,8 @@ function buildPipeline(order: PendingOrder | null): Array<{ label: string; detai
   if (!order) {
     return [
       { label: "Zone entered", detail: "Waiting for an active setup", state: "pending" },
-      { label: "Displaced MSS / CHoCH", detail: "Not started", state: "pending" },
-      { label: "Micro OB retracement", detail: "Not started", state: "pending" },
+      { label: "Confirmation", detail: "Frozen when the next setup is created", state: "pending" },
+      { label: "Post-confirmation entry", detail: "Frozen when the next setup is created", state: "pending" },
       { label: "Final authorization", detail: "Not started", state: "pending" },
     ];
   }
@@ -340,14 +344,12 @@ function buildPipeline(order: PendingOrder | null): Array<{ label: string; detai
       { label: "Position ownership", detail: "Do not retry until broker state is confirmed", state: "pending" },
     ];
   }
-  const confirmation = order.impulse_entry_lifecycle?.confirmation;
-  const retracement = order.post_confirmation_entry;
-  const confirmationDone = Boolean(confirmation?.confirmedAt || retracement);
+  const confirmationStep = pendingOrderConfirmationPresentation(order);
+  const confirmationDone = confirmationStep.complete;
   const zoneEntered = stage !== "watching";
   const finalAuthorized = order.final_authorization?.authorized === true;
-  const afterChochMode = order.confirmation_config?.afterChochMode || "confirmation_close";
-  const requiresRetracement = afterChochMode === "wait_retracement";
-  const observesRetracement = afterChochMode === "observe_retracement";
+  const postConfirmation =
+    pendingOrderPostConfirmationPresentation(order, confirmationDone);
 
   const steps: Array<{ label: string; detail: string; state: PipelineState }> = [
     {
@@ -356,31 +358,15 @@ function buildPipeline(order: PendingOrder | null): Array<{ label: string; detai
       state: zoneEntered ? "complete" : "active",
     },
     {
-      label: "Displaced MSS / CHoCH",
-      detail: confirmationDone
-        ? "Closed-bar confirmation recorded"
-        : order.confirmation_build_diagnostic?.reasonCode?.replace(/_/g, " ") || "Building protected structure",
+      label: confirmationStep.label,
+      detail: confirmationStep.detail,
       state: confirmationDone ? "complete" : zoneEntered ? "active" : "pending",
     },
   ];
-  if (requiresRetracement || observesRetracement || retracement) {
-    steps.push({
-      label: requiresRetracement ? "Micro OB retracement" : "Retracement observation",
-      detail: retracement
-        ? retracement.state.replace(/_/g, " ")
-        : observesRetracement
-        ? "Observation only; does not block entry"
-        : "Begins after confirmation",
-      state: retracement?.state === "ready"
-        ? "complete"
-        : retracement?.state === "awaiting_retracement"
-        ? "active"
-        : observesRetracement && confirmationDone
-        ? "complete"
-        : "pending",
-    });
+  if (postConfirmation.step) {
+    steps.push(postConfirmation.step);
   }
-  const entryReady = confirmationDone && (!requiresRetracement || retracement?.state === "ready");
+  const entryReady = postConfirmation.entryReady;
   steps.push({
       label: "Final authorization",
       detail: finalAuthorized ? "Risk and execution checks passed" : "Awaiting fresh price, risk, and broker checks",
@@ -399,11 +385,20 @@ function commentary(order: PendingOrder | null): string {
     return `${order.symbol} requires broker reconciliation. The execution outcome is uncertain, so verify the broker position before retrying or changing this setup.`;
   }
   if (stage === "confirmation") {
-    const diagnostic = order.confirmation_build_diagnostic?.reasonCode?.replace(/_/g, " ");
-    return `${order.symbol} has entered its frozen ${zoneType(order)}. Price is now being evaluated for a later ${direction} displaced MSS or CHoCH close${diagnostic ? `; the current lock state is ${diagnostic}` : ""}. No order is sent until the remaining authorization checks pass.`;
+    const confirmation = pendingOrderConfirmationPresentation(order);
+    const contractDescription = confirmation.frozenAtSetup
+      ? `the frozen ${confirmation.label} contract`
+      : confirmation.methodSource === "frozen"
+      ? `the persisted ${confirmation.label} contract`
+      : confirmation.methodSource === "legacy_persisted"
+      ? `the legacy persisted ${confirmation.label} contract`
+      : confirmation.methodSource === "runtime_observation"
+      ? `the currently observed ${confirmation.label} contract`
+      : "the current confirmation settings for this legacy setup";
+    return `${order.symbol} has entered its frozen ${zoneType(order)}. Price is now being evaluated against ${contractDescription}. Current state: ${confirmation.detail}. No order is sent until the remaining authorization checks pass.`;
   }
   if (stage === "retracement") {
-    return `${order.symbol} has confirmed the ${direction} structure shift. The lifecycle is now waiting for price to return to the frozen micro order block before final authorization.`;
+    return `${order.symbol} completed its ${direction} confirmation contract and is now waiting for price to return to its frozen retracement zone before final authorization.`;
   }
   return `${order.symbol} remains pre-armed ${formatDistance(order)} from its frozen ${zoneType(order)}. Lightweight monitoring continues until price approaches the zone; deeper confirmation analysis starts before touch.`;
 }
@@ -623,6 +618,20 @@ function OperationsDashboard() {
   const watchingOrders = activeOrders.filter((order) => pendingOrderDisplayStage(order) === "watching");
   const priceHistory = focusedOrder ? scanPriceHistory(scans, focusedOrder.symbol) : [];
   const pipeline = buildPipeline(focusedOrder);
+  const focusedConfirmation = focusedOrder
+    ? pendingOrderConfirmationPresentation(focusedOrder)
+    : null;
+  const focusedConfirmationContext = focusedConfirmation?.frozenAtSetup
+    ? "Confirmation and entry modes frozen at setup"
+    : focusedConfirmation?.methodSource === "frozen"
+    ? "Confirmation method frozen; entry mode unavailable"
+    : focusedConfirmation?.methodSource === "legacy_persisted"
+    ? "Legacy setup · persisted confirmation method"
+    : focusedConfirmation?.methodSource === "runtime_observation"
+    ? "Legacy setup · current observed confirmation settings"
+    : focusedConfirmation
+    ? "Legacy setup · current confirmation settings"
+    : null;
   const focusedGeometry = focusedOrder ? zoneGeometry(focusedOrder) : null;
   const focusedStopPolicy = focusedOrder ? stopPolicyPresentation(focusedOrder) : null;
 
@@ -1205,7 +1214,14 @@ function OperationsDashboard() {
 
                     <section className="apex-pipeline" aria-labelledby="pipeline-title">
                       <div className="apex-subsection-head">
-                        <h3 id="pipeline-title">Decision Pipeline</h3>
+                        <div>
+                          <h3 id="pipeline-title">Decision Pipeline</h3>
+                          {focusedOrder && (
+                            <p className="apex-pipeline-frozen">
+                              {focusedConfirmationContext}
+                            </p>
+                          )}
+                        </div>
                         <span>{focusedOrder?.candidate_id ? `#${focusedOrder.candidate_id.slice(0, 8)}` : "No candidate"}</span>
                       </div>
                       <ol>

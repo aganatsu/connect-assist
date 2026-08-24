@@ -151,6 +151,9 @@ describe("OperationsDashboard", () => {
         setup_type: "ob",
         setup_confidence: null,
         from_watchlist: true,
+        candidate_id: "ea2b21ab-02f9-4015-9560-f63d98617983",
+        confirmation_method: "indicators",
+        confirmation_config: { afterChochMode: "wait_retracement" },
         staged_cycles: 2,
         staged_initial_score: 33.7,
         exit_flags: {},
@@ -200,6 +203,10 @@ describe("OperationsDashboard", () => {
     expect(lifecycleTab).toHaveFocus();
     expect(lifecycleTab).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "What’s happening now" })).toBeInTheDocument();
+    expect(screen.getByText("Confirmation and entry modes frozen at setup")).toBeInTheDocument();
+    expect(screen.getByText("Indicator consensus")).toBeInTheDocument();
+    expect(screen.getByText("Post-confirmation retracement")).toBeInTheDocument();
+    expect(screen.getByText("#ea2b21ab")).toBeInTheDocument();
     expect(screen.getAllByText(/frozen OB/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: /AUD\/JPY 33\.7% Watchlist/i }));
     expect(screen.getByRole("tab", { name: "Detail Breakdown" })).toHaveAttribute("aria-selected", "true");

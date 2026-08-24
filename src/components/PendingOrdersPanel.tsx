@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
 import { generatePendingOrderNarrative } from "@/lib/narrative";
 import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
-import { pendingOrderDisplayStage } from "@/lib/pendingOrderDisplay";
+import {
+  pendingOrderConfirmationPresentation,
+  pendingOrderDisplayStage,
+} from "@/lib/pendingOrderDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle, Eye, Crosshair } from "lucide-react";
@@ -200,21 +203,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       signalReason.decisionContext ||
       order.final_authorization?.decisionContext ||
       null;
-    const confirmationMethod = order.confirmation_method ||
-      signalReason.watchlistLifecycle?.confirmationMethod ||
-      signalReason.confirmationMethod ||
-      "choch";
-    const structureLifecycleEnforced =
-      order.impulse_entry_lifecycle?.mode === "enforce";
-    const confirmationLabel = structureLifecycleEnforced
-      ? confirmationMethod === "indicators" || confirmationMethod === "choch_and_indicators"
-        ? "displaced MSS/CHoCH close + indicator consensus"
-        : "displaced MSS/CHoCH close"
-      : confirmationMethod === "indicators"
-      ? "indicator consensus"
-      : confirmationMethod === "choch_and_indicators"
-      ? "MSS/CHoCH, displacement, or reversal candle + indicators"
-      : "MSS/CHoCH, displacement, or reversal candle";
+    const confirmation =
+      pendingOrderConfirmationPresentation(order);
+    const confirmationLabel = confirmation.methodKnown
+      ? confirmation.label
+      : "current confirmation settings";
+    const confirmationRequirement =
+      confirmation.methodSource === "runtime_observation"
+        ? `currently observed ${confirmationLabel}`
+        : confirmation.methodSource === "fallback"
+        ? "current confirmation settings"
+        : `saved ${confirmationLabel}`;
     const retracementPlan = order.post_confirmation_entry;
     const waitingForRetracement =
       retracementPlan?.state === "awaiting_retracement";
@@ -351,9 +350,9 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             : retracementReady
             ? "The frozen retracement was reached. Final authorization must pass before entry."
             : isHunting
-            ? structureLifecycleEnforced
-              ? `Price has entered the ${order.entry_zone_type} zone. The enforced structure lifecycle requires a later displaced close through its locked MSS/CHoCH break${confirmationMethod === "indicators" || confirmationMethod === "choch_and_indicators" ? " and indicator consensus" : ""} before entry.`
-              : `Price has entered the ${order.entry_zone_type} zone. The saved ${confirmationLabel} rule must pass before entry.`
+            ? confirmation.structureLifecycleEnforced
+              ? `Price has entered the ${order.entry_zone_type} zone. The enforced structure lifecycle requires a later displaced close through its locked MSS/CHoCH break${confirmation.method === "indicators" || confirmation.method === "choch_and_indicators" ? " and indicator consensus" : ""} before entry.`
+              : `Price has entered the ${order.entry_zone_type} zone. The ${confirmationRequirement} rule must pass before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>

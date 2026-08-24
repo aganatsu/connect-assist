@@ -41,9 +41,8 @@ describe("Zone Setup confirmation contract", () => {
   });
 
   it("names the enforced structure break instead of promising a generic CHoCH/BOS trigger", () => {
-    expect(source).toContain("displaced MSS/CHoCH close");
+    expect(source).toContain("pendingOrderConfirmationPresentation");
     expect(source).toContain("requires a later displaced close through its locked MSS/CHoCH break");
-    expect(source).toContain("MSS/CHoCH, displacement, or reversal candle");
     expect(source).not.toContain(' : "CHoCH/BOS"');
   });
 
