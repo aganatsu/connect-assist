@@ -76,36 +76,52 @@ export async function metaFetch(
     : cached
     ? [cached, ...META_REGIONS.filter((r) => r !== cached)]
     : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
+  let lastBody = ""; let lastStatus = 504; let sawHttpResponse = false;
+  const isDnsFailure = (m: string) => /dns error|failed to lookup address/i.test(m);
   for (const region of order) {
     const url = pathBuilder(metaBaseUrl(region, accountId));
     const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    try {
-      const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-      const body = await res.text();
-      if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-      lastBody = body; lastStatus = res.status;
-      if (!/region|not connected to broker/i.test(body)) {
-        return { res: new Response(body, { status: res.status }), body };
+    // A 429 from the correct region is rate limiting, not a region mismatch:
+    // back off once on the same region before moving on.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      try {
+        const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+        const body = await res.text();
+        if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+        lastBody = body; lastStatus = res.status; sawHttpResponse = true;
+        if (!/region|not connected to broker/i.test(body)) {
+          return { res: new Response(body, { status: res.status }), body };
+        }
+        if (res.status === 429 && attempt === 0 && failoverAllowed) {
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+        console.warn(
+          !failoverAllowed
+            ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
+            : `MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`,
+        );
+      } catch (err) {
+        const message = (err as Error).message;
+        // An unreachable region host says nothing about the account; keep the
+        // more meaningful HTTP status from a region that actually answered.
+        if (!sawHttpResponse || !isDnsFailure(message)) {
+          lastBody = `network error: ${message}`;
+          lastStatus = 504;
+        }
+        console.warn(
+          !failoverAllowed
+            ? `MetaAPI ${region} network error; unsafe retry suppressed: ${message}`
+            : `MetaAPI ${region} network error, trying next: ${message}`,
+        );
+      } finally {
+        clearTimeout(timer);
       }
-      console.warn(
-        !failoverAllowed
-          ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
-          : `MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`,
-      );
-    } catch (err) {
-      lastBody = `network error: ${(err as Error).message}`;
-      lastStatus = 504;
-      console.warn(
-        !failoverAllowed
-          ? `MetaAPI ${region} network error; unsafe retry suppressed: ${(err as Error).message}`
-          : `MetaAPI ${region} network error, trying next: ${(err as Error).message}`,
-      );
-    } finally {
-      clearTimeout(timer);
+      break;
     }
   }
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+
 }
