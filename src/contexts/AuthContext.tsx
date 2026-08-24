@@ -44,10 +44,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session && jwtHasSubject(session.access_token)) {
-        // Validate session against the server. If JWT is bad (e.g. missing sub),
-        // sign out so the user can re-authenticate instead of being stuck.
-        const { error } = await supabase.auth.getUser();
-        if (error) {
+        // Validate session against the server. Only a definitive rejection may
+        // sign the user out — a network blip must not destroy a fresh login.
+        const { error } = await supabase.auth
+          .getUser()
+          .catch(() => ({ error: new Error("network error") } as any));
+        const transient = !!error &&
+          /network|fetch|timeout|failed to fetch/i.test(error.message ?? "");
+        if (error && !transient) {
           console.warn("[Auth] Invalid session detected, signing out:", error.message);
           await supabase.auth.signOut();
           try {
@@ -68,6 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(session);
       setLoading(false);
     });
+
 
     return () => subscription.unsubscribe();
   }, []);
