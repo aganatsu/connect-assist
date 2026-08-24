@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Existing edge-function responses are untyped at this UI boundary. */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -34,6 +34,7 @@ import {
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/AppShell";
+import { ScanDetailBreakdown } from "@/components/ScanDetailBreakdown";
 import { WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -60,6 +61,7 @@ import { pendingOrderDisplayStage } from "@/lib/pendingOrderDisplay";
 import "@/styles/operations-dashboard.css";
 
 type ScanFilter = "all" | "signals" | "qualified";
+type ContextPanel = "detail" | "lifecycle";
 type PipelineState = "complete" | "active" | "pending";
 
 const QUALIFIED_STATUSES = new Set([
@@ -413,11 +415,28 @@ function OperationsDashboard() {
   const [scanIndex, setScanIndex] = useState(0);
   const [scanFilter, setScanFilter] = useState<ScanFilter>("all");
   const [selectedPair, setSelectedPair] = useState<string | null>(null);
+  const [contextPanel, setContextPanel] = useState<ContextPanel>("detail");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [positionsOpen, setPositionsOpen] = useState(false);
   const [scanPolling, setScanPolling] = useState(false);
   const scanPollRef = useRef<number | null>(null);
   const scanStartedAtRef = useRef<string | null>(null);
+
+  const handleContextTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    let nextPanel: ContextPanel | null = null;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      nextPanel = contextPanel === "detail" ? "lifecycle" : "detail";
+    } else if (event.key === "Home") {
+      nextPanel = "detail";
+    } else if (event.key === "End") {
+      nextPanel = "lifecycle";
+    }
+    if (!nextPanel) return;
+
+    event.preventDefault();
+    setContextPanel(nextPanel);
+    document.getElementById(nextPanel === "detail" ? "detail-breakdown-tab" : "lifecycle-tab")?.focus();
+  };
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
@@ -945,7 +964,10 @@ function OperationsDashboard() {
                       <button
                         key={`${symbol}-${detail.status}`}
                         className={`apex-scan-row ${selectedPair === symbol ? "selected" : ""}`}
-                        onClick={() => setSelectedPair(symbol)}
+                        onClick={() => {
+                          setSelectedPair(symbol);
+                          setContextPanel("detail");
+                        }}
                       >
                         <div className="apex-row-primary">
                           <span className="apex-direction-icon">
@@ -1120,50 +1142,101 @@ function OperationsDashboard() {
                 </>}
               </section>
 
-              <aside className="apex-column apex-now-column" aria-labelledby="now-title">
-                <section className="apex-commentary">
-                  <p className="apex-kicker">Desk brief</p>
-                  <h2 id="now-title">What’s happening now</h2>
-                  <p>{commentary(focusedOrder)}</p>
-                  {focusedOrder && (
-                    <button className="apex-text-action" onClick={() => navigate(`/chart?symbol=${encodeURIComponent(focusedOrder.symbol)}`)}>
-                      Open {focusedOrder.symbol} chart <ChevronRight />
-                    </button>
-                  )}
-                </section>
+              <aside className="apex-column apex-now-column" aria-label="Scan and lifecycle context">
+                <div className="apex-context-tabs" role="tablist" aria-label="Context panel">
+                  <button
+                    id="detail-breakdown-tab"
+                    role="tab"
+                    aria-controls="detail-breakdown-panel"
+                    aria-selected={contextPanel === "detail"}
+                    tabIndex={contextPanel === "detail" ? 0 : -1}
+                    className={contextPanel === "detail" ? "active" : ""}
+                    onKeyDown={handleContextTabKeyDown}
+                    onClick={() => setContextPanel("detail")}
+                  >
+                    Detail Breakdown
+                  </button>
+                  <button
+                    id="lifecycle-tab"
+                    role="tab"
+                    aria-controls="lifecycle-panel"
+                    aria-selected={contextPanel === "lifecycle"}
+                    tabIndex={contextPanel === "lifecycle" ? 0 : -1}
+                    className={contextPanel === "lifecycle" ? "active" : ""}
+                    onKeyDown={handleContextTabKeyDown}
+                    onClick={() => setContextPanel("lifecycle")}
+                  >
+                    Lifecycle
+                  </button>
+                </div>
 
-                <section className="apex-pipeline" aria-labelledby="pipeline-title">
-                  <div className="apex-subsection-head">
-                    <h3 id="pipeline-title">Decision Pipeline</h3>
-                    <span>{focusedOrder?.candidate_id ? `#${focusedOrder.candidate_id.slice(0, 8)}` : "No candidate"}</span>
-                  </div>
-                  <ol>
-                    {pipeline.map((step, index) => (
-                      <li key={step.label} className={step.state}>
-                        <span className="pipeline-marker">{step.state === "complete" ? "✓" : index + 1}</span>
-                        <div><strong>{step.label}</strong><span>{step.detail}</span></div>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-
-                <section className="apex-events" aria-labelledby="events-title">
-                  <div className="apex-subsection-head">
-                    <h3 id="events-title">Recent Events</h3>
-                    <span>Live ledger</span>
-                  </div>
-                  <div>
-                    {recentEvents.length === 0 ? (
-                      <p className="apex-table-empty">No lifecycle events yet.</p>
-                    ) : recentEvents.map((event) => (
-                      <div className="apex-event" key={event.id}>
-                        <time>{formatClock(event.time, false)}</time>
-                        <span className={`event-dot ${event.tone}`} />
-                        <p><strong>{event.label}</strong><span>{event.detail}</span></p>
+                {contextPanel === "detail" ? (
+                  <section
+                    id="detail-breakdown-panel"
+                    className="apex-detail-breakdown"
+                    role="tabpanel"
+                    aria-labelledby="detail-breakdown-tab"
+                  >
+                    <div className="apex-subsection-head">
+                      <div>
+                        <p className="apex-kicker">Selected scan</p>
+                        <h2>Detail Breakdown</h2>
                       </div>
-                    ))}
+                      <span>{selectedScanDetail ? pairName(selectedScanDetail) : "No row"}</span>
+                    </div>
+                    {selectedScanDetail ? (
+                      <ScanDetailBreakdown signal={selectedScanDetail} observedAt={currentScan?.scanned_at} />
+                    ) : (
+                      <p className="apex-detail-empty">Select a scan row to inspect its setup model.</p>
+                    )}
+                  </section>
+                ) : (
+                  <div id="lifecycle-panel" className="apex-lifecycle-context" role="tabpanel" aria-labelledby="lifecycle-tab">
+                    <section className="apex-commentary">
+                      <p className="apex-kicker">Desk brief</p>
+                      <h2 id="now-title">What’s happening now</h2>
+                      <p>{commentary(focusedOrder)}</p>
+                      {focusedOrder && (
+                        <button className="apex-text-action" onClick={() => navigate(`/chart?symbol=${encodeURIComponent(focusedOrder.symbol)}`)}>
+                          Open {focusedOrder.symbol} chart <ChevronRight />
+                        </button>
+                      )}
+                    </section>
+
+                    <section className="apex-pipeline" aria-labelledby="pipeline-title">
+                      <div className="apex-subsection-head">
+                        <h3 id="pipeline-title">Decision Pipeline</h3>
+                        <span>{focusedOrder?.candidate_id ? `#${focusedOrder.candidate_id.slice(0, 8)}` : "No candidate"}</span>
+                      </div>
+                      <ol>
+                        {pipeline.map((step, index) => (
+                          <li key={step.label} className={step.state}>
+                            <span className="pipeline-marker">{step.state === "complete" ? "✓" : index + 1}</span>
+                            <div><strong>{step.label}</strong><span>{step.detail}</span></div>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+
+                    <section className="apex-events" aria-labelledby="events-title">
+                      <div className="apex-subsection-head">
+                        <h3 id="events-title">Recent Events</h3>
+                        <span>Live ledger</span>
+                      </div>
+                      <div>
+                        {recentEvents.length === 0 ? (
+                          <p className="apex-table-empty">No lifecycle events yet.</p>
+                        ) : recentEvents.map((event) => (
+                          <div className="apex-event" key={event.id}>
+                            <time>{formatClock(event.time, false)}</time>
+                            <span className={`event-dot ${event.tone}`} />
+                            <p><strong>{event.label}</strong><span>{event.detail}</span></p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
                   </div>
-                </section>
+                )}
               </aside>
             </div>
         </main>
