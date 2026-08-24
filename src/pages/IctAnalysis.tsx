@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Clock, Target, BarChart3, Layers, Activity, TrendingUp, TrendingDown, Minus, Compass, Shield, Zap, ArrowUpDown } from "lucide-react";
 import { scannerApi, marketApi } from "@/lib/api";
@@ -125,7 +126,19 @@ export default function IctAnalysis() {
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <WorkspacePage layout="canvas">
+        <WorkspaceHeader
+          icon={Compass}
+          eyebrow="Analysis workspace"
+          title={`ICT Analysis · ${selectedSymbol}`}
+          actions={d?.direction ? (
+            <span className={`workspace-page__action uppercase ${d.direction === "long" ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>
+              {d.direction === "long" ? "Buy" : "Sell"}
+            </span>
+          ) : undefined}
+        />
+        <WorkspaceBody padded={false}>
+      <div className="flex h-full min-h-0 flex-col md:flex-row">
         {/* Instrument sidebar — shows score + direction from scanner */}
         <div className="w-full md:w-40 shrink-0 md:border-r border-b md:border-b-0 border-border md:pr-2 pb-2 md:pb-0 flex md:flex-col gap-0.5 overflow-x-auto md:overflow-y-auto">
           <div className="flex items-center justify-between px-2 mb-1">
@@ -155,39 +168,26 @@ export default function IctAnalysis() {
 
         {/* Analysis content */}
         <div className="flex-1 overflow-y-auto md:pl-3 pt-2 md:pt-0 space-y-3">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-bold flex items-center gap-2">
-                ICT Analysis — {selectedSymbol}
-                {d?.direction && (
-                  <span className={`text-sm font-bold uppercase px-2 py-0.5 border ${
-                    d.direction === "long" ? "border-success/30 bg-success/10 text-success" : "border-destructive/30 bg-destructive/10 text-destructive"
-                  }`}>{d.direction === "long" ? "BUY" : "SELL"}</span>
-                )}
-              </h1>
-              {d && (
-                <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                  <span className="text-xs text-muted-foreground">
-                    Score: <span className={`font-mono font-bold ${d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>
-                      {d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score}/10`}
-                    </span>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    Trend: <span className={d.trend === "bullish" ? "text-success" : d.trend === "bearish" ? "text-destructive" : ""}>{d.trend}</span>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    Zone: <span className="text-primary">{d.zone} ({d.zonePercent?.toFixed(0)}%)</span>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    Session: <span className="text-foreground">{d.session}</span>
-                    {d.killZone && <span className="ml-1 text-primary">● KZ</span>}
-                  </span>
-                </div>
-              )}
-              {d?.summary && <p className="text-[10px] text-muted-foreground mt-0.5 max-w-2xl">{d.summary}</p>}
+          {d && (
+            <div className="flex items-center gap-3 px-3 pt-1 flex-wrap">
+              <span className="text-xs text-muted-foreground">
+                Score: <span className={`font-mono font-bold ${d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>
+                  {d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score}/10`}
+                </span>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Trend: <span className={d.trend === "bullish" ? "text-success" : d.trend === "bearish" ? "text-destructive" : ""}>{d.trend}</span>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Zone: <span className="text-primary">{d.zone} ({d.zonePercent?.toFixed(0)}%)</span>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Session: <span className="text-foreground">{d.session}</span>
+                {d.killZone && <span className="ml-1 text-primary">● KZ</span>}
+              </span>
             </div>
-          </div>
+          )}
+          {d?.summary && <p className="max-w-2xl px-3 text-[10px] text-muted-foreground">{d.summary}</p>}
 
           {scanLoading && <p className="text-xs text-muted-foreground animate-pulse">Loading scanner data...</p>}
           {!scanLoading && !d && <p className="text-xs text-muted-foreground">No scanner data for {selectedSymbol}. Run a scan from the Bot tab.</p>}
@@ -725,6 +725,8 @@ export default function IctAnalysis() {
           )}
         </div>
       </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

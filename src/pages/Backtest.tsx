@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -592,13 +593,12 @@ export default function Backtest() {
   // ─── Render ──────────────────────────────────────────────────────────
   return (
     <AppShell>
-      <div className="space-y-4">
-        {/* Header */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2 font-mono">
-            <FlaskConical className="h-6 w-6 text-cyan" /> BACKTEST ENGINE
-          </h1>
-          {results && (
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={FlaskConical}
+          eyebrow="Strategy research"
+          title="Backtest Engine"
+          actions={results ? (
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-[10px]">
                 {results.dataSource?.mode === "mt5" ? "MT5 HISTORY" : "MARKET DATA PROVIDER"}
@@ -607,8 +607,9 @@ export default function Backtest() {
                 {results.stats.totalTrades} trades | {fixedResult(results.stats.winRate, 1, "0.0")}% WR | {formatMoney(results.stats.totalPnl, true)}
               </Badge>
             </div>
-          )}
-        </div>
+          ) : undefined}
+        />
+        <WorkspaceBody className="space-y-4">
 
         {/* ═══════════════════════════════════════════════════════════════
             CONFIGURATION PANEL — Full Bot Config Surface
@@ -2027,7 +2028,8 @@ export default function Backtest() {
             </CardContent>
           </Card>
         )}
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

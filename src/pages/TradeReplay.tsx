@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { paperApi, marketApi, scannerApi, type CandleSource } from "@/lib/api";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import TradeReplayChart, {
@@ -27,6 +28,7 @@ import {
   Target,
   Hash,
   AlertTriangle,
+  History,
 } from "lucide-react";
 
 /* ─── Timeframe options ─── */
@@ -391,13 +393,18 @@ export default function TradeReplay() {
 
   return (
     <AppShell>
-    <div className="h-full flex flex-col overflow-hidden">
+    <WorkspacePage layout="canvas">
+      <WorkspaceHeader
+        icon={History}
+        eyebrow="Execution review"
+        title="Trade Replay"
+        actions={<span className="workspace-page__action font-mono">{trades.length} records</span>}
+      />
+      <WorkspaceBody padded={false}>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* Top toolbar */}
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-border bg-card/50">
         <div className="flex items-center gap-3">
-          <h1 className="text-sm font-bold tracking-wide text-foreground">
-            TRADE REPLAY
-          </h1>
           {selectedTrade && (
             <span className="text-xs font-mono text-muted-foreground">
               {selectedTrade.symbol} — {selectedTrade.direction}
@@ -640,6 +647,8 @@ export default function TradeReplay() {
         </div>
       </div>
     </div>
+      </WorkspaceBody>
+    </WorkspacePage>
     </AppShell>
   );
 }

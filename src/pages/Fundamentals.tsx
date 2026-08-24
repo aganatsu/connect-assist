@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fundamentalsApi } from "@/lib/api";
 import { Calendar, Clock, AlertTriangle, TrendingUp, TrendingDown, Minus, Brain, ChevronDown, ChevronRight, Zap } from "lucide-react";
@@ -106,38 +107,39 @@ export default function Fundamentals() {
 
   return (
     <AppShell>
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Calendar className="h-6 w-6" /> Economic Calendar
-            </h1>
-            <p className="text-sm text-muted-foreground">Fundamental events with AI interpretation</p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setShowInterpretation(!showInterpretation)}
-              className={`flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors ${
-                showInterpretation ? "bg-primary/10 border-primary/30 text-primary" : "bg-card border-border text-muted-foreground"
-              }`}
-            >
-              <Brain className="h-3 w-3" />
-              Interpretation
-            </button>
-            <select value={filterImpact} onChange={e => setFilterImpact(e.target.value)}
-              className="bg-card border border-border rounded px-2 py-1 text-xs">
-              <option value="all">All Impact</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-            <select value={filterCurrency} onChange={e => setFilterCurrency(e.target.value)}
-              className="bg-card border border-border rounded px-2 py-1 text-xs">
-              <option value="all">All Currencies</option>
-              {currencies.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={Calendar}
+          eyebrow="Macro context"
+          title="Economic Calendar"
+          description="Fundamental events with AI interpretation"
+          actions={(
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setShowInterpretation(!showInterpretation)}
+                className={`flex items-center gap-1 px-2 py-1 text-xs border transition-colors ${
+                  showInterpretation ? "bg-primary/10 border-primary/30 text-primary" : "bg-card border-border text-muted-foreground"
+                }`}
+              >
+                <Brain className="h-3 w-3" />
+                Interpretation
+              </button>
+              <select value={filterImpact} onChange={e => setFilterImpact(e.target.value)}
+                className="bg-card border border-border px-2 py-1 text-xs">
+                <option value="all">All Impact</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <select value={filterCurrency} onChange={e => setFilterCurrency(e.target.value)}
+                className="bg-card border border-border px-2 py-1 text-xs">
+                <option value="all">All Currencies</option>
+                {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+        />
+        <WorkspaceBody className="space-y-4">
 
         {/* Currency Bias Summary — from news impact interpretation */}
         {showInterpretation && impacts.length > 0 && (
@@ -269,7 +271,8 @@ export default function Fundamentals() {
             })}
           </div>
         )}
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -279,26 +280,30 @@ export default function JournalView() {
 
   return (
     <AppShell>
-      <div className="flex min-h-0 flex-col md:h-[calc(100vh-4.5rem)] md:flex-row">
-        {/* Main content */}
-        <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-xl font-bold">Trade Reviews</h1>
-              <p className="text-[11px] text-muted-foreground">Closed bot trades appear automatically. Review the decision story, outcome and lesson.</p>
-            </div>
+      <WorkspacePage layout="canvas">
+        <WorkspaceHeader
+          icon={BookOpen}
+          eyebrow="Execution review"
+          title="Trade Reviews"
+          description="Closed bot trades, decision context, outcomes and lessons"
+          actions={(
             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
               <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1.5 sm:flex sm:w-auto">
                 <Filter className="h-3.5 w-3.5 text-muted-foreground" />
                 <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="min-w-0 bg-card border border-border px-2 py-2 text-[11px] sm:py-1">{ALL_SYMBOLS.map(s => <option key={s} value={s}>{s === "all" ? "All Symbols" : s}</option>)}</select>
                 <select value={filterDirection} onChange={e => setFilterDirection(e.target.value as any)} className="min-w-0 bg-card border border-border px-2 py-2 text-[11px] sm:py-1"><option value="all">All</option><option value="long">Long</option><option value="short">Short</option></select>
-                <button onClick={() => setShowTagFilters(!showTagFilters)} className={`flex items-center gap-1 px-2 py-1 text-[11px] border rounded ${showTagFilters ? 'bg-primary/10 border-primary/40 text-primary' : 'bg-card border-border text-muted-foreground'}`}>
+                <button onClick={() => setShowTagFilters(!showTagFilters)} className={`flex items-center gap-1 px-2 py-1 text-[11px] border ${showTagFilters ? 'bg-primary/10 border-primary/40 text-primary' : 'bg-card border-border text-muted-foreground'}`}>
                   <Tag className="h-3 w-3" /> Tags <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showTagFilters ? 'rotate-180' : ''}`} />
                 </button>
               </div>
-                <Button size="sm" variant="outline" className="h-9 w-9 p-0 sm:h-7 sm:w-auto sm:px-2" onClick={handleExportCSV} disabled={filteredTrades.length === 0} title="Download CSV"><Download className="h-3.5 w-3.5" /><span className="sr-only sm:not-sr-only sm:ml-1">CSV</span></Button>
+              <Button size="sm" variant="outline" className="h-9 w-9 p-0 sm:h-7 sm:w-auto sm:px-2" onClick={handleExportCSV} disabled={filteredTrades.length === 0} title="Download CSV"><Download className="h-3.5 w-3.5" /><span className="sr-only sm:not-sr-only sm:ml-1">CSV</span></Button>
             </div>
-          </div>
+          )}
+        />
+        <WorkspaceBody className="min-h-0">
+          <div className="flex h-full min-h-0 flex-col md:flex-row">
+            {/* Main content */}
+            <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
 
           {/* Tag filter chips */}
           {showTagFilters && (
@@ -511,7 +516,9 @@ export default function JournalView() {
             }} />
           </div>
         )}
-      </div>
+          </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

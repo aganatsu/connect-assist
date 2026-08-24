@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,9 +30,11 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row gap-4 md:gap-6 min-h-[calc(100vh-7rem)]">
+      <WorkspacePage>
+        <WorkspaceHeader icon={Settings} eyebrow="Application" title="Settings" />
+        <WorkspaceBody>
+      <div className="flex min-h-0 flex-col gap-4 md:flex-row md:gap-6">
         <div className="w-full md:w-56 shrink-0">
-          <h1 className="hidden md:flex text-lg font-bold mb-4 items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
           <div className="md:space-y-1 flex md:flex-col gap-1 overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 md:overflow-visible pb-2 md:pb-0">
           {TABS.map(tab => {
             const Icon = tab.icon;
@@ -54,6 +57,8 @@ export default function SettingsPage() {
           {activeTab === "about" && <AboutSettings />}
         </div>
       </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

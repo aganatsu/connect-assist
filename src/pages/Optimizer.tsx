@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 
 // ─── Types ───
 
@@ -285,27 +286,21 @@ export default function Optimizer() {
 
   return (
     <AppShell>
-      <div className="p-1 sm:p-2 max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-            <Zap className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold">Canonical Strategy Research</h1>
-            <p className="text-xs text-muted-foreground">
-              Research-only parameter recommendations with walk-forward validation
-            </p>
-          </div>
-        </div>
-        {hasActiveRun && (
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={FlaskConical}
+          eyebrow="Strategy research"
+          title="Canonical Strategy Research"
+          description="Walk-forward parameter recommendations with no automatic configuration changes."
+          actions={hasActiveRun ? (
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
             <span className="text-[10px] font-mono text-primary uppercase">Running</span>
           </div>
-        )}
-      </div>
+          ) : undefined}
+        />
+        <WorkspaceBody>
+          <div className="max-w-4xl mx-auto space-y-6">
 
       {/* Controls */}
       <Card>
@@ -446,7 +441,9 @@ export default function Optimizer() {
           <RunCard key={run.id} run={run} />
         ))}
       </div>
-      </div>
+          </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

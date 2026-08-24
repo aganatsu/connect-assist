@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -258,22 +259,18 @@ export default function ScheduledTasks() {
 
   return (
     <AppShell>
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold flex items-center gap-2">
-              <Clock className="h-5 w-5 text-primary" />
-              Scheduled Tasks
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Manage cron jobs — pause, resume, change intervals, or trigger manually
-            </p>
-          </div>
-          <Badge variant="outline" className="text-xs">
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={Clock}
+          eyebrow="Automation"
+          title="Scheduled Tasks"
+          description="Manage cron jobs, intervals, and manual runs."
+          actions={<Badge variant="outline" className="text-xs">
             {tasks.filter((t) => t.enabled).length}/{tasks.length} active
-          </Badge>
-        </div>
+          </Badge>}
+        />
+        <WorkspaceBody>
+          <div className="max-w-4xl mx-auto space-y-6">
 
         {deployment?.authorized && (
           <Card className="border-primary/40 bg-primary/5">
@@ -567,7 +564,9 @@ export default function ScheduledTasks() {
         <p className="text-xs text-muted-foreground text-center pt-4 border-t border-border/30">
           Tasks run via pg_cron. Changing the Bot Scanner interval also updates your scan interval setting.
         </p>
-      </div>
+          </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

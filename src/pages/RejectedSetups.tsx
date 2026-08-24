@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import {
   PieChart, Pie, Cell, Area, AreaChart,
 } from "recharts";
 import {
-  RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
+  RefreshCw, Filter, ArrowUpDown, Sparkles, Download, ShieldX,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -1137,21 +1138,18 @@ export default function RejectedSetups() {
 
   return (
     <AppShell>
-      <div className="space-y-4 pb-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={ShieldX}
+          eyebrow="Decision evidence"
+          title="Rejected Setups Analytics"
+          description="Counterfactual outcomes of blocked setups. Observation only; no trade is reopened or executed."
+          actions={(
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Badge variant="outline" className="text-[9px] border-info-c/40 text-info-c">
                 MONITORING
               </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Counterfactual outcomes of blocked setups. This page measures what happened afterward; it never reopens or executes a trade.
-            </p>
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_2.25rem_minmax(0,1fr)] sm:flex items-center gap-2 w-full sm:w-auto">
+              <div className="grid grid-cols-[minmax(0,1fr)_2.25rem_minmax(0,1fr)] sm:flex items-center gap-2">
             <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
               <SelectTrigger className="w-full sm:w-[100px] h-9 sm:h-8 text-xs">
                 <SelectValue />
@@ -1195,8 +1193,11 @@ export default function RejectedSetups() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        </div>
+            </div>
+          )}
+        />
 
+        <WorkspaceBody className="space-y-4 pb-6">
         {/* Filters */}
         <div className="grid grid-cols-2 sm:flex gap-2">
           <Select value={symbolFilter} onValueChange={setSymbolFilter}>
@@ -1971,7 +1972,8 @@ export default function RejectedSetups() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

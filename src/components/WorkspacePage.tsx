@@ -1,16 +1,15 @@
-import type { ComponentType, HTMLAttributes, ReactNode, SVGProps } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import "@/styles/workspace-page.css";
-
-type WorkspaceIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 interface WorkspacePageProps extends HTMLAttributes<HTMLDivElement> {
   layout?: "document" | "canvas";
 }
 
 interface WorkspaceHeaderProps extends HTMLAttributes<HTMLElement> {
-  icon: WorkspaceIcon;
+  icon: LucideIcon;
   eyebrow: string;
   title: string;
   description?: string;

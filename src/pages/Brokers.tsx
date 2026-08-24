@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -231,21 +232,17 @@ export default function BrokersPage() {
 
   return (
     <AppShell>
-      <div className="h-full flex flex-col">
-        {/* Page header */}
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-xl font-bold flex items-center gap-2">
-              <Server className="h-5 w-5 text-primary" /> Brokers
-            </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Manage broker connections and symbol mappings
-            </p>
-          </div>
-          <Button size="sm" disabled={connectionsPending || connectionsUnavailable} onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
+      <WorkspacePage layout="canvas">
+        <WorkspaceHeader
+          icon={Server}
+          eyebrow="Execution infrastructure"
+          title="Brokers"
+          description="Manage broker connections and symbol mappings"
+          actions={<Button size="sm" disabled={connectionsPending || connectionsUnavailable} onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
             <Plus className="h-4 w-4 mr-1.5" /> Add Connection
-          </Button>
-        </div>
+          </Button>}
+        />
+        <WorkspaceBody className="flex min-h-0 flex-col">
 
         {/* Split view */}
         <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
@@ -402,7 +399,8 @@ export default function BrokersPage() {
             )}
           </DialogContent>
         </Dialog>
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }

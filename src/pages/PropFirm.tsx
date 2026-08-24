@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -140,17 +141,14 @@ export default function PropFirm() {
 
   return (
     <AppShell>
-      <div className="container max-w-6xl py-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield className="w-7 h-7 text-primary" />
-            <div>
-              <h1 className="text-2xl font-bold">Prop Firm Compliance</h1>
-              <p className="text-sm text-muted-foreground">FTMO risk management & daily tracking</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={Shield}
+          eyebrow="Risk controls"
+          title="Prop Firm Compliance"
+          description="FTMO risk management and daily tracking"
+          actions={(
+            <div className="flex items-center gap-2">
             {configExists && gateEnabled && (
               <Badge variant={dailyState?.is_locked ? "destructive" : "default"} className="gap-1">
                 {dailyState?.is_locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
@@ -188,8 +186,10 @@ export default function PropFirm() {
                 />
               </div>
             )}
-          </div>
-        </div>
+            </div>
+          )}
+        />
+        <WorkspaceBody className="mx-auto w-full max-w-6xl space-y-6">
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
@@ -244,7 +244,8 @@ export default function PropFirm() {
             />
           </TabsContent>
         </Tabs>
-      </div>
+        </WorkspaceBody>
+      </WorkspacePage>
     </AppShell>
   );
 }
