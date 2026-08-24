@@ -431,6 +431,20 @@ export async function invokeFunction<T = any>(
       const authFallback = retryableRead
         ? getFunctionFallback(functionName, body)
         : undefined;
+      // Only a server-confirmed dead session may sign the user out. A single
+      // function rejecting the JWT must never destroy a valid login (that is
+      // what bounced people straight back to /login after signing in).
+      const { data: verified, error: verifyError } = await supabase.auth
+        .getUser()
+        .catch(() => ({ data: { user: null }, error: new Error("network") } as any));
+      const sessionDead = !verified?.user &&
+        !!verifyError && !/network|fetch|failed to fetch/i.test(verifyError.message ?? "");
+      if (!sessionDead) {
+        if (authFallback !== undefined) return authFallback as T;
+        throw new Error(
+          "Request was not authorized. Your session is still valid; please retry.",
+        );
+      }
       await supabase.auth.signOut().catch(() => {});
       if (typeof window !== "undefined" && !signOutRedirectTriggered) {
         try {
@@ -445,6 +459,7 @@ export async function invokeFunction<T = any>(
       if (authFallback !== undefined) return authFallback as T;
       throw new Error("Session expired. Please sign in again.");
     }
+
   }
 
   // A broker-origin failure (account not found, broker outage) is not an app
