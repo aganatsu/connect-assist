@@ -60,7 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .catch(() => ({ error: new Error("network error") } as any));
         const transient = !!error &&
           /network|fetch|timeout|failed to fetch/i.test(error.message ?? "");
-        if (error && !transient) {
+        if (error && !transient && !(sawLiveEvent && liveSession)) {
           console.warn("[Auth] Invalid session detected, signing out:", error.message);
           await supabase.auth.signOut();
           try {
@@ -75,7 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
       } else if (session) {
-        await supabase.auth.signOut().catch(() => {});
+        if (!(sawLiveEvent && liveSession)) await supabase.auth.signOut().catch(() => {});
         session = null;
       }
       // A sign-in that landed while this check was in flight wins.
