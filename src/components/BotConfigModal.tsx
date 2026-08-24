@@ -639,7 +639,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               {config && filteredTabs.length > 0 && (
                 <>
                   {effectiveActiveTab === "scan" && <ScanTab config={config} setConfig={setConfig} updateField={updateField} />}
-                  {effectiveActiveTab === "enter" && <EnterTab config={config} setConfig={setConfig} updateField={updateField} />}
+                  {effectiveActiveTab === "enter" && <EnterTab config={config} setConfig={setConfig} updateField={updateField} connectionScoped={!!connectionId} />}
                   {effectiveActiveTab === "exit" && <ExitTab config={config} setConfig={setConfig} updateField={updateField} />}
                   {effectiveActiveTab === "risk" && <RiskTab config={config} setConfig={setConfig} updateField={updateField} />}
                 </>

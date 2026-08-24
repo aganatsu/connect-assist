@@ -1,6 +1,8 @@
 export const IMPULSE_ENTRY_LIFECYCLE_VERSION = "impulse-entry-lifecycle.v1";
 
 export type ImpulseEntryLifecycleMode = "off" | "observe" | "enforce";
+export type ImpulseEntryMode = "confirmation" | "nested_poi_market";
+export type EntryTriggerKind = "range" | "level";
 export type EntryCandidateState =
   | "queued"
   | "active"
@@ -11,11 +13,13 @@ export type EntryCandidateState =
 
 export interface ImpulseEntryCandidate {
   id: string;
-  type: "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg";
+  type: "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg" |
+    "support_resistance" | "fib";
   low: number;
   high: number;
   timeframe: string;
   impulseId: string;
+  triggerKind?: EntryTriggerKind;
   rank: number;
   depth: number;
   state: EntryCandidateState;
@@ -49,6 +53,7 @@ export interface CandidateConfirmationContract {
 export interface ImpulseEntryLifecycle {
   contractVersion: typeof IMPULSE_ENTRY_LIFECYCLE_VERSION;
   mode: ImpulseEntryLifecycleMode;
+  entryMode?: ImpulseEntryMode;
   impulse: {
     id: string;
     direction: "long" | "short";
@@ -82,6 +87,7 @@ export interface BuildImpulseEntryLifecycleInput {
     refinementTimeframe: string;
     expiresAt: string;
   };
+  entryMode?: ImpulseEntryMode;
   initialCandidateId?: string | null;
   maxCandidates?: number;
 }
@@ -143,8 +149,12 @@ export function buildImpulseEntryLifecycle(
     .filter((candidate) => {
       if (!candidate.id || seen.has(candidate.id)) return false;
       seen.add(candidate.id);
+      const validGeometry = finite(candidate.low) && finite(candidate.high) &&
+        (candidate.high > candidate.low ||
+          (candidate.triggerKind === "level" &&
+            candidate.high === candidate.low));
       return candidate.impulseId === impulse.id &&
-        candidate.high > candidate.low &&
+        validGeometry &&
         candidate.low >= impulse.rangeLow &&
         candidate.high <= impulse.rangeHigh;
     })
@@ -171,9 +181,12 @@ export function buildImpulseEntryLifecycle(
         " is not eligible",
     );
   }
+  const entryMode = input.entryMode ?? "confirmation";
   const candidates = rankedCandidates
     .filter((candidate) =>
-      selectedDepth === undefined || candidate.depth >= selectedDepth
+      entryMode === "nested_poi_market"
+        ? candidate.id === initialCandidateId
+        : selectedDepth === undefined || candidate.depth >= selectedDepth
     )
     .sort((a, b) => {
       if (a.id === initialCandidateId) return -1;
@@ -191,16 +204,25 @@ export function buildImpulseEntryLifecycle(
     }));
 
   const active = candidates[0] ?? null;
+  const confirmation = active
+    ? newConfirmation(active.id, 1, input.confirmation, input.now)
+    : null;
+  if (active && confirmation && entryMode === "nested_poi_market") {
+    confirmation.protectedLevel = active.triggerKind === "level"
+      ? impulse.protectedLevel
+      : impulse.direction === "long"
+      ? active.low
+      : active.high;
+  }
   return {
     contractVersion: IMPULSE_ENTRY_LIFECYCLE_VERSION,
     mode: input.mode ?? "observe",
+    entryMode,
     impulse: { ...impulse },
     status: active ? "active" : "exhausted",
     activeCandidateId: active?.id ?? null,
     candidates,
-    confirmation: active
-      ? newConfirmation(active.id, 1, input.confirmation, input.now)
-      : null,
+    confirmation,
     revision: 1,
     lastTransitionReason: active
       ? `Activated ${active.type} candidate ${active.id}`
@@ -210,6 +232,7 @@ export function buildImpulseEntryLifecycle(
 
 export type ImpulseEntryLifecycleEvent =
   | { type: "zone_touched"; at: string }
+  | { type: "entry_trigger_touched"; at: string }
   | { type: "candidate_failed"; at: string; reason: string }
   | {
     type: "trigger_revised";
@@ -266,8 +289,23 @@ export function transitionImpulseEntryLifecycle(
     next.lastTransitionReason = "Impulse entry lifecycle expired";
     return next;
   }
+  if (!active) return current;
+  if (event.type === "entry_trigger_touched") {
+    if ((next.entryMode ?? "confirmation") !== "nested_poi_market") {
+      return current;
+    }
+    active.state = "entered";
+    next.status = "entered";
+    if (next.confirmation) {
+      next.confirmation.status = "confirmed";
+      next.confirmation.confirmedAt = event.at;
+    }
+    next.lastTransitionReason =
+      `Nested POI trigger ${active.id} touched; entry is ready`;
+    return next;
+  }
   const currentConfirmation = current.confirmation;
-  if (!active || !currentConfirmation || !next.confirmation) return current;
+  if (!currentConfirmation || !next.confirmation) return current;
   next.confirmation.revisions ||= [];
   next.confirmation.confirmedAt ??= null;
 
@@ -385,6 +423,7 @@ export function candidateFailedByClose(
     candidate.id === lifecycle.activeCandidateId
   );
   if (!active) return false;
+  if (active.triggerKind === "level") return false;
   return lifecycle.impulse.direction === "long"
     ? close < active.low
     : close > active.high;

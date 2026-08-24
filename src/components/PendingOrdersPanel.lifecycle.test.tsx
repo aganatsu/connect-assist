@@ -29,7 +29,8 @@ describe("Zone Setup confirmation contract", () => {
   });
 
   it("shows the real expiry while confirmation is active", () => {
-    expect(source).toContain("Confirmation active · {getTimeRemaining(order.expires_at)}");
+    expect(source).toContain('nestedPoiEnforced ? "Nested trigger active" : "Confirmation active"');
+    expect(source).toContain("getTimeRemaining(order.expires_at)");
     expect(source).not.toContain("Confirmation active — no time limit");
   });
 
@@ -44,6 +45,17 @@ describe("Zone Setup confirmation contract", () => {
     expect(source).toContain("pendingOrderConfirmationPresentation");
     expect(source).toContain("requires a later displaced close through its locked MSS/CHoCH break");
     expect(source).not.toContain(' : "CHoCH/BOS"');
+  });
+
+  it("renders nested POI orders without claiming CHoCH or retracement ownership", () => {
+    expect(source).toContain("pendingOrderNestedPoiPresentation");
+    expect(source).toContain("Outer zone entered — awaiting frozen nested POI");
+    expect(source).toContain("Nested POI market plan");
+    expect(source).toContain("Nested POI observation");
+    expect(source).toContain('nestedPoi.route === "observe"');
+    expect(source).toContain("current market price is used only after fresh final authorization");
+    expect(source).toContain("!nestedPoiEnforced && order.impulse_entry_lifecycle?.confirmation");
+    expect(source).toContain('{nestedPoiEnforced ? "Nested trigger active" : "Confirmation active"}');
   });
 
   it("shows whether the frozen Zone Setup stop policy can affect paper and live execution", () => {

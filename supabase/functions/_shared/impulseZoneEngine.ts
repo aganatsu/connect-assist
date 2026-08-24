@@ -16,7 +16,11 @@ import type {
   Candle, SwingPoint, OrderBlock, FairValueGap, StructureBreak, BreakerBlock, FibLevel, FibLevels,
 } from "./smcAnalysis.ts";
 import {
-  analyzeMarketStructure, detectOrderBlocks, detectFVGs, calculateATR,
+  analyzeMarketStructure,
+  calculateATR,
+  detectBreakerBlocks,
+  detectFVGs,
+  detectOrderBlocks,
 } from "./smcAnalysis.ts";
 import { evaluateZoneLifecycle, type ZoneLifecycleConfig, type ZoneLifecycleResult } from "./zoneLifecycle.ts";
 import { buildConceptEvidence, type MarketConceptEvidence } from "./conceptEvidence.ts";
@@ -26,6 +30,8 @@ import {
   observeZoneLocalPoint,
   observeZoneLocalRange,
   type ZoneLocalConfluenceObservation,
+  type ZoneLocalEvidenceObservation,
+  type ZoneLocalEvidenceSource,
 } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import {
@@ -39,6 +45,11 @@ import {
 } from "./zoneCandidateModel.ts";
 import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
+import {
+  type ICTNestedEntryZoneCandidate,
+  type ICTNestedEntryZoneType,
+  selectICTEntryZone,
+} from "./ictEntryZoneAuthority.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +138,12 @@ export interface RankedPOI {
   totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1) + htfConfluenceScore
   /** Observe-only proximity evidence. It never participates in ranking or gates. */
   localConfluence?: ZoneLocalConfluenceObservation;
+  /**
+   * Additional contained evidence collected only for nested-POI selection.
+   * This is deliberately separate from localConfluence so enabling support for
+   * the rollout cannot change legacy shadow ranking or zone-local enforcement.
+   */
+  nestedPoiEvidence?: ZoneLocalEvidenceObservation[];
   /** Alternative candidate ordering for audit only. */
   shadowRanking?: ZoneCandidateShadowRanking;
   /** Counterfactual levels used only for outcome validation. */
@@ -139,6 +156,47 @@ export interface RankedPOI {
   candidateModel?: ZoneCandidateModelObservation;
   /** Observation-only Phase 4 parent/child timeframe relationship. */
   timeframeLineage?: CrossTimeframeZoneLineage;
+}
+
+export const NESTED_POI_ENTRY_VERSION = "nested-poi-entry.v1";
+
+export type NestedPoiTriggerType = ICTNestedEntryZoneType;
+
+export interface NestedPoiTriggerCandidate {
+  id: string;
+  type: NestedPoiTriggerType;
+  geometry: "range" | "level";
+  source: ZoneLocalEvidenceSource;
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  entryPrice: number;
+  timeframe: string;
+  lifecycle: string | null;
+  evidenceId: string;
+  entityId: string;
+  supportingEvidenceIds: string[];
+  supportingFamilies: NestedPoiTriggerType[];
+  independentEvidenceCount: number;
+  localScore: number;
+  lifecycleRank: number;
+  depth: number;
+  widthRatio: number;
+  rank: number;
+}
+
+export interface NestedPoiEntryPlan {
+  contractVersion: typeof NESTED_POI_ENTRY_VERSION;
+  enforcement: "observe_only";
+  outerCandidateId: string | null;
+  outerZone: {
+    low: number;
+    high: number;
+    direction: "bullish" | "bearish";
+  };
+  selected: NestedPoiTriggerCandidate | null;
+  candidates: NestedPoiTriggerCandidate[];
+  reason: "selected" | "local_evidence_unavailable" | "no_contained_trigger";
 }
 
 export interface ZoneValidationTrade {
@@ -226,6 +284,97 @@ const PRICE_AT_ZONE_ATR_MULT = 1.5;
 
 /** Proximity threshold for "price at zone" — STRICT (market fill decisions) */
 const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
+
+function appendNestedPoiEvidence(
+  zone: RankedPOI,
+  item: ZoneLocalEvidenceObservation,
+): void {
+  const entityId = item.evidence?.entityId;
+  if (!entityId) return;
+  if (
+    zone.localConfluence?.items.some((existing) =>
+      existing.evidence?.entityId === entityId
+    ) || zone.nestedPoiEvidence?.some((existing) =>
+      existing.evidence?.entityId === entityId
+    )
+  ) return;
+  (zone.nestedPoiEvidence ??= []).push(item);
+}
+
+function freezeNestedPoiCandidate(
+  candidate: ICTNestedEntryZoneCandidate,
+): NestedPoiTriggerCandidate {
+  return {
+    id: candidate.id,
+    type: candidate.type,
+    geometry: candidate.geometry,
+    source: candidate.source,
+    direction: candidate.direction,
+    low: candidate.low,
+    high: candidate.high,
+    entryPrice: candidate.entryPrice,
+    timeframe: candidate.timeframe,
+    lifecycle: candidate.lifecycle,
+    evidenceId: candidate.evidenceId,
+    entityId: candidate.entityId,
+    supportingEvidenceIds: candidate.supportingEvidenceIds,
+    supportingFamilies: candidate.supportingFamilies,
+    independentEvidenceCount: candidate.independentEvidenceCount,
+    localScore: candidate.localScore,
+    lifecycleRank: candidate.lifecycleRank,
+    depth: candidate.depth,
+    widthRatio: candidate.widthRatio,
+    rank: candidate.rank,
+  };
+}
+
+/**
+ * Adapts the ICT entry-zone authority result into the frozen nested-entry
+ * contract. Candidate eligibility and ranking remain owned by the authority.
+ */
+export function buildNestedPoiEntryPlan(zone: RankedPOI): NestedPoiEntryPlan {
+  const outerLow = Math.min(zone.poi.low, zone.poi.high);
+  const outerHigh = Math.max(zone.poi.low, zone.poi.high);
+  const local = zone.localConfluence;
+  const base: Omit<
+    NestedPoiEntryPlan,
+    "selected" | "candidates" | "reason"
+  > = {
+    contractVersion: NESTED_POI_ENTRY_VERSION,
+    enforcement: "observe_only" as const,
+    outerCandidateId: local?.candidateId || zone.poi.evidence?.entityId || null,
+    outerZone: {
+      low: outerLow,
+      high: outerHigh,
+      direction: zone.poi.direction,
+    },
+  };
+  if (!local) {
+    return {
+      ...base,
+      selected: null,
+      candidates: [],
+      reason: "local_evidence_unavailable",
+    };
+  }
+
+  const authority = selectICTEntryZone({
+    mode: "nested_poi",
+    outerZone: base.outerZone,
+    impulseId: base.outerCandidateId || "unknown",
+    evidence: [...local.items, ...(zone.nestedPoiEvidence || [])],
+  });
+  const candidates = authority.ranked.map(freezeNestedPoiCandidate);
+  return {
+    ...base,
+    selected: authority.selected
+      ? freezeNestedPoiCandidate(authority.selected)
+      : null,
+    candidates,
+    reason: authority.selected ? "selected" : "no_contained_trigger",
+  };
+}
+
 
 // ─── 1. findImpulseLeg ────────────────────────────────────────────────────────
 
@@ -1193,6 +1342,7 @@ export function checkHistoricalSR(
   impulseStartIndex: number,
   options?: {
     evidenceContext?: ZoneEvidenceContext;
+    collectNestedPoiEvidence?: boolean;
   },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
@@ -1222,12 +1372,17 @@ export function checkHistoricalSR(
   for (const zone of zones) {
     const zoneHigh = zone.poi.high;
     const zoneLow = zone.poi.low;
+    let srCounted = false;
 
     for (const sr of srLevels) {
       if (sr >= zoneLow && sr <= zoneHigh) {
-        zone.srConfirmed = true;
-        zone.srLevel = sr;
-        zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
+        const isLegacyMatch = !srCounted;
+        if (isLegacyMatch) {
+          zone.srConfirmed = true;
+          zone.srLevel = sr;
+          zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
+          srCounted = true;
+        }
         if (
           zone.localConfluence &&
           options?.evidenceContext
@@ -1257,16 +1412,24 @@ export function checkHistoricalSR(
               lookbackEnd,
             },
           });
-          zone.localConfluence.items.push(observeZoneLocalPoint({
+          const observation = observeZoneLocalPoint({
             source: "historical_sr",
             label: "Historical close S/R",
             evidence: srEvidence,
             candidate: zone.localConfluence,
             level: sr,
             legacyScoreContribution: 1,
-          }));
+          });
+          if (isLegacyMatch) {
+            zone.localConfluence.items.push(observation);
+          } else if (
+            options.collectNestedPoiEvidence &&
+            sr > zoneLow && sr < zoneHigh
+          ) {
+            appendNestedPoiEvidence(zone, observation);
+          }
         }
-        break;
+        if (!options?.collectNestedPoiEvidence) break;
       }
     }
   }
@@ -1332,6 +1495,7 @@ export function checkHTFConfluence(
   htfData: HTFConfluenceData,
   options?: {
     evidenceContext?: ZoneEvidenceContext;
+    collectNestedPoiEvidence?: boolean;
   },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
@@ -1343,6 +1507,7 @@ export function checkHTFConfluence(
     const zoneLow = zone.poi.low;
 
     // ── 4H Order Blocks ──
+    let orderBlockCounted = false;
     for (const ob of htfData.h4OBs) {
       // Only consider OBs aligned with trade direction and not broken/mitigated
       if (ob.state === "broken" || ob.state === "mitigated") continue;
@@ -1352,8 +1517,12 @@ export function checkHTFConfluence(
       ) continue;
       // Overlap check: max(zone.low, ob.low) <= min(zone.high, ob.high)
       if (Math.max(zoneLow, ob.low) <= Math.min(zoneHigh, ob.high)) {
-        score += 1;
-        layers.push("4H_OB");
+        const isLegacyMatch = !orderBlockCounted;
+        if (isLegacyMatch) {
+          score += 1;
+          layers.push("4H_OB");
+          orderBlockCounted = true;
+        }
         if (zone.localConfluence && options?.evidenceContext) {
           const evidence = buildConceptEvidence({
             concept: "order_block",
@@ -1371,20 +1540,29 @@ export function checkHTFConfluence(
               mitigatedPercent: ob.mitigatedPercent,
             },
           });
-          zone.localConfluence.items.push(observeZoneLocalRange({
+          const observation = observeZoneLocalRange({
             source: "htf_order_block",
             label: "4H Order Block",
             evidence,
             candidate: zone.localConfluence,
             bounds: { low: ob.low, high: ob.high },
             legacyScoreContribution: 1,
-          }));
+          });
+          if (isLegacyMatch) {
+            zone.localConfluence.items.push(observation);
+          } else if (
+            options.collectNestedPoiEvidence &&
+            ob.low > zoneLow && ob.high < zoneHigh
+          ) {
+            appendNestedPoiEvidence(zone, observation);
+          }
         }
-        break; // Count at most once per layer type
+        if (!options?.collectNestedPoiEvidence) break;
       }
     }
 
     // ── 4H Fair Value Gaps ──
+    let fairValueGapCounted = false;
     for (const fvg of htfData.h4FVGs) {
       if (fvg.state === "filled") continue;
       if (
@@ -1392,8 +1570,12 @@ export function checkHTFConfluence(
         (htfData.direction === "bearish" && fvg.type !== "bearish")
       ) continue;
       if (Math.max(zoneLow, fvg.low) <= Math.min(zoneHigh, fvg.high)) {
-        score += 1;
-        layers.push("4H_FVG");
+        const isLegacyMatch = !fairValueGapCounted;
+        if (isLegacyMatch) {
+          score += 1;
+          layers.push("4H_FVG");
+          fairValueGapCounted = true;
+        }
         if (zone.localConfluence && options?.evidenceContext) {
           const evidence = buildConceptEvidence({
             concept: "fvg",
@@ -1411,20 +1593,29 @@ export function checkHTFConfluence(
               respectedCount: fvg.respectedCount,
             },
           });
-          zone.localConfluence.items.push(observeZoneLocalRange({
+          const observation = observeZoneLocalRange({
             source: "htf_fvg",
             label: "4H Fair Value Gap",
             evidence,
             candidate: zone.localConfluence,
             bounds: { low: fvg.low, high: fvg.high },
             legacyScoreContribution: 1,
-          }));
+          });
+          if (isLegacyMatch) {
+            zone.localConfluence.items.push(observation);
+          } else if (
+            options.collectNestedPoiEvidence &&
+            fvg.low > zoneLow && fvg.high < zoneHigh
+          ) {
+            appendNestedPoiEvidence(zone, observation);
+          }
         }
-        break;
+        if (!options?.collectNestedPoiEvidence) break;
       }
     }
 
     // ── 4H Breaker Blocks ──
+    let breakerCounted = false;
     for (const bb of htfData.h4Breakers) {
       if (!bb.isActive || bb.state === "broken") continue;
       // Breaker alignment: bullish_breaker for bullish direction, bearish_breaker for bearish
@@ -1433,8 +1624,12 @@ export function checkHTFConfluence(
         (htfData.direction === "bearish" && bb.type !== "bearish_breaker")
       ) continue;
       if (Math.max(zoneLow, bb.low) <= Math.min(zoneHigh, bb.high)) {
-        score += 1;
-        layers.push("4H_BREAKER");
+        const isLegacyMatch = !breakerCounted;
+        if (isLegacyMatch) {
+          score += 1;
+          layers.push("4H_BREAKER");
+          breakerCounted = true;
+        }
         if (zone.localConfluence && options?.evidenceContext) {
           const observedAt = options.evidenceContext.observedAt || "unknown";
           const evidence = buildConceptEvidence({
@@ -1459,16 +1654,24 @@ export function checkHTFConfluence(
               sourceIndex: bb.mitigatedAt,
             },
           });
-          zone.localConfluence.items.push(observeZoneLocalRange({
+          const observation = observeZoneLocalRange({
             source: "htf_breaker",
             label: "4H Breaker",
             evidence,
             candidate: zone.localConfluence,
             bounds: { low: bb.low, high: bb.high },
             legacyScoreContribution: 1,
-          }));
+          });
+          if (isLegacyMatch) {
+            zone.localConfluence.items.push(observation);
+          } else if (
+            options.collectNestedPoiEvidence &&
+            bb.low > zoneLow && bb.high < zoneHigh
+          ) {
+            appendNestedPoiEvidence(zone, observation);
+          }
         }
-        break;
+        if (!options?.collectNestedPoiEvidence) break;
       }
     }
 
@@ -1600,6 +1803,8 @@ export function refineLowerTF(
   zone: RankedPOI,
   options?: {
     evidenceContext?: ZoneEvidenceContext;
+    entryTimeframe?: string;
+    collectNestedPoiEvidence?: boolean;
   },
 ): RankedPOI {
   if (entryCandles.length < 10) return zone;
@@ -1619,14 +1824,19 @@ export function refineLowerTF(
     }
   }
 
-  if (insideCandles.length < 3) return zone; // Not enough LTF data inside zone
+  const legacyRefinementEligible = insideCandles.length >= 3;
+  const collectNestedPoiEvidence = options?.collectNestedPoiEvidence === true &&
+    zone.localConfluence != null &&
+    options.evidenceContext != null;
+  if (!legacyRefinementEligible && !collectNestedPoiEvidence) return zone;
 
-  // Run structure analysis on the inside candles (for FVGs)
-  const ltfStructure = analyzeMarketStructure(insideCandles);
-  const ltfBreaks = [...ltfStructure.bos, ...ltfStructure.choch];
-
-  // FVGs: detect on inside candles (purely geometric, no lifecycle issue)
-  const ltfFVGs = detectFVGs(insideCandles, ltfBreaks);
+  let ltfFVGs: FairValueGap[] = [];
+  if (legacyRefinementEligible) {
+    // Keep the existing legacy FVG refinement ranking on inside-zone candles.
+    const ltfStructure = analyzeMarketStructure(insideCandles);
+    const ltfBreaks = [...ltfStructure.bos, ...ltfStructure.choch];
+    ltfFVGs = detectFVGs(insideCandles, ltfBreaks);
+  }
 
   // OBs: detect on FULL entryCandles to avoid lifecycle false-negatives.
   // The OB (last opposing candle) may sit just outside the zone boundary,
@@ -1646,98 +1856,221 @@ export function refineLowerTF(
     lifecycle: string;
   } | null = null;
 
-  // Prefer OBs over FVGs for precision
-  for (const ob of ltfOBs) {
-    if (ob.type === zone.poi.direction && ob.state !== "broken" && ob.state !== "mitigated") {
-      // Ensure the OB is actually inside the zone boundaries
-      if (ob.high <= zoneHigh && ob.low >= zoneLow) {
-        bestLTF = {
-          type: "ob",
-          high: ob.high,
-          low: ob.low,
-          datetime: ob.datetime,
-          sourceIndex: ob.index,
-          lifecycle: ob.state,
-        };
-        break;
-      }
-    }
-  }
-
-  // Fallback to FVG if no OB found
-  if (!bestLTF) {
-    for (const fvg of ltfFVGs) {
-      if (fvg.type === zone.poi.direction && fvg.state !== "filled") {
-        if (fvg.high <= zoneHigh && fvg.low >= zoneLow) {
+  if (legacyRefinementEligible) {
+    // Prefer OBs over FVGs for precision
+    for (const ob of ltfOBs) {
+      if (
+        ob.type === zone.poi.direction &&
+        ob.state !== "broken" &&
+        ob.state !== "mitigated"
+      ) {
+        // Ensure the OB is actually inside the zone boundaries
+        if (ob.high <= zoneHigh && ob.low >= zoneLow) {
           bestLTF = {
-            type: "fvg",
-            high: fvg.high,
-            low: fvg.low,
-            datetime: fvg.datetime,
-            sourceIndex: fvg.index,
-            lifecycle: fvg.state,
+            type: "ob",
+            high: ob.high,
+            low: ob.low,
+            datetime: ob.datetime,
+            sourceIndex: ob.index,
+            lifecycle: ob.state,
           };
           break;
         }
       }
     }
+
+    // Fallback to FVG if no OB found
+    if (!bestLTF) {
+      for (const fvg of ltfFVGs) {
+        if (fvg.type === zone.poi.direction && fvg.state !== "filled") {
+          if (fvg.high <= zoneHigh && fvg.low >= zoneLow) {
+            bestLTF = {
+              type: "fvg",
+              high: fvg.high,
+              low: fvg.low,
+              datetime: fvg.datetime,
+              sourceIndex: fvg.index,
+              lifecycle: fvg.state,
+            };
+            break;
+          }
+        }
+      }
+    }
   }
 
-  if (!bestLTF) return zone; // No LTF refinement found
+  if (bestLTF) {
+    // Calculate refined entry and SL from the LTF POI
+    const refinedEntry = zone.poi.direction === "bullish"
+      ? bestLTF.high // Enter at the top of the LTF OB/FVG for longs
+      : bestLTF.low; // Enter at the bottom for shorts
 
-  // Calculate refined entry and SL from the LTF POI
-  const refinedEntry = zone.poi.direction === "bullish"
-    ? bestLTF.high  // Enter at the top of the LTF OB/FVG for longs
-    : bestLTF.low;  // Enter at the bottom for shorts
+    const refinedSL = zone.poi.direction === "bullish"
+      ? bestLTF.low // SL below the LTF OB/FVG for longs
+      : bestLTF.high; // SL above for shorts
 
-  const refinedSL = zone.poi.direction === "bullish"
-    ? bestLTF.low   // SL below the LTF OB/FVG for longs
-    : bestLTF.high; // SL above for shorts
+    // Update the zone with LTF refinement
+    zone.ltfRefined = true;
+    zone.refinedEntry = refinedEntry;
+    zone.refinedSL = refinedSL;
+    zone.ltfType = bestLTF.type;
+    zone.totalScore = zone.fibScore + zone.htfConfluenceScore +
+      (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
+    if (zone.localConfluence && options?.evidenceContext) {
+      const observedAt = options.evidenceContext.observedAt ||
+        entryCandles[entryCandles.length - 1]?.datetime ||
+        bestLTF.datetime;
+      const evidence = buildConceptEvidence({
+        concept: bestLTF.type === "ob" ? "order_block" : "fvg",
+        detector: {
+          name: bestLTF.type === "ob"
+            ? "smcAnalysis.detectOrderBlocks"
+            : "smcAnalysis.detectFVGs",
+          version: "1",
+        },
+        symbol: options.evidenceContext.symbol,
+        timeframe: "LTF",
+        sourceCandleStart: bestLTF.datetime,
+        observedAt,
+        direction: zone.poi.direction,
+        bounds: { low: bestLTF.low, high: bestLTF.high },
+        lifecycle: bestLTF.lifecycle,
+        discriminator: bestLTF.sourceIndex,
+        attributes: {
+          parentTimeframe: options.evidenceContext.timeframe,
+          refinementType: bestLTF.type,
+        },
+      });
+      zone.localConfluence.items.push(observeZoneLocalRange({
+        source: "ltf_refinement",
+        label: `LTF ${bestLTF.type.toUpperCase()} refinement`,
+        evidence,
+        candidate: zone.localConfluence,
+        bounds: { low: bestLTF.low, high: bestLTF.high },
+        legacyScoreContribution: 1,
+      }));
+    }
+  }
 
-  // Update the zone with LTF refinement
-  zone.ltfRefined = true;
-  zone.refinedEntry = refinedEntry;
-  zone.refinedSL = refinedSL;
-  zone.ltfType = bestLTF.type;
-  zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
-  if (zone.localConfluence && options?.evidenceContext) {
-    const observedAt = options.evidenceContext.observedAt ||
-      entryCandles[entryCandles.length - 1]?.datetime ||
-      bestLTF.datetime;
-    const evidence = buildConceptEvidence({
-      concept: bestLTF.type === "ob" ? "order_block" : "fvg",
-      detector: {
-        name: bestLTF.type === "ob"
-          ? "smcAnalysis.detectOrderBlocks"
-          : "smcAnalysis.detectFVGs",
-        version: "1",
-      },
-      symbol: options.evidenceContext.symbol,
-      timeframe: "LTF",
-      sourceCandleStart: bestLTF.datetime,
-      observedAt,
-      direction: zone.poi.direction,
-      bounds: { low: bestLTF.low, high: bestLTF.high },
-      lifecycle: bestLTF.lifecycle,
-      discriminator: bestLTF.sourceIndex,
-      attributes: {
-        parentTimeframe: options.evidenceContext.timeframe,
-        refinementType: bestLTF.type,
-      },
-    });
-    zone.localConfluence.items.push(observeZoneLocalRange({
-      source: "ltf_refinement",
-      label: `LTF ${bestLTF.type.toUpperCase()} refinement`,
-      evidence,
-      candidate: zone.localConfluence,
-      bounds: { low: bestLTF.low, high: bestLTF.high },
-      legacyScoreContribution: 1,
-    }));
+  if (collectNestedPoiEvidence) {
+    const observedAt = options!.evidenceContext!.observedAt ||
+      entryCandles[entryCandles.length - 1]?.datetime || "unknown";
+    const timeframe = options!.entryTimeframe ||
+      options!.evidenceContext!.timeframe || "unknown";
+    const addRangeEvidence = (input: {
+      concept: "order_block" | "fvg" | "breaker";
+      detector: string;
+      label: string;
+      low: number;
+      high: number;
+      direction: "bullish" | "bearish";
+      lifecycle: string;
+      sourceTime: string;
+      discriminator: string | number;
+      attributes?: Record<string, unknown>;
+    }) => {
+      if (
+        input.direction !== zone.poi.direction ||
+        input.low <= zoneLow || input.high >= zoneHigh ||
+        !(input.high > input.low)
+      ) return;
+      const legacyType = input.concept === "order_block" ? "ob" : input.concept;
+      if (
+        bestLTF?.type === legacyType &&
+        bestLTF.low === input.low &&
+        bestLTF.high === input.high
+      ) return;
+      const evidence = buildConceptEvidence({
+        concept: input.concept,
+        detector: { name: input.detector, version: "1" },
+        symbol: options!.evidenceContext!.symbol,
+        timeframe,
+        sourceCandleStart: input.sourceTime,
+        observedAt,
+        direction: input.direction,
+        bounds: { low: input.low, high: input.high },
+        lifecycle: input.lifecycle,
+        discriminator: input.discriminator,
+        attributes: {
+          parentTimeframe: options!.evidenceContext!.timeframe,
+          ...input.attributes,
+        },
+      });
+      appendNestedPoiEvidence(
+        zone,
+        observeZoneLocalRange({
+          source: "ltf_refinement",
+          label: input.label,
+          evidence,
+          candidate: zone.localConfluence!,
+          bounds: { low: input.low, high: input.high },
+          legacyScoreContribution: input.concept === "breaker" ? 0 : 1,
+        }),
+      );
+    };
+
+    for (const ob of ltfOBs) {
+      if (ob.state === "broken" || ob.state === "mitigated") continue;
+      addRangeEvidence({
+        concept: "order_block",
+        detector: "smcAnalysis.detectOrderBlocks",
+        label: timeframe + " Order Block refinement",
+        low: ob.low,
+        high: ob.high,
+        direction: ob.type,
+        lifecycle: ob.state,
+        sourceTime: ob.datetime,
+        discriminator: ob.index,
+      });
+    }
+
+    const fullLtfFVGs = detectFVGs(entryCandles, fullBreaks);
+    for (const fvg of fullLtfFVGs) {
+      if (fvg.state === "filled") continue;
+      addRangeEvidence({
+        concept: "fvg",
+        detector: "smcAnalysis.detectFVGs",
+        label: timeframe + " FVG refinement",
+        low: fvg.low,
+        high: fvg.high,
+        direction: fvg.type,
+        lifecycle: fvg.state,
+        sourceTime: fvg.datetime,
+        discriminator: fvg.index,
+      });
+    }
+
+    const ltfBreakers = detectBreakerBlocks(
+      ltfOBs,
+      entryCandles,
+      fullBreaks,
+    );
+    for (const breaker of ltfBreakers) {
+      if (
+        breaker.subtype !== "breaker" || !breaker.isActive ||
+        breaker.state === "broken"
+      ) continue;
+      addRangeEvidence({
+        concept: "breaker",
+        detector: "smcAnalysis.detectBreakerBlocks",
+        label: timeframe + " active Breaker refinement",
+        low: breaker.low,
+        high: breaker.high,
+        direction: breaker.type === "bullish_breaker" ? "bullish" : "bearish",
+        lifecycle: breaker.state,
+        sourceTime: entryCandles[breaker.mitigatedAt]?.datetime || observedAt,
+        discriminator: breaker.mitigatedAt,
+        attributes: {
+          subtype: breaker.subtype,
+          testedCount: breaker.testedCount,
+          originalOBType: breaker.originalOBType,
+        },
+      });
+    }
   }
 
   return zone;
 }
-
 // ─── 6. rankAndSelectBestZone ─────────────────────────────────────────────────
 
 /**
@@ -2006,13 +2339,17 @@ export function findBestEntryZone(
     htfCandles,
     rankedZones,
     impulse.startIndex,
-    { evidenceContext: options?.evidenceContext },
+    {
+      evidenceContext: options?.evidenceContext,
+      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
+    },
   );
 
   // Step 5: HTF confluence scoring (if data available)
   if (htfData) {
     rankedZones = checkHTFConfluence(rankedZones, htfData, {
       evidenceContext: options?.evidenceContext,
+      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
     });
   }
 
@@ -2021,6 +2358,8 @@ export function findBestEntryZone(
   for (let i = 0; i < topZones.length; i++) {
     topZones[i] = refineLowerTF(entryCandles, topZones[i], {
       evidenceContext: options?.evidenceContext,
+      entryTimeframe: options?.entryTimeframe,
+      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
     });
   }
   // Replace in full array
@@ -2211,6 +2550,13 @@ export interface ZoneEngineOptions {
   originOBRetest?: boolean;
   /** Observe-only identity context. It never participates in scoring or gates. */
   evidenceContext?: ZoneEvidenceContext;
+  /** Actual timeframe of entryCandles, persisted on nested trigger evidence. */
+  entryTimeframe?: string;
+  /**
+   * Collect additional strictly-contained evidence for nested-POI selection.
+   * Defaults off so legacy scoring and detector cost remain unchanged.
+   */
+  collectNestedPoiEvidence?: boolean;
   /**
    * Zone Lifecycle v2: When enabled, replaces the default 50% penetration invalidation
    * with close-based invalidation. Zones survive wick penetration and can be traded

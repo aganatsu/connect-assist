@@ -300,7 +300,7 @@ Deno.test("Watchlist lifecycle monitoring reads the frozen boundary", () => {
 });
 
 Deno.test("routine Watchlist refresh does not rewrite sl_level", () => {
-  const updateMarker = "// Update existing staged with latest zone data";
+  const updateMarker = "// Update observation fields without rewriting frozen executable geometry.";
   const updateStart = scanner.indexOf(updateMarker);
   const updateEnd = scanner.indexOf("if (zoneWatchUpdateError)", updateStart);
   const update = scanner.slice(updateStart, updateEnd);

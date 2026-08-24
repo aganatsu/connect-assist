@@ -1,6 +1,10 @@
 import type {
   CanonicalZoneLifecycleObservation,
 } from "./zoneCandidateModel.ts";
+import type {
+  ZoneLocalEvidenceObservation,
+  ZoneLocalEvidenceSource,
+} from "./zoneLocalConfluence.ts";
 
 export const ICT_ENTRY_ZONE_AUTHORITY_VERSION = "ict-entry-zone-authority.v1";
 
@@ -55,10 +59,329 @@ export interface ICTEntryZoneSelection {
   explanation: string;
 }
 
+export type ICTNestedEntryZoneType =
+  | ICTEntryZoneComponentType
+  | "support_resistance"
+  | "fib";
+
+export interface ICTNestedEntryZoneInput {
+  mode: "nested_poi";
+  outerZone: {
+    low: number;
+    high: number;
+    direction: "bullish" | "bearish";
+  };
+  impulseId: string;
+  evidence: readonly ZoneLocalEvidenceObservation[];
+}
+
+export interface ICTNestedEntryZoneCandidate {
+  contractVersion: typeof ICT_ENTRY_ZONE_AUTHORITY_VERSION;
+  enforcement: "observe_only";
+  mode: "nested_poi";
+  id: string;
+  type: ICTNestedEntryZoneType;
+  geometry: "range" | "level";
+  source: ZoneLocalEvidenceSource;
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  entryPrice: number;
+  timeframe: string;
+  impulseId: string;
+  lifecycle: string | null;
+  evidenceId: string;
+  entityId: string;
+  supportingEvidenceIds: string[];
+  supportingFamilies: ICTNestedEntryZoneType[];
+  independentEvidenceCount: number;
+  localScore: number;
+  lifecycleRank: number;
+  depth: number;
+  widthRatio: number;
+  rank: number;
+  eligible: true;
+  reasons: string[];
+}
+
+export interface ICTNestedEntryZoneSelection {
+  contractVersion: typeof ICT_ENTRY_ZONE_AUTHORITY_VERSION;
+  enforcement: "observe_only";
+  mode: "nested_poi";
+  selected: ICTNestedEntryZoneCandidate | null;
+  ranked: ICTNestedEntryZoneCandidate[];
+  explanation: string;
+}
+
+export type ICTEntryZoneAuthorityInput =
+  | readonly ICTEntryZoneComponent[]
+  | ICTNestedEntryZoneInput;
+
+export type ICTEntryZoneSelectionFor<
+  T extends ICTEntryZoneAuthorityInput,
+> = T extends ICTNestedEntryZoneInput
+  ? ICTNestedEntryZoneSelection
+  : ICTEntryZoneSelection;
+
+interface ICTNestedEntryZoneSeed {
+  id: string;
+  type: ICTNestedEntryZoneType;
+  geometry: "range" | "level";
+  source: ZoneLocalEvidenceSource;
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  entryPrice: number;
+  timeframe: string;
+  impulseId: string;
+  lifecycle: string | null;
+  evidenceId: string;
+  entityId: string;
+  legacyCredit: number;
+  lifecycleRank: number;
+  depth: number;
+  widthRatio: number;
+}
+
 function overlap(a: ICTEntryZoneComponent, b: ICTEntryZoneComponent) {
   const low = Math.max(a.low, b.low);
   const high = Math.min(a.high, b.high);
   return high > low ? { low, high } : null;
+}
+
+function nestedEntryType(
+  item: ZoneLocalEvidenceObservation,
+): ICTNestedEntryZoneType | null {
+  switch (item.source) {
+    case "ltf_refinement":
+      return item.evidence?.concept === "order_block"
+        ? "ob"
+        : item.evidence?.concept === "fvg"
+        ? "fvg"
+        : item.evidence?.concept === "breaker"
+        ? "breaker"
+        : null;
+    case "htf_order_block":
+      return "ob";
+    case "htf_fvg":
+      return "fvg";
+    case "htf_breaker":
+      return "breaker";
+    case "historical_sr":
+      return "support_resistance";
+    case "impulse_fib":
+    case "htf_fib":
+      return "fib";
+    default:
+      return null;
+  }
+}
+
+function nestedEntryLifecycleRank(
+  type: ICTNestedEntryZoneType,
+  value: unknown,
+): number {
+  if (type === "support_resistance" || type === "fib") return 1;
+  const lifecycle = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (lifecycle === "fresh" || lifecycle === "open") return 5;
+  if (lifecycle === "respected" || lifecycle === "tapped_and_held") return 4;
+  if (lifecycle === "active") return 3;
+  if (lifecycle === "tested" || lifecycle === "partially_filled") return 2;
+  return 1;
+}
+
+function nestedEntryLifecycleEligible(
+  item: ZoneLocalEvidenceObservation,
+  type: ICTNestedEntryZoneType,
+): boolean {
+  const lifecycle = String(item.evidence?.lifecycle || "").trim().toLowerCase();
+  if (type === "ob") return lifecycle !== "broken" && lifecycle !== "mitigated";
+  if (type === "fvg") return lifecycle !== "filled";
+  if (type !== "breaker") return true;
+  const subtype = String(
+    item.attributes.subtype ?? item.evidence?.attributes.subtype ?? "",
+  ).trim().toLowerCase();
+  return subtype === "breaker" &&
+    (lifecycle === "active" || lifecycle === "tested" ||
+      lifecycle === "respected");
+}
+
+function nestedEntrySeed(
+  input: ICTNestedEntryZoneInput,
+  item: ZoneLocalEvidenceObservation,
+): ICTNestedEntryZoneSeed | null {
+  const evidence = item.evidence;
+  const type = nestedEntryType(item);
+  if (!evidence || !type || !nestedEntryLifecycleEligible(item, type)) {
+    return null;
+  }
+  if (
+    evidence.direction !== "neutral" &&
+    evidence.direction !== input.outerZone.direction
+  ) return null;
+
+  const outerLow = Math.min(input.outerZone.low, input.outerZone.high);
+  const outerHigh = Math.max(input.outerZone.low, input.outerZone.high);
+  const outerWidth = outerHigh - outerLow;
+  if (!(outerWidth > 0)) return null;
+
+  let geometry: "range" | "level";
+  let low: number;
+  let high: number;
+  if (type === "support_resistance" || type === "fib") {
+    const level = Number(evidence.level);
+    if (!Number.isFinite(level) || level <= outerLow || level >= outerHigh) {
+      return null;
+    }
+    geometry = "level";
+    low = level;
+    high = level;
+  } else {
+    const boundsLow = Number(evidence.bounds?.low);
+    const boundsHigh = Number(evidence.bounds?.high);
+    if (!Number.isFinite(boundsLow) || !Number.isFinite(boundsHigh)) {
+      return null;
+    }
+    low = Math.min(boundsLow, boundsHigh);
+    high = Math.max(boundsLow, boundsHigh);
+    if (
+      !(high > low) || low <= outerLow || high >= outerHigh ||
+      high - low >= outerWidth
+    ) return null;
+    geometry = "range";
+  }
+
+  const entryPrice = geometry === "level"
+    ? low
+    : input.outerZone.direction === "bullish"
+    ? high
+    : low;
+  const depth = input.outerZone.direction === "bullish"
+    ? (outerHigh - entryPrice) / outerWidth
+    : (entryPrice - outerLow) / outerWidth;
+  const widthRatio = geometry === "range" ? (high - low) / outerWidth : 0;
+  return {
+    id: evidence.entityId,
+    type,
+    geometry,
+    source: item.source,
+    direction: input.outerZone.direction,
+    low,
+    high,
+    entryPrice,
+    timeframe: evidence.timeframe,
+    impulseId: input.impulseId,
+    lifecycle: evidence.lifecycle,
+    evidenceId: evidence.evidenceId,
+    entityId: evidence.entityId,
+    legacyCredit: Math.max(0, Number(item.legacyScoreContribution) || 0),
+    lifecycleRank: nestedEntryLifecycleRank(type, evidence.lifecycle),
+    depth: Math.max(0, Math.min(1, depth)),
+    widthRatio: Math.max(0, Math.min(1, widthRatio)),
+  };
+}
+
+function nestedEntryOverlaps(
+  left: Pick<ICTNestedEntryZoneSeed, "low" | "high">,
+  right: Pick<ICTNestedEntryZoneSeed, "low" | "high">,
+): boolean {
+  return Math.max(left.low, right.low) <= Math.min(left.high, right.high);
+}
+
+function selectNestedICTEntryZone(
+  input: ICTNestedEntryZoneInput,
+): ICTNestedEntryZoneSelection {
+  const deduplicated = new Map<string, ICTNestedEntryZoneSeed>();
+  for (const item of input.evidence) {
+    const seed = nestedEntrySeed(input, item);
+    if (!seed) continue;
+    const existing = deduplicated.get(seed.entityId);
+    if (
+      !existing || seed.legacyCredit > existing.legacyCredit ||
+      (seed.legacyCredit === existing.legacyCredit &&
+        seed.source < existing.source)
+    ) {
+      deduplicated.set(seed.entityId, seed);
+    }
+  }
+
+  const seeds = [...deduplicated.values()];
+  const candidates = seeds.map((seed): ICTNestedEntryZoneCandidate => {
+    const familyWinners = new Map<
+      ICTNestedEntryZoneType,
+      ICTNestedEntryZoneSeed
+    >();
+    for (const supporting of seeds) {
+      if (!nestedEntryOverlaps(seed, supporting)) continue;
+      const current = familyWinners.get(supporting.type);
+      if (
+        !current || supporting.legacyCredit > current.legacyCredit ||
+        (supporting.legacyCredit === current.legacyCredit &&
+          supporting.id < current.id)
+      ) {
+        familyWinners.set(supporting.type, supporting);
+      }
+    }
+    const supporting = [...familyWinners.values()].sort((left, right) =>
+      left.type.localeCompare(right.type) || left.id.localeCompare(right.id)
+    );
+    return {
+      contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
+      enforcement: "observe_only",
+      mode: "nested_poi",
+      id: seed.id,
+      type: seed.type,
+      geometry: seed.geometry,
+      source: seed.source,
+      direction: seed.direction,
+      low: seed.low,
+      high: seed.high,
+      entryPrice: seed.entryPrice,
+      timeframe: seed.timeframe,
+      impulseId: seed.impulseId,
+      lifecycle: seed.lifecycle,
+      evidenceId: seed.evidenceId,
+      entityId: seed.entityId,
+      supportingEvidenceIds: supporting.map((item) => item.evidenceId),
+      supportingFamilies: supporting.map((item) => item.type),
+      independentEvidenceCount: supporting.length,
+      localScore: Number(
+        supporting.reduce((sum, item) => sum + item.legacyCredit, 0).toFixed(4),
+      ),
+      lifecycleRank: seed.lifecycleRank,
+      depth: Number(seed.depth.toFixed(6)),
+      widthRatio: Number(seed.widthRatio.toFixed(6)),
+      rank: 0,
+      eligible: true,
+      reasons: [
+        `strictly contained in impulse ${seed.impulseId}`,
+        `${supporting.length} independent overlapping evidence families`,
+        `lifecycle ${seed.lifecycle || "not_applicable"}`,
+      ],
+    };
+  });
+
+  candidates.sort((left, right) =>
+    right.independentEvidenceCount - left.independentEvidenceCount ||
+    right.localScore - left.localScore ||
+    right.lifecycleRank - left.lifecycleRank ||
+    Number(right.geometry === "range") - Number(left.geometry === "range") ||
+    right.depth - left.depth ||
+    left.widthRatio - right.widthRatio ||
+    left.id.localeCompare(right.id)
+  );
+  candidates.forEach((candidate, index) => candidate.rank = index + 1);
+  const selected = candidates[0] || null;
+  return {
+    contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
+    enforcement: "observe_only",
+    mode: "nested_poi",
+    selected,
+    ranked: candidates,
+    explanation: selected
+      ? `${selected.type} selected at ${selected.low}-${selected.high}: ${selected.reasons.join("; ")}`
+      : "No eligible strictly-contained nested ICT entry zone candidate",
+  };
 }
 
 function lifecycleScore(component: ICTEntryZoneComponent): number {
@@ -138,10 +461,15 @@ function candidateFor(
   };
 }
 
-export function selectICTEntryZone(
-  input: readonly ICTEntryZoneComponent[],
-): ICTEntryZoneSelection {
-  const components = input.filter((item) =>
+export function selectICTEntryZone<T extends ICTEntryZoneAuthorityInput>(
+  input: T,
+): ICTEntryZoneSelectionFor<T> {
+  if (!Array.isArray(input)) {
+    return selectNestedICTEntryZone(
+      input as ICTNestedEntryZoneInput,
+    ) as ICTEntryZoneSelectionFor<T>;
+  }
+  const components = (input as readonly ICTEntryZoneComponent[]).filter((item) =>
     item.high > item.low && item.impulseId.length > 0
   );
   const consumed = new Set<string>();
@@ -183,7 +511,9 @@ export function selectICTEntryZone(
     selected,
     ranked: candidates,
     explanation: selected
-      ? `${selected.type} selected at ${selected.low}-${selected.high}: ${selected.reasons.join("; ")}`
+      ? `${selected.type} selected at ${selected.low}-${selected.high}: ${
+        selected.reasons.join("; ")
+      }`
       : "No eligible ICT entry zone candidate",
-  };
+  } as ICTEntryZoneSelectionFor<T>;
 }

@@ -24,6 +24,10 @@
 
 import { normalizeSessionFilter } from "./sessions.ts";
 import type { ImpulseEntryLifecycleMode } from "./impulseEntryLifecycle.ts";
+import {
+  normalizeNestedPoiMarketMode,
+  type NestedPoiMarketMode,
+} from "./botConfigBehavior.ts";
 
 /**
  * SMC Video Enhancement configuration — opt-in module toggles.
@@ -293,6 +297,7 @@ export const RUNTIME_DEFAULTS = {
   limitOrderMinDistancePips: 3,
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest",
   marketFillAtZone: true,
+  nestedPoiMarketMode: "off" as NestedPoiMarketMode,
   marketFillStrictATRMult: 0.3,
   confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",
   afterChochMode: "confirmation_close" as "confirmation_close" | "observe_retracement" | "wait_retracement",
@@ -884,6 +889,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? RUNTIME_DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? RUNTIME_DEFAULTS.limitOrderPreferZone,
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
+    nestedPoiMarketMode: normalizeNestedPoiMarketMode(
+      entry.nestedPoiMarketMode ?? raw.nestedPoiMarketMode,
+    ),
     marketFillStrictATRMult: entry.zoneProximityATR ?? entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
     confirmationMethod: (entry.confirmationMethod ?? raw.confirmationMethod ?? RUNTIME_DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
     afterChochMode: (entry.afterChochMode ?? raw.afterChochMode ?? RUNTIME_DEFAULTS.afterChochMode) as "confirmation_close" | "observe_retracement" | "wait_retracement",

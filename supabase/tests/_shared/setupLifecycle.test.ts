@@ -3,13 +3,18 @@ import {
   buildFrozenSetupStrategyContext,
   buildSetupLifecycleEvidence,
   canTransitionSetup,
+  normalizeNestedPoiEntryMode,
+  normalizeNestedPoiEntryPlan,
   resolvePendingConfirmationMethod,
   resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
+  resolvePendingNestedPoiEntryPlan,
+  resolvePendingNestedPoiEntryPlanState,
   resolvePendingStylePolicy,
   validateFrozenSetupIdentity,
 } from "../../functions/_shared/setupLifecycle.ts";
+import type { NestedPoiTriggerCandidate } from "../../functions/_shared/impulseZoneEngine.ts";
 
 function stylePolicy(
   style: "scalper" | "day_trader" = "scalper",
@@ -81,15 +86,27 @@ Deno.test("setup lifecycle permits only canonical forward transitions", () => {
 Deno.test("pending Premium/Discount mode is frozen with the setup", () => {
   const frozen = buildFrozenSetupStrategyContext({
     identity: { setupId: "setup-1", candidateId: "candidate-1" },
-    symbol: "GBP/USD", direction: "long", stylePolicy: stylePolicy("scalper"),
-    runtimeConfig: { effectiveConfig: { dealingRangeMode: "strict_value" } } as any,
-    gamePlan: null, directionVerdict: null, confirmationMethod: "choch",
+    symbol: "GBP/USD",
+    direction: "long",
+    stylePolicy: stylePolicy("scalper"),
+    runtimeConfig: {
+      effectiveConfig: { dealingRangeMode: "strict_value" },
+    } as any,
+    gamePlan: null,
+    directionVerdict: null,
+    confirmationMethod: "choch",
   });
   assertEquals(
-    resolvePendingDealingRangeMode({ frozen_strategy_context: frozen }, "avoid_wrong_side"),
+    resolvePendingDealingRangeMode(
+      { frozen_strategy_context: frozen },
+      "avoid_wrong_side",
+    ),
     "strict_value",
   );
-  assertEquals(resolvePendingDealingRangeMode({}, "avoid_wrong_side"), "avoid_wrong_side");
+  assertEquals(
+    resolvePendingDealingRangeMode({}, "avoid_wrong_side"),
+    "avoid_wrong_side",
+  );
 });
 
 Deno.test("pending confirmation method is frozen on the pending row", () => {
@@ -406,4 +423,415 @@ Deno.test("lifecycle evidence cannot be rewritten by a newer plan", () => {
   assertEquals(evidence.directionVerdictId, "original-dv");
   assertEquals(evidence.confirmationMethod, "indicators");
   assertEquals(evidence.originatingZone, { type: "original-zone" });
+});
+function nestedPoiPlan() {
+  const selected: NestedPoiTriggerCandidate = {
+    id: "nested-ob-1",
+    type: "ob" as const,
+    geometry: "range" as const,
+    source: "ltf_refinement" as const,
+    direction: "bullish" as const,
+    low: 1.102,
+    high: 1.103,
+    entryPrice: 1.103,
+    timeframe: "1m",
+    lifecycle: "fresh",
+    evidenceId: "evidence-ob-1",
+    entityId: "nested-ob-1",
+    supportingEvidenceIds: ["evidence-ob-1", "evidence-fib-1"],
+    supportingFamilies: ["ob" as const, "fib" as const],
+    independentEvidenceCount: 2,
+    localScore: 2.5,
+    lifecycleRank: 5,
+    depth: 0.7,
+    widthRatio: 0.1,
+    rank: 1,
+  };
+  return {
+    contractVersion: "nested-poi-entry.v1" as const,
+    enforcement: "observe_only" as const,
+    mode: "enforce_paper" as const,
+    route: "nested_poi_market" as const,
+    monitoringTimeframe: "5m",
+    direction: "long" as const,
+    frozenAt: "2026-08-24T12:00:00.000Z",
+    outerCandidateId: "candidate-1",
+    outerZone: {
+      low: 1.1,
+      high: 1.11,
+      direction: "bullish" as const,
+    },
+    selected,
+    candidates: [selected],
+    reason: "selected" as const,
+  };
+}
+
+function nestedLifecycleContext(plan: ReturnType<typeof nestedPoiPlan>) {
+  return {
+    impulseEntryLifecycleAvailability: {
+      mode: "enforce",
+      available: true,
+      reason: "available",
+    },
+    impulseEntryLifecycle: {
+      mode: "enforce" as "enforce" | "observe",
+      entryMode: "nested_poi_market" as
+        | "nested_poi_market"
+        | "confirmation",
+      impulse: { direction: plan.direction as "long" | "short" },
+      confirmation: { timeframe: plan.monitoringTimeframe },
+      activeCandidateId: plan.selected.id,
+      candidates: [{
+        id: plan.selected.id,
+        type: plan.selected.type,
+        low: plan.selected.low,
+        high: plan.selected.high,
+        triggerKind: plan.selected.geometry,
+      }],
+    },
+  };
+}
+
+Deno.test("nested POI entry plan is frozen with the setup and resolves unchanged", () => {
+  const nestedPoiEntry = nestedPoiPlan();
+  const frozen = buildFrozenSetupStrategyContext({
+    identity: { setupId: "setup-1", candidateId: "candidate-1" },
+    symbol: "GBP/USD",
+    direction: "long",
+    stylePolicy: stylePolicy(),
+    gamePlan: null,
+    directionVerdict: null,
+    confirmationMethod: "choch",
+    nestedPoiEntry,
+  });
+
+  nestedPoiEntry.selected.low = 1.109;
+  assertEquals(frozen.nestedPoiEntry?.selected?.low, 1.102);
+  assertEquals(
+    resolvePendingNestedPoiEntryPlan({ frozen_strategy_context: frozen }),
+    frozen.nestedPoiEntry,
+  );
+});
+
+Deno.test("valid frozen setup context does not fall back to stale duplicate nested fields", () => {
+  const frozen = buildFrozenSetupStrategyContext({
+    identity: { setupId: "setup-1", candidateId: "candidate-1" },
+    symbol: "GBP/USD",
+    direction: "long",
+    stylePolicy: stylePolicy(),
+    gamePlan: null,
+    directionVerdict: null,
+    confirmationMethod: "choch",
+    nestedPoiEntry: null,
+  });
+  const stale = nestedPoiPlan();
+
+  assertEquals(
+    resolvePendingNestedPoiEntryPlan({
+      frozen_strategy_context: frozen,
+      nested_poi_entry: stale,
+      signal_reason: { nestedPoiEntry: stale },
+      confirmation_config: { nestedPoiEntry: stale },
+    }),
+    null,
+  );
+});
+
+Deno.test("nested POI plan rejects geometry outside the frozen outer zone", () => {
+  const plan = nestedPoiPlan();
+  plan.selected.low = 1.099;
+  plan.candidates[0].low = 1.099;
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan), null);
+});
+
+Deno.test("nested POI plan rejects geometry touching the frozen outer boundary", () => {
+  const plan = nestedPoiPlan();
+  plan.selected.low = plan.outerZone.low;
+  plan.candidates[0].low = plan.outerZone.low;
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan), null);
+});
+
+Deno.test("nested POI plan rejects an invalid monitoring timeframe", () => {
+  const plan = nestedPoiPlan();
+  plan.monitoringTimeframe = "not-a-timeframe";
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan), null);
+});
+
+Deno.test("nested POI plan canonicalizes a valid monitoring timeframe alias", () => {
+  const plan = nestedPoiPlan();
+  plan.monitoringTimeframe = "5min";
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan)?.monitoringTimeframe, "5m");
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: nestedLifecycleContext(plan),
+      nested_poi_entry: plan,
+    }).valid,
+    true,
+  );
+});
+
+Deno.test("nested POI plan rejects point geometry repaired into a range", () => {
+  const plan = nestedPoiPlan();
+  const point = {
+    ...plan.selected,
+    id: "fib-1",
+    type: "fib" as const,
+    geometry: "level" as const,
+    low: 1.105,
+    high: 1.106,
+    entryPrice: 1.105,
+    evidenceId: "evidence-fib-1",
+    entityId: "fib-1",
+    supportingEvidenceIds: ["evidence-fib-1"],
+    supportingFamilies: ["fib" as const],
+    independentEvidenceCount: 1,
+  };
+  plan.selected = point;
+  plan.candidates = [point];
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan), null);
+});
+
+Deno.test("nested POI plan supports an observation with no eligible trigger", () => {
+  const plan = {
+    ...nestedPoiPlan(),
+    mode: "observe",
+    route: "observe",
+    selected: null,
+    candidates: [],
+    reason: "no_contained_trigger",
+  };
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan)?.selected, null);
+  assertEquals(
+    normalizeNestedPoiEntryPlan(plan)?.reason,
+    "no_contained_trigger",
+  );
+});
+
+Deno.test("nested POI entry modes fail closed to off", () => {
+  assertEquals(normalizeNestedPoiEntryMode("observe"), "observe");
+  assertEquals(normalizeNestedPoiEntryMode("enforce_paper"), "enforce_paper");
+  assertEquals(normalizeNestedPoiEntryMode("enforce_live"), "enforce_live");
+  assertEquals(normalizeNestedPoiEntryMode("hard"), "off");
+});
+
+Deno.test("declared nested route fails closed without a valid frozen plan", () => {
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "nested_poi_market" },
+    }),
+    {
+      declared: true,
+      valid: false,
+      plan: null,
+      reason: "nested_poi_frozen_plan_unavailable",
+    },
+  );
+});
+
+Deno.test("cross-timeframe nested route fails closed without a valid frozen plan", () => {
+  const frozen = buildFrozenSetupStrategyContext({
+    identity: { setupId: "setup-1", candidateId: "candidate-1" },
+    symbol: "GBP/USD",
+    direction: "long",
+    stylePolicy: stylePolicy(),
+    gamePlan: null,
+    directionVerdict: null,
+    confirmationMethod: "choch",
+    crossTimeframeContext: {
+      impulseEntryLifecycle: { entryMode: "nested_poi_market" },
+    } as any,
+    nestedPoiEntry: null,
+  });
+
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({ frozen_strategy_context: frozen }),
+    {
+      declared: true,
+      valid: false,
+      plan: null,
+      reason: "nested_poi_frozen_plan_unavailable",
+    },
+  );
+});
+
+Deno.test("legacy confirmation row without nested declaration remains valid", () => {
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "confirmation" },
+    }),
+    {
+      declared: false,
+      valid: true,
+      plan: null,
+      reason: "nested_poi_not_declared",
+    },
+  );
+});
+
+Deno.test("declared nested route resolves its exact valid frozen plan", () => {
+  const plan = nestedPoiPlan();
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "nested_poi_market" },
+      cross_timeframe_context: nestedLifecycleContext(plan),
+      nested_poi_entry: plan,
+    }),
+    {
+      declared: true,
+      valid: true,
+      plan,
+      reason: "nested_poi_frozen_plan_available",
+    },
+  );
+});
+
+Deno.test("declared nested route rejects a plan without its frozen lifecycle", () => {
+  const plan = nestedPoiPlan();
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "nested_poi_market" },
+      nested_poi_entry: plan,
+    }),
+    {
+      declared: true,
+      valid: false,
+      plan: null,
+      reason: "nested_poi_frozen_plan_unavailable",
+    },
+  );
+});
+
+Deno.test("declared nested route rejects confirmation-mode or mismatched lifecycle identity", () => {
+  const plan = nestedPoiPlan();
+  const confirmationLifecycle = nestedLifecycleContext(plan);
+  confirmationLifecycle.impulseEntryLifecycle.entryMode = "confirmation";
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: confirmationLifecycle,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+
+  const mismatchedTimeframe = nestedLifecycleContext(plan);
+  mismatchedTimeframe.impulseEntryLifecycle.confirmation.timeframe = "15m";
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: mismatchedTimeframe,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+
+  const mismatchedLifecycle = nestedLifecycleContext(plan);
+  mismatchedLifecycle.impulseEntryLifecycle.candidates[0].id = "other-trigger";
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: mismatchedLifecycle,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+
+  const observedLifecycle = nestedLifecycleContext(plan);
+  observedLifecycle.impulseEntryLifecycle.mode = "observe";
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: observedLifecycle,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+
+  const oppositeDirectionLifecycle = nestedLifecycleContext(plan);
+  oppositeDirectionLifecycle.impulseEntryLifecycle.impulse.direction = "short";
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: oppositeDirectionLifecycle,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+});
+
+Deno.test("declared nested route rejects a frozen observation with no selected trigger", () => {
+  const plan = {
+    ...nestedPoiPlan(),
+    selected: null,
+    candidates: [],
+    reason: "no_contained_trigger",
+  };
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "nested_poi_market" },
+      nested_poi_entry: plan,
+    }),
+    {
+      declared: true,
+      valid: false,
+      plan: null,
+      reason: "nested_poi_frozen_plan_unavailable",
+    },
+  );
+});
+
+Deno.test("paper-only observation plan does not declare an executable nested route", () => {
+  const plan = {
+    ...nestedPoiPlan(),
+    route: "observe" as const,
+  };
+
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      confirmation_config: { entryMode: "confirmation" },
+      nested_poi_entry: plan,
+    }),
+    {
+      declared: false,
+      valid: true,
+      plan,
+      reason: "nested_poi_not_declared",
+    },
+  );
+});
+
+Deno.test("nested POI plan rejects impossible mode and route combinations", () => {
+  assertEquals(
+    normalizeNestedPoiEntryPlan({
+      ...nestedPoiPlan(),
+      mode: "observe",
+      route: "nested_poi_market",
+    }),
+    null,
+  );
+  assertEquals(
+    normalizeNestedPoiEntryPlan({
+      ...nestedPoiPlan(),
+      mode: "enforce_live",
+      route: "observe",
+    }),
+    null,
+  );
+  assertEquals(
+    normalizeNestedPoiEntryPlan({
+      ...nestedPoiPlan(),
+      mode: "off",
+      route: "observe",
+    }),
+    null,
+  );
+});
+
+Deno.test("nested POI plan rejects a missing effective route", () => {
+  const plan = nestedPoiPlan();
+  delete (plan as any).route;
+
+  assertEquals(normalizeNestedPoiEntryPlan(plan), null);
 });

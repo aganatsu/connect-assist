@@ -1,11 +1,150 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   pendingOrderConfirmationPresentation,
+  pendingOrderDisplayStage,
+  pendingOrderNestedPoiPresentation,
   pendingOrderPostConfirmationPresentation,
 } from "@/lib/pendingOrderDisplay";
 
 describe("OperationsDashboard decision pipeline", () => {
+  const nestedPlan = {
+    contractVersion: "nested-poi-entry.v1",
+    enforcement: "observe_only",
+    mode: "enforce_paper",
+    route: "nested_poi_market",
+    monitoringTimeframe: "5m",
+    direction: "long",
+    frozenAt: "2026-08-24T12:00:00Z",
+    outerCandidateId: "outer-1",
+    outerZone: { low: 1.1, high: 1.2, direction: "bullish" },
+    selected: {
+      id: "inner-1",
+      type: "breaker",
+      geometry: "range",
+      low: 1.14,
+      high: 1.15,
+      entryPrice: 1.15,
+      timeframe: "5m",
+    },
+    candidates: [],
+    reason: "selected",
+  };
+
+  it("renders the frozen nested POI as the enforced entry step", () => {
+    const waiting = pendingOrderNestedPoiPresentation({
+      confirmation_config: { entryMode: "nested_poi_market" },
+      frozen_strategy_context: {
+        contractVersion: "setup-policy-freeze.v1",
+        nestedPoiEntry: nestedPlan,
+      },
+      impulse_entry_lifecycle: {
+        mode: "enforce",
+        entryMode: "nested_poi_market",
+        status: "active",
+      },
+    });
+    const touched = pendingOrderNestedPoiPresentation({
+      confirmation_config: { entryMode: "nested_poi_market" },
+      frozen_strategy_context: {
+        contractVersion: "setup-policy-freeze.v1",
+        nestedPoiEntry: nestedPlan,
+      },
+      impulse_entry_lifecycle: {
+        mode: "enforce",
+        entryMode: "nested_poi_market",
+        status: "entered",
+      },
+    });
+
+    expect(waiting).toMatchObject({
+      route: "enforce",
+      label: "Nested POI trigger",
+      complete: false,
+      entryReady: false,
+      frozenAtSetup: true,
+    });
+    expect(waiting.detail).toContain("Active breaker 1.14 - 1.15 on 5m");
+    expect(touched).toMatchObject({
+      route: "enforce",
+      complete: true,
+      entryReady: true,
+    });
+    expect(touched.detail).toContain("touched by a closed candle");
+  });
+
+  it("labels nested POI observation without claiming it controls entry", () => {
+    const plan = { ...nestedPlan, mode: "observe" };
+    const presentation = pendingOrderNestedPoiPresentation({
+      frozen_strategy_context: {
+        contractVersion: "setup-policy-freeze.v1",
+        nestedPoiEntry: plan,
+      },
+      impulse_entry_lifecycle: {
+        mode: "observe",
+        entryMode: "confirmation",
+        status: "active",
+      },
+    });
+
+    expect(presentation).toMatchObject({
+      route: "observe",
+      label: "Nested POI observation",
+      complete: true,
+      entryReady: false,
+    });
+    expect(presentation.detail).toContain("does not control entry");
+  });
+
+  it("does not render a stale post-CHoCH retracement as the nested route stage", () => {
+    expect(pendingOrderDisplayStage({
+      status: "awaiting_confirmation",
+      confirmation_config: { entryMode: "nested_poi_market" },
+      post_confirmation_entry: { state: "awaiting_retracement" },
+    })).toBe("confirmation");
+  });
+
+  it("keeps legacy confirmation presentation when no nested route was frozen", () => {
+    expect(pendingOrderNestedPoiPresentation({})).toMatchObject({
+      route: "none",
+      complete: false,
+      entryReady: false,
+      frozenAtSetup: false,
+    });
+  });
+
+  it("does not resurrect a stale nested plan when canonical frozen context has none", () => {
+    const presentation = pendingOrderNestedPoiPresentation({
+      confirmation_config: { entryMode: "confirmation" },
+      frozen_strategy_context: {
+        contractVersion: "setup-policy-freeze.v1",
+        nestedPoiEntry: null,
+      },
+      signal_reason: { nestedPoiEntry: nestedPlan },
+      impulse_entry_lifecycle: {
+        mode: "observe",
+        entryMode: "confirmation",
+        status: "active",
+      },
+    });
+
+    expect(presentation).toMatchObject({
+      route: "none",
+      frozenAtSetup: false,
+    });
+  });
+
+  it("replaces CHoCH and retracement steps only for the enforced nested route", () => {
+    const source = readFileSync("src/pages/OperationsDashboard.tsx", "utf8");
+    expect(source).toContain('if (nestedPoi.route === "enforce")');
+    expect(source).toContain('label: nestedPoi.route === "none" ? "Zone entered" : "Outer zone entered"');
+    expect(source).toContain('label: nestedPoi.label');
+    expect(source.indexOf('if (nestedPoi.route === "enforce")')).toBeLessThan(
+      source.indexOf("const postConfirmation ="),
+    );
+  });
+
   it.each([
     ["choch", "MSS / CHoCH, displacement, or reversal"],
     ["indicators", "Indicator consensus"],

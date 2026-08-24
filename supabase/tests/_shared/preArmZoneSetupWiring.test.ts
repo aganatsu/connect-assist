@@ -15,8 +15,12 @@ Deno.test("visible zone setup expiry owns staging and pending lifecycle clocks",
 });
 
 Deno.test("pre-armed setup inherits lifecycle identity and has no frozen size", () => {
-  const start = scanner.indexOf("staged_setup_id: frozenZoneWatch.id");
-  const insert = scanner.slice(start - 1200, start + 1200);
+  const start = scanner.indexOf(
+    'const { error: preArmError } = await supabase.from("pending_orders").insert({',
+  );
+  const end = scanner.indexOf("if (preArmError", start);
+  const insert = scanner.slice(start, end);
+  assert(start >= 0 && end > start);
   assert(insert.includes("candidate_id: frozenZoneWatch.candidate_id"));
   assert(insert.includes("staged_setup_id: frozenZoneWatch.id"));
   assert(insert.includes("frozen_strategy_context: frozenZoneWatch.frozen_strategy_context"));

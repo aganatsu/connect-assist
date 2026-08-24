@@ -5,6 +5,7 @@ import {
   impulseInvalidatedByClose,
   transitionImpulseEntryLifecycle,
 } from "../../functions/_shared/impulseEntryLifecycle.ts";
+import { advanceTradeLifecycle } from "../../functions/_shared/tradeLifecycleAuthority.ts";
 
 const input = {
   now: "2026-08-05T20:00:00.000Z",
@@ -109,6 +110,71 @@ Deno.test("candidate failure and impulse invalidation use separate levels", () =
   }
   if (!impulseInvalidatedByClose(lifecycle, 1.09)) {
     throw new Error("protected low should invalidate impulse");
+  }
+});
+
+Deno.test("nested POI market entry becomes ready on the frozen trigger touch", () => {
+  const lifecycle = buildImpulseEntryLifecycle({
+    ...input,
+    entryMode: "nested_poi_market",
+    candidates: [{
+      id: "fib-618",
+      type: "fib",
+      low: 1.1382,
+      high: 1.1382,
+      triggerKind: "level",
+      timeframe: "1H",
+      impulseId: "impulse-1",
+    }],
+    initialCandidateId: "fib-618",
+  });
+  const before = advanceTradeLifecycle({
+    lifecycle,
+    candle: {
+      datetime: "2026-08-05T20:05:00.000Z",
+      open: 1.14, high: 1.14, low: 1.139, close: 1.1395,
+    },
+    completedCandles: [],
+  });
+  if (before.disposition !== "watch") {
+    throw new Error("outer-zone presence must not authorize before trigger touch");
+  }
+  const touched = advanceTradeLifecycle({
+    lifecycle: before.after,
+    candle: {
+      datetime: "2026-08-05T20:10:00.000Z",
+      open: 1.1395, high: 1.1398, low: 1.1380, close: 1.1388,
+    },
+    completedCandles: [],
+  });
+  if (touched.disposition !== "entry_ready") {
+    throw new Error("frozen nested point touch must authorize lifecycle entry");
+  }
+  if (touched.events[0]?.type !== "entry_trigger_touched") {
+    throw new Error("nested touch must have its own lifecycle event");
+  }
+});
+
+Deno.test("nested POI lifecycle never retargets beyond its frozen selected trigger", () => {
+  const lifecycle = buildImpulseEntryLifecycle({
+    ...input,
+    entryMode: "nested_poi_market",
+    initialCandidateId: "shallow-fvg",
+  });
+  if (
+    lifecycle.candidates.length !== 1 ||
+    lifecycle.activeCandidateId !== "shallow-fvg"
+  ) {
+    throw new Error("nested mode must retain only the frozen selected trigger");
+  }
+
+  const failed = transitionImpulseEntryLifecycle(lifecycle, {
+    type: "candidate_failed",
+    at: "2026-08-05T20:10:00.000Z",
+    reason: "frozen nested trigger failed",
+  });
+  if (failed.status !== "exhausted" || failed.activeCandidateId !== null) {
+    throw new Error("nested mode must terminate instead of retargeting");
   }
 });
 

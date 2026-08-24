@@ -5,6 +5,7 @@ export type ConfirmationAuthoritySource =
   | "legacy_tier"
   | "indicator_router"
   | "combined_router"
+  | "nested_poi_entry"
   | "unavailable";
 
 export type ConfirmationAuthorityLevel =
@@ -15,6 +16,7 @@ export type ConfirmationAuthorityLevel =
   | "reversal_pattern"
   | "indicator_minimum"
   | "combined"
+  | "nested_poi_trigger"
   | "none";
 
 export interface ConfirmationAuthorityObservation {

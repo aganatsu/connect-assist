@@ -274,6 +274,101 @@ Deno.test("impulse lifecycle starts from the executable zone and queues deeper a
   );
 });
 
+Deno.test("nested executable identity includes candidate ID and trigger kind", () => {
+  const frozen = buildFrozenCrossTimeframeContext({
+    symbol: "CHF/JPY",
+    gamePlan: null,
+    directionVerdict: null,
+    stylePolicy,
+    zoneStory: {
+      selectedTF: "5m",
+      impulseQualification: {
+        contractVersion: "impulse-zone-qualification.v2",
+        state: "qualified",
+        qualified: true,
+      },
+      bestZone: {
+        type: "fvg",
+        low: 198.25,
+        high: 198.37,
+        candidateModel: { candidateId: "outer-fvg", rank: 1 },
+        timeframeLineage: { candidateTimeframe: "5m" },
+      },
+      candidateAuthorityObservation: { ranked: [] },
+    },
+    executableZone: {
+      candidateId: "nested-fib",
+      type: "fib",
+      low: 198.3,
+      high: 198.3,
+      timeframe: "5m",
+      triggerKind: "level",
+    },
+    crossTimeframeAuthority,
+    impulseEntryLifecycleMode: "enforce",
+    impulseEntryMode: "nested_poi_market",
+    nestedPoiMonitoringTimeframe: "1m",
+    timeframeEvidence: {
+      observed_at: "2026-08-21T08:00:00.000Z",
+      selected_timeframe: "5m",
+      slots: [{
+        timeframe: "5m",
+        impulses: [{
+          impulseId: "chfjpy-impulse",
+          selected: true,
+          direction: "bullish",
+          high: 198.5,
+          low: 198,
+        }],
+      }],
+    } as any,
+  });
+
+  assertEquals(frozen.impulseEntryLifecycle?.confirmation?.timeframe, "1m");
+  assertEquals(
+    validateImpulseLifecycleExecutableZone({
+      mode: "enforce",
+      context: frozen,
+      executableZone: {
+        candidateId: "nested-fib",
+        type: "fib",
+        low: 198.3,
+        high: 198.3,
+        triggerKind: "level",
+      },
+    }).valid,
+    true,
+  );
+  assertEquals(
+    validateImpulseLifecycleExecutableZone({
+      mode: "enforce",
+      context: frozen,
+      executableZone: {
+        candidateId: "other-fib",
+        type: "fib",
+        low: 198.3,
+        high: 198.3,
+        triggerKind: "level",
+      },
+    }).reason,
+    "impulse_entry_lifecycle_executable_zone_mismatch",
+  );
+  assertEquals(
+    validateImpulseLifecycleExecutableZone({
+      mode: "enforce",
+      context: frozen,
+      executableZone: {
+        candidateId: "nested-fib",
+        type: "fib",
+        low: 198.3,
+        high: 198.3,
+        triggerKind: "range",
+      },
+    }).reason,
+    "impulse_entry_lifecycle_executable_zone_mismatch",
+  );
+});
+
 Deno.test("enforced frozen context reports an out-of-range executable zone without throwing", () => {
   const frozen = buildFrozenCrossTimeframeContext({
     symbol: "GBP/USD",

@@ -78,16 +78,22 @@ const NORMALIZED_TIMEFRAMES: Record<string, AnalysisTimeframe> = {
   "monthly": "1M",
 };
 
-export function normalizeAnalysisTimeframe(
+export function normalizeAnalysisTimeframeOrNull(
   value: unknown,
-  fallback: AnalysisTimeframe = "15m",
-): AnalysisTimeframe {
-  if (typeof value !== "string") return fallback;
+): AnalysisTimeframe | null {
+  if (typeof value !== "string") return null;
   const trimmed = value.trim();
   // Preserve the provider's case-sensitive monthly interval. Lowercasing
   // "1M" would otherwise turn it into the one-minute "1m" interval.
   if (trimmed === "1M") return "1M";
-  return NORMALIZED_TIMEFRAMES[trimmed.toLowerCase()] || fallback;
+  return NORMALIZED_TIMEFRAMES[trimmed.toLowerCase()] || null;
+}
+
+export function normalizeAnalysisTimeframe(
+  value: unknown,
+  fallback: AnalysisTimeframe = "15m",
+): AnalysisTimeframe {
+  return normalizeAnalysisTimeframeOrNull(value) ?? fallback;
 }
 
 export function formatAnalysisTimeframe(

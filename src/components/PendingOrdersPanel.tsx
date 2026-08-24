@@ -5,6 +5,8 @@ import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
 import {
   pendingOrderConfirmationPresentation,
   pendingOrderDisplayStage,
+  pendingOrderDistancePrice,
+  pendingOrderNestedPoiPresentation,
 } from "@/lib/pendingOrderDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -126,11 +128,15 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     }
   };
 
-  const getDistanceDisplay = (order: PendingOrder): string => {
-    if (!order.current_price) return "—";
-    const pipSize = getPipSize(order.symbol);
-    const rawPips = Math.abs(Number(order.current_price) - Number(order.entry_price)) / pipSize;
-    return formatPipDisplay(rawPips, order.symbol, { showSign: false });
+  const getDistanceDisplay = (
+    order: PendingOrder,
+    target: "entry" | "outer_zone" = "entry",
+  ): string => {
+    const distance = pendingOrderDistancePrice(order, target);
+    if (distance === null) return "—";
+    return formatPipDisplay(distance / getPipSize(order.symbol), order.symbol, {
+      showSign: false,
+    });
   };
 
   const statusIcon = (status: string) => {
@@ -169,6 +175,14 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const huntingOrders = orders.filter(o =>
     pendingOrderDisplayStage(o) === "confirmation"
   );
+  const nestedHuntingCount = huntingOrders.filter((order) =>
+    pendingOrderNestedPoiPresentation(order).route === "enforce"
+  ).length;
+  const huntingHeading = nestedHuntingCount === 0
+    ? "Hunting Confirmation"
+    : nestedHuntingCount === huntingOrders.length
+    ? "Hunting Nested POI"
+    : "Hunting Entry Trigger";
   const reconciliationOrders = orders.filter(o =>
     pendingOrderDisplayStage(o) === "reconciliation"
   );
@@ -205,6 +219,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       null;
     const confirmation =
       pendingOrderConfirmationPresentation(order);
+    const nestedPoi = pendingOrderNestedPoiPresentation(order);
+    const nestedPoiEnforced = nestedPoi.route === "enforce";
     const confirmationLabel = confirmation.methodKnown
       ? confirmation.label
       : "current confirmation settings";
@@ -218,7 +234,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     const waitingForRetracement =
       retracementPlan?.state === "awaiting_retracement";
     const retracementReady = retracementPlan?.state === "ready";
-    const hasActiveRetracement = waitingForRetracement || retracementReady;
+    const hasActiveRetracement = !nestedPoiEnforced &&
+      (waitingForRetracement || retracementReady);
     const authorizationWait = order.final_authorization?.authorized === false &&
       order.final_authorization?.retryable === true
       ? order.final_authorization.reason
@@ -304,7 +321,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           <div className="flex items-center justify-between text-[12px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
-              {waitingForRetracement
+              {nestedPoiEnforced
+                ? nestedPoi.complete
+                  ? "Nested POI touched — running fresh final authorization"
+                  : "Outer zone entered — awaiting frozen nested POI"
+                : waitingForRetracement
                 ? `CHoCH confirmed — waiting for ${retracementPlan.zone.type.replace(/_/g, " ")} [${Number(retracementPlan.zone.low).toFixed(5)} – ${Number(retracementPlan.zone.high).toFixed(5)}]`
                 : retracementReady
                 ? "Retracement reached — running fresh final authorization"
@@ -321,7 +342,10 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <span>
               Current: <span className="text-foreground font-mono">{order.current_price ? Number(order.current_price).toFixed(5) : "—"}</span>
               {" · "}
-              <span className="text-info-c">{getDistanceDisplay(order)} away</span>
+              <span className="text-info-c">
+                {getDistanceDisplay(order, nestedPoiEnforced ? "outer_zone" : "entry")} away
+                {nestedPoiEnforced ? " from outer zone" : ""}
+              </span>
             </span>
             <span>
               {stopLossLabel}: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
@@ -345,7 +369,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Narrative sentence */}
         <p className="text-[11px] text-foreground/50 italic leading-tight">
-          {waitingForRetracement
+          {nestedPoiEnforced
+            ? isHunting
+              ? `The outer ${order.entry_zone_type} has been entered. ${nestedPoi.detail}. The broad zone cannot authorize entry by itself.`
+              : `The outer ${order.entry_zone_type} only arms this setup. ${nestedPoi.detail}.`
+            : waitingForRetracement
             ? `The saved CHoCH is confirmed. Price must retrace into the frozen ${retracementPlan.zone.type.replace(/_/g, " ")} before final authorization.`
             : retracementReady
             ? "The frozen retracement was reached. Final authorization must pass before entry."
@@ -394,7 +422,38 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           </details>
         )}
 
-        {order.impulse_entry_lifecycle?.confirmation && (
+        {nestedPoi.route === "observe" && (
+          <div className="border-t border-border/40 pt-2 text-[11px] text-foreground/60">
+            <div className="font-medium text-foreground/70">
+              Nested POI observation <span className="ml-2 text-[9px] text-highlight">OBSERVE ONLY</span>
+            </div>
+            <p className="mt-1">{nestedPoi.detail}</p>
+          </div>
+        )}
+
+        {nestedPoiEnforced && order.impulse_entry_lifecycle?.confirmation && (
+          <details className="border-t border-border/40 pt-2 text-[11px]">
+            <summary className="cursor-pointer text-foreground/70 font-medium">
+              Nested POI market plan · {nestedPoi.complete
+                ? "TOUCHED"
+                : isHunting
+                ? "WAITING"
+                : "STARTS AFTER OUTER TOUCH"}
+              <span className="ml-2 text-[9px] text-warn">ENFORCED</span>
+            </summary>
+            <div className="mt-1.5 space-y-1 text-foreground/60">
+              <p>{nestedPoi.detail}</p>
+              <p className="text-[10px] text-muted-foreground">
+                Candidate <span className="font-mono">{order.impulse_entry_lifecycle.confirmation.candidateId.slice(0, 10)}</span> · current market price is used only after fresh final authorization.
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                {order.impulse_entry_lifecycle.lastTransitionReason}
+              </p>
+            </div>
+          </details>
+        )}
+
+        {!nestedPoiEnforced && order.impulse_entry_lifecycle?.confirmation && (
           <details className="border-t border-border/40 pt-2 text-[11px]">
             <summary className="cursor-pointer text-foreground/70 font-medium">
               Structure confirmation plan · {(!isHunting && order.impulse_entry_lifecycle.confirmation.status === "building")
@@ -480,8 +539,10 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                   ? "text-profit"
                   : "text-highlight"
               }>
-                Confirmation {decision.entryConfirmation?.passed
+                {nestedPoiEnforced ? "Nested POI" : "Confirmation"} {decision.entryConfirmation?.passed
                   ? "PASSED"
+                  : nestedPoiEnforced
+                  ? "WAITING"
                   : `WAITING (${confirmationLabel})`}
               </span>
             </div>
@@ -528,12 +589,12 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <div className="flex items-center gap-1">
               <Crosshair className="w-3 h-3 text-warn animate-pulse" />
               <span className="text-warn">
-                Confirmation active · {getTimeRemaining(order.expires_at)}
+                {nestedPoiEnforced ? "Nested trigger active" : "Confirmation active"} · {getTimeRemaining(order.expires_at)}
               </span>
             </div>
             <span className="text-foreground/40">
-              Zone touched: {(order as any).zone_touch_time
-                ? new Date((order as any).zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              {nestedPoiEnforced ? "Outer zone touched" : "Zone touched"}: {order.zone_touch_time
+                ? new Date(order.zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                 : "just now"
               }
             </span>
@@ -610,7 +671,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
                 <Crosshair className="w-3 h-3" />
-                Hunting Confirmation ({huntingOrders.length})
+                {huntingHeading} ({huntingOrders.length})
               </div>
               {huntingOrders.map((order) => renderOrderCard(order, true))}
             </div>

@@ -49,10 +49,18 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
-import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
+import {
+  buildConfirmationAuthorityObservation,
+  buildRoutedConfirmationObservation,
+} from "../_shared/confirmationAuthority.ts";
 import {
   advanceStoredTradeLifecycle,
+  loadImpulseEntryLifecycle,
 } from "../_shared/impulseEntryLifecycleStore.ts";
+import {
+  completedCandlesSinceCursor,
+  cursorAfterLatestTouchCandle,
+} from "../_shared/pendingZoneTouch.ts";
 import {
   resolveImpulseLifecycleEnforcement,
   type ImpulseLifecycleEnforcementResolution,
@@ -142,13 +150,14 @@ import {
 } from "../_shared/brokerExecutionLedger.ts";
 import { calculateFinalPendingSize, loadAverageRoundTripCommission, loadCachedSizingRateMap } from "../_shared/finalPendingSize.ts";
 import {
+  readFrozenCrossTimeframeAuthority,
+  readFrozenSetupStrategyContext,
   resolvePendingConfirmationMethod,
   resolvePendingDealingRangeMode,
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
+  resolvePendingNestedPoiEntryPlanState,
   resolvePendingStylePolicy,
-  readFrozenCrossTimeframeAuthority,
-  readFrozenSetupStrategyContext,
   validateFrozenSetupIdentity,
 } from "../_shared/setupLifecycle.ts";
 import {
@@ -161,6 +170,9 @@ import {
 import {
   evaluateCrossTimeframeEntryAuthority,
 } from "../_shared/crossTimeframeEntryAuthority.ts";
+import {
+  resolveFrozenNestedPoiMarketRoute,
+} from "../_shared/botConfigBehavior.ts";
 import {
   beginScannerOperation,
   completeScannerOperation,
@@ -581,9 +593,12 @@ Deno.serve(async (req) => {
         );
         const userData = userDataMap[userId];
         if (!userData) { stillHunting++; continue; }
-        await supabase.from("pending_orders").update({
-          last_confirmation_checked_at: new Date().toISOString(),
-        }).eq("id", pending.id).eq("status", "awaiting_confirmation");
+        const confirmationCheckStartedAt = new Date().toISOString();
+        const confirmationReplayCursor = String(
+          pending.last_confirmation_checked_at || pending.zone_touch_time ||
+            pending.placed_at || pending.created_at ||
+            confirmationCheckStartedAt,
+        );
 
         const {
           telegramChatIds,
@@ -610,6 +625,58 @@ Deno.serve(async (req) => {
           );
           continue;
         }
+
+        const frozenNestedPlanState =
+          resolvePendingNestedPoiEntryPlanState(pending);
+        if (!frozenNestedPlanState.valid) {
+          const reason = frozenNestedPlanState.reason;
+          const { data: invalidatedPending } = await supabase
+            .from("pending_orders")
+            .update({
+              status: "invalidated",
+              cancel_reason: reason,
+              resolved_at: new Date().toISOString(),
+            })
+            .eq("id", pending.id)
+            .eq("user_id", userId)
+            .eq("status", "awaiting_confirmation")
+            .select("id")
+            .maybeSingle();
+          if (!invalidatedPending) continue;
+          cancelled++;
+          console.warn(
+            "[zone-confirm] " + pending.symbol + " invalidated: " + reason,
+          );
+          continue;
+        }
+        const frozenNestedPoiEntry = frozenNestedPlanState.plan;
+        const nestedPoiActivation = frozenNestedPoiEntry
+          ? resolveFrozenNestedPoiMarketRoute({
+            mode: frozenNestedPoiEntry.mode,
+            route: frozenNestedPoiEntry.route,
+            runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+          })
+          : null;
+        if (nestedPoiActivation?.runtimeTargetMismatch === true) {
+          const reason =
+            "nested_poi_runtime_target_mismatch: paper-only setup cannot execute live";
+          const { data: cancelledPending } = await supabase
+            .from("pending_orders")
+            .update({
+              status: "cancelled",
+              cancel_reason: reason,
+              resolved_at: new Date().toISOString(),
+            })
+            .eq("id", pending.id)
+            .eq("user_id", userId)
+            .eq("status", "awaiting_confirmation")
+            .select("id")
+            .maybeSingle();
+          if (!cancelledPending) continue;
+          cancelled++;
+          continue;
+        }
+        const nestedPoiEnforced = nestedPoiActivation?.enforced === true;
 
         const pendingPolicyResolution = resolvePendingStylePolicy(
           pending,
@@ -643,13 +710,16 @@ Deno.serve(async (req) => {
           pendingTimeframeAuthority.roles.confirmation;
         const refinementTimeframe =
           pendingTimeframeAuthority.roles.refinement;
+        const lifecycleMonitoringTimeframe = nestedPoiEnforced
+          ? frozenNestedPoiEntry!.monitoringTimeframe
+          : confirmationTimeframe;
         const candles5m = await fetchCandles(
           pending.symbol,
-          confirmationTimeframe,
+          lifecycleMonitoringTimeframe,
           brokerConn,
         );
         if (candles5m.length < 10) {
-          console.log(`[zone-confirm] ${pending.symbol} — insufficient ${confirmationTimeframe} frozen-confirmation candles (${candles5m.length})`);
+          console.log(`[zone-confirm] ${pending.symbol} — insufficient ${lifecycleMonitoringTimeframe} frozen-lifecycle candles (${candles5m.length})`);
           stillHunting++;
           continue;
         }
@@ -679,21 +749,70 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        let impulseLifecycleObservation = null;
-        let lifecycleAfterLock = null;
+        let impulseLifecycleObservation: any = null;
+        let lifecycleAfterLock: any = null;
+        let lifecycleObservationSucceeded = false;
+        let nextConfirmationReplayCursor: string | null = null;
         try {
-          impulseLifecycleObservation = await advanceStoredTradeLifecycle(
-            supabase,
-            pending.impulse_entry_lifecycle_id,
-            candles5m[candles5m.length - 1],
-            candles5m,
-          );
-          for (const transition of impulseLifecycleObservation?.transitions || []) {
+          if (nestedPoiEnforced) {
+            const nestedCandles = completedCandlesSinceCursor({
+              candles: candles5m,
+              observedAfter: confirmationReplayCursor,
+              interval: lifecycleMonitoringTimeframe,
+            });
+            const transitions: any[] = [];
+            const processedNestedCandles: Candle[] = [];
+            for (
+              let candleIndex = 0;
+              candleIndex < nestedCandles.length;
+              candleIndex++
+            ) {
+              const step = await advanceStoredTradeLifecycle(
+                supabase,
+                pending.impulse_entry_lifecycle_id,
+                nestedCandles[candleIndex],
+                nestedCandles.slice(0, candleIndex + 1),
+              );
+              if (!step) continue;
+              processedNestedCandles.push(nestedCandles[candleIndex]);
+              transitions.push(...(step.transitions || []));
+              impulseLifecycleObservation = { ...step, transitions };
+              lifecycleAfterLock = step.after || lifecycleAfterLock;
+              if (step.disposition !== "watch") break;
+            }
+            if (processedNestedCandles.length > 0 && lifecycleAfterLock) {
+              nextConfirmationReplayCursor = cursorAfterLatestTouchCandle(
+                processedNestedCandles,
+                lifecycleMonitoringTimeframe,
+                confirmationReplayCursor,
+              );
+            }
+            if (nestedCandles.length === 0) {
+              lifecycleAfterLock = await loadImpulseEntryLifecycle(
+                supabase,
+                pending.impulse_entry_lifecycle_id,
+              );
+              impulseLifecycleObservation = lifecycleAfterLock
+                ? { after: lifecycleAfterLock, transitions: [] }
+                : null;
+            }
+          } else {
+            impulseLifecycleObservation = await advanceStoredTradeLifecycle(
+              supabase,
+              pending.impulse_entry_lifecycle_id,
+              candles5m[candles5m.length - 1],
+              candles5m,
+            );
+            lifecycleAfterLock = impulseLifecycleObservation?.after || null;
+          }
+          lifecycleObservationSucceeded = true;
+          for (
+            const transition of impulseLifecycleObservation?.transitions || []
+          ) {
             console.log(
               `[zone-confirm] ${pending.symbol} lifecycle ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
             );
           }
-          lifecycleAfterLock = impulseLifecycleObservation?.after || null;
           const buildDiagnostic =
             impulseLifecycleObservation?.confirmationBuildDiagnostic || null;
           if (
@@ -713,11 +832,61 @@ Deno.serve(async (req) => {
             `[zone-confirm] ${pending.symbol} shared lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
           );
         }
+        const persistedConfirmationCursor = nestedPoiEnforced
+          ? nextConfirmationReplayCursor
+          : confirmationCheckStartedAt;
+        if (
+          lifecycleObservationSucceeded &&
+          persistedConfirmationCursor &&
+          (!nestedPoiEnforced || lifecycleAfterLock !== null)
+        ) {
+          const { error: cursorError } = await supabase.from("pending_orders")
+            .update({
+              last_confirmation_checked_at: persistedConfirmationCursor,
+            })
+            .eq("id", pending.id)
+            .eq("status", "awaiting_confirmation");
+          if (cursorError) {
+            console.warn(
+              `[zone-confirm] ${pending.symbol} confirmation cursor update failed: ${cursorError.message}`,
+            );
+          }
+        }
         const lifecycleFailure = impulseLifecycleObservation?.transitions.find(
-          (transition) => transition.event?.type === "candidate_failed",
+          (transition: any) => transition.event?.type === "candidate_failed",
         ) || null;
+        if (
+          nestedPoiEnforced && lifecycleAfterLock &&
+          lifecycleAfterLock.status !== "active" &&
+          lifecycleAfterLock.status !== "entered"
+        ) {
+          const reason = "nested_poi_" +
+            String(lifecycleAfterLock.status) + ": " +
+            String(
+              lifecycleAfterLock.lastTransitionReason ||
+                "Frozen nested trigger became terminal",
+            );
+          await supabase.from("pending_orders").update({
+            status: lifecycleAfterLock.status === "expired"
+              ? "expired"
+              : "invalidated",
+            cancel_reason: reason,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", pending.id).eq("user_id", userId);
+          cancelled++;
+          continue;
+        }
+        if (nestedPoiEnforced && !lifecycleAfterLock) {
+          stillHunting++;
+          console.warn(
+            "[zone-confirm] " + pending.symbol +
+              " nested POI lifecycle unavailable; fill withheld",
+          );
+          continue;
+        }
 
         if (
+          !nestedPoiEnforced &&
           impulseLifecycleEnforcement.effectiveMode === "enforce" &&
           lifecycleFailure &&
           lifecycleFailure.after.status === "active"
@@ -729,7 +898,9 @@ Deno.serve(async (req) => {
           if (retargetError) throw retargetError;
           if (retarget?.retargeted) {
             resetToPending++;
-            console.log(`[zone-confirm] ${pending.symbol} retargeted to frozen impulse candidate ${retarget.candidate_id}`);
+            console.log(
+              `[zone-confirm] ${pending.symbol} retargeted to frozen impulse candidate ${retarget.candidate_id}`,
+            );
             continue;
           }
         }
@@ -795,9 +966,23 @@ Deno.serve(async (req) => {
         const rawRefinedLow = parseFloat(pending.refined_zone_low || "0");
         const rawRefinedHigh = parseFloat(pending.refined_zone_high || "0");
         const hasRefinedZone = rawRefinedLow > 0 && rawRefinedHigh > 0;
-        const zoneLow = hasRefinedZone ? rawRefinedLow : parseFloat(pending.entry_zone_low || "0");
-        const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
-        if (!retracementReadyPlan && zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+        const zoneLow = hasRefinedZone
+          ? rawRefinedLow
+          : parseFloat(pending.entry_zone_low || "0");
+        const zoneHigh = hasRefinedZone
+          ? rawRefinedHigh
+          : parseFloat(pending.entry_zone_high || "0");
+        if (
+          !retracementReadyPlan &&
+          !(nestedPoiEnforced && lifecycleAfterLock?.status === "entered") &&
+          zoneLow > 0 && zoneHigh > 0 &&
+          !isPriceInZone(
+            currentPrice,
+            zoneLow,
+            zoneHigh,
+            pending.direction as "long" | "short",
+          )
+        ) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
           const maxAttempts = resolvePendingMaxConfirmationAttempts(
             pending,
@@ -807,11 +992,14 @@ Deno.serve(async (req) => {
             // Cap reached — cancel the order instead of retrying indefinitely
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Max confirmation attempts reached (${attempts}/${maxAttempts})`,
+              cancel_reason:
+                `Max confirmation attempts reached (${attempts}/${maxAttempts})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             cancelled++;
-            console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CANCELLED: max confirmation attempts reached (${attempts}/${maxAttempts})`);
+            console.log(
+              `[zone-confirm] ${pending.symbol} ${pending.direction} — CANCELLED: max confirmation attempts reached (${attempts}/${maxAttempts})`,
+            );
             continue;
           }
           await supabase.from("pending_orders").update({
@@ -820,7 +1008,9 @@ Deno.serve(async (req) => {
             confirmation_attempts: attempts,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           resetToPending++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts}/${maxAttempts})`);
+          console.log(
+            `[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts}/${maxAttempts})`,
+          );
           continue;
         }
 
@@ -858,13 +1048,15 @@ Deno.serve(async (req) => {
 
         // Fetch the exact lower timeframe frozen with this setup.
         let candles1m: Candle[] = [];
-        try {
-          candles1m = await fetchCandles(
-            pending.symbol,
-            refinementTimeframe,
-            brokerConn,
-          );
-        } catch { /* non-critical: LTF path just won't fire */ }
+        if (!nestedPoiEnforced) {
+          try {
+            candles1m = await fetchCandles(
+              pending.symbol,
+              refinementTimeframe,
+              brokerConn,
+            );
+          } catch { /* non-critical: LTF path just won't fire */ }
+        }
 
         // Extract sweep data from signal_reason (stored at order placement time)
         let sweepEventData: { level: number; type: string } | null = null;
@@ -882,18 +1074,44 @@ Deno.serve(async (req) => {
 
         // Respect the confirmation contract frozen when this setup was created.
         // Runtime config is only a legacy fallback for pre-Phase 4 rows.
-        const confirmationMethod = resolvePendingConfirmationMethod(
+        const legacyConfirmationMethod = resolvePendingConfirmationMethod(
           pending,
           config,
         );
-        const confirmationIndicatorMinimum =
-          resolvePendingIndicatorMinimum(pending, config);
-        let confirmationSignal = retracementReadyPlan
+        const confirmationMethod = nestedPoiEnforced
+          ? "nested_poi_market"
+          : legacyConfirmationMethod;
+        const confirmationIndicatorMinimum = resolvePendingIndicatorMinimum(
+          pending,
+          config,
+        );
+        const nestedTriggerReady = nestedPoiEnforced &&
+          lifecycleAfterLock?.status === "entered";
+        let confirmationSignal: any = nestedPoiEnforced
+          ? nestedTriggerReady
+            ? {
+              type: "nested_poi_trigger",
+              tier: 1,
+              price: currentPrice,
+              candleIndex: candles5m.length - 1,
+              displacement: 0,
+              significance: undefined,
+              closeBased: false,
+              supportingSignals: [
+                "nested_poi:" + frozenNestedPoiEntry!.selected!.type,
+                ...frozenNestedPoiEntry!.selected!.supportingFamilies.map(
+                  (family) => "nested_support:" + family,
+                ),
+              ],
+            }
+            : null
+          : retracementReadyPlan
           ? {
             ...retracementReadyPlan.confirmation,
-            significance: retracementReadyPlan.confirmation.significance || undefined,
+            significance: retracementReadyPlan.confirmation.significance ||
+              undefined,
           } as any
-          : confirmationMethod === "indicators"
+          : legacyConfirmationMethod === "indicators"
           ? null
           : detectZoneConfirmation(
             candles5m,
@@ -906,23 +1124,27 @@ Deno.serve(async (req) => {
             sweepEventData,
             candlestickProfile,
           );
-        const indicatorConfirmation = retracementReadyPlan || confirmationMethod === "choch"
+        const indicatorConfirmation = nestedPoiEnforced ||
+            retracementReadyPlan || legacyConfirmationMethod === "choch"
           ? null
           : checkIndicatorConfirmation(
             candles5m,
             pending.direction as "long" | "short",
             { minIndicators: confirmationIndicatorMinimum },
           );
-        const confirmationPassed = retracementReadyPlan
+        const confirmationPassed = nestedPoiEnforced
+          ? nestedTriggerReady
+          : retracementReadyPlan
           ? true
-          : confirmationMethod === "choch"
+          : legacyConfirmationMethod === "choch"
           ? !!confirmationSignal
-          : confirmationMethod === "indicators"
+          : legacyConfirmationMethod === "indicators"
           ? !!indicatorConfirmation?.confirmed
           : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
-        const lifecycleConfirmationPassed =
-          impulseLifecycleEnforcement.effectiveMode !== "enforce" ||
-          lifecycleAfterLock?.status === "entered";
+        const lifecycleConfirmationPassed = nestedPoiEnforced
+          ? nestedTriggerReady
+          : impulseLifecycleEnforcement.effectiveMode !== "enforce" ||
+            lifecycleAfterLock?.status === "entered";
         const confirmationCandleTime =
           candles5m[candles5m.length - 1]?.datetime || new Date().toISOString();
         const previousConfirmationObservationUpdatedAt =
@@ -932,9 +1154,11 @@ Deno.serve(async (req) => {
           {
             sampledAt: new Date().toISOString(),
             candleTime: confirmationCandleTime,
-            timeframe: confirmationTimeframe,
+            timeframe: lifecycleMonitoringTimeframe,
             method: confirmationMethod,
-            lifecycleMode: impulseLifecycleEnforcement.effectiveMode,
+            lifecycleMode: nestedPoiEnforced
+              ? "enforce"
+              : impulseLifecycleEnforcement.effectiveMode,
             lifecycleAvailable: lifecycleAfterLock !== null,
             lifecycleStatus: lifecycleAfterLock?.status || null,
             detectorPassed: confirmationPassed,
@@ -948,7 +1172,9 @@ Deno.serve(async (req) => {
           ) {
             const { error: observationError } = await supabase
               .from("pending_orders")
-              .update({ pending_authorization_observation: confirmationObservation })
+              .update({
+                pending_authorization_observation: confirmationObservation,
+              })
               .eq("id", pending.id).eq("user_id", userId)
               .eq("status", "awaiting_confirmation");
             if (observationError) throw observationError;
@@ -960,18 +1186,42 @@ Deno.serve(async (req) => {
               observationError?.message,
           );
         }
-        const confirmationAuthority = buildRoutedConfirmationObservation({
-          method: confirmationMethod,
-          direction: pending.direction as "long" | "short",
-          structural: confirmationSignal?.authority || null,
-          indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
-          indicatorsRequired: confirmationIndicatorMinimum,
-          indicatorConfirmed: indicatorConfirmation?.confirmed === true,
-          evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
-          candleIndex: candles5m.length - 1,
-          candleTime: candles5m[candles5m.length - 1]?.datetime || null,
-          price: currentPrice,
-        });
+        const confirmationAuthority = nestedPoiEnforced
+          ? buildConfirmationAuthorityObservation({
+            source: "nested_poi_entry",
+            level: "nested_poi_trigger",
+            direction: pending.direction as "long" | "short",
+            entryReadyUnderCurrentBehavior: nestedTriggerReady,
+            evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
+            candleIndex: candles5m.length - 1,
+            candleTime: candles5m[candles5m.length - 1]?.datetime || null,
+            price: currentPrice,
+            closeBased: false,
+            supportingSignals: frozenNestedPoiEntry!.selected!
+              .supportingFamilies.map(
+                (family) => "nested_support:" + family,
+              ),
+            reasonCodes: [
+              nestedTriggerReady
+                ? "frozen_nested_poi_trigger_touched"
+                : "frozen_nested_poi_trigger_waiting",
+            ],
+          })
+          : buildRoutedConfirmationObservation({
+            method: legacyConfirmationMethod,
+            direction: pending.direction as "long" | "short",
+            structural: confirmationSignal?.authority || null,
+            indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
+            indicatorsRequired: confirmationIndicatorMinimum,
+            indicatorConfirmed: indicatorConfirmation?.confirmed === true,
+            evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
+            candleIndex: candles5m.length - 1,
+            candleTime: candles5m[candles5m.length - 1]?.datetime || null,
+            price: currentPrice,
+          });
+        if (confirmationSignal) {
+          confirmationSignal.authority = confirmationAuthority;
+        }
 
         // ── Phase 1: confirmation-attempt evidence (observation only) ──
         // Never feeds the confirmation decision below; failures are swallowed.

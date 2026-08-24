@@ -41,11 +41,11 @@ Deno.test("pending and direct entries preserve the Watchlist identity", () => {
 Deno.test("the sole confirmation scanner uses the saved pending rule", () => {
   assertStringIncludes(
     fastScanner,
-    "resolvePendingConfirmationMethod(",
+    "const legacyConfirmationMethod = resolvePendingConfirmationMethod(",
   );
   assertStringIncludes(
     fastScanner,
-    "resolvePendingIndicatorMinimum(pending, config)",
+    "resolvePendingIndicatorMinimum(",
   );
   assertStringIncludes(botScanner, "confirmation_config:");
   assertStringIncludes(botScanner, "confirmation_method:");

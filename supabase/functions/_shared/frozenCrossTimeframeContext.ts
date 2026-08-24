@@ -19,8 +19,10 @@ import {
 import type { EvidenceRow } from "./zoneTimeframeEvidence.ts";
 import {
   buildImpulseEntryLifecycle,
+  type EntryTriggerKind,
   type ImpulseEntryLifecycle,
   type ImpulseEntryLifecycleMode,
+  type ImpulseEntryMode,
 } from "./impulseEntryLifecycle.ts";
 
 export const FROZEN_CROSS_TF_CONTEXT_VERSION = "frozen-cross-tf-context.v2";
@@ -113,12 +115,15 @@ function lifecycleCandidateType(value: unknown):
   | "breaker"
   | "ob_fvg"
   | "breaker_fvg"
+  | "support_resistance"
+  | "fib"
   | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
   const normalized = raw === "breaker_block" ? "breaker" : raw;
   return normalized === "ob" || normalized === "fvg" ||
       normalized === "breaker" || normalized === "ob_fvg" ||
-      normalized === "breaker_fvg"
+      normalized === "breaker_fvg" ||
+      normalized === "support_resistance" || normalized === "fib"
     ? normalized
     : null;
 }
@@ -178,7 +183,9 @@ export function buildFrozenCrossTimeframeContext(input: {
     >
     | null;
   impulseEntryLifecycleMode?: ImpulseEntryLifecycleMode;
+  impulseEntryMode?: ImpulseEntryMode;
   confirmationMethod?: "choch" | "indicators" | "choch_and_indicators";
+  nestedPoiMonitoringTimeframe?: string;
 }): FrozenCrossTimeframeContext {
   const story = record(input.zoneStory);
   const best = record(story.bestZone);
@@ -262,6 +269,9 @@ export function buildFrozenCrossTimeframeContext(input: {
         : selectedZone?.timeframe || null,
       low: finite(requestedExecutableZone.low),
       high: finite(requestedExecutableZone.high),
+      triggerKind: requestedExecutableZone.triggerKind === "level"
+        ? "level" as const
+        : "range" as const,
     }
     : {
       candidateId: selectedZone?.candidateId || null,
@@ -269,6 +279,7 @@ export function buildFrozenCrossTimeframeContext(input: {
       timeframe: selectedZone?.timeframe || null,
       low: selectedZone?.low ?? null,
       high: selectedZone?.high ?? null,
+      triggerKind: "range" as const,
     };
   let lifecycleUnavailableReason:
     | ImpulseEntryLifecycleUnavailableReason
@@ -283,7 +294,9 @@ export function buildFrozenCrossTimeframeContext(input: {
     lifecycleUnavailableReason = "executable_zone_type_unsupported";
   } else if (
     executableZone.low === null || executableZone.high === null ||
-    executableZone.high <= executableZone.low
+    (executableZone.high < executableZone.low) ||
+    (executableZone.high === executableZone.low &&
+      executableZone.triggerKind !== "level")
   ) {
     lifecycleUnavailableReason = "executable_zone_bounds_invalid";
   } else if (
@@ -301,6 +314,7 @@ export function buildFrozenCrossTimeframeContext(input: {
         high: executableZone.high!,
         timeframe: executableZone.timeframe || "unknown",
         impulseId: canonicalRange.impulseId,
+        triggerKind: executableZone.triggerKind as EntryTriggerKind,
       }
       : null;
   const authorityLifecycleCandidates = canonicalRange
@@ -319,7 +333,9 @@ export function buildFrozenCrossTimeframeContext(input: {
           | "fvg"
           | "breaker"
           | "ob_fvg"
-          | "breaker_fvg",
+          | "breaker_fvg"
+          | "support_resistance"
+          | "fib",
         low: Number(candidate.low),
         high: Number(candidate.high),
         timeframe: String(
@@ -368,9 +384,13 @@ export function buildFrozenCrossTimeframeContext(input: {
       },
       candidates: lifecycleCandidates,
       initialCandidateId: executableLifecycleCandidate!.id,
+      entryMode: input.impulseEntryMode,
       confirmation: {
         method: input.confirmationMethod || "choch",
-        timeframe: input.stylePolicy.timeframes?.roles?.confirmation || "5m",
+        timeframe: input.impulseEntryMode === "nested_poi_market"
+          ? input.nestedPoiMonitoringTimeframe ||
+            input.stylePolicy.timeframes?.runtimeEntry || "5m"
+          : input.stylePolicy.timeframes?.roles?.confirmation || "5m",
         refinementTimeframe: input.stylePolicy.timeframes?.roles?.refinement ||
           "1m",
         expiresAt: lifecycleExpiry!,
@@ -472,6 +492,15 @@ export function validateImpulseLifecycleExecutableZone(input: {
   const zoneLow = finite(zone.low);
   const zoneHigh = finite(zone.high);
   const zoneType = lifecycleCandidateType(zone.type);
+  const zoneCandidateId = typeof zone.candidateId === "string"
+    ? zone.candidateId
+    : null;
+  const zoneTriggerKind = zone.triggerKind === "range" ||
+      zone.triggerKind === "level"
+    ? zone.triggerKind
+    : null;
+  const nestedPoiEntry =
+    (lifecycle.entryMode ?? "confirmation") === "nested_poi_market";
   if (!active || zoneLow === null || zoneHigh === null || !zoneType) {
     return {
       valid: false,
@@ -480,7 +509,10 @@ export function validateImpulseLifecycleExecutableZone(input: {
   }
   if (
     active.low !== zoneLow || active.high !== zoneHigh ||
-    active.type !== zoneType
+    active.type !== zoneType ||
+    (nestedPoiEntry &&
+      (zoneCandidateId !== active.id ||
+        zoneTriggerKind !== (active.triggerKind ?? "range")))
   ) {
     return {
       valid: false,

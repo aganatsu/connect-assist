@@ -10,24 +10,45 @@ import type { MarketConceptEvidence } from "./conceptEvidence.ts";
 import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
 import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 import type { ZoneLocalEnforcementDecision } from "./zoneLocalEnforcement.ts";
-import { buildICTConfirmationPolicy, type ICTConfirmationPolicy } from "./ictConfirmationPolicy.ts";
-import { buildLiquidityActivationPolicy, type LiquidityActivationPolicy } from "./liquidityActivationPolicy.ts";
+import {
+  buildICTConfirmationPolicy,
+  type ICTConfirmationPolicy,
+} from "./ictConfirmationPolicy.ts";
+import {
+  buildLiquidityActivationPolicy,
+  type LiquidityActivationPolicy,
+} from "./liquidityActivationPolicy.ts";
 import type {
   CrossTimeframeEntryAuthorityDecision,
 } from "./crossTimeframeEntryAuthority.ts";
-import type {
-  FrozenCrossTimeframeContext,
+import {
+  type FrozenCrossTimeframeContext,
+  validateImpulseLifecycleExecutableZone,
 } from "./frozenCrossTimeframeContext.ts";
 import {
   WATCHLIST_LIFECYCLE_EVIDENCE_VERSION,
   type WatchlistLifecycleEvidence,
   type WatchlistLifecycleReasonCode,
 } from "./watchlistLifecycleEvidence.ts";
+import {
+  NESTED_POI_ENTRY_VERSION,
+  type NestedPoiEntryPlan as NestedPoiSelectionPlan,
+  type NestedPoiTriggerCandidate,
+} from "./impulseZoneEngine.ts";
+import {
+  isNestedPoiMarketRouteCompatible,
+  type NestedPoiMarketMode,
+  type NestedPoiMarketRoute,
+  normalizeNestedPoiMarketMode,
+  normalizeNestedPoiMarketRoute,
+} from "./botConfigBehavior.ts";
+import { normalizeAnalysisTimeframeOrNull } from "./timeframeAuthority.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
 export const FROZEN_SETUP_POLICY_VERSION = "setup-policy-freeze.v1";
 export const SCENARIO_ZONE_STORY_VERSION = "scenario-zone-story.v1";
+export const NESTED_POI_ENTRY_CONTRACT_VERSION = NESTED_POI_ENTRY_VERSION;
 
 export type SetupLifecycleStatus =
   | "watching"
@@ -44,6 +65,15 @@ export type ConfirmationMethod =
   | "choch"
   | "indicators"
   | "choch_and_indicators";
+
+/** Immutable entry geometry selected from already-detected evidence. */
+export interface FrozenNestedPoiEntryPlan extends NestedPoiSelectionPlan {
+  mode: NestedPoiMarketMode;
+  route: NestedPoiMarketRoute;
+  monitoringTimeframe: string;
+  direction: "long" | "short";
+  frozenAt: string;
+}
 
 export interface SetupLifecycleIdentity {
   setupId: string;
@@ -94,6 +124,8 @@ export interface FrozenSetupStrategyContext {
   zoneLocalEnforcement?: ZoneLocalEnforcementDecision | null;
   /** Exact cross-timeframe authority and provenance frozen at qualification. */
   crossTimeframeContext?: FrozenCrossTimeframeContext | null;
+  /** Optional market-entry trigger frozen independently from the parent zone. */
+  nestedPoiEntry?: FrozenNestedPoiEntryPlan | null;
   scenarioZoneStory: {
     contractVersion: typeof SCENARIO_ZONE_STORY_VERSION;
     enforcement: "observe_only";
@@ -177,6 +209,7 @@ function normalizeConfirmationMethod(
     : null;
 }
 
+export const normalizeNestedPoiEntryMode = normalizeNestedPoiMarketMode;
 function parseSignalReason(value: unknown): Record<string, any> {
   if (!value) return {};
   if (typeof value === "object") return value as Record<string, any>;
@@ -190,6 +223,221 @@ function parseSignalReason(value: unknown): Record<string, any> {
 
 function asRecord(value: unknown): Record<string, any> {
   return value && typeof value === "object" ? value as Record<string, any> : {};
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function nestedTriggerType(
+  value: unknown,
+): NestedPoiTriggerCandidate["type"] | null {
+  return value === "ob" || value === "fvg" || value === "breaker" ||
+      value === "support_resistance" || value === "fib"
+    ? value
+    : null;
+}
+
+function nestedTriggerSource(
+  value: unknown,
+): NestedPoiTriggerCandidate["source"] | null {
+  return value === "impulse_fib" || value === "historical_sr" ||
+      value === "htf_order_block" || value === "htf_fvg" ||
+      value === "htf_breaker" || value === "htf_fib" ||
+      value === "ltf_refinement" || value === "premium_discount" ||
+      value === "liquidity_pool"
+    ? value
+    : null;
+}
+
+function normalizeNestedPoiTriggerCandidate(
+  value: unknown,
+  outerZone: { low: number; high: number; direction: "bullish" | "bearish" },
+): NestedPoiTriggerCandidate | null {
+  const candidate = asRecord(value);
+  const id = nonEmptyString(candidate.id);
+  const type = nestedTriggerType(candidate.type);
+  const geometry =
+    candidate.geometry === "range" || candidate.geometry === "level"
+      ? candidate.geometry
+      : null;
+  const source = nestedTriggerSource(candidate.source);
+  const direction = candidate.direction === "bullish" ||
+      candidate.direction === "bearish"
+    ? candidate.direction
+    : null;
+  const low = finiteNumber(candidate.low);
+  const high = finiteNumber(candidate.high);
+  const entryPrice = finiteNumber(candidate.entryPrice);
+  const timeframe = nonEmptyString(candidate.timeframe);
+  const evidenceId = nonEmptyString(candidate.evidenceId);
+  const entityId = nonEmptyString(candidate.entityId);
+  const independentEvidenceCount = finiteNumber(
+    candidate.independentEvidenceCount,
+  );
+  const localScore = finiteNumber(candidate.localScore);
+  const lifecycleRank = finiteNumber(candidate.lifecycleRank);
+  const depth = finiteNumber(candidate.depth);
+  const widthRatio = finiteNumber(candidate.widthRatio);
+  const rank = finiteNumber(candidate.rank);
+  if (
+    !id || !type || !geometry || !source || !direction ||
+    low === null || high === null || entryPrice === null || !timeframe ||
+    !evidenceId || !entityId || independentEvidenceCount === null ||
+    localScore === null || lifecycleRank === null || depth === null ||
+    widthRatio === null || rank === null ||
+    !Number.isInteger(independentEvidenceCount) ||
+    independentEvidenceCount < 1 || localScore < 0 || lifecycleRank < 0 ||
+    depth < 0 || depth > 1 || widthRatio < 0 || widthRatio > 1 ||
+    !Number.isInteger(rank) || rank < 1 || direction !== outerZone.direction ||
+    low <= outerZone.low || high >= outerZone.high || entryPrice < low ||
+    entryPrice > high
+  ) return null;
+  if (
+    geometry === "level"
+      ? low !== high || entryPrice !== low ||
+        (type !== "support_resistance" && type !== "fib")
+      : !(high > low) || type === "support_resistance" || type === "fib"
+  ) return null;
+
+  const supportingEvidenceIds = Array.isArray(candidate.supportingEvidenceIds)
+    ? candidate.supportingEvidenceIds.map(nonEmptyString).filter(
+      (item): item is string => item !== null,
+    )
+    : [];
+  const supportingFamilies = Array.isArray(candidate.supportingFamilies)
+    ? candidate.supportingFamilies.map(nestedTriggerType).filter(
+      (item): item is NestedPoiTriggerCandidate["type"] => item !== null,
+    )
+    : [];
+  if (
+    supportingEvidenceIds.length === 0 || supportingFamilies.length === 0 ||
+    supportingEvidenceIds.length !== supportingFamilies.length ||
+    independentEvidenceCount !== supportingFamilies.length
+  ) return null;
+
+  return {
+    id,
+    type,
+    geometry,
+    source,
+    direction,
+    low,
+    high,
+    entryPrice,
+    timeframe,
+    lifecycle: nonEmptyString(candidate.lifecycle),
+    evidenceId,
+    entityId,
+    supportingEvidenceIds: Array.from(new Set(supportingEvidenceIds)),
+    supportingFamilies: Array.from(new Set(supportingFamilies)),
+    independentEvidenceCount,
+    localScore,
+    lifecycleRank,
+    depth,
+    widthRatio,
+    rank,
+  };
+}
+
+/**
+ * Parses the shared nested-POI selection plan without repairing its geometry.
+ * Invalid plans fail closed so callers never substitute a midpoint.
+ */
+export function normalizeNestedPoiEntryPlan(
+  value: unknown,
+): FrozenNestedPoiEntryPlan | null {
+  const plan = asRecord(value);
+  if (plan.contractVersion !== NESTED_POI_ENTRY_CONTRACT_VERSION) return null;
+  if (plan.enforcement !== "observe_only") return null;
+  if (
+    plan.mode !== "off" && plan.mode !== "observe" &&
+    plan.mode !== "enforce_paper" && plan.mode !== "enforce_live"
+  ) return null;
+  const route = normalizeNestedPoiMarketRoute(plan.route);
+  if (!route || !isNestedPoiMarketRouteCompatible({ mode: plan.mode, route })) {
+    return null;
+  }
+  const monitoringTimeframe = normalizeAnalysisTimeframeOrNull(
+    plan.monitoringTimeframe,
+  );
+  if (!monitoringTimeframe) return null;
+  if (plan.direction !== "long" && plan.direction !== "short") return null;
+
+  const frozenAt = nonEmptyString(plan.frozenAt);
+  const outer = asRecord(plan.outerZone);
+  const outerLow = finiteNumber(outer.low);
+  const outerHigh = finiteNumber(outer.high);
+  const outerDirection = outer.direction === "bullish" ||
+      outer.direction === "bearish"
+    ? outer.direction
+    : null;
+  if (
+    !frozenAt || outerLow === null || outerHigh === null ||
+    !(outerHigh > outerLow) || !outerDirection ||
+    (plan.direction === "long"
+      ? outerDirection !== "bullish"
+      : outerDirection !== "bearish")
+  ) return null;
+
+  const outerCandidateId = plan.outerCandidateId == null
+    ? null
+    : nonEmptyString(plan.outerCandidateId);
+  if (plan.outerCandidateId != null && !outerCandidateId) return null;
+  const outerZone = {
+    low: outerLow,
+    high: outerHigh,
+    direction: outerDirection,
+  };
+  const rawCandidates = Array.isArray(plan.candidates) ? plan.candidates : [];
+  const candidates = rawCandidates.map((candidate) =>
+    normalizeNestedPoiTriggerCandidate(candidate, outerZone)
+  );
+  if (candidates.some((candidate) => candidate === null)) return null;
+  const normalizedCandidates = candidates as NestedPoiTriggerCandidate[];
+  const candidateIds = normalizedCandidates.map((candidate) => candidate.id);
+  if (new Set(candidateIds).size !== candidateIds.length) return null;
+
+  const selected = plan.selected == null
+    ? null
+    : normalizeNestedPoiTriggerCandidate(plan.selected, outerZone);
+  if (plan.selected != null && !selected) return null;
+  if (
+    selected &&
+    !normalizedCandidates.some((candidate) =>
+      candidate.id === selected.id &&
+      JSON.stringify(candidate) === JSON.stringify(selected)
+    )
+  ) return null;
+  const reason = plan.reason === "selected" ||
+      plan.reason === "local_evidence_unavailable" ||
+      plan.reason === "no_contained_trigger"
+    ? plan.reason
+    : null;
+  if (!reason || (reason === "selected") !== (selected !== null)) return null;
+  if (!selected && normalizedCandidates.length > 0) return null;
+
+  return {
+    contractVersion: NESTED_POI_ENTRY_CONTRACT_VERSION,
+    enforcement: "observe_only",
+    mode: plan.mode,
+    route,
+    monitoringTimeframe,
+    direction: plan.direction,
+    frozenAt,
+    outerCandidateId,
+    outerZone,
+    selected,
+    candidates: normalizedCandidates,
+    reason,
+  };
 }
 
 function normalizeIndicatorMinimum(value: unknown): number {
@@ -231,6 +479,7 @@ export function buildFrozenSetupStrategyContext(input: {
   zoneCandidateShadowRanking?: ZoneCandidateShadowRanking | null;
   zoneLocalEnforcement?: ZoneLocalEnforcementDecision | null;
   crossTimeframeContext?: FrozenCrossTimeframeContext | null;
+  nestedPoiEntry?: unknown;
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
@@ -289,6 +538,7 @@ export function buildFrozenSetupStrategyContext(input: {
     zoneCandidateShadowRanking: input.zoneCandidateShadowRanking || null,
     zoneLocalEnforcement: input.zoneLocalEnforcement || null,
     crossTimeframeContext: input.crossTimeframeContext || null,
+    nestedPoiEntry: normalizeNestedPoiEntryPlan(input.nestedPoiEntry),
     scenarioZoneStory: {
       contractVersion: SCENARIO_ZONE_STORY_VERSION,
       enforcement: "observe_only",
@@ -359,10 +609,146 @@ export function readFrozenSetupStrategyContext(
       scenarioZoneStory.contractVersion === SCENARIO_ZONE_STORY_VERSION &&
       scenarioZoneStory.enforcement === "observe_only"
     ) {
-      return context as FrozenSetupStrategyContext;
+      return {
+        ...(context as FrozenSetupStrategyContext),
+        nestedPoiEntry: normalizeNestedPoiEntryPlan(context.nestedPoiEntry),
+      };
     }
   }
   return null;
+}
+
+/** Reads persisted setup data only; runtime settings never rewrite the plan. */
+export function resolvePendingNestedPoiEntryPlan(
+  pending: Record<string, unknown>,
+): FrozenNestedPoiEntryPlan | null {
+  const frozen = readFrozenSetupStrategyContext(pending);
+  if (frozen) return frozen.nestedPoiEntry || null;
+
+  const signalReason = parseSignalReason(pending.signal_reason);
+  const confirmationConfig = asRecord(pending.confirmation_config);
+  const candidates = [
+    pending.nested_poi_entry,
+    signalReason.nestedPoiEntry,
+    confirmationConfig.nestedPoiEntry,
+  ];
+  for (const candidate of candidates) {
+    const plan = normalizeNestedPoiEntryPlan(candidate);
+    if (plan) return plan;
+  }
+  return null;
+}
+
+export type PendingNestedPoiEntryPlanState =
+  | {
+    declared: false;
+    valid: true;
+    plan: FrozenNestedPoiEntryPlan | null;
+    reason: "nested_poi_not_declared";
+  }
+  | {
+    declared: true;
+    valid: true;
+    plan: FrozenNestedPoiEntryPlan;
+    reason: "nested_poi_frozen_plan_available";
+  }
+  | {
+    declared: true;
+    valid: false;
+    plan: null;
+    reason: "nested_poi_frozen_plan_unavailable";
+  };
+
+/**
+ * A persisted nested route must retain its exact frozen plan. A missing or
+ * malformed plan fails closed instead of falling through to legacy CHoCH.
+ */
+export function resolvePendingNestedPoiEntryPlanState(
+  pending: Record<string, unknown>,
+): PendingNestedPoiEntryPlanState {
+  const confirmationConfig = asRecord(pending.confirmation_config);
+  const signalReason = parseSignalReason(pending.signal_reason);
+  const frozen = readFrozenSetupStrategyContext(pending);
+  const fallbackFrozenContexts = [
+    pending.frozen_strategy_context,
+    signalReason.frozenStrategyContext,
+    signalReason.watchlistLifecycle?.frozenStrategyContext,
+    asRecord(pending.authorization_result).frozenStrategyContext,
+    asRecord(
+      asRecord(pending.final_authorization).decisionContext,
+    ).frozenStrategyContext,
+  ];
+  const crossTimeframeContexts = frozen ? [frozen.crossTimeframeContext] : [
+    pending.cross_timeframe_context,
+    pending.crossTimeframeContext,
+    ...fallbackFrozenContexts.map((context) =>
+      asRecord(context).crossTimeframeContext
+    ),
+  ];
+  const declaredByEntryMode =
+    confirmationConfig.entryMode === "nested_poi_market" ||
+    crossTimeframeContexts.some((context) =>
+      asRecord(asRecord(context).impulseEntryLifecycle).entryMode ===
+        "nested_poi_market"
+    );
+  const plan = resolvePendingNestedPoiEntryPlan(pending);
+  const planDeclaresNestedRoute = plan?.route === "nested_poi_market";
+  const declared = declaredByEntryMode || planDeclaresNestedRoute;
+  const lifecycleMatchesPlan = !!(planDeclaresNestedRoute && plan?.selected) &&
+    crossTimeframeContexts.some((contextValue) => {
+      const context = asRecord(contextValue);
+      const lifecycle = asRecord(context.impulseEntryLifecycle);
+      const impulse = asRecord(lifecycle.impulse);
+      const confirmation = asRecord(lifecycle.confirmation);
+      const lifecycleMonitoringTimeframe = normalizeAnalysisTimeframeOrNull(
+        confirmation.timeframe,
+      );
+      if (
+        lifecycle.mode !== "enforce" ||
+        lifecycle.entryMode !== "nested_poi_market" ||
+        impulse.direction !== plan!.direction ||
+        lifecycleMonitoringTimeframe !== plan!.monitoringTimeframe
+      ) return false;
+      try {
+        return validateImpulseLifecycleExecutableZone({
+          mode: "enforce",
+          context: context as FrozenCrossTimeframeContext,
+          executableZone: {
+            candidateId: plan!.selected!.id,
+            type: plan!.selected!.type,
+            low: plan!.selected!.low,
+            high: plan!.selected!.high,
+            triggerKind: plan!.selected!.geometry,
+          },
+        }).valid;
+      } catch {
+        return false;
+      }
+    });
+  if (
+    declared && planDeclaresNestedRoute && plan?.selected &&
+    lifecycleMatchesPlan
+  ) {
+    return {
+      declared: true,
+      valid: true,
+      plan,
+      reason: "nested_poi_frozen_plan_available",
+    };
+  }
+  return declared
+    ? {
+      declared: true,
+      valid: false,
+      plan: null,
+      reason: "nested_poi_frozen_plan_unavailable",
+    }
+    : {
+      declared: false,
+      valid: true,
+      plan,
+      reason: "nested_poi_not_declared",
+    };
 }
 
 export function resolvePendingDealingRangeMode(
@@ -677,15 +1063,27 @@ export function resolveLifecycleCandidateId(
   generate: () => string,
 ): LifecycleIdentity {
   if (usable(input.inheritedCandidateId)) {
-    return { candidateId: input.inheritedCandidateId, source: "promoted_evidence", inherited: true };
+    return {
+      candidateId: input.inheritedCandidateId,
+      source: "promoted_evidence",
+      inherited: true,
+    };
   }
   if (usable(input.stagedCandidateId)) {
-    return { candidateId: input.stagedCandidateId, source: "staged_candidate", inherited: true };
+    return {
+      candidateId: input.stagedCandidateId,
+      source: "staged_candidate",
+      inherited: true,
+    };
   }
   // The watchlist row's own id is durable even when candidate_id predates the
   // column being populated. Better than minting: it still points at one row.
   if (usable(input.stagedRowId)) {
-    return { candidateId: input.stagedRowId, source: "staged_row", inherited: true };
+    return {
+      candidateId: input.stagedRowId,
+      source: "staged_row",
+      inherited: true,
+    };
   }
   return { candidateId: generate(), source: "generated", inherited: false };
 }

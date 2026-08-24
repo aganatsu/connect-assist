@@ -338,6 +338,7 @@ Deno.test("mapNestedToFlat: limit order fields from entry section", () => {
       limitOrderMinDistancePips: 5,
       limitOrderPreferZone: "fvg",
       marketFillAtZone: false,
+      nestedPoiMarketMode: "enforce_paper",
       marketFillStrictATRMult: 0.5,
     },
   });
@@ -347,7 +348,26 @@ Deno.test("mapNestedToFlat: limit order fields from entry section", () => {
   assertEquals(result.limitOrderMinDistancePips, 5);
   assertEquals(result.limitOrderPreferZone, "fvg");
   assertEquals(result.marketFillAtZone, false);
+  assertEquals(result.nestedPoiMarketMode, "enforce_paper");
   assertAlmostEquals(result.marketFillStrictATRMult, 0.5);
+});
+
+Deno.test("mapNestedToFlat: nested POI market trigger is opt-in and rejects unknown modes", () => {
+  assertEquals(mapNestedToFlat({}).nestedPoiMarketMode, "off");
+  assertEquals(
+    mapNestedToFlat({ nestedPoiMarketMode: "observe" }).nestedPoiMarketMode,
+    "observe",
+  );
+  assertEquals(
+    mapNestedToFlat({ entry: { nestedPoiMarketMode: "enforce_live" } })
+      .nestedPoiMarketMode,
+    "enforce_live",
+  );
+  assertEquals(
+    mapNestedToFlat({ entry: { nestedPoiMarketMode: "unexpected" } })
+      .nestedPoiMarketMode,
+    "off",
+  );
 });
 
 Deno.test("mapNestedToFlat: visible Pending Zone controls map to their runtime behavior", () => {

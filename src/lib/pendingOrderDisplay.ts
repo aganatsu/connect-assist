@@ -7,6 +7,8 @@ export type PendingOrderDisplayStage =
 
 interface PendingOrderDisplayInput {
   status: string;
+  confirmation_config?: { entryMode?: unknown } | null;
+  impulse_entry_lifecycle?: { entryMode?: unknown } | null;
   post_confirmation_entry?: { state?: string | null } | null;
 }
 
@@ -16,6 +18,34 @@ export type PendingOrderConfirmationMethod =
   | "choch_and_indicators";
 
 export type PendingOrderPipelineState = "complete" | "active" | "pending";
+
+interface PendingOrderDistanceInput {
+  current_price?: unknown;
+  entry_price?: unknown;
+  entry_zone_low?: unknown;
+  entry_zone_high?: unknown;
+}
+
+/** Returns quote-price distance to either the exact entry or the outer zone. */
+export function pendingOrderDistancePrice(
+  order: PendingOrderDistanceInput,
+  target: "entry" | "outer_zone" = "entry",
+): number | null {
+  const current = Number(order.current_price);
+  if (!Number.isFinite(current)) return null;
+  if (target === "outer_zone") {
+    const rawLow = Number(order.entry_zone_low);
+    const rawHigh = Number(order.entry_zone_high);
+    if (!Number.isFinite(rawLow) || !Number.isFinite(rawHigh)) return null;
+    const low = Math.min(rawLow, rawHigh);
+    const high = Math.max(rawLow, rawHigh);
+    if (current < low) return low - current;
+    if (current > high) return current - high;
+    return 0;
+  }
+  const entry = Number(order.entry_price);
+  return Number.isFinite(entry) ? Math.abs(current - entry) : null;
+}
 
 export interface PendingOrderPostConfirmationPresentation {
   step: {
@@ -29,9 +59,22 @@ export interface PendingOrderPostConfirmationPresentation {
 interface PendingOrderConfirmationInput {
   status?: unknown;
   confirmation_method?: unknown;
-  confirmation_config?: { afterChochMode?: unknown } | null;
+  confirmation_config?: {
+    afterChochMode?: unknown;
+    entryMode?: unknown;
+    nestedPoiEntry?: unknown;
+  } | null;
   signal_reason?: unknown;
-  impulse_entry_lifecycle?: { mode?: unknown } | null;
+  frozen_strategy_context?: {
+    contractVersion?: unknown;
+    nestedPoiEntry?: unknown;
+  } | null;
+  nested_poi_entry?: unknown;
+  impulse_entry_lifecycle?: {
+    mode?: unknown;
+    entryMode?: unknown;
+    status?: unknown;
+  } | null;
   confirmation_build_diagnostic?: { reasonCode?: unknown } | null;
   pending_authorization_observation?: {
     confirmation?: {
@@ -65,14 +108,27 @@ export interface PendingOrderConfirmationPresentation {
   structureLifecycleEnforced: boolean;
 }
 
+export interface PendingOrderNestedPoiPresentation {
+  route: "none" | "observe" | "enforce";
+  label: string;
+  detail: string;
+  complete: boolean;
+  entryReady: boolean;
+  frozenAtSetup: boolean;
+}
+
 /** Presentation-only projection of the persisted pending-order lifecycle. */
 export function pendingOrderDisplayStage(
   order: PendingOrderDisplayInput,
 ): PendingOrderDisplayStage {
   const retracementState = order.post_confirmation_entry?.state;
+  const isNestedPoiEntry =
+    order.impulse_entry_lifecycle?.entryMode === "nested_poi_market" ||
+    order.confirmation_config?.entryMode === "nested_poi_market";
   const isActive = order.status === "pending" || order.status === "awaiting_confirmation";
   if (
     isActive &&
+    !isNestedPoiEntry &&
     (retracementState === "awaiting_retracement" || retracementState === "ready")
   ) {
     return "retracement";
@@ -125,6 +181,114 @@ function persistedConfirmationMethod(
   return confirmationMethodValue(order.confirmation_method) ||
     confirmationMethodValue(watchlistLifecycle.confirmationMethod) ||
     confirmationMethodValue(signalReason.confirmationMethod);
+}
+
+function nestedPoiTypeLabel(type: unknown): string {
+  if (type === "ob") return "Order Block";
+  if (type === "fvg") return "FVG";
+  if (type === "breaker") return "Active breaker";
+  if (type === "support_resistance") return "S/R level";
+  if (type === "fib") return "Fib level";
+  return "Nested POI";
+}
+
+function nestedPoiPlan(
+  order: PendingOrderConfirmationInput,
+): Record<string, unknown> {
+  const frozenContext = recordValue(order.frozen_strategy_context);
+  const signalReason = recordValue(order.signal_reason);
+  const watchlistLifecycle = recordValue(signalReason.watchlistLifecycle);
+  const frozenSources = [
+    frozenContext,
+    recordValue(signalReason.frozenStrategyContext),
+    recordValue(watchlistLifecycle.frozenStrategyContext),
+  ];
+  for (const context of frozenSources) {
+    if (context.contractVersion !== "setup-policy-freeze.v1") continue;
+    const plan = recordValue(context.nestedPoiEntry);
+    return plan.contractVersion === "nested-poi-entry.v1" ? plan : {};
+  }
+
+  // Legacy rows may predate the canonical frozen context. Only those rows may
+  // fall back to duplicated persistence fields.
+  const sources = [
+    order.nested_poi_entry,
+    signalReason.nestedPoiEntry,
+    order.confirmation_config?.nestedPoiEntry,
+  ];
+  for (const source of sources) {
+    const plan = recordValue(source);
+    if (plan.contractVersion === "nested-poi-entry.v1") return plan;
+  }
+  return {};
+}
+
+function nestedPoiGeometryDetail(selected: Record<string, unknown>): string {
+  const type = nestedPoiTypeLabel(selected.type);
+  const timeframe = typeof selected.timeframe === "string" && selected.timeframe
+    ? ` on ${selected.timeframe}`
+    : "";
+  const low = Number(selected.low);
+  const high = Number(selected.high);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return `${type}${timeframe}`;
+  if (selected.geometry === "level" || low === high) {
+    return `${type} at ${low}${timeframe}`;
+  }
+  return `${type} ${low} - ${high}${timeframe}`;
+}
+
+/** Presentation-only projection of the frozen nested-POI entry route. */
+export function pendingOrderNestedPoiPresentation(
+  order: PendingOrderConfirmationInput,
+): PendingOrderNestedPoiPresentation {
+  const plan = nestedPoiPlan(order);
+  const selected = recordValue(plan.selected);
+  const hasPlan = Object.keys(plan).length > 0;
+  const hasSelected = Object.keys(selected).length > 0;
+  const lifecycleEntryMode = order.impulse_entry_lifecycle?.entryMode;
+  const configuredEntryMode = order.confirmation_config?.entryMode;
+  const enforced = lifecycleEntryMode === "nested_poi_market" ||
+    configuredEntryMode === "nested_poi_market";
+  const observed = !enforced && hasPlan && plan.mode !== "off";
+
+  if (!enforced && !observed) {
+    return {
+      route: "none",
+      label: "Nested POI trigger",
+      detail: "Not active for this setup",
+      complete: false,
+      entryReady: false,
+      frozenAtSetup: false,
+    };
+  }
+
+  if (!hasSelected) {
+    return {
+      route: enforced ? "enforce" : "observe",
+      label: enforced ? "Nested POI trigger" : "Nested POI observation",
+      detail: enforced
+        ? "Frozen nested trigger unavailable; entry remains blocked"
+        : "No contained nested POI was selected; execution is unchanged",
+      complete: false,
+      entryReady: false,
+      frozenAtSetup: hasPlan,
+    };
+  }
+
+  const trigger = nestedPoiGeometryDetail(selected);
+  const complete = enforced && order.impulse_entry_lifecycle?.status === "entered";
+  return {
+    route: enforced ? "enforce" : "observe",
+    label: enforced ? "Nested POI trigger" : "Nested POI observation",
+    detail: enforced
+      ? complete
+        ? `${trigger} touched by a closed candle`
+        : `Waiting for a closed candle to touch frozen ${trigger}`
+      : `${trigger} recorded only; it does not control entry`,
+    complete: enforced ? complete : true,
+    entryReady: complete,
+    frozenAtSetup: true,
+  };
 }
 
 

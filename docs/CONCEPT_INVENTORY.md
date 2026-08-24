@@ -52,6 +52,7 @@ instead of arbitrating.
 | Zone confirmation | 1 | `detectZoneConfirmation` | 🟢 Single owner |
 | Post-touch CHoCH/MSS trigger | 2 enforced checks | `detectZoneConfirmation` + `impulseConfirmationLock` | 🔴 DUPLICATE ENFORCEMENT |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
+| Nested entry-zone eligibility/ranking | 1 authority mode | `ictEntryZoneAuthority.ts:selectICTEntryZone` | 🟢 Single owner |
 
 ---
 
@@ -152,6 +153,40 @@ cannot construct that identity, the frozen context records a named unavailable r
 and the order-creation boundary rejects only that setup. It must not throw across the
 scanner loop. Backtest applies the same containment check and retains its prior state
 when the executable zone is outside the canonical range.
+
+## Nested POI market trigger
+
+`_shared/ictEntryZoneAuthority.ts:selectICTEntryZone` is the single owner of
+nested market-entry candidate eligibility and ranking through its explicit
+`nested_poi` mode. It consumes evidence already produced by the existing Order Block,
+FVG, breaker, historical S/R, and Fibonacci owners; it does not detect those concepts
+again. `impulseZoneEngine.ts:buildNestedPoiEntryPlan` only adapts and freezes the
+authority result into the persisted nested-entry contract.
+
+Expanded candidate evidence is stored separately from `localConfluence` and collected
+only while this feature is enabled, so `off` preserves legacy shadow ranking,
+zone-local enforcement inputs, and detector cost. The authority requires candidates to
+be direction-aligned and strictly inside the selected outer impulse zone. Active
+breakers use the existing breaker semantics: a previous Order Block must have broken
+and remain eligible for its retest.
+
+The outer zone is context and arming geometry only. The selected inner range or level
+is frozen in the setup strategy context and becomes the lifecycle's exact executable
+candidate. Its source timeframe remains provenance; the setup separately freezes the
+runtime-entry timeframe used to monitor completed-candle touches. There is no midpoint or
+outer-zone fallback. The activation modes are
+`off`, `observe`, `enforce_paper`, and `enforce_live`; `off` preserves the
+legacy Market Fill behavior, while observation records the selection without changing
+entry. Each setup freezes the effective route, not just the requested mode: a live
+setup under `enforce_paper` remains observational even if the account later changes
+target, while a paper-created executable setup fails closed if moved to live.
+Under enforcement, a completed candle must touch the frozen inner trigger before
+the existing final authorization, risk, spread, sizing, and broker checks may send a
+market order at the current price. The enforced nested route replaces the CHoCH and
+post-CHoCH retracement steps for that setup; it does not run as an additional gate.
+`pendingZoneTouch.ts:closedCandleTouchesRange` is the single owner of exact
+completed-candle overlap for outer-zone and nested-trigger touches. Live and backtest
+both advance the same persisted impulse-entry lifecycle through that owner.
 
 ## Post-touch CHoCH/MSS trigger
 
@@ -398,8 +433,10 @@ findCascadeZone  (cascadeZoneEngine)  ─┴─► findBestEntryZoneMultiTF ─�
 
 One detection foundation, two competing *selection strategies* over it, resolved by an
 explicit priority waterfall at `bot-scanner/index.ts:6015`. `selectICTEntryZone` is
-observation-only (called inside `buildCandidateAuthorityObservation`). This is defensible
-architecture, not duplication.
+observation-only: its standard mode is called inside `buildCandidateAuthorityObservation`,
+and its explicit `nested_poi` mode owns the nested route's eligibility and ranking before
+`buildNestedPoiEntryPlan` freezes the result. This is defensible architecture, not
+duplication.
 
 ---
 
