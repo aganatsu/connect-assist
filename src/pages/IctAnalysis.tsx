@@ -13,6 +13,7 @@ import { getChartTheme } from "@/lib/chartTheme";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import { generateDetailNarrative } from "@/lib/narrative";
+import { collectLatestScanDetails } from "@/lib/scanLogHistory";
 import {
   BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
@@ -45,19 +46,16 @@ export default function IctAnalysis() {
     refetchInterval: 60000,
   });
 
-  // Parse latest scan
-  const { meta, pairDetails, selectedDetail } = useMemo(() => {
-    const logs = Array.isArray(scanLogs) ? scanLogs : [];
-    const currentScan = logs[0];
-    if (!currentScan) return { meta: null, pairDetails: [], selectedDetail: null };
-    let dj = currentScan.details_json;
-    if (typeof dj === "string") { try { dj = JSON.parse(dj); } catch { return { meta: null, pairDetails: [], selectedDetail: null }; } }
-    const arr = Array.isArray(dj) ? dj : [];
-    const m = arr.find((d: any) => d?.__meta) ?? null;
-    const details = arr.filter((d: any) => !d?.__meta);
-    const selected = details.find((d: any) => d?.pair === selectedSymbol) || null;
-    return { meta: m, pairDetails: details, selectedDetail: selected };
-  }, [scanLogs, selectedSymbol]);
+  // Each scan contains one rotating slice. Rebuild the latest known state for
+  // every pair from the history already returned by scannerApi.logs().
+  const { meta, details: pairDetails } = useMemo(
+    () => collectLatestScanDetails(scanLogs),
+    [scanLogs],
+  );
+  const selectedDetail = useMemo(
+    () => pairDetails.find((detail) => detail.pair === selectedSymbol) ?? null,
+    [pairDetails, selectedSymbol],
+  );
 
   // Scanner timestamp
   const scanTime = useMemo(() => {
@@ -123,6 +121,22 @@ export default function IctAnalysis() {
   }, [strengthData, liveQuotes]);
 
   const d = selectedDetail; // shorthand
+  const selectedScanTime = useMemo(() => {
+    if (typeof d?.scanObservedAt !== "string") return null;
+    const observedAt = new Date(d.scanObservedAt);
+    if (Number.isNaN(observedAt.getTime())) return null;
+    return observedAt.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }, [d?.scanObservedAt]);
+  const selectedReason = typeof d?.reason === "string"
+    ? d.reason
+    : typeof d?.skipReason === "string"
+      ? d.skipReason
+      : null;
 
   return (
     <AppShell>
@@ -143,7 +157,7 @@ export default function IctAnalysis() {
         <div className="w-full md:w-40 shrink-0 md:border-r border-b md:border-b-0 border-border md:pr-2 pb-2 md:pb-0 flex md:flex-col gap-0.5 overflow-x-auto md:overflow-y-auto">
           <div className="flex items-center justify-between px-2 mb-1">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Instruments</p>
-            {scanTime && <span className="text-[9px] text-muted-foreground font-mono">{scanTime}</span>}
+            {scanTime && <span className="text-[9px] text-muted-foreground font-mono">Latest {scanTime}</span>}
           </div>
           {SYMBOLS.map(s => {
             const pd = pairDetails.find((p: any) => p?.pair === s);
@@ -170,27 +184,50 @@ export default function IctAnalysis() {
         <div className="flex-1 overflow-y-auto md:pl-3 pt-2 md:pt-0 space-y-3">
           {d && (
             <div className="flex items-center gap-3 px-3 pt-1 flex-wrap">
-              <span className="text-xs text-muted-foreground">
-                Score: <span className={`font-mono font-bold ${d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>
-                  {d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score}/10`}
+              {typeof d.score === "number" && (
+                <span className="text-xs text-muted-foreground">
+                  Score: <span className={`font-mono font-bold ${d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>
+                    {d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score}/10`}
+                  </span>
                 </span>
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Trend: <span className={d.trend === "bullish" ? "text-success" : d.trend === "bearish" ? "text-destructive" : ""}>{d.trend}</span>
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Zone: <span className="text-primary">{d.zone} ({d.zonePercent?.toFixed(0)}%)</span>
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Session: <span className="text-foreground">{d.session}</span>
-                {d.killZone && <span className="ml-1 text-primary">● KZ</span>}
-              </span>
+              )}
+              {typeof d.trend === "string" && (
+                <span className="text-xs text-muted-foreground">
+                  Trend: <span className={d.trend === "bullish" ? "text-success" : d.trend === "bearish" ? "text-destructive" : ""}>{d.trend}</span>
+                </span>
+              )}
+              {typeof d.zone === "string" && (
+                <span className="text-xs text-muted-foreground">
+                  Zone: <span className="text-primary">{d.zone}{typeof d.zonePercent === "number" ? ` (${d.zonePercent.toFixed(0)}%)` : ""}</span>
+                </span>
+              )}
+              {typeof d.session === "string" && (
+                <span className="text-xs text-muted-foreground">
+                  Session: <span className="text-foreground">{d.session}</span>
+                  {d.killZone && <span className="ml-1 text-primary">● KZ</span>}
+                </span>
+              )}
+              {selectedScanTime && (
+                <span className="text-xs text-muted-foreground">
+                  Analyzed: <span className="font-mono text-foreground">{selectedScanTime}</span>
+                  {!d.inLatestScan && <span className="ml-1 text-warning">previous rotation</span>}
+                </span>
+              )}
             </div>
           )}
           {d?.summary && <p className="max-w-2xl px-3 text-[10px] text-muted-foreground">{d.summary}</p>}
 
+          {d && (d.status === "skipped" || selectedReason) && (
+            <div className="mx-3 border border-border bg-secondary/25 px-3 py-2 text-xs">
+              <span className="font-semibold uppercase text-muted-foreground">
+                {typeof d.status === "string" ? d.status.replace(/_/g, " ") : "Scan note"}
+              </span>
+              {selectedReason && <span className="ml-2 text-foreground">{selectedReason}</span>}
+            </div>
+          )}
+
           {scanLoading && <p className="text-xs text-muted-foreground animate-pulse">Loading scanner data...</p>}
-          {!scanLoading && !d && <p className="text-xs text-muted-foreground">No scanner data for {selectedSymbol}. Run a scan from the Bot tab.</p>}
+          {!scanLoading && !d && <p className="text-xs text-muted-foreground">No recent scanner data for {selectedSymbol} in the available scan history.</p>}
 
           {d && (
             <Accordion type="multiple" defaultValue={["direction", "regime", "zone", "factors", "structure", "strength"]}>

@@ -991,6 +991,7 @@ export const scannerApi = {
     const { data, error } = await (supabase as any)
       .from("scan_logs")
       .select("*")
+      .eq("bot_id", "smc")
       .order("scanned_at", { ascending: false })
       .limit(100);
     if (error) throw new Error(error.message);
