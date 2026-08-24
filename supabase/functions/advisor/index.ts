@@ -60,7 +60,6 @@ async function loadContext(
     .from("trade_reasonings")
     .select("*")
     .eq("user_id", userId)
-    .eq("bot_id", botId)
     .gte("created_at", cutoff)
     .order("created_at", { ascending: false })
     .limit(500);
@@ -83,7 +82,6 @@ async function loadContext(
     .from("bot_configs")
     .select("config_json")
     .eq("user_id", userId)
-    .eq("bot_id", botId)
     .maybeSingle();
 
   const configRaw = (configRow?.config_json as Record<string, unknown>) || {};
