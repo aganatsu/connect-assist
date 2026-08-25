@@ -19,7 +19,7 @@ import {
   type ResolvedRejection,
   type ClosedTrade,
 } from "../_shared/gatePerformanceEngine.ts";
-import { normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
+import { isStopOut, normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
 
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 
@@ -538,7 +538,7 @@ function detectMarketRegime(trades: TradeRecord[]): RegimeAnalysis {
   }
 
   // 4. SL hit rate — high SL hits in ranging markets (false breakouts)
-  const slHits = trades.filter(t => t.close_reason === "sl_hit" || t.close_reason === "stop_loss").length;
+  const slHits = trades.filter(isStopOut).length;
   const slRate = slHits / trades.length;
   if (slRate > 0.6) {
     regimeScore -= 2;
