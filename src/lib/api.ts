@@ -241,7 +241,9 @@ async function invokeSupabaseFunction(functionName: string, body: Record<string,
       return { data: null, error, requestDispatched };
     }
   };
-  if (functionName !== "broker-execute") return run();
+  if (functionName !== "broker-execute" || isRetryableReadRequest(functionName, body)) {
+    return run();
+  }
 
   const previous = brokerExecuteQueue.catch(() => undefined);
   const current = previous.then(run);
@@ -331,7 +333,7 @@ export async function invokeFunction<T = any>(
     if (transientFallback !== undefined) return transientFallback as T;
   }
 
-  if (retryableRead && data?.errorOrigin === "broker") {
+  if (retryableRead && functionName === "broker-execute" && data?.errorOrigin === "broker") {
     return data as T;
   }
 
