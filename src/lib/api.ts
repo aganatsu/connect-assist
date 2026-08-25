@@ -88,19 +88,6 @@ function jwtHasSubject(token?: string): boolean {
 }
 
 let refreshInFlight: Promise<string | null> | null = null;
-let signOutRedirectTriggered = false;
-
-/** Redirect to /login at most once — concurrent polls must not stack
- *  full-page navigations (that leaves the app on a blank screen). */
-function redirectToLoginOnce(delayMs = 0) {
-  if (typeof window === "undefined") return;
-  if (signOutRedirectTriggered) return;
-  if (window.location.pathname.startsWith("/login")) return;
-  signOutRedirectTriggered = true;
-  window.setTimeout(() => {
-    window.location.replace("/login");
-  }, delayMs);
-}
 
 // Single-flight refresh: concurrent polling calls must not fire competing
 // refresh requests (the loser gets a revoked token and still 500s).
