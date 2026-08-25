@@ -186,3 +186,115 @@ Deno.test("the sole pending fill route uses the shared retry policy", async () =
     true,
   );
 });
+
+// ── Canonical scanner enforcement is the third gate ─────────────────────────
+// It was invisible here, so a canonical "wait" fell through every check and
+// returned false — permanently cancelling a setup the state machine still
+// wanted to hold. Observed 2026-08-25 on GBP/USD: ownership authorized
+// (owned_authorities_allow) while canonical blocked with
+// canonical_state_awaiting_liquidity / disposition "wait", and the order was
+// destroyed rather than kept for the next cycle.
+
+const canonical = (
+  disposition: "allow" | "wait" | "terminal",
+  authorized = false,
+  affectsAuthorization = true,
+) => ({ authorized, affectsAuthorization, disposition });
+
+Deno.test("canonical wait keeps the setup alive even when every other gate allowed", () => {
+  // The exact GBP/USD shape: ownership allowed with no reason codes, so nothing
+  // else in this function can see a reason to wait.
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("allow"),
+      canonical: canonical("wait"),
+    }),
+    true,
+  );
+});
+
+Deno.test("canonical terminal cancels permanently", () => {
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("allow"),
+      canonical: canonical("terminal"),
+    }),
+    false,
+  );
+});
+
+Deno.test("canonical is ignored while observing or when it authorized", () => {
+  // Observe mode: affectsAuthorization false, so it must not force a wait.
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("allow"),
+      canonical: canonical("wait", false, false),
+    }),
+    false,
+  );
+  // Authorized: canonical is not the blocker, so it has nothing to say.
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("allow"),
+      canonical: canonical("allow", true),
+    }),
+    false,
+  );
+});
+
+Deno.test("a genuinely terminal setup stays terminal despite a canonical wait", () => {
+  // Direction reversal and invalid geometry must not be resurrected by a
+  // transient canonical state.
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("direction_conflict"),
+      ownership: ownership("allow"),
+      canonical: canonical("wait"),
+    }),
+    false,
+  );
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("block", ["direction_not_authorized"]),
+      canonical: canonical("wait"),
+    }),
+    false,
+  );
+});
+
+Deno.test("omitting canonical preserves the previous behaviour for backtest", () => {
+  // backtest-engine has no canonical enforcement gate and projects scanner
+  // state only after this call, so it passes nothing and must be unaffected.
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("allow"),
+    }),
+    false,
+  );
+  assertEquals(
+    pendingFinalAuthorizationRetryable({
+      raw: raw("additional_gate"),
+      ownership: ownership("block", ["strict_value_required"]),
+    }),
+    true,
+  );
+});
+
+Deno.test("zone-confirmation-scanner passes canonical enforcement into the retry decision", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  );
+  assertEquals(
+    scanner.includes(
+      "pendingFinalAuthorizationRetryable({ raw: rawAuthorization, ownership: ownershipFill.decision, canonical: pendingCanonicalEnforcement })",
+    ),
+    true,
+    "the live retry decision must see the canonical gate that blocked the fill",
+  );
+});
