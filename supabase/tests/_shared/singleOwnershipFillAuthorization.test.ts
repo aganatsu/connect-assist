@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { evaluateSingleOwnershipFillAuthorization } from "../../functions/_shared/singleOwnershipFillAuthorization.ts";
+import {
+  composePendingFillBlockReason,
+  evaluateSingleOwnershipFillAuthorization,
+  OWNERSHIP_EMPTY_FILL_REASON,
+} from "../../functions/_shared/singleOwnershipFillAuthorization.ts";
 import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
 
 const frozen = {
@@ -84,4 +88,99 @@ Deno.test("fill enforcement fails closed without frozen Zone Story", () => {
   assertEquals(result.decision.completeness.unavailable, ["zone_story"]);
   assertEquals(result.retryable, true);
   assertEquals(result.reason.includes("zone_story_unavailable"), true);
+});
+
+// ── composePendingFillBlockReason ───────────────────────────────────────────
+// A blocked fill is an AND across three gates, but the message used to report
+// only single ownership's reason and overwrite rawAuthorization.reason — the
+// one field carrying the specific cause. Observed 2026-08-25: a GBP/USD fill
+// that passed confirmation, had valid geometry and cleared R:R was cancelled
+// with the bare literal `owned_authorities_do_not_allow`, which is what
+// ownership emits when it has NO reason codes — i.e. when it allowed the trade.
+
+Deno.test("fill block reason keeps the raw gate's own explanation", () => {
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: false, reason: "Breaker fill rejected: retest incomplete" },
+    ownership: { authorized: false, reason: OWNERSHIP_EMPTY_FILL_REASON },
+    canonical: { authorized: true, affectsAuthorization: false, reasonCode: "observing" },
+  });
+  assertEquals(reason, "Breaker fill rejected: retest incomplete");
+});
+
+Deno.test("fill block reason never blames ownership when ownership had no codes", () => {
+  // The exact GBP/USD shape: ownership allowed (empty codes), raw denied.
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: false, reason: "" },
+    ownership: { authorized: false, reason: OWNERSHIP_EMPTY_FILL_REASON },
+    canonical: { authorized: true, affectsAuthorization: false, reasonCode: "observing" },
+  });
+  assertEquals(reason, "final_authorization_denied_without_reason");
+});
+
+Deno.test("fill block reason reports canonical enforcement only while it enforces", () => {
+  const enforcing = composePendingFillBlockReason({
+    raw: { authorized: true },
+    ownership: { authorized: true, reason: "" },
+    canonical: {
+      authorized: false,
+      affectsAuthorization: true,
+      reasonCode: "canonical_state_watching",
+    },
+  });
+  assertEquals(enforcing, "canonical_scanner:canonical_state_watching");
+
+  // In observe mode canonical always authorizes, so it must not appear.
+  const observing = composePendingFillBlockReason({
+    raw: { authorized: false, reason: "spread too wide" },
+    ownership: { authorized: false, reason: OWNERSHIP_EMPTY_FILL_REASON },
+    canonical: {
+      authorized: true,
+      affectsAuthorization: false,
+      reasonCode: "single_ownership_required",
+    },
+  });
+  assertEquals(observing, "spread too wide");
+});
+
+Deno.test("fill block reason lists every gate that failed, deduplicated", () => {
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: false, reason: "minimum risk reward" },
+    ownership: { authorized: false, reason: "safety_spread, thesis_invalid" },
+    canonical: {
+      authorized: false,
+      affectsAuthorization: true,
+      reasonCode: "canonical_state_at_poi",
+    },
+  });
+  assertEquals(
+    reason,
+    "minimum risk reward; canonical_scanner:canonical_state_at_poi; safety_spread, thesis_invalid",
+  );
+});
+
+Deno.test("fill block reason says so when no gate reported a failure", () => {
+  // Every gate authorized yet the fill was blocked — an upstream contract
+  // violation. Saying that is more useful than naming an authority that allowed it.
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: true },
+    ownership: { authorized: true, reason: "" },
+    canonical: { authorized: true, affectsAuthorization: true, reasonCode: "canonical_state_authorized" },
+  });
+  assertEquals(reason, "blocked_with_no_gate_reporting_failure");
+});
+
+Deno.test("zone-confirmation-scanner composes the block reason instead of discarding it", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
+  );
+  assertEquals(
+    scanner.includes('"Trade Decision did not authorize entry: " + ownershipFill.reason'),
+    false,
+    "the failure branch is still overwriting rawAuthorization.reason with ownership's",
+  );
+  assertEquals(
+    scanner.includes("composePendingFillBlockReason({ raw: rawAuthorization, ownership: ownershipFill, canonical: pendingCanonicalEnforcement })"),
+    true,
+    "the failure branch must compose from all three gates",
+  );
 });
