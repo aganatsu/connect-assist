@@ -1,7 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
 import type { SingleOwnershipEnforcementResult } from "../../functions/_shared/singleOwnershipEnforcement.ts";
-import { resolveSingleOwnershipScanOutcome } from "../../functions/_shared/singleOwnershipScanOutcome.ts";
+import {
+  explainReason,
+  resolveSingleOwnershipScanOutcome,
+} from "../../functions/_shared/singleOwnershipScanOutcome.ts";
 
 function decision(
   value: "allow" | "watch" | "block" | "unavailable",
@@ -62,4 +65,38 @@ Deno.test("observation leaves legacy scanner disposition unchanged", () => {
     enforcement: enforcement("observe"),
     decision: decision("watch", ["confirmation_waiting"]),
   }), { disposition: "legacy", reasons: [] });
+});
+
+Deno.test("Premium/Discount labelling is scoped to location codes, not every canonical code", () => {
+  // The catch-all matched a bare `canonical` substring, so every
+  // `canonical_state_*` scanner stage was labelled a Premium/Discount block.
+  // Those are lifecycle positions, not P/D rejections.
+  assertEquals(
+    explainReason("canonical_location_blocked").startsWith(
+      "Premium/Discount rule blocked entry",
+    ),
+    true,
+  );
+  assertEquals(
+    explainReason("canonical_state_awaiting_liquidity"),
+    "Waiting for liquidity to be taken before entry",
+  );
+  assertEquals(
+    explainReason("canonical_state_some_future_stage").includes(
+      "Premium/Discount",
+    ),
+    false,
+    "an unmapped scanner stage must not be reported as a Premium/Discount block",
+  );
+});
+
+Deno.test("canonical scanner stages read as explanations", () => {
+  assertEquals(
+    explainReason("canonical_state_watching"),
+    "Watching the zone; price has not arrived",
+  );
+  assertEquals(
+    explainReason("canonical_state_awaiting_retracement"),
+    "Waiting for price to retrace back into the entry",
+  );
 });
