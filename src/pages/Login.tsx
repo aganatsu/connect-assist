@@ -40,7 +40,8 @@ const Login = () => {
   const handleGoogleLogin = async () => {
     setLoading(true);
     const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
+      redirect_uri: `${window.location.origin}/auth/callback`,
+      extraParams: { prompt: "select_account" },
     });
     if (result.error) {
       toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
@@ -48,7 +49,8 @@ const Login = () => {
       return;
     }
     if (result.redirected) return;
-    navigate("/");
+    const { data } = await supabase.auth.getUser();
+    if (data.user) navigate("/", { replace: true });
     setLoading(false);
   };
 

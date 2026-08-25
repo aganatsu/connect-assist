@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 const pagesDir = resolve(__dirname, "..");
 
 // Pages that intentionally render without the shell (pre-login, 404).
-const NO_SHELL = new Set(["Login.tsx", "Signup.tsx", "ResetPassword.tsx", "NotFound.tsx"]);
+const NO_SHELL = new Set(["Login.tsx", "Signup.tsx", "ResetPassword.tsx", "AuthCallback.tsx", "NotFound.tsx"]);
 
 describe("page layout", () => {
   it("every routed page wraps itself in AppShell", () => {

@@ -17,6 +17,7 @@ import BrokersPage from "./pages/Brokers";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
+import AuthCallback from "./pages/AuthCallback";
 import NotFound from "./pages/NotFound";
 import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
@@ -44,6 +45,7 @@ const App = () => (
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                 <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
                 <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />

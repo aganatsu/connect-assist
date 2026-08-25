@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const pagesDir = resolve(__dirname, "..");
-const NO_WORKSPACE = new Set(["Login.tsx", "Signup.tsx", "ResetPassword.tsx", "NotFound.tsx"]);
+const NO_WORKSPACE = new Set(["Login.tsx", "Signup.tsx", "ResetPassword.tsx", "AuthCallback.tsx", "NotFound.tsx"]);
 
 describe("workspace visual system", () => {
   it("gives every protected route the shared page frame and identity header", () => {

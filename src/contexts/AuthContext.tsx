@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -7,6 +7,7 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   signOut: () => Promise<void>;
+  recheckSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -14,81 +15,73 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   signOut: async () => {},
+  recheckSession: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
-
-function jwtHasSubject(token?: string): boolean {
-  if (!token) return false;
-  try {
-    const payload = token.split(".")[1];
-    if (!payload) return false;
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const claims = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")));
-    return typeof claims?.sub === "string" && claims.sub.length > 0;
-  } catch {
-    return false;
-  }
-}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const recheckSession = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        setSession(null);
+        return;
+      }
+
+      const { data: userData, error } = await supabase.auth.getUser();
+      if (userData.user) {
+        setSession({ ...sessionData.session, user: userData.user });
+      } else if (!error) {
+        setSession(null);
+      }
+      // Keep the last known session on transport errors. A temporary network or
+      // preview-broker failure must never turn into an involuntary sign-out.
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    // Tracks whether a live auth event (e.g. OAuth sign-in) already delivered a
-    // session. The slower initial getSession() check must never clobber it.
-    let liveSession: Session | null = null;
-    let sawLiveEvent = false;
+    let active = true;
+    let authRevision = 0;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      // Never expose a malformed persisted token to protected routes. Public
-      // app keys are valid JWTs but intentionally have no user `sub` claim.
-      const next = session && jwtHasSubject(session.access_token) ? session : null;
-      sawLiveEvent = true;
-      liveSession = next;
-      setSession(next);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      authRevision += 1;
+      setSession(nextSession);
       setLoading(false);
     });
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session && jwtHasSubject(session.access_token)) {
-        // Validate session against the server. Only a definitive rejection may
-        // sign the user out — a network blip must not destroy a fresh login.
-        const { error } = await supabase.auth
-          .getUser()
-          .catch(() => ({ error: new Error("network error") } as any));
-        const transient = !!error &&
-          /network|fetch|timeout|failed to fetch/i.test(error.message ?? "");
-        if (error && !transient && !(sawLiveEvent && liveSession)) {
-          console.warn("[Auth] Invalid session detected, signing out:", error.message);
-          await supabase.auth.signOut();
-          try {
-            // Belt-and-suspenders: purge any stale sb-* auth tokens so a
-            // reload doesn't rehydrate the same bad JWT.
-            Object.keys(localStorage)
-              .filter((k) => k.startsWith("sb-") && k.endsWith("-auth-token"))
-              .forEach((k) => localStorage.removeItem(k));
-          } catch {}
-          setSession(null);
-          setLoading(false);
-          return;
-        }
-      } else if (session) {
-        if (!(sawLiveEvent && liveSession)) await supabase.auth.signOut().catch(() => {});
-        session = null;
+    const bootstrapRevision = authRevision;
+    void supabase.auth.getSession().then(async ({ data }) => {
+      if (!active || authRevision !== bootstrapRevision) return;
+      const initialSession = data.session;
+      if (!initialSession) {
+        setSession(null);
+        setLoading(false);
+        return;
       }
-      // A sign-in that landed while this check was in flight wins.
-      if (sawLiveEvent) {
-        setSession(liveSession);
-      } else {
-        setSession(session);
-      }
+
+      const { data: verified } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+      if (!active || authRevision !== bootstrapRevision) return;
+      // Only expose a startup session after the auth server validates its user.
+      // On a transport failure, retain it temporarily; authenticated requests
+      // will validate the bearer without deleting the local session.
+      setSession(verified.user ? { ...initialSession, user: verified.user } : initialSession);
       setLoading(false);
+    }).catch(() => {
+      if (active && authRevision === bootstrapRevision) setLoading(false);
     });
 
-
-    return () => subscription.unsubscribe();
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
 
@@ -97,7 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user: session?.user ?? null, session, loading, signOut }}>
+    <AuthContext.Provider value={{ user: session?.user ?? null, session, loading, signOut, recheckSession }}>
       {children}
     </AuthContext.Provider>
   );

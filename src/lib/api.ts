@@ -88,19 +88,6 @@ function jwtHasSubject(token?: string): boolean {
 }
 
 let refreshInFlight: Promise<string | null> | null = null;
-let signOutRedirectTriggered = false;
-
-/** Redirect to /login at most once — concurrent polls must not stack
- *  full-page navigations (that leaves the app on a blank screen). */
-function redirectToLoginOnce(delayMs = 0) {
-  if (typeof window === "undefined") return;
-  if (signOutRedirectTriggered) return;
-  if (window.location.pathname.startsWith("/login")) return;
-  signOutRedirectTriggered = true;
-  window.setTimeout(() => {
-    window.location.replace("/login");
-  }, delayMs);
-}
 
 // Single-flight refresh: concurrent polling calls must not fire competing
 // refresh requests (the loser gets a revoked token and still 500s).
@@ -132,8 +119,6 @@ async function getAuthenticatedToken(): Promise<string> {
     token = (await refreshAccessToken()) ?? undefined;
   }
   if (!jwtHasSubject(token)) {
-    await supabase.auth.signOut().catch(() => {});
-    redirectToLoginOnce();
     throw new Error("Session expired. Please sign in again.");
   }
   return token!;
@@ -445,17 +430,6 @@ export async function invokeFunction<T = any>(
           "Request was not authorized. Your session is still valid; please retry.",
         );
       }
-      await supabase.auth.signOut().catch(() => {});
-      if (typeof window !== "undefined" && !signOutRedirectTriggered) {
-        try {
-          const { toast } = await import("sonner");
-          toast.error("Session expired", {
-            description: "Redirecting you to sign in again…",
-            duration: 2500,
-          });
-        } catch {}
-      }
-      redirectToLoginOnce(1800);
       if (authFallback !== undefined) return authFallback as T;
       throw new Error("Session expired. Please sign in again.");
     }
