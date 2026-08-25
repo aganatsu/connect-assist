@@ -5,6 +5,7 @@ import {
 } from "./singleOwnershipDecision.ts";
 import { evaluateSingleOwnershipEnforcement } from "./singleOwnershipEnforcement.ts";
 import { normalizeRejectedGate } from "./rejectedSetupLogger.ts";
+import { explainReason } from "./singleOwnershipScanOutcome.ts";
 import type { FrozenSetupStrategyContext } from "./setupLifecycle.ts";
 
 export function evaluateSingleOwnershipFillAuthorization(input: {
@@ -180,7 +181,11 @@ export function composePendingFillBlockReason(input: {
 
   // Only meaningful while enforcing; in observe mode this gate always authorizes.
   if (input.canonical.affectsAuthorization && !input.canonical.authorized) {
-    parts.push(`canonical_scanner:${input.canonical.reasonCode}`);
+    // Prose first so the UI line is readable, code retained in parentheses so
+    // the cancellation stays greppable and aggregatable.
+    parts.push(
+      `${explainReason(input.canonical.reasonCode)} (${input.canonical.reasonCode})`,
+    );
   }
 
   const ownershipReason = (input.ownership.reason ?? "").trim();

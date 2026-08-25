@@ -127,7 +127,10 @@ Deno.test("fill block reason reports canonical enforcement only while it enforce
       reasonCode: "canonical_state_watching",
     },
   });
-  assertEquals(enforcing, "canonical_scanner:canonical_state_watching");
+  assertEquals(
+    enforcing,
+    "Watching the zone; price has not arrived (canonical_state_watching)",
+  );
 
   // In observe mode canonical always authorizes, so it must not appear.
   const observing = composePendingFillBlockReason({
@@ -154,7 +157,9 @@ Deno.test("fill block reason lists every gate that failed, deduplicated", () => 
   });
   assertEquals(
     reason,
-    "minimum risk reward; canonical_scanner:canonical_state_at_poi; safety_spread, thesis_invalid",
+    "minimum risk reward; " +
+      "Price is at the zone but entry is not authorized yet (canonical_state_at_poi); " +
+      "safety_spread, thesis_invalid",
   );
 });
 
@@ -182,5 +187,46 @@ Deno.test("zone-confirmation-scanner composes the block reason instead of discar
     scanner.includes("composePendingFillBlockReason({ raw: rawAuthorization, ownership: ownershipFill, canonical: pendingCanonicalEnforcement })"),
     true,
     "the failure branch must compose from all three gates",
+  );
+});
+
+Deno.test("the GBP/USD cancellation now reads as an explanation, not a code", () => {
+  // What the operator actually saw in PendingOrdersPanel on 2026-08-25:
+  //   [final-auth:additional_gate] Trade Decision did not authorize entry:
+  //   owned_authorities_do_not_allow
+  // — which named the one gate that had ALLOWED the trade, in machine syntax.
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: true },
+    ownership: { authorized: true, reason: "" },
+    canonical: {
+      authorized: false,
+      affectsAuthorization: true,
+      reasonCode: "canonical_state_awaiting_liquidity",
+    },
+  });
+  assertEquals(
+    reason,
+    "Waiting for liquidity to be taken before entry (canonical_state_awaiting_liquidity)",
+  );
+  // The code is retained so cancellations stay greppable and aggregatable.
+  assertEquals(reason.includes("canonical_state_awaiting_liquidity"), true);
+});
+
+Deno.test("an unmapped canonical code degrades to readable words, never raw snake_case", () => {
+  const reason = composePendingFillBlockReason({
+    raw: { authorized: true },
+    ownership: { authorized: true, reason: "" },
+    canonical: {
+      authorized: false,
+      affectsAuthorization: true,
+      reasonCode: "canonical_state_some_future_stage",
+    },
+  });
+  assertEquals(reason.includes("canonical_state_some_future_stage"), true);
+  assertEquals(reason.includes("_"), true); // the code half keeps underscores
+  assertEquals(
+    reason.startsWith("canonical state some future stage ("),
+    true,
+    "unmapped codes must still be spaced out rather than shown raw",
   );
 });
