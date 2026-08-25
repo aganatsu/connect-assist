@@ -324,19 +324,14 @@ export async function invokeFunction<T = any>(
     retryableRead &&
     isTransientServiceFailure(error, data, requestDispatched)
   ) {
-    const cooldownKey = data?.errorOrigin === "broker"
-      ? requestCooldownKey
-      : functionName;
-    functionCooldownUntil.set(cooldownKey, Date.now() + 15_000);
+    if (data?.errorOrigin !== "broker") {
+      functionCooldownUntil.set(functionName, Date.now() + 15_000);
+    }
     const transientFallback = getFunctionFallback(functionName, body);
     if (transientFallback !== undefined) return transientFallback as T;
   }
 
   if (retryableRead && data?.errorOrigin === "broker") {
-    const brokerStatus = Number(data?.brokerStatus ?? data?.status ?? 0);
-    if (data?.fallback === true || brokerStatus >= 500) {
-      functionCooldownUntil.set(requestCooldownKey, Date.now() + 15_000);
-    }
     return data as T;
   }
 
