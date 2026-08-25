@@ -15,7 +15,7 @@ const read = (p: string) => readFileSync(resolve(__dirname, "../..", p), "utf8")
 // Routes intentionally reached from elsewhere rather than the rail: the
 // dashboard is the logo/home target, and auth pages are pre-login.
 const NOT_IN_NAV = new Set([
-  "/", "*", "/login", "/auth", "/signup", "/reset-password",
+  "/", "*", "/login", "/auth", "/auth/callback", "/signup", "/reset-password",
 ]);
 
 describe("navigation coverage", () => {
