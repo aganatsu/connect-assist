@@ -127,3 +127,76 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
     reason,
   };
 }
+
+/**
+ * The literal `evaluateSingleOwnershipFillAuthorization` falls back to when it
+ * has nothing to report. Exported so the composer below can recognise it as an
+ * absence of evidence rather than a cause.
+ */
+export const OWNERSHIP_EMPTY_FILL_REASON = "owned_authorities_do_not_allow";
+
+/**
+ * Compose the reason a pending fill was blocked, preserving every gate that
+ * actually said no.
+ *
+ * A blocked fill is an AND across three independent gates — the raw final
+ * authorization, single ownership, and canonical scanner enforcement — but the
+ * message previously reported only single ownership's `reason`, overwriting
+ * `rawAuthorization.reason` in the process. That is the one field carrying the
+ * specific explanation, so the real cause was destroyed before anything reached
+ * the database.
+ *
+ * It compounds: single ownership's `reason` is a join of its reason codes, and
+ * falls back to OWNERSHIP_EMPTY_FILL_REASON when there are none. But an empty
+ * code list means the ownership decision was `allow` with complete evidence —
+ * so the message asserted that the owned authorities refused, in exactly the
+ * case where they did not. Observed 2026-08-25 on a GBP/USD fill that had
+ * passed confirmation (`both_passed`, lifecycle `entered`), had valid execution
+ * geometry, and cleared R:R at 1.115 against a 1.0 minimum. Nothing recorded
+ * which gate stopped it.
+ *
+ * `operationalSafetyChecks` narrows failing checks to a 16-code whitelist, so a
+ * gate outside that set drops out of the code list too and lands here as the
+ * empty fallback. Naming the gate that failed is therefore the only reliable
+ * signal, and it must not be discarded.
+ */
+export function composePendingFillBlockReason(input: {
+  raw: { authorized: boolean; reason?: string | null };
+  ownership: { authorized: boolean; reason: string };
+  canonical: {
+    authorized: boolean;
+    affectsAuthorization: boolean;
+    reasonCode: string;
+  };
+}): string {
+  const parts: string[] = [];
+
+  if (!input.raw.authorized) {
+    const rawReason = (input.raw.reason ?? "").trim();
+    // Name the gate even when it carried no text, so "the raw gate failed
+    // silently" stays distinguishable from "the raw gate passed".
+    parts.push(rawReason || "final_authorization_denied_without_reason");
+  }
+
+  // Only meaningful while enforcing; in observe mode this gate always authorizes.
+  if (input.canonical.affectsAuthorization && !input.canonical.authorized) {
+    parts.push(`canonical_scanner:${input.canonical.reasonCode}`);
+  }
+
+  const ownershipReason = (input.ownership.reason ?? "").trim();
+  if (
+    !input.ownership.authorized && ownershipReason &&
+    ownershipReason !== OWNERSHIP_EMPTY_FILL_REASON
+  ) {
+    parts.push(ownershipReason);
+  }
+
+  if (parts.length === 0) {
+    // Every gate reported authorized, yet the fill was blocked. That is a
+    // contract violation upstream, and saying so is more useful than blaming
+    // an authority that allowed the trade.
+    return "blocked_with_no_gate_reporting_failure";
+  }
+
+  return [...new Set(parts)].join("; ");
+}

@@ -113,7 +113,10 @@ import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts"
 import {
   evaluateFinalTradeAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
-import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
+import {
+  composePendingFillBlockReason,
+  evaluateSingleOwnershipFillAuthorization,
+} from "../_shared/singleOwnershipFillAuthorization.ts";
 import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
@@ -1994,7 +1997,7 @@ Deno.serve(async (req) => {
           pendingCanonicalEnforcement.authorized;
         const authorityRawAuthorization = canonicalFillAuthorized
           ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement }
-          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingFinalAuthorizationRetryable({ raw: rawAuthorization, ownership: ownershipFill.decision }), reason: "Trade Decision did not authorize entry: " + ownershipFill.reason, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement };
+          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingFinalAuthorizationRetryable({ raw: rawAuthorization, ownership: ownershipFill.decision }), reason: "Trade Decision did not authorize entry: " + composePendingFillBlockReason({ raw: rawAuthorization, ownership: ownershipFill, canonical: pendingCanonicalEnforcement }), singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement };
         const authorization = attachDecisionContext(
           authorityRawAuthorization,
           buildTradeDecisionContext({
