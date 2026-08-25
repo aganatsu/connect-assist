@@ -6462,7 +6462,15 @@ async function runScanForUser(
               currentPrice: Number(analysis.lastPrice),
               entryPrice: plan.plan.entryPrice,
               pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-              atrValue: Number((analysis as any).atrValue) || null,
+              // `analysis` carries no atrValue — that field belongs to SLTPInput,
+              // not the analysis result, and the `as any` cast hid it. Every
+              // pre-armed row since the observation was added recorded
+              // distanceAtr: null, so the only instrument-normalised distance
+              // signal has never existed. Reuse the per-pair ATR the stop policy
+              // already computed rather than adding a fifth calculateATR call.
+              atrValue: zoneStopPolicyConfirmationAtr > 0
+                ? zoneStopPolicyConfirmationAtr
+                : null,
               ttlMinutes,
               referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
               armedAt: placedAt,
@@ -10642,7 +10650,11 @@ async function runScanForUser(
               currentPrice: Number(analysis.lastPrice),
               entryPrice: waitPlan.plan.entryPrice,
               pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-              atrValue: Number((analysis as any).atrValue) || null,
+              // Same fix as the frozen-zone route above: `analysis.atrValue`
+              // does not exist, so this recorded null on every pre-armed row.
+              atrValue: zoneStopPolicyConfirmationAtr > 0
+                ? zoneStopPolicyConfirmationAtr
+                : null,
               ttlMinutes,
               referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
               armedAt: placedAt,

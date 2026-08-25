@@ -52,3 +52,39 @@ Deno.test("visible zone setup expiry is not overridden by trading style", () => 
   assert(scanner.match(/const styleTTL = stagingTTLMinutes;/g)?.length === 4);
   assert(scanner.includes("ttlMinutes: stagingTTLMinutes"));
 });
+
+Deno.test("pre-arm reachability sources a real ATR, not the non-existent analysis.atrValue", () => {
+  // `atrValue` is declared on SLTPInput (smcAnalysis.ts), an INPUT type for the
+  // SL/TP calculator. It is not a field on the analysis result, and the
+  // `as any` cast meant the mistake type-checked. Number(undefined) is NaN and
+  // `NaN || null` is null, so every pre-armed row recorded distanceAtr: null —
+  // verified in production 2026-08-25 across all five pre-armed orders.
+  //
+  // That matters because a pip bound cannot normalise across instruments:
+  // XAU/USD has pipSize 0.01, so the 30-pip reference is $0.30 on a metal that
+  // moves $20+ a day. ATR is the only usable normaliser, and it was never
+  // recorded.
+  assert(
+    !scanner.includes("atrValue: Number((analysis as any).atrValue) || null"),
+    "pre-arm reachability is reading analysis.atrValue, which does not exist — " +
+      "distanceAtr will be null on every armed row",
+  );
+  assert(
+    scanner.match(/atrValue: zoneStopPolicyConfirmationAtr > 0/g)?.length === 2,
+    "both pre-arm routes must source ATR from the per-pair confirmation ATR " +
+      "the stop policy already computes",
+  );
+});
+
+Deno.test("pre-arm ATR reuses the stop policy's per-pair value rather than recomputing", () => {
+  // Four calculateATR call sites already exist in bot-scanner. A fifth for the
+  // same per-pair value is how this repo grew its drift problem, so the
+  // reachability observation deliberately borrows the stop policy's.
+  assert(scanner.includes("const zoneStopPolicyConfirmationAtr = calculateATR("));
+  const atrDecl = scanner.indexOf("const zoneStopPolicyConfirmationAtr = calculateATR(");
+  const firstUse = scanner.indexOf("atrValue: zoneStopPolicyConfirmationAtr > 0");
+  assert(
+    atrDecl >= 0 && firstUse > atrDecl,
+    "the confirmation ATR must be declared before the pre-arm sites that read it",
+  );
+});
