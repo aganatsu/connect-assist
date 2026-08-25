@@ -68,6 +68,19 @@ function ReadUnavailable({ label }: { label: string }) {
   );
 }
 
+function isRemoteReadUnavailable(value: unknown): value is { error?: string; fallback?: boolean; state?: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  return payload.fallback === true || payload.state === "unknown" || payload.state === "unavailable";
+}
+
+function readUnavailableText(value: unknown, fallback: string) {
+  if (isRemoteReadUnavailable(value) && typeof value.error === "string" && value.error.trim()) {
+    return value.error;
+  }
+  return fallback;
+}
+
 function accountControlError(fallback: string) {
   return (error: unknown) =>
     toast.error(error instanceof Error && error.message ? error.message : fallback);
@@ -212,12 +225,28 @@ export default function BotView() {
   const selectedBrokerPositionQuery = selectedConnectionIndex >= 0
     ? brokerPositionQueries[selectedConnectionIndex]
     : undefined;
-  const brokerAccount = selectedBrokerAccountQuery?.data;
-  const brokerAccountReadFailed = selectedBrokerAccountQuery?.isError === true;
+  const selectedBrokerAccountData = selectedBrokerAccountQuery?.data;
+  const selectedBrokerPositionData = selectedBrokerPositionQuery?.data;
+  const brokerAccountUnavailable = isRemoteReadUnavailable(selectedBrokerAccountData);
+  const brokerPositionsUnavailable = isRemoteReadUnavailable(selectedBrokerPositionData);
+  const brokerAccount = brokerAccountUnavailable ? undefined : selectedBrokerAccountData;
+  const brokerAccountReadFailed = selectedBrokerAccountQuery?.isError === true || brokerAccountUnavailable;
   const brokerAccountReadError = selectedBrokerAccountQuery?.error;
-  const brokerOpenTrades = selectedBrokerPositionQuery?.data;
-  const brokerPositionsReadFailed = selectedBrokerPositionQuery?.isError === true;
+  const brokerAccountReadMessage = brokerAccountUnavailable
+    ? readUnavailableText(selectedBrokerAccountData, "Broker account unavailable")
+    : brokerAccountReadError instanceof Error
+      ? brokerAccountReadError.message
+      : "Broker account unavailable";
+  const brokerOpenTrades = Array.isArray(selectedBrokerPositionData) ? selectedBrokerPositionData : undefined;
+  const brokerPositionsReadFailed = selectedBrokerPositionQuery?.isError === true ||
+    brokerPositionsUnavailable ||
+    (selectedBrokerPositionQuery?.isSuccess === true && selectedBrokerPositionData != null && !Array.isArray(selectedBrokerPositionData));
   const brokerPositionsReadError = selectedBrokerPositionQuery?.error;
+  const brokerPositionsReadMessage = brokerPositionsUnavailable
+    ? readUnavailableText(selectedBrokerPositionData, "Broker positions unavailable")
+    : brokerPositionsReadError instanceof Error
+      ? brokerPositionsReadError.message
+      : "Broker positions unavailable";
   const liveBrokerReadPending = activeConnections.some((_, index) =>
     brokerConnectionStateQueries[index]?.isPending ||
     brokerAccountQueries[index]?.isPending ||
@@ -225,14 +254,18 @@ export default function BotView() {
   );
   const liveBrokerReadFailed = activeConnections.some((_, index) =>
     brokerConnectionStateQueries[index]?.isError ||
+    isRemoteReadUnavailable(brokerConnectionStateQueries[index]?.data) ||
     brokerAccountQueries[index]?.isError ||
+    isRemoteReadUnavailable(brokerAccountQueries[index]?.data) ||
     brokerPositionQueries[index]?.isError
+    || isRemoteReadUnavailable(brokerPositionQueries[index]?.data)
   );
   const liveBrokerStates = activeConnections.map((_, index) =>
     brokerConnectionStateQueries[index]?.isSuccess === true &&
     brokerConnectionStateQueries[index]?.data?.ready === true &&
     brokerAccountQueries[index]?.isSuccess === true &&
     !!brokerAccountQueries[index]?.data &&
+    !isRemoteReadUnavailable(brokerAccountQueries[index]?.data) &&
     brokerPositionQueries[index]?.isSuccess === true &&
     Array.isArray(brokerPositionQueries[index]?.data)
   );
@@ -241,7 +274,7 @@ export default function BotView() {
     executionMode,
     brokerConnectionsKnown,
     activeConnections.map((_, index) => ({
-      available: brokerPositionQueries[index]?.isSuccess === true,
+      available: brokerPositionQueries[index]?.isSuccess === true && Array.isArray(brokerPositionQueries[index]?.data),
       positions: brokerPositionQueries[index]?.data,
     })),
   );
@@ -1237,10 +1270,12 @@ export default function BotView() {
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {selectedConnection?.display_name}</p>
                   {selectedConnectionStateQuery?.isError ? (
                     <p className="text-warning text-[10px]">{selectedConnectionStateQuery.error instanceof Error ? selectedConnectionStateQuery.error.message : "Broker connection status unavailable"}</p>
+                  ) : isRemoteReadUnavailable(selectedConnectionStateQuery?.data) ? (
+                    <p className="text-warning text-[10px]">{readUnavailableText(selectedConnectionStateQuery?.data, "Broker connection status unavailable")}</p>
                   ) : selectedConnectionStateQuery?.data?.ready === false ? (
                     <p className="text-warning text-[10px]">Broker connection is not ready</p>
                   ) : brokerAccountReadFailed ? (
-                    <p className="text-warning text-[10px]">{brokerAccountReadError instanceof Error ? brokerAccountReadError.message : "Broker account unavailable"}</p>
+                    <p className="text-warning text-[10px]">{brokerAccountReadMessage}</p>
                   ) : brokerAccount ? (
                     <>
                       <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
@@ -1263,7 +1298,7 @@ export default function BotView() {
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions</p>
                   {brokerPositionsReadFailed ? (
-                    <p className="text-warning text-[10px]">{brokerPositionsReadError instanceof Error ? brokerPositionsReadError.message : "Broker positions unavailable"}</p>
+                    <p className="text-warning text-[10px]">{brokerPositionsReadMessage}</p>
                   ) : !brokerOpenTrades ? (
                     <p className="text-muted-foreground text-[10px]">Loading broker positions...</p>
                   ) : brokerOpenTrades.length === 0 ? (
