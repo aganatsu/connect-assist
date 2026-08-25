@@ -333,7 +333,10 @@ export async function invokeFunction<T = any>(
   }
 
   if (retryableRead && data?.errorOrigin === "broker") {
-    functionCooldownUntil.set(requestCooldownKey, Date.now() + 15_000);
+    const brokerStatus = Number(data?.brokerStatus ?? data?.status ?? 0);
+    if (data?.fallback === true || brokerStatus >= 500) {
+      functionCooldownUntil.set(requestCooldownKey, Date.now() + 15_000);
+    }
     return data as T;
   }
 
