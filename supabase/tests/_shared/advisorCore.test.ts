@@ -5,6 +5,7 @@ import {
   computeSymbolStats,
   detectRegimeFromTrades,
   buildRegimeRecommendations,
+  isStopOut,
   normalizeTradeRecord,
   buildPromptPayload,
   type TradeRecord,
@@ -442,4 +443,93 @@ Deno.test("Performance metrics are internally consistent (avgWin * wins - avgLos
     Math.abs(reconstructedPnl - perf.totalPnl) < 0.01,
     `Reconstructed PnL ${reconstructedPnl} != totalPnl ${perf.totalPnl}`,
   );
+});
+
+// ── isStopOut ───────────────────────────────────────────────────────────────
+// `close_reason` on paper_positions doubles as an SL-state tag while a position
+// is open ("" = original stop, "be", "trail"), and exitEvaluation reads it to
+// emit be_hit / trail_hit. That tagging arrived 2026-08-05 and its reader
+// 2026-08-10, so every earlier close reads as `sl_hit` even when the stop had
+// been trailed into profit. Measured on GBP/USD history: 12 of 17 `sl_hit`
+// closes were profitable. advisorCore treats SL rate as a regime signal
+// (>0.6 => "choppy/ranging", -2 regime score), so those rows made well-managed
+// trends look choppy.
+
+Deno.test("isStopOut: a stop that made money is not a stop-out", () => {
+  // The real GBP/USD rows: trailing exits recorded as sl_hit.
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: 700.91 }), false);
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: 29.20 }), false);
+  // +1.0 pip — the break-even-plus-buffer signature.
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: 4.40 }), false);
+});
+
+Deno.test("isStopOut: a genuine loss still counts", () => {
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: -527.56 }), true);
+  assertEquals(isStopOut({ close_reason: "stop_loss", pnl: -265.65 }), true);
+});
+
+Deno.test("isStopOut: only stop reasons qualify at all", () => {
+  assertEquals(isStopOut({ close_reason: "tp_hit", pnl: 492.88 }), false);
+  assertEquals(isStopOut({ close_reason: "be_hit", pnl: 0 }), false);
+  assertEquals(isStopOut({ close_reason: "trail_hit", pnl: 120 }), false);
+  // A losing manual close is not a stop-out either.
+  assertEquals(isStopOut({ close_reason: "manual_close", pnl: -80 }), false);
+});
+
+Deno.test("isStopOut: exact breakeven is not a stop-out", () => {
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: 0 }), false);
+});
+
+Deno.test("isStopOut: an unreadable P&L trusts the label rather than dropping a stop", () => {
+  assertEquals(isStopOut({ close_reason: "sl_hit", pnl: NaN }), true);
+  assertEquals(
+    isStopOut({ close_reason: "sl_hit", pnl: undefined as unknown as number }),
+    true,
+  );
+});
+
+Deno.test("SL rate is the regime signal, so mislabelled wins must not inflate it", () => {
+  // Six trades: two real stops, three trailed-into-profit exits, one target.
+  const trades = [
+    { close_reason: "sl_hit", pnl: -527.56 },
+    { close_reason: "sl_hit", pnl: -265.65 },
+    { close_reason: "sl_hit", pnl: 700.91 },
+    { close_reason: "sl_hit", pnl: 372.78 },
+    { close_reason: "sl_hit", pnl: 29.20 },
+    { close_reason: "tp_hit", pnl: 492.88 },
+  ];
+  const labelOnly = trades.filter((t) =>
+    t.close_reason === "sl_hit" || t.close_reason === "stop_loss"
+  ).length;
+  const actual = trades.filter(isStopOut).length;
+
+  assertEquals(labelOnly, 5);
+  assertEquals(actual, 2);
+  // 5/6 = 0.83 trips the >0.6 "choppy/ranging" branch; 2/6 = 0.33 does not.
+  assert(labelOnly / trades.length > 0.6);
+  assert(actual / trades.length <= 0.6);
+});
+
+Deno.test("all three advisors read stop-outs through the single owner", async () => {
+  const read = (p: string) =>
+    Deno.readTextFile(new URL(p, import.meta.url));
+  const [core, daily, weekly] = await Promise.all([
+    read("../../functions/_shared/advisorCore.ts"),
+    read("../../functions/bot-daily-review/index.ts"),
+    read("../../functions/bot-weekly-advisor/index.ts"),
+  ]);
+  for (const [name, src] of [["advisorCore", core], ["daily", daily], ["weekly", weekly]] as const) {
+    // Match the filter expression, not the bare substring — the owner's own
+    // docstring quotes the old code it replaced.
+    assertEquals(
+      /filter\(\s*t\s*=>\s*t\.close_reason === "sl_hit"/.test(src),
+      false,
+      `${name} still filters stop-outs by label instead of using isStopOut`,
+    );
+    assertEquals(
+      src.includes("filter(isStopOut)"),
+      true,
+      `${name} must classify stop-outs through the shared owner`,
+    );
+  }
 });

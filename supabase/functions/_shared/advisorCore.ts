@@ -36,6 +36,41 @@ export interface TradeRecord {
   bot_id?: string;
 }
 
+/**
+ * Did this trade actually stop out?
+ *
+ * Single owner for the question — `bot-daily-review`, `bot-weekly-advisor` and
+ * this module each carried the same `close_reason === "sl_hit"` filter.
+ *
+ * The label alone is not sufficient. `close_reason` on `paper_positions` is
+ * dual-purpose: while a position is open it doubles as an SL-state tag
+ * (`""` = original stop, `"be"` = break-even, `"trail"` = trailing), and
+ * `exitEvaluation.ts:slReasonFor` reads that tag to emit `be_hit` / `trail_hit`
+ * instead of `sl_hit`. That tagging only arrived on 2026-08-05, and the reader
+ * on 2026-08-10 — so every close before those dates is recorded as `sl_hit`
+ * regardless of whether the stop had been trailed into profit.
+ *
+ * Measured on GBP/USD history: 12 of 17 `sl_hit` closes were profitable, three
+ * of them exactly +1.0 pip — the break-even-plus-buffer signature. Counting
+ * those as stop-outs inflates the SL rate, and `advisorCore` reads that rate as
+ * a market-regime signal (>0.6 ⇒ "choppy/ranging", −2 regime score). The
+ * advisor was therefore calling well-managed trends choppy.
+ *
+ * P&L is the honest test and is robust both to the historical rows and to any
+ * future tagging gap: a stop that made money is not a stop-out.
+ */
+export function isStopOut(
+  trade: Pick<TradeRecord, "close_reason" | "pnl">,
+): boolean {
+  const reason = trade.close_reason;
+  if (reason !== "sl_hit" && reason !== "stop_loss") return false;
+  const pnl = Number(trade.pnl);
+  // An unparseable P&L is not evidence the trade was profitable, so fall back
+  // to trusting the label rather than silently dropping a real stop-out.
+  if (!Number.isFinite(pnl)) return true;
+  return pnl < 0;
+}
+
 export interface TradeReasoning {
   id: string;
   user_id: string;
@@ -574,7 +609,7 @@ export function detectRegimeFromTrades(trades: TradeRecord[]): RegimeAnalysis {
   }
 
   // 3. SL hit rate
-  const slHits = trades.filter(t => t.close_reason === "sl_hit" || t.close_reason === "stop_loss").length;
+  const slHits = trades.filter(isStopOut).length;
   const slRate = slHits / trades.length;
   if (slRate > 0.6) {
     regimeScore -= 2;

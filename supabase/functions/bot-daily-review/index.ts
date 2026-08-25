@@ -17,7 +17,7 @@ import {
   type ResolvedRejection,
   type ClosedTrade,
 } from "../_shared/gatePerformanceEngine.ts";
-import { normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
+import { isStopOut, normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -297,7 +297,7 @@ function computeDimensionalBreakdowns(trades: TradeRecord[]): {
 }
 
 function computeSLAnalysis(trades: TradeRecord[]): SLAnalysis {
-  const slHits = trades.filter(t => t.close_reason === "sl_hit" || t.close_reason === "stop_loss");
+  const slHits = trades.filter(isStopOut);
   const slHitRate = trades.length > 0 ? (slHits.length / trades.length) * 100 : 0;
 
   // Average SL distance in price terms
