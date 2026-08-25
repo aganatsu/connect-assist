@@ -13,6 +13,7 @@
 
 import {
   beginScanSourceTally,
+  CACHE_TTL_INTRADAY_MS,
   classifyMetaApiOperationalIssue,
   endScanSourceTally,
   filterClosedMarketCandles,
@@ -256,4 +257,47 @@ Deno.test("Failover: unsupported symbol returns empty gracefully", async () => {
   });
   assertEquals(result.candles.length, 0);
   assertEquals(result.source, "none");
+});
+
+// ── Intraday cache TTL is coupled to the management-loop cadence ────────────
+// These two constants live in different files and nothing connects them, which
+// is how the coupling broke unnoticed. bot-scanner runs the management loop
+// inside ONE edge invocation for LOOP_BUDGET_MS, calling runScanForUser every
+// MANAGEMENT_LOOP_INTERVAL_MS — so passes land at t=0, t=20s and t=40s. The
+// in-memory candle cache is what stops those passes each re-fetching the same
+// symbol. If its TTL does not reach the final pass, every monitored symbol is
+// fetched twice a minute rather than once.
+//
+// Measured 2026-08-24 at a 30s TTL: ~50 of 55 TwelveData credits/min consumed,
+// 200-440 requests refused per scan cycle, and the main scan starved to ~8
+// pairs per cycle. Mirror any change to the loop cadence here.
+const MANAGEMENT_LOOP_INTERVAL_MS = 20_000;
+const MANAGEMENT_LOOP_BUDGET_MS = 50_000;
+
+Deno.test("intraday candle cache TTL spans a full management-loop invocation", () => {
+  const finalPassAt =
+    Math.floor(MANAGEMENT_LOOP_BUDGET_MS / MANAGEMENT_LOOP_INTERVAL_MS) *
+    MANAGEMENT_LOOP_INTERVAL_MS;
+
+  assert(
+    CACHE_TTL_INTRADAY_MS > finalPassAt,
+    `Intraday cache TTL is ${CACHE_TTL_INTRADAY_MS}ms but the last management ` +
+      `pass runs at t=${finalPassAt}ms. That pass will miss the cache and ` +
+      `re-fetch every monitored symbol, spending TwelveData credits the main ` +
+      `scan needs.`,
+  );
+});
+
+Deno.test("intraday candle cache TTL stays short enough to see a closed 5m bar", () => {
+  // The counterweight to the test above: the TTL delays visibility of a newly
+  // closed bar. Half of the shortest timeframe this cache serves (5m) keeps
+  // that delay to a fraction of one bar.
+  const FIVE_MINUTES_MS = 5 * 60_000;
+
+  assert(
+    CACHE_TTL_INTRADAY_MS <= FIVE_MINUTES_MS / 2,
+    `Intraday cache TTL is ${CACHE_TTL_INTRADAY_MS}ms, more than half a 5m ` +
+      `bar. A closed bar could stay invisible long enough to matter to ` +
+      `pre-entry invalidation.`,
+  );
 });
