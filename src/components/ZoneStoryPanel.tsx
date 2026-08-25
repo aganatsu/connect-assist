@@ -761,11 +761,17 @@ export function ZoneStoryPanel({
           {/* Price Row */}
           <tr className="border-b border-zinc-800/50">
             <td className="py-1.5 pr-2 align-top">
-              <Bullet filled={unifiedData.price.atZone || unifiedData.price.insideZone} />
+              <Bullet filled={!!unifiedData.zone && (unifiedData.price.atZone || unifiedData.price.insideZone)} />
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Price</td>
             <td className="py-1.5">
-              {unifiedData.price.insideZone ? (
+              {/* Distance is measured against a zone. With none found the engine
+                  leaves distancePips at 0, which rendered as "0.0 pips away" —
+                  indistinguishable from price sitting exactly on the zone, and
+                  shown directly beneath a Zone row reading "None found". */}
+              {!unifiedData.zone ? (
+                <span className="text-zinc-400">No zone to measure against</span>
+              ) : unifiedData.price.insideZone ? (
                 <span className="text-green-400">Inside zone</span>
               ) : unifiedData.price.atZone ? (
                 <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>

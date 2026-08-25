@@ -258,4 +258,41 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText(/No Impulse/)).toBeTruthy();
     expect(screen.getByText(/Timeframe Evidence/)).toBeTruthy();
   });
+  it("does not report a distance when no zone was found", () => {
+    // Distance is measured against a zone. With none found the engine leaves
+    // distancePips at its 0 default, and the Price row rendered that verbatim
+    // as "0.0 pips away" — indistinguishable from price sitting exactly on the
+    // zone, and shown directly beneath a Zone row reading "None found".
+    //
+    // Observed 2026-08-25 on XAU/USD: the Detail Breakdown claimed 0.0 pips
+    // away while the Watchlist on the same screen reported 1514.9 pips for the
+    // same instrument.
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          hasZone: false,
+          zone: null,
+          price: { ...unifiedData.price, distancePips: 0, atZone: false, insideZone: false },
+        }}
+        gateData={gateData}
+        symbol="XAU/USD"
+      />,
+    );
+
+    expect(screen.getByText("No zone to measure against")).toBeTruthy();
+    expect(screen.queryByText(/^0\.0 pips away$/)).toBeNull();
+  });
+
+  it("still reports a real distance when a zone exists", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={unifiedData}
+        gateData={gateData}
+        symbol="GBP/USD"
+      />,
+    );
+
+    expect(screen.queryByText("No zone to measure against")).toBeNull();
+  });
 });
