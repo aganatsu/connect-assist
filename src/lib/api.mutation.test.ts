@@ -181,7 +181,12 @@ describe("edge function retry safety", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(brokerExecApi.accountSummary("connection-1"))
-      .rejects.toThrow("OANDA error: 401");
+      .resolves.toMatchObject({
+        ok: false,
+        state: "unknown",
+        errorOrigin: "broker",
+        error: "OANDA error: 401",
+      });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(supabase.auth.refreshSession).not.toHaveBeenCalled();
     expect(supabase.auth.signOut).not.toHaveBeenCalled();
@@ -200,7 +205,12 @@ describe("edge function retry safety", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(brokerExecApi.accountSummary("connection-1"))
-      .rejects.toThrow("MetaAPI error: 401");
+      .resolves.toMatchObject({
+        ok: false,
+        state: "unknown",
+        errorOrigin: "broker",
+        error: "MetaAPI error: 401",
+      });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(supabase.auth.refreshSession).not.toHaveBeenCalled();
     expect(supabase.auth.signOut).not.toHaveBeenCalled();
@@ -617,9 +627,12 @@ describe("edge function retry safety", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const request = brokerExecApi.accountSummary("connection-1");
-    const assertion = expect(request).rejects.toThrow(
-      "Broker service is temporarily unavailable",
-    );
+    const assertion = expect(request).resolves.toMatchObject({
+      ok: false,
+      state: "unknown",
+      fallback: true,
+      error: "Broker service is temporarily unavailable. Please try again shortly.",
+    });
     await vi.runAllTimersAsync();
 
     await assertion;
@@ -652,9 +665,12 @@ describe("edge function retry safety", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const statusRequest = brokerExecApi.connectionStatus("connection-1");
-    const statusAssertion = expect(statusRequest).rejects.toThrow(
-      "Broker service is temporarily unavailable",
-    );
+    const statusAssertion = expect(statusRequest).resolves.toMatchObject({
+      ok: false,
+      state: "unknown",
+      fallback: true,
+      error: "Broker service is temporarily unavailable. Please try again shortly.",
+    });
     await vi.runAllTimersAsync();
     await statusAssertion;
 
