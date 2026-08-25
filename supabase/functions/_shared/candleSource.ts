@@ -126,7 +126,20 @@ interface CacheEntry {
   timestamp: number;
 }
 const _candleCache = new Map<string, CacheEntry>();
-const CACHE_TTL_INTRADAY_MS = 30_000;  // 30 seconds for intraday
+// Intraday TTL must outlive a full management-loop invocation, not a single
+// pass through it. `bot-scanner` runs the management loop inside one edge
+// invocation for LOOP_BUDGET_MS (50s), calling runScanForUser every 20s — so
+// passes land at t=0, t=20 and t=40. At the previous 30s the third pass always
+// missed, and every monitored symbol was fetched twice a minute instead of
+// once. With ten pending orders that alone was ~20 TwelveData credits/min
+// against a 55/min plan shared with the scan, which starved the main scan down
+// to ~8 pairs per cycle (measured 2026-08-24).
+//
+// 90s spans all three passes with margin. The cost is that a newly closed bar
+// can stay invisible for up to 90s; on the 5m+ timeframes this cache serves,
+// that is a fraction of one bar and the callers already act on closed bars only.
+// If the loop cadence or LOOP_BUDGET_MS changes, this must change with it.
+export const CACHE_TTL_INTRADAY_MS = 90_000;  // 90 seconds for intraday
 const CACHE_TTL_DAILY_MS = 300_000;    // 5 minutes for daily
 
 function getCacheKey(symbol: string, interval: string, scope = "public"): string {
