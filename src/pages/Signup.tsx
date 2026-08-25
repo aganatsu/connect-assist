@@ -34,12 +34,16 @@ const Signup = () => {
   const handleGoogleSignup = async () => {
     setLoading(true);
     const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
+      redirect_uri: `${window.location.origin}/auth/callback`,
+      extraParams: { prompt: "select_account" },
     });
     if (result.error) {
       toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
       setLoading(false);
+      return;
     }
+    if (result.redirected) return;
+    window.location.replace("/");
   };
 
   if (submitted) {

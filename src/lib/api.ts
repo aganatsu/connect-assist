@@ -132,8 +132,6 @@ async function getAuthenticatedToken(): Promise<string> {
     token = (await refreshAccessToken()) ?? undefined;
   }
   if (!jwtHasSubject(token)) {
-    await supabase.auth.signOut().catch(() => {});
-    redirectToLoginOnce();
     throw new Error("Session expired. Please sign in again.");
   }
   return token!;
@@ -445,17 +443,6 @@ export async function invokeFunction<T = any>(
           "Request was not authorized. Your session is still valid; please retry.",
         );
       }
-      await supabase.auth.signOut().catch(() => {});
-      if (typeof window !== "undefined" && !signOutRedirectTriggered) {
-        try {
-          const { toast } = await import("sonner");
-          toast.error("Session expired", {
-            description: "Redirecting you to sign in again…",
-            duration: 2500,
-          });
-        } catch {}
-      }
-      redirectToLoginOnce(1800);
       if (authFallback !== undefined) return authFallback as T;
       throw new Error("Session expired. Please sign in again.");
     }
