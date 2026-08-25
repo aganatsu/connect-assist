@@ -221,11 +221,17 @@ export function UnifiedZonePanel({ data }: Props) {
 
         {/* 3. Price */}
         <StoryBullet
-          filled={data.price.atZone || data.price.insideZone}
+          filled={!!data.zone && (data.price.atZone || data.price.insideZone)}
           label="Price"
         >
           <span className="text-zinc-200">
-            {data.price.insideZone ? (
+            {/* Distance is measured against a zone. With none found the engine
+                leaves distancePips at 0, which rendered as "0.0 pips away" —
+                indistinguishable from price sitting exactly on the zone, and
+                directly under a Zone row reading "None found". */}
+            {!data.zone ? (
+              <span className="text-zinc-400">No zone to measure against</span>
+            ) : data.price.insideZone ? (
               <span className="text-green-400">Inside zone</span>
             ) : data.price.atZone ? (
               <span className="text-green-400">At zone{!data.price.sideOk && " (wrong side)"}</span>
