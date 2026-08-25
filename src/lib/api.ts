@@ -118,10 +118,26 @@ async function getAuthenticatedToken(): Promise<string> {
   if (!jwtHasSubject(token)) {
     token = (await refreshAccessToken()) ?? undefined;
   }
-  if (!jwtHasSubject(token)) {
+  if (!token || !jwtHasSubject(token)) {
     throw new Error("Session expired. Please sign in again.");
   }
-  return token!;
+  return token;
+}
+
+function isRemoteReadFailurePayload(data: unknown): data is {
+  ok?: false;
+  state?: "unknown" | "unavailable";
+  fallback?: boolean;
+  error?: string;
+  errorOrigin?: string;
+} {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const payload = data as Record<string, unknown>;
+  return payload.fallback === true ||
+    payload.state === "unknown" ||
+    payload.state === "unavailable" ||
+    payload.errorOrigin === "broker" ||
+    (payload.ok === false && typeof payload.error === "string");
 }
 
 function functionCacheKey(functionName: string, body: Record<string, any>) {
@@ -314,6 +330,11 @@ export async function invokeFunction<T = any>(
     functionCooldownUntil.set(cooldownKey, Date.now() + 15_000);
     const transientFallback = getFunctionFallback(functionName, body);
     if (transientFallback !== undefined) return transientFallback as T;
+  }
+
+  if (retryableRead && data?.errorOrigin === "broker") {
+    functionCooldownUntil.set(requestCooldownKey, Date.now() + 15_000);
+    return data as T;
   }
 
   if (
@@ -1312,24 +1333,33 @@ export const fundamentalsApi = {
 export const brokerExecApi = {
   accountSummary: (connectionId: string) =>
     invokeFunction("broker-execute", { action: "account_summary", connectionId })
-      .then((data) => requireAvailableObject<any>(
-        data,
-        "Broker account",
-        (account) => [account.balance, account.equity].some((value) =>
-          (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
-          Number.isFinite(Number(value))
-        ),
-      )),
+      .then((data) => {
+        if (isRemoteReadFailurePayload(data)) return data as any;
+        return requireAvailableObject<any>(
+          data,
+          "Broker account",
+          (account) => [account.balance, account.equity].some((value) =>
+            (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
+            Number.isFinite(Number(value))
+          ),
+        );
+      }),
   openTrades: (connectionId: string) =>
     invokeFunction("broker-execute", { action: "open_trades", connectionId })
-      .then((data) => requireAvailableCollection<any>(data, "Broker positions")),
+      .then((data) => {
+        if (isRemoteReadFailurePayload(data)) return data as any;
+        return requireAvailableCollection<any>(data, "Broker positions");
+      }),
   connectionStatus: (connectionId: string) =>
     invokeFunction("broker-execute", { action: "connection_status", connectionId })
-      .then((data) => requireAvailableObject<any>(
-        data,
-        "Broker connection status",
-        (status) => typeof status.ready === "boolean",
-      )),
+      .then((data) => {
+        if (isRemoteReadFailurePayload(data)) return data as any;
+        return requireAvailableObject<any>(
+          data,
+          "Broker connection status",
+          (status) => typeof status.ready === "boolean",
+        );
+      }),
   validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
     invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
@@ -1345,7 +1375,10 @@ export const brokerExecApi = {
       .then(requireConfirmedBrokerMutation),
   tradeHistory: (connectionId: string, limit = 50) =>
     invokeFunction("broker-execute", { action: "trade_history", connectionId, limit })
-      .then((data) => requireAvailableCollection<any>(data, "Broker trade history")),
+      .then((data) => {
+        if (isRemoteReadFailurePayload(data)) return data as any;
+        return requireAvailableCollection<any>(data, "Broker trade history");
+      }),
   modifyTrade: (connectionId: string, tradeId: string, updates: { stopLoss?: number; takeProfit?: number; symbol?: string }) =>
     afterFreshTradingTruth(
       () => invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates })
