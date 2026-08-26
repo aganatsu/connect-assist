@@ -16,10 +16,38 @@ export function TradeDecisionPanel({ detail }: { detail: any }) {
   const presentation = detail?.tradeDecisionPresentation;
   const sequenceObservation = detail?.liquidityConfirmationObservation;
   if (!decision && !enforcement && !workflow) return null;
-  const outcome = String(workflow?.stage || decision?.decision || "unavailable").replace(/_/g, " ").toUpperCase();
-  const outcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) ? "text-success"
-    : outcome.includes("AWAITING") || ["WATCHING", "AT POI", "WATCH"].includes(outcome) ? "text-warning" : "text-destructive";
-  const primaryExplanation = presentation?.primary?.explanation || workflow?.explanation || null;
+  const status = String(detail?.status || "");
+  const actualOutcome = status.includes("rejected") || status === "rejected"
+    ? "REJECTED"
+    : status.includes("blocked")
+    ? "BLOCKED"
+    : status.startsWith("skipped_") || status === "below_threshold"
+    ? "SKIPPED"
+    : status.startsWith("trade_placed")
+    ? "AUTHORIZED"
+    : status.includes("zone_setup") || status.includes("limit_order") || status.startsWith("staged_")
+    ? "WATCHING"
+    : String(decision?.decision || "unavailable").replace(/_/g, " ").toUpperCase();
+  const actualOutcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(actualOutcome)
+    ? "text-success"
+    : ["WATCHING", "WATCH"].includes(actualOutcome)
+    ? "text-warning"
+    : "text-destructive";
+  const actualFailedGate = Array.isArray(detail?.gates)
+    ? detail.gates.find((gate: any) => gate?.passed === false && typeof gate?.reason === "string")
+    : null;
+  const actualExplanation = actualFailedGate?.reason || detail?.reason ||
+    (Array.isArray(decision?.reasonCodes) && decision.reasonCodes.length > 0
+      ? decision.reasonCodes.join(", ").replace(/_/g, " ")
+      : null);
+  const workflowOutcome = String(workflow?.stage || "unavailable").replace(/_/g, " ").toUpperCase();
+  const workflowOutcomeColor = ["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(workflowOutcome)
+    ? "text-success"
+    : workflowOutcome.includes("AWAITING") || ["WATCHING", "AT POI", "WATCH"].includes(workflowOutcome)
+    ? "text-warning"
+    : "text-destructive";
+  const workflowExplanation = presentation?.primary?.explanation || workflow?.explanation || null;
+  const workflowAffectsAuthorization = workflowEnforcement?.affectsAuthorization === true;
   const diagnostics = Array.isArray(presentation?.diagnostics) ? presentation.diagnostics : [];
   const failedCheck = Array.isArray(presentation?.authorityChecks)
     ? presentation.authorityChecks.find((check: any) => check.passed === false || check.passed == null)
@@ -33,16 +61,51 @@ export function TradeDecisionPanel({ detail }: { detail: any }) {
       <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
         <div>
           <p className="text-xs font-semibold">Trade Decision</p>
-          <p className="text-[11px] text-muted-foreground">ICT Scanner Workflow · current canonical authority</p>
+          <p className="text-[11px] text-muted-foreground">Actual scan outcome</p>
         </div>
-        <span className={"text-xs font-mono font-bold " + outcomeColor}>{outcome}</span>
+        <span className={"text-xs font-mono font-bold " + actualOutcomeColor}>{actualOutcome}</span>
       </div>
       <div className="space-y-2 px-3 py-2 text-xs">
-        {primaryExplanation ? <p className={outcomeColor}>{primaryExplanation}</p> : <p className="text-muted-foreground">No canonical scanner explanation recorded.</p>}
-        {nextRequirement && !["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(outcome) && (
-          <div className="border-l-2 border-warning pl-2">
-            <p className="text-[11px] font-semibold text-warning">Next required</p>
-            <p className="text-[11px] text-foreground/90">{nextRequirement}</p>
+        {actualExplanation
+          ? <p className={actualOutcomeColor}>{actualExplanation}</p>
+          : <p className="text-muted-foreground">No actual scan explanation recorded.</p>}
+        <p className="text-muted-foreground">
+          Trade Decision mode: <span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
+        </p>
+
+        {workflow && (
+          <div className="space-y-2 border-t border-border/40 pt-2" aria-label="ICT workflow comparison">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold">
+                {workflowAffectsAuthorization ? "Workflow enforcement" : "Workflow observation"}
+              </p>
+              <span className={"text-[11px] font-mono font-bold " + workflowOutcomeColor}>{workflowOutcome}</span>
+            </div>
+            {!workflowAffectsAuthorization && (
+              <p className="text-[11px] text-muted-foreground">Observation only — this workflow does not change this scan outcome.</p>
+            )}
+            {workflowExplanation && <p className={workflowOutcomeColor}>{workflowExplanation}</p>}
+            {nextRequirement && !["AUTHORIZED", "ENTERED", "MANAGING", "ALLOW"].includes(workflowOutcome) && (
+              <div className="border-l-2 border-warning pl-2">
+                <p className="text-[11px] font-semibold text-warning">Workflow next required</p>
+                <p className="text-[11px] text-foreground/90">{nextRequirement}</p>
+              </div>
+            )}
+            <p className="text-muted-foreground">
+              Workflow mode: <span className="font-mono text-foreground">{String(workflowEnforcement?.effectiveMode || "observe").toUpperCase()}</span>
+            </p>
+            {Array.isArray(presentation?.authorityChecks) && presentation.authorityChecks.length > 0 && (
+              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                {presentation.authorityChecks.map((check: any) => (
+                  <div key={check.role} className="flex items-center justify-between gap-1 border border-border/40 px-1.5 py-1">
+                    <span className="min-w-0 break-words text-muted-foreground">{String(check.role).replace(/_/g, " ")}</span>
+                    <span className={check.passed === true ? "text-success" : check.passed === false ? workflowAffectsAuthorization ? "text-destructive" : "text-warning" : "text-warning"}>
+                      {check.passed === true ? "PASS" : check.passed === false ? workflowAffectsAuthorization ? "BLOCK" : "OBSERVE" : "WAIT"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {sequenceObservation && (
@@ -51,21 +114,6 @@ export function TradeDecisionPanel({ detail }: { detail: any }) {
             <span className={sequenceObservation.ready ? "text-success" : "text-warning"}>
               {String(sequenceObservation.reasonCode || "unavailable").replace(/_/g, " ")}
             </span>
-          </div>
-        )}
-        <p className="text-muted-foreground">
-          Workflow: <span className="font-mono text-foreground">{String(workflowEnforcement?.effectiveMode || "observe").toUpperCase()}</span>
-          {" · Trade Decision: "}<span className="font-mono text-foreground">{String(enforcement?.effectiveMode || "observe").toUpperCase()}</span>
-        </p>
-        {primaryExplanation ? <p className={outcomeColor}>{primaryExplanation}</p> : <p className="text-muted-foreground">No canonical scanner explanation recorded.</p>}
-        {Array.isArray(presentation?.authorityChecks) && presentation.authorityChecks.length > 0 && (
-          <div className="grid grid-cols-2 gap-1 border-t border-border/40 pt-2 sm:grid-cols-4">
-            {presentation.authorityChecks.map((check: any) => (
-              <div key={check.role} className="flex items-center justify-between gap-1 border border-border/40 px-1.5 py-1">
-                <span className="min-w-0 break-words text-muted-foreground">{String(check.role).replace(/_/g, " ")}</span>
-                <span className={check.passed === true ? "text-success" : check.passed === false ? "text-destructive" : "text-warning"}>{check.passed === true ? "PASS" : check.passed === false ? "BLOCK" : "WAIT"}</span>
-              </div>
-            ))}
           </div>
         )}
         {diagnostics.length > 0 && (
@@ -87,6 +135,9 @@ export function ScanDetailBreakdown({ signal: d, observedAt }: { signal: any; ob
     const interval = window.setInterval(() => setNewsClock(Date.now()), 60_000);
     return () => window.clearInterval(interval);
   }, []);
+  const observedAtMs = observedAt ? new Date(observedAt).getTime() : Number.NaN;
+  const scanAgeMs = newsClock - observedAtMs;
+  const isLiveContext = Number.isFinite(observedAtMs) && scanAgeMs >= 0 && scanAgeMs < 2 * 60_000;
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : d.status === "trade_placed" ? "✅ PLACED" : d.status === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : d.status === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : d.status === "watching_zone" ? "⏳ WATCHING" : d.status === "watchlist_persistence_failed" ? "⚠ WATCHLIST ERROR" : d.status === "waiting_zone_untracked" ? "ZONE AWAY" : d.status === "paused" ? "⏸ PAUSED" : d.status === "no_direction" ? "— NO DIR" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.startsWith("skipped_") ? "SKIPPED" : d.status?.startsWith("staged_") ? "⏳ STAGED" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status?.startsWith("trade_placed") ? "text-success" : d.status === "rejected" || d.status === "watchlist_persistence_failed" ? "text-destructive" : d.status === "waiting_for_sweep" ? "text-purple-400" : d.status === "waiting_for_reconfirmation" ? "text-orange-400" : d.status === "paused" || d.status === "no_direction" ? "text-zinc-400" : "text-muted-foreground";
 
@@ -145,7 +196,7 @@ export function ScanDetailBreakdown({ signal: d, observedAt }: { signal: any; ob
         unifiedData={d.unifiedZone}
         gateData={d.impulseZone}
         zoneLocalEnforcement={d.zoneLocalEnforcement}
-        isLiveContext
+        isLiveContext={isLiveContext}
         symbol={d.pair}
         direction={d.direction}
         timeframeEvidenceId={d.timeframeEvidenceId}

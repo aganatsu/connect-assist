@@ -34,10 +34,15 @@ describe("operations dashboard wiring", () => {
 
   it("uses existing operational APIs for every market-facing surface", () => {
     const page = read("pages/OperationsDashboard.tsx");
+    const api = read("lib/api.ts");
 
     expect(page).toContain("scannerApi.logs()");
     expect(page).toContain("scannerApi.pendingSnapshot()");
     expect(page).toContain("scannerApi.activeStaged()");
+    expect(page).toContain("scannerApi.lifecycleEvents({");
+    expect(page).toContain("scannerApi.impulseLifecycleTransitions(");
+    expect(api).toContain('.from("setup_lifecycle_events")');
+    expect(api).toContain('.from("impulse_entry_lifecycle_transitions")');
     expect(page).toContain("paperApi.status()");
     expect(page).toContain("brokerApi.list()");
     expect(page).toContain("brokerExecApi.connectionStatus(connection.id)");
@@ -46,6 +51,15 @@ describe("operations dashboard wiring", () => {
     expect(page).toContain("scannerApi.dismissStaged(setupId)");
     expect(page).toContain("pendingOrderDisplayStage(order)");
     expect(page).not.toContain("112.991");
+  });
+
+  it("binds scan detail and lifecycle by persisted setup identity", () => {
+    const page = read("pages/OperationsDashboard.tsx");
+
+    expect(page).toContain("linkedOrderForScan(activeOrders, selectedScanDetail)");
+    expect(page).toContain("lifecycleEventMatchesIdentity");
+    expect(page).toContain("Persisted lifecycle ledgers");
+    expect(page).not.toContain("Live ledger");
   });
 
   it("keeps the key controls functional and the layout responsive", () => {

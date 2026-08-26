@@ -295,4 +295,27 @@ describe("ZoneStoryPanel zone-local explanations", () => {
 
     expect(screen.queryByText("No zone to measure against")).toBeNull();
   });
+
+  it("labels loose proximity as near the zone instead of an exact zone touch", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          state: "at_zone",
+          price: {
+            ...unifiedData.price,
+            atZone: true,
+            atZoneStrict: false,
+            insideZone: false,
+            sideOk: false,
+            distancePips: 6.4,
+          },
+        }}
+        symbol="GBP/USD"
+      />,
+    );
+
+    expect(screen.getByText("Near zone (wrong side)")).toBeTruthy();
+    expect(screen.queryByText("At zone (wrong side)")).toBeNull();
+  });
 });

@@ -13,10 +13,14 @@ describe("canonical ICT scanner workflow UI", () => {
     expect(configApi).toContain("strategy.canonicalScannerMode must be observe or enforce");
   });
 
-  it("shows one workflow stage and keeps diagnostics collapsed", () => {
-    expect(detailBreakdown).toContain("ICT Scanner Workflow");
+  it("keeps the actual scan outcome primary and labels the workflow by authority mode", () => {
+    expect(detailBreakdown).toContain("Actual scan outcome");
+    expect(detailBreakdown).toContain("Workflow observation");
+    expect(detailBreakdown).toContain("Workflow enforcement");
+    expect(detailBreakdown).toContain("does not change this scan outcome");
     expect(detailBreakdown).toContain("presentation?.primary?.explanation");
     expect(detailBreakdown).toContain("Diagnostic scores and legacy checks");
+    expect(detailBreakdown).not.toContain("current canonical authority");
   });
 
   it("shows canonical state on Watchlist cards", () => {

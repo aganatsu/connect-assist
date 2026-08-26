@@ -43,8 +43,10 @@ import {
   brokerExecApi,
   paperApi,
   scannerApi,
+  type ImpulseEntryLifecycleTransition,
   type PendingOrder,
   type PendingOrderSnapshot,
+  type SetupLifecycleEvent,
   type StagedSetup,
 } from "@/lib/api";
 import {
@@ -306,6 +308,146 @@ function recordIdentifier(value: unknown): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
   const identifier = String(value).trim();
   return identifier || null;
+}
+
+interface SetupIdentity {
+  orderId: string | null;
+  stagedSetupId: string | null;
+  candidateId: string | null;
+  impulseEntryLifecycleId: string | null;
+  symbol: string;
+  direction: "long" | "short" | null;
+}
+
+function scanSetupIdentity(detail: any): SetupIdentity {
+  const rawDirection = String(detail?.direction || "").toLowerCase();
+  return {
+    orderId: recordIdentifier(
+      detail?.setupIdentity?.orderId ??
+        detail?.limitOrder?.orderId ??
+        detail?.goldenReplaySnapshot?.provenance?.orderId,
+    ),
+    stagedSetupId: recordIdentifier(
+      detail?.setupIdentity?.stagedSetupId ??
+        detail?.staging?.setupId ??
+        detail?.staging?.stagedSetupId ??
+        detail?.watchlistLifecycle?.setupId ??
+        detail?.goldenReplaySnapshot?.provenance?.stagedSetupId,
+    ),
+    candidateId: recordIdentifier(
+      detail?.setupIdentity?.candidateId ??
+        detail?.staging?.candidateId ??
+        detail?.limitOrder?.candidateId ??
+        detail?.goldenReplaySnapshot?.provenance?.candidateId ??
+        detail?.singleOwnershipDecision?.identity?.candidateId,
+    ),
+    impulseEntryLifecycleId: recordIdentifier(
+      detail?.setupIdentity?.impulseEntryLifecycleId ??
+        detail?.impulseEntryLifecycleId ??
+        detail?.impulse_entry_lifecycle_id,
+    ),
+    symbol: pairName(detail),
+    direction: rawDirection === "long" || rawDirection === "short"
+      ? rawDirection
+      : null,
+  };
+}
+
+function orderMatchesIdentity(
+  order: PendingOrder,
+  identity: SetupIdentity,
+): boolean {
+  if (identity.orderId && order.order_id === identity.orderId) return true;
+  if (
+    identity.stagedSetupId &&
+    recordIdentifier(order.staged_setup_id) === identity.stagedSetupId
+  ) return true;
+  if (
+    identity.candidateId &&
+    recordIdentifier(order.candidate_id) === identity.candidateId
+  ) return true;
+  if (
+    identity.impulseEntryLifecycleId &&
+    recordIdentifier(order.impulse_entry_lifecycle_id) ===
+      identity.impulseEntryLifecycleId
+  ) return true;
+  return false;
+}
+
+type SetupLinkMethod =
+  | "order_id"
+  | "staged_setup_id"
+  | "candidate_id"
+  | "impulse_entry_lifecycle_id"
+  | "legacy_symbol";
+
+function linkedOrderForScan(
+  orders: PendingOrder[],
+  detail: any,
+): { order: PendingOrder; method: SetupLinkMethod } | null {
+  if (!detail) return null;
+  const identity = scanSetupIdentity(detail);
+  const exactOrder = orders.find((order) => orderMatchesIdentity(order, identity));
+  if (exactOrder) {
+    const method: SetupLinkMethod = identity.orderId === exactOrder.order_id
+      ? "order_id"
+      : identity.stagedSetupId === recordIdentifier(exactOrder.staged_setup_id)
+      ? "staged_setup_id"
+      : identity.candidateId === recordIdentifier(exactOrder.candidate_id)
+      ? "candidate_id"
+      : "impulse_entry_lifecycle_id";
+    return { order: exactOrder, method };
+  }
+
+  if (
+    identity.orderId ||
+    identity.stagedSetupId ||
+    identity.candidateId ||
+    identity.impulseEntryLifecycleId
+  ) {
+    return null;
+  }
+  const sameSymbol = orders.filter((order) => order.symbol === identity.symbol);
+  const sameDirection = identity.direction
+    ? sameSymbol.filter((order) => order.direction === identity.direction)
+    : sameSymbol;
+  const legacyMatches = sameDirection.length === 1 ? sameDirection : sameSymbol;
+  return legacyMatches.length === 1
+    ? { order: legacyMatches[0], method: "legacy_symbol" }
+    : null;
+}
+
+function lifecycleEventMatchesIdentity(
+  event: SetupLifecycleEvent,
+  identity: SetupIdentity,
+): boolean {
+  if (
+    identity.stagedSetupId &&
+    event.staged_setup_id === identity.stagedSetupId
+  ) return true;
+  return Boolean(
+    identity.candidateId && event.candidate_id === identity.candidateId,
+  );
+}
+
+function lifecycleEventTone(event: SetupLifecycleEvent): string {
+  if (event.to_status === "filled") return "green";
+  if (["invalidated", "cancelled", "expired", "blocked_after_qualification"].includes(event.to_status)) {
+    return "red";
+  }
+  if (["qualified", "pending", "awaiting_confirmation"].includes(event.to_status)) {
+    return "orange";
+  }
+  return "cyan";
+}
+
+function impulseLifecycleEventTone(
+  event: ImpulseEntryLifecycleTransition,
+): string {
+  if (["confirmation_passed", "entered"].includes(event.event_type)) return "green";
+  if (["impulse_invalidated", "expired", "no_zones_left"].includes(event.event_type)) return "red";
+  if (["candidate_failed", "zone_touched", "trigger_locked"].includes(event.event_type)) return "orange";
+  return "cyan";
 }
 
 function downloadScanCsv(details: any[], observedAt: string | undefined) {
@@ -642,16 +784,27 @@ function OperationsDashboard() {
   }, [displayedScanDetails, selectedPair]);
 
   const selectedScanDetail = displayedScanDetails.find((detail) => pairName(detail) === selectedPair) || displayedScanDetails[0] || null;
+  const selectedScanIdentity = useMemo(
+    () => selectedScanDetail ? scanSetupIdentity(selectedScanDetail) : null,
+    [selectedScanDetail],
+  );
   const huntingOrders = activeOrders.filter((order) => {
     const stage = pendingOrderDisplayStage(order);
     return stage === "confirmation" || stage === "retracement";
   });
   const reconciliationOrders = activeOrders.filter((order) => pendingOrderDisplayStage(order) === "reconciliation");
-  const focusedOrder = activeOrders.find((order) => order.order_id === selectedOrderId)
-    || reconciliationOrders[0]
-    || huntingOrders[0]
-    || activeOrders[0]
-    || null;
+  const explicitlySelectedOrder = activeOrders.find((order) =>
+    order.order_id === selectedOrderId &&
+    (!selectedPair || order.symbol === selectedPair)
+  ) || null;
+  const linkedOrder = useMemo(
+    () => linkedOrderForScan(activeOrders, selectedScanDetail),
+    [activeOrders, selectedScanDetail],
+  );
+  const focusedOrder = explicitlySelectedOrder || linkedOrder?.order || null;
+  const focusedOrderLinkMethod: SetupLinkMethod | null = explicitlySelectedOrder
+    ? "order_id"
+    : linkedOrder?.method || null;
   const watchingOrders = activeOrders.filter((order) => pendingOrderDisplayStage(order) === "watching");
   const priceHistory = focusedOrder ? scanPriceHistory(scans, focusedOrder.symbol) : [];
   const pipeline = buildPipeline(focusedOrder);
@@ -678,6 +831,78 @@ function OperationsDashboard() {
     : null;
   const focusedGeometry = focusedOrder ? zoneGeometry(focusedOrder) : null;
   const focusedStopPolicy = focusedOrder ? stopPolicyPresentation(focusedOrder) : null;
+  const selectedLifecycleIdentity: SetupIdentity | null = useMemo(
+    () => focusedOrder
+      ? {
+          orderId: focusedOrder.order_id,
+          stagedSetupId: recordIdentifier(focusedOrder.staged_setup_id),
+          candidateId: recordIdentifier(focusedOrder.candidate_id),
+          impulseEntryLifecycleId: recordIdentifier(
+            focusedOrder.impulse_entry_lifecycle_id,
+          ),
+          symbol: focusedOrder.symbol,
+          direction: focusedOrder.direction,
+        }
+      : selectedScanIdentity,
+    [focusedOrder, selectedScanIdentity],
+  );
+  const hasSetupLedgerIdentity = Boolean(
+    selectedLifecycleIdentity?.stagedSetupId ||
+      selectedLifecycleIdentity?.candidateId,
+  );
+  const hasImpulseLedgerIdentity = Boolean(
+    selectedLifecycleIdentity?.impulseEntryLifecycleId,
+  );
+  const lifecycleEventsQuery = useQuery({
+    queryKey: [
+      "setup-lifecycle-events",
+      selectedLifecycleIdentity?.stagedSetupId,
+      selectedLifecycleIdentity?.candidateId,
+    ],
+    queryFn: () => scannerApi.lifecycleEvents({
+      stagedSetupId: selectedLifecycleIdentity?.stagedSetupId,
+      candidateId: selectedLifecycleIdentity?.candidateId,
+    }),
+    enabled: hasSetupLedgerIdentity,
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const impulseLifecycleQuery = useQuery({
+    queryKey: [
+      "impulse-entry-lifecycle-transitions",
+      selectedLifecycleIdentity?.impulseEntryLifecycleId,
+    ],
+    queryFn: () => scannerApi.impulseLifecycleTransitions(
+      selectedLifecycleIdentity!.impulseEntryLifecycleId!,
+    ),
+    enabled: hasImpulseLedgerIdentity,
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const lifecycleEvents: SetupLifecycleEvent[] = useMemo(
+    () => Array.isArray(lifecycleEventsQuery.data) ? lifecycleEventsQuery.data : [],
+    [lifecycleEventsQuery.data],
+  );
+  const impulseLifecycleTransitions: ImpulseEntryLifecycleTransition[] = useMemo(
+    () => Array.isArray(impulseLifecycleQuery.data) ? impulseLifecycleQuery.data : [],
+    [impulseLifecycleQuery.data],
+  );
+  const selectedLifecycleEvents = useMemo(
+    () => selectedLifecycleIdentity
+      ? lifecycleEvents.filter((event) =>
+          lifecycleEventMatchesIdentity(event, selectedLifecycleIdentity)
+        )
+      : [],
+    [lifecycleEvents, selectedLifecycleIdentity],
+  );
+  const selectedImpulseLifecycleTransitions = useMemo(
+    () => selectedLifecycleIdentity?.impulseEntryLifecycleId
+      ? impulseLifecycleTransitions.filter((event) =>
+          event.lifecycle_id === selectedLifecycleIdentity.impulseEntryLifecycleId
+        )
+      : [],
+    [impulseLifecycleTransitions, selectedLifecycleIdentity],
+  );
 
   const scansToday = scans.filter((scan) => {
     const date = new Date(scan.scanned_at);
@@ -703,36 +928,28 @@ function OperationsDashboard() {
     ? "Engine paused"
     : "Engine stopped";
 
-  const recentEvents = useMemo(() => {
-    const rows: Array<{ id: string; time: string; label: string; detail: string; tone: string }> = [];
-    if (currentScan?.scanned_at) {
-      rows.push({
-        id: `scan-${currentScan.scanned_at}`,
-        time: currentScan.scanned_at,
-        label: "Scan completed",
-        detail: `${currentScan.pairs_scanned || 0} pairs · ${currentScan.signals_found || 0} signals`,
-        tone: "cyan",
-      });
-    }
-    const ordersById = new Map<string, PendingOrder>();
-    for (const order of [...(pendingSnapshot.history || []), ...activeOrders]) {
-      ordersById.set(order.order_id, order);
-    }
-    for (const order of ordersById.values()) {
-      const time = order.resolved_at || order.updated_at || order.placed_at;
-      rows.push({
-        id: order.order_id,
-        time,
-        label: `${order.symbol} · ${order.status.replace(/_/g, " ")}`,
-        detail: order.cancel_reason || order.fill_reason || `${order.direction.toUpperCase()} ${zoneType(order)}`,
-        tone: order.status === "filled" ? "green" : order.status === "invalidated" || order.status === "cancelled" ? "red" : "orange",
-      });
-    }
-    return rows
-      .filter((event) => event.time)
-      .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-      .slice(0, 5);
-  }, [activeOrders, currentScan, pendingSnapshot.history]);
+  const recentEvents = useMemo(() => [
+    ...selectedLifecycleEvents.map((event) => ({
+      id: `setup:${event.id}`,
+      time: event.created_at,
+      label: `${event.symbol} · setup · ${event.to_status.replace(/_/g, " ")}`,
+      detail: event.reason || event.reason_code?.replace(/_/g, " ") || "Setup transition recorded",
+      tone: lifecycleEventTone(event),
+    })),
+    ...selectedImpulseLifecycleTransitions.map((event) => ({
+      id: `impulse:${event.id}`,
+      time: event.created_at,
+      label: `${selectedLifecycleIdentity?.symbol || "Setup"} · impulse · ${event.event_type.replace(/_/g, " ")}`,
+      detail: event.reason || "Impulse-entry transition recorded",
+      tone: impulseLifecycleEventTone(event),
+    })),
+  ].sort((left, right) =>
+    new Date(right.time).getTime() - new Date(left.time).getTime()
+  ).slice(0, 8), [
+    selectedLifecycleEvents,
+    selectedLifecycleIdentity?.symbol,
+    selectedImpulseLifecycleTransitions,
+  ]);
 
   const manualScan = useMutation({
     mutationFn: () => scannerApi.manualScan(),
@@ -758,6 +975,8 @@ function OperationsDashboard() {
             setScanPolling(false);
             queryClient.setQueryData(["scan-logs"], latest);
             queryClient.invalidateQueries({ queryKey: ["pending-orders-snapshot"] });
+            queryClient.invalidateQueries({ queryKey: ["setup-lifecycle-events"] });
+            queryClient.invalidateQueries({ queryKey: ["impulse-entry-lifecycle-transitions"] });
             queryClient.invalidateQueries({ queryKey: ["paper-status"] });
             toast.success("Scan complete — ledger updated");
           }
@@ -817,6 +1036,8 @@ function OperationsDashboard() {
     onSuccess: () => {
       setSelectedOrderId(null);
       queryClient.invalidateQueries({ queryKey: ["pending-orders-snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["setup-lifecycle-events"] });
+      queryClient.invalidateQueries({ queryKey: ["impulse-entry-lifecycle-transitions"] });
       toast.success("Zone setup cancelled");
     },
     onError: (error: any) => toast.error(error?.message || "Zone setup was not cancelled"),
@@ -825,6 +1046,8 @@ function OperationsDashboard() {
     mutationFn: (setupId: string) => scannerApi.dismissStaged(setupId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["staged-setups-active"] });
+      queryClient.invalidateQueries({ queryKey: ["setup-lifecycle-events"] });
+      queryClient.invalidateQueries({ queryKey: ["impulse-entry-lifecycle-transitions"] });
       toast.success("Staged candidate dismissed");
     },
     onError: (error: any) => toast.error(error?.message || "Candidate was not dismissed"),
@@ -871,6 +1094,8 @@ function OperationsDashboard() {
     ...(scansQuery.isPending ? ["Scan ledger"] : []),
     ...(pendingQuery.isPending ? ["Zone setup ledger"] : []),
     ...(stagedQuery.isPending ? ["Staged candidates"] : []),
+    ...(hasSetupLedgerIdentity && lifecycleEventsQuery.isPending ? ["Setup lifecycle ledger"] : []),
+    ...(hasImpulseLedgerIdentity && impulseLifecycleQuery.isPending ? ["Impulse-entry lifecycle ledger"] : []),
     ...(connectionsQuery.isPending ? ["Broker connections"] : []),
     ...activeConnections.flatMap((connection: any, index: number) => {
       const brokerName = String(connection.display_name || connection.broker_type || `Broker ${index + 1}`);
@@ -891,6 +1116,8 @@ function OperationsDashboard() {
     ...(scansQuery.isError || (scansQuery.isSuccess && !Array.isArray(scansQuery.data)) ? ["Scan ledger"] : []),
     ...(pendingQuery.isError || pendingSnapshot.fallback === true ? ["Zone setup ledger"] : []),
     ...(stagedQuery.isError || (stagedQuery.isSuccess && !Array.isArray(stagedQuery.data)) ? ["Staged candidates"] : []),
+    ...(hasSetupLedgerIdentity && (lifecycleEventsQuery.isError || (lifecycleEventsQuery.isSuccess && !Array.isArray(lifecycleEventsQuery.data))) ? ["Setup lifecycle ledger"] : []),
+    ...(hasImpulseLedgerIdentity && (impulseLifecycleQuery.isError || (impulseLifecycleQuery.isSuccess && !Array.isArray(impulseLifecycleQuery.data))) ? ["Impulse-entry lifecycle ledger"] : []),
     ...(connectionListUnavailable ? ["Broker connections"] : []),
     ...activeConnections.flatMap((connection: any, index: number) => {
       const brokerName = String(connection.display_name || connection.broker_type || `Broker ${index + 1}`);
@@ -984,10 +1211,10 @@ function OperationsDashboard() {
                       </TooltipTrigger>
                       <TooltipContent>{scanPolling ? "Scan running" : "Run scan now"}</TooltipContent>
                     </Tooltip>
-                    <button onClick={() => { setScanIndex((value) => Math.min(scans.length - 1, value + 1)); setSelectedPair(null); }} disabled={safeScanIndex >= scans.length - 1}>
+                    <button onClick={() => { setScanIndex((value) => Math.min(scans.length - 1, value + 1)); setSelectedPair(null); setSelectedOrderId(null); }} disabled={safeScanIndex >= scans.length - 1}>
                       <ChevronLeft /> older
                     </button>
-                    <button onClick={() => { setScanIndex((value) => Math.max(0, value - 1)); setSelectedPair(null); }} disabled={safeScanIndex === 0}>
+                    <button onClick={() => { setScanIndex((value) => Math.max(0, value - 1)); setSelectedPair(null); setSelectedOrderId(null); }} disabled={safeScanIndex === 0}>
                       newer <ChevronRight />
                     </button>
                   </div>
@@ -1019,6 +1246,9 @@ function OperationsDashboard() {
                         className={`apex-scan-row ${selectedPair === symbol ? "selected" : ""}`}
                         onClick={() => {
                           setSelectedPair(symbol);
+                          setSelectedOrderId(
+                            linkedOrderForScan(activeOrders, detail)?.order.order_id || null,
+                          );
                           setContextPanel("detail");
                         }}
                       >
@@ -1068,13 +1298,18 @@ function OperationsDashboard() {
                   <span className="apex-meta-count">{activeOrders.length} active · {huntingOrders.length} hunting{reconciliationOrders.length ? ` · ${reconciliationOrders.length} reconcile` : ""}</span>
                 </div>
 
-                {activeOrders.length > 1 && (
+                {activeOrders.length > 0 && (
                   <div className="apex-active-order-strip" aria-label="Select active zone setup">
                     {activeOrders.map((order) => (
                       <button
                         key={order.order_id}
                         className={focusedOrder?.order_id === order.order_id ? "active" : ""}
-                        onClick={() => setSelectedOrderId(order.order_id)}
+                        aria-label={`Select ${order.symbol} active setup`}
+                        onClick={() => {
+                          setScanFilter("all");
+                          setSelectedOrderId(order.order_id);
+                          setSelectedPair(order.symbol);
+                        }}
                       >
                         <strong>{order.symbol}</strong>
                         <span>{pendingOrderDisplayStage(order).replace(/_/g, " ")}</span>
@@ -1148,8 +1383,12 @@ function OperationsDashboard() {
                 ) : (
                   <div className="apex-focus-empty">
                     <Target />
-                    <strong>No active zone setup</strong>
-                    <span>Qualified setups will appear after the scanner freezes executable geometry.</span>
+                    <strong>{selectedScanDetail
+                      ? `No active setup linked to ${pairName(selectedScanDetail)}`
+                      : "No active zone setup"}</strong>
+                    <span>{activeOrders.length > 0
+                      ? "Choose an active setup above, or select the scan that created it."
+                      : "Qualified setups will appear after the scanner freezes executable geometry."}</span>
                   </div>
                 )}
 
@@ -1163,7 +1402,7 @@ function OperationsDashboard() {
                   <thead><tr><th>Instrument</th><th>Direction</th><th>Zone</th><th>Distance</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{watchingOrders.slice(0, 6).map((order) => (
                     <tr key={order.order_id}>
-                      <td><button className="apex-row-select" onClick={() => setSelectedOrderId(order.order_id)}>{order.symbol}</button></td>
+                      <td><button className="apex-row-select" onClick={() => { setScanFilter("all"); setSelectedOrderId(order.order_id); setSelectedPair(order.symbol); }}>{order.symbol}</button></td>
                       <td><span className={order.direction}>{order.direction}</span></td>
                       <td>{zoneType(order)}</td>
                       <td className="distance">{formatDistance(
@@ -1240,7 +1479,9 @@ function OperationsDashboard() {
                         <p className="apex-kicker">Selected scan</p>
                         <h2>Detail Breakdown</h2>
                       </div>
-                      <span>{selectedScanDetail ? pairName(selectedScanDetail) : "No row"}</span>
+                      <span>{selectedScanDetail
+                        ? `${pairName(selectedScanDetail)} · scan ${formatClock(currentScan?.scanned_at)}`
+                        : "No row"}</span>
                     </div>
                     {selectedScanDetail ? (
                       <ScanDetailBreakdown signal={selectedScanDetail} observedAt={currentScan?.scanned_at} />
@@ -1251,13 +1492,24 @@ function OperationsDashboard() {
                 ) : (
                   <div id="lifecycle-panel" className="apex-lifecycle-context" role="tabpanel" aria-labelledby="lifecycle-tab">
                     <section className="apex-commentary">
-                      <p className="apex-kicker">Desk brief</p>
+                      <p className="apex-kicker">Desk brief{selectedScanDetail ? ` · ${pairName(selectedScanDetail)}` : ""}</p>
                       <h2 id="now-title">What’s happening now</h2>
-                      <p>{commentary(focusedOrder)}</p>
+                      <p>{focusedOrder
+                        ? commentary(focusedOrder)
+                        : selectedScanDetail
+                        ? `No active order is linked to the selected ${pairName(selectedScanDetail)} scan. Persisted events for its exact setup identity are shown below when available; another instrument's lifecycle is never substituted.`
+                        : commentary(null)}</p>
                       {focusedOrder && (
-                        <button className="apex-text-action" onClick={() => navigate(`/chart?symbol=${encodeURIComponent(focusedOrder.symbol)}`)}>
-                          Open {focusedOrder.symbol} chart <ChevronRight />
-                        </button>
+                        <>
+                          <p className="apex-lifecycle-provenance">
+                            Frozen {formatClock(focusedOrder.placed_at)} · Updated {formatClock(focusedOrder.updated_at)}
+                            {pendingSnapshot.fetchedAt ? ` · Ledger fetched ${formatClock(pendingSnapshot.fetchedAt)}` : ""}
+                            {focusedOrderLinkMethod === "legacy_symbol" ? " · Legacy symbol link" : ""}
+                          </p>
+                          <button className="apex-text-action" onClick={() => navigate(`/chart?symbol=${encodeURIComponent(focusedOrder.symbol)}`)}>
+                            Open {focusedOrder.symbol} chart <ChevronRight />
+                          </button>
+                        </>
                       )}
                     </section>
 
@@ -1286,11 +1538,13 @@ function OperationsDashboard() {
                     <section className="apex-events" aria-labelledby="events-title">
                       <div className="apex-subsection-head">
                         <h3 id="events-title">Recent Events</h3>
-                        <span>Live ledger</span>
+                        <span>Persisted lifecycle ledgers</span>
                       </div>
                       <div>
-                        {recentEvents.length === 0 ? (
-                          <p className="apex-table-empty">No lifecycle events yet.</p>
+                        {(lifecycleEventsQuery.isLoading || impulseLifecycleQuery.isLoading) ? (
+                          <p className="apex-table-empty">Loading lifecycle events…</p>
+                        ) : recentEvents.length === 0 ? (
+                          <p className="apex-table-empty">No persisted events for this selected setup.</p>
                         ) : recentEvents.map((event) => (
                           <div className="apex-event" key={event.id}>
                             <time>{formatClock(event.time, false)}</time>
