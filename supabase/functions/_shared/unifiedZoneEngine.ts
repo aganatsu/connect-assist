@@ -105,6 +105,7 @@ export type UnifiedState =
 
 export interface ImpulseStory {
   direction: "bullish" | "bearish";
+  breakType: "bos" | "choch" | null;
   high: number;
   low: number;
   pips: number;
@@ -374,6 +375,7 @@ export function findUnifiedZone(
   const impulsePips = Math.abs(impulse.high - impulse.low) / pipSize;
   const impulseStory: ImpulseStory = {
     direction: impulse.direction,
+    breakType: impulse.breakType ?? null,
     high: impulse.high,
     low: impulse.low,
     pips: Math.round(impulsePips * 10) / 10,
@@ -698,7 +700,8 @@ function buildNoZoneResult(
   const leg = developing?.result?.impulse ?? null;
   const qualification = developing?.result?.impulseQualification ?? null;
   const impulse: ImpulseStory | null = leg ? {
-    direction: leg.direction, high: leg.high, low: leg.low,
+    direction: leg.direction, breakType: leg.breakType ?? null,
+    high: leg.high, low: leg.low,
     pips: Math.round((Math.abs(leg.high - leg.low) / pipSize) * 10) / 10,
     timeframe: developing?.timeframe ?? leg.timeframe ?? "unknown",
     startDate: leg.startDate ?? null, endDate: leg.endDate ?? null,
@@ -716,7 +719,7 @@ function buildNoZoneResult(
     unifiedScore: 0,
     scoreBreakdown: { baseScore: 0, liquidityBonus: 0, confirmationBonus: 0, tfBonus: 0, total: 0 },
     storySummary: qualification
-      ? `${qualification.state === "developing" ? "Developing structural leg" : "Invalidated structural leg"}: ${qualification.reasons.join("; ")}`
+      ? `${qualification.state === "developing" ? "Impulse candidate not yet qualified" : "Invalidated structural leg"}: ${qualification.reasons.join("; ")}`
       : `No valid ${direction} structural leg found on any timeframe.`,
     multiTFResult,
     state: impulse ? "no_zone" : "no_impulse",
@@ -830,9 +833,12 @@ function buildStorySummary(
   const empty = "○";
 
   // Line 1: Impulse
-  lines.push(`${filled} ${selectedTF} Impulse: ${dir} ${impulse.low.toFixed(5)} → ${impulse.high.toFixed(5)} (${impulse.pips} pips)`);
+  const impulseStart = impulse.direction === "bearish" ? impulse.high : impulse.low;
+  const impulseEnd = impulse.direction === "bearish" ? impulse.low : impulse.high;
+  lines.push(`${filled} ${selectedTF} Impulse: ${dir} ${impulseStart.toFixed(5)} → ${impulseEnd.toFixed(5)} (${impulse.pips} pips)`);
   if (impulse.startDate && impulse.endDate) {
-    lines.push(`    BOS: ${impulse.bosPrice.toFixed(5)}  ${impulse.startDate} → ${impulse.endDate} (${impulse.spanBars} bars)`);
+    const structureLabel = impulse.breakType === "choch" ? "CHoCH" : "BOS";
+    lines.push(`    ${structureLabel}: ${impulse.bosPrice.toFixed(5)}  ${impulse.startDate} → ${impulse.endDate} (${impulse.spanBars} bars)`);
   }
 
   // Line 2: Zone
