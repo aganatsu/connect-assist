@@ -166,7 +166,17 @@ export async function metaFetch(
       }
       break;
     }
+
+    // Every guessed region rejected the account. Ask MetaAPI provisioning which
+    // region actually hosts it instead of failing with a 504 region mismatch.
+    if (!queue.length && failoverAllowed && !consultedProvisioning) {
+      consultedProvisioning = true;
+      regionCache.delete(accountId);
+      const provisioned = await resolveAccountRegion(accountId, authToken);
+      if (provisioned && !tried.has(provisioned)) queue.push(provisioned);
+    }
   }
+
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 
 }
