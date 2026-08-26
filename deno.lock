@@ -4,7 +4,6 @@
     "jsr:@deno/installer-shell-setup@*": "0.3.4",
     "npm:@eslint/js@^9.32.0": "9.39.4",
     "npm:@hookform/resolvers@^3.10.0": "3.10.0_react-hook-form@7.77.0__react@18.3.1_react@18.3.1",
-    "npm:@lovable.dev/cloud-auth-js@^1.1.1": "1.1.2",
     "npm:@radix-ui/react-accordion@^1.2.11": "1.2.13_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-alert-dialog@^1.1.14": "1.1.16_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-aspect-ratio@^1.1.7": "1.1.9_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
@@ -4050,7 +4049,7 @@
       "dependencies": [
         "npm:@eslint/js@^9.32.0",
         "npm:@hookform/resolvers@^3.10.0",
-        "npm:@lovable.dev/cloud-auth-js@^1.1.1",
+        "npm:@lovable.dev/cloud-auth-js@1.1.2",
         "npm:@radix-ui/react-accordion@^1.2.11",
         "npm:@radix-ui/react-alert-dialog@^1.1.14",
         "npm:@radix-ui/react-aspect-ratio@^1.1.7",
