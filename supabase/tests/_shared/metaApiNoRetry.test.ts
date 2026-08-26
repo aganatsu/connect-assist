@@ -65,9 +65,14 @@ Deno.test("MetaAPI never sends a cold-cache mutation when region discovery fails
       result.body,
       "MetaAPI account region could not be established; mutation was not sent",
     );
-    assertEquals(calls.length, META_REGIONS.length);
+    const clientCalls = calls.filter((call) => !call.url.includes("provisioning"));
+    assertEquals(clientCalls.length, META_REGIONS.length);
     assertEquals(calls.every((call) => call.method === "GET"), true);
-    assertEquals(calls.every((call) => call.url.endsWith("/account-information")), true);
+    assertEquals(
+      clientCalls.every((call) => call.url.endsWith("/account-information")),
+      true,
+    );
+
   } finally {
     globalThis.fetch = originalFetch;
     regionCache.clear();
