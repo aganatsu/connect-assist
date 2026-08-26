@@ -28,6 +28,42 @@ export function metaBaseUrl(region: string, accountId: string): string {
   return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
 }
 
+/**
+ * Ask MetaAPI provisioning which region actually hosts this account instead of
+ * guessing. Blind region cycling produces 504 "not connected to broker yet or
+ * request URL does not match the account region" on every region, and one of
+ * the guessed hosts may not even resolve in DNS.
+ */
+export async function resolveAccountRegion(
+  accountId: string,
+  authToken: string,
+): Promise<string | null> {
+  const cached = regionCache.get(accountId);
+  if (cached) return cached;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(
+      `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${accountId}`,
+      { headers: { "auth-token": authToken }, signal: ctrl.signal },
+    );
+    if (!res.ok) return null;
+    const account = await res.json().catch(() => null) as
+      | { region?: string }
+      | null;
+    const region = typeof account?.region === "string" && account.region.trim()
+      ? account.region.trim()
+      : null;
+    if (region) regionCache.set(accountId, region);
+    return region;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
 // ─── Core Fetch with Region Failover ────────────────────────────────────
 /**
  * Fetch from MetaAPI with automatic region failover.
@@ -52,6 +88,8 @@ export async function metaFetch(
   // Mutations may be dispatched only once. A cold edge-function isolate has
   // no cached region, so locate the account with a read-only request first.
   if (!failoverAllowed && !regionCache.has(accountId)) {
+
+
     const discovery = await metaFetch(
       accountId,
       authToken,
@@ -78,7 +116,14 @@ export async function metaFetch(
     : META_REGIONS;
   let lastBody = ""; let lastStatus = 504; let sawHttpResponse = false;
   const isDnsFailure = (m: string) => /dns error|failed to lookup address/i.test(m);
-  for (const region of order) {
+  const queue = [...order];
+  const tried = new Set<string>();
+  let consultedProvisioning = false;
+  while (queue.length) {
+    const region = queue.shift()!;
+    if (tried.has(region)) continue;
+    tried.add(region);
+
     const url = pathBuilder(metaBaseUrl(region, accountId));
     const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
     // A 429 from the correct region is rate limiting, not a region mismatch:
@@ -121,7 +166,17 @@ export async function metaFetch(
       }
       break;
     }
+
+    // Every guessed region rejected the account. Ask MetaAPI provisioning which
+    // region actually hosts it instead of failing with a 504 region mismatch.
+    if (!queue.length && failoverAllowed && !consultedProvisioning) {
+      consultedProvisioning = true;
+      regionCache.delete(accountId);
+      const provisioned = await resolveAccountRegion(accountId, authToken);
+      if (provisioned && !tried.has(provisioned)) queue.push(provisioned);
+    }
   }
+
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 
 }
