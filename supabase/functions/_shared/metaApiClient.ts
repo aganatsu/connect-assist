@@ -85,15 +85,10 @@ export async function metaFetch(
   const isMutation = method !== "GET" && method !== "HEAD";
   const failoverAllowed = !isMutation && options?.allowFailover !== false;
 
-  // Prefer the region MetaAPI itself reports for this account. Without it every
-  // guessed host can answer 504 "does not match the account region".
-  if (!regionCache.has(accountId)) {
-    await resolveAccountRegion(accountId, authToken);
-  }
-
   // Mutations may be dispatched only once. A cold edge-function isolate has
   // no cached region, so locate the account with a read-only request first.
   if (!failoverAllowed && !regionCache.has(accountId)) {
+
 
     const discovery = await metaFetch(
       accountId,
