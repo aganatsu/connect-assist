@@ -28,6 +28,42 @@ export function metaBaseUrl(region: string, accountId: string): string {
   return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
 }
 
+/**
+ * Ask MetaAPI provisioning which region actually hosts this account instead of
+ * guessing. Blind region cycling produces 504 "not connected to broker yet or
+ * request URL does not match the account region" on every region, and one of
+ * the guessed hosts may not even resolve in DNS.
+ */
+export async function resolveAccountRegion(
+  accountId: string,
+  authToken: string,
+): Promise<string | null> {
+  const cached = regionCache.get(accountId);
+  if (cached) return cached;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(
+      `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${accountId}`,
+      { headers: { "auth-token": authToken }, signal: ctrl.signal },
+    );
+    if (!res.ok) return null;
+    const account = await res.json().catch(() => null) as
+      | { region?: string }
+      | null;
+    const region = typeof account?.region === "string" && account.region.trim()
+      ? account.region.trim()
+      : null;
+    if (region) regionCache.set(accountId, region);
+    return region;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
 // ─── Core Fetch with Region Failover ────────────────────────────────────
 /**
  * Fetch from MetaAPI with automatic region failover.
