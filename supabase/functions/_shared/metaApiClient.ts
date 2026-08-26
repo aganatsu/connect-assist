@@ -116,7 +116,14 @@ export async function metaFetch(
     : META_REGIONS;
   let lastBody = ""; let lastStatus = 504; let sawHttpResponse = false;
   const isDnsFailure = (m: string) => /dns error|failed to lookup address/i.test(m);
-  for (const region of order) {
+  const queue = [...order];
+  const tried = new Set<string>();
+  let consultedProvisioning = false;
+  while (queue.length) {
+    const region = queue.shift()!;
+    if (tried.has(region)) continue;
+    tried.add(region);
+
     const url = pathBuilder(metaBaseUrl(region, accountId));
     const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
     // A 429 from the correct region is rate limiting, not a region mismatch:
