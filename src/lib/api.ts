@@ -1053,6 +1053,38 @@ export const scannerApi = {
     if (error) throw new Error(error.message);
     return hydrateImpulseEntryLifecycles(data || []);
   },
+  lifecycleEvents: async (identity: {
+    stagedSetupId?: string | null;
+    candidateId?: string | null;
+  }): Promise<SetupLifecycleEvent[]> => {
+    const stagedSetupId = identity.stagedSetupId?.trim() || null;
+    const candidateId = identity.candidateId?.trim() || null;
+    if (!stagedSetupId && !candidateId) return [];
+
+    let query = supabase
+      .from("setup_lifecycle_events")
+      .select("*")
+      .eq("bot_id", "smc")
+      .order("created_at", { ascending: false });
+    query = stagedSetupId
+      ? query.eq("staged_setup_id", stagedSetupId)
+      : query.eq("candidate_id", candidateId!);
+    const { data, error } = await query.limit(100);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  impulseLifecycleTransitions: async (
+    lifecycleId: string,
+  ): Promise<ImpulseEntryLifecycleTransition[]> => {
+    const { data, error } = await supabase
+      .from("impulse_entry_lifecycle_transitions")
+      .select("*")
+      .eq("lifecycle_id", lifecycleId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
   dismissStaged: async (setupId: string) => {
     const { error } = await (supabase as any)
       .from("staged_setups")
@@ -1178,6 +1210,38 @@ export interface StagedSetup {
   resolved_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SetupLifecycleEvent {
+  id: string;
+  staged_setup_id: string;
+  candidate_id: string;
+  user_id: string;
+  bot_id: string;
+  symbol: string;
+  direction: string;
+  from_status: string | null;
+  to_status: string;
+  lifecycle_phase: string | null;
+  reason: string | null;
+  reason_code: string | null;
+  evidence: unknown;
+  created_at: string;
+}
+
+export interface ImpulseEntryLifecycleTransition {
+  id: string;
+  lifecycle_id: string;
+  user_id: string;
+  event_type: string;
+  reason: string;
+  event_payload: unknown;
+  lifecycle_snapshot: unknown;
+  from_candidate_id: string | null;
+  to_candidate_id: string | null;
+  from_revision: number;
+  to_revision: number;
+  created_at: string;
 }
 
 // ── Pending Order Type ──

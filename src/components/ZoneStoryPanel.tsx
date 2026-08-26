@@ -286,7 +286,7 @@ const STATE_COLORS: Record<string, string> = {
 const STATE_LABELS: Record<string, string> = {
   triggered: "⚡ TRIGGERED",
   confirmed: "✓ Confirmed",
-  at_zone: "📍 At Zone",
+  at_zone: "📍 Near Zone",
   watching: "⏳ Watching",
   waiting_for_sweep: "⏳ Sweep Wait",
   waiting_for_reconfirmation: "⏳ Reconfirmation Wait",
@@ -774,7 +774,9 @@ export function ZoneStoryPanel({
               ) : unifiedData.price.insideZone ? (
                 <span className="text-green-400">Inside zone</span>
               ) : unifiedData.price.atZone ? (
-                <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
+                <span className={unifiedData.price.sideOk ? "text-yellow-400" : "text-orange-400"}>
+                  Near zone{!unifiedData.price.sideOk && " (wrong side)"}
+                </span>
               ) : (
                 <span className="text-orange-400">{fmtPips(unifiedData.price.distancePips, { absolute: true })} away</span>
               )}

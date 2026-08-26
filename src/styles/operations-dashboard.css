@@ -760,6 +760,14 @@
   line-height: 1.55;
 }
 
+.apex-commentary > .apex-lifecycle-provenance {
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
 .apex-text-action {
   display: inline-flex;
   align-items: center;

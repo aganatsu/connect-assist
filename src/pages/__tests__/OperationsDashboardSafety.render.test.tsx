@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   logs: vi.fn(),
   pendingSnapshot: vi.fn(),
   activeStaged: vi.fn(),
+  lifecycleEvents: vi.fn(),
+  impulseLifecycleTransitions: vi.fn(),
   connections: vi.fn(),
   connectionStatus: vi.fn(),
   accountSummary: vi.fn(),
@@ -51,6 +53,8 @@ vi.mock("@/lib/api", () => ({
     logs: api.logs,
     pendingSnapshot: api.pendingSnapshot,
     activeStaged: api.activeStaged,
+    lifecycleEvents: api.lifecycleEvents,
+    impulseLifecycleTransitions: api.impulseLifecycleTransitions,
     manualScan: api.manualScan,
   },
   brokerApi: { list: api.connections },
@@ -95,6 +99,8 @@ describe("OperationsDashboard safety integration", () => {
     api.logs.mockResolvedValue([]);
     api.pendingSnapshot.mockResolvedValue({ active: [], history: [], fetchedAt: null });
     api.activeStaged.mockResolvedValue([]);
+    api.lifecycleEvents.mockResolvedValue([]);
+    api.impulseLifecycleTransitions.mockResolvedValue([]);
     api.connections.mockResolvedValue([]);
     api.connectionStatus.mockResolvedValue({ ready: true });
     api.accountSummary.mockResolvedValue({ balance: 10_000, equity: 10_000 });

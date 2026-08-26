@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   logs: vi.fn(),
   pendingSnapshot: vi.fn(),
   activeStaged: vi.fn(),
+  lifecycleEvents: vi.fn(),
+  impulseLifecycleTransitions: vi.fn(),
   connections: vi.fn(),
   connectionStatus: vi.fn(),
   accountSummary: vi.fn(),
@@ -48,6 +50,8 @@ vi.mock("@/lib/api", () => ({
     logs: api.logs,
     pendingSnapshot: api.pendingSnapshot,
     activeStaged: api.activeStaged,
+    lifecycleEvents: api.lifecycleEvents,
+    impulseLifecycleTransitions: api.impulseLifecycleTransitions,
     manualScan: api.manualScan,
   },
   brokerApi: { list: api.connections },
@@ -165,6 +169,8 @@ describe("OperationsDashboard", () => {
       }],
     });
     api.activeStaged.mockResolvedValue([]);
+    api.lifecycleEvents.mockResolvedValue([]);
+    api.impulseLifecycleTransitions.mockResolvedValue([]);
     api.connections.mockResolvedValue([{ id: "broker-1", display_name: "FTMO Demo", is_active: true, is_live: false }]);
     api.connectionStatus.mockResolvedValue({ ok: true, ready: true, connectionStatus: "CONNECTED" });
     api.accountSummary.mockResolvedValue({ balance: 10000, equity: 10000 });
@@ -312,5 +318,136 @@ describe("OperationsDashboard", () => {
     expect(screen.getAllByText(/Active breaker 112.45 - 112.48 on 5m/).length).toBeGreaterThan(0);
     expect(screen.queryByText("Displaced MSS / CHoCH")).not.toBeInTheDocument();
     expect(screen.queryByText("Micro OB retracement")).not.toBeInTheDocument();
+  });
+
+  it("does not attach an unrelated active order lifecycle to the selected scan", async () => {
+    api.logs.mockResolvedValue([{
+      scanned_at: "2026-08-26T17:48:21Z",
+      pairs_scanned: 2,
+      signals_found: 1,
+      trades_placed: 0,
+      details_json: [
+        {
+          pair: "USD/CHF",
+          direction: "neutral",
+          score: 61.7,
+          status: "rejected",
+          reason: "Effective R:R is below the required minimum",
+        },
+        {
+          pair: "XAU/USD",
+          direction: "short",
+          score: 42,
+          status: "zone_setup_active",
+          reason: "Zone setup active",
+          setupIdentity: {
+            orderId: "xau-order",
+            stagedSetupId: "xau-setup",
+            candidateId: "xau-candidate",
+            impulseEntryLifecycleId: "xau-impulse-lifecycle",
+          },
+        },
+      ],
+    }]);
+    api.pendingSnapshot.mockResolvedValue({
+      fetchedAt: "2026-08-26T17:48:30Z",
+      history: [],
+      active: [{
+        order_id: "xau-order",
+        symbol: "XAU/USD",
+        direction: "short",
+        order_type: "limit_ob",
+        entry_price: 4400,
+        current_price: 4450,
+        stop_loss: 4470,
+        take_profit: 4300,
+        size: null,
+        entry_zone_type: "ob",
+        entry_zone_low: 4390,
+        entry_zone_high: 4410,
+        status: "pending",
+        expiry_minutes: 2880,
+        expires_at: "2026-08-28T17:48:21Z",
+        fill_reason: null,
+        cancel_reason: null,
+        filled_at: null,
+        resolved_at: null,
+        signal_reason: {},
+        signal_score: 42,
+        setup_type: "ob",
+        setup_confidence: null,
+        from_watchlist: true,
+        candidate_id: "xau-candidate",
+        staged_setup_id: "xau-setup",
+        impulse_entry_lifecycle_id: "xau-impulse-lifecycle",
+        staged_cycles: 1,
+        staged_initial_score: 42,
+        exit_flags: {},
+        final_authorization: null,
+        decision_context: null,
+        placed_at: "2026-08-26T17:40:00Z",
+        created_at: "2026-08-26T17:40:00Z",
+        updated_at: "2026-08-26T17:47:00Z",
+      }],
+    });
+    api.lifecycleEvents.mockResolvedValue([{
+      id: "event-xau",
+      staged_setup_id: "xau-setup",
+      candidate_id: "xau-candidate",
+      symbol: "XAU/USD",
+      direction: "short",
+      from_status: "watching",
+      to_status: "pending",
+      lifecycle_phase: "zone_discovered",
+      reason: "XAU setup armed",
+      reason_code: "pending_created",
+      evidence: {},
+      created_at: "2026-08-26T17:40:00Z",
+      bot_id: "smc",
+      user_id: "user-1",
+    }]);
+    api.impulseLifecycleTransitions.mockResolvedValue([{
+      id: "impulse-event-xau",
+      lifecycle_id: "xau-impulse-lifecycle",
+      user_id: "user-1",
+      event_type: "zone_touched",
+      reason: "Nested XAU zone touched",
+      event_payload: {},
+      lifecycle_snapshot: {},
+      from_candidate_id: "xau-candidate",
+      to_candidate_id: "xau-candidate",
+      from_revision: 1,
+      to_revision: 2,
+      created_at: "2026-08-26T17:45:00Z",
+    }]);
+
+    renderDashboard();
+
+    fireEvent.click(await screen.findByRole("button", { name: /USD\/CHF 61\.7% Rejected/i }));
+    expect(await screen.findByText("No active setup linked to USD/CHF")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Lifecycle" }));
+    expect(screen.getByText(/No active order is linked to the selected USD\/CHF scan/i)).toBeInTheDocument();
+    expect(screen.queryByText("XAU setup armed")).toBeNull();
+    expect(screen.queryByText("Nested XAU zone touched")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Select XAU\/USD active setup/i }));
+    expect(await screen.findByText(/Frozen .* · Updated .*/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.lifecycleEvents).toHaveBeenLastCalledWith({
+        stagedSetupId: "xau-setup",
+        candidateId: "xau-candidate",
+      });
+      expect(api.impulseLifecycleTransitions).toHaveBeenLastCalledWith(
+        "xau-impulse-lifecycle",
+      );
+    });
+    expect(screen.getByText("XAU setup armed")).toBeInTheDocument();
+    expect(screen.getByText("Nested XAU zone touched")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Detail Breakdown" }));
+    fireEvent.click(screen.getByRole("button", { name: /USD\/CHF 61\.7% Rejected/i }));
+    fireEvent.click(screen.getByRole("tab", { name: "Lifecycle" }));
+    expect(screen.queryByText("XAU setup armed")).toBeNull();
+    expect(screen.queryByText("Nested XAU zone touched")).toBeNull();
   });
 });

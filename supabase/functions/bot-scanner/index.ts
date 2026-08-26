@@ -4210,6 +4210,11 @@ async function runScanForUser(
       console.log(`[scan ${scanCycleId}] ${pair} Direction SYNC: analysis.direction ${analysis.direction} → ${effectiveDirection} (source: ${directionSource})`);
       analysis.direction = effectiveDirection;
     }
+    // `detail` is created before Direction Verdict runs. Keep the persisted
+    // scan row aligned with the direction that downstream zone, risk, and
+    // execution logic actually uses instead of leaving the pre-verdict value.
+    detail.direction = effectiveDirection ?? "neutral";
+    detail.directionSource = directionSource;
 
     // ── SL/TP Recalculation: when verdict provides direction but original SL/TP are null ──
     // Root cause: calculateSLTP() inside runConfluenceAnalysis() returns null when direction is null.
@@ -5294,6 +5299,24 @@ async function runScanForUser(
       currentPendingNestedPoiPlanState?.declared === true;
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
+    if (currentPendingCandidate || existingStaged) {
+      // Presentation linkage only: expose the already-persisted identities so
+      // scan, staged, pending, and lifecycle views can join the same setup.
+      // This does not participate in qualification or authorization.
+      detail.setupIdentity = {
+        orderId: currentPendingCandidate?.order_id || null,
+        stagedSetupId:
+          currentPendingCandidate?.staged_setup_id || existingStaged?.id || null,
+        candidateId:
+          currentPendingCandidate?.candidate_id ||
+          existingStaged?.candidate_id ||
+          null,
+        impulseEntryLifecycleId:
+          currentPendingCandidate?.impulse_entry_lifecycle_id ||
+          existingStaged?.impulse_entry_lifecycle_id ||
+          null,
+      };
+    }
     const stagedNestedPoiPlanState = existingStaged
       ? resolvePendingNestedPoiEntryPlanState(existingStaged)
       : null;
@@ -9191,6 +9214,13 @@ async function runScanForUser(
             expiresAt,
             currentPrice: analysis.lastPrice,
             distancePips: (Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1),
+          };
+          detail.setupIdentity = {
+            orderId: pendingOrderId,
+            stagedSetupId: pendingLifecycleEvidence?.setupId || null,
+            candidateId: pendingCandidateId,
+            impulseEntryLifecycleId:
+              existingStaged?.impulse_entry_lifecycle_id || null,
           };
           detail.decisionContext = pendingDecisionContext;
           if (isPromotedFromStaging && existingStaged) {

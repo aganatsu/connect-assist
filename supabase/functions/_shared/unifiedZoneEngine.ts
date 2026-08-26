@@ -97,7 +97,7 @@ export type UnifiedState =
   | "no_impulse"          // No valid impulse found on any TF
   | "no_zone"            // Impulse exists but no valid zone
   | "watching"           // Zone found, price not there yet (watchlist)
-  | "at_zone"            // Price at zone, waiting for confirmation
+  | "at_zone"            // Price within the loose awareness radius, waiting for confirmation
   | "confirmed"          // Confirmation fired, entry ready
   | "triggered"          // Price at entry level — execute
   | "waiting_for_sweep"  // Qualified local/internal trigger exists but is unswept
@@ -841,7 +841,7 @@ function buildStorySummary(
 
   // Line 3: Price
   if (price.atZone || price.insideZone) {
-    lines.push(`${filled} Price: ${price.insideZone ? "Inside zone" : "At zone"}`);
+    lines.push(`${filled} Price: ${price.insideZone ? "Inside zone" : "Near zone"}`);
   } else {
     lines.push(`${empty} Price: ${price.distancePips.toFixed(1)} pips away`);
   }
