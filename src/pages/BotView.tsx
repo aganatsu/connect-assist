@@ -2304,7 +2304,7 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
   const { buckets, impulseZoneBreakdown = {}, directionBreakdown = {}, samplePairs = {}, totalScanned = 0 } = summary;
 
   const STATUS_META: Record<string, { label: string; color: string; icon: string }> = {
-    skipped_no_impulse_zone: { label: "No impulse zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
+    skipped_no_impulse_zone: { label: "No valid entry zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
     skipped_weak_zone: { label: "Weak zone rejected", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⛔" },
     watching_zone: { label: "Watching zone", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
     no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },

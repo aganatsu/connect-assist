@@ -158,6 +158,19 @@ function statusPresentation(detail: any): { label: string; tone: string } {
   return { label: "Skipped", tone: "neutral" };
 }
 
+function scanStatusDetail(detail: any): string {
+  const status = String(detail?.status || "");
+  if (status === "skipped_no_impulse_zone") {
+    const hasImpulseCandidate = Boolean(
+      detail?.unifiedZone?.impulse || detail?.impulseZone?.impulse,
+    );
+    return hasImpulseCandidate
+      ? "impulse candidate found · no valid entry zone"
+      : "no valid impulse or entry zone";
+  }
+  return detail?.reason || detail?.skipReason || status.replace(/_/g, " ") || "No status detail";
+}
+
 function scanPrice(detail: any): number | null {
   const candidates = [
     detail?.currentPrice,
@@ -1272,7 +1285,7 @@ function OperationsDashboard() {
                             ) : <span />}
                           </div>
                           <div className="apex-score-track"><span style={{ width: `${Math.max(0, Math.min(100, Number.isFinite(score) ? score : 0))}%` }} /></div>
-                          <span className="apex-row-note">{detail.reason || detail.status?.replace(/_/g, " ") || "No status detail"}</span>
+                          <span className="apex-row-note">{scanStatusDetail(detail)}</span>
                         </div>
                       </button>
                     );
@@ -1284,7 +1297,7 @@ function OperationsDashboard() {
                     <span>Selected</span>
                     <strong>{pairName(selectedScanDetail)}</strong>
                     <span>{selectedScanDetail.direction || "neutral"}</span>
-                    <span>{selectedScanDetail.status?.replace(/_/g, " ") || "observed"}</span>
+                    <span>{scanStatusDetail(selectedScanDetail)}</span>
                   </div>
                 )}
               </section>

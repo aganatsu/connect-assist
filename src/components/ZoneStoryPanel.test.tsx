@@ -262,7 +262,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     // Distance is measured against a zone. With none found the engine leaves
     // distancePips at its 0 default, and the Price row rendered that verbatim
     // as "0.0 pips away" — indistinguishable from price sitting exactly on the
-    // zone, and shown directly beneath a Zone row reading "None found".
+    // zone, and shown directly beneath a Zone row with no qualified entry zone.
     //
     // Observed 2026-08-25 on XAU/USD: the Detail Breakdown claimed 0.0 pips
     // away while the Watchlist on the same screen reported 1514.9 pips for the
@@ -280,7 +280,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
       />,
     );
 
-    expect(screen.getByText("No zone to measure against")).toBeTruthy();
+    expect(screen.getByText("No entry zone to measure against")).toBeTruthy();
     expect(screen.queryByText(/^0\.0 pips away$/)).toBeNull();
   });
 
@@ -293,7 +293,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
       />,
     );
 
-    expect(screen.queryByText("No zone to measure against")).toBeNull();
+    expect(screen.queryByText("No entry zone to measure against")).toBeNull();
   });
 
   it("labels loose proximity as near the zone instead of an exact zone touch", () => {
@@ -317,5 +317,85 @@ describe("ZoneStoryPanel zone-local explanations", () => {
 
     expect(screen.getByText("Near zone (wrong side)")).toBeTruthy();
     expect(screen.queryByText("At zone (wrong side)")).toBeNull();
+  });
+
+  it("distinguishes an impulse candidate from a qualified entry zone", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          hasZone: false,
+          state: "no_zone",
+          selectedTF: "1H",
+          unifiedScore: 0,
+          scoreBreakdown: {
+            baseScore: 0,
+            liquidityBonus: 0,
+            confirmationBonus: 0,
+            tfBonus: 0,
+            total: 0,
+          },
+          impulse: {
+            direction: "bearish",
+            high: 1.63148,
+            low: 1.62313,
+            pips: 83.5,
+            timeframe: "1H",
+            startDate: "2026-08-25T15:00:00Z",
+            endDate: "2026-08-25T22:00:00Z",
+            spanBars: 7,
+            bosPrice: 1.62313,
+            qualification: {
+              state: "developing",
+              reasons: ["No accepted FVG or Order Block was created by the impulse"],
+              measurements: { breakType: "choch" },
+            },
+          },
+          zone: null,
+          price: {
+            currentPrice: 1.624,
+            atZone: false,
+            atZoneStrict: false,
+            insideZone: false,
+            distancePips: 0,
+            sideOk: false,
+          },
+          liquidity: null,
+          confirmation: null,
+          entry: null,
+          reason: "No valid zone on any timeframe",
+          storySummary: "Developing structural leg",
+        }}
+        zoneLocalEnforcement={{
+          mode: {
+            requestedMode: "observe",
+            effectiveMode: "observe",
+            certifiedMaximum: "observe",
+            activationTrusted: false,
+            reason: "no_activation",
+          },
+          allowed: true,
+          scoreAdjustment: 0,
+          minimumLocalScore: 1,
+          reason: "observe_only",
+        }}
+        symbol="EUR/USD"
+      />,
+    );
+
+    expect(screen.getByText("— No Entry Zone")).toBeTruthy();
+    expect(screen.getByText("impulse via 1H")).toBeTruthy();
+    expect(screen.getByText("1.63148 → 1.62313")).toBeTruthy();
+    expect(screen.getByText("NOT YET QUALIFIED")).toBeTruthy();
+    expect(screen.getByText("CHoCH")).toBeTruthy();
+    expect(screen.queryByText("BOS")).toBeNull();
+    expect(screen.getByText("No qualified entry zone")).toBeTruthy();
+    expect(screen.getByText("NOT APPLIED")).toBeTruthy();
+    expect(screen.queryByText("ALLOWED")).toBeNull();
+    expect(screen.getAllByText("Not evaluated — no entry zone")).toHaveLength(2);
+    expect(screen.getByText("Unavailable — no entry zone")).toBeTruthy();
+    expect(screen.getByText(/1H impulse candidate inspected; no entry zone selected/)).toBeTruthy();
+    expect(screen.queryByText(/1H zone selected/)).toBeNull();
+    expect(screen.queryByText(/Waiting for confirmation/)).toBeNull();
   });
 });
