@@ -16,12 +16,51 @@
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
+  buildDirectionVerdictThesisOptions,
   compareDirectionVerdicts,
   isVerdictComplete,
+  validatePendingOrderThesis,
 } from "../../functions/_shared/thesisValidator.ts";
 
 const frozenLong = { verdict: "long" as const, confidence: 72 };
 const MIN = 55;
+
+const scalperEvidence = {
+  version: "style-decision-evidence.v1" as const,
+  style: "scalper" as const,
+  roles: {
+    bias: "1h" as const,
+    structure: "15m" as const,
+    setup: "5m" as const,
+    confirmation: "5m" as const,
+    refinement: "1m" as const,
+  },
+};
+
+function storedVerdict(
+  verdict: "long" | "short" | "neutral",
+  confidence: number,
+  options: {
+    weekly?: boolean;
+    gamePlan?: boolean;
+    shouldBlock?: boolean;
+    evidence?: unknown;
+  } = {},
+) {
+  return {
+    verdict,
+    confidence,
+    shouldBlock: options.shouldBlock ?? false,
+    decisionEvidence: options.evidence ?? scalperEvidence,
+    sources: [
+      { name: "confirmedTrend", direction: verdict === "neutral" ? "neutral" : verdict === "long" ? "bullish" : "bearish" },
+      { name: "simpleDirection", direction: verdict === "neutral" ? "neutral" : verdict === "long" ? "bullish" : "bearish" },
+      { name: "regime", direction: "neutral" },
+      { name: "weeklyBias", direction: options.weekly ? "neutral" : null },
+      { name: "gamePlan", direction: options.gamePlan === false ? null : "neutral" },
+    ],
+  };
+}
 
 Deno.test("confident reversal is the ONLY outcome that cancels", () => {
   const r = compareDirectionVerdicts({
@@ -189,6 +228,95 @@ Deno.test("either missing spine source makes the verdict incomplete", () => {
     false,
     "regime feeds the confidence penalty and the strong-regime veto",
   );
+});
+
+Deno.test("XAU regression: a complete scalper verdict reversal cancels the frozen setup", () => {
+  const directionVerdictThesisOptions = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 80),
+    currentDirectionVerdict: storedVerdict("short", 80),
+    expectedDecisionEvidence: scalperEvidence,
+    frozenEffectiveConfig: { gamePlanEnabled: true, gpEnforcementMode: "hard" },
+  });
+  const result = validatePendingOrderThesis({
+    order_id: "f60f0479",
+    symbol: "XAU/USD",
+    direction: "long",
+    entry_price: 4478.3753748,
+  }, {
+    fotsiResult: null,
+    lastGamePlan: null,
+    dailyCandles: null,
+    h4Candles: null,
+    h1Candles: null,
+    decisionEvidence: null,
+    ...directionVerdictThesisOptions,
+  });
+
+  assertEquals(directionVerdictThesisOptions.currentDirectionVerdictComplete, true);
+  assertEquals(result.valid, false);
+  assertEquals(result.checkType, "direction_verdict_reversal");
+});
+
+Deno.test("Scalper completeness does not require Weekly evidence", () => {
+  const result = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 70),
+    currentDirectionVerdict: storedVerdict("short", 80),
+    expectedDecisionEvidence: scalperEvidence,
+    frozenEffectiveConfig: { gamePlanEnabled: true, gpEnforcementMode: "hard" },
+  });
+  assertEquals(result.currentDirectionVerdictComplete, true);
+});
+
+Deno.test("frozen Game Plan observation mode does not require a Game Plan source", () => {
+  const result = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 70, { gamePlan: false }),
+    currentDirectionVerdict: storedVerdict("short", 80, { gamePlan: false }),
+    expectedDecisionEvidence: scalperEvidence,
+    frozenEffectiveConfig: {
+      gamePlanEnabled: true,
+      gpEnforcementMode: "off",
+    },
+  });
+  assertEquals(result.currentDirectionVerdictComplete, true);
+});
+
+Deno.test("Swing completeness requires Weekly evidence", () => {
+  const swingEvidence = {
+    ...scalperEvidence,
+    style: "swing_trader" as const,
+    roles: {
+      bias: "1w" as const,
+      structure: "1d" as const,
+      setup: "4h" as const,
+      confirmation: "1h" as const,
+      refinement: "15m" as const,
+    },
+  };
+  const result = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 70, { weekly: true, evidence: swingEvidence }),
+    currentDirectionVerdict: storedVerdict("short", 80, { evidence: swingEvidence }),
+    expectedDecisionEvidence: swingEvidence,
+    frozenEffectiveConfig: { gamePlanEnabled: true, gpEnforcementMode: "hard" },
+  });
+  assertEquals(result.currentDirectionVerdictComplete, false);
+});
+
+Deno.test("a blocked or wrong-style opposite verdict cannot cancel a frozen setup", () => {
+  const blocked = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 70),
+    currentDirectionVerdict: storedVerdict("short", 90, { shouldBlock: true }),
+    expectedDecisionEvidence: scalperEvidence,
+  });
+  assertEquals(blocked.currentDirectionVerdict, null);
+  assertEquals(blocked.currentDirectionVerdictComplete, false);
+
+  const dayTraderEvidence = { ...scalperEvidence, style: "day_trader" as const };
+  const wrongStyle = buildDirectionVerdictThesisOptions({
+    frozenDirectionVerdict: storedVerdict("long", 70),
+    currentDirectionVerdict: storedVerdict("short", 90, { evidence: dayTraderEvidence }),
+    expectedDecisionEvidence: scalperEvidence,
+  });
+  assertEquals(wrongStyle.currentDirectionVerdictComplete, false);
 });
 
 // ─── The removed authority stays removed ─────────────────────────────

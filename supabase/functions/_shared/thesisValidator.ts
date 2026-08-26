@@ -140,6 +140,12 @@ export interface VerdictSourcePresence {
   gamePlan: boolean;
 }
 
+export interface DirectionVerdictThesisOptions {
+  frozenDirectionVerdict: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  currentDirectionVerdict: { verdict: "long" | "short" | "neutral"; confidence: number } | null;
+  currentDirectionVerdictComplete: boolean;
+}
+
 /**
  * Is the recomputed verdict complete?
  *
@@ -161,6 +167,96 @@ export function isVerdictComplete(
   if (expected.weeklyExpected && !present.weeklyBias) return false;
   if (expected.gamePlanExpected && !present.gamePlan) return false;
   return true;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeStoredVerdict(
+  value: unknown,
+  requireExecutable: boolean,
+): DirectionVerdictThesisOptions["currentDirectionVerdict"] {
+  const verdict = asRecord(value);
+  if (verdict.verdict !== "long" && verdict.verdict !== "short" && verdict.verdict !== "neutral") return null;
+  const confidence = Number(verdict.confidence);
+  if (!Number.isFinite(confidence)) return null;
+  if (requireExecutable && verdict.shouldBlock !== false) return null;
+  return { verdict: verdict.verdict, confidence };
+}
+
+function evidenceMatchesExpectedStyle(
+  verdict: unknown,
+  expected: Pick<StyleDecisionEvidence, "style" | "roles">,
+): boolean {
+  const evidence = asRecord(asRecord(verdict).decisionEvidence);
+  const roles = asRecord(evidence.roles);
+  return evidence.style === expected.style &&
+    roles.bias === expected.roles.bias &&
+    roles.structure === expected.roles.structure &&
+    roles.setup === expected.roles.setup;
+}
+
+function sourcePresence(verdict: unknown): VerdictSourcePresence {
+  const sources = Array.isArray(asRecord(verdict).sources)
+    ? asRecord(verdict).sources as unknown[]
+    : [];
+  const present = (name: string): boolean => {
+    const source = sources.map(asRecord).find((item) => item.name === name);
+    return !!source && source.direction !== null && source.direction !== undefined;
+  };
+  return {
+    confirmedTrend: present("confirmedTrend"),
+    simpleDirection: present("simpleDirection"),
+    regime: present("regime"),
+    weeklyBias: present("weeklyBias"),
+    gamePlan: present("gamePlan"),
+  };
+}
+
+/**
+ * Adapts persisted verdict records into the existing thesis comparison.
+ * This stays in the thesis owner so live and backtest cannot drift.
+ */
+export function buildDirectionVerdictThesisOptions(input: {
+  frozenDirectionVerdict: unknown;
+  currentDirectionVerdict: unknown;
+  expectedDecisionEvidence: Pick<StyleDecisionEvidence, "style" | "roles">;
+  frozenEffectiveConfig?: unknown;
+}): DirectionVerdictThesisOptions {
+  const frozenMatchesStyle = evidenceMatchesExpectedStyle(
+    input.frozenDirectionVerdict,
+    input.expectedDecisionEvidence,
+  );
+  const currentMatchesStyle = evidenceMatchesExpectedStyle(
+    input.currentDirectionVerdict,
+    input.expectedDecisionEvidence,
+  );
+  const frozenDirectionVerdict = frozenMatchesStyle
+    ? normalizeStoredVerdict(input.frozenDirectionVerdict, false)
+    : null;
+  const currentDirectionVerdict = currentMatchesStyle
+    ? normalizeStoredVerdict(input.currentDirectionVerdict, true)
+    : null;
+  const frozenConfig = asRecord(input.frozenEffectiveConfig);
+  const gamePlanExpectationIsFrozen =
+    "gamePlanEnabled" in frozenConfig || "gpEnforcementMode" in frozenConfig;
+  const frozenSources = sourcePresence(input.frozenDirectionVerdict);
+  const gamePlanExpected = gamePlanExpectationIsFrozen
+    ? frozenConfig.gamePlanEnabled !== false && frozenConfig.gpEnforcementMode !== "off"
+    : frozenSources.gamePlan;
+
+  return {
+    frozenDirectionVerdict,
+    currentDirectionVerdict,
+    currentDirectionVerdictComplete: currentDirectionVerdict !== null &&
+      isVerdictComplete(sourcePresence(input.currentDirectionVerdict), {
+        weeklyExpected: input.expectedDecisionEvidence.roles.bias === "1w",
+        gamePlanExpected,
+      }),
+  };
 }
 
 // ── Direction Verdict comparison — the sole post-placement direction authority ──

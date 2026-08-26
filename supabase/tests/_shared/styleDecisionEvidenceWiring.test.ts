@@ -60,13 +60,12 @@ Deno.test("Direction Verdict, thesis and conviction share one pair evidence snap
   );
 });
 
-Deno.test("live, backtest, manual refresh and fast confirmation build the same evidence contract", () => {
+Deno.test("verdict producers build the same evidence contract", () => {
   for (
     const [surface, source] of [
       ["live", scanner],
       ["backtest", backtest],
       ["manual refresh", refresh],
-      ["fast confirmation", confirmation],
     ] as const
   ) {
     assertStringIncludes(
@@ -80,6 +79,16 @@ Deno.test("live, backtest, manual refresh and fast confirmation build the same e
       `${surface} must resolve authoritative roles`,
     );
   }
+  assertStringIncludes(
+    confirmation,
+    "loadActiveDirectionVerdicts(",
+    "fast confirmation must consume the dedicated persisted verdict",
+  );
+  assertStringIncludes(
+    confirmation,
+    "buildDirectionVerdictThesisOptions({",
+    "fast confirmation must validate persisted evidence against the frozen style",
+  );
   assert(
     !scanner.includes("entry candles are 5m, but we use hourly"),
     "Scalper structural conviction must not fall back to the old 1H proxy",

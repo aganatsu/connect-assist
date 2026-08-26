@@ -62,6 +62,10 @@ const SINGLE_OWNER: string[] = [
   "checkCorrelationExposure",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",
+  // ── Post-placement direction ──
+  "compareDirectionVerdicts",
+  "isVerdictComplete",
+  "buildDirectionVerdictThesisOptions",
   // ── Entry confirmation ──
   "detectZoneConfirmation",
   "selectICTEntryZone",

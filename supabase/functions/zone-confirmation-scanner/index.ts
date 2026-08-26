@@ -102,13 +102,8 @@ import {
   type ResolvedStylePolicy,
 } from "../_shared/stylePolicy.ts";
 import {
-  bindTimeframeCandles,
-  buildTimeframeCandleMap,
   resolveTimeframeAuthority,
 } from "../_shared/timeframeAuthority.ts";
-import {
-  buildStyleDecisionEvidence,
-} from "../_shared/styleDecisionEvidence.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import {
   evaluateFinalTradeAuthorization,
@@ -138,6 +133,7 @@ import {
   buildFinalRuntimeGateStates,
 } from "../_shared/finalRuntimeGates.ts";
 import {
+  buildDirectionVerdictThesisOptions,
   validatePendingOrderThesis,
   type ThesisValidationResult,
 } from "../_shared/thesisValidator.ts";
@@ -705,6 +701,87 @@ Deno.serve(async (req) => {
           cancelled++;
           console.warn(
             `[zone-confirm] ${pending.symbol} invalidated: ${frozenIdentity.reason}`,
+          );
+          continue;
+        }
+
+        let directionVerdict = directionVerdicts.get(pending.symbol) || null;
+        const frozenPendingConfig =
+          pendingPolicyResolution.frozenContext?.runtimeConfig
+            ?.effectiveConfig || null;
+        const pendingGamePlanExpected = frozenPendingConfig
+          ? frozenPendingConfig.gamePlanEnabled !== false &&
+            frozenPendingConfig.gpEnforcementMode !== "off"
+          : config.gamePlanEnabled !== false &&
+            config.gpEnforcementMode !== "off";
+        if (
+          directionVerdict && pendingGamePlanExpected &&
+          !directionVerdictMatchesGamePlan(
+            directionVerdict,
+            gamePlan,
+            pending.symbol,
+          )
+        ) {
+          console.warn(
+            `[zone-confirm] ${pending.symbol}: Direction Verdict and Gameplan versions do not match`,
+          );
+          directionVerdict = null;
+        }
+        const directionVerdictThesisOptions =
+          buildDirectionVerdictThesisOptions({
+            frozenDirectionVerdict:
+              pendingPolicyResolution.frozenContext?.directionVerdict || null,
+            currentDirectionVerdict: directionVerdict,
+            expectedDecisionEvidence: {
+              style: pendingTimeframeAuthority.style,
+              roles: pendingTimeframeAuthority.roles,
+            },
+            frozenEffectiveConfig: frozenPendingConfig,
+          });
+        const requireThesisValidation = true;
+        let thesisResult: ThesisValidationResult | null = null;
+        try {
+          thesisResult = validatePendingOrderThesis(
+            {
+              order_id: pending.order_id,
+              symbol: pending.symbol,
+              direction: pending.direction as "long" | "short",
+              entry_price: pending.entry_price,
+              signal_reason: pending.signal_reason,
+            },
+            {
+              fotsiResult: null,
+              lastGamePlan: gamePlan,
+              dailyCandles: null,
+              h4Candles: null,
+              h1Candles: null,
+              decisionEvidence: directionVerdict?.decisionEvidence || null,
+              ...directionVerdictThesisOptions,
+            },
+          );
+        } catch (error: any) {
+          console.warn(
+            `[zone-confirm] Thesis validation failed open for ${pending.symbol}: ${error?.message}`,
+          );
+        }
+        if (thesisResult && !thesisResult.valid) {
+          const { data: invalidatedPending } = await supabase
+            .from("pending_orders")
+            .update({
+              status: "invalidated",
+              cancel_reason: thesisResult.reason,
+              thesis_cancel_reason: thesisResult.cancelReason,
+              resolved_at: new Date().toISOString(),
+            })
+            .eq("id", pending.id)
+            .eq("user_id", userId)
+            .eq("status", "awaiting_confirmation")
+            .select("id")
+            .maybeSingle();
+          if (!invalidatedPending) continue;
+          cancelled++;
+          console.log(
+            `[zone-confirm] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`,
           );
           continue;
         }
@@ -1483,86 +1560,6 @@ Deno.serve(async (req) => {
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
-        // ── Fresh thesis, account, direction, Game Plan, prop-firm and spread checks ──
-        // Thesis validity is a fill-time safety decision. It is deliberately
-        // separate from the observational Thesis Conviction score and cannot
-        // be disabled by the latter.
-        const requireThesisValidation = true;
-        let thesisResult: ThesisValidationResult | null = null;
-        if (requireThesisValidation) {
-          try {
-            const [biasCandles, structureCandles, setupCandles] =
-              await Promise.all([
-              fetchCandles(
-                pending.symbol,
-                pendingTimeframeAuthority.roles.bias,
-                brokerConn,
-                120,
-              ),
-              fetchCandles(
-                pending.symbol,
-                pendingTimeframeAuthority.roles.structure,
-                brokerConn,
-                120,
-              ),
-              fetchCandles(
-                pending.symbol,
-                pendingTimeframeAuthority.roles.setup,
-                brokerConn,
-                120,
-              ),
-            ]);
-            const decisionEvidence = buildStyleDecisionEvidence(
-              pendingTimeframeAuthority,
-              bindTimeframeCandles(
-                pendingTimeframeAuthority,
-                buildTimeframeCandleMap([
-                  {
-                    timeframe: pendingTimeframeAuthority.roles.bias,
-                    candles: biasCandles,
-                  },
-                  {
-                    timeframe:
-                      pendingTimeframeAuthority.roles.structure,
-                    candles: structureCandles,
-                  },
-                  {
-                    timeframe: pendingTimeframeAuthority.roles.setup,
-                    candles: setupCandles,
-                  },
-                ]),
-              ),
-              {
-                h4ChochLookback: config.simpleDirectionH4ChochLookback,
-                h1BosLookback: config.simpleDirectionH1BosLookback,
-                confirmedTrendFibFactor: config.confirmedTrendFibFactor,
-                confirmedTrendSwingLookback:
-                  config.confirmedTrendSwingLookback,
-                useConfirmedTrend: config.useConfirmedTrend,
-              },
-            );
-            thesisResult = validatePendingOrderThesis(
-              {
-                order_id: pending.order_id,
-                symbol: pending.symbol,
-                direction: pending.direction as "long" | "short",
-                entry_price: pending.entry_price,
-                signal_reason: pending.signal_reason,
-              },
-              {
-                fotsiResult: null,
-                lastGamePlan: gamePlan,
-                dailyCandles: null,
-                h4Candles: null,
-                h1Candles: null,
-                decisionEvidence,
-              },
-            );
-          } catch (e: any) {
-            console.warn(`[zone-confirm] Fresh thesis validation failed for ${pending.symbol}: ${e?.message}`);
-          }
-        }
-
         let brokerEquity: number | undefined;
         if (account.execution_mode === "live" && brokerConn) {
           try {
@@ -1656,22 +1653,6 @@ Deno.serve(async (req) => {
           .map((item) => item.result!)
           .sort((a, b) => a.spreadPips - b.spreadPips)[0];
 
-        let directionVerdict = directionVerdicts.get(pending.symbol) || null;
-        if (
-          directionVerdict &&
-          config.gamePlanEnabled &&
-          config.gpEnforcementMode !== "off" &&
-          !directionVerdictMatchesGamePlan(
-            directionVerdict,
-            gamePlan,
-            pending.symbol,
-          )
-        ) {
-          console.warn(
-            `[zone-confirm] ${pending.symbol}: Direction Verdict and Gameplan versions do not match`,
-          );
-          directionVerdict = null;
-        }
         const runtimeGates = await buildFinalRuntimeGateStates({
           supabase,
           userId,

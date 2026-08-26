@@ -33,6 +33,7 @@ import {
   type EntryConfirmationDecision,
 } from "../_shared/decisionContract.ts";
 import {
+  directionVerdictMatchesGamePlan,
   loadActiveDirectionVerdicts,
   persistActiveDirectionVerdict,
 } from "../_shared/directionVerdictStore.ts";
@@ -298,7 +299,11 @@ import {
   watchlistOriginLines,
   zoneEvidenceLines,
 } from "../_shared/telegramDetail.ts";
-import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
+import {
+  buildDirectionVerdictThesisOptions,
+  validatePendingOrderThesis,
+  type ThesisValidationResult,
+} from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, normalizeRejectedGate, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
@@ -1657,50 +1662,6 @@ async function runScanForUser(
     config,
   });
   const timeframeAuthority = resolveTimeframeAuthority(scanStylePolicy);
-  const loadCurrentDecisionEvidence = async (
-    symbol: string,
-    authority = timeframeAuthority,
-  ): Promise<StyleDecisionEvidence> => {
-    const [bias, structure, setup] = await Promise.all([
-      cachedFetch(
-        symbol,
-        authority.roles.bias,
-        timeframeFetchRange(authority.roles.bias),
-      ),
-      cachedFetch(
-        symbol,
-        authority.roles.structure,
-        timeframeFetchRange(authority.roles.structure),
-      ),
-      cachedFetch(
-        symbol,
-        authority.roles.setup,
-        timeframeFetchRange(authority.roles.setup),
-      ),
-    ]);
-    return buildStyleDecisionEvidence(
-      authority,
-      bindTimeframeCandles(
-        authority,
-        buildTimeframeCandleMap([
-          { timeframe: authority.roles.bias, candles: bias },
-          {
-            timeframe: authority.roles.structure,
-            candles: structure,
-          },
-          { timeframe: authority.roles.setup, candles: setup },
-        ]),
-      ),
-      {
-        h4ChochLookback: config.simpleDirectionH4ChochLookback,
-        h1BosLookback: config.simpleDirectionH1BosLookback,
-        confirmedTrendFibFactor: config.confirmedTrendFibFactor,
-        confirmedTrendSwingLookback:
-          config.confirmedTrendSwingLookback,
-        useConfirmedTrend: config.useConfirmedTrend,
-      },
-    );
-  };
 
   // Day-of-week check — skip for crypto-only instrument lists.
   // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
@@ -2748,11 +2709,37 @@ async function runScanForUser(
         let pendingThesisResult: ThesisValidationResult | null = null;
         {
           try {
-            const pendingDecisionEvidence =
-              await loadCurrentDecisionEvidence(
+            let currentPendingDirectionVerdict =
+              _activeDirectionVerdicts.get(pending.symbol) || null;
+            const frozenPendingConfig =
+              pendingPolicyResolution.frozenContext?.runtimeConfig
+                ?.effectiveConfig || null;
+            const pendingGamePlanExpected = frozenPendingConfig
+              ? frozenPendingConfig.gamePlanEnabled !== false &&
+                frozenPendingConfig.gpEnforcementMode !== "off"
+              : gamePlanAffectsExecution;
+            if (
+              currentPendingDirectionVerdict && pendingGamePlanExpected &&
+              !directionVerdictMatchesGamePlan(
+                currentPendingDirectionVerdict,
+                _lastGamePlanForValidation,
                 pending.symbol,
-                pendingTimeframeAuthority,
-              );
+              )
+            ) {
+              currentPendingDirectionVerdict = null;
+            }
+            const directionVerdictThesisOptions =
+              buildDirectionVerdictThesisOptions({
+                frozenDirectionVerdict:
+                  pendingPolicyResolution.frozenContext?.directionVerdict ||
+                  null,
+                currentDirectionVerdict: currentPendingDirectionVerdict,
+                expectedDecisionEvidence: {
+                  style: pendingTimeframeAuthority.style,
+                  roles: pendingTimeframeAuthority.roles,
+                },
+                frozenEffectiveConfig: frozenPendingConfig,
+              });
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -2767,7 +2754,9 @@ async function runScanForUser(
                 dailyCandles: null,
                 h4Candles: null,
                 h1Candles: null,
-                decisionEvidence: pendingDecisionEvidence,
+                decisionEvidence:
+                  currentPendingDirectionVerdict?.decisionEvidence || null,
+                ...directionVerdictThesisOptions,
               },
             );
             pendingThesisResult = thesisResult;

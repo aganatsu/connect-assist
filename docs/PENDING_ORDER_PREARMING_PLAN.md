@@ -191,19 +191,16 @@ the persistence behaviour, not derivation:
 
 ---
 
-## Current limitation: #319 is fail-open
+## Direction-reversal validation after #319
 
-`compareDirectionVerdicts()` is merged, but **its six call sites are not wired**.
-Every call returns `baseline_missing`, so **directional cancellation is
-currently inactive**.
+`compareDirectionVerdicts()` remains the sole post-placement direction owner.
+The pending monitor, confirmation monitor, and simulated backtest lifecycle now
+adapt the dedicated persisted Direction Verdict into that comparison. They do
+not rebuild direction or fetch another set of candles.
 
-Bounded by `expiry_minutes`. An order surviving a genuine direction reversal is
-this known gap, not a new bug.
-
-Wiring requires a complete Direction Verdict at validation time. The verdict is
-computed at `bot-scanner` ~4822, *after* the pending-order loop at ~2626, so it
-means computing it earlier or per-pending — with credit implications on the
-1-minute cron. Its own PR.
+The comparison remains fail-open unless the setup has a frozen baseline and the
+current verdict is fresh, executable, built for the same frozen style roles,
+and complete for the sources that style/configuration expects.
 
 Two constraints that must survive wiring, both already pinned by tests in
 `supabase/tests/_shared/directionVerdictAuthority.test.ts`:
@@ -304,4 +301,4 @@ group by 1, 2, 3 order by 4 desc;
 | #315 | 30-minute credit history (was 2 minutes — could not distinguish saturation from a burst) |
 | #316 | manage loop re-fetched six daily FX pairs every minute |
 | #318 | pending orders cancelled and recreated themselves every scan cycle |
-| #319 | one owner for post-placement direction — **fail-open until wired** |
+| #319 | introduced the single owner for post-placement direction; live/backtest consumers are now wired to it |

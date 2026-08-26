@@ -264,7 +264,10 @@ import {
   type SessionName as GPSessionName,
 } from "../_shared/gamePlan.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
-import { validatePendingOrderThesis } from "../_shared/thesisValidator.ts";
+import {
+  buildDirectionVerdictThesisOptions,
+  validatePendingOrderThesis,
+} from "../_shared/thesisValidator.ts";
 import {
   updateConviction,
   evaluateEvidence,
@@ -3189,6 +3192,90 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           } catch { /* zone engine non-fatal */ }
         }
 
+        // ── Direction Verdict (same evidence contract as live) ──
+        // This runs before the pending-lifecycle early return so a frozen setup
+        // can observe a style-matched reversal while it is still waiting.
+        const weeklyBiasResult: WeeklyBiasResult | null = relevantWeekly.length >= 12
+          ? analyzeWeeklyBiasAndDOL(relevantWeekly, candle.close)
+          : null;
+        let directionVerdict: DirectionVerdictResult | null = null;
+        try {
+          const ctResult = config.useConfirmedTrend !== false
+            ? barDecisionEvidence.confirmedTrend
+            : null;
+          directionVerdict = computeDirectionVerdict({
+            decisionEvidence: barDecisionEvidence,
+            confirmedTrend: ctResult,
+            simpleDirection: directionResult ? {
+              direction: directionResult.direction,
+              bias: directionResult.bias,
+              biasSource: directionResult.biasSource,
+              h4Retrace: directionResult.h4Retrace,
+              h4ChochAgainst: directionResult.h4ChochAgainst,
+              h1Confirmed: directionResult.h1Confirmed,
+              reason: directionResult.reason,
+            } : null,
+            regime: barDecisionEvidence.biasRegime ? {
+              regime: barDecisionEvidence.biasRegime.regime,
+              confidence: barDecisionEvidence.biasRegime.confidence,
+              directionalBias:
+                barDecisionEvidence.biasRegime.directionalBias,
+            } : null,
+            weeklyBias:
+              timeframeAuthority.roles.bias === "1w" && weeklyBiasResult
+                ? {
+                  bias: weeklyBiasResult.bias,
+                  confidence: weeklyBiasResult.confidence,
+                }
+                : null,
+            gamePlanBias: (() => {
+              if (!activeGamePlan || pairConfig.gpEnforcementMode === "off") return null;
+              const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
+              return pairPlan ? { bias: pairPlan.bias, confidence: pairPlan.biasConfidence } : null;
+            })(),
+          });
+        } catch { directionVerdict = null; }
+        const directionVerdictThesisOptions =
+          buildDirectionVerdictThesisOptions({
+            frozenDirectionVerdict:
+              frozenLifecycleExecution?.directionVerdict || null,
+            currentDirectionVerdict: directionVerdict,
+            expectedDecisionEvidence: {
+              style: timeframeAuthority.style,
+              roles: timeframeAuthority.roles,
+            },
+            frozenEffectiveConfig: pairConfig,
+          });
+        const backtestThesis = analysis.direction
+          ? validatePendingOrderThesis({
+            order_id: "backtest:" + runId + ":" + symbol + ":" + candle.datetime,
+            symbol,
+            direction: analysis.direction as "long" | "short",
+            entry_price: candle.close,
+            signal_reason: { directionVerdict },
+          }, {
+            fotsiResult: fotsiForDate || null,
+            lastGamePlan: activeGamePlan,
+            dailyCandles: relevantDaily.length >= 20 ? relevantDaily : null,
+            h4Candles: relevantH4.length >= 20 ? relevantH4 : null,
+            h1Candles: relevantH1.length >= 20 ? relevantH1 : null,
+            decisionEvidence: barDecisionEvidence,
+            ...directionVerdictThesisOptions,
+          })
+          : null;
+        if (frozenLifecycleExecution && backtestThesis && !backtestThesis.valid) {
+          tradeLifecycleState = cancelBacktestTradeLifecycle({
+            state: tradeLifecycleState,
+            at: candle.datetime,
+            reason: backtestThesis.reason || "Frozen Direction Verdict reversed",
+          });
+          diagnostics.skippedGateBlocked++;
+          const reversalReason = "Thesis direction reversal";
+          diagnostics.gateBlockReasons[reversalReason] =
+            (diagnostics.gateBlockReasons[reversalReason] || 0) + 1;
+          continue;
+        }
+
         const backtestConfirmationProfile =
           resolvedTradingStyle === "swing_trader" && cascadeResult?.entryZone
             ? "cascade"
@@ -3463,50 +3550,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             if (veto.vetoed) fotsiPenalty = -2.0;
           }
         }
-
-        // ── Weekly Bias (ICT weekly structure + DOL analysis) ──
-        const weeklyBiasResult: WeeklyBiasResult | null = relevantWeekly.length >= 12
-          ? analyzeWeeklyBiasAndDOL(relevantWeekly, candle.close)
-          : null;
-
-        // ── Direction Verdict (mirrors bot-scanner pre-zone direction consensus) ──
-        let directionVerdict: DirectionVerdictResult | null = null;
-        try {
-          const ctResult = config.useConfirmedTrend !== false
-            ? barDecisionEvidence.confirmedTrend
-            : null;
-          directionVerdict = computeDirectionVerdict({
-            decisionEvidence: barDecisionEvidence,
-            confirmedTrend: ctResult,
-            simpleDirection: directionResult ? {
-              direction: directionResult.direction,
-              bias: directionResult.bias,
-              biasSource: directionResult.biasSource,
-              h4Retrace: directionResult.h4Retrace,
-              h4ChochAgainst: directionResult.h4ChochAgainst,
-              h1Confirmed: directionResult.h1Confirmed,
-              reason: directionResult.reason,
-            } : null,
-            regime: barDecisionEvidence.biasRegime ? {
-              regime: barDecisionEvidence.biasRegime.regime,
-              confidence: barDecisionEvidence.biasRegime.confidence,
-              directionalBias:
-                barDecisionEvidence.biasRegime.directionalBias,
-            } : null,
-            weeklyBias:
-              timeframeAuthority.roles.bias === "1w" && weeklyBiasResult
-                ? {
-                  bias: weeklyBiasResult.bias,
-                  confidence: weeklyBiasResult.confidence,
-                }
-                : null,
-            gamePlanBias: (() => {
-              if (!activeGamePlan || pairConfig.gpEnforcementMode === "off") return null;
-              const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
-              return pairPlan ? { bias: pairPlan.bias, confidence: pairPlan.biasConfidence } : null;
-            })(),
-          });
-        } catch { directionVerdict = null; }
 
         // ── ICT HTF Analysis (Daily OB containment + weekly bias) ──
         let ictHTFResult: ICTHTFResult | null = null;
@@ -3788,23 +3831,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             effectiveScore += result.scoreAdjustment;
           }
         }
-
-        const backtestThesis = analysis.direction
-          ? validatePendingOrderThesis({
-            order_id: "backtest:" + runId + ":" + symbol + ":" + candle.datetime,
-            symbol,
-            direction: analysis.direction as "long" | "short",
-            entry_price: candle.close,
-            signal_reason: { directionVerdict },
-          }, {
-            fotsiResult: fotsiForDate || null,
-            lastGamePlan: activeGamePlan,
-            dailyCandles: relevantDaily.length >= 20 ? relevantDaily : null,
-            h4Candles: relevantH4.length >= 20 ? relevantH4 : null,
-            h1Candles: relevantH1.length >= 20 ? relevantH1 : null,
-            decisionEvidence: barDecisionEvidence,
-          })
-          : null;
 
         // ── Bidirectional Conflict Counter ──
         const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -4428,6 +4454,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               stopLoss: pendingPlan.stopLoss,
               takeProfit: pendingPlan.takeProfit,
               frozenAt: candle.datetime,
+              directionVerdict,
             },
             analysisSnapshot: {
               ...analysis,

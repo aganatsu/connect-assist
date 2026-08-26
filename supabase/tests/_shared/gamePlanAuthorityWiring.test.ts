@@ -89,7 +89,15 @@ Deno.test("Gameplan observation mode cannot change scanner execution", async () 
   );
   assertStringIncludes(
     fastScannerSource,
-    "config.gpEnforcementMode !== \"off\" &&",
+    "const pendingGamePlanExpected = frozenPendingConfig",
+  );
+  assertStringIncludes(
+    fastScannerSource,
+    "config.gpEnforcementMode !== \"off\";",
+  );
+  assertStringIncludes(
+    fastScannerSource,
+    "directionVerdict && pendingGamePlanExpected &&",
   );
 });
 
