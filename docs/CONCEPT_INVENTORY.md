@@ -50,6 +50,7 @@ instead of arbitrating.
 | Market structure | 1 | `analyzeMarketStructure` | 🟢 Single owner |
 | Liquidity pools | 1 | `detectLiquidityPools` | 🟢 Single owner |
 | Zone confirmation | 1 | `detectZoneConfirmation` | 🟢 Single owner |
+| Post-placement direction reversal | 1 | `thesisValidator.ts:compareDirectionVerdicts` | 🟢 Single owner |
 | Post-touch CHoCH/MSS trigger | 2 enforced checks | `detectZoneConfirmation` + `impulseConfirmationLock` | 🔴 DUPLICATE ENFORCEMENT |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 | Nested entry-zone eligibility/ranking | 1 authority mode | `ictEntryZoneAuthority.ts:selectICTEntryZone` | 🟢 Single owner |
@@ -216,6 +217,14 @@ neutral current verdict keeps the setup waiting, while a fresh explicit opposite
 long/short verdict terminates it. Missing evidence never authorizes entry. The same
 policy is passed through `finalTradeAuthorization.ts`,
 `singleOwnershipFillAuthorization.ts`, the zone-confirmation scanner, and backtest.
+
+`thesisValidator.ts:compareDirectionVerdicts` owns the earlier post-placement
+reversal check while a setup is still waiting. Its adapter consumes the frozen
+setup verdict and the dedicated persisted current verdict; it does not run a
+second detector. Completeness is evaluated against the setup's frozen style
+roles, so Scalper and Day Trader do not require Weekly evidence while Swing
+does. A blocked, partial, stale, wrong-style, or unavailable current verdict
+cannot cancel a setup.
 
 ## Live broker target-count safety
 

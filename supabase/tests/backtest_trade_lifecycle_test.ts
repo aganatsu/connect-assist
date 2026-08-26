@@ -66,6 +66,11 @@ const executionCandidate = {
   stopLoss: 99,
   takeProfit: 112,
   frozenAt: range.frozenAt,
+  directionVerdict: {
+    verdict: "long" as const,
+    confidence: 80,
+    shouldBlock: false,
+  },
 };
 
 const nestedTrigger = {
@@ -222,6 +227,10 @@ Deno.test("backtest freezes the complete nested plan and runtime monitoring time
     nestedAnalysisSnapshot,
   );
   assertEquals(activeBacktestFrozenSignalSource(armed), "unified");
+  assertEquals(
+    activeBacktestFrozenExecutionCandidate(armed)?.directionVerdict,
+    executionCandidate.directionVerdict,
+  );
   assertEquals(armed.frozenCanonicalLocation, nestedCanonicalLocation);
   assertEquals(
     armed.frozenCrossTimeframeDecision,

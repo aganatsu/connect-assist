@@ -26,6 +26,7 @@ import type { NestedPoiEntryPlan } from "./impulseZoneEngine.ts";
 import { frozenTargetAlreadyReached } from "./pendingOrderPlan.ts";
 import { closedCandleTouchesNestedPoiOuterZone } from "./pendingZoneTouch.ts";
 import { normalizeAnalysisTimeframeOrNull } from "./timeframeAuthority.ts";
+import type { DirectionVerdictDecision } from "./decisionContract.ts";
 import {
   type AfterChochMode,
   derivePostChochEntryPlan,
@@ -48,6 +49,7 @@ export interface BacktestFrozenExecutionCandidate {
   stopLoss: number;
   takeProfit: number;
   frozenAt: string;
+  directionVerdict?: DirectionVerdictDecision | null;
 }
 
 export interface BacktestTradeLifecycleTerminalResolution {
@@ -216,7 +218,7 @@ export function discoverBacktestTradeLifecycle(input: {
     }),
     lastStep: null,
     postConfirmationEntry: null,
-    frozenExecution: { ...executionCandidate },
+    frozenExecution: structuredClone(executionCandidate),
     frozenNestedPoiEntry: nestedPoiEntryPlan
       ? structuredClone(nestedPoiEntryPlan)
       : null,
