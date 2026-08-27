@@ -127,7 +127,7 @@ export async function metaFetch(
     /TooManyRequestsError/i.test(b) && /unexisting or undeployed/i.test(b);
   const queue = [...order];
   const tried = new Set<string>();
-  let consultedProvisioning = cached ? true : true;
+  let consultedProvisioning = true;
 
   while (queue.length) {
     const region = queue.shift()!;
