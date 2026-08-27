@@ -262,8 +262,10 @@ group by 1 order by 2 desc;
 ```
 
 Post-#316 baseline: `bot-scanner:candleSource` ~13/min (was 20–30 before the
-daily-FX pre-warm), `impulse-lifecycle-replay` ~3/min (bounded by `limit(20)`
-every 5 min), `paper-trading/price` ~3/min.
+daily-FX pre-warm) and `paper-trading/price` ~3/min. The observation-only
+`impulse-lifecycle-replay` monitor must remain at **0 provider credits**: it
+reuses immutable `scan_candle_snapshots` produced by the scanner and defers when
+a newer matching snapshot is unavailable.
 
 If this climbs, check `creditBudget` in `scan_logs.details_json` — non-zero
 `unenforced` means the shared budget failed open and per-isolate limiting is

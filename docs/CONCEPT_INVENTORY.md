@@ -210,6 +210,16 @@ and the order-creation boundary rejects only that setup. It must not throw acros
 scanner loop. Backtest applies the same containment check and retains its prior state
 when the executable zone is outside the canonical range.
 
+## Impulse lifecycle candle ownership
+
+`bot-scanner` owns external discovery-candle acquisition and publishes its exact
+closed-bar inputs to immutable `scan_candle_snapshots`. The observation-only orphan
+lifecycle monitor in `impulse-lifecycle-replay` consumes those snapshots; it must not
+call `candleSource` or reserve provider credits independently. If no newer matching
+snapshot exists, observation defers until the scanner supplies one. Active pending
+orders remain owned by `zone-confirmation-scanner` and are excluded from the orphan
+monitor, so the same lifecycle is not advanced by two runtime paths.
+
 ## Nested POI market trigger
 
 `_shared/ictEntryZoneAuthority.ts:selectICTEntryZone` is the single owner of

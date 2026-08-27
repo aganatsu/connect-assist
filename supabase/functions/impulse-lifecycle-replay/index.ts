@@ -2,17 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { resolveAuthenticatedUserId } from "../_shared/callerAuth.ts";
-import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { replayImpulseEntryLifecycle } from "../_shared/impulseLifecycleReplay.ts";
 import { normalizeAnalysisTimeframe } from "../_shared/timeframeAuthority.ts";
 import {
   observeImpulseConfirmationLock,
   observeImpulseEntryPrice,
 } from "../_shared/impulseEntryLifecycleStore.ts";
-
-import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-
-setCreditCallerContext("impulse-lifecycle-replay");
 
 const BOT_ID = "smc";
 const respond = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
@@ -62,36 +57,136 @@ async function publishEnforcementCertificate(client: any, userId: string) {
   return certificate;
 }
 
+interface StoredCandleSnapshot {
+  id: string;
+  candles: any[];
+  observed_at: string;
+  completed_candle_cutoff: string | null;
+}
+
+async function loadLatestScanCandleSnapshot(
+  client: any,
+  input: {
+    userId: string;
+    symbol: string;
+    timeframe: string;
+    observedAfter?: string | null;
+  },
+): Promise<StoredCandleSnapshot | null> {
+  let query = client.from("scan_candle_snapshots")
+    .select("id,candles,observed_at,completed_candle_cutoff")
+    .eq("user_id", input.userId).eq("bot_id", BOT_ID)
+    .eq("symbol", input.symbol).eq("timeframe", input.timeframe);
+  if (input.observedAfter) {
+    query = query.gt("observed_at", input.observedAfter);
+  }
+  const { data, error } = await query
+    .order("observed_at", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data && Array.isArray(data.candles)
+    ? data as StoredCandleSnapshot
+    : null;
+}
+
+function latestTimestamp(...values: Array<unknown>): string | null {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    const parsed = Date.parse(String(value || ""));
+    if (Number.isFinite(parsed)) latest = Math.max(latest, parsed);
+  }
+  return Number.isFinite(latest) ? new Date(latest).toISOString() : null;
+}
+
 async function monitorOrphanedLifecycles(client: any) {
   const { data: lifecycles, error } = await client
     .from("impulse_entry_lifecycles")
-    .select("id,user_id,symbol,lifecycle")
+    .select("id,user_id,symbol,lifecycle,created_at,updated_at")
     .eq("bot_id", BOT_ID).eq("status", "active").eq("mode", "observe")
-    .order("updated_at", { ascending: true }).limit(20);
+    .order("updated_at", { ascending: true }).limit(100);
   if (error) throw error;
-  let monitored = 0;
-  for (const row of lifecycles || []) {
-    const { data: activeOrder } = await client.from("pending_orders").select("id")
-      .eq("impulse_entry_lifecycle_id", row.id)
+  const lifecycleRows = lifecycles || [];
+  const lifecycleIds = lifecycleRows.map((row: any) => row.id);
+  const { data: activeOrders, error: activeOrdersError } = lifecycleIds.length > 0
+    ? await client.from("pending_orders").select("impulse_entry_lifecycle_id")
+      .in("impulse_entry_lifecycle_id", lifecycleIds)
       .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
-      .limit(1).maybeSingle();
-    if (activeOrder) continue;
-    const timeframe = row.lifecycle?.confirmation?.timeframe || "5m";
+    : { data: [], error: null };
+  if (activeOrdersError) throw activeOrdersError;
+  const activeOrderLifecycleIds = new Set(
+    (activeOrders || []).map((order: any) => order.impulse_entry_lifecycle_id),
+  );
+  let monitored = 0;
+  let activeOrderOwned = 0;
+  let snapshotUnavailable = 0;
+  let insufficientSnapshot = 0;
+  let noPostActivationCandle = 0;
+  for (const row of lifecycleRows) {
+    if (activeOrderLifecycleIds.has(row.id)) {
+      activeOrderOwned++;
+      continue;
+    }
+    const lifecycle = row.lifecycle;
+    const timeframe = normalizeAnalysisTimeframe(
+      lifecycle?.confirmation?.timeframe,
+      "5m",
+    );
+    const activationStartedAt = latestTimestamp(
+      lifecycle?.confirmation?.startedAt,
+      row.created_at,
+    );
+    const snapshotObservedAfter = latestTimestamp(
+      activationStartedAt,
+      row.updated_at,
+    );
     try {
-      const fetched = await fetchCandlesWithFallback({
-        symbol: row.symbol, interval: timeframe, limit: 100,
-        brokerConn: null, skipBroker: true,
+      // Observation must never compete with execution for provider credits.
+      // Consume the scanner's immutable closed-candle input instead. Requiring
+      // a snapshot observed after the last lifecycle transition also prevents
+      // the same scan from advancing multiple candidates on repeated cron runs.
+      const snapshot = await loadLatestScanCandleSnapshot(client, {
+        userId: row.user_id,
+        symbol: row.symbol,
+        timeframe,
+        observedAfter: snapshotObservedAfter,
       });
-      if (fetched.candles.length < 10) continue;
-      const last = fetched.candles.at(-1)!;
+      if (!snapshot) {
+        snapshotUnavailable++;
+        continue;
+      }
+      if (snapshot.candles.length < 10) {
+        insufficientSnapshot++;
+        continue;
+      }
+      const last = snapshot.candles.at(-1);
+      const lastCandleTime = Date.parse(String(last?.datetime || ""));
+      const completedCandleTime = Date.parse(String(
+        snapshot.completed_candle_cutoff || last?.datetime || "",
+      ));
+      const activationTime = Date.parse(String(activationStartedAt || ""));
+      if (
+        !last || !Number.isFinite(Number(last.close)) ||
+        !Number.isFinite(lastCandleTime) ||
+        !Number.isFinite(completedCandleTime) ||
+        (Number.isFinite(activationTime) && completedCandleTime < activationTime)
+      ) {
+        noPostActivationCandle++;
+        continue;
+      }
       await observeImpulseEntryPrice(client, row.id, last.close, last.datetime);
-      await observeImpulseConfirmationLock(client, row.id, fetched.candles);
+      await observeImpulseConfirmationLock(client, row.id, snapshot.candles);
       monitored++;
     } catch (monitorError) {
       console.warn(`[impulse-monitor] ${row.symbol}: ${String(monitorError)}`);
     }
   }
-  return { monitored, eligible: lifecycles?.length || 0 };
+  return {
+    monitored,
+    eligible: lifecycleRows.length,
+    activeOrderOwned,
+    snapshotUnavailable,
+    insufficientSnapshot,
+    noPostActivationCandle,
+  };
 }
 
 async function replayUserLifecycles(client: any, userId: string, limit: number) {
@@ -122,12 +217,12 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
       initial.confirmation?.timeframe,
       "5m",
     );
-    const { data: snapshot } = await client.from("scan_candle_snapshots")
-      .select("id,candles")
-      .eq("user_id", userId).eq("bot_id", BOT_ID)
-      .eq("symbol", row.symbol).eq("timeframe", timeframe)
-      .order("observed_at", { ascending: false }).limit(1).maybeSingle();
-    if (!snapshot || !Array.isArray(snapshot.candles)) {
+    const snapshot = await loadLatestScanCandleSnapshot(client, {
+      userId,
+      symbol: row.symbol,
+      timeframe,
+    });
+    if (!snapshot) {
       unavailable++;
       missingCandleSnapshot++;
       continue;
