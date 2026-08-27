@@ -464,6 +464,7 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
+          commission_mode: string
           commission_per_lot: number
           created_at: string
           detected_commission_per_lot: number | null
@@ -480,6 +481,7 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
+          commission_mode?: string
           commission_per_lot?: number
           created_at?: string
           detected_commission_per_lot?: number | null
@@ -496,6 +498,7 @@ export type Database = {
           account_id?: string
           api_key?: string
           broker_type?: string
+          commission_mode?: string
           commission_per_lot?: number
           created_at?: string
           detected_commission_per_lot?: number | null

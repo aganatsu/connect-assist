@@ -59,13 +59,13 @@ const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string
 
 // ─── Per-Pair Override Definitions ────────────────────────────────────────────
 const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
-  'EURJPY': { minTier1Factors: 1, allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },
-  'GBPUSD': { protectionMaxDailyLossDollar: 5000, maxConsecutiveLosses: 8 },
-  'USDCAD': { minTier1Factors: 2 },
-  'USDCHF': { minRiskReward: 0.8 },
-  'NZDCHF': { minRiskReward: 0.8 },
-  'XAUUSD': { minConfluence: 35 },
-  'BTCUSD': { minTier1Factors: 4, allowSameDirectionStacking: false, maxPerSymbol: 1 },
+  'EUR/JPY': { minTier1Factors: 1, allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },
+  'GBP/USD': { protectionMaxDailyLossDollar: 5000, maxConsecutiveLosses: 8 },
+  'USD/CAD': { minTier1Factors: 2 },
+  'USD/CHF': { minRiskReward: 0.8 },
+  'NZD/CHF': { minRiskReward: 0.8 },
+  'XAU/USD': { minConfluence: 35 },
+  'BTC/USD': { minTier1Factors: 4, allowSameDirectionStacking: false, maxPerSymbol: 1 },
 };
 
 const OVERRIDE_FIELDS = [

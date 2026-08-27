@@ -41,6 +41,10 @@ import {
   buildFinalRuntimeGateStates,
 } from "../_shared/finalRuntimeGates.ts";
 import {
+  averageRoundTripCommission,
+  resolveRoundTripCommission,
+} from "../_shared/tradingCosts.ts";
+import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
 } from "../_shared/gamePlanShadowAudit.ts";
@@ -1766,19 +1770,14 @@ async function runScanForUser(
   let avgCommissionPerLot = 0;
   if (account.execution_mode === "live") {
     const { data: commConns } = await supabase.from("broker_connections")
-      .select("commission_per_lot, detected_commission_per_lot")
+      .select("commission_mode, commission_per_lot, detected_commission_per_lot")
       .eq("user_id", userId).eq("is_active", true);
     if (commConns && commConns.length > 0) {
-      let totalComm = 0;
-      let count = 0;
-      for (const c of commConns) {
-        const userComm = parseFloat(c.commission_per_lot ?? "0");
-        const detectedComm = parseFloat(c.detected_commission_per_lot ?? "0") * 2; // detected is per-side, double for round-trip
-        const effective = userComm > 0 ? userComm : detectedComm;
-        if (effective > 0) { totalComm += effective; count++; }
-      }
-      avgCommissionPerLot = count > 0 ? totalComm / count : 0;
-      if (avgCommissionPerLot > 0) console.log(`[scan ${scanCycleId}] Avg commission: $${avgCommissionPerLot.toFixed(2)}/lot round-trip (from ${count} broker(s))`);
+      avgCommissionPerLot = averageRoundTripCommission(commConns);
+      const costedConnections = commConns.filter((connection: any) =>
+        resolveRoundTripCommission(connection).roundTripPerLot > 0
+      ).length;
+      if (avgCommissionPerLot > 0) console.log(`[scan ${scanCycleId}] Avg commission: $${avgCommissionPerLot.toFixed(2)}/lot round-trip (from ${costedConnections} broker(s))`);
     }
   }
   (config as any)._avgCommissionPerLot = avgCommissionPerLot;
@@ -10434,10 +10433,8 @@ async function runScanForUser(
                        continue;
                      }
                      const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
-                     // Get per-connection commission: user-set takes priority, then auto-detected (per-side × 2 for round-trip)
-                     const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
-                     const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;
-                     const connCommRT = connUserComm > 0 ? connUserComm : connDetectedComm;
+                     // Resolve the connection's explicit auto/manual/none commission mode.
+                     const connCommRT = resolveRoundTripCommission(conn).roundTripPerLot;
                      // Unified sizing for broker mirror (volatility scaling applies)
                      const brokerSizingResult = computePositionSize(
                        {

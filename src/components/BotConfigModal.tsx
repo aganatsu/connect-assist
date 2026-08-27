@@ -389,6 +389,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-border/60 pt-2">
                 <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
                 <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
+                <span>Min R:R: {Number(
+                  effectiveRuntime.provenance.criticalSettings.minRiskReward ??
+                    effectiveRuntime.effectiveConfig?.minRiskReward ?? 0,
+                ).toFixed(2)}</span>
+                <span>
+                  Spread ceiling: {effectiveRuntime.provenance.criticalSettings.spreadFilterEnabled
+                    ? Number(effectiveRuntime.provenance.criticalSettings.maxSpreadPips || 0) > 0
+                      ? `${Number(effectiveRuntime.provenance.criticalSettings.maxSpreadPips).toFixed(1)}p global`
+                      : "per-instrument"
+                    : "OFF"}
+                </span>
                 {effectiveRuntime.authorityModes?.runtimeTarget && (
                   <span>Account target: {effectiveRuntime.authorityModes.runtimeTarget.toUpperCase()}</span>
                 )}

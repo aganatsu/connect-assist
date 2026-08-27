@@ -29,7 +29,10 @@ export interface RuntimeConfigProvenance {
     crossTfAuthorityMode: string;
     dealingRangeMode: string;
     minConfluence: number;
+    minRiskReward: number;
     riskPerTrade: number;
+    spreadFilterEnabled: boolean;
+    maxSpreadPips: number;
   };
 }
 
@@ -161,7 +164,10 @@ export async function loadEffectiveRuntimeConfig(
           effectiveConfig.dealingRangeMode || "avoid_wrong_side",
         ),
         minConfluence: Number(effectiveConfig.minConfluence),
+        minRiskReward: Number(effectiveConfig.minRiskReward),
         riskPerTrade: Number(effectiveConfig.riskPerTrade),
+        spreadFilterEnabled: effectiveConfig.spreadFilterEnabled === true,
+        maxSpreadPips: Number(effectiveConfig.maxSpreadPips),
       },
     },
   };

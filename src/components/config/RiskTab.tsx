@@ -106,8 +106,8 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
           <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
             <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
           </FieldGroup>
-          <FieldGroup label="Min R:R Ratio" description="Gate: rejects trades below this R:R">
-            <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
+          <FieldGroup label="Min R:R Ratio" description="Global effective R:R floor after trading costs. Pair-specific overrides are under Enter.">
+            <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.1} min={0.1} max={20} className="h-9 text-sm" />
           </FieldGroup>
           <FieldGroup label="Max Portfolio Heat (%)" description="Max total risk exposure across all open positions">
             <Input type="number" value={config.risk?.maxPortfolioHeat ?? 10} onChange={e => updateField('risk', 'maxPortfolioHeat', parseFloat(e.target.value) || 0)} step={1} min={1} max={100} className="h-9 text-sm" />
