@@ -241,6 +241,7 @@ import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEn
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateFinalTradeAuthorization } from "../_shared/finalTradeAuthorization.ts";
 import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
+import { calculateRoundTripCommission } from "../_shared/tradingCosts.ts";
 import { buildPendingOrderPlan } from "../_shared/pendingOrderPlan.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import {
@@ -1222,7 +1223,7 @@ function processExits(
         );
       }
       const { pnl: rawPnl, pnlPips } = pnlResult;
-      const comm = pos.size * commissionPerLot * 2;
+      const comm = calculateRoundTripCommission(pos.size, commissionPerLot);
       const pnl = rawPnl - comm;
       closedTrades.push({
         id: pos.id,
@@ -4977,7 +4978,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           );
         }
         const { pnl: rawPnl, pnlPips } = pnlResult;
-        const comm = pos.size * commissionPerLot * 2;
+        const comm = calculateRoundTripCommission(
+          pos.size,
+          commissionPerLot,
+        );
         allTrades.push({
           id: pos.id,
           symbol: pos.symbol,

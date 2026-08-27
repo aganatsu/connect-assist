@@ -80,3 +80,13 @@ export function averageRoundTripCommission(
     ? values.reduce((sum, value) => sum + value, 0) / values.length
     : 0;
 }
+
+/** Apply an already-resolved round-trip $/lot commission exactly once. */
+export function calculateRoundTripCommission(
+  lots: number,
+  roundTripPerLot: number,
+): number {
+  if (!Number.isFinite(lots) || lots <= 0) return 0;
+  if (!Number.isFinite(roundTripPerLot) || roundTripPerLot <= 0) return 0;
+  return lots * roundTripPerLot;
+}

@@ -1,9 +1,9 @@
 /**
  * Shared Min R:R gate check.
  *
- * Computes effective risk:reward after deducting spread cost (and optionally
- * commission cost) from the raw reward. Returns a gate result indicating
- * pass/fail with a descriptive reason string.
+ * Computes net risk:reward after deducting spread and commission from the
+ * winning outcome and adding the same round-trip costs to the losing outcome.
+ * Returns a gate result indicating pass/fail with a descriptive reason string.
  *
  * Used by finalTradeAuthorization for direct-market, pending-confirmation,
  * breaker, and backtest execution routes.
@@ -64,6 +64,12 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
   const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
   const risk = Math.abs(lastPrice - stopLoss);
   const rawReward = Math.abs(takeProfit - lastPrice);
+  if (risk <= 0) {
+    return {
+      passed: false,
+      reason: "Trade rejected: Risk/Reward cannot be calculated because stop-loss risk is zero",
+    };
+  }
 
   // Spread cost in price terms
   const effectiveSpreadPips = (input.spreadPipsOverride && input.spreadPipsOverride > 0)
@@ -81,8 +87,9 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
 
   const totalCostInPrice = spreadCostInPrice + commCostInPrice;
   const effectiveReward = Math.max(0, rawReward - totalCostInPrice);
-  const rawRR = risk > 0 ? rawReward / risk : 0;
-  const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
+  const effectiveRisk = risk + totalCostInPrice;
+  const rawRR = rawReward / risk;
+  const effectiveRR = effectiveRisk > 0 ? effectiveReward / effectiveRisk : 0;
 
   // Build cost detail string
   let costDetail: string;

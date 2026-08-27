@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   averageRoundTripCommission,
+  calculateRoundTripCommission,
   resolveRoundTripCommission,
 } from "../../functions/_shared/tradingCosts.ts";
 
@@ -80,4 +81,11 @@ Deno.test("average commission uses each connection's explicit mode", () => {
     ]),
     6,
   );
+});
+
+Deno.test("round-trip commission is applied exactly once to closed lots", () => {
+  assertEquals(calculateRoundTripCommission(0.5, 7), 3.5);
+  assertEquals(calculateRoundTripCommission(2, 5), 10);
+  assertEquals(calculateRoundTripCommission(0, 7), 0);
+  assertEquals(calculateRoundTripCommission(1, -7), 0);
 });

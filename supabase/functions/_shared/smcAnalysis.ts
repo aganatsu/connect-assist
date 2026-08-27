@@ -2555,6 +2555,19 @@ export const MIN_SL_PIPS: Record<string, number> = {
 export const ATR_SL_FLOOR_MULTIPLIER = 1.5;
 
 // ─── Position Sizing ────────────────────────────────────────────────
+/** Floor a risk-limited lot quantity to the executable step. */
+export function floorLotSize(value: number, step = 0.01): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(step) || step <= 0) return 0;
+  const scaled = value / step;
+  const tolerance = Math.max(
+    1e-9,
+    Number.EPSILON * Math.max(1, Math.abs(scaled)) * 8,
+  );
+  const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
+  return Number((Math.floor(scaled + tolerance) * step).toFixed(decimals));
+}
+
 // rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
 // used to convert pip value to USD for cross-pair lot sizing.
 // fallbackMaxLot: optional override for the hardcoded max lot cap.
@@ -2589,26 +2602,18 @@ export function calculatePositionSize(
     const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
     const atrDistance = config.atrValue * atrMultiplier; // Configurable ATR multiplier for volatility sizing
     if (atrDistance === 0) return 0.01;
-    // Iterative solve: lots = (riskAmount - lots*commission) / (distance*lotUnits*quoteToUSD)
-    let lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
-    if (commRT > 0) {
-      const adjustedRisk = riskAmount - (lots * commRT);
-      if (adjustedRisk > 0) lots = adjustedRisk / (atrDistance * spec.lotUnits * quoteToUSD);
-    }
-    return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
+    const riskPerLot = atrDistance * spec.lotUnits * quoteToUSD;
+    const lots = riskAmount / (riskPerLot + commRT);
+    return Math.max(0.01, Math.min(maxLot, floorLotSize(lots)));
   }
 
   // Default: percent_risk (risk-based)
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  // Iterative solve: lots = (riskAmount - lots*commission) / (slDistance*lotUnits*quoteToUSD)
-  let lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
-  if (commRT > 0) {
-    const adjustedRisk = riskAmount - (lots * commRT);
-    if (adjustedRisk > 0) lots = adjustedRisk / (slDistance * spec.lotUnits * quoteToUSD);
-  }
-  return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
+  const riskPerLot = slDistance * spec.lotUnits * quoteToUSD;
+  const lots = riskAmount / (riskPerLot + commRT);
+  return Math.max(0.01, Math.min(maxLot, floorLotSize(lots)));
 }
 
 // ─── PnL Calculation ────────────────────────────────────────────────

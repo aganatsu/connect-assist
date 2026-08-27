@@ -65,6 +65,8 @@ const SINGLE_OWNER: string[] = [
   "checkCorrelationExposure",
   "checkMinRR",
   "resolveRoundTripCommission",
+  "calculateRoundTripCommission",
+  "floorLotSize",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",
   // ── Post-placement direction ──

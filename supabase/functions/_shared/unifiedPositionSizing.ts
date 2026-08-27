@@ -20,7 +20,14 @@
  *   // result.lots, result.riskUSD, result.adjustments[]
  */
 
-import { calculatePositionSize, getQuoteToUSDRate, normalizeSymKey, SPECS } from "./smcAnalysis.ts";
+import {
+  calculatePositionSize,
+  floorLotSize,
+  getQuoteToUSDRate,
+  normalizeSymKey,
+  SPECS,
+} from "./smcAnalysis.ts";
+import { calculateRoundTripCommission } from "./tradingCosts.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -88,9 +95,9 @@ export interface PropFirmContext {
 export interface SizingResult {
   /** Final position size in lots */
   lots: number;
-  /** Risk in USD for this position */
+  /** All-in stop risk in USD, including round-trip commission */
   riskUSD: number;
-  /** Risk as percentage of balance */
+  /** All-in stop risk as percentage of balance */
   riskPercent: number;
   /** Base lots before adjustments */
   baseLots: number;
@@ -349,7 +356,7 @@ export function applyFinalCandidateSizeAdjustments(
 
   let lots = input.sizingResult.lots;
   if (correlationMultiplier < 1) {
-    lots = Math.round(lots * correlationMultiplier * 100) / 100;
+    lots = floorLotSize(lots * correlationMultiplier);
     if (lots < 0.01) {
       return reject("Correlation adjustment reduced size below the executable minimum");
     }
@@ -357,7 +364,7 @@ export function applyFinalCandidateSizeAdjustments(
   const afterCorrelationLots = lots;
 
   if (signalSourceMultiplier < 1) {
-    lots = Math.round(lots * signalSourceMultiplier * 100) / 100;
+    lots = floorLotSize(lots * signalSourceMultiplier);
     if (lots < 0.01) {
       return reject("Signal-source adjustment reduced size below the executable minimum");
     }
@@ -481,7 +488,7 @@ export function computePositionSize(
     const thisTradeHeatPercent = input.riskPercent;
     if (thisTradeHeatPercent > remainingHeatPercent) {
       const heatMultiplier = remainingHeatPercent / thisTradeHeatPercent;
-      lots = Math.round(lots * heatMultiplier * 100) / 100;
+      lots = floorLotSize(lots * heatMultiplier);
       // This cap represents a real USD ceiling — remember it.
       hardCapUSD = Math.min(
         hardCapUSD,
@@ -523,7 +530,7 @@ export function computePositionSize(
     const remainingCorrelated = maxCorrelated - correlatedPercent;
     if (input.riskPercent > remainingCorrelated && remainingCorrelated > 0) {
       const corrMultiplier = remainingCorrelated / input.riskPercent;
-      lots = Math.round(lots * corrMultiplier * 100) / 100;
+      lots = floorLotSize(lots * corrMultiplier);
       hardCapUSD = Math.min(
         hardCapUSD,
         (remainingCorrelated / 100) * input.balance,
@@ -540,7 +547,7 @@ export function computePositionSize(
   if (volatility) {
     const volMultiplier = VOLATILITY_MULTIPLIERS[volatility.regime] ?? 1.0;
     if (volMultiplier < 1.0) {
-      lots = Math.round(lots * volMultiplier * 100) / 100;
+      lots = floorLotSize(lots * volMultiplier);
       adjustments.push({
         type: "volatility",
         multiplier: volMultiplier,
@@ -555,7 +562,7 @@ export function computePositionSize(
     if (
       propFirm.sizeMultiplier !== undefined && propFirm.sizeMultiplier < 1.0
     ) {
-      lots = Math.round(lots * propFirm.sizeMultiplier * 100) / 100;
+      lots = floorLotSize(lots * propFirm.sizeMultiplier);
       adjustments.push({
         type: "prop_firm",
         multiplier: propFirm.sizeMultiplier,
@@ -570,12 +577,13 @@ export function computePositionSize(
     ) {
       const slDistance = Math.abs(input.entryPrice - input.stopLoss);
       const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
-      const riskPerLot = slDistance * spec.lotUnits * quoteToUSD;
+      const riskPerLot = slDistance * spec.lotUnits * quoteToUSD +
+        (input.commissionPerLot ?? 0);
       if (riskPerLot > 0) {
         const maxLotsByDaily = propFirm.dailyLossRemaining / riskPerLot;
         if (lots > maxLotsByDaily) {
           const dailyMult = maxLotsByDaily / lots;
-          lots = Math.round(maxLotsByDaily * 100) / 100;
+          lots = floorLotSize(maxLotsByDaily);
           // This is a hard USD ceiling by definition — remember it.
           hardCapUSD = Math.min(hardCapUSD, propFirm.dailyLossRemaining);
           adjustments.push({
@@ -595,7 +603,8 @@ export function computePositionSize(
   if ((lots < 0.01 && lots > 0) || (lots === 0 && hardCapUSD < Infinity)) {
     const slDistance = Math.abs(input.entryPrice - input.stopLoss);
     const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
-    const riskAtMinLot = slDistance * spec.lotUnits * 0.01 * quoteToUSD;
+    const riskAtMinLot = slDistance * spec.lotUnits * 0.01 * quoteToUSD +
+      calculateRoundTripCommission(0.01, input.commissionPerLot ?? 0);
 
     if (riskAtMinLot > hardCapUSD) {
       // Flooring to 0.01 lots would breach the tightest hard cap that applied
@@ -625,15 +634,19 @@ export function computePositionSize(
   }
 
   // Final rounding
-  lots = Math.round(lots * 100) / 100;
+  lots = floorLotSize(lots);
 
   // Calculate actual risk
   const slDistance = Math.abs(input.entryPrice - input.stopLoss);
   const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
-  const riskUSD = slDistance * spec.lotUnits * lots * quoteToUSD;
-  const riskPct = input.balance > 0 ? (riskUSD / input.balance) * 100 : 0;
-
-  const totalRiskUSD = riskUSD + lots * (input.commissionPerLot ?? 0);
+  const priceRiskUSD = slDistance * spec.lotUnits * lots * quoteToUSD;
+  const totalRiskUSD = priceRiskUSD + calculateRoundTripCommission(
+    lots,
+    input.commissionPerLot ?? 0,
+  );
+  const riskPct = input.balance > 0
+    ? (totalRiskUSD / input.balance) * 100
+    : 0;
   if (!Number.isFinite(totalRiskUSD) || !Number.isFinite(riskPct)) {
     return reject("Position sizing produced non-finite risk", baseLots);
   }
@@ -659,7 +672,7 @@ export function computePositionSize(
 
   return {
     lots,
-    riskUSD: Math.round(riskUSD * 100) / 100,
+    riskUSD: Math.round(totalRiskUSD * 100) / 100,
     riskPercent: Math.round(riskPct * 100) / 100,
     baseLots,
     adjustments,
@@ -671,7 +684,7 @@ export function computePositionSize(
 // ─── Utility: Calculate risk for an existing position ────────────────
 
 /**
- * Calculate the current risk in USD for an open position.
+ * Calculate the current all-in risk in USD for an open position.
  * Useful for building the PortfolioContext.openPositions array.
  */
 export function calculatePositionRisk(
@@ -680,11 +693,13 @@ export function calculatePositionRisk(
   stopLoss: number,
   lots: number,
   rateMap?: Record<string, number>,
+  commissionPerLot?: number,
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const slDistance = Math.abs(entryPrice - stopLoss);
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
-  return slDistance * spec.lotUnits * lots * quoteToUSD;
+  return slDistance * spec.lotUnits * lots * quoteToUSD +
+    calculateRoundTripCommission(lots, commissionPerLot ?? 0);
 }
 
 // ─── Utility: Check if new trade would breach portfolio limits ───────

@@ -23,7 +23,7 @@ const EVALUATED_AT = "2026-07-22T09:45:00.000Z";
 const EXPECTED_INPUT_FINGERPRINT =
   "golden-replay-input.v1:57d49cfae62ce9779e20bf5bcc61758508edbe4669b2d38517c6f65458ba7289";
 const EXPECTED_DECISION_HASH =
-  "3e07d8887e7fa21209a7af099f2cf86f9aa2de3615fed97ea6cd6019631327f8";
+  "ebc6c6df5592dd1abe908dae8c196c45f565c0163fc911fb1443b3fe43eaa439";
 
 function makeCandles(
   count: number,
@@ -302,7 +302,7 @@ Deno.test("Phase 7 final fixture produces complete matching decisions", () => {
   assertEquals(result.backtest.coverage, { complete: true, missing: [] });
   assertEquals(result.live.decisionHash, result.backtest.decisionHash);
   assertEquals(result.live.decisionHash, EXPECTED_DECISION_HASH);
-  assertEquals(result.live.decision.execution.positionSize, 0.29);
+  assertEquals(result.live.decision.execution.positionSize, 0.28);
   assertEquals(analysis.score, 10.2);
 });
 
