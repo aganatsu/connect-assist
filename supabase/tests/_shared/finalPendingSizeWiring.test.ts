@@ -20,7 +20,7 @@ Deno.test("the sole pending scanner sizes immediately before atomic fill", () =>
   assert(fast.slice(sizeAt, fillAt).includes("signalSource"));
 });
 
-Deno.test("fast scanner loads cached FX conversion and live commission", () => {
+Deno.test("fast scanner loads cached FX conversion and resolves approved-connection commission", () => {
   const sizeAt = fast.indexOf("calculateFinalPendingSize({");
   const rateMapAt = fast.indexOf(
     "const sizingRateMap = await loadCachedSizingRateMap(supabase)",
@@ -28,7 +28,8 @@ Deno.test("fast scanner loads cached FX conversion and live commission", () => {
   const block = fast.slice(sizeAt, sizeAt + 1400);
   assert(rateMapAt > 0 && rateMapAt < sizeAt);
   assert(block.includes("rateMap: sizingRateMap"));
-  assert(block.includes("loadAverageRoundTripCommission("));
+  assert(fast.includes("averageRoundTripCommission(approvedBrokerConnections)"));
+  assert(block.includes("commissionPerLot: executionCommissionPerLot"));
 });
 
 Deno.test("pending final sizing returns a rejection instead of reviving zero lots", () => {

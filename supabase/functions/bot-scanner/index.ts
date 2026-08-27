@@ -344,7 +344,6 @@ import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
-import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import {
   detectSession as sharedDetectSession,
@@ -882,16 +881,12 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 10: Min R:R (spread + commission adjusted) — shared implementation
-  gates.push(checkMinRR({
-    lastPrice: analysis.lastPrice,
-    stopLoss: analysis.stopLoss,
-    takeProfit: analysis.takeProfit,
-    symbol,
-    minRiskReward: config.minRiskReward,
-    commissionPerLot: (config as any)._avgCommissionPerLot ?? 0,
-    rateMap,
-  }));
+  // Gate 10: R:R is route-specific. The executable entry, stop and target do
+  // not exist until the market or pending-order geometry is frozen below.
+  gates.push({
+    passed: true,
+    reason: "Risk/reward deferred until executable geometry is frozen",
+  });
 
   // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
@@ -9507,8 +9502,7 @@ async function runScanForUser(
           result: Awaited<ReturnType<typeof fetchBrokerSpread>>;
         }> = [];
         if (
-          account.execution_mode === "live" &&
-          pairConfig.spreadFilterEnabled
+          account.execution_mode === "live"
         ) {
           for (const connection of directConnections || []) {
             let metaAccountId: string | undefined;
@@ -9626,6 +9620,8 @@ async function runScanForUser(
           maxDailyLoss: pairConfig.maxDailyLoss,
           maxDrawdown: pairConfig.maxDrawdown,
           minimumRiskReward: pairConfig.minRiskReward,
+          commissionPerLot: avgCommissionPerLot,
+          rateMap,
           directionVerdict: activeDirectionVerdict,
           requireDirectionVerdict: true,
           gamePlan: activeGamePlan,
@@ -10980,10 +10976,6 @@ async function runScanForUser(
               : (breakerSL > breakerEntry && breakerTP < breakerEntry);
             if (!breakerOrientationOk) continue;
 
-            // R:R check
-            const breakerRR = Math.abs(breakerTP - breakerEntry) / breakerRisk;
-            if (breakerRR < (config.minRiskReward ?? 1.0)) continue;
-
             // Size calculation (default remains the historical half-risk behavior).
             const breakerSizeMultiplier = Math.max(
               0.1,
@@ -11082,12 +11074,14 @@ async function runScanForUser(
                 takeProfit: breakerTP,
               },
               openPositions: openPosArr,
-              maxOpenPositions: config.maxOpenPositions,
-              maxPerSymbol: config.maxPerSymbol,
-              allowSameDirectionStacking: config.allowSameDirectionStacking,
-              maxDailyLoss: config.maxDailyLoss,
-              maxDrawdown: config.maxDrawdown,
-              minimumRiskReward: config.minRiskReward,
+              maxOpenPositions: pairConfig.maxOpenPositions,
+              maxPerSymbol: pairConfig.maxPerSymbol,
+              allowSameDirectionStacking: pairConfig.allowSameDirectionStacking,
+              maxDailyLoss: pairConfig.maxDailyLoss,
+              maxDrawdown: pairConfig.maxDrawdown,
+              minimumRiskReward: pairConfig.minRiskReward,
+              commissionPerLot: avgCommissionPerLot,
+              rateMap,
               directionVerdict: activeDirectionVerdict,
               requireDirectionVerdict: true,
               gamePlan: activeGamePlan,

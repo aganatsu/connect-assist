@@ -3,6 +3,7 @@ import { checkDuplicateDirection } from "./gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "./gateMaxDrawdown.ts";
 import { checkMaxPerSymbol } from "./gateMaxPerSymbol.ts";
 import { checkMaxPositions } from "./gateMaxPositions.ts";
+import { checkMinRR } from "./gateMinRR.ts";
 import { type GamePlanEnforcementMode } from "./gamePlanGate.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ThesisValidationResult } from "./thesisValidator.ts";
@@ -118,6 +119,8 @@ export interface FinalTradeAuthorizationInput {
   maxDailyLoss: number;
   maxDrawdown: number;
   minimumRiskReward: number;
+  commissionPerLot?: number;
+  rateMap?: Record<string, number>;
   directionVerdict: DirectionVerdictForAuthorization | null;
   requireDirectionVerdict?: boolean;
   directionVerdictPolicy?: DirectionVerdictPolicy;
@@ -270,24 +273,57 @@ export function evaluateFinalTradeAuthorization(
     reason: "Entry, stop-loss and take-profit orientation is valid",
   });
 
-  const risk = Math.abs(entry - stop);
-  const reward = Math.abs(target - entry);
-  const rr = risk > 0 ? reward / risk : 0;
-  if (rr < input.minimumRiskReward) {
+  if (input.spread.required) {
+    if (!input.spread.available) {
+      return deny(
+        "spread_unavailable",
+        "Live spread could not be verified",
+        true,
+        checks,
+        now,
+      );
+    }
+    if (!input.spread.passed) {
+      return deny(
+        "spread_too_wide",
+        `Spread ${
+          asFiniteNumber(input.spread.spreadPips).toFixed(2)
+        } pips exceeds ${
+          asFiniteNumber(input.spread.maximumPips).toFixed(2)
+        } pips`,
+        true,
+        checks,
+        now,
+      );
+    }
+    checks.push({
+      passed: true,
+      reason: `Spread ${
+        asFiniteNumber(input.spread.spreadPips).toFixed(2)
+      } pips is within limit`,
+    });
+  }
+
+  const riskReward = checkMinRR({
+    lastPrice: entry,
+    stopLoss: stop,
+    takeProfit: target,
+    symbol: candidate.symbol,
+    minRiskReward: input.minimumRiskReward,
+    spreadPipsOverride: input.spread.spreadPips ?? undefined,
+    commissionPerLot: input.commissionPerLot,
+    rateMap: input.rateMap,
+  });
+  if (!riskReward.passed) {
     return deny(
       "risk_reward",
-      `Trade rejected: R:R is ${rr.toFixed(2)}, below the required ${
-        input.minimumRiskReward.toFixed(2)
-      }. Increase the target or reduce the stop distance`,
+      riskReward.reason,
       false,
       checks,
       now,
     );
   }
-  checks.push({
-    passed: true,
-    reason: `Risk/reward ${rr.toFixed(2)} meets minimum`,
-  });
+  checks.push(riskReward);
 
   if (
     input.requireCrossTimeframeAuthority === true &&
@@ -450,37 +486,6 @@ export function evaluateFinalTradeAuthorization(
       return deny("max_drawdown", drawdown.reason, true, checks, now);
     }
     checks.push(drawdown);
-  }
-
-  if (input.spread.required) {
-    if (!input.spread.available) {
-      return deny(
-        "spread_unavailable",
-        "Live spread could not be verified",
-        true,
-        checks,
-        now,
-      );
-    }
-    if (!input.spread.passed) {
-      return deny(
-        "spread_too_wide",
-        `Spread ${
-          asFiniteNumber(input.spread.spreadPips).toFixed(2)
-        } pips exceeds ${
-          asFiniteNumber(input.spread.maximumPips).toFixed(2)
-        } pips`,
-        true,
-        checks,
-        now,
-      );
-    }
-    checks.push({
-      passed: true,
-      reason: `Spread ${
-        asFiniteNumber(input.spread.spreadPips).toFixed(2)
-      } pips is within limit`,
-    });
   }
 
   for (const gate of input.additionalGates ?? []) {

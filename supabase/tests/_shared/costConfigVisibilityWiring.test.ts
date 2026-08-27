@@ -27,8 +27,8 @@ const recommendations = await Deno.readTextFile(
 const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
-const pendingSizing = await Deno.readTextFile(
-  new URL("../../functions/_shared/finalPendingSize.ts", import.meta.url),
+const fastScanner = await Deno.readTextFile(
+  new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url),
 );
 
 Deno.test("broker commission mode is explicit from storage through the UI", () => {
@@ -42,7 +42,10 @@ Deno.test("broker commission mode is explicit from storage through the UI", () =
   assertStringIncludes(brokerUi, "round trip");
   assertStringIncludes(scanner, "resolveRoundTripCommission(conn)");
   assertStringIncludes(scanner, "averageRoundTripCommission(commConns)");
-  assertStringIncludes(pendingSizing, "averageRoundTripCommission(data || [])");
+  assertStringIncludes(
+    fastScanner,
+    "averageRoundTripCommission(approvedBrokerConnections)",
+  );
   assert(
     !scanner.includes('detected_commission_per_lot ?? "0") * 2'),
     "scanner must not keep a second inline commission resolver",

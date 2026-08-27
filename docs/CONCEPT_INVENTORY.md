@@ -41,6 +41,7 @@ instead of arbitrating.
 | AMD phase | 2 | shared only | 🟡 Dead local copy |
 | Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
 | Broker commission resolution | 1 | `tradingCosts.ts:resolveRoundTripCommission` | 🟢 Single owner |
+| Effective minimum R:R | 1 | `gateMinRR.ts:checkMinRR` | 🟢 Single owner |
 | SL/TP target selection | 1 | `calculateSLTP` | 🟢 Single owner |
 | Game Plan generation | 1 | `generateInstrumentGamePlan` / `game-plan-refresh` | 🟢 Single algorithm and live producer |
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
@@ -496,8 +497,15 @@ size, never raise it to a broker minimum.
 **Broker commission resolution** is owned by
 `_shared/tradingCosts.ts:resolveRoundTripCommission`. Persisted commission mode is
 explicit: `auto` doubles the broker-observed per-side amount, `manual` consumes the
-configured round-trip amount, and `none` forces zero. Scanner, final pending sizing,
-and broker-connection presentation delegate to that owner.
+configured round-trip amount, and `none` forces zero. Scanner execution routes,
+final pending sizing inputs, and broker-connection presentation delegate to that
+owner.
+
+**Effective minimum R:R** is owned by `_shared/gateMinRR.ts:checkMinRR`.
+Discovery gates defer this check until a route has frozen its executable entry,
+stop, and target. Market, pending-confirmation, breaker, and backtest routes are
+screened by final authorization with the latest cost evidence available to that
+route.
 
 **Max drawdown** — `gateMaxDrawdown.ts` and `propFirmRisk.ts` are both live but on mutually
 exclusive paths with an explicit delegation comment (Gate 8 hands off when
