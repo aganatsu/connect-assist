@@ -780,6 +780,38 @@ function OperationsDashboard() {
   const currentScan = scans[safeScanIndex];
   const scanDetails = useMemo(() => cleanDetails(currentScan), [currentScan]);
   const meta = useMemo(() => detailMeta(currentScan), [currentScan]);
+  const sessionRotationObservation =
+    meta?.impulseRotation?.sessionObservation?.contract ===
+        "session-aware-rotation-observation.v1"
+      ? meta.impulseRotation.sessionObservation
+      : null;
+  const sessionRotationActual = Array.isArray(sessionRotationObservation?.actual)
+    ? sessionRotationObservation.actual.map(String)
+    : [];
+  const sessionRotationProposed = Array.isArray(sessionRotationObservation?.proposed)
+    ? sessionRotationObservation.proposed.map(String)
+    : [];
+  const sessionRotationSlots = Math.max(
+    sessionRotationActual.length,
+    sessionRotationProposed.length,
+  );
+  const sessionRotationOverlap = Number.isFinite(
+      Number(sessionRotationObservation?.overlapCount),
+    )
+    ? Number(sessionRotationObservation.overlapCount)
+    : sessionRotationActual.filter((symbol: string) =>
+      sessionRotationProposed.includes(symbol)
+    ).length;
+  const sessionRotationTitle = sessionRotationObservation
+    ? [
+      `Current: ${sessionRotationActual.join(", ") || "none"}`,
+      `Proposed: ${sessionRotationProposed.join(", ") || "none"}`,
+      `Would promote: ${Array.isArray(sessionRotationObservation.wouldPromote) ? sessionRotationObservation.wouldPromote.join(", ") || "none" : "none"}`,
+      `Would defer: ${Array.isArray(sessionRotationObservation.wouldDefer) ? sessionRotationObservation.wouldDefer.join(", ") || "none" : "none"}`,
+    ].join(" · ")
+    : undefined;
+  const sessionRotationAvailable = sessionRotationObservation?.status !==
+    "unavailable";
   const displayedScanDetails = useMemo(() => {
     if (scanFilter === "signals") return scanDetails.filter(isSignal);
     if (scanFilter === "qualified") return scanDetails.filter(isQualified);
@@ -1232,6 +1264,35 @@ function OperationsDashboard() {
                     </button>
                   </div>
                 </div>
+
+                {sessionRotationObservation && (
+                  <div
+                    className="apex-session-observation"
+                    role="status"
+                    aria-label="Session-aware scan priority observation"
+                    title={sessionRotationTitle}
+                  >
+                    <div className="apex-session-observation__heading">
+                      <span>Session priority</span>
+                      <span className="apex-session-observation__mode">Observe only</span>
+                    </div>
+                    <strong>
+                      {sessionRotationAvailable
+                        ? `${sessionRotationOverlap}/${sessionRotationSlots} same slots`
+                        : "Unavailable"}
+                    </strong>
+                    <span>
+                      {String(sessionRotationObservation.session?.name || "Unknown session")}
+                      {" · "}
+                      {String(sessionRotationObservation.style || meta?.activeStyle || "unknown").replace(/_/g, " ")}
+                      {sessionRotationAvailable
+                        ? sessionRotationObservation.restrictedAssetSessionGateOpen === false
+                          ? " · gated session disabled · no extra API calls"
+                          : " · no extra API calls"
+                        : " · scan continued unchanged"}
+                    </span>
+                  </div>
+                )}
 
                 <div className="apex-segmented" role="group" aria-label="Filter scan rows">
                   {([

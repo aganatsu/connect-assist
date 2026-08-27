@@ -86,7 +86,9 @@ import {
   saveRotatingImpulseState,
   selectRotatingImpulseUniverse,
   updateRotatingImpulseState,
+  SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT,
   type RotationSelection,
+  type SessionRotationObservation,
 } from "../_shared/rotatingImpulseUniverse.ts";
 import {
   classifyInstrumentRegime,
@@ -1686,6 +1688,17 @@ async function runScanForUser(
   const normalizedSession = session.filterKey;
   // Freeze the session snapshot for this entire scan cycle
   const cachedSession = { ...session };
+  // Preserve the existing 24/5 compatibility rule once per scan cycle. This
+  // same frozen state is used by both the live gate and rotation observation.
+  const coreSessionsEnabled = ["asian", "london", "newyork"].every((key) =>
+    config.enabledSessions.includes(key)
+  );
+  const offHoursImplicitlyAllowed = normalizedSession === "offhours" &&
+    coreSessionsEnabled;
+  const restrictedAssetSessionGateOpen = isSessionEnabled(
+    cachedSession,
+    config.enabledSessions,
+  ) || offHoursImplicitlyAllowed;
   // Session gate is now checked per-instrument inside the loop, not globally
   // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
   {
@@ -3220,16 +3233,17 @@ async function runScanForUser(
   const rotatingImpulseSlotCount = Math.max(1, Math.min(12, Number((config as any).rotatingImpulseSlotCount) || 8));
   const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && fullInstrumentUniverse.length > rotatingImpulseSlotCount;
   let rotationSelection: RotationSelection | null = null;
+  let sessionRotationObservation: SessionRotationObservation | null = null;
   let discoveryScanUniverse = fullInstrumentUniverse;
   let scanUniverse = fullInstrumentUniverse;
+  const lifecycleOwnedSymbols = new Set<string>([
+    ...activeStagedSetups
+      .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
+      .map((setup: any) => setup.symbol),
+    ...(activePendingOrders || []).map((order: any) => order.symbol),
+    ...openPosArr.map((position: any) => position.symbol),
+  ]);
   if (rotatingImpulseScanEnabled) {
-    const lifecycleOwnedSymbols = new Set<string>([
-      ...activeStagedSetups
-        .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
-        .map((setup: any) => setup.symbol),
-      ...(activePendingOrders || []).map((order: any) => order.symbol),
-      ...openPosArr.map((position: any) => position.symbol),
-    ]);
     const rotationState = await loadRotatingImpulseState(supabase, userId, BOT_ID);
     rotationSelection = selectRotatingImpulseUniverse(
       fullInstrumentUniverse,
@@ -3290,6 +3304,83 @@ async function runScanForUser(
       activeGamePlan = null;
       console.warn(
         `[scan ${scanCycleId}] Game Plan consumer validation failed (${error?.message}); pair scanning continues`,
+      );
+    }
+  }
+
+  // ── Session-aware discovery priority observation ──
+  // Compare the existing least-recently-scanned universe with a proposal that
+  // reuses the canonical session, session-affinity, style, Gameplan, and
+  // lifecycle ownership. It is deliberately calculated after Gameplan loads,
+  // but it cannot replace discoveryScanUniverse/scanUniverse/scanOrder and it
+  // performs no candle or live-price fetches.
+  if (rotationSelection) {
+    const observationBase = {
+      contract: SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT,
+      mode: "observe" as const,
+      affectsExecution: false as const,
+      additionalMarketDataCalls: 0 as const,
+      capturedAt: now.toISOString(),
+      style: scanStylePolicy.style,
+      session: cachedSession,
+      enabledSessionKeys: [...config.enabledSessions],
+      restrictedAssetSessionGateOpen,
+      offHoursImplicitlyAllowed,
+      actual: [...discoveryScanUniverse],
+      lifecycleExcludedSymbols: Array.from(lifecycleOwnedSymbols),
+    };
+    try {
+      const gamePlanFocusSymbols = gamePlanAffectsExecution
+        ? activeGamePlan?.focusPairs || []
+        : [];
+      const proposedRotationSelection = selectRotatingImpulseUniverse(
+        fullInstrumentUniverse,
+        rotatingImpulseSlotCount,
+        rotationSelection.state,
+        now.toISOString(),
+        lifecycleOwnedSymbols,
+        {
+          style: scanStylePolicy.style,
+          session: cachedSession,
+          atMs: now.getTime(),
+          focusSymbols: gamePlanFocusSymbols,
+        },
+      );
+      const actualSet = new Set(discoveryScanUniverse);
+      const proposedSet = new Set(proposedRotationSelection.selected);
+      const overlap = discoveryScanUniverse.filter((symbol) => proposedSet.has(symbol));
+      sessionRotationObservation = {
+        ...observationBase,
+        status: "ready",
+        gamePlanFocusApplied: gamePlanAffectsExecution,
+        gamePlanFocusSymbols,
+        proposed: [...proposedRotationSelection.selected],
+        overlap,
+        overlapCount: overlap.length,
+        overlapPercent: discoveryScanUniverse.length > 0
+          ? Math.round((overlap.length / discoveryScanUniverse.length) * 1000) / 10
+          : 100,
+        wouldPromote: proposedRotationSelection.selected.filter((symbol) =>
+          !actualSet.has(symbol)
+        ),
+        wouldDefer: discoveryScanUniverse.filter((symbol) => !proposedSet.has(symbol)),
+        preferredCapacity: proposedRotationSelection.priority?.preferredCapacity || 0,
+        preferredSelected: proposedRotationSelection.priority?.preferredSelected || 0,
+        fairnessSelected: proposedRotationSelection.priority?.fairnessSelected || 0,
+        selection: proposedRotationSelection.priority?.selected || [],
+      };
+      console.log(
+        `[scan ${scanCycleId}] Session-aware rotation observation: ${overlap.length}/${discoveryScanUniverse.length} actual slots matched; proposed=[${proposedRotationSelection.selected.join(", ")}], actual=[${discoveryScanUniverse.join(", ")}]`,
+      );
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      sessionRotationObservation = {
+        ...observationBase,
+        status: "unavailable",
+        unavailableReason: reason,
+      };
+      console.warn(
+        `[scan ${scanCycleId}] Session-aware rotation observation unavailable (non-fatal): ${reason}`,
       );
     }
   }
@@ -3414,9 +3505,7 @@ async function runScanForUser(
     const pairAssetProfile = getAssetProfile(pair);
     // Session gate: empty enabledSessions = NOTHING enabled (bot pauses).
     // Off-hours is implicitly allowed when all 3 core sessions are enabled (user wants 24/5).
-    const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
-    const offHoursImplicitlyAllowed = normalizedSession === "offhours" && coreSessionsEnabled;
-    if (!pairAssetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions) && !offHoursImplicitlyAllowed) {
+    if (!pairAssetProfile.skipSessionGate && !restrictedAssetSessionGateOpen) {
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
       continue;
     }
@@ -11658,6 +11747,7 @@ async function runScanForUser(
         discovery: discoveryScanUniverse,
         lifecycleDeepScan: Array.from(lifecycleDeepScanSymbols),
         lifecycleLightweightMonitored: executableWatchlist.length,
+        sessionObservation: sessionRotationObservation,
       } : { enabled: false, universeSize: fullInstrumentUniverse.length },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },

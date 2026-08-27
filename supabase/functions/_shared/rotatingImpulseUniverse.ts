@@ -1,4 +1,81 @@
+import { getSessionAffinity, type SessionAffinityResult } from "./sessionAffinity.ts";
+import type { SessionResult } from "./sessions.ts";
+import type { TradingStyleMode } from "./tradingStyleConfig.ts";
+
 export type RotationOutcome = "active_zone" | "no_impulse" | "data_error";
+
+export const SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT =
+  "session-aware-rotation-observation.v1" as const;
+
+export type RotationPriorityReason =
+  | "gameplan_focus"
+  | "primary_session"
+  | "session_affinity"
+  | "fairness";
+
+export interface RotationPriorityOptions {
+  style: TradingStyleMode;
+  session: SessionResult;
+  /** Fixed scan-cycle timestamp. Never call Date.now() per symbol. */
+  atMs: number;
+  /** Focus pairs from the existing active Gameplan, when it affects execution. */
+  focusSymbols?: Iterable<string>;
+}
+
+export interface RotationPriorityCandidate {
+  symbol: string;
+  reason: RotationPriorityReason;
+  affinityTier: SessionAffinityResult["tier"];
+  affinityScore: number;
+  isPrimarySession: boolean;
+  lastScannedAt: string | null;
+}
+
+export interface RotationPrioritySummary {
+  style: TradingStyleMode;
+  session: SessionResult;
+  preferredCapacity: number;
+  preferredSelected: number;
+  fairnessSelected: number;
+  selected: RotationPriorityCandidate[];
+}
+
+interface SessionRotationObservationBase {
+  contract: typeof SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT;
+  mode: "observe";
+  affectsExecution: false;
+  additionalMarketDataCalls: 0;
+  capturedAt: string;
+  style: TradingStyleMode;
+  session: SessionResult;
+  enabledSessionKeys: string[];
+  restrictedAssetSessionGateOpen: boolean;
+  offHoursImplicitlyAllowed: boolean;
+  actual: string[];
+  lifecycleExcludedSymbols: string[];
+}
+
+export type SessionRotationObservation = SessionRotationObservationBase & (
+  | {
+    status: "ready";
+    gamePlanFocusApplied: boolean;
+    gamePlanFocusSymbols: string[];
+    proposed: string[];
+    overlap: string[];
+    overlapCount: number;
+    overlapPercent: number;
+    wouldPromote: string[];
+    wouldDefer: string[];
+    preferredCapacity: number;
+    preferredSelected: number;
+    fairnessSelected: number;
+    selection: RotationPriorityCandidate[];
+  }
+  | {
+    status: "unavailable";
+    unavailableReason: string;
+  }
+);
 
 export interface RotationPairState {
   symbol: string;
@@ -18,6 +95,8 @@ export interface RotationSelection {
   pinned: string[];
   discovery: string[];
   state: RotationState;
+  /** Present only when the caller explicitly requests session-aware ranking. */
+  priority?: RotationPrioritySummary;
 }
 
 export interface LifecycleZoneProximity {
@@ -66,24 +145,115 @@ export function selectRotatingImpulseUniverse(
   state: RotationState | null | undefined,
   now = new Date().toISOString(),
   excludedSymbols: Iterable<string> = [],
+  priorityOptions?: RotationPriorityOptions,
 ): RotationSelection {
   const unique = [...new Set(universe)];
   const slots = Math.max(1, Math.min(Math.floor(slotCount) || 8, unique.length));
   const current = state?.version === "impulse-rotation.v1" ? state : emptyRotationState(now);
   const excluded = new Set(excludedSymbols);
   const pinned: string[] = [];
-  const discovery = unique
-    .filter((symbol) => !excluded.has(symbol))
+  const eligible = unique.filter((symbol) => !excluded.has(symbol));
+  const compareByScanRecency = (left: string, right: string): number => {
+    const leftTime = current.pairs[left]?.lastScannedAt;
+    const rightTime = current.pairs[right]?.lastScannedAt;
+    if (!leftTime && rightTime) return -1;
+    if (leftTime && !rightTime) return 1;
+    if (leftTime !== rightTime) return String(leftTime || "").localeCompare(String(rightTime || ""));
+    return 0;
+  };
+  const compareByDiscoveryAge = (left: string, right: string): number => {
+    const recencyDifference = compareByScanRecency(left, right);
+    if (recencyDifference !== 0) return recencyDifference;
+    return unique.indexOf(left) - unique.indexOf(right);
+  };
+
+  // Preserve the production selector exactly unless the caller explicitly asks
+  // for the observation ranking. The bot-scanner's execution universe continues
+  // to use this branch while the proposed ranking gathers evidence.
+  if (!priorityOptions) {
+    const discovery = eligible.sort(compareByDiscoveryAge).slice(0, slots);
+    return { selected: discovery, pinned, discovery, state: current };
+  }
+
+  const focus = new Set(priorityOptions.focusSymbols || []);
+  const tierRank: Record<SessionAffinityResult["tier"], number> = {
+    prime: 0,
+    good: 1,
+    marginal: 2,
+    avoid: 3,
+  };
+  const preferredShare: Record<TradingStyleMode, number> = {
+    // Shorter holding periods are more dependent on current-session liquidity;
+    // longer styles retain more least-recently-scanned coverage.
+    scalper: 0.75,
+    day_trader: 0.5,
+    swing_trader: 0.25,
+  };
+  const styleShare = preferredShare[priorityOptions.style] ?? 0.5;
+  const preferredCapacity = Math.min(
+    slots,
+    Math.max(1, Math.ceil(slots * styleShare)),
+  );
+  const ranked = eligible.map((symbol) => ({
+    symbol,
+    affinity: getSessionAffinity(symbol, priorityOptions.session, {
+      atMs: priorityOptions.atMs,
+    }),
+    isFocus: focus.has(symbol),
+  }));
+  const preferred = ranked
+    // Avoid-tier symbols are not banned. They remain available to the fairness
+    // lane so session affinity cannot silently become a new entry gate.
+    .filter((candidate) => candidate.isFocus || candidate.affinity.tier !== "avoid")
     .sort((left, right) => {
-      const leftTime = current.pairs[left]?.lastScannedAt;
-      const rightTime = current.pairs[right]?.lastScannedAt;
-      if (!leftTime && rightTime) return -1;
-      if (leftTime && !rightTime) return 1;
-      if (leftTime !== rightTime) return String(leftTime || "").localeCompare(String(rightTime || ""));
-      return unique.indexOf(left) - unique.indexOf(right);
+      if (left.isFocus !== right.isFocus) return left.isFocus ? -1 : 1;
+      if (left.affinity.isPrimarySession !== right.affinity.isPrimarySession) {
+        return left.affinity.isPrimarySession ? -1 : 1;
+      }
+      const tierDifference = tierRank[left.affinity.tier] - tierRank[right.affinity.tier];
+      if (tierDifference !== 0) return tierDifference;
+      const ageDifference = compareByScanRecency(left.symbol, right.symbol);
+      if (ageDifference !== 0) return ageDifference;
+      if (left.affinity.score !== right.affinity.score) return right.affinity.score - left.affinity.score;
+      return unique.indexOf(left.symbol) - unique.indexOf(right.symbol);
     })
-    .slice(0, slots);
-  return { selected: discovery, pinned, discovery, state: current };
+    .slice(0, preferredCapacity);
+  const preferredSymbols = new Set(preferred.map((candidate) => candidate.symbol));
+  const fairness = ranked
+    .filter((candidate) => !preferredSymbols.has(candidate.symbol))
+    .sort((left, right) => compareByDiscoveryAge(left.symbol, right.symbol))
+    .slice(0, Math.max(0, slots - preferred.length));
+  const chosen = [...preferred, ...fairness];
+  const discovery = chosen.map((candidate) => candidate.symbol);
+  const selected: RotationPriorityCandidate[] = chosen.map((candidate, index) => ({
+    symbol: candidate.symbol,
+    reason: index >= preferred.length
+      ? "fairness"
+      : candidate.isFocus
+      ? "gameplan_focus"
+      : candidate.affinity.isPrimarySession
+      ? "primary_session"
+      : "session_affinity",
+    affinityTier: candidate.affinity.tier,
+    affinityScore: candidate.affinity.score,
+    isPrimarySession: candidate.affinity.isPrimarySession,
+    lastScannedAt: current.pairs[candidate.symbol]?.lastScannedAt || null,
+  }));
+
+  return {
+    selected: discovery,
+    pinned,
+    discovery,
+    state: current,
+    priority: {
+      style: priorityOptions.style,
+      session: priorityOptions.session,
+      preferredCapacity,
+      preferredSelected: preferred.length,
+      fairnessSelected: fairness.length,
+      selected,
+    },
+  };
 }
 
 export function updateRotatingImpulseState(

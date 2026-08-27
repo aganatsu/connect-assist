@@ -168,6 +168,51 @@
   font-weight: 600;
 }
 
+.apex-session-observation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--cyan);
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.apex-session-observation__heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.apex-session-observation__mode {
+  padding: 2px 4px;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  font-size: 8px;
+}
+
+.apex-session-observation > strong {
+  grid-row: span 2;
+  align-self: center;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.apex-session-observation > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .apex-inline-actions {
   display: flex;
   align-items: center;
@@ -1144,6 +1189,14 @@
   .apex-scan-time-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .apex-session-observation {
+    grid-template-columns: 1fr;
+  }
+
+  .apex-session-observation > strong {
+    grid-row: auto;
   }
 
   .apex-inline-actions {

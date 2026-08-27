@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,7 +91,28 @@ describe("OperationsDashboard", () => {
       signals_found: 1,
       trades_placed: 0,
       details_json: [
-        { __meta: true, activeStyle: "scalper", creditBudget: { refused: 0, unenforced: 0 } },
+        {
+          __meta: true,
+          activeStyle: "scalper",
+          creditBudget: { refused: 0, unenforced: 0 },
+          impulseRotation: {
+            sessionObservation: {
+              contract: "session-aware-rotation-observation.v1",
+              mode: "observe",
+              status: "ready",
+              affectsExecution: false,
+              additionalMarketDataCalls: 0,
+              style: "scalper",
+              session: { name: "New York", filterKey: "newyork", isKillZone: true },
+              actual: ["AUD/JPY", "USD/CAD"],
+              proposed: ["AUD/JPY", "XAU/USD"],
+              overlapCount: 1,
+              overlapPercent: 50,
+              wouldPromote: ["XAU/USD"],
+              wouldDefer: ["USD/CAD"],
+            },
+          },
+        },
         {
           pair: "AUD/JPY",
           direction: "long",
@@ -192,6 +213,13 @@ describe("OperationsDashboard", () => {
     expect(screen.getByText("SMC Trading Dashboard")).toBeInTheDocument();
 
     expect(await screen.findByRole("heading", { name: "Latest Scan" })).toBeInTheDocument();
+    const sessionPriority = await screen.findByRole("status", {
+      name: "Session-aware scan priority observation",
+    });
+    expect(within(sessionPriority).getByText("Session priority")).toBeInTheDocument();
+    expect(within(sessionPriority).getByText("Observe only")).toBeInTheDocument();
+    expect(within(sessionPriority).getByText("1/2 same slots")).toBeInTheDocument();
+    expect(within(sessionPriority).getByText(/New York · scalper · no extra API calls/i)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Zone Setups" })).toBeInTheDocument();
     expect((await screen.findAllByText("AUD/JPY")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("33.7%").length).toBeGreaterThan(0);
@@ -219,6 +247,39 @@ describe("OperationsDashboard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Kill Switch$/i }));
     await waitFor(() => expect(api.killSwitch).toHaveBeenCalledWith(true));
+  });
+
+  it("shows a non-fatal session-priority observation failure without implying execution stopped", async () => {
+    api.logs.mockResolvedValue([{
+      scanned_at: "2026-08-26T22:12:37Z",
+      pairs_scanned: 0,
+      signals_found: 0,
+      trades_placed: 0,
+      details_json: [{
+        __meta: true,
+        activeStyle: "day_trader",
+        impulseRotation: {
+          sessionObservation: {
+            contract: "session-aware-rotation-observation.v1",
+            mode: "observe",
+            status: "unavailable",
+            affectsExecution: false,
+            additionalMarketDataCalls: 0,
+            style: "day_trader",
+            session: { name: "Off-Hours", filterKey: "offhours", isKillZone: false },
+            actual: [],
+            unavailableReason: "invalid observation input",
+          },
+        },
+      }],
+    }]);
+
+    renderDashboard();
+    const sessionPriority = await screen.findByRole("status", {
+      name: "Session-aware scan priority observation",
+    });
+    expect(within(sessionPriority).getByText("Unavailable")).toBeInTheDocument();
+    expect(within(sessionPriority).getByText(/scan continued unchanged/i)).toBeInTheDocument();
   });
 
   it("describes an unqualified impulse candidate without claiming no impulse exists", async () => {

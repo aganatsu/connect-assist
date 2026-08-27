@@ -44,6 +44,9 @@ const SINGLE_OWNER: string[] = [
   "detectLiquidityPools",
   "detectUnicornSetups",
   "detectSweepReclaim",
+  // ── Session and discovery scheduling ──
+  "getSessionAffinity",
+  "selectRotatingImpulseUniverse",
   // ── Consolidated 2026-08-10 (were duplicated in bot-scanner) ──
   "detectSMTDivergence",
   "calculatePremiumDiscount",

@@ -44,6 +44,8 @@ instead of arbitrating.
 | Game Plan generation | 1 | `generateInstrumentGamePlan` / `game-plan-refresh` | 🟢 Single algorithm and live producer |
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
 | Session detection | 2 | `sessions.ts` | 🟢 Correct delegation |
+| Session-pair affinity | 1 | `sessionAffinity.ts:getSessionAffinity` | 🟢 Single owner |
+| Discovery scan rotation | 1 | `rotatingImpulseUniverse.ts:selectRotatingImpulseUniverse` | 🟢 Single owner; session-aware proposal is observation-only |
 | FVG | 1 | `detectFVGs` | 🟢 Single owner |
 | Order Block | 1 | `detectOrderBlocks` | 🟢 Single owner |
 | Swing points | 1 | `detectSwingPoints` | 🟢 Single owner |
@@ -123,6 +125,34 @@ scoring or targets, or invalidate an otherwise current Direction Verdict because
 of a Game Plan version mismatch. Direction Verdict and every independent safety
 gate keep their configured enforcement. Hard and soft Game Plan behavior remains
 unchanged.
+
+## Discovery rotation and session priority
+
+`_shared/rotatingImpulseUniverse.ts:selectRotatingImpulseUniverse` is the single
+owner of discovery-slot selection. Its legacy call ranks eligible instruments by
+least-recently-scanned time. Lifecycle-owned staged setups, pending orders, and
+open positions are excluded from discovery slots and continue through the
+existing lifecycle monitoring lane.
+
+The same owner can calculate a session-aware proposal from the already-captured
+scan session, resolved trading style, `_shared/sessionAffinity.ts`, and the
+existing active Gameplan focus list. It reserves preferred/fairness capacity by
+style (scalper 75/25, day trader 50/50, swing trader 25/75). Avoid-tier symbols
+remain eligible through fairness, so affinity is not a hidden gate and the full
+configured universe cannot starve.
+
+The scanner currently stores this comparison under
+`impulseRotation.sessionObservation` with contract
+`session-aware-rotation-observation.v1`. It is observation-only: the legacy
+selection still owns `discoveryScanUniverse`, rotation-state updates, candle
+prewarming, pair processing, and execution. The proposal makes zero additional
+market-data calls, and its error boundary fails open so observation failure
+cannot stop a scan. Gameplan focus is included only when the existing Gameplan
+configuration is allowed to affect execution; an off/observation-only Gameplan
+cannot influence the proposal. The observation also records the same frozen
+session-gate state used by the pair loop, including the existing implicit
+Off-Hours compatibility rule. Promotion to live scheduling requires separate
+forward evidence and a deliberately isolated behavioral change.
 
 ## SL/TP target selection
 
