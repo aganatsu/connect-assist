@@ -56,4 +56,18 @@ describe("normalizeBotConfigForEditor", () => {
     expect(normalizeBotConfigForEditor({ entry: { nestedPoiMarketMode: "enforce_live" } }).entry.nestedPoiMarketMode).toBe("enforce_live");
     expect(normalizeBotConfigForEditor({ entry: { nestedPoiMarketMode: "invalid" } }).entry.nestedPoiMarketMode).toBe("off");
   });
+
+  it("loads the legacy minimum R:R key into the visible canonical control", () => {
+    expect(normalizeBotConfigForEditor({
+      risk: { minRiskReward: 0.5 },
+    }).risk.minRR).toBe(0.5);
+
+    expect(normalizeBotConfigForEditor({
+      risk: { minRR: 1, minRiskReward: 0.5 },
+    }).risk.minRR).toBe(1);
+
+    expect(normalizeBotConfigForEditor({
+      minRiskReward: 0.75,
+    }).risk.minRR).toBe(0.75);
+  });
 });

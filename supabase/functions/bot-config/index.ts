@@ -610,6 +610,9 @@ function validateConfig(config: any): string[] {
     if (typeof r.maxConcurrentTrades === "number" && (r.maxConcurrentTrades < 1 || r.maxConcurrentTrades > 50)) {
       errors.push("risk.maxConcurrentTrades must be between 1 and 50");
     }
+    if (typeof r.minRR === "number" && (r.minRR < 0.1 || r.minRR > 20)) {
+      errors.push("risk.minRR must be between 0.1 and 20");
+    }
     if (typeof r.minRiskReward === "number" && (r.minRiskReward < 0.1 || r.minRiskReward > 20)) {
       errors.push("risk.minRiskReward must be between 0.1 and 20");
     }
@@ -643,8 +646,8 @@ function validateConfig(config: any): string[] {
     for (const [sym, val] of Object.entries(config.pairGateOverrides)) {
       if (val && typeof val === "object") {
         const v = val as any;
-        if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0 || v.minRiskReward > 20)) {
-          errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0 and 20`);
+        if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0.1 || v.minRiskReward > 20)) {
+          errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0.1 and 20`);
         }
         if (typeof v.minTier1Factors === "number" && (v.minTier1Factors < 0 || v.minTier1Factors > 5)) {
           errors.push(`pairGateOverrides.${sym}.minTier1Factors must be between 0 and 5`);
@@ -748,7 +751,7 @@ function getDefaultConfig() {
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-      fixedLotSize: 0.1, maxConcurrentTrades: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
+      fixedLotSize: 0.1, maxConcurrentTrades: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRR: 1.5,
     },
     entry: {
       defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",

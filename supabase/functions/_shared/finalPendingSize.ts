@@ -6,6 +6,7 @@ import {
   type PropFirmContext,
   resolveSizingVolatilityContext,
 } from "./unifiedPositionSizing.ts";
+import { averageRoundTripCommission } from "./tradingCosts.ts";
 
 const SIZING_RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
 
@@ -32,16 +33,9 @@ export async function loadAverageRoundTripCommission(
 ): Promise<number> {
   if (!liveMode) return 0;
   const { data } = await supabase.from("broker_connections")
-    .select("commission_per_lot, detected_commission_per_lot")
+    .select("commission_mode, commission_per_lot, detected_commission_per_lot")
     .eq("user_id", userId).eq("is_active", true);
-  const commissions = (data || []).map((row: any) => {
-    const configured = Number(row.commission_per_lot || 0);
-    const detectedRoundTrip = Number(row.detected_commission_per_lot || 0) * 2;
-    return configured > 0 ? configured : detectedRoundTrip;
-  }).filter((value: number) => Number.isFinite(value) && value > 0);
-  return commissions.length
-    ? commissions.reduce((sum: number, value: number) => sum + value, 0) / commissions.length
-    : 0;
+  return averageRoundTripCommission(data || []);
 }
 
 /** Position size is calculated only after final entry authorization. */

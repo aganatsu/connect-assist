@@ -1,6 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { buildBrokerSymbolMapProbed, type TradabilityProbe } from "../_shared/symbolMatcher.ts";
+import {
+  type CommissionMode,
+  resolveRoundTripCommission,
+} from "../_shared/tradingCosts.ts";
 
 // Canonical pairs the bot scanner cares about — used for auto-mapping.
 const CANONICAL_PAIRS = [
@@ -16,6 +20,25 @@ const REGIONS = ["london", "new-york", "singapore"];
 
 function brokerFailure(broker: "oanda" | "metaapi", brokerStatus: number) {
   return { errorOrigin: "broker" as const, broker, brokerStatus };
+}
+
+function presentConnection(row: any) {
+  const commission = resolveRoundTripCommission(row);
+  return {
+    ...row,
+    commission_mode: commission.mode,
+    commission_source: commission.source,
+    effective_commission_per_lot: commission.roundTripPerLot,
+  };
+}
+
+function requestedCommissionMode(payload: any): CommissionMode {
+  const mode = payload.commission_mode;
+  if (mode === "auto" || mode === "manual" || mode === "none") return mode;
+  if (mode !== undefined && mode !== null) {
+    throw new Error("commission_mode must be auto, manual, or none");
+  }
+  return Number(payload.commission_per_lot || 0) > 0 ? "manual" : "auto";
 }
 
 async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Promise<{ symbols: string[]; region: string | null; error?: string; brokerStatus?: number }> {
@@ -145,10 +168,10 @@ Deno.serve(async (req) => {
     const { action, ...payload } = await req.json();
 
     if (action === "list") {
-      const { data, error } = await supabase.from("broker_connections").select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_per_lot, detected_commission_per_lot, created_at")
+      const { data, error } = await supabase.from("broker_connections").select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_mode, commission_per_lot, detected_commission_per_lot, created_at")
         .eq("user_id", user.id).order("created_at", { ascending: false });
       if (error) throw error;
-      return respond(data);
+      return respond((data || []).map(presentConnection));
     }
 
     if (action === "create") {
@@ -170,14 +193,19 @@ Deno.serve(async (req) => {
         }
       }
 
+      const commissionMode = requestedCommissionMode(payload);
+      if (commissionMode === "manual" && !(Number(payload.commission_per_lot) > 0)) {
+        throw new Error("Manual commission must be greater than zero");
+      }
       const { data, error } = await supabase.from("broker_connections").insert({
         user_id: user.id, broker_type: payload.broker_type, display_name: payload.display_name,
         api_key: payload.api_key, account_id: payload.account_id, is_live: payload.is_live || false,
         symbol_suffix, symbol_overrides,
+        commission_mode: commissionMode,
         commission_per_lot: payload.commission_per_lot ?? 0,
-      }).select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_per_lot, detected_commission_per_lot").single();
+      }).select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_mode, commission_per_lot, detected_commission_per_lot").single();
       if (error) throw error;
-      return respond({ ...data, auto_map_info });
+      return respond({ ...presentConnection(data), auto_map_info });
     }
 
     if (action === "update") {
@@ -189,14 +217,20 @@ Deno.serve(async (req) => {
       if (payload.is_active !== undefined) updates.is_active = payload.is_active;
       if (payload.symbol_suffix !== undefined) updates.symbol_suffix = payload.symbol_suffix;
       if (payload.symbol_overrides !== undefined) updates.symbol_overrides = payload.symbol_overrides;
+      if (payload.commission_mode !== undefined || payload.commission_per_lot !== undefined) {
+        updates.commission_mode = requestedCommissionMode(payload);
+        if (updates.commission_mode === "manual" && payload.commission_per_lot !== undefined && !(Number(payload.commission_per_lot) > 0)) {
+          throw new Error("Manual commission must be greater than zero");
+        }
+      }
       if (payload.commission_per_lot !== undefined) updates.commission_per_lot = payload.commission_per_lot;
       if (payload.detected_commission_per_lot !== undefined) updates.detected_commission_per_lot = payload.detected_commission_per_lot;
 
       const { data, error } = await supabase.from("broker_connections").update(updates)
         .eq("id", payload.id).eq("user_id", user.id)
-        .select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_per_lot, detected_commission_per_lot").single();
+        .select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, commission_mode, commission_per_lot, detected_commission_per_lot").single();
       if (error) throw error;
-      return respond(data);
+      return respond(presentConnection(data));
     }
 
     if (action === "delete") {

@@ -640,7 +640,10 @@ export const botConfigApi = {
           crossTfAuthorityMode: string;
           dealingRangeMode: string;
           minConfluence: number;
+          minRiskReward: number;
           riskPerTrade: number;
+          spreadFilterEnabled: boolean;
+          maxSpreadPips: number;
         };
       };
       authorityModes: BotRuntimeAuthorityModes;
@@ -725,7 +728,7 @@ export const settingsApi = {
 export const brokerApi = {
   list: () => invokeFunction("broker-connections", { action: "list" })
     .then((data) => requireAvailableCollection<any>(data, "Broker connections")),
-  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string>; commission_per_lot?: number }) =>
+  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string>; commission_mode?: "auto" | "manual" | "none"; commission_per_lot?: number }) =>
     afterFreshTradingTruth(
       () => invokeFunction("broker-connections", { action: "create", ...data }),
     ),

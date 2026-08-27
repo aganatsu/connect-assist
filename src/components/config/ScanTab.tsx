@@ -276,7 +276,7 @@ export function ScanTab({ config, setConfig, updateField, runtimeAuthorityModes 
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Filters</p>
           <ToggleField label="Spread Filter" description="Skip pairs with spread above threshold" checked={config.instruments?.spreadFilterEnabled ?? true} onChange={v => updateField('instruments', 'spreadFilterEnabled', v)} />
           {(config.instruments?.spreadFilterEnabled ?? true) && (
-            <FieldGroup label="Max Spread (pips)">
+            <FieldGroup label="Max Spread (pips)" description="Execution ceiling only; this does not replace the spread cost used by the R:R check.">
               <Input type="number" value={config.instruments?.maxSpreadPips ?? 3} onChange={e => updateField('instruments', 'maxSpreadPips', parseFloat(e.target.value) || 0)} step={0.5} min={0.5} className="h-9 text-sm" />
             </FieldGroup>
           )}

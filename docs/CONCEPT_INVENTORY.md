@@ -40,6 +40,7 @@ instead of arbitrating.
 | Judas swing | 2 | both (distinct semantics) | 🟠 Name collision |
 | AMD phase | 2 | shared only | 🟡 Dead local copy |
 | Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
+| Broker commission resolution | 1 | `tradingCosts.ts:resolveRoundTripCommission` | 🟢 Single owner |
 | SL/TP target selection | 1 | `calculateSLTP` | 🟢 Single owner |
 | Game Plan generation | 1 | `generateInstrumentGamePlan` / `game-plan-refresh` | 🟢 Single algorithm and live producer |
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
@@ -491,6 +492,12 @@ compliance. It is the sole entry point for `bot-scanner` and `backtest-engine`. 
 remain zero-sized through final candidate adjustments and pending-order authorization;
 `normalizeBrokerVolumeDown` owns broker-step normalization and can only reduce an accepted
 size, never raise it to a broker minimum.
+
+**Broker commission resolution** is owned by
+`_shared/tradingCosts.ts:resolveRoundTripCommission`. Persisted commission mode is
+explicit: `auto` doubles the broker-observed per-side amount, `manual` consumes the
+configured round-trip amount, and `none` forces zero. Scanner, final pending sizing,
+and broker-connection presentation delegate to that owner.
 
 **Max drawdown** — `gateMaxDrawdown.ts` and `propFirmRisk.ts` are both live but on mutually
 exclusive paths with an explicit delegation comment (Gate 8 hands off when

@@ -8,6 +8,7 @@ export function normalizeBotConfigForEditor(rawConfig: any): any {
   const parsed = JSON.parse(JSON.stringify(rawConfig ?? {}));
 
   parsed.strategy = { ...(parsed.strategy || {}) };
+  parsed.risk = { ...(parsed.risk || {}) };
   parsed.entry = { ...(parsed.entry || {}) };
   parsed.instruments = { ...(parsed.instruments || {}) };
   parsed.sessions = { ...(parsed.sessions || {}) };
@@ -52,6 +53,9 @@ export function normalizeBotConfigForEditor(rawConfig: any): any {
   parsed.instruments.atrFilterMaxPips ??= parsed.instruments.maxATR;
   parsed.sessions.newsBufferMinutes ??=
     parsed.sessions.newsFilterPauseMinutes;
+  parsed.risk.minRR ??= parsed.risk.minRiskReward ?? parsed.minRiskReward;
+  delete parsed.risk.minRiskReward;
+  delete parsed.minRiskReward;
 
   parsed.openingRange.useJudasSwing ??= parsed.openingRange.judasSwing;
   parsed.openingRange.useKeyLevels ??= parsed.openingRange.keyLevels;
