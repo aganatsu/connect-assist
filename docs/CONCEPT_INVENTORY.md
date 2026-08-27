@@ -40,7 +40,7 @@ instead of arbitrating.
 | Judas swing | 2 | both (distinct semantics) | 🟠 Name collision |
 | AMD phase | 2 | shared only | 🟡 Dead local copy |
 | Position sizing | 3 | `computePositionSize` | 🟡 One dead copy |
-| Broker commission resolution | 1 | `tradingCosts.ts:resolveRoundTripCommission` | 🟢 Single owner |
+| Broker commission resolution and application | 1 | `tradingCosts.ts` | 🟢 Single owner |
 | Effective minimum R:R | 1 | `gateMinRR.ts:checkMinRR` | 🟢 Single owner |
 | SL/TP target selection | 1 | `calculateSLTP` | 🟢 Single owner |
 | Game Plan generation | 1 | `generateInstrumentGamePlan` / `game-plan-refresh` | 🟢 Single algorithm and live producer |
@@ -492,20 +492,24 @@ wraps `calculatePositionSize` (`smcAnalysis.ts`) and adds volatility scaling and
 compliance. It is the sole entry point for `bot-scanner` and `backtest-engine`. Rejections
 remain zero-sized through final candidate adjustments and pending-order authorization;
 `normalizeBrokerVolumeDown` owns broker-step normalization and can only reduce an accepted
-size, never raise it to a broker minimum.
+size, never raise it to a broker minimum. Risk-based sizing solves stop loss plus round-trip
+commission as one all-in budget and floors every risk-reducing adjustment to the 0.01-lot
+internal step, so rounding cannot raise exposure above the configured limit.
 
 **Broker commission resolution** is owned by
 `_shared/tradingCosts.ts:resolveRoundTripCommission`. Persisted commission mode is
 explicit: `auto` doubles the broker-observed per-side amount, `manual` consumes the
 configured round-trip amount, and `none` forces zero. Scanner execution routes,
 final pending sizing inputs, and broker-connection presentation delegate to that
-owner.
+owner. Every downstream `commissionPerLot` value is therefore already round-trip;
+`calculateRoundTripCommission` applies it once to the executed lot quantity.
 
 **Effective minimum R:R** is owned by `_shared/gateMinRR.ts:checkMinRR`.
 Discovery gates defer this check until a route has frozen its executable entry,
 stop, and target. Market, pending-confirmation, breaker, and backtest routes are
 screened by final authorization with the latest cost evidence available to that
-route.
+route. Effective reward subtracts transaction cost and effective risk adds the
+same transaction cost, so the ratio represents net profit versus all-in loss.
 
 **Max drawdown** — `gateMaxDrawdown.ts` and `propFirmRisk.ts` are both live but on mutually
 exclusive paths with an explicit delegation comment (Gate 8 hands off when

@@ -113,6 +113,42 @@ Deno.test("computePositionSize calculates correct base size for EUR/USD", () => 
   assertEquals(result.adjustments.length, 0);
 });
 
+Deno.test("commission-aware sizing solves the all-in risk budget exactly", () => {
+  const result = computePositionSize({
+    ...baseInput,
+    commissionPerLot: 100,
+  });
+
+  // $100 budget / ($200 stop risk + $100 round-trip commission) = 0.333 lots.
+  assertEquals(result.lots, 0.33);
+  assertEquals(result.baseLots, 0.33);
+  assertAlmostEquals(result.riskUSD, 99, 0.001);
+  assertAlmostEquals(result.riskPercent, 0.99, 0.001);
+});
+
+Deno.test("reported position risk includes round-trip commission", () => {
+  const result = computePositionSize({
+    ...baseInput,
+    commissionPerLot: 7,
+  });
+
+  assertEquals(result.lots, 0.48);
+  assertAlmostEquals(result.riskUSD, 99.36, 0.001);
+  assertAlmostEquals(result.riskPercent, 0.99, 0.001);
+});
+
+Deno.test("risk-based sizing never rounds above the all-in budget", () => {
+  const result = computePositionSize({
+    ...baseInput,
+    commissionPerLot: 5,
+  });
+
+  // Exact size is 100 / (200 + 5) = 0.4878 lots. Rounding to 0.49 would
+  // risk $100.45, so executable sizing must floor to 0.48.
+  assertEquals(result.lots, 0.48);
+  assertEquals(result.riskUSD <= 100, true);
+});
+
 Deno.test("computePositionSize handles fixed_lot method", () => {
   const input: SizingInput = {
     ...baseInput,
@@ -249,7 +285,7 @@ Deno.test("computePositionSize reduces size in high volatility", () => {
   const volatility: VolatilityContext = { regime: "high", atrPercentile: 85 };
   const result = computePositionSize(baseInput, undefined, volatility);
 
-  assertEquals(result.lots, 0.38); // 0.5 * 0.75 = 0.375 → Math.round(0.375*100)/100 = 0.38
+  assertEquals(result.lots, 0.37); // Risk reductions floor to the 0.01 lot step.
   assertEquals(result.adjustments.some((a) => a.type === "volatility"), true);
 });
 
@@ -303,8 +339,8 @@ Deno.test("final candidate sizing applies correlation before source multiplier",
     standaloneMultiplier: 0.5,
   });
 
-  assertEquals(result.afterCorrelationLots, 0.38);
-  assertEquals(result.lots, 0.19);
+  assertEquals(result.afterCorrelationLots, 0.37);
+  assertEquals(result.lots, 0.18);
   assertEquals(result.signalSourceMultiplier, 0.5);
 });
 
@@ -316,8 +352,8 @@ Deno.test("unified source keeps the correlation-adjusted size", () => {
     standaloneMultiplier: 0.5,
   });
 
-  assertEquals(result.afterCorrelationLots, 0.38);
-  assertEquals(result.lots, 0.38);
+  assertEquals(result.afterCorrelationLots, 0.37);
+  assertEquals(result.lots, 0.37);
   assertEquals(result.signalSourceMultiplier, 1);
 });
 
@@ -333,6 +369,17 @@ Deno.test("final candidate sizing never revives a zero-sized rejection", () => {
   assertEquals(result.afterCorrelationLots, 0);
   assertEquals(result.rejected, true);
   assertEquals(result.rejectionReason, "risk cap");
+});
+
+Deno.test("final candidate reductions reject when they fall below minimum lot", () => {
+  const result = applyFinalCandidateSizeAdjustments({
+    sizingResult: { lots: 0.01, rejected: false },
+    signalSource: "standalone",
+    standaloneMultiplier: 0.5,
+  });
+
+  assertEquals(result.lots, 0);
+  assertEquals(result.rejected, true);
 });
 
 Deno.test("correlation concentration maps to the historical live multiplier", () => {
@@ -411,6 +458,18 @@ Deno.test("calculatePositionRisk handles short positions", () => {
   const risk = calculatePositionRisk("EUR/USD", 1.10000, 1.10200, 0.5);
   // Same distance, same risk regardless of direction
   assertAlmostEquals(risk, 100, 5);
+});
+
+Deno.test("calculatePositionRisk includes round-trip commission when supplied", () => {
+  const risk = calculatePositionRisk(
+    "EUR/USD",
+    1.10000,
+    1.09800,
+    0.5,
+    undefined,
+    7,
+  );
+  assertAlmostEquals(risk, 103.5, 0.001);
 });
 
 // ─── canOpenNewTrade Tests ───────────────────────────────────────────

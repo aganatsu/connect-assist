@@ -118,5 +118,5 @@ Deno.test("identical live and backtest sizing fixtures produce one lot size", ()
   });
 
   assertEquals(backtest, live);
-  assertEquals(live.lots, 0.14);
+  assertEquals(live.lots, 0.13);
 });

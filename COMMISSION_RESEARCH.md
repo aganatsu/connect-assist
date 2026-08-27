@@ -62,8 +62,8 @@ The `OrderFillTransaction` object contains these cost-related fields:
 - Same approach as OANDA — read from fill data, store for future estimation
 
 ## Design Decision:
-- **Auto-detect from fill data**: Read `commission` from OANDA OrderFillTransaction after first trade, store it for future estimation
-- **Manual config fallback**: User enters `commissionPerLot` when setting up broker connection
-- **Pre-trade estimation**: `estimatedCommission = lots × commissionPerLot × 2` (round-trip: open + close)
-- **Factor into lot sizing**: `effectiveRisk = riskAmount - estimatedCommission`
-- **Factor into R:R**: `effectiveReward = rawReward - (2 × commissionCost)` (spread already handled separately)
+- **Auto-detect from fill data**: store the observed broker amount per side in `detected_commission_per_lot`; the shared resolver doubles it once to produce a round-trip rate.
+- **Manual configuration**: `commission_per_lot` is entered and stored as a round-trip amount.
+- **Downstream contract**: every `commissionPerLot` value is already round-trip, so executed commission is `lots × commissionPerLot` with no second doubling.
+- **Factor into lot sizing**: solve `lots = riskBudget / (stopRiskPerLot + roundTripCommissionPerLot)`.
+- **Factor into R:R**: subtract total transaction cost from reward and add it to stop-side risk.

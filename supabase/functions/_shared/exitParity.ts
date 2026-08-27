@@ -5,6 +5,7 @@ import {
   classifyInstrumentRegime,
 } from "./smcAnalysis.ts";
 import type { StructureCheckResult } from "./computeManagementDecision.ts";
+import { calculateRoundTripCommission } from "./tradingCosts.ts";
 
 export const EXIT_PARITY_CONTRACT_VERSION = "exit-parity.v1";
 
@@ -22,6 +23,7 @@ export interface PartialCloseInput {
   partialTPLevel: number;
   executionPriceMode: "observed_market" | "threshold";
   rateMap?: Record<string, number>;
+  /** Round-trip commission per standard lot. */
   commissionPerLot?: number;
   lotStep?: number;
 }
@@ -178,7 +180,10 @@ export function computePartialCloseDecision(
     );
   }
   const { pnl: grossPnl, pnlPips } = pnlResult;
-  const commission = closeSize * finite(input.commissionPerLot ?? 0, 0) * 2;
+  const commission = calculateRoundTripCommission(
+    closeSize,
+    finite(input.commissionPerLot ?? 0, 0),
+  );
   const netPnl = grossPnl - commission;
 
   return {

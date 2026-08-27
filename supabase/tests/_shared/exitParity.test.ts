@@ -99,8 +99,8 @@ Deno.test("partial close uses one trigger, lot rounding, and accounting contract
   assertEquals(decision.closeSize, 0.5);
   assertEquals(decision.remainingSize, 0.5);
   assert(Math.abs(decision.pnlPips - 20) < 0.000001);
-  assertEquals(decision.commission, 7);
-  assert(Math.abs(decision.netPnl - 93) < 0.000001);
+  assertEquals(decision.commission, 3.5);
+  assert(Math.abs(decision.netPnl - 96.5) < 0.000001);
 });
 
 Deno.test("live and backtest share sizing while explicitly modeling fill price", () => {
