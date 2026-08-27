@@ -146,6 +146,11 @@ export async function metaFetch(
         const body = await res.text();
         if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
         lastBody = body; lastStatus = res.status; sawHttpResponse = true;
+        // Application-wide account-lookup throttle: more region attempts only
+        // deepen it, so surface it immediately.
+        if (isAccountLookupThrottle(body)) {
+          return { res: new Response(body, { status: res.status }), body };
+        }
         if (!/region|not connected to broker/i.test(body)) {
           return { res: new Response(body, { status: res.status }), body };
         }
@@ -153,6 +158,7 @@ export async function metaFetch(
           await new Promise((r) => setTimeout(r, 600));
           continue;
         }
+
         console.warn(
           !failoverAllowed
             ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
