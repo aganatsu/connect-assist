@@ -8,6 +8,7 @@ import {
   type FullClosePosition,
   reconcileFullBrokerClose,
 } from "../../functions/_shared/reconcileBrokerState.ts";
+import { regionCache } from "../../functions/_shared/metaApiClient.ts";
 
 const position: FullClosePosition = {
   id: "position-row-1",
@@ -146,6 +147,10 @@ async function withFetchQueue(
   run: (calls: Array<{ url: string; method: string }>) => Promise<void>,
 ) {
   const originalFetch = globalThis.fetch;
+  // Region discovery has its own dedicated contract tests. These close tests
+  // exercise exact-position and close-history behavior, so pin the known
+  // account region and keep the response queue scoped to those broker calls.
+  regionCache.set(metaConnection.account_id, "london");
   const calls: Array<{ url: string; method: string }> = [];
   let index = 0;
   globalThis.fetch =
@@ -165,6 +170,7 @@ async function withFetchQueue(
     await run(calls);
   } finally {
     globalThis.fetch = originalFetch;
+    regionCache.delete(metaConnection.account_id);
   }
 }
 
