@@ -21,7 +21,9 @@ describe("impulse entry lifecycle evidence", () => {
   it("keeps evidence review advisory while allowing deliberate enforcement", () => {
     expect(scanTab).toContain('<SelectItem value="enforce">Enforce</SelectItem>');
     expect(scanTab).not.toContain("lifecycleEnforceUnlocked");
-    expect(rejectedSetups).toContain("Review & Unlock Enforce");
+    expect(rejectedSetups).toContain("Review Evidence");
+    expect(rejectedSetups).toContain("Runtime enforcement is selected separately in Bot Config");
+    expect(rejectedSetups).not.toContain("ENFORCE LOCKED");
     expect(rejectedSetups).toContain("review_impulse_lifecycle_certificate");
   });
 });

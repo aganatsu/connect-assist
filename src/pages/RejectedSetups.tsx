@@ -850,7 +850,7 @@ export default function RejectedSetups() {
       );
       if (error) throw error;
       await refetchImpulseLifecycleCertificate();
-      toast.success("Impulse lifecycle evidence reviewed. Enforce can now be selected in Bot Config.");
+      toast.success("Impulse lifecycle evidence marked reviewed. Runtime enforcement is selected separately in Bot Config.");
     } catch (error) {
       toast.error(`Evidence review failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -2043,10 +2043,17 @@ function ImpulseEntryLifecycleEvidenceCard({
   certificate?: ImpulseLifecycleEnforcementCertificate | null; reviewing: boolean;
   onReplay: () => void; onReview: () => void;
 }) {
-  const unlocked = certificate?.status === "eligible" && certificate.reviewed &&
+  const evidenceReviewed = certificate?.status === "eligible" && certificate.reviewed &&
     certificate.minimum_sample_ready;
   const readyForReview = certificate?.status === "eligible" &&
     certificate.minimum_sample_ready && !certificate.reviewed;
+  const evidenceStatus = evidenceReviewed
+    ? "EVIDENCE REVIEWED"
+    : readyForReview
+    ? "READY FOR REVIEW"
+    : certificate?.status === "rejected"
+    ? "EVIDENCE REJECTED"
+    : "EVIDENCE COLLECTING";
   return (
     <Card className="border-border/50">
       <CardHeader className="pb-2 pt-3 px-4">
@@ -2064,11 +2071,11 @@ function ImpulseEntryLifecycleEvidenceCard({
             </Button>
             {readyForReview && (
               <Button type="button" size="sm" className="h-7 text-[10px]" onClick={onReview} disabled={reviewing}>
-                {reviewing ? "Reviewing…" : "Review & Unlock Enforce"}
+                {reviewing ? "Reviewing…" : "Review Evidence"}
               </Button>
             )}
-            <Badge variant="outline" className={`text-[9px] ${unlocked ? "border-success/40 text-success" : readyForReview ? "border-info-c/40 text-info-c" : "border-warning/40 text-warning"}`}>
-              {unlocked ? "ENFORCE UNLOCKED" : readyForReview ? "READY FOR REVIEW" : "ENFORCE LOCKED"}
+            <Badge variant="outline" className={`text-[9px] ${evidenceReviewed ? "border-success/40 text-success" : readyForReview ? "border-info-c/40 text-info-c" : "border-warning/40 text-warning"}`}>
+              {evidenceStatus}
             </Badge>
           </div>
         </div>
@@ -2125,7 +2132,7 @@ function ImpulseEntryLifecycleEvidenceCard({
               </div>
             )}
             <p className="text-[9px] text-muted-foreground">
-              Enforce unlock requires completed confirmation locking, replay parity, and reviewed outcome evidence.
+              Certificates are advisory evidence for strategy review. Runtime enforcement is selected separately in Bot Config and is frozen when a setup is created.
             </p>
           </div>
         )}
@@ -2257,8 +2264,8 @@ function ZoneLocalValidationCard({
               Zone Candidate & Cross-TF Validation
             </CardTitle>
             <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Compares legacy selection with zone-local ranking and the
-              observation-only parent/child timeframe policy.
+              Reports zone-local ranking and parent/child timeframe evidence
+              separately. The activation status below applies only to POI Confluence.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -2276,6 +2283,9 @@ function ZoneLocalValidationCard({
       <CardContent className="px-4 pb-4 space-y-3">
         <div className="rounded border border-primary/25 bg-primary/5 p-2">
           <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+              POI CONFLUENCE
+            </Badge>
             <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
               {activationDisplay.authorityLabel}
             </Badge>

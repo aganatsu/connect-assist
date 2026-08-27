@@ -20,7 +20,7 @@ describe("Bot Config clarity", () => {
     const source = readFileSync("src/components/BotConfigModal.tsx", "utf8");
     expect(source).toContain("<details");
     expect(source).toContain("RUNTIME VERIFIED");
-    expect(source).toContain("Saved settings are valid and ready for the scanner.");
+    expect(source).toContain("Saved settings are valid; each rollout control shows its effective runtime mode.");
   });
 
   it("exposes reasons for unavailable controls", () => {

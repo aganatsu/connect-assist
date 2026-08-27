@@ -63,6 +63,6 @@ export function getStrategyActivationDisplay(
     description: record.runtime_enforced
       ? record.transition_reason ||
         "This registered policy is enforced by the runtime."
-      : "The rollout state is recorded, but Phase 8A does not connect it to trade decisions.",
+      : "The rollout state is recorded, but runtime enforcement is currently disabled.",
   };
 }

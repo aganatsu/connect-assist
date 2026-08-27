@@ -10,6 +10,27 @@ const WAITING_STAGES = new Set<CanonicalScannerState["stage"]>([
 
 export type CanonicalScannerDisposition = "allow" | "wait" | "terminal";
 
+export function resolveCanonicalScannerMode(input: {
+  requestedMode?: unknown;
+  singleOwnershipEffectiveMode: "observe" | "enforce" | "enforce_live";
+}): {
+  requestedMode: CanonicalScannerMode;
+  effectiveMode: CanonicalScannerMode;
+  reasonCode: "observing" | "single_ownership_required" | "requested_mode_enabled";
+} {
+  const requestedMode: CanonicalScannerMode = input.requestedMode === "enforce" ? "enforce" : "observe";
+  const effectiveMode: CanonicalScannerMode = requestedMode === "enforce" && input.singleOwnershipEffectiveMode === "enforce" ? "enforce" : "observe";
+  return {
+    requestedMode,
+    effectiveMode,
+    reasonCode: effectiveMode === "enforce"
+      ? "requested_mode_enabled"
+      : requestedMode === "enforce"
+      ? "single_ownership_required"
+      : "observing",
+  };
+}
+
 export function canonicalScannerDisposition(
   stage: CanonicalScannerState["stage"],
 ): CanonicalScannerDisposition {
@@ -23,15 +44,15 @@ export function evaluateCanonicalScannerEnforcement(input: {
   singleOwnershipEffectiveMode: "observe" | "enforce" | "enforce_live";
   state: CanonicalScannerState;
 }) {
-  const requestedMode: CanonicalScannerMode = input.requestedMode === "enforce" ? "enforce" : "observe";
-  const effectiveMode: CanonicalScannerMode = requestedMode === "enforce" && input.singleOwnershipEffectiveMode === "enforce" ? "enforce" : "observe";
+  const mode = resolveCanonicalScannerMode(input);
+  const { requestedMode, effectiveMode } = mode;
   const disposition = canonicalScannerDisposition(input.state.stage);
   const authorized = effectiveMode === "observe" || disposition === "allow";
   return {
     contractVersion: CANONICAL_SCANNER_ENFORCEMENT_VERSION,
     requestedMode, effectiveMode, authorized, disposition,
     affectsAuthorization: effectiveMode === "enforce",
-    reasonCode: effectiveMode === "observe" ? (requestedMode === "enforce" ? "single_ownership_required" : "observing") : authorized ? "canonical_state_authorized" : `canonical_state_${input.state.stage}`,
+    reasonCode: effectiveMode === "observe" ? mode.reasonCode : authorized ? "canonical_state_authorized" : `canonical_state_${input.state.stage}`,
   } as const;
 }
 

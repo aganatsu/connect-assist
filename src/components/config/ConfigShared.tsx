@@ -5,6 +5,7 @@ import {
   FEATURE_STATE_LABELS,
   type FeatureState,
 } from "@/lib/featureState";
+import type { BotRuntimeAuthorityModes, RuntimeAuthorityModeStatus } from "@/lib/api";
 
 export type { FeatureState } from "@/lib/featureState";
 
@@ -31,6 +32,56 @@ export interface ConfigTabProps {
   updateField: (section: string, key: string, value: any) => void;
   highlightedLabels?: Set<string>;
   connectionScoped?: boolean;
+  runtimeAuthorityModes?: BotRuntimeAuthorityModes;
+}
+
+const MODE_REASON_LABELS: Record<string, string> = {
+  requested_observe: "Saved in Observe. It stays there until you deliberately save another mode; decisions are recorded without trade impact.",
+  observing: "Saved in Observe. It stays there until you deliberately save another mode; decisions are recorded without trade impact.",
+  requested_mode_enabled: "The saved mode is the effective runtime mode.",
+  single_ownership_required: "Requires Trade Decision Mode to be enforcing before this control can affect authorization.",
+  activation_missing: "No approved activation record exists, so runtime remains in Observe.",
+  runtime_not_enabled: "The rollout record is not enabled for runtime use, so runtime remains in Observe.",
+  runtime_scope_mismatch: "The approved rollout scope does not include this account mode.",
+  capped_by_certified_authority: "The saved request exceeds its approved rollout authority, so runtime is capped.",
+  certified_mode_enabled: "The saved request is within the approved rollout authority.",
+  disabled: "This feature is disabled.",
+  market_fill_required: "Requires Market Fill at Zone before this route can observe or enforce.",
+  paper_scope_only: "Paper-only enforcement does not affect the current live account.",
+};
+
+function modeLabel(value: string | undefined): string {
+  return (value || "unknown").replace(/_/g, " ").toUpperCase();
+}
+
+export function RuntimeModeStatus({ status, draftRequestedMode }: {
+  status?: RuntimeAuthorityModeStatus;
+  draftRequestedMode?: string;
+}) {
+  if (!status) {
+    return <p className="text-[9px] text-muted-foreground">Effective runtime status is unavailable until the saved configuration is verified.</p>;
+  }
+  const draftDiffers = !!draftRequestedMode && draftRequestedMode !== status.requestedMode;
+  const effective = status.effectiveMode;
+  const effectiveClass = effective === "observe" || effective === "off"
+    ? "text-muted-foreground"
+    : effective.includes("paper") || effective === "soft"
+    ? "text-warning"
+    : "text-success";
+
+  return (
+    <div className="rounded border border-border/50 bg-muted/20 p-2 text-[9px]">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <span>SAVED REQUEST: <strong className="font-mono text-foreground">{modeLabel(status.requestedMode)}</strong></span>
+        <span>EFFECTIVE NOW: <strong className={`font-mono ${effectiveClass}`}>{modeLabel(effective)}</strong></span>
+        {status.certifiedMaximum && (
+          <span>APPROVED MAX: <strong className="font-mono text-foreground">{modeLabel(status.certifiedMaximum)}</strong></span>
+        )}
+      </div>
+      <p className="mt-1 text-muted-foreground">{MODE_REASON_LABELS[status.reason] || status.reason}</p>
+      {draftDiffers && <p className="mt-1 text-warning">Unsaved request: {modeLabel(draftRequestedMode)}. Save before it can take effect.</p>}
+    </div>
+  );
 }
 
 export function FeatureStateBadge({ state, reason }: { state: FeatureState; reason?: string }) {

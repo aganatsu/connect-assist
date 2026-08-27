@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
-import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, FeatureStateBadge, ConfigTabProps } from "./ConfigShared";
+import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, FeatureStateBadge, ConfigTabProps, RuntimeModeStatus } from "./ConfigShared";
 
 // ─── Instruments Data (derived from canonical marketData.ts) ─────────────────
 const INSTRUMENT_GROUPS = INSTRUMENT_TYPES.map(type => ({
@@ -137,7 +137,7 @@ const SMC_ENHANCEMENT_MODULES: {
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
+export function ScanTab({ config, setConfig, updateField, runtimeAuthorityModes }: ConfigTabProps) {
   // Count active instruments
   const ALL_INSTRUMENTS = INSTRUMENTS.map(i => i.symbol);
   const totalPairs = ALL_INSTRUMENTS.length;
@@ -394,6 +394,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <RuntimeModeStatus status={runtimeAuthorityModes?.impulseLifecycle} draftRequestedMode={config.strategy?.impulseEntryLifecycleMode ?? "observe"} />
           <FieldGroup label="Trade Decision Mode" description="Observe or enforce the ICT setup workflow on the selected account">
             <Select
               value={config.strategy?.singleOwnershipMode === "enforce" || config.strategy?.singleOwnershipMode === "enforce_live" || config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"}
@@ -413,6 +414,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <RuntimeModeStatus status={runtimeAuthorityModes?.tradeDecision} draftRequestedMode={config.strategy?.singleOwnershipMode === "enforce" || config.strategy?.singleOwnershipMode === "enforce_live" || config.strategy?.streamlinedDecisionMode === "enforce" ? "enforce" : "observe"} />
           <FieldGroup label="ICT Scanner Workflow" description="Observe the unified scanner stages, or enforce them after Trade Decision Mode is enforcing">
             <Select
               value={config.strategy?.canonicalScannerMode ?? "observe"}
@@ -425,6 +427,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <RuntimeModeStatus status={runtimeAuthorityModes?.scannerWorkflow} draftRequestedMode={config.strategy?.canonicalScannerMode ?? "observe"} />
           <FieldGroup label="Market Structure Authority" description="Use frozen swings, sweeps, BOS, CHoCH and MSS as one decision sequence">
             <Select value={config.strategy?.canonicalStructureMode ?? "observe"} onValueChange={v => updateField("strategy", "canonicalStructureMode", v)}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
@@ -434,6 +437,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               </SelectContent>
             </Select>
           </FieldGroup>
+          <RuntimeModeStatus status={runtimeAuthorityModes?.marketStructure} draftRequestedMode={config.strategy?.canonicalStructureMode ?? "observe"} />
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Scoring</p>

@@ -153,9 +153,11 @@ export function resolveZoneLocalMode(input: {
     certifiedMaximum: certified.mode,
     runtimeTarget: input.runtimeTarget,
     activationTrusted: certified.trusted,
-    reason: effectiveMode !== requestedMode
-      ? "capped_by_certified_authority"
-      : certified.reason,
+    reason: effectiveMode === requestedMode
+      ? certified.reason
+      : certified.mode === "observe"
+      ? certified.reason
+      : "capped_by_certified_authority",
     activation: input.activation,
   };
 }

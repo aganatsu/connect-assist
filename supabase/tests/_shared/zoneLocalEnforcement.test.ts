@@ -57,7 +57,7 @@ Deno.test("requested hard remains observe without certified activation", () => {
     activation: null,
   });
   assertEquals(result.effectiveMode, "observe");
-  assertEquals(result.reason, "capped_by_certified_authority");
+  assertEquals(result.reason, "activation_missing");
 });
 
 Deno.test("soft certificate caps a requested hard mode", () => {
@@ -77,6 +77,7 @@ Deno.test("paper-scoped activation cannot enforce live", () => {
     activation: softActivation,
   });
   assertEquals(result.effectiveMode, "observe");
+  assertEquals(result.reason, "runtime_scope_mismatch");
 });
 
 Deno.test("observe mode never changes score or authorization", () => {

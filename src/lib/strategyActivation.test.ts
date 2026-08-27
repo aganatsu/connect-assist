@@ -28,6 +28,6 @@ describe("strategy activation display", () => {
     expect(display.authorityLabel).toBe("LOG ONLY");
     expect(display.scopeLabel).toBe("PAPER");
     expect(display.runtimeLabel).toBe("NOT ENFORCED");
-    expect(display.description).toContain("does not connect");
+    expect(display.description).toContain("runtime enforcement is currently disabled");
   });
 });

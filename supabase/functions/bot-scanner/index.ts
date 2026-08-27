@@ -5107,14 +5107,17 @@ async function runScanForUser(
       frozenStrategyContext: any,
       executableZone: unknown,
       nestedEntryEnforced = nestedPoiLifecycleEnforced,
-    ) =>
-      validateImpulseLifecycleExecutableZone({
-        mode: nestedEntryEnforced
-          ? "enforce"
-          : impulseLifecycleEnforcement.effectiveMode,
-        context: frozenStrategyContext?.crossTimeframeContext || null,
+    ) => {
+      const frozenContext = frozenStrategyContext?.crossTimeframeContext || null;
+      const frozenLifecycleMode = frozenContext?.impulseEntryLifecycle?.mode ||
+        frozenContext?.impulseEntryLifecycleAvailability?.mode ||
+        "observe";
+      return validateImpulseLifecycleExecutableZone({
+        mode: nestedEntryEnforced ? "enforce" : frozenLifecycleMode,
+        context: frozenContext,
         executableZone,
       });
+    };
     const currentWatchlistLifecycle = (executionEligible: boolean) => {
       const lifecycleZoneData = (detail as any).unifiedZone;
       const lifecycleReasonCode =

@@ -383,12 +383,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
                   RUNTIME VERIFIED
                 </Badge>
-                <span>Saved settings are valid and ready for the scanner.</span>
+                <span>Saved settings are valid; each rollout control shows its effective runtime mode.</span>
                 <ChevronDown className="ml-auto h-3.5 w-3.5" />
               </summary>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-border/60 pt-2">
                 <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
                 <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
+                {effectiveRuntime.authorityModes?.runtimeTarget && (
+                  <span>Account target: {effectiveRuntime.authorityModes.runtimeTarget.toUpperCase()}</span>
+                )}
                 <span>
                   Require sweep:{" "}
                   <strong className={effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "text-emerald-500" : "text-amber-500"}>
@@ -638,9 +641,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
             <HighlightContext.Provider value={matchedLabels}>
               {config && filteredTabs.length > 0 && (
                 <>
-                  {effectiveActiveTab === "scan" && <ScanTab config={config} setConfig={setConfig} updateField={updateField} />}
-                  {effectiveActiveTab === "enter" && <EnterTab config={config} setConfig={setConfig} updateField={updateField} connectionScoped={!!connectionId} />}
-                  {effectiveActiveTab === "exit" && <ExitTab config={config} setConfig={setConfig} updateField={updateField} />}
+                  {effectiveActiveTab === "scan" && <ScanTab config={config} setConfig={setConfig} updateField={updateField} runtimeAuthorityModes={effectiveRuntime?.authorityModes} />}
+                  {effectiveActiveTab === "enter" && <EnterTab config={config} setConfig={setConfig} updateField={updateField} connectionScoped={!!connectionId} runtimeAuthorityModes={effectiveRuntime?.authorityModes} />}
+                  {effectiveActiveTab === "exit" && <ExitTab config={config} setConfig={setConfig} updateField={updateField} runtimeAuthorityModes={effectiveRuntime?.authorityModes} />}
                   {effectiveActiveTab === "risk" && <RiskTab config={config} setConfig={setConfig} updateField={updateField} />}
                 </>
               )}

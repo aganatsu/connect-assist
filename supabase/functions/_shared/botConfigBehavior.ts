@@ -30,6 +30,12 @@ export interface NestedPoiMarketActivation {
   enforced: boolean;
   route: "legacy" | NestedPoiMarketRoute;
   runtimeTarget: "paper" | "live";
+  reason:
+    | "disabled"
+    | "market_fill_required"
+    | "observing"
+    | "paper_scope_only"
+    | "requested_mode_enabled";
 }
 
 /**
@@ -58,6 +64,15 @@ export function resolveNestedPoiMarketActivation(input: {
     enforced,
     route,
     runtimeTarget: input.runtimeTarget,
+    reason: mode === "off"
+      ? "disabled"
+      : !input.marketFillAtZone
+      ? "market_fill_required"
+      : enforced
+      ? "requested_mode_enabled"
+      : mode === "enforce_paper" && input.runtimeTarget === "live"
+      ? "paper_scope_only"
+      : "observing",
   };
 }
 

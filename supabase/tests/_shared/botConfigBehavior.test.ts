@@ -60,6 +60,7 @@ Deno.test("Nested POI Market Trigger stays disabled unless Market Fill is enable
       enforced: false,
       route: "legacy",
       runtimeTarget: "live",
+      reason: "market_fill_required",
     },
   );
 });

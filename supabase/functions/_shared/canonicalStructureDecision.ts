@@ -3,6 +3,27 @@ import type { CanonicalLiquiditySequenceReport } from "./canonicalLiquiditySeque
 
 export const CANONICAL_STRUCTURE_DECISION_VERSION = "canonical-structure-decision.v1";
 
+export function resolveCanonicalStructureMode(input: {
+  requestedMode?: unknown;
+  singleOwnershipEffectiveMode: "observe" | "enforce" | "enforce_live";
+}): {
+  requestedMode: "observe" | "enforce";
+  effectiveMode: "observe" | "enforce";
+  reasonCode: "observing" | "single_ownership_required" | "requested_mode_enabled";
+} {
+  const requestedMode = input.requestedMode === "enforce" ? "enforce" : "observe";
+  const effectiveMode = requestedMode === "enforce" && input.singleOwnershipEffectiveMode === "enforce" ? "enforce" : "observe";
+  return {
+    requestedMode,
+    effectiveMode,
+    reasonCode: effectiveMode === "enforce"
+      ? "requested_mode_enabled"
+      : requestedMode === "enforce"
+      ? "single_ownership_required"
+      : "observing",
+  };
+}
+
 export function evaluateCanonicalStructureDecision(input: { direction: "long" | "short" | null; structure: CanonicalStructureAuthority; liquidity: CanonicalLiquiditySequenceReport; requireLiquiditySweep: boolean }) {
   const direction: StructureDirection | null = input.direction === "long" ? "bullish" : input.direction === "short" ? "bearish" : null;
   const externalTrend = input.structure.trend.external;
@@ -16,7 +37,6 @@ export function evaluateCanonicalStructureDecision(input: { direction: "long" | 
 }
 
 export function evaluateCanonicalStructureEnforcement(input: { requestedMode?: unknown; singleOwnershipEffectiveMode: "observe" | "enforce" | "enforce_live"; decision: ReturnType<typeof evaluateCanonicalStructureDecision> }) {
-  const requestedMode = input.requestedMode === "enforce" ? "enforce" : "observe";
-  const effectiveMode = requestedMode === "enforce" && input.singleOwnershipEffectiveMode === "enforce" ? "enforce" : "observe";
-  return { contractVersion: "canonical-structure-enforcement.v1", requestedMode, effectiveMode, affectsAuthorization: effectiveMode === "enforce", authorized: effectiveMode === "observe" || input.decision.decision === "allow", reasonCode: effectiveMode === "observe" ? (requestedMode === "enforce" ? "single_ownership_required" : "observing") : input.decision.reasonCode } as const;
+  const mode = resolveCanonicalStructureMode(input);
+  return { contractVersion: "canonical-structure-enforcement.v1", requestedMode: mode.requestedMode, effectiveMode: mode.effectiveMode, affectsAuthorization: mode.effectiveMode === "enforce", authorized: mode.effectiveMode === "observe" || input.decision.decision === "allow", reasonCode: mode.effectiveMode === "observe" ? mode.reasonCode : input.decision.reasonCode } as const;
 }
