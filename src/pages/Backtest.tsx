@@ -34,7 +34,8 @@ import { toast } from "sonner";
 interface BacktestTrade {
   id: string; symbol: string; direction: "long" | "short";
   entryTime: string; exitTime: string; entryPrice: number; exitPrice: number;
-  size: number; pnl: number; pnlPips: number; commission: number; confluenceScore: number;
+  size: number; pnl: number; pnlPips: number; grossPnl?: number;
+  commission: number; spreadCost?: number; totalTradingCost?: number; confluenceScore: number;
   closeReason: string;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
@@ -65,7 +66,7 @@ interface BacktestStats {
   bestTrade: number; worstTrade: number;
   consecutiveWins: number; consecutiveLosses: number;
   longsWinRate: number; shortsWinRate: number; tradesPerMonth: number;
-  totalCommission: number; netPnl: number;
+  totalCommission: number; totalSpreadCost?: number; totalTradingCosts?: number; netPnl: number;
 }
 interface BacktestResponse {
   trades: BacktestTrade[];
@@ -737,7 +738,7 @@ export default function Backtest() {
                   <label className="text-[10px] text-muted-foreground uppercase">Spread</label>
                   <input type="number" value={spreadPips} onChange={e => setSpreadPips(Number(e.target.value))}
                     min={0} max={10} step={0.1} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
-                  <span className="text-[9px] text-muted-foreground">pips (0=auto)</span>
+                  <span className="text-[9px] text-muted-foreground">full RT pips (0=instrument default)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-[10px] text-muted-foreground uppercase">Commission</label>
@@ -1567,6 +1568,7 @@ export default function Backtest() {
                   { label: "Longs WR", value: `${fixedResult(results.stats.longsWinRate, 1, "0.0")}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
                   { label: "Shorts WR", value: `${fixedResult(results.stats.shortsWinRate, 1, "0.0")}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
                   ...(results.stats.totalCommission > 0 ? [{ label: "Total Commission", value: formatMoney(-results.stats.totalCommission), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
+                  ...((results.stats.totalSpreadCost ?? 0) > 0 ? [{ label: "Total Spread Cost", value: formatMoney(-(results.stats.totalSpreadCost ?? 0)), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
                 ].map(s => (
                   <Card key={s.label} className="border-border/30">
                     <CardContent className="pt-2.5 pb-2">
@@ -1819,6 +1821,8 @@ export default function Backtest() {
                               <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{fixedResult(t.exitPrice, 5, "0")}</span></div>
                               <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{fixedResult(t.size, 2, "0")} lots</span></div>
                               <div><span className="text-muted-foreground">Diagnostic score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
+                              <div><span className="text-muted-foreground">Spread cost:</span> <span className="font-mono">{formatMoney(-(t.spreadCost ?? 0))}</span></div>
+                              <div><span className="text-muted-foreground">Commission:</span> <span className="font-mono">{formatMoney(-t.commission)}</span></div>
                             </div>
                             <p className="text-[10px] text-muted-foreground">Legacy diagnostics - do not authorize the trade</p>
                             <div className="flex flex-wrap gap-1 mt-1">
@@ -1875,6 +1879,8 @@ export default function Backtest() {
                                     <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{fixedResult(t.exitPrice, 5, "0")}</p></div>
                                     <div><span className="text-[9px] text-muted-foreground">Size</span><p className="text-xs font-mono">{fixedResult(t.size, 2, "0")} lots</p></div>
                                     <div><span className="text-[9px] text-muted-foreground">Hold Time</span><p className="text-xs font-mono">{((new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()) / 3600000).toFixed(1)}h</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Spread Cost</span><p className="text-xs font-mono">{formatMoney(-(t.spreadCost ?? 0))}</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Commission</span><p className="text-xs font-mono">{formatMoney(-t.commission)}</p></div>
                                   </div>
                                   <div>
                                     <div className="flex flex-wrap items-center gap-2"><span className="text-[9px] text-muted-foreground uppercase">Legacy Diagnostic Factors</span><span className="text-[9px] text-muted-foreground">Context only - does not authorize trades</span></div>

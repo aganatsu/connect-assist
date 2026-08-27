@@ -503,6 +503,15 @@ configured round-trip amount, and `none` forces zero. Scanner execution routes,
 final pending sizing inputs, and broker-connection presentation delegate to that
 owner. Every downstream `commissionPerLot` value is therefore already round-trip;
 `calculateRoundTripCommission` applies it once to the executed lot quantity.
+Backtest spread resolution and cash conversion use the same owner:
+`resolveEffectiveSpreadPips` selects an explicit override or the instrument
+default, and `calculateRoundTripTradingCosts` charges one full spread plus the
+already-resolved round-trip commission on each closed quantity. Partial and
+remaining closes therefore sum to the same total cost as one full close.
+Backtest quote conversion maps contain raw pair prices (for example,
+`USD/JPY=142`), never the already-converted `1/142` multiplier; until
+point-in-time conversion candles are available without extra provider calls,
+the backtest uses the shared `FALLBACK_RATES` values.
 
 **Effective minimum R:R** is owned by `_shared/gateMinRR.ts:checkMinRR`.
 Discovery gates defer this check until a route has frozen its executable entry,

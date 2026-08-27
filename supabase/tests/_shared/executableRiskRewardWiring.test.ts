@@ -65,7 +65,7 @@ Deno.test("all final-authorization routes pass cost inputs to the shared R:R own
   assertStringIncludes(backtest, "commissionPerLot,");
   assertStringIncludes(
     backtest,
-    "spreadPips: spreadPips > 0 ? spreadPips : undefined",
+    "spreadPips: effectiveSpreadPips",
   );
 });
 

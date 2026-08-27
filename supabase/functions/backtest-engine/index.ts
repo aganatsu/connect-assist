@@ -46,6 +46,7 @@ import {
   type ReasoningFactor,
   type LiquidityPool,
   SPECS,
+  FALLBACK_RATES,
   MIN_SL_PIPS,
   ATR_SL_FLOOR_MULTIPLIER,
   SUPPORTED_SYMBOLS,
@@ -241,7 +242,10 @@ import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEn
 import { evaluateSingleOwnershipFillAuthorization } from "../_shared/singleOwnershipFillAuthorization.ts";
 import { evaluateFinalTradeAuthorization } from "../_shared/finalTradeAuthorization.ts";
 import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
-import { calculateRoundTripCommission } from "../_shared/tradingCosts.ts";
+import {
+  calculateRoundTripTradingCosts,
+  resolveEffectiveSpreadPips,
+} from "../_shared/tradingCosts.ts";
 import { buildPendingOrderPlan } from "../_shared/pendingOrderPlan.ts";
 import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
 import {
@@ -299,7 +303,10 @@ interface BacktestTrade {
   size: number;
   pnl: number;
   pnlPips: number;
+  grossPnl: number;
   commission: number;
+  spreadCost: number;
+  totalTradingCost: number;
   closeReason: string;
   confluenceScore: number;
   effectiveScore: number;
@@ -357,6 +364,8 @@ interface BacktestStats {
   consecutiveWins: number;
   consecutiveLosses: number;
   totalCommission: number;
+  totalSpreadCost: number;
+  totalTradingCosts: number;
   netPnl: number;
 }
 
@@ -1001,6 +1010,7 @@ function processExits(
   config: any,
   slippagePips: number,
   btRateMap: Record<string, number>,
+  effectiveSpreadPips: number,
   commissionPerLot: number,
   allCandles?: Candle[],
   dailyCandles?: Candle[],
@@ -1170,6 +1180,7 @@ function processExits(
       executionPriceMode: "threshold",
       rateMap: btRateMap,
       commissionPerLot,
+      spreadPips: effectiveSpreadPips,
     });
     if (!closeReason && partialDecision.triggered) {
       const partialExitPrice = partialDecision.executionPrice ??
@@ -1186,7 +1197,10 @@ function processExits(
         size: partialDecision.closeSize,
         pnl: partialDecision.netPnl,
         pnlPips: partialDecision.pnlPips,
+        grossPnl: partialDecision.grossPnl,
         commission: partialDecision.commission,
+        spreadCost: partialDecision.spreadCost,
+        totalTradingCost: partialDecision.totalTradingCost,
         closeReason: "partial_tp",
         confluenceScore: pos.confluenceScore,
         effectiveScore: pos.effectiveScore,
@@ -1223,8 +1237,15 @@ function processExits(
         );
       }
       const { pnl: rawPnl, pnlPips } = pnlResult;
-      const comm = calculateRoundTripCommission(pos.size, commissionPerLot);
-      const pnl = rawPnl - comm;
+      const tradingCosts = calculateRoundTripTradingCosts({
+        lots: pos.size,
+        spreadPips: effectiveSpreadPips,
+        pipSize: spec.pipSize,
+        lotUnits: spec.lotUnits,
+        quoteToUSD: getQuoteToUSDRate(pos.symbol, btRateMap),
+        roundTripCommissionPerLot: commissionPerLot,
+      });
+      const pnl = rawPnl - tradingCosts.totalCost;
       closedTrades.push({
         id: pos.id,
         symbol: pos.symbol,
@@ -1236,7 +1257,10 @@ function processExits(
         size: pos.size,
         pnl,
         pnlPips,
-        commission: comm,
+        grossPnl: rawPnl,
+        commission: tradingCosts.commission,
+        spreadCost: tradingCosts.spreadCost,
+        totalTradingCost: tradingCosts.totalCost,
         closeReason,
         confluenceScore: pos.confluenceScore,
         effectiveScore: pos.effectiveScore,
@@ -1334,6 +1358,8 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
   const winRate = fullTrades.length > 0 ? (wins.length / fullTrades.length) * 100 : 0;
   const expectancy = fullTrades.length > 0 ? totalPnl / fullTrades.length : 0;
   const totalCommission = trades.reduce((s, t) => s + (t.commission || 0), 0);
+  const totalSpreadCost = trades.reduce((s, t) => s + (t.spreadCost || 0), 0);
+  const totalTradingCosts = totalCommission + totalSpreadCost;
 
   return {
     totalTrades: fullTrades.length,
@@ -1359,6 +1385,8 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
     consecutiveWins: maxConsWins,
     consecutiveLosses: maxConsLosses,
     totalCommission,
+    totalSpreadCost,
+    totalTradingCosts,
     netPnl: totalPnl,
   };
 }
@@ -1590,7 +1618,10 @@ function computeResearchAnalytics(
         size: 0,
         pnl: bt.hypotheticalPnlPips > 0 ? bt.hypotheticalPnlPips : -bt.hypotheticalPnlPips,
         pnlPips: bt.hypotheticalPnlPips,
+        grossPnl: bt.hypotheticalPnlPips > 0 ? bt.hypotheticalPnlPips : -bt.hypotheticalPnlPips,
         commission: 0,
+        spreadCost: 0,
+        totalTradingCost: 0,
         closeReason: "counterfactual",
         confluenceScore: bt.score,
         effectiveScore: bt.effectiveScore,
@@ -2073,17 +2104,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     }
 
     // ── Build BT Rate Map ──
-    const btRateMap: Record<string, number> = {};
-    for (const symbol of chunkSymbols) {
-      try {
-        const rate = await getQuoteToUSDRate(symbol);
-        btRateMap[symbol] = rate;
-      } catch { btRateMap[symbol] = 1; }
-    }
-    // Merge with previously persisted rate map
-    const priorRateMap: Record<string, number> =
-      priorPartialState?.btRateMap || {};
-    Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
+    // getQuoteToUSDRate expects raw market prices such as USD/JPY=142, not an
+    // already-converted multiplier such as 1/142. Until point-in-time FX
+    // conversion candles are available without extra provider calls, use the
+    // shared raw-rate fallbacks. Persisting/reloading converted multipliers here
+    // used to invert JPY, CAD, and CHF conversions a second time.
+    const btRateMap: Record<string, number> = { ...FALLBACK_RATES };
 
     // ── Main Scan Loop ──
     await updateProgress(chunkResumeProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
@@ -2218,6 +2244,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       }
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
+      const effectiveSpreadPips = resolveEffectiveSpreadPips(
+        spreadPips,
+        spec.typicalSpread,
+      );
       const lookback = config.structureLookback || 100;
       const restoredRuntime = symbolRuntimeState[symbol];
       let tradeLifecycleState = restoredRuntime?.tradeLifecycleState ||
@@ -2353,7 +2383,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const symbolPositions = openPositions.filter(p => p.symbol === symbol);
         if (symbolPositions.length > 0) {
           const { closedTrades, updatedPositions } = processExits(
-            symbolPositions, candle, i, config, slippagePips, btRateMap, commissionPerLot, entryCandles, dailyCandles,
+            symbolPositions, candle, i, config, slippagePips, btRateMap,
+            effectiveSpreadPips, commissionPerLot, entryCandles, dailyCandles,
           );
           // Remove old positions for this symbol, add updated
           const otherPositions = openPositions.filter(p => p.symbol !== symbol);
@@ -3932,7 +3963,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const safetyGateEvaluation = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, pairConfig, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
-          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult,
+          allTrades, candleMs, peakBalance, effectiveSpreadPips, fotsiForDate,
+          smtResult,
           session,
           roleCandles.structure.length >= 20 ? roleCandles.structure : null,
           barDecisionEvidence.labels.structure,
@@ -4550,7 +4582,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             required: false,
             available: true,
             passed: true,
-            spreadPips: spreadPips > 0 ? spreadPips : undefined,
+            spreadPips: effectiveSpreadPips,
           },
           runtimeGates: {
             executionMode: { passed: true, reason: "Historical execution mode is paper" },
@@ -4978,10 +5010,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           );
         }
         const { pnl: rawPnl, pnlPips } = pnlResult;
-        const comm = calculateRoundTripCommission(
-          pos.size,
-          commissionPerLot,
+        const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+        const effectiveSpreadPips = resolveEffectiveSpreadPips(
+          spreadPips,
+          spec.typicalSpread,
         );
+        const tradingCosts = calculateRoundTripTradingCosts({
+          lots: pos.size,
+          spreadPips: effectiveSpreadPips,
+          pipSize: spec.pipSize,
+          lotUnits: spec.lotUnits,
+          quoteToUSD: getQuoteToUSDRate(pos.symbol, btRateMap),
+          roundTripCommissionPerLot: commissionPerLot,
+        });
         allTrades.push({
           id: pos.id,
           symbol: pos.symbol,
@@ -4991,9 +5032,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           entryTime: pos.entryTime,
           exitTime: closeTime,
           size: pos.size,
-          pnl: rawPnl - comm,
+          pnl: rawPnl - tradingCosts.totalCost,
           pnlPips,
-          commission: comm,
+          grossPnl: rawPnl,
+          commission: tradingCosts.commission,
+          spreadCost: tradingCosts.spreadCost,
+          totalTradingCost: tradingCosts.totalCost,
           closeReason: "end_of_test",
           confluenceScore: pos.confluenceScore,
           effectiveScore: pos.effectiveScore,
@@ -5007,7 +5051,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           goldenReplaySnapshot: pos.goldenReplaySnapshot,
           exitParityEvidence: pos.exitParityEvidence,
         });
-        balance += rawPnl - comm;
+        balance += rawPnl - tradingCosts.totalCost;
       }
     }
     openPositions.length = 0;

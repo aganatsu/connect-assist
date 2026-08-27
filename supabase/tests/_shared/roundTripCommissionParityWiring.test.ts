@@ -11,8 +11,8 @@ const exitParity = await Deno.readTextFile(
 );
 
 Deno.test("backtest and shared partial exits apply round-trip commission once", () => {
-  assertStringIncludes(backtest, "calculateRoundTripCommission(");
-  assertStringIncludes(exitParity, "calculateRoundTripCommission(");
+  assertStringIncludes(backtest, "calculateRoundTripTradingCosts({");
+  assertStringIncludes(exitParity, "calculateRoundTripTradingCosts({");
   assert(
     !backtest.includes("commissionPerLot * 2"),
     "backtest input is already round-trip and must not be doubled",
