@@ -209,7 +209,6 @@ import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
-import { checkMinRR } from "../_shared/gateMinRR.ts";
 import {
   applyFinalCandidateSizeAdjustments,
   computePositionSize,
@@ -680,16 +679,12 @@ function runBacktestSafetyGates(
     });
   }
 
-  // Gate 4: Min RR check (spread-adjusted) — shared implementation
-  const rrGateResult = checkMinRR({
-    lastPrice: analysis.lastPrice,
-    stopLoss: analysis.stopLoss,
-    takeProfit: analysis.takeProfit,
-    symbol,
-    minRiskReward: config.minRiskReward,
-    spreadPipsOverride: spreadPips,
+  // Gate 4: R:R is checked by final authorization after executable geometry
+  // (including the minimum stop floor and route-specific entry) is frozen.
+  gates.push({
+    passed: true,
+    reason: "Risk/reward deferred until executable geometry is frozen",
   });
-  gates.push(rrGateResult);
 
   // Gate 5: Max drawdown (circuit breaker)
   gates.push(checkMaxDrawdown({ balance, peakBalance, maxDrawdown: config.maxDrawdown }));
@@ -4514,6 +4509,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           maxDailyLoss: pairConfig.maxDailyLoss,
           maxDrawdown: pairConfig.maxDrawdown,
           minimumRiskReward: pairConfig.minRiskReward,
+          commissionPerLot,
+          rateMap: btRateMap,
           directionVerdict,
           requireDirectionVerdict: true,
           directionVerdictPolicy: "retain_frozen_until_opposed",
@@ -4552,7 +4549,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             required: false,
             available: true,
             passed: true,
-            spreadPips,
+            spreadPips: spreadPips > 0 ? spreadPips : undefined,
           },
           runtimeGates: {
             executionMode: { passed: true, reason: "Historical execution mode is paper" },

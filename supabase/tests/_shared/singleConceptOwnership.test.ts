@@ -63,6 +63,7 @@ const SINGLE_OWNER: string[] = [
   "checkBrokerConnectionSizingAtExecution",
   "checkPortfolioHeatAtExecution",
   "checkCorrelationExposure",
+  "checkMinRR",
   "resolveRoundTripCommission",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",

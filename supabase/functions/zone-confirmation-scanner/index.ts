@@ -143,7 +143,8 @@ import {
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
-import { calculateFinalPendingSize, loadAverageRoundTripCommission, loadCachedSizingRateMap } from "../_shared/finalPendingSize.ts";
+import { calculateFinalPendingSize, loadCachedSizingRateMap } from "../_shared/finalPendingSize.ts";
+import { averageRoundTripCommission } from "../_shared/tradingCosts.ts";
 import {
   readFrozenCrossTimeframeAuthority,
   readFrozenSetupStrategyContext,
@@ -1605,6 +1606,11 @@ Deno.serve(async (req) => {
           maxSpreadPips: config.maxSpreadPips,
         };
         const liveMode = account.execution_mode === "live";
+        const pendingRuntimeConfig = readFrozenSetupStrategyContext(pending)
+          ?.runtimeConfig?.effectiveConfig;
+        const pendingMinimumRiskReward = Number(
+          pendingRuntimeConfig?.minRiskReward ?? config.minRiskReward,
+        );
         const requestedStopPolicyResolution = resolveZoneStopPolicyMode(
           parsedPendingEvidence.zoneSetupStopPolicyMode ?? "observe",
           liveMode ? "live" : "paper",
@@ -1618,7 +1624,7 @@ Deno.serve(async (req) => {
               reason: "Stop policy was not active when this order was armed",
             };
         const spreadResults: Array<{ conn: any; result: Awaited<ReturnType<typeof fetchBrokerSpread>> }> = [];
-        if (liveMode && (config.spreadFilterEnabled || pendingStopPolicyResolution.enforced)) {
+        if (liveMode) {
           for (const conn of brokerConnections) {
             let metaAccountId: string | undefined;
             let authToken: string | undefined;
@@ -1641,6 +1647,9 @@ Deno.serve(async (req) => {
         const approvedBrokerConnections = liveMode && config.spreadFilterEnabled
           ? passingSpreads.map((item) => item.conn)
           : brokerConnections;
+        const executionCommissionPerLot = liveMode
+          ? averageRoundTripCommission(approvedBrokerConnections)
+          : 0;
         const bestSpread = availableSpreads
           .map((item) => item.result!)
           .sort((a, b) => a.spreadPips - b.spreadPips)[0];
@@ -1826,7 +1835,9 @@ Deno.serve(async (req) => {
           allowSameDirectionStacking: config.allowSameDirectionStacking,
           maxDailyLoss: config.maxDailyLoss,
           maxDrawdown: config.maxDrawdown,
-          minimumRiskReward: config.minRiskReward,
+          minimumRiskReward: pendingMinimumRiskReward,
+          commissionPerLot: executionCommissionPerLot,
+          rateMap: sizingRateMap,
           directionVerdict,
           requireDirectionVerdict: true,
           directionVerdictPolicy: "retain_frozen_until_opposed",
@@ -2002,8 +2013,10 @@ Deno.serve(async (req) => {
             authorizationEntryPrice: actualFillPrice,
             storedStopLoss: Number(pending.stop_loss),
             storedTakeProfit: Number(pending.take_profit),
-            effectiveTargetRiskReward: Number(config.tpRatio ?? 2),
-            effectiveMinimumRiskReward: Number(config.minRiskReward),
+            effectiveTargetRiskReward: Number(
+              pendingRuntimeConfig?.tpRatio ?? config.tpRatio ?? 2,
+            ),
+            effectiveMinimumRiskReward: pendingMinimumRiskReward,
             executionGeometry: wouldBeExecutionPlan.valid
               ? {
                 valid: true,
@@ -2137,11 +2150,7 @@ Deno.serve(async (req) => {
           method: (config as any).positionSizingMethod,
           fixedLotSize: (config as any).fixedLotSize,
           rateMap: sizingRateMap,
-          commissionPerLot: await loadAverageRoundTripCommission(
-            supabase,
-            userId,
-            account.execution_mode === "live",
-          ),
+          commissionPerLot: executionCommissionPerLot,
           regimeInfo: parsedPendingEvidence.regimeData,
           propFirmSizeMultiplier: propFirmResult?.enabled
             ? propFirmResult.maxPositionSizeMultiplier : undefined,

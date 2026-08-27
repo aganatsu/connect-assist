@@ -5,10 +5,8 @@
  * commission cost) from the raw reward. Returns a gate result indicating
  * pass/fail with a descriptive reason string.
  *
- * Used by both bot-scanner (live) and backtest-engine.
- *
- * Bot-scanner supplies commissionPerLot + rateMap for full cost accounting.
- * Backtest-engine supplies only spreadPips (commission not modeled in backtest).
+ * Used by finalTradeAuthorization for direct-market, pending-confirmation,
+ * breaker, and backtest execution routes.
  */
 
 import { SPECS } from "./smcAnalysis.ts";
@@ -32,13 +30,13 @@ export interface MinRRGateInput {
    */
   spreadPipsOverride?: number;
   /**
-   * Average commission per standard lot in USD. When provided (> 0),
+   * Round-trip commission per standard lot in USD. When provided (> 0),
    * commission cost is converted to price-movement equivalent and added
    * to the spread cost. Used by bot-scanner (live).
    */
   commissionPerLot?: number;
   /**
-   * Rate map for converting commission from USD to price terms.
+   * Rate map for converting round-trip commission from USD to price terms.
    * Required when commissionPerLot > 0.
    */
   rateMap?: Record<string, number>;

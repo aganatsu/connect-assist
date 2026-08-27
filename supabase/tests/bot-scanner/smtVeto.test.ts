@@ -143,7 +143,7 @@ Deno.test("Gate 9b: Source code presence verification in bot-scanner/index.ts", 
   // Verify gate is positioned after Gate 9 and before Gate 10
   const gate9Idx = source.indexOf("// Gate 9: Min confluence");
   const gate9bIdx = source.indexOf("// Gate 9b: SMT Opposite Veto");
-  const gate10Idx = source.indexOf("// Gate 10: Min R:R");
+  const gate10Idx = source.indexOf("// Gate 10:");
   assertEquals(gate9bIdx > gate9Idx, true, "Gate 9b must come after Gate 9");
   assertEquals(gate9bIdx < gate10Idx, true, "Gate 9b must come before Gate 10");
 });
