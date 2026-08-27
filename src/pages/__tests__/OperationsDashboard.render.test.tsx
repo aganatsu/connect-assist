@@ -576,4 +576,41 @@ describe("OperationsDashboard", () => {
     expect(screen.queryByText("XAU setup armed")).toBeNull();
     expect(screen.queryByText("Nested XAU zone touched")).toBeNull();
   });
+
+  it("keeps global recent activity visible when the selected scan has no lifecycle identity", async () => {
+    api.logs.mockResolvedValue([{
+      scanned_at: "2026-08-27T15:00:00Z",
+      pairs_scanned: 1,
+      signals_found: 0,
+      trades_placed: 0,
+      details_json: [{
+        pair: "USD/CHF",
+        direction: "neutral",
+        score: 18,
+        status: "skipped",
+        reason: "No valid impulse or entry zone",
+      }],
+    }]);
+    api.pendingSnapshot.mockResolvedValue({
+      active: [],
+      history: [{
+        order_id: "resolved-xau-order",
+        symbol: "XAU/USD",
+        direction: "long",
+        entry_zone_type: "ob",
+        status: "cancelled",
+        cancel_reason: "Frozen target already reached",
+        resolved_at: "2026-08-27T14:55:00Z",
+      }],
+      fetchedAt: "2026-08-27T15:00:05Z",
+    });
+
+    renderDashboard();
+    fireEvent.click(await screen.findByRole("tab", { name: "Lifecycle" }));
+
+    expect(screen.getByText("Scan completed")).toBeInTheDocument();
+    expect(screen.getByText("XAU/USD · cancelled")).toBeInTheDocument();
+    expect(screen.getByText("Frozen target already reached")).toBeInTheDocument();
+    expect(screen.queryByText("No persisted events for this selected setup.")).toBeNull();
+  });
 });

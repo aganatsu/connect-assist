@@ -58,7 +58,9 @@ describe("operations dashboard wiring", () => {
 
     expect(page).toContain("linkedOrderForScan(activeOrders, selectedScanDetail)");
     expect(page).toContain("lifecycleEventMatchesIdentity");
-    expect(page).toContain("Persisted lifecycle ledgers");
+    expect(page).toContain("Operational ledger · selected setup detail");
+    expect(page).toContain("const latestScan = scans[0]");
+    expect(page).toContain("...(pendingSnapshot.history || [])");
     expect(page).not.toContain("Live ledger");
   });
 

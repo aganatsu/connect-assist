@@ -973,24 +973,66 @@ function OperationsDashboard() {
     ? "Engine paused"
     : "Engine stopped";
 
-  const recentEvents = useMemo(() => [
-    ...selectedLifecycleEvents.map((event) => ({
-      id: `setup:${event.id}`,
-      time: event.created_at,
-      label: `${event.symbol} · setup · ${event.to_status.replace(/_/g, " ")}`,
-      detail: event.reason || event.reason_code?.replace(/_/g, " ") || "Setup transition recorded",
-      tone: lifecycleEventTone(event),
-    })),
-    ...selectedImpulseLifecycleTransitions.map((event) => ({
-      id: `impulse:${event.id}`,
-      time: event.created_at,
-      label: `${selectedLifecycleIdentity?.symbol || "Setup"} · impulse · ${event.event_type.replace(/_/g, " ")}`,
-      detail: event.reason || "Impulse-entry transition recorded",
-      tone: impulseLifecycleEventTone(event),
-    })),
-  ].sort((left, right) =>
-    new Date(right.time).getTime() - new Date(left.time).getTime()
-  ).slice(0, 8), [
+  const recentEvents = useMemo(() => {
+    const rows: Array<{
+      id: string;
+      time: string;
+      label: string;
+      detail: string;
+      tone: string;
+    }> = [];
+    const latestScan = scans[0];
+    if (latestScan?.scanned_at) {
+      rows.push({
+        id: `scan:${latestScan.scanned_at}`,
+        time: latestScan.scanned_at,
+        label: "Scan completed",
+        detail: `${latestScan.pairs_scanned || 0} pairs · ${latestScan.signals_found || 0} signals`,
+        tone: "cyan",
+      });
+    }
+    const ordersById = new Map<string, PendingOrder>();
+    for (const order of [...(pendingSnapshot.history || []), ...activeOrders]) {
+      ordersById.set(order.order_id, order);
+    }
+    for (const order of ordersById.values()) {
+      const time = order.resolved_at || order.updated_at || order.placed_at;
+      if (!time) continue;
+      rows.push({
+        id: `order:${order.order_id}`,
+        time,
+        label: `${order.symbol} · ${order.status.replace(/_/g, " ")}`,
+        detail: order.cancel_reason || order.fill_reason || `${order.direction.toUpperCase()} ${zoneType(order)}`,
+        tone: order.status === "filled"
+          ? "green"
+          : ["invalidated", "expired", "cancelled", "broker_rejected"].includes(order.status)
+          ? "red"
+          : "orange",
+      });
+    }
+    rows.push(
+      ...selectedLifecycleEvents.map((event) => ({
+        id: `setup:${event.id}`,
+        time: event.created_at,
+        label: `${event.symbol} · setup · ${event.to_status.replace(/_/g, " ")}`,
+        detail: event.reason || event.reason_code?.replace(/_/g, " ") || "Setup transition recorded",
+        tone: lifecycleEventTone(event),
+      })),
+      ...selectedImpulseLifecycleTransitions.map((event) => ({
+        id: `impulse:${event.id}`,
+        time: event.created_at,
+        label: `${selectedLifecycleIdentity?.symbol || "Setup"} · impulse · ${event.event_type.replace(/_/g, " ")}`,
+        detail: event.reason || "Impulse-entry transition recorded",
+        tone: impulseLifecycleEventTone(event),
+      })),
+    );
+    return rows.sort((left, right) =>
+      new Date(right.time).getTime() - new Date(left.time).getTime()
+    ).slice(0, 8);
+  }, [
+    activeOrders,
+    pendingSnapshot.history,
+    scans,
     selectedLifecycleEvents,
     selectedLifecycleIdentity?.symbol,
     selectedImpulseLifecycleTransitions,
@@ -1571,7 +1613,7 @@ function OperationsDashboard() {
                       <p>{focusedOrder
                         ? commentary(focusedOrder)
                         : selectedScanDetail
-                        ? `No active order is linked to the selected ${pairName(selectedScanDetail)} scan. Persisted events for its exact setup identity are shown below when available; another instrument's lifecycle is never substituted.`
+                        ? `No active order is linked to the selected ${pairName(selectedScanDetail)} scan. Its exact lifecycle is added to Recent Activity when available; another instrument's lifecycle is never substituted into this pipeline.`
                         : commentary(null)}</p>
                       {focusedOrder && (
                         <>
@@ -1611,14 +1653,15 @@ function OperationsDashboard() {
 
                     <section className="apex-events" aria-labelledby="events-title">
                       <div className="apex-subsection-head">
-                        <h3 id="events-title">Recent Events</h3>
-                        <span>Persisted lifecycle ledgers</span>
+                        <h3 id="events-title">Recent Activity</h3>
+                        <span>Operational ledger · selected setup detail</span>
                       </div>
                       <div>
-                        {(lifecycleEventsQuery.isLoading || impulseLifecycleQuery.isLoading) ? (
+                        {recentEvents.length === 0 &&
+                            (lifecycleEventsQuery.isLoading || impulseLifecycleQuery.isLoading) ? (
                           <p className="apex-table-empty">Loading lifecycle events…</p>
                         ) : recentEvents.length === 0 ? (
-                          <p className="apex-table-empty">No persisted events for this selected setup.</p>
+                          <p className="apex-table-empty">No operational activity has been recorded yet.</p>
                         ) : recentEvents.map((event) => (
                           <div className="apex-event" key={event.id}>
                             <time>{formatClock(event.time, false)}</time>
