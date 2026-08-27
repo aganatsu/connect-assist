@@ -62,10 +62,6 @@ import {
   cursorAfterLatestTouchCandle,
 } from "../_shared/pendingZoneTouch.ts";
 import {
-  resolveImpulseLifecycleEnforcement,
-  type ImpulseLifecycleEnforcementResolution,
-} from "../_shared/impulseLifecycleEnforcement.ts";
-import {
   derivePostChochEntryPlan,
   evaluatePostChochRetracement,
   normalizeAfterChochMode,
@@ -431,7 +427,6 @@ Deno.serve(async (req) => {
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
       crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
-      impulseLifecycleEnforcement: ImpulseLifecycleEnforcementResolution;
     }> = {};
     const configFailureUsers = new Map<string, Error>();
 
@@ -536,10 +531,6 @@ Deno.serve(async (req) => {
         runtimeTarget: account?.execution_mode === "live" ? "live" : "paper",
         activation: crossTimeframeActivation,
       });
-      const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
-        (styleResolution.config as any).impulseEntryLifecycleMode,
-        null,
-      );
       userDataMap[userId] = {
         telegramChatIds,
         notifyCategories,
@@ -552,7 +543,6 @@ Deno.serve(async (req) => {
         gamePlan,
         directionVerdicts,
         crossTimeframeAuthority,
-        impulseLifecycleEnforcement,
       };
     }
 
@@ -611,7 +601,6 @@ Deno.serve(async (req) => {
           gamePlan,
           directionVerdicts,
           crossTimeframeAuthority,
-          impulseLifecycleEnforcement,
         } = userData;
 
         // Avoid market-data work when execution is administratively disabled.
@@ -935,6 +924,13 @@ Deno.serve(async (req) => {
         const lifecycleFailure = impulseLifecycleObservation?.transitions.find(
           (transition: any) => transition.event?.type === "candidate_failed",
         ) || null;
+        const pendingLifecycleMode = lifecycleAfterLock?.mode ||
+          pendingPolicyResolution.frozenContext?.crossTimeframeContext
+            ?.impulseEntryLifecycle?.mode ||
+          pendingPolicyResolution.frozenContext?.crossTimeframeContext
+            ?.impulseEntryLifecycleAvailability?.mode ||
+          "observe";
+        const pendingLifecycleEnforced = pendingLifecycleMode === "enforce";
         if (
           nestedPoiEnforced && lifecycleAfterLock &&
           lifecycleAfterLock.status !== "active" &&
@@ -966,8 +962,7 @@ Deno.serve(async (req) => {
         }
 
         if (
-          !nestedPoiEnforced &&
-          impulseLifecycleEnforcement.effectiveMode === "enforce" &&
+          !nestedPoiEnforced && pendingLifecycleEnforced &&
           lifecycleFailure &&
           lifecycleFailure.after.status === "active"
         ) {
@@ -1223,8 +1218,7 @@ Deno.serve(async (req) => {
           : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
         const lifecycleConfirmationPassed = nestedPoiEnforced
           ? nestedTriggerReady
-          : impulseLifecycleEnforcement.effectiveMode !== "enforce" ||
-            lifecycleAfterLock?.status === "entered";
+          : !pendingLifecycleEnforced || lifecycleAfterLock?.status === "entered";
         const confirmationCandleTime =
           candles5m[candles5m.length - 1]?.datetime || new Date().toISOString();
         const previousConfirmationObservationUpdatedAt =
@@ -1236,9 +1230,7 @@ Deno.serve(async (req) => {
             candleTime: confirmationCandleTime,
             timeframe: lifecycleMonitoringTimeframe,
             method: confirmationMethod,
-            lifecycleMode: nestedPoiEnforced
-              ? "enforce"
-              : impulseLifecycleEnforcement.effectiveMode,
+            lifecycleMode: nestedPoiEnforced ? "enforce" : pendingLifecycleMode,
             lifecycleAvailable: lifecycleAfterLock !== null,
             lifecycleStatus: lifecycleAfterLock?.status || null,
             detectorPassed: confirmationPassed,

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { Target, SlidersHorizontal, Zap, Shield, Timer, RotateCcw, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { toast } from "sonner";
-import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
+import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, ConfigTabProps, RuntimeModeStatus } from "./ConfigShared";
 import { getLiveThesisConvictionDisplay } from "@/lib/featureState";
 
 // ─── Factor Weight Definitions (with tierPts for scoring) ─────────────────────
@@ -90,6 +90,7 @@ export function EnterTab({
   setConfig,
   updateField,
   connectionScoped = false,
+  runtimeAuthorityModes,
 }: ConfigTabProps) {
   const impulseZoneAvailable = (config.strategy?.impulseZoneGateMode ?? "hard") !== "off";
   const pendingZoneOrdersEnabled = config.entry?.pendingZoneOrders ?? false;
@@ -113,13 +114,6 @@ export function EnterTab({
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [confirmLiveNestedPoi, setConfirmLiveNestedPoi] = useState(false);
   const overrides: Record<string, Record<string, any>> = config.pairGateOverrides || {};
-
-  const crossTfStatus = useMemo(() => {
-    const requested = config.strategy?.crossTfAuthorityMode ?? "observe";
-    return { requested, effective: requested };
-  }, [
-    config.strategy?.crossTfAuthorityMode,
-  ]);
 
   // Factor weight helpers
   const updateWeight = (key: string, value: number) => {
@@ -390,6 +384,7 @@ export function EnterTab({
             </SelectContent>
           </Select>
         </FieldGroup>
+        <RuntimeModeStatus status={runtimeAuthorityModes?.zoneLocal} draftRequestedMode={config.strategy?.zoneLocalEnforcementMode ?? "observe"} />
         {(config.strategy?.zoneLocalEnforcementMode ?? "observe") === "soft" && (
           <FieldGroup
             label="POI Confluence Penalty"
@@ -442,25 +437,10 @@ export function EnterTab({
               Hard fails closed when parent-child evidence is unavailable.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              ["Saved mode", crossTfStatus.requested],
-              ["Effective", crossTfStatus.effective],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded border border-border bg-muted/30 p-2">
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground">
-                  {label}
-                </p>
-                <p className="text-xs font-mono font-bold capitalize mt-1">
-                  {value}
-                </p>
-              </div>
-            ))}
-          </div>
           <FieldGroup
             label="HTF-to-LTF Alignment Mode"
             description="Observe records decisions only. Soft adjusts scoring. Hard becomes entry authority immediately after Save."
-            status={crossTfStatus.effective === "observe" ? "monitoring" : "active"}
+            status={!runtimeAuthorityModes || runtimeAuthorityModes.crossTimeframe.effectiveMode === "observe" ? "monitoring" : "active"}
           >
             <Select
               value={config.strategy?.crossTfAuthorityMode ?? "observe"}
@@ -475,6 +455,7 @@ export function EnterTab({
               </SelectContent>
             </Select>
           </FieldGroup>
+          <RuntimeModeStatus status={runtimeAuthorityModes?.crossTimeframe} draftRequestedMode={config.strategy?.crossTfAuthorityMode ?? "observe"} />
           <ToggleField
             label="Require LTF POI Inside HTF Impulse"
             description="Require the executable zone to be nested inside its parent-timeframe impulse."
@@ -661,33 +642,36 @@ export function EnterTab({
           status={marketFillEnabled ? "active" : "disabled"}
         />
         {(marketFillEnabled || connectionScoped) && (
-          <FieldGroup
-            label="Nested POI Market Trigger"
-            description={connectionScoped
-              ? "This execution route is owned by Global Bot Config. Broker-specific overrides cannot change scanner behavior."
-              : "Optional rollout for newly armed setups: the outer zone only arms the setup. Entry requires a frozen nested OB, FVG, active breaker, S/R, or Fib trigger; there is no midpoint fallback. Active setups keep their frozen route."}
-            status={connectionScoped
-              ? "unavailable"
-              : nestedPoiMarketMode === "off"
-              ? "disabled"
-              : nestedPoiMarketMode === "observe"
-              ? "monitoring"
-              : "active"}
-          >
-            <Select
-              value={connectionScoped ? "off" : nestedPoiMarketMode}
-              disabled={connectionScoped}
-              onValueChange={value => selectNestedPoiMarketMode(value as NestedPoiMarketMode)}
+          <>
+            <FieldGroup
+              label="Nested POI Market Trigger"
+              description={connectionScoped
+                ? "This execution route is owned by Global Bot Config. Broker-specific overrides cannot change scanner behavior."
+                : "Optional rollout for newly armed setups: the outer zone only arms the setup. Entry requires a frozen nested OB, FVG, active breaker, S/R, or Fib trigger; there is no midpoint fallback. Active setups keep their frozen route."}
+              status={connectionScoped
+                ? "unavailable"
+                : nestedPoiMarketMode === "off"
+                ? "disabled"
+                : nestedPoiMarketMode === "observe"
+                ? "monitoring"
+                : "active"}
             >
-              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">Off — Existing Entry Behavior</SelectItem>
-                <SelectItem value="observe">Observe Only</SelectItem>
-                <SelectItem value="enforce_paper">Enforce on Paper</SelectItem>
-                <SelectItem value="enforce_live">Enforce on Paper + Live</SelectItem>
-              </SelectContent>
-            </Select>
-          </FieldGroup>
+              <Select
+                value={connectionScoped ? "off" : nestedPoiMarketMode}
+                disabled={connectionScoped}
+                onValueChange={value => selectNestedPoiMarketMode(value as NestedPoiMarketMode)}
+              >
+                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Off — Existing Entry Behavior</SelectItem>
+                  <SelectItem value="observe">Observe Only</SelectItem>
+                  <SelectItem value="enforce_paper">Enforce on Paper</SelectItem>
+                  <SelectItem value="enforce_live">Enforce on Paper + Live</SelectItem>
+                </SelectContent>
+              </Select>
+            </FieldGroup>
+            <RuntimeModeStatus status={runtimeAuthorityModes?.nestedPoiMarket} draftRequestedMode={connectionScoped ? undefined : nestedPoiMarketMode} />
+          </>
         )}
         <FieldGroup label="Zone Proximity (ATR)" description={marketFillEnabled ? "How close price must be to zone for entry" : "Enable Market Fill at Zone; proximity is not used when market-fill entry is off."} status={marketFillEnabled ? "active" : "unavailable"}>
           <div className="flex items-center gap-4">

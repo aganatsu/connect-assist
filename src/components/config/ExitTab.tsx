@@ -14,9 +14,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { CollapsibleSection, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
+import { CollapsibleSection, FieldGroup, ToggleField, ConfigTabProps, RuntimeModeStatus } from "./ConfigShared";
 
-export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
+export function ExitTab({ config, setConfig, updateField, runtimeAuthorityModes }: ConfigTabProps) {
   const [confirmLiveStopPolicy, setConfirmLiveStopPolicy] = useState(false);
   const stopPolicyMode = config.exit?.zoneSetupStopPolicyMode ?? "observe";
 
@@ -82,6 +82,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             </SelectContent>
           </Select>
         </FieldGroup>
+        <RuntimeModeStatus status={runtimeAuthorityModes?.zoneStopPolicy} draftRequestedMode={stopPolicyMode} />
         <FieldGroup label="Max SL (pips)" description="Not yet enforced by the shared execution engine" status="unavailable">
           <Input type="number" value={config.exit?.maxSLPips ?? 50} onChange={() => {}} min={5} max={500} step={5} className="h-9 text-sm" disabled />
         </FieldGroup>

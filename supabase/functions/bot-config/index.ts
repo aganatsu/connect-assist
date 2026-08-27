@@ -6,6 +6,128 @@ import { buildStreamlinedReplay } from "../_shared/streamlinedDecisionReplay.ts"
 import { buildSingleOwnershipComparison } from "../_shared/singleOwnershipComparison.ts";
 import { buildCanonicalScannerComparison } from "../_shared/canonicalScannerComparison.ts";
 import { buildAuthorityOutcomeComparison } from "../_shared/authorityOutcomeComparison.ts";
+import { resolveNestedPoiMarketActivation } from "../_shared/botConfigBehavior.ts";
+import { resolveCanonicalScannerMode } from "../_shared/canonicalScannerEnforcement.ts";
+import { resolveCanonicalStructureMode } from "../_shared/canonicalStructureDecision.ts";
+import { loadCrossTimeframeActivation } from "../_shared/crossTimeframeActivationStore.ts";
+import { resolveCrossTimeframeAuthority } from "../_shared/crossTimeframeAuthority.ts";
+import { resolveImpulseLifecycleEnforcement } from "../_shared/impulseLifecycleEnforcement.ts";
+import { resolveSingleOwnershipMode } from "../_shared/singleOwnershipEnforcement.ts";
+import { resolveZoneStopPolicyMode } from "../_shared/stopPolicyMode.ts";
+import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
+import { resolveZoneLocalMode } from "../_shared/zoneLocalEnforcement.ts";
+
+type RuntimeAuthorityClient = Parameters<typeof loadZoneLocalActivation>[0];
+
+async function loadRuntimeTarget(client: RuntimeAuthorityClient, userId: string): Promise<"paper" | "live"> {
+  const { data: botAccount, error: botAccountError } = await client
+    .from("paper_accounts")
+    .select("execution_mode")
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .maybeSingle();
+  if (botAccountError) throw botAccountError;
+  if (botAccount) return botAccount.execution_mode === "live" ? "live" : "paper";
+
+  const { data: legacyAccount, error: legacyAccountError } = await client
+    .from("paper_accounts")
+    .select("execution_mode")
+    .eq("user_id", userId)
+    .is("bot_id", null)
+    .limit(1)
+    .maybeSingle();
+  if (legacyAccountError) throw legacyAccountError;
+  return legacyAccount?.execution_mode === "live" ? "live" : "paper";
+}
+
+// Read-only UI projection. Every mode is resolved by its existing runtime
+// owner; this endpoint never grants authority or reconciles competing results.
+async function buildRuntimeAuthorityModes(client: RuntimeAuthorityClient, userId: string, config: Record<string, unknown>) {
+  const runtimeTarget = await loadRuntimeTarget(client, userId);
+  const [zoneLocalActivation, crossTimeframeActivation] = await Promise.all([
+    loadZoneLocalActivation(client, { userId, botId: "smc" }),
+    loadCrossTimeframeActivation(client, { userId, botId: "smc" }),
+  ]);
+  const zoneLocal = resolveZoneLocalMode({
+    requestedMode: config.zoneLocalEnforcementMode,
+    runtimeTarget,
+    activation: zoneLocalActivation,
+  });
+  const crossTimeframe = resolveCrossTimeframeAuthority({
+    rawConfig: config,
+    runtimeTarget,
+    activation: crossTimeframeActivation,
+  });
+  const impulseLifecycle = resolveImpulseLifecycleEnforcement(config.impulseEntryLifecycleMode, null);
+  const tradeDecision = resolveSingleOwnershipMode(config.singleOwnershipMode);
+  const scannerWorkflow = resolveCanonicalScannerMode({
+    requestedMode: config.canonicalScannerMode,
+    singleOwnershipEffectiveMode: tradeDecision.effectiveMode,
+  });
+  const marketStructure = resolveCanonicalStructureMode({
+    requestedMode: config.canonicalStructureMode,
+    singleOwnershipEffectiveMode: tradeDecision.effectiveMode,
+  });
+  const nestedPoiMarket = resolveNestedPoiMarketActivation({
+    marketFillAtZone: config.marketFillAtZone === true,
+    mode: config.nestedPoiMarketMode,
+    runtimeTarget,
+  });
+  const zoneStopPolicy = resolveZoneStopPolicyMode(config.zoneSetupStopPolicyMode, runtimeTarget);
+
+  return {
+    runtimeTarget,
+    zoneLocal: {
+      requestedMode: zoneLocal.requestedMode,
+      effectiveMode: zoneLocal.effectiveMode,
+      certifiedMaximum: zoneLocal.certifiedMaximum,
+      reason: zoneLocal.reason,
+    },
+    crossTimeframe: {
+      requestedMode: crossTimeframe.requestedMode,
+      effectiveMode: crossTimeframe.effectiveMode,
+      reason: crossTimeframe.reason,
+    },
+    impulseLifecycle: {
+      requestedMode: impulseLifecycle.requestedMode,
+      effectiveMode: impulseLifecycle.effectiveMode,
+      reason: impulseLifecycle.effectiveMode === "off"
+        ? "disabled"
+        : impulseLifecycle.effectiveMode === "observe"
+        ? "observing"
+        : "requested_mode_enabled",
+    },
+    tradeDecision: {
+      requestedMode: tradeDecision.requestedMode,
+      effectiveMode: tradeDecision.effectiveMode,
+      reason: tradeDecision.reasonCode,
+    },
+    scannerWorkflow: {
+      requestedMode: scannerWorkflow.requestedMode,
+      effectiveMode: scannerWorkflow.effectiveMode,
+      reason: scannerWorkflow.reasonCode,
+    },
+    marketStructure: {
+      requestedMode: marketStructure.requestedMode,
+      effectiveMode: marketStructure.effectiveMode,
+      reason: marketStructure.reasonCode,
+    },
+    nestedPoiMarket: {
+      requestedMode: nestedPoiMarket.mode,
+      effectiveMode: nestedPoiMarket.enforced ? "enforce" : nestedPoiMarket.observing ? "observe" : "off",
+      reason: nestedPoiMarket.reason,
+    },
+    zoneStopPolicy: {
+      requestedMode: zoneStopPolicy.requestedMode,
+      effectiveMode: zoneStopPolicy.enforced ? zoneStopPolicy.requestedMode : "observe",
+      reason: zoneStopPolicy.enforced
+        ? "requested_mode_enabled"
+        : zoneStopPolicy.requestedMode === "enforce_paper" && runtimeTarget === "live"
+        ? "paper_scope_only"
+        : "observing",
+    },
+  };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -69,9 +191,15 @@ Deno.serve(async (req) => {
         userId: user.id,
         connectionId: connectionId || undefined,
       });
+      const authorityModes = await buildRuntimeAuthorityModes(
+        supabase,
+        user.id,
+        loaded.config as Record<string, unknown>,
+      );
       return new Response(JSON.stringify({
         effectiveConfig: loaded.config,
         provenance: loaded.provenance,
+        authorityModes,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

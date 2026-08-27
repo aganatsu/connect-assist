@@ -37,7 +37,7 @@ inside that same impulse.
 - [x] Default existing and new accounts to Observe.
 - [x] Display the active zone, deeper queue and impulse protection in Watchlist.
 - [x] Display lifecycle transitions in Rejected Setups -> Shadow Evidence.
-- [x] Show the future Enforce mode as evidence-locked in Bot Config.
+- [x] Show the saved and effective runtime modes separately in Bot Config.
 
 ### Phase 3: Controlled confirmation locking - implemented
 
@@ -53,21 +53,25 @@ inside that same impulse.
 - [x] Add backtest parity for advancement, expiry and impulse invalidation.
 - [x] Report winner retention, rescued deeper entries and added losses.
 
-### Phase 5: Evidence-gated enforcement - implemented
+### Phase 5: Reviewed evidence and deliberate enforcement - implemented
 
-- [x] Require a current, sample-ready, beneficial, owner-reviewed evidence certificate.
-- [x] Expose Enforce only after Replay 100 certification and explicit evidence review.
+- [x] Publish a current, sample-ready evidence certificate for owner review.
+- [x] Keep evidence review advisory and expose the actual saved/effective mode in Bot Config.
 - [x] Replace legacy refined-zone cancellation with atomic deeper advancement.
 - [x] Require the frozen confirmation contract before eventual fill.
 - [x] Preserve final thesis, risk, duplicate-position and broker authorization at fill.
 
 ## Current Runtime Effect
 
-The lifecycle defaults to `Observe`. Replay publishes a hashed evidence
-certificate. `Enforce` remains unavailable until the certificate has at least
-30 resolved samples, does not add more losses than winners it rescues, and the
-account owner reviews it in Rejected Setups -> Shadow Evidence. Missing, stale
-or unreviewed evidence fails closed to Observe.
+The lifecycle defaults to `Observe`. Saving `Enforce` in Bot Config makes it the
+effective mode for newly created setups. Each setup freezes that effective mode,
+so a later Bot Config change does not silently upgrade or downgrade an existing
+pending order.
+
+Replay still publishes a hashed evidence certificate, and the account owner can
+mark eligible evidence reviewed in Rejected Setups -> Shadow Evidence. That
+certificate is advisory: it supports the decision to change Bot Config but is
+not a second hidden runtime switch.
 
 In Enforce, a failed candidate can atomically retarget the same pending thesis
 to the next prequalified deeper candidate. The impulse remains frozen, the new
@@ -76,6 +80,7 @@ position and broker checks still run before any fill.
 
 ## Resume Prompt
 
-Continue from `docs/IMPULSE_OWNED_ENTRY_LIFECYCLE_PHASES.md`. Merge the stacked
-PRs in order, apply their migrations, deploy the changed Edge Functions, run
-Replay 100, review an eligible certificate, then select Enforce in Bot Config.
+Continue from `docs/IMPULSE_OWNED_ENTRY_LIFECYCLE_PHASES.md`. Apply the current
+migrations, deploy the changed Edge Functions, verify saved/effective mode in
+Bot Config, and keep reviewing Replay 100 evidence before deliberately changing
+the runtime mode.

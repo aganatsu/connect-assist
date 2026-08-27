@@ -18,8 +18,8 @@ Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
       "Require BSL/SSL Sweep Before Displacement",
       "POI Mitigation State",
       "Maximum Candidates Per Timeframe",
-      "Saved mode",
-      "Effective",
+      "RuntimeModeStatus",
+      "runtimeAuthorityModes?.crossTimeframe",
     ]
   ) {
     assertStringIncludes(ui, label);

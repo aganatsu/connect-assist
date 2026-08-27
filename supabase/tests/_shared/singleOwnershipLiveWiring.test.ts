@@ -23,7 +23,11 @@ Deno.test("enforcement follows the selected account while legacy live values rem
   );
   assertStringIncludes(
     policy,
-    'requestedMode === "enforce" || requestedMode === "enforce_live"',
+    'requested === "enforce_live"',
+  );
+  assertStringIncludes(
+    policy,
+    'effectiveMode: requestedMode === "observe" ? "observe" : "enforce"',
   );
 });
 

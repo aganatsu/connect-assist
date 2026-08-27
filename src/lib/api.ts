@@ -598,6 +598,25 @@ export const marketApi = {
 };
 
 // ── Bot Config ──
+export interface RuntimeAuthorityModeStatus {
+  requestedMode: string;
+  effectiveMode: string;
+  reason: string;
+  certifiedMaximum?: string;
+}
+
+export interface BotRuntimeAuthorityModes {
+  runtimeTarget: "paper" | "live";
+  zoneLocal: RuntimeAuthorityModeStatus;
+  crossTimeframe: RuntimeAuthorityModeStatus;
+  impulseLifecycle: RuntimeAuthorityModeStatus;
+  tradeDecision: RuntimeAuthorityModeStatus;
+  scannerWorkflow: RuntimeAuthorityModeStatus;
+  marketStructure: RuntimeAuthorityModeStatus;
+  nestedPoiMarket: RuntimeAuthorityModeStatus;
+  zoneStopPolicy: RuntimeAuthorityModeStatus;
+}
+
 export const botConfigApi = {
   get: (connectionId?: string) => invokeFunction("bot-config", { action: "get", connectionId }),
   getEffective: (connectionId?: string) =>
@@ -624,6 +643,7 @@ export const botConfigApi = {
           riskPerTrade: number;
         };
       };
+      authorityModes: BotRuntimeAuthorityModes;
     }>("bot-config", { action: "effective", connectionId }),
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => afterFreshTradingTruth(

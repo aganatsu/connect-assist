@@ -84,6 +84,31 @@ still has separate orchestrators in `paper-trading`, `bot-scanner`, and
 `zone-confirmation-scanner`; a server-side all-connections preflight remains required before a
 partial multi-account dispatch can be ruled out.
 
+## Runtime mode ownership
+
+Observe modes never promote themselves. Evidence collection, replay, and review
+can inform an operator, but only the existing configuration or activation owner
+changes effective runtime authority. `bot-config?action=effective` projects the
+saved request, effective mode, account target, prerequisite/cap reason, and any
+certified maximum so the UI does not infer runtime state from draft config.
+
+| Control | Effective-mode owner | Existing setup behavior |
+|---|---|---|
+| Trade Decision | Saved Bot Config directly | Re-evaluated by final authorization |
+| ICT Scanner Workflow | Saved mode, gated by effective Trade Decision enforcement | Re-evaluated by final authorization |
+| Market Structure Authority | Saved mode, gated by effective Trade Decision enforcement | Re-evaluated by final authorization |
+| Cross-TF Alignment | Saved Bot Config directly; activation evidence is advisory metadata | Frozen context remains the setup's evidence |
+| Impulse Entry Lifecycle | Saved Bot Config directly | Effective mode is frozen when the setup is created |
+| Nested POI Market Trigger | Saved paper/live-scoped mode plus Market Fill prerequisite | Effective route is frozen when the setup is created |
+| Zone Setup Stop Policy | Saved paper/live-scoped mode | Effective mode and stop inputs are frozen when the setup arms |
+| POI Confluence / zone-local ranking | Existing activation record caps the saved request | Saving Soft/Hard alone may remain effectively Observe |
+| Gameplan Hierarchy / Thesis Conviction | Research evidence only | Never changes execution |
+
+Do not add a new authority module to reconcile these controls. A contract drift
+must be repaired in the listed owner or by deleting a duplicate. In particular,
+the impulse lifecycle evidence certificate is not an enforcement prerequisite;
+the lifecycle row's frozen mode owns atomic deeper-zone retargeting.
+
 ## Game Plan generation and consumption
 
 `_shared/gamePlan.ts:generateInstrumentGamePlan` is the single algorithm owner.

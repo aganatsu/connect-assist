@@ -16,18 +16,33 @@ export interface SingleOwnershipEnforcementResult {
     | "owned_authorities_do_not_allow";
 }
 
+export function resolveSingleOwnershipMode(
+  requested: unknown,
+): Pick<SingleOwnershipEnforcementResult, "requestedMode" | "effectiveMode"> & {
+  reasonCode: "observing" | "requested_mode_enabled";
+} {
+  const requestedMode: SingleOwnershipMode = requested === "enforce_live"
+    ? "enforce_live"
+    : requested === "enforce"
+    ? "enforce"
+    : "observe";
+  return {
+    requestedMode,
+    effectiveMode: requestedMode === "observe" ? "observe" : "enforce",
+    reasonCode: requestedMode === "observe"
+      ? "observing"
+      : "requested_mode_enabled",
+  };
+}
+
 export function evaluateSingleOwnershipEnforcement(input: {
   requestedMode?: unknown;
   runtimeTarget: "paper" | "live";
   decision: SingleOwnershipDecisionResult;
 }): SingleOwnershipEnforcementResult {
-  const requestedMode: SingleOwnershipMode = input.requestedMode === "enforce_live"
-    ? "enforce_live"
-    : input.requestedMode === "enforce"
-    ? "enforce"
-    : "observe";
-  const canEnforce = requestedMode === "enforce" || requestedMode === "enforce_live";
-  const effectiveMode: SingleOwnershipMode = canEnforce ? "enforce" : "observe";
+  const { requestedMode, effectiveMode } = resolveSingleOwnershipMode(
+    input.requestedMode,
+  );
   if (effectiveMode === "observe") {
     return {
       requestedMode,
