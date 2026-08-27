@@ -24,6 +24,7 @@ import {
   assertEquals,
   assert,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { regionCache } from "../../functions/_shared/metaApiClient.ts";
 
 // ─── Mock Fetch (intercepts MetaAPI calls) ──────────────────────────────────
 let fetchCalls: Array<{ url: string; method: string; body?: string }> = [];
@@ -44,11 +45,15 @@ function setupFetch(responses: Array<{ ok: boolean; status: number; body: string
   fetchCalls = [];
   fetchResponseIndex = 0;
   fetchResponses = responses;
+  // Region failover is tested in metaApiNoRetry.test.ts. Reconciliation tests
+  // need their first queued response to remain the broker positions payload.
+  regionCache.set("meta-account-123", "london");
   globalThis.fetch = mockFetch as any;
 }
 
 function teardownFetch() {
   globalThis.fetch = originalFetch;
+  regionCache.delete("meta-account-123");
 }
 
 // ─── Mock Supabase ──────────────────────────────────────────────────────────
