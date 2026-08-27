@@ -45,6 +45,7 @@ interface ZoneStoryData {
   };
   impulse: {
     direction: "bullish" | "bearish";
+    breakType?: "bos" | "choch" | null;
     high: number;
     low: number;
     pips: number;
@@ -290,7 +291,7 @@ const STATE_LABELS: Record<string, string> = {
   watching: "⏳ Watching",
   waiting_for_sweep: "⏳ Sweep Wait",
   waiting_for_reconfirmation: "⏳ Reconfirmation Wait",
-  no_zone: "— No Zone",
+  no_zone: "— No Entry Zone",
   no_impulse: "— No Impulse",
   error: "⚠ Error",
 };
@@ -329,6 +330,31 @@ export function ZoneStoryPanel({
 
   const stateColor = STATE_COLORS[unifiedData.state] ?? "text-zinc-400";
   const stateLabel = STATE_LABELS[unifiedData.state] ?? unifiedData.state;
+  const hasEntryZone = unifiedData.hasZone === true && unifiedData.zone != null;
+  const impulseStartPrice = unifiedData.impulse?.direction === "bearish"
+    ? unifiedData.impulse.high
+    : unifiedData.impulse?.low;
+  const impulseEndPrice = unifiedData.impulse?.direction === "bearish"
+    ? unifiedData.impulse.low
+    : unifiedData.impulse?.high;
+  const impulseQualificationState = unifiedData.impulse?.qualification?.state;
+  const impulseIsQualified = Boolean(
+    unifiedData.impulse &&
+      (!impulseQualificationState || impulseQualificationState === "qualified"),
+  );
+  const impulseIsDeveloping = Boolean(
+    unifiedData.impulse && impulseQualificationState === "developing",
+  );
+  const impulseBreakType = String(
+    unifiedData.impulse?.breakType ??
+      unifiedData.impulse?.qualification?.measurements?.breakType ??
+      "bos",
+  ).toLowerCase();
+  const impulseBreakLabel = impulseBreakType === "choch"
+    ? "CHoCH"
+    : impulseBreakType === "bos"
+    ? "BOS"
+    : "Structure";
 
   // Error state
   if (unifiedData.state === "error") {
@@ -407,7 +433,7 @@ export function ZoneStoryPanel({
           <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">ICT Setup Model</span>
           {unifiedData.selectedTF && (
             <span className="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 text-[10px] font-bold">
-              via {unifiedData.selectedTF}
+              {hasEntryZone ? `via ${unifiedData.selectedTF}` : `impulse via ${unifiedData.selectedTF}`}
             </span>
           )}
           {unifiedData.unifiedScore > 0 && (
@@ -432,7 +458,7 @@ export function ZoneStoryPanel({
           {/* Impulse Row */}
           <tr className="border-b border-zinc-800/50">
             <td className="py-1.5 pr-2 align-top w-5">
-              <Bullet filled={!!unifiedData.impulse} />
+              <Bullet filled={impulseIsQualified} partial={impulseIsDeveloping} />
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap w-24">
               Impulse
@@ -443,11 +469,13 @@ export function ZoneStoryPanel({
                   <span className={unifiedData.impulse.direction === "bullish" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
                     {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
                   </span>
-                  <span className="ml-2">{fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}</span>
+                  <span className="ml-2">{fmt(impulseStartPrice)} → {fmt(impulseEndPrice)}</span>
                   <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
                   {unifiedData.impulse.qualification && (
                     <span className={`ml-2 font-mono text-[10px] uppercase ${unifiedData.impulse.qualification.state === "qualified" ? "text-emerald-400" : unifiedData.impulse.qualification.state === "developing" ? "text-amber-400" : "text-red-400"}`}>
-                      {unifiedData.impulse.qualification.state}
+                      {unifiedData.impulse.qualification.state === "developing"
+                        ? "NOT YET QUALIFIED"
+                        : unifiedData.impulse.qualification.state}
                     </span>
                   )}
                 </div>
@@ -475,7 +503,7 @@ export function ZoneStoryPanel({
           {unifiedData.impulse && (
             <tr className="border-b border-zinc-800/50">
               <td className="py-1 pr-2"></td>
-              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">BOS</td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">{impulseBreakLabel}</td>
               <td className="py-1 font-mono text-zinc-200">{fmt(unifiedData.impulse.bosPrice)}</td>
             </tr>
           )}
@@ -483,11 +511,11 @@ export function ZoneStoryPanel({
           {/* Zone Row */}
           <tr className="border-b border-zinc-800/50">
             <td className="py-1.5 pr-2 align-top">
-              <Bullet filled={!!unifiedData.zone} />
+              <Bullet filled={hasEntryZone} />
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Zone</td>
             <td className="py-1.5 text-zinc-200">
-              {unifiedData.zone ? (
+              {hasEntryZone ? (
                 <div>
                   <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
                   <span className="text-zinc-400 ml-1">
@@ -496,7 +524,7 @@ export function ZoneStoryPanel({
                   <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
                 </div>
               ) : (
-                <span className="text-zinc-400">None found</span>
+                <span className="text-zinc-400">No qualified entry zone</span>
               )}
             </td>
           </tr>
@@ -740,19 +768,27 @@ export function ZoneStoryPanel({
                   {" · "}Certified max {zoneLocalEnforcement.mode.certifiedMaximum.toUpperCase()}
                 </span>
                 <span className={`ml-2 rounded px-1 py-0.5 text-[9px] font-bold ${
-                  zoneLocalEnforcement.allowed
+                  !hasEntryZone
+                    ? "bg-zinc-500/15 text-zinc-400"
+                    : zoneLocalEnforcement.allowed
                     ? "bg-green-500/15 text-green-400"
                     : "bg-red-500/15 text-red-400"
                 }`}>
-                  {zoneLocalEnforcement.allowed ? "ALLOWED" : "BLOCKED"}
+                  {!hasEntryZone
+                    ? "NOT APPLIED"
+                    : zoneLocalEnforcement.allowed
+                    ? "ALLOWED"
+                    : "BLOCKED"}
                 </span>
-                {zoneLocalEnforcement.scoreAdjustment !== 0 && (
+                {hasEntryZone && zoneLocalEnforcement.scoreAdjustment !== 0 && (
                   <span className="ml-2 text-[10px] font-mono text-orange-400">
                     score {zoneLocalEnforcement.scoreAdjustment}
                   </span>
                 )}
                 <p className="mt-1 text-[9px] text-zinc-400">
-                  {humanizePolicyReason(zoneLocalEnforcement.reason)}
+                  {hasEntryZone
+                    ? humanizePolicyReason(zoneLocalEnforcement.reason)
+                    : "No qualified entry zone exists in this scan, so the zone-local policy has nothing to evaluate."}
                 </p>
               </td>
             </tr>
@@ -768,9 +804,9 @@ export function ZoneStoryPanel({
               {/* Distance is measured against a zone. With none found the engine
                   leaves distancePips at 0, which rendered as "0.0 pips away" —
                   indistinguishable from price sitting exactly on the zone, and
-                  shown directly beneath a Zone row reading "None found". */}
-              {!unifiedData.zone ? (
-                <span className="text-zinc-400">No zone to measure against</span>
+                  shown directly beneath a Zone row with no qualified entry zone. */}
+              {!hasEntryZone ? (
+                <span className="text-zinc-400">No entry zone to measure against</span>
               ) : unifiedData.price.insideZone ? (
                 <span className="text-green-400">Inside zone</span>
               ) : unifiedData.price.atZone ? (
@@ -796,7 +832,9 @@ export function ZoneStoryPanel({
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Liquidity</td>
             <td className="py-1.5">
-              {unifiedData.liquidity ? (
+              {!hasEntryZone ? (
+                <span className="text-zinc-400">Not evaluated — no entry zone</span>
+              ) : unifiedData.liquidity ? (
                 <span className="text-zinc-200">
                   <span className={
                     unifiedData.liquidity.entryTriggerState === "swept_rejected"
@@ -836,7 +874,9 @@ export function ZoneStoryPanel({
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Confirmation</td>
             <td className="py-1.5">
-              {unifiedData.confirmation?.entryReady ? (
+              {!hasEntryZone ? (
+                <span className="text-zinc-400">Not evaluated — no entry zone</span>
+              ) : unifiedData.confirmation?.entryReady ? (
                 <span className="text-zinc-200">
                   {unifiedData.confirmation.detail}
                   <span className="text-cyan-400 ml-1">(+{unifiedData.confirmation.score.toFixed(1)})</span>
@@ -892,6 +932,8 @@ export function ZoneStoryPanel({
                 <span className="text-purple-400">Waiting for qualified local/internal sweep</span>
               ) : unifiedData.state === "waiting_for_reconfirmation" ? (
                 <span className="text-orange-400">Sweep was not rejected — waiting for a fresh trigger and confirmation</span>
+              ) : !hasEntryZone ? (
+                <span className="text-zinc-400">Unavailable — no entry zone</span>
               ) : (
                 <span className="text-zinc-400">Not yet</span>
               )}
@@ -901,7 +943,7 @@ export function ZoneStoryPanel({
       </table>
 
       {/* Score breakdown footer */}
-      {unifiedData.hasZone && (
+      {hasEntryZone && (
         <div className="mt-2 pt-2 border-t border-zinc-800 flex flex-wrap gap-2 text-[10px]">
           <span className="text-zinc-300">Base: {unifiedData.scoreBreakdown.baseScore.toFixed(1)}/9</span>
           {unifiedData.scoreBreakdown.liquidityBonus > 0 && (
@@ -929,8 +971,15 @@ export function ZoneStoryPanel({
 
       {/* Story summary */}
       <p className="text-[10px] text-zinc-300 mt-2 leading-relaxed">
-        {unifiedData.selectedTF ?? "—"} zone selected
-        {unifiedData.scoreBreakdown.tfBonus >= 2.0 ? " (A+ setup)" : unifiedData.scoreBreakdown.tfBonus >= 1.0 ? " (B+ setup)" : ""}: {unifiedData.reason}
+        {hasEntryZone
+          ? `${unifiedData.selectedTF ?? "—"} zone selected${
+            unifiedData.scoreBreakdown.tfBonus >= 2.0
+              ? " (A+ setup)"
+              : unifiedData.scoreBreakdown.tfBonus >= 1.0
+              ? " (B+ setup)"
+              : ""
+          }: ${unifiedData.reason}`
+          : `${unifiedData.selectedTF ?? unifiedData.impulse?.timeframe ?? "—"} impulse candidate inspected; no entry zone selected: ${unifiedData.reason}`}
       </p>
 
       {/* Observation-only per-timeframe evidence */}

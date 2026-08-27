@@ -221,6 +221,71 @@ describe("OperationsDashboard", () => {
     await waitFor(() => expect(api.killSwitch).toHaveBeenCalledWith(true));
   });
 
+  it("describes an unqualified impulse candidate without claiming no impulse exists", async () => {
+    api.logs.mockResolvedValue([{
+      scanned_at: "2026-08-26T22:12:37Z",
+      pairs_scanned: 1,
+      signals_found: 0,
+      trades_placed: 0,
+      details_json: [{
+        pair: "EUR/AUD",
+        direction: "short",
+        score: 28.6,
+        status: "skipped_no_impulse_zone",
+        unifiedZone: {
+          hasZone: false,
+          state: "no_zone",
+          selectedTF: "1H",
+          unifiedScore: 0,
+          scoreBreakdown: {
+            baseScore: 0,
+            liquidityBonus: 0,
+            confirmationBonus: 0,
+            tfBonus: 0,
+            total: 0,
+          },
+          impulse: {
+            direction: "bearish",
+            high: 1.63148,
+            low: 1.62313,
+            pips: 83.5,
+            timeframe: "1H",
+            startDate: "2026-08-25T15:00:00Z",
+            endDate: "2026-08-25T22:00:00Z",
+            spanBars: 7,
+            bosPrice: 1.62313,
+            qualification: {
+              state: "developing",
+              reasons: ["No accepted FVG or Order Block was created by the impulse"],
+              measurements: {},
+            },
+          },
+          zone: null,
+          price: {
+            currentPrice: 1.624,
+            atZone: false,
+            atZoneStrict: false,
+            insideZone: false,
+            distancePips: 0,
+            sideOk: false,
+          },
+          liquidity: null,
+          confirmation: null,
+          entry: null,
+          storySummary: "Impulse candidate not yet qualified",
+          reason: "No valid zone on any timeframe",
+        },
+      }],
+    }]);
+    api.pendingSnapshot.mockResolvedValue({ active: [], history: [], fetchedAt: null });
+
+    renderDashboard();
+
+    expect((await screen.findAllByText("impulse candidate found · no valid entry zone")).length).toBeGreaterThan(0);
+    expect(screen.getByText("— No Entry Zone")).toBeInTheDocument();
+    expect(screen.queryByText("skipped no impulse zone")).toBeNull();
+  });
+
   it("renders the frozen nested POI route instead of CHoCH and retracement", async () => {
     api.pendingSnapshot.mockResolvedValue({
       fetchedAt: "2026-08-23T14:31:20Z",

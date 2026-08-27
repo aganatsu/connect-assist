@@ -872,6 +872,28 @@ Deno.test("findBestEntryZone — full pipeline with bullish impulse", () => {
   }
 });
 
+Deno.test("findBestEntryZone — names an intact but unqualified leg as an impulse candidate", () => {
+  const htfCandles = generateBullishImpulseCandles(50);
+  const entryCandles = generateBullishImpulseCandles(100);
+
+  const result = findBestEntryZone(
+    htfCandles,
+    entryCandles,
+    "bullish",
+    1.03,
+    undefined,
+    { minDisplacementATR: 100 },
+  );
+
+  assertExists(result.impulse);
+  assertEquals(result.bestZone, null);
+  assert(
+    result.reason.includes("Impulse candidate not yet qualified"),
+    `Reason should distinguish the candidate from an entry zone: ${result.reason}`,
+  );
+  assert(!result.reason.includes("Developing structural leg"));
+});
+
 Deno.test("findBestEntryZone — observe-only evidence does not change selection or score", () => {
   const htfCandles = generateBullishImpulseCandles(50);
   const entryCandles = generateBullishImpulseCandles(100);

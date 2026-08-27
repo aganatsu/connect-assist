@@ -18,4 +18,9 @@ describe("watchlist persistence status", () => {
     expect(botView).toContain("WATCHLIST ERROR");
     expect(botView).toContain("ZONE AWAY");
   });
+
+  it("does not label an impulse candidate without a zone as no impulse", () => {
+    expect(botView).toContain('skipped_no_impulse_zone: { label: "No valid entry zone"');
+    expect(botView).not.toContain('skipped_no_impulse_zone: { label: "No impulse zone"');
+  });
 });

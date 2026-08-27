@@ -2265,7 +2265,9 @@ export function findBestEntryZone(
       impulse,
       impulseQualification,
       allZones: [],
-      reason: (impulseQualification.state === "invalidated" ? "Invalidated" : "Developing") + " structural leg: " + impulseQualification.reasons.join("; "),
+      reason: (impulseQualification.state === "invalidated"
+        ? "Invalidated structural leg"
+        : "Impulse candidate not yet qualified") + ": " + impulseQualification.reasons.join("; "),
     });
   }
   const qualification = poiQualification;
