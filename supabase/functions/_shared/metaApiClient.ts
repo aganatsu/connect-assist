@@ -107,6 +107,13 @@ export async function metaFetch(
     }
   }
 
+  // Cold cache: ask provisioning where the account actually lives BEFORE
+  // guessing. Blind region cycling hits hosts that do not know the account,
+  // which MetaAPI counts as "unexisting account" lookups and answers with a
+  // global 429 TooManyRequestsError for the whole application.
+  if (!regionCache.has(accountId)) {
+    await resolveAccountRegion(accountId, authToken);
+  }
   const cached = regionCache.get(accountId);
   const preferredRegion = cached || META_REGIONS[0];
   const order = !failoverAllowed
@@ -116,9 +123,12 @@ export async function metaFetch(
     : META_REGIONS;
   let lastBody = ""; let lastStatus = 504; let sawHttpResponse = false;
   const isDnsFailure = (m: string) => /dns error|failed to lookup address/i.test(m);
+  const isAccountLookupThrottle = (b: string) =>
+    /TooManyRequestsError/i.test(b) && /unexisting or undeployed/i.test(b);
   const queue = [...order];
   const tried = new Set<string>();
-  let consultedProvisioning = false;
+  let consultedProvisioning = true;
+
   while (queue.length) {
     const region = queue.shift()!;
     if (tried.has(region)) continue;
@@ -136,6 +146,11 @@ export async function metaFetch(
         const body = await res.text();
         if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
         lastBody = body; lastStatus = res.status; sawHttpResponse = true;
+        // Application-wide account-lookup throttle: more region attempts only
+        // deepen it, so surface it immediately.
+        if (isAccountLookupThrottle(body)) {
+          return { res: new Response(body, { status: res.status }), body };
+        }
         if (!/region|not connected to broker/i.test(body)) {
           return { res: new Response(body, { status: res.status }), body };
         }
@@ -143,6 +158,7 @@ export async function metaFetch(
           await new Promise((r) => setTimeout(r, 600));
           continue;
         }
+
         console.warn(
           !failoverAllowed
             ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
