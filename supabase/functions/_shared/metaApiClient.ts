@@ -107,6 +107,13 @@ export async function metaFetch(
     }
   }
 
+  // Cold cache: ask provisioning where the account actually lives BEFORE
+  // guessing. Blind region cycling hits hosts that do not know the account,
+  // which MetaAPI counts as "unexisting account" lookups and answers with a
+  // global 429 TooManyRequestsError for the whole application.
+  if (!regionCache.has(accountId)) {
+    await resolveAccountRegion(accountId, authToken);
+  }
   const cached = regionCache.get(accountId);
   const preferredRegion = cached || META_REGIONS[0];
   const order = !failoverAllowed
@@ -116,9 +123,12 @@ export async function metaFetch(
     : META_REGIONS;
   let lastBody = ""; let lastStatus = 504; let sawHttpResponse = false;
   const isDnsFailure = (m: string) => /dns error|failed to lookup address/i.test(m);
+  const isAccountLookupThrottle = (b: string) =>
+    /TooManyRequestsError/i.test(b) && /unexisting or undeployed/i.test(b);
   const queue = [...order];
   const tried = new Set<string>();
-  let consultedProvisioning = false;
+  let consultedProvisioning = cached ? true : true;
+
   while (queue.length) {
     const region = queue.shift()!;
     if (tried.has(region)) continue;
