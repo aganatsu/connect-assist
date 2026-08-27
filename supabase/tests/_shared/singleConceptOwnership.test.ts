@@ -66,6 +66,8 @@ const SINGLE_OWNER: string[] = [
   "checkMinRR",
   "resolveRoundTripCommission",
   "calculateRoundTripCommission",
+  "resolveEffectiveSpreadPips",
+  "calculateRoundTripTradingCosts",
   "floorLotSize",
   // ── Game Plan generation ──
   "generateInstrumentGamePlan",

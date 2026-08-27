@@ -594,6 +594,8 @@ export async function manageOpenPositions(
           remainingSize: partialDecision.remainingSize,
           grossPnl: partialDecision.grossPnl,
           commission: partialDecision.commission,
+          spreadCost: partialDecision.spreadCost,
+          totalTradingCost: partialDecision.totalTradingCost,
           netPnl: partialDecision.netPnl,
           pnlPips: partialDecision.pnlPips,
           rMultiple: partialDecision.rMultiple,

@@ -11,6 +11,7 @@
 
 import { SPECS } from "./smcAnalysis.ts";
 import { getQuoteToUSDRate } from "./smcAnalysis.ts";
+import { resolveEffectiveSpreadPips } from "./tradingCosts.ts";
 
 export interface MinRRGateInput {
   /** Current price */
@@ -72,9 +73,10 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
   }
 
   // Spread cost in price terms
-  const effectiveSpreadPips = (input.spreadPipsOverride && input.spreadPipsOverride > 0)
-    ? input.spreadPipsOverride
-    : (pairSpec.typicalSpread ?? 1);
+  const effectiveSpreadPips = resolveEffectiveSpreadPips(
+    input.spreadPipsOverride,
+    pairSpec.typicalSpread ?? 1,
+  );
   const spreadCostInPrice = effectiveSpreadPips * pairSpec.pipSize;
 
   // Commission cost in price terms (optional — live path only)

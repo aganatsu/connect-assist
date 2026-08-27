@@ -3,9 +3,11 @@ import {
   calcPnl,
   type Candle,
   classifyInstrumentRegime,
+  getQuoteToUSDRate,
+  SPECS,
 } from "./smcAnalysis.ts";
 import type { StructureCheckResult } from "./computeManagementDecision.ts";
-import { calculateRoundTripCommission } from "./tradingCosts.ts";
+import { calculateRoundTripTradingCosts } from "./tradingCosts.ts";
 
 export const EXIT_PARITY_CONTRACT_VERSION = "exit-parity.v1";
 
@@ -25,6 +27,8 @@ export interface PartialCloseInput {
   rateMap?: Record<string, number>;
   /** Round-trip commission per standard lot. */
   commissionPerLot?: number;
+  /** Full simulated spread in pips. Omitted for broker-observed live fills. */
+  spreadPips?: number;
   lotStep?: number;
 }
 
@@ -40,6 +44,8 @@ export interface PartialCloseDecision {
   pnlPips: number;
   grossPnl: number;
   commission: number;
+  spreadCost: number;
+  totalTradingCost: number;
   netPnl: number;
 }
 
@@ -108,6 +114,8 @@ export function computePartialCloseDecision(
     pnlPips: 0,
     grossPnl: 0,
     commission: 0,
+    spreadCost: 0,
+    totalTradingCost: 0,
     netPnl: 0,
   });
 
@@ -180,11 +188,16 @@ export function computePartialCloseDecision(
     );
   }
   const { pnl: grossPnl, pnlPips } = pnlResult;
-  const commission = calculateRoundTripCommission(
-    closeSize,
-    finite(input.commissionPerLot ?? 0, 0),
-  );
-  const netPnl = grossPnl - commission;
+  const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
+  const tradingCosts = calculateRoundTripTradingCosts({
+    lots: closeSize,
+    spreadPips: finite(input.spreadPips ?? 0, 0),
+    pipSize: spec.pipSize,
+    lotUnits: spec.lotUnits,
+    quoteToUSD: getQuoteToUSDRate(input.symbol, input.rateMap),
+    roundTripCommissionPerLot: finite(input.commissionPerLot ?? 0, 0),
+  });
+  const netPnl = grossPnl - tradingCosts.totalCost;
 
   return {
     contractVersion: EXIT_PARITY_CONTRACT_VERSION,
@@ -198,7 +211,9 @@ export function computePartialCloseDecision(
     remainingSize,
     pnlPips,
     grossPnl,
-    commission,
+    commission: tradingCosts.commission,
+    spreadCost: tradingCosts.spreadCost,
+    totalTradingCost: tradingCosts.totalCost,
     netPnl,
   };
 }

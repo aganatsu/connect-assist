@@ -100,7 +100,22 @@ Deno.test("partial close uses one trigger, lot rounding, and accounting contract
   assertEquals(decision.remainingSize, 0.5);
   assert(Math.abs(decision.pnlPips - 20) < 0.000001);
   assertEquals(decision.commission, 3.5);
+  assertEquals(decision.spreadCost, 0);
+  assertEquals(decision.totalTradingCost, 3.5);
   assert(Math.abs(decision.netPnl - 96.5) < 0.000001);
+});
+
+Deno.test("backtest partial close deducts the configured full spread once", () => {
+  const decision = computePartialCloseDecision(
+    partialInput({ spreadPips: 2 }),
+  );
+
+  assertEquals(decision.triggered, true);
+  assert(Math.abs(decision.grossPnl - 100) < 0.000001);
+  assertEquals(decision.spreadCost, 10);
+  assertEquals(decision.commission, 3.5);
+  assertEquals(decision.totalTradingCost, 13.5);
+  assert(Math.abs(decision.netPnl - 86.5) < 0.000001);
 });
 
 Deno.test("live and backtest share sizing while explicitly modeling fill price", () => {
