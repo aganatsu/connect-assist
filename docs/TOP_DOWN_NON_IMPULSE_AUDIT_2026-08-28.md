@@ -347,7 +347,9 @@ This is enough to count and inspect a descriptive cohort such as:
 The bounded summary query is
 `reports/non-impulse-top-down-opportunity-audit.sql`. It projects only the
 scalar fields and small evidence arrays needed for grouped counts; it does not
-materialize the full scan JSON or join other evidence tables.
+materialize the full scan JSON or join other evidence tables. It also groups by
+runtime status so a fresh no-zone rejection is not conflated with a previously
+frozen setup that the scanner merely retained.
 
 If the summary contains an `at_aligned_htf_poi_*` category, inspect a capped
 sample with `reports/non-impulse-top-down-candidate-details.sql`. The detail

@@ -27,6 +27,7 @@ setup lifecycle, risk, authorization, or execution behavior.
   - distinguishes no structural impulse from an impulse trace with no accepted
     zone;
   - classifies independent direction/structure/HTF-POI/liquidity evidence;
+  - separates current no-zone skips from retained frozen setup observations;
   - avoids materializing full scan JSON or joining large evidence tables.
 - `reports/non-impulse-top-down-candidate-details.sql`
   - read-only detail follow-up for the summary's `at_aligned_htf_poi_*`
@@ -69,6 +70,11 @@ The first wide audit query reached Supabase SQLSTATE `53100` while PostgreSQL
 was writing `pgsql_tmp`. It was replaced before merge with the bounded summary
 and capped detail queries listed above. The failing wide query should not be
 rerun.
+
+Review of the first bounded export also found that counting every historical
+ready liquidity sequence overstated current readiness. Both queries now mirror
+`evaluateCanonicalStructureDecision`: only the latest direction-aligned sequence
+controls the reported ready/pending state.
 
 ## Regression check
 

@@ -7,6 +7,8 @@
 -- It returns at most 250 descriptive rows and does not join candle snapshots or
 -- timeframe-evidence tables. It is READ ONLY and does not establish that a
 -- setup was executable or would have won.
+-- Structure readiness mirrors evaluateCanonicalStructureDecision by selecting
+-- only the latest direction-aligned liquidity sequence.
 --
 -- Start with three days. Increase lookback_days only after this succeeds.
 
@@ -183,8 +185,12 @@ candidate_pois AS (
     poi.poi_direction,
     poi.low_price AS poi_low,
     poi.high_price AS poi_high,
-    sequence.aligned_count AS aligned_sequence_count,
-    sequence.ready_count AS ready_sequence_count
+    sequence.sequence_id,
+    sequence.sequence_status,
+    sequence.sequence_entry_ready,
+    sequence.sequence_has_shift,
+    COALESCE(sequence.structure_sequence_ready, false)
+      AS structure_sequence_ready
   FROM filtered_rows r
   CROSS JOIN LATERAL (
     SELECT
@@ -207,27 +213,34 @@ candidate_pois AS (
   ) poi
   LEFT JOIN LATERAL (
     SELECT
-      count(*) FILTER (WHERE q.direction_aligned)::integer AS aligned_count,
-      count(*) FILTER (
-        WHERE q.direction_aligned
-          AND CASE
-            WHEN r.require_liquidity_sweep THEN q.entry_ready
-            ELSE q.has_shift
-          END
-      )::integer AS ready_count
-    FROM (
-      SELECT
-        CASE
-          WHEN r.direction = 'long'
-            THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bullish'
-          WHEN r.direction = 'short'
-            THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bearish'
-          ELSE false
-        END AS direction_aligned,
-        seq.value ->> 'entryReady' = 'true' AS entry_ready,
-        jsonb_typeof(seq.value -> 'shift') = 'object' AS has_shift
-      FROM jsonb_array_elements(r.liquidity_sequences) AS seq(value)
-    ) q
+      NULLIF(seq.value ->> 'id', '') AS sequence_id,
+      NULLIF(seq.value ->> 'status', '') AS sequence_status,
+      COALESCE(seq.value ->> 'entryReady' = 'true', false)
+        AS sequence_entry_ready,
+      COALESCE(
+        jsonb_typeof(seq.value -> 'shift') = 'object',
+        false
+      ) AS sequence_has_shift,
+      CASE
+        WHEN r.require_liquidity_sweep
+          THEN COALESCE(seq.value ->> 'entryReady' = 'true', false)
+        ELSE COALESCE(
+          jsonb_typeof(seq.value -> 'shift') = 'object',
+          false
+        )
+      END AS structure_sequence_ready
+    FROM jsonb_array_elements(r.liquidity_sequences)
+      WITH ORDINALITY AS seq(value, ordinality)
+    WHERE
+      CASE
+        WHEN r.direction = 'long'
+          THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bullish'
+        WHEN r.direction = 'short'
+          THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bearish'
+        ELSE false
+      END
+    ORDER BY seq.ordinality DESC
+    LIMIT 1
   ) sequence ON true
   WHERE
     CASE
@@ -262,9 +275,11 @@ SELECT
   c.poi_direction,
   c.poi_low,
   c.poi_high,
-  c.ready_sequence_count > 0 AS structure_sequence_ready,
-  c.aligned_sequence_count,
-  c.ready_sequence_count,
+  c.structure_sequence_ready,
+  c.sequence_id,
+  c.sequence_status,
+  c.sequence_entry_ready,
+  c.sequence_has_shift,
   c.require_liquidity_sweep,
   c.unified_state,
   c.impulse_qualification_state,

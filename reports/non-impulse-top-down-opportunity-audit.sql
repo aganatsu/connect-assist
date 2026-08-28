@@ -13,6 +13,8 @@
 --   MATERIALIZED CTEs can force PostgreSQL to spill gigabytes into pgsql_tmp.
 --   This query expands each scan once, projects only the fields needed for the
 --   summary, and returns grouped rows instead of every raw scan.
+--   Structure readiness mirrors evaluateCanonicalStructureDecision by selecting
+--   only the latest direction-aligned liquidity sequence.
 --
 -- Interpretation:
 --   * `no_structural_impulse` means no accepted structural leg was found.
@@ -178,8 +180,7 @@ measured AS (
     r.*,
     COALESCE(htf.aligned_count, 0) AS aligned_htf_poi_count,
     COALESCE(htf.inside_count, 0) AS inside_aligned_htf_poi_count,
-    COALESCE(sequence.aligned_count, 0) AS aligned_sequence_count,
-    COALESCE(sequence.ready_count, 0) AS ready_sequence_count
+    COALESCE(sequence.sequence_ready, false) AS structure_sequence_ready
   FROM filtered_rows r
   LEFT JOIN LATERAL (
     SELECT
@@ -221,27 +222,26 @@ measured AS (
   ) htf ON true
   LEFT JOIN LATERAL (
     SELECT
-      count(*) FILTER (WHERE q.direction_aligned)::integer AS aligned_count,
-      count(*) FILTER (
-        WHERE q.direction_aligned
-          AND CASE
-            WHEN r.require_liquidity_sweep THEN q.entry_ready
-            ELSE q.has_shift
-          END
-      )::integer AS ready_count
-    FROM (
-      SELECT
-        CASE
-          WHEN r.direction = 'long'
-            THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bullish'
-          WHEN r.direction = 'short'
-            THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bearish'
-          ELSE false
-        END AS direction_aligned,
-        seq.value ->> 'entryReady' = 'true' AS entry_ready,
-        jsonb_typeof(seq.value -> 'shift') = 'object' AS has_shift
-      FROM jsonb_array_elements(r.liquidity_sequences) AS seq(value)
-    ) q
+      CASE
+        WHEN r.require_liquidity_sweep
+          THEN COALESCE(seq.value ->> 'entryReady' = 'true', false)
+        ELSE COALESCE(
+          jsonb_typeof(seq.value -> 'shift') = 'object',
+          false
+        )
+      END AS sequence_ready
+    FROM jsonb_array_elements(r.liquidity_sequences)
+      WITH ORDINALITY AS seq(value, ordinality)
+    WHERE
+      CASE
+        WHEN r.direction = 'long'
+          THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bullish'
+        WHEN r.direction = 'short'
+          THEN lower(COALESCE(seq.value ->> 'direction', '')) = 'bearish'
+        ELSE false
+      END
+    ORDER BY seq.ordinality DESC
+    LIMIT 1
   ) sequence ON true
 ),
 classified AS (
@@ -279,7 +279,7 @@ classified AS (
         THEN 'aligned_htf_poi_price_unavailable'
       WHEN m.inside_aligned_htf_poi_count = 0
         THEN 'aligned_htf_poi_exists_price_not_inside'
-      WHEN m.ready_sequence_count > 0
+      WHEN m.structure_sequence_ready
         THEN 'at_aligned_htf_poi_sequence_ready_geometry_not_frozen'
       ELSE 'at_aligned_htf_poi_sequence_pending_geometry_not_frozen'
     END AS opportunity_stage
@@ -292,6 +292,7 @@ SELECT
   c.setup_timeframe,
   c.confirmation_timeframe,
   c.session,
+  c.runtime_status,
   c.zone_failure_class,
   c.opportunity_stage,
   count(*) AS scan_observations,
@@ -304,7 +305,7 @@ SELECT
     WHERE c.inside_aligned_htf_poi_count > 0
   ) AS scans_at_aligned_htf_poi,
   count(*) FILTER (
-    WHERE c.ready_sequence_count > 0
+    WHERE c.structure_sequence_ready
   ) AS scans_with_ready_structure_sequence,
   count(*) FILTER (
     WHERE c.timeframe_evidence_id IS NULL
@@ -319,6 +320,7 @@ GROUP BY
   c.setup_timeframe,
   c.confirmation_timeframe,
   c.session,
+  c.runtime_status,
   c.zone_failure_class,
   c.opportunity_stage
 ORDER BY
