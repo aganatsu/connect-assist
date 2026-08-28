@@ -6,7 +6,7 @@ function input() {
     evaluatedAt: "2026-08-03T21:00:00Z",
     identity: { candidateId: "c1", symbol: "EUR/USD", direction: "long" as const },
     direction: { verdict: "long" as const, shouldBlock: false },
-    zoneStory: { available: true, valid: true, entryReady: true, source: "unified", reasonCodes: [] },
+    entryZone: { available: true, valid: true, entryReady: true, source: "unified", reasonCodes: [] },
     canonicalLocation: { required: true, available: true, allowed: true },
     confirmation: { required: true, passed: true, reasonCodes: [] },
     thesis: { required: true, valid: true, reasonCodes: [] },
@@ -23,13 +23,13 @@ Deno.test("allows when owned authorities pass regardless of legacy diagnostics",
   assertEquals(result.affectsAuthorization, false);
 });
 
-Deno.test("waits for Zone Story or confirmation without treating it as a hard rejection", () => {
+Deno.test("waits for entry zone or confirmation without treating it as a hard rejection", () => {
   const value = input();
-  value.zoneStory.entryReady = false;
+  value.entryZone.entryReady = false;
   value.confirmation.passed = false;
   const result = evaluateSingleOwnershipDecision(value);
   assertEquals(result.decision, "watch");
-  assertEquals(result.reasonCodes, ["confirmation_waiting", "zone_story_waiting"]);
+  assertEquals(result.reasonCodes, ["confirmation_waiting", "entry_zone_waiting"]);
 });
 
 Deno.test("blocks canonical location, invalid thesis, and operational safety failures", () => {

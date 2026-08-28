@@ -184,7 +184,7 @@ Deno.test("lifecycle evidence ties candidate to exact strategy versions", () => 
   assertEquals(evidence.thesisVersion, "thesis.v1");
 });
 
-Deno.test("frozen setup captures only matching directional scenarios and zone story", () => {
+Deno.test("frozen setup captures only matching directional scenarios and entry zone", () => {
   const frozen = buildFrozenSetupStrategyContext({
     identity: {
       setupId: "setup-1",
@@ -230,13 +230,15 @@ Deno.test("frozen setup captures only matching directional scenarios and zone st
   });
 
   assertEquals(frozen.stylePolicy.policyHash, "scalper-exact");
-  assertEquals(frozen.scenarioZoneStory.enforcement, "observe_only");
-  assertEquals(frozen.scenarioZoneStory.scenarioCandidates.length, 1);
+  assertEquals(frozen.scenarioStory.enforcement, "observe_only");
+  assertEquals(frozen.scenarioStory.scenarioCandidates.length, 1);
   assertEquals(
-    frozen.scenarioZoneStory.scenarioCandidates[0].condition,
+    frozen.scenarioStory.scenarioCandidates[0].condition,
     "Price reclaims the demand zone",
   );
-  assertEquals(frozen.scenarioZoneStory.selectedScenarioIndex, null);
+  assertEquals(frozen.scenarioStory.selectedScenarioIndex, null);
+  assertEquals(frozen.entryZone?.setupFamily, "impulse");
+  assertEquals(frozen.entryZone?.bounds, { low: 1.29, high: 1.295 });
   assertEquals(frozen.confirmation.timeframe, "5min");
   assertEquals(frozen.confirmation.refinementTimeframe, "1min");
   assertEquals(frozen.confirmation.maxAttempts, 2);
@@ -392,7 +394,12 @@ Deno.test("lifecycle evidence cannot be rewritten by a newer plan", () => {
       id: "original-dv",
       verdictVersion: "original-dv-version",
     } as any,
-    originatingZone: { type: "original-zone" },
+    originatingZone: {
+      type: "fvg",
+      low: 1.29,
+      high: 1.295,
+      entry: 1.295,
+    },
     confirmationMethod: "indicators",
   });
   const evidence = buildSetupLifecycleEvidence({
@@ -414,7 +421,12 @@ Deno.test("lifecycle evidence cannot be rewritten by a newer plan", () => {
       verdictVersion: "new-dv-version",
     } as any,
     confirmationMethod: "choch",
-    originatingZone: { type: "new-zone" },
+    originatingZone: {
+      type: "ob",
+      low: 1.3,
+      high: 1.305,
+      entry: 1.305,
+    },
     frozenStrategyContext: frozen,
   });
 
@@ -422,7 +434,9 @@ Deno.test("lifecycle evidence cannot be rewritten by a newer plan", () => {
   assertEquals(evidence.gamePlanVersion, "original-version");
   assertEquals(evidence.directionVerdictId, "original-dv");
   assertEquals(evidence.confirmationMethod, "indicators");
-  assertEquals(evidence.originatingZone, { type: "original-zone" });
+  assertEquals(evidence.entryZone?.type, "fvg");
+  assertEquals(evidence.entryZone?.bounds, { low: 1.29, high: 1.295 });
+  assertEquals(evidence.originatingZone, undefined);
 });
 function nestedPoiPlan() {
   const selected: NestedPoiTriggerCandidate = {

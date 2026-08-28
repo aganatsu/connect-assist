@@ -46,8 +46,11 @@ import { normalizeAnalysisTimeframeOrNull } from "./timeframeAuthority.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
-export const FROZEN_SETUP_POLICY_VERSION = "setup-policy-freeze.v1";
-export const SCENARIO_ZONE_STORY_VERSION = "scenario-zone-story.v1";
+export const LEGACY_FROZEN_SETUP_POLICY_VERSION = "setup-policy-freeze.v1";
+export const FROZEN_SETUP_POLICY_VERSION = "setup-policy-freeze.v2";
+export const FROZEN_ENTRY_ZONE_VERSION = "frozen-entry-zone.v1";
+export const LEGACY_SCENARIO_ZONE_STORY_VERSION = "scenario-zone-story.v1";
+export const SCENARIO_STORY_VERSION = "scenario-story.v1";
 export const NESTED_POI_ENTRY_CONTRACT_VERSION = NESTED_POI_ENTRY_VERSION;
 
 export type SetupLifecycleStatus =
@@ -92,8 +95,75 @@ export interface SetupLifecycleEvidence {
   thesisVersion: string;
   decisionContractVersion: string;
   confirmationMethod: ConfirmationMethod;
-  originatingZone: Record<string, unknown> | null;
+  entryZone: FrozenEntryZone | null;
+  /** Present only when adapting pre-v2 lifecycle evidence. */
+  originatingZone?: Record<string, unknown> | null;
   frozenStrategyContext?: FrozenSetupStrategyContext | null;
+}
+
+export type SetupFamily = "impulse" | "cascade" | "structure_poi";
+
+/**
+ * One immutable, type-neutral entry-zone contract for every setup family.
+ *
+ * The setup lifecycle ID on `FrozenSetupStrategyContext.candidateId` identifies
+ * the opportunity's persisted journey. `candidateId` here identifies the
+ * selected market object and may be null only when adapting historical rows
+ * that predate zone-evidence identity.
+ */
+export interface FrozenEntryZone {
+  contractVersion: typeof FROZEN_ENTRY_ZONE_VERSION;
+  enforcement: "observe_only";
+  affectsAuthorization: false;
+  setupFamily: SetupFamily;
+  candidateId: string | null;
+  sourceEvidenceIds: string[];
+  sourceContextId: string | null;
+  sourceImpulseId: string | null;
+  sourceWindow: { start: string; end: string } | null;
+  type: string;
+  timeframe: string | null;
+  direction: "long" | "short";
+  bounds: { low: number; high: number };
+  lifecycle: string | null;
+  geometry: {
+    entry: number | null;
+    structuralInvalidation: number | null;
+    positionStop: number | null;
+    target: number | null;
+  };
+  stylePolicy: {
+    version: string;
+    basePolicyHash: string;
+    policyHash: string;
+    style: string;
+  };
+  timeframeRoles: {
+    bias: string;
+    structure: string;
+    setup: string;
+    confirmation: string;
+    refinement: string;
+    runtimeEntry: string;
+    runtimeHTF: string;
+  };
+  frozenAt: string;
+}
+
+export interface FrozenScenarioStory {
+  contractVersion: typeof SCENARIO_STORY_VERSION;
+  enforcement: "observe_only";
+  scenarioCandidates: Array<{
+    index: number;
+    direction: string;
+    condition: string;
+    action: string;
+    target: number | null;
+    invalidation: string | null;
+  }>;
+  selectedScenarioIndex: null;
+  status: "captured" | "no_directional_scenario";
+  reason: string;
 }
 
 export interface FrozenSetupStrategyContext {
@@ -126,22 +196,10 @@ export interface FrozenSetupStrategyContext {
   crossTimeframeContext?: FrozenCrossTimeframeContext | null;
   /** Optional market-entry trigger frozen independently from the parent zone. */
   nestedPoiEntry?: FrozenNestedPoiEntryPlan | null;
-  scenarioZoneStory: {
-    contractVersion: typeof SCENARIO_ZONE_STORY_VERSION;
-    enforcement: "observe_only";
-    originatingZone: Record<string, unknown> | null;
-    scenarioCandidates: Array<{
-      index: number;
-      direction: string;
-      condition: string;
-      action: string;
-      target: number | null;
-      invalidation: string | null;
-    }>;
-    selectedScenarioIndex: null;
-    status: "captured" | "no_directional_scenario";
-    reason: string;
-  };
+  /** The sole frozen entry-zone representation for v2 setup rows. */
+  entryZone: FrozenEntryZone | null;
+  /** Gameplan narrative is independent from executable zone geometry. */
+  scenarioStory: FrozenScenarioStory;
   liquidityActivation: LiquidityActivationPolicy;
   confirmation: {
     method: ConfirmationMethod;
@@ -464,6 +522,356 @@ function isResolvedStylePolicy(
     !!policy.lifecycle;
 }
 
+function normalizeSetupFamily(value: unknown): SetupFamily {
+  if (value === "cascade") return "cascade";
+  if (value === "structure_poi") return "structure_poi";
+  // `unified`, `standalone`, and the supplemental breaker route all use the
+  // impulse-owned setup family today. They are authorization/source labels,
+  // not separate zone detectors.
+  return "impulse";
+}
+
+function optionalFinite(value: unknown): number | null | undefined {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function canonicalTimeframe(value: unknown): string | null {
+  return normalizeAnalysisTimeframeOrNull(value);
+}
+
+function normalizedTimeframeRoles(
+  stylePolicy: ResolvedStylePolicy,
+): FrozenEntryZone["timeframeRoles"] {
+  const roles = stylePolicy.timeframes.roles;
+  return {
+    bias: canonicalTimeframe(roles.bias) || roles.bias,
+    structure: canonicalTimeframe(roles.structure) || roles.structure,
+    setup: canonicalTimeframe(roles.setup) || roles.setup,
+    confirmation: canonicalTimeframe(roles.confirmation) || roles.confirmation,
+    refinement: canonicalTimeframe(roles.refinement) || roles.refinement,
+    runtimeEntry: canonicalTimeframe(stylePolicy.timeframes.runtimeEntry) ||
+      stylePolicy.timeframes.runtimeEntry,
+    runtimeHTF: canonicalTimeframe(stylePolicy.timeframes.runtimeHTF) ||
+      stylePolicy.timeframes.runtimeHTF,
+  };
+}
+
+function frozenStyleReference(
+  stylePolicy: ResolvedStylePolicy,
+): FrozenEntryZone["stylePolicy"] {
+  return {
+    version: stylePolicy.contractVersion,
+    basePolicyHash: stylePolicy.basePolicyHash,
+    policyHash: stylePolicy.policyHash,
+    style: stylePolicy.style,
+  };
+}
+
+function normalizedStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value.map(nonEmptyString).filter((item): item is string => item !== null),
+  )].sort();
+}
+
+function normalizedSourceWindow(
+  value: unknown,
+  frozenAt: string,
+): FrozenEntryZone["sourceWindow"] | undefined {
+  if (value === null || value === undefined) return null;
+  const window = asRecord(value);
+  const start = nonEmptyString(window.start);
+  const end = nonEmptyString(window.end);
+  const startMs = start ? Date.parse(start) : Number.NaN;
+  const endMs = end ? Date.parse(end) : Number.NaN;
+  const frozenMs = Date.parse(frozenAt);
+  if (
+    !start || !end || !Number.isFinite(startMs) || !Number.isFinite(endMs) ||
+    !Number.isFinite(frozenMs) || startMs > endMs || endMs > frozenMs
+  ) return undefined;
+  return { start, end };
+}
+
+function sourceWindowFromEvidence(
+  evidence: MarketConceptEvidence[],
+  frozenAt: string,
+): FrozenEntryZone["sourceWindow"] {
+  const timestamps = evidence.flatMap((item) => [
+    item.sourceCandleStart,
+    item.sourceCandleEnd,
+  ]).filter((value) => Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  if (timestamps.length === 0) return null;
+  return normalizedSourceWindow({
+    start: timestamps[0],
+    end: timestamps[timestamps.length - 1],
+  }, frozenAt) || null;
+}
+
+function normalizeScenarioStory(value: unknown): FrozenScenarioStory | null {
+  const story = asRecord(value);
+  if (
+    story.contractVersion !== SCENARIO_STORY_VERSION ||
+    story.enforcement !== "observe_only" ||
+    !Array.isArray(story.scenarioCandidates) ||
+    story.selectedScenarioIndex !== null ||
+    (story.status !== "captured" &&
+      story.status !== "no_directional_scenario") ||
+    typeof story.reason !== "string"
+  ) return null;
+  return story as unknown as FrozenScenarioStory;
+}
+
+function scenarioStoryFromLegacy(value: unknown): FrozenScenarioStory | null {
+  const story = asRecord(value);
+  if (
+    story.contractVersion !== LEGACY_SCENARIO_ZONE_STORY_VERSION ||
+    story.enforcement !== "observe_only" ||
+    !Array.isArray(story.scenarioCandidates) ||
+    story.selectedScenarioIndex !== null ||
+    (story.status !== "captured" &&
+      story.status !== "no_directional_scenario") ||
+    typeof story.reason !== "string"
+  ) return null;
+  return {
+    contractVersion: SCENARIO_STORY_VERSION,
+    enforcement: "observe_only",
+    scenarioCandidates: story.scenarioCandidates,
+    selectedScenarioIndex: null,
+    status: story.status,
+    reason: story.reason,
+  } as FrozenScenarioStory;
+}
+
+export function normalizeFrozenEntryZone(
+  value: unknown,
+  expected?: {
+    direction?: "long" | "short";
+    stylePolicy?: ResolvedStylePolicy;
+    frozenAt?: string;
+  },
+): FrozenEntryZone | null {
+  const zone = asRecord(value);
+  if (
+    zone.contractVersion !== FROZEN_ENTRY_ZONE_VERSION ||
+    zone.enforcement !== "observe_only" ||
+    zone.affectsAuthorization !== false
+  ) return null;
+  const setupFamily = zone.setupFamily === "impulse" ||
+      zone.setupFamily === "cascade" || zone.setupFamily === "structure_poi"
+    ? zone.setupFamily as SetupFamily
+    : null;
+  const candidateId = zone.candidateId == null
+    ? null
+    : nonEmptyString(zone.candidateId);
+  const type = nonEmptyString(zone.type);
+  const timeframe = zone.timeframe == null
+    ? null
+    : canonicalTimeframe(zone.timeframe);
+  const direction = zone.direction === "long" || zone.direction === "short"
+    ? zone.direction
+    : null;
+  const bounds = asRecord(zone.bounds);
+  const low = optionalFinite(bounds.low);
+  const high = optionalFinite(bounds.high);
+  const lifecycle = zone.lifecycle == null
+    ? null
+    : nonEmptyString(zone.lifecycle);
+  const geometry = asRecord(zone.geometry);
+  const entry = optionalFinite(geometry.entry);
+  const structuralInvalidation = optionalFinite(
+    geometry.structuralInvalidation,
+  );
+  const positionStop = optionalFinite(geometry.positionStop);
+  const target = optionalFinite(geometry.target);
+  const style = asRecord(zone.stylePolicy);
+  const roles = asRecord(zone.timeframeRoles);
+  const sourceContextId = zone.sourceContextId == null
+    ? null
+    : nonEmptyString(zone.sourceContextId);
+  const sourceImpulseId = zone.sourceImpulseId == null
+    ? null
+    : nonEmptyString(zone.sourceImpulseId);
+  const frozenAt = nonEmptyString(zone.frozenAt);
+  const sourceWindow = frozenAt
+    ? normalizedSourceWindow(zone.sourceWindow, frozenAt)
+    : undefined;
+  const sourceEvidenceIds = normalizedStringList(zone.sourceEvidenceIds);
+  const normalizedRoles = {
+    bias: canonicalTimeframe(roles.bias),
+    structure: canonicalTimeframe(roles.structure),
+    setup: canonicalTimeframe(roles.setup),
+    confirmation: canonicalTimeframe(roles.confirmation),
+    refinement: canonicalTimeframe(roles.refinement),
+    runtimeEntry: canonicalTimeframe(roles.runtimeEntry),
+    runtimeHTF: canonicalTimeframe(roles.runtimeHTF),
+  };
+  if (
+    !setupFamily || !type || !direction || low === undefined ||
+    high === undefined || low === null || high === null || high < low ||
+    entry === undefined || structuralInvalidation === undefined ||
+    positionStop === undefined || target === undefined ||
+    (zone.candidateId != null && !candidateId) ||
+    (zone.timeframe != null && !timeframe) ||
+    (zone.lifecycle != null && !lifecycle) ||
+    (zone.sourceContextId != null && !sourceContextId) ||
+    (zone.sourceImpulseId != null && !sourceImpulseId) ||
+    !frozenAt || !Number.isFinite(Date.parse(frozenAt)) ||
+    sourceWindow === undefined ||
+    typeof style.version !== "string" ||
+    typeof style.basePolicyHash !== "string" ||
+    typeof style.policyHash !== "string" ||
+    typeof style.style !== "string" ||
+    Object.values(normalizedRoles).some((item) => item === null)
+  ) return null;
+  if (
+    (expected?.direction && expected.direction !== direction) ||
+    (expected?.frozenAt && expected.frozenAt !== frozenAt) ||
+    (expected?.stylePolicy &&
+      (expected.stylePolicy.contractVersion !== style.version ||
+        expected.stylePolicy.basePolicyHash !== style.basePolicyHash ||
+        expected.stylePolicy.policyHash !== style.policyHash ||
+        expected.stylePolicy.style !== style.style ||
+        JSON.stringify(normalizedTimeframeRoles(expected.stylePolicy)) !==
+          JSON.stringify(normalizedRoles)))
+  ) return null;
+  if (
+    setupFamily === "structure_poi" &&
+    (!candidateId || !sourceContextId || sourceEvidenceIds.length === 0 ||
+      sourceWindow === null || !timeframe)
+  ) return null;
+  return {
+    contractVersion: FROZEN_ENTRY_ZONE_VERSION,
+    enforcement: "observe_only",
+    affectsAuthorization: false,
+    setupFamily,
+    candidateId,
+    sourceEvidenceIds,
+    sourceContextId,
+    sourceImpulseId,
+    sourceWindow,
+    type,
+    timeframe,
+    direction,
+    bounds: { low, high },
+    lifecycle,
+    geometry: { entry, structuralInvalidation, positionStop, target },
+    stylePolicy: {
+      version: style.version,
+      basePolicyHash: style.basePolicyHash,
+      policyHash: style.policyHash,
+      style: style.style,
+    },
+    timeframeRoles: normalizedRoles as FrozenEntryZone["timeframeRoles"],
+    frozenAt,
+  };
+}
+
+export function buildFrozenEntryZone(input: {
+  zone?: unknown;
+  setupFamily?: unknown;
+  direction: "long" | "short";
+  stylePolicy: ResolvedStylePolicy;
+  frozenAt: string;
+  conceptEvidence?: MarketConceptEvidence[];
+  crossTimeframeContext?: FrozenCrossTimeframeContext | null;
+}): FrozenEntryZone | null {
+  const alreadyFrozen = normalizeFrozenEntryZone(input.zone, {
+    direction: input.direction,
+    stylePolicy: input.stylePolicy,
+    frozenAt: input.frozenAt,
+  });
+  if (alreadyFrozen) return alreadyFrozen;
+
+  const zone = asRecord(input.zone);
+  const bounds = asRecord(zone.bounds);
+  const geometry = asRecord(zone.geometry);
+  const context = asRecord(input.crossTimeframeContext);
+  const selectedZone = asRecord(context.selectedZone);
+  const canonicalRange = asRecord(asRecord(context.canonicalDealingRange).range);
+  const low = optionalFinite(bounds.low ?? zone.low);
+  const high = optionalFinite(bounds.high ?? zone.high);
+  const type = nonEmptyString(zone.type) || nonEmptyString(zone.displayType);
+  if (
+    low === null || low === undefined || high === null || high === undefined ||
+    high < low || !type
+  ) return null;
+
+  const evidence = input.conceptEvidence || [];
+  const sourceEvidenceIds = normalizedStringList([
+    ...normalizedStringList(zone.sourceEvidenceIds),
+    ...evidence.map((item) => item.evidenceId),
+  ]);
+  const explicitWindow = zone.sourceWindow == null
+    ? null
+    : normalizedSourceWindow(zone.sourceWindow, input.frozenAt);
+  if (explicitWindow === undefined) return null;
+  const timeframe = [
+    zone.timeframe,
+    zone.selectedTimeframe,
+    selectedZone.timeframe,
+  ].map(canonicalTimeframe)
+    .find((item): item is string => item !== null) || null;
+  const inferredFamily = input.setupFamily ?? zone.setupFamily ??
+    zone.signalSource;
+  const entry = optionalFinite(
+    geometry.entry ?? geometry.entryPrice ?? zone.entry ?? zone.entryPrice,
+  );
+  const structuralInvalidation = optionalFinite(
+    geometry.structuralInvalidation ?? zone.structuralInvalidation,
+  );
+  const positionStop = optionalFinite(
+    geometry.positionStop ?? zone.positionStop ?? zone.stopLoss,
+  );
+  const target = optionalFinite(
+    geometry.target ?? zone.target ?? zone.takeProfit,
+  );
+  if (
+    entry === undefined || structuralInvalidation === undefined ||
+    positionStop === undefined || target === undefined
+  ) return null;
+  const built: FrozenEntryZone = {
+    contractVersion: FROZEN_ENTRY_ZONE_VERSION,
+    enforcement: "observe_only",
+    affectsAuthorization: false,
+    setupFamily: normalizeSetupFamily(inferredFamily),
+    candidateId: nonEmptyString(zone.candidateId) ||
+      nonEmptyString(zone.id) ||
+      nonEmptyString(selectedZone.candidateId),
+    sourceEvidenceIds,
+    sourceContextId: nonEmptyString(zone.sourceContextId) ||
+      nonEmptyString(zone.contextId),
+    sourceImpulseId: nonEmptyString(zone.sourceImpulseId) ||
+      nonEmptyString(zone.impulseId) ||
+      nonEmptyString(canonicalRange.impulseId),
+    sourceWindow: explicitWindow ||
+      sourceWindowFromEvidence(evidence, input.frozenAt),
+    type,
+    timeframe,
+    direction: input.direction,
+    bounds: { low, high },
+    lifecycle: nonEmptyString(zone.lifecycle) ||
+      nonEmptyString(asRecord(zone.candidateLifecycle).state) ||
+      nonEmptyString(selectedZone.lifecycle),
+    geometry: {
+      entry,
+      structuralInvalidation,
+      positionStop,
+      target,
+    },
+    stylePolicy: frozenStyleReference(input.stylePolicy),
+    timeframeRoles: normalizedTimeframeRoles(input.stylePolicy),
+    frozenAt: input.frozenAt,
+  };
+  return normalizeFrozenEntryZone(built, {
+    direction: input.direction,
+    stylePolicy: input.stylePolicy,
+    frozenAt: input.frozenAt,
+  });
+}
+
 export function buildFrozenSetupStrategyContext(input: {
   identity: SetupLifecycleIdentity;
   timeframeEvidenceId?: string | null;
@@ -480,6 +888,9 @@ export function buildFrozenSetupStrategyContext(input: {
   zoneLocalEnforcement?: ZoneLocalEnforcementDecision | null;
   crossTimeframeContext?: FrozenCrossTimeframeContext | null;
   nestedPoiEntry?: unknown;
+  entryZone?: unknown;
+  setupFamily?: unknown;
+  /** Legacy call-site input. New callers should pass `entryZone`. */
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
@@ -509,9 +920,19 @@ export function buildFrozenSetupStrategyContext(input: {
   const confirmationMethod =
     normalizeConfirmationMethod(input.confirmationMethod) || "choch";
   const indicatorMinimum = normalizeIndicatorMinimum(input.indicatorMinCount);
+  const frozenAt = input.frozenAt || new Date().toISOString();
+  const entryZone = buildFrozenEntryZone({
+    zone: input.entryZone ?? input.originatingZone,
+    setupFamily: input.setupFamily,
+    direction: input.direction,
+    stylePolicy: input.stylePolicy,
+    frozenAt,
+    conceptEvidence: input.conceptEvidence,
+    crossTimeframeContext: input.crossTimeframeContext,
+  });
   return {
     contractVersion: FROZEN_SETUP_POLICY_VERSION,
-    frozenAt: input.frozenAt || new Date().toISOString(),
+    frozenAt,
     setupId: input.identity.setupId,
     candidateId: input.identity.candidateId,
     timeframeEvidenceId: input.timeframeEvidenceId || null,
@@ -539,10 +960,10 @@ export function buildFrozenSetupStrategyContext(input: {
     zoneLocalEnforcement: input.zoneLocalEnforcement || null,
     crossTimeframeContext: input.crossTimeframeContext || null,
     nestedPoiEntry: normalizeNestedPoiEntryPlan(input.nestedPoiEntry),
-    scenarioZoneStory: {
-      contractVersion: SCENARIO_ZONE_STORY_VERSION,
+    entryZone,
+    scenarioStory: {
+      contractVersion: SCENARIO_STORY_VERSION,
       enforcement: "observe_only",
-      originatingZone: input.originatingZone || null,
       scenarioCandidates,
       selectedScenarioIndex: null,
       status: scenarioCandidates.length > 0
@@ -595,9 +1016,7 @@ export function readFrozenSetupStrategyContext(
   for (const candidate of candidates) {
     const context = asRecord(candidate);
     const confirmation = asRecord(context.confirmation);
-    const scenarioZoneStory = asRecord(context.scenarioZoneStory);
     if (
-      context.contractVersion === FROZEN_SETUP_POLICY_VERSION &&
       isResolvedStylePolicy(context.stylePolicy) &&
       typeof context.setupId === "string" &&
       typeof context.candidateId === "string" &&
@@ -605,14 +1024,69 @@ export function readFrozenSetupStrategyContext(
       (context.direction === "long" || context.direction === "short") &&
       normalizeConfirmationMethod(confirmation.method) !== null &&
       typeof confirmation.timeframe === "string" &&
-      typeof confirmation.refinementTimeframe === "string" &&
-      scenarioZoneStory.contractVersion === SCENARIO_ZONE_STORY_VERSION &&
-      scenarioZoneStory.enforcement === "observe_only"
+      typeof confirmation.refinementTimeframe === "string"
     ) {
-      return {
-        ...(context as FrozenSetupStrategyContext),
-        nestedPoiEntry: normalizeNestedPoiEntryPlan(context.nestedPoiEntry),
-      };
+      if (context.contractVersion === FROZEN_SETUP_POLICY_VERSION) {
+        const scenarioStory = normalizeScenarioStory(context.scenarioStory);
+        const entryZone = context.entryZone == null
+          ? null
+          : normalizeFrozenEntryZone(context.entryZone, {
+            direction: context.direction,
+            stylePolicy: context.stylePolicy,
+            frozenAt: typeof context.frozenAt === "string"
+              ? context.frozenAt
+              : undefined,
+          });
+        if (
+          !scenarioStory || !("entryZone" in context) ||
+          (context.entryZone != null && !entryZone)
+        ) continue;
+        return {
+          ...(context as FrozenSetupStrategyContext),
+          entryZone,
+          scenarioStory,
+          nestedPoiEntry: normalizeNestedPoiEntryPlan(context.nestedPoiEntry),
+        };
+      }
+
+      if (context.contractVersion === LEGACY_FROZEN_SETUP_POLICY_VERSION) {
+        const legacyScenarioZoneStory = asRecord(context.scenarioZoneStory);
+        const scenarioStory = scenarioStoryFromLegacy(
+          legacyScenarioZoneStory,
+        );
+        if (!scenarioStory) continue;
+        const entryZone = buildFrozenEntryZone({
+          zone: legacyScenarioZoneStory.originatingZone,
+          direction: context.direction,
+          stylePolicy: context.stylePolicy,
+          frozenAt: typeof context.frozenAt === "string"
+            ? context.frozenAt
+            : new Date(0).toISOString(),
+          conceptEvidence: Array.isArray(context.conceptEvidence)
+            ? context.conceptEvidence as MarketConceptEvidence[]
+            : [],
+          crossTimeframeContext: context.crossTimeframeContext as
+            | FrozenCrossTimeframeContext
+            | null
+            | undefined,
+        });
+        const {
+          scenarioZoneStory: _legacyScenarioZoneStory,
+          entryZone: _legacyEntryZone,
+          scenarioStory: _legacyScenarioStory,
+          ...legacyContext
+        } = context;
+        return {
+          ...(legacyContext as Omit<
+            FrozenSetupStrategyContext,
+            "contractVersion" | "entryZone" | "scenarioStory"
+          >),
+          contractVersion: FROZEN_SETUP_POLICY_VERSION,
+          entryZone,
+          scenarioStory,
+          nestedPoiEntry: normalizeNestedPoiEntryPlan(context.nestedPoiEntry),
+        };
+      }
     }
   }
   return null;
@@ -921,6 +1395,8 @@ export function buildSetupLifecycleEvidence(input: {
   gamePlan: SessionGamePlan | null;
   directionVerdict: DirectionVerdictDecision | null;
   confirmationMethod: unknown;
+  entryZone?: FrozenEntryZone | null;
+  /** Legacy evidence input for callers without a frozen v2 context. */
   originatingZone?: Record<string, unknown> | null;
   frozenStrategyContext?: FrozenSetupStrategyContext | null;
 }): SetupLifecycleEvidence {
@@ -952,10 +1428,11 @@ export function buildSetupLifecycleEvidence(input: {
     confirmationMethod: frozen?.confirmation.method ||
       normalizeConfirmationMethod(input.confirmationMethod) ||
       "choch",
-    originatingZone: frozen?.scenarioZoneStory.originatingZone ||
-      input.originatingZone ||
-      null,
+    entryZone: frozen?.entryZone || input.entryZone || null,
     frozenStrategyContext: frozen,
+    ...(!frozen && input.originatingZone
+      ? { originatingZone: input.originatingZone }
+      : {}),
   };
 }
 

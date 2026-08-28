@@ -1,5 +1,6 @@
 import {
   evaluateSingleOwnershipDecision,
+  normalizeSingleOwnershipDecision,
   operationalSafetyChecks,
   type SingleOwnershipDecisionResult,
 } from "./singleOwnershipDecision.ts";
@@ -38,22 +39,25 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
   requestedMode?: unknown;
   runtimeTarget: "paper" | "live";
 }) {
-  const frozenZone = input.frozenDecision?.authorities.zoneStory;
-  const frozenOriginatingZone = input.frozenStrategyContext?.scenarioZoneStory
-    .originatingZone;
+  const normalizedFrozenDecision = normalizeSingleOwnershipDecision(
+    input.frozenDecision,
+  );
+  const frozenZone = normalizedFrozenDecision?.authorities.entryZone;
+  const frozenEntryZone = input.frozenStrategyContext?.entryZone;
   const inheritedZone =
-    frozenOriginatingZone && Object.keys(frozenOriginatingZone).length > 0
+    frozenEntryZone
       ? {
         available: true,
         valid: true,
         entryReady: true,
         source: "frozen_setup_context",
-        candidateId: input.frozenStrategyContext?.candidateId ||
+        candidateId: frozenEntryZone.candidateId ||
           input.candidateId,
-        poiType: typeof frozenOriginatingZone.type === "string"
-          ? frozenOriginatingZone.type
-          : null,
-        reasonCodes: ["frozen_zone_story_inherited", "fill_confirmation_ready"],
+        setupFamily: frozenEntryZone.setupFamily,
+        sourceEvidenceIds: frozenEntryZone.sourceEvidenceIds,
+        impulseId: frozenEntryZone.sourceImpulseId,
+        poiType: frozenEntryZone.type,
+        reasonCodes: ["frozen_entry_zone_inherited", "fill_confirmation_ready"],
       }
       : null;
   const decision = evaluateSingleOwnershipDecision({
@@ -73,7 +77,7 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
       evidenceId: input.directionVerdict?.id || null,
       policy: "retain_frozen_until_opposed",
     },
-    zoneStory: frozenZone
+    entryZone: frozenZone
       ? {
         ...frozenZone,
         entryReady: true,
@@ -84,7 +88,7 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
         valid: null,
         entryReady: null,
         source: null,
-        reasonCodes: ["frozen_zone_story_unavailable"],
+        reasonCodes: ["frozen_entry_zone_unavailable"],
       },
     canonicalLocation: input.canonicalLocation,
     confirmation: {
@@ -105,7 +109,7 @@ export function evaluateSingleOwnershipFillAuthorization(input: {
         passed: check.passed,
       }))),
     },
-    legacyDiagnostics: input.frozenDecision?.legacyDiagnostics || null,
+    legacyDiagnostics: normalizedFrozenDecision?.legacyDiagnostics || null,
   });
   const enforcement = evaluateSingleOwnershipEnforcement({
     requestedMode: input.requestedMode,

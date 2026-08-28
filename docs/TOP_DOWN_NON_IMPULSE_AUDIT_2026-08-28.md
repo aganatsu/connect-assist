@@ -50,6 +50,18 @@ rank already-detected POIs under a non-impulse setup family, freeze the same
 setup contract, and run observation-only in both live and backtest before it can
 authorize paper or live execution.
 
+### Implementation status
+
+Phase 1 and Phase 2 are now implemented without changing setup admission or
+execution. The existing entry-zone selector has an observation-only
+`structure_poi` adapter, and `_shared/setupLifecycle.ts` now owns the neutral
+`setup-policy-freeze.v2` contract. New frozen rows use `entryZone`; legacy
+`scenarioZoneStory`, Single Ownership `zoneStory`, and Canonical Scanner
+`impulse_zone` evidence are converted at read time. The existing database
+freeze trigger now accepts both persisted versions; no stored rows are
+rewritten and no new authority was added. The verified findings below describe
+the pre-migration baseline that motivated these changes.
+
 ## What “top-down” currently means
 
 The active style already owns the timeframe ladder. The scanner resolves the
@@ -455,6 +467,14 @@ them into this owner and leave a one-line delegating adapter until the legacy
 caller is removed.
 
 ### Phase 2 — Generalize the existing setup contract
+
+Implementation status: complete. New writes use the neutral
+`FrozenEntryZone` contract and the `entry_zone` scanner role. Compatibility
+readers adapt v1 rows in memory, and the existing database trigger validates
+both persisted versions. Database columns such as `originating_zone` remain
+available to the existing execution/UI paths. This phase changes names,
+versioning, and frozen provenance only; it does not create a `structure_poi`
+trade route.
 
 Change the existing `zoneStory` contract to a neutral `entryZone` concept with
 provenance:

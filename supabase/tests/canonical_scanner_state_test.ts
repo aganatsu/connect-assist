@@ -27,7 +27,7 @@ Deno.test("canonical scanner state is observation only and preserves authority t
   const result = projectCanonicalScannerState(base());
   assertEquals(result.observationOnly, true);
   assertEquals(result.affectsAuthorization, false);
-  assertEquals(result.authorities.map((item) => item.role), ["direction", "impulse_zone", "location", "liquidity", "confirmation", "thesis", "safety", "execution"]);
+  assertEquals(result.authorities.map((item) => item.role), ["direction", "entry_zone", "location", "liquidity", "confirmation", "thesis", "safety", "execution"]);
 });
 
 Deno.test("terminal lifecycle state takes precedence", () => {

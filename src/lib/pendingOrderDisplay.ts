@@ -204,7 +204,10 @@ function nestedPoiPlan(
     recordValue(watchlistLifecycle.frozenStrategyContext),
   ];
   for (const context of frozenSources) {
-    if (context.contractVersion !== "setup-policy-freeze.v1") continue;
+    if (
+      context.contractVersion !== "setup-policy-freeze.v1" &&
+      context.contractVersion !== "setup-policy-freeze.v2"
+    ) continue;
     const plan = recordValue(context.nestedPoiEntry);
     return plan.contractVersion === "nested-poi-entry.v1" ? plan : {};
   }

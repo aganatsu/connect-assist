@@ -19,6 +19,8 @@ Deno.test("duplicate market-quality gates are legacy diagnostics", () => {
 Deno.test("owned authorities and operational safety remain enforcing", () => {
   assertEquals(authorityGateOwner("premium_discount"), "canonical_location");
   assertEquals(authorityGateOwner("direction_verdict"), "direction");
+  assertEquals(authorityGateOwner("entry_zone"), "entry_zone");
+  assertEquals(authorityGateOwner("zone_story"), "entry_zone");
   assertEquals(authorityGateOwner("confirmation"), "confirmation");
   assertEquals(authorityGateOwner("thesis"), "thesis");
   for (const code of [

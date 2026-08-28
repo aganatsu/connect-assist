@@ -248,6 +248,20 @@ bot-scanner detects setup
                 └─ Impulse invalidated → cancel order
 ```
 
+### Frozen setup contract
+
+The setup lifecycle persists one versioned, style-aware `entryZone` contract
+for impulse and cascade setups, with `structure_poi` reserved for observation
+until evidence supports a separate paper-only rollout. It freezes the selected
+market-object identity, evidence provenance, timeframe, bounds, lifecycle,
+entry, invalidation, stop, target, style hashes, and timeframe roles. This is
+distinct from the setup lifecycle UUID, which identifies the opportunity's
+journey through watchlist, pending order, and position state.
+
+Historical `scenarioZoneStory` / `zoneStory` / `impulse_zone` records are
+normalized by compatibility readers. They are not rewritten, and no parallel
+decision implementation is retained.
+
 ---
 
 ## Position Management (paper-trading/index.ts)
