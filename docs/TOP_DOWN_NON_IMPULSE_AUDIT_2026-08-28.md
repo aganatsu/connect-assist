@@ -430,6 +430,12 @@ audit-query result.
 
 ### Phase 1 — Observation-only candidate adapter
 
+Implementation status: the shared authority now exposes an explicit
+`structure_poi` mode with stable identity, closed-bar provenance checks,
+style-role timeframe filtering, and the existing type-neutral ranking logic.
+It is intentionally not connected to scanner admission or execution in this
+phase.
+
 Modify `_shared/ictEntryZoneAuthority.ts`, the existing owner, so it can accept
 already-detected non-impulse POI components with explicit provenance such as
 `structure_poi`. Do not create `TopDownZoneEngine`, `POIAuthorityV2`, or another

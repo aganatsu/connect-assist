@@ -57,7 +57,7 @@ instead of arbitrating.
 | Post-placement direction reversal | 1 | `thesisValidator.ts:compareDirectionVerdicts` | 🟢 Single owner |
 | Post-touch CHoCH/MSS trigger | 2 enforced checks | `detectZoneConfirmation` + `impulseConfirmationLock` | 🔴 DUPLICATE ENFORCEMENT |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
-| Nested entry-zone eligibility/ranking | 1 authority mode | `ictEntryZoneAuthority.ts:selectICTEntryZone` | 🟢 Single owner |
+| Entry-zone eligibility/ranking | 1 authority: standard + 2 explicit modes | `ictEntryZoneAuthority.ts:selectICTEntryZone` | 🟢 Single owner |
 
 ---
 
@@ -255,6 +255,22 @@ post-CHoCH retracement steps for that setup; it does not run as an additional ga
 `pendingZoneTouch.ts:closedCandleTouchesRange` is the single owner of exact
 completed-candle overlap for outer-zone and nested-trigger touches. Live and backtest
 both advance the same persisted impulse-entry lifecycle through that owner.
+
+## Structure POI observation adapter
+
+`_shared/ictEntryZoneAuthority.ts:selectICTEntryZone` also owns the explicit
+`structure_poi` mode for non-impulse candidate research. This is an extension of
+the existing selector, not another detector or decision pipeline. It accepts POIs
+already produced by the existing Order Block, FVG, and breaker detectors and
+reuses the same type-neutral scoring, overlap construction, and lifecycle
+eligibility rules as standard impulse candidates.
+
+The adapter requires stable entity and evidence IDs, source-candle start/end
+timestamps that are closed by the observation time, direction alignment, and a
+timeframe belonging to the resolved style's setup, structure, or confirmation
+roles. Its candidate identity is deterministic across rescans and its output is
+hard-coded to `observe_only`. It is not yet wired into scanner admission,
+lifecycle, authorization, orders, or execution.
 
 ## Post-touch CHoCH/MSS trigger
 
@@ -534,11 +550,12 @@ findCascadeZone  (cascadeZoneEngine)  ─┴─► findBestEntryZoneMultiTF ─�
 ```
 
 One detection foundation, two competing *selection strategies* over it, resolved by an
-explicit priority waterfall at `bot-scanner/index.ts:6015`. `selectICTEntryZone` is
-observation-only: its standard mode is called inside `buildCandidateAuthorityObservation`,
-and its explicit `nested_poi` mode owns the nested route's eligibility and ranking before
-`buildNestedPoiEntryPlan` freezes the result. This is defensible architecture, not
-duplication.
+explicit priority waterfall at `bot-scanner/index.ts:6015`. `selectICTEntryZone` remains
+the single type-neutral entry-zone owner: its standard mode is called inside
+`buildCandidateAuthorityObservation`, its `nested_poi` mode owns the nested route's
+eligibility and ranking before `buildNestedPoiEntryPlan` freezes the result, and its
+`structure_poi` mode is observation-only research over already-detected non-impulse POIs.
+This is defensible architecture, not duplication.
 
 ---
 

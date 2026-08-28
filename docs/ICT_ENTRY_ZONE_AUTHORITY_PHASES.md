@@ -5,7 +5,7 @@
 Replace separate OB, FVG, Breaker and Unicorn selection paths with one
 explainable authority:
 
-`authoritative impulse -> eligible zone -> liquidity -> confirmation -> authorization`
+`authoritative setup context -> eligible zone -> liquidity -> confirmation -> authorization`
 
 Legacy percentages, tiers and factor weights remain diagnostics. They do not
 select the production entry zone.
@@ -38,6 +38,18 @@ select the production entry zone.
 - [x] Revalidate breaker ownership, far-boundary lifecycle, thesis and confirmation at fill.
 - [x] Use the same pure selector in unified live and backtest analysis.
 - [ ] Remove the independent Breaker pending-order authority.
+
+### Non-impulse extension: structure POI research
+
+- [x] Add an explicit `structure_poi` mode to this existing authority.
+- [x] Require stable entity/evidence IDs and closed-bar provenance.
+- [x] Restrict candidates to the resolved style's setup, structure, and
+      confirmation timeframes.
+- [x] Reuse the existing type-neutral scoring and overlap construction.
+- [x] Keep the result permanently `observe_only` at this phase.
+- [ ] Wire identical observation inputs from live scanning and backtest.
+- [ ] Generalize and version the frozen setup contract before any paper rollout.
+- [ ] Collect forward outcomes; retrospective replay cannot unlock execution.
 
 ## Safety Rule
 

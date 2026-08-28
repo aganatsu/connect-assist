@@ -1,6 +1,11 @@
 import { assertEquals, assertGreater } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { breakerCloseInvalidated, breakerRetestHeld, evaluateBreakerFillLifecycle, hasOppositeStructureBreak } from "../../functions/_shared/breakerSemantics.ts";
-import { selectICTEntryZone, type ICTEntryZoneComponent } from "../../functions/_shared/ictEntryZoneAuthority.ts";
+import {
+  type ICTEntryZoneComponent,
+  type ICTStructurePoiComponent,
+  type ICTStructurePoiEntryZoneInput,
+  selectICTEntryZone,
+} from "../../functions/_shared/ictEntryZoneAuthority.ts";
 import { classifyZoneCandidateLifecycle } from "../../functions/_shared/zoneCandidateModel.ts";
 
 const fresh = classifyZoneCandidateLifecycle({
@@ -15,6 +20,53 @@ function component(id: string, type: ICTEntryZoneComponent["type"], overrides: P
     fibDepth: 0.618, valueLocationScore: 1.5, displacementScore: 2,
     liquidityScore: 1, htfLineageScore: 1, historicalSRScore: 1,
     proximityScore: 1, ...overrides,
+  };
+}
+
+function structurePoiComponent(
+  id: string,
+  type: ICTStructurePoiComponent["type"],
+  overrides: Partial<ICTStructurePoiComponent> = {},
+): ICTStructurePoiComponent {
+  return {
+    id,
+    evidenceId: `evidence:${id}`,
+    type,
+    direction: "bullish",
+    low: 1.1,
+    high: 1.101,
+    timeframe: "5m",
+    sourceCandleStart: "2026-08-28T10:00:00.000Z",
+    sourceCandleEnd: "2026-08-28T10:05:00.000Z",
+    lifecycle: fresh,
+    fibDepth: 0,
+    valueLocationScore: 0,
+    displacementScore: 2,
+    liquidityScore: 0,
+    htfLineageScore: 1,
+    historicalSRScore: 0,
+    proximityScore: 1,
+    ...overrides,
+  };
+}
+
+function structurePoiInput(
+  components: ICTStructurePoiComponent[],
+  overrides: Partial<ICTStructurePoiEntryZoneInput> = {},
+): ICTStructurePoiEntryZoneInput {
+  return {
+    mode: "structure_poi",
+    contextId: "liquidity:sweep-1:choch-1",
+    direction: "bullish",
+    observedAt: "2026-08-28T10:10:00.000Z",
+    currentPrice: 1.1005,
+    timeframes: {
+      setup: "5m",
+      structure: "15m",
+      confirmation: "5m",
+    },
+    components,
+    ...overrides,
   };
 }
 
@@ -64,6 +116,93 @@ Deno.test("overlapping breaker and FVG form a Unicorn candidate", () => {
   ]);
   assertEquals(selection.selected?.type, "breaker_fvg");
   assertGreater(selection.selected?.score ?? 0, 0);
+});
+
+Deno.test("structure POIs use the existing type-neutral selector without an impulse ID", () => {
+  const selection = selectICTEntryZone(structurePoiInput([
+    structurePoiComponent("ob:entity-1", "ob", {
+      low: 1.1,
+      high: 1.1015,
+      timeframe: "15m",
+      displacementScore: 0.5,
+    }),
+    structurePoiComponent("fvg:entity-1", "fvg", {
+      low: 1.102,
+      high: 1.103,
+      displacementScore: 3,
+    }),
+  ]));
+
+  assertEquals(selection.enforcement, "observe_only");
+  assertEquals(selection.affectsAuthorization, false);
+  assertEquals(selection.selected?.affectsAuthorization, false);
+  assertEquals(selection.mode, "structure_poi");
+  assertEquals(selection.setupFamily, "structure_poi");
+  assertEquals(selection.selected?.type, "fvg");
+  assertEquals(selection.selected?.contextId, "liquidity:sweep-1:choch-1");
+  assertEquals(selection.selected?.timeframeRoles, ["setup", "confirmation"]);
+  assertEquals(selection.selected?.sourceEvidenceIds, [
+    "evidence:fvg:entity-1",
+  ]);
+});
+
+Deno.test("structure POI selection accepts only stable closed-bar evidence on resolved timeframes", () => {
+  const selection = selectICTEntryZone(structurePoiInput([
+    structurePoiComponent("valid", "fvg"),
+    structurePoiComponent("wrong-direction", "ob", { direction: "bearish" }),
+    structurePoiComponent("wrong-timeframe", "ob", { timeframe: "1H" }),
+    structurePoiComponent("forming", "ob", {
+      sourceCandleEnd: "2026-08-28T10:15:00.000Z",
+    }),
+    structurePoiComponent("missing-evidence", "ob", { evidenceId: "" }),
+    structurePoiComponent("invalid-score", "ob", {
+      displacementScore: Number.NaN,
+    }),
+    structurePoiComponent("", "ob"),
+    structurePoiComponent("bad-bounds", "ob", { low: 1.102, high: 1.101 }),
+  ]));
+
+  assertEquals(selection.componentCounts, { received: 8, accepted: 1 });
+  assertEquals(selection.ranked.length, 1);
+  assertEquals(selection.selected?.componentIds, ["valid"]);
+});
+
+Deno.test("overlapping structure POIs form one stable composite candidate", () => {
+  const components = [
+    structurePoiComponent("ob:entity-2", "ob", {
+      low: 1.1,
+      high: 1.1015,
+    }),
+    structurePoiComponent("fvg:entity-2", "fvg", {
+      low: 1.101,
+      high: 1.102,
+    }),
+  ];
+  const first = selectICTEntryZone(structurePoiInput(components));
+  const rescanned = selectICTEntryZone(structurePoiInput([...components].reverse(), {
+    observedAt: "2026-08-28T10:20:00.000Z",
+    contextId: "  liquidity:sweep-1:choch-1  ",
+  }));
+
+  assertEquals(first.selected?.type, "ob_fvg");
+  assertEquals(first.selected?.low, 1.101);
+  assertEquals(first.selected?.high, 1.1015);
+  assertEquals(first.selected?.id, "structure_poi:fvg:entity-2+ob:entity-2");
+  assertEquals(rescanned.selected?.id, first.selected?.id);
+  assertEquals(rescanned.contextId, first.contextId);
+  assertEquals(
+    rescanned.selected?.sourceEvidenceIds,
+    first.selected?.sourceEvidenceIds,
+  );
+});
+
+Deno.test("legacy impulse selection still rejects components without impulse ownership", () => {
+  const selection = selectICTEntryZone([
+    component("unowned", "ob", { impulseId: "" }),
+  ]);
+
+  assertEquals(selection.selected, null);
+  assertEquals(selection.ranked, []);
 });
 
 Deno.test("breaker fill lifecycle requires frozen structure and an intact far boundary", () => {
