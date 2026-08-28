@@ -5,6 +5,7 @@ import type {
   ZoneLocalEvidenceObservation,
   ZoneLocalEvidenceSource,
 } from "./zoneLocalConfluence.ts";
+import { distanceToBounds } from "./conceptEvidence.ts";
 
 export const ICT_ENTRY_ZONE_AUTHORITY_VERSION = "ict-entry-zone-authority.v1";
 
@@ -57,6 +58,78 @@ export interface ICTEntryZoneSelection {
   selected: ICTEntryZoneCandidate | null;
   ranked: ICTEntryZoneCandidate[];
   explanation: string;
+}
+
+export type ICTStructurePoiTimeframeRole =
+  | "setup"
+  | "structure"
+  | "confirmation";
+
+/**
+ * A non-impulse POI that has already been produced by an existing shared
+ * detector. The authority ranks these components; it does not detect them.
+ * Stable entity/evidence IDs and closed-bar provenance are mandatory so a
+ * candidate can be compared across scans without inventing a new identity.
+ */
+export interface ICTStructurePoiComponent
+  extends Omit<ICTEntryZoneComponent, "impulseId" | "validationTrade"> {
+  evidenceId: string;
+  sourceCandleStart: string;
+  sourceCandleEnd: string;
+}
+
+export interface ICTStructurePoiEntryZoneInput {
+  mode: "structure_poi";
+  contextId: string;
+  direction: "bullish" | "bearish";
+  observedAt: string;
+  currentPrice: number;
+  timeframes: Record<ICTStructurePoiTimeframeRole, string>;
+  components: readonly ICTStructurePoiComponent[];
+}
+
+export interface ICTStructurePoiEntryZoneCandidate {
+  contractVersion: typeof ICT_ENTRY_ZONE_AUTHORITY_VERSION;
+  enforcement: "observe_only";
+  affectsAuthorization: false;
+  mode: "structure_poi";
+  setupFamily: "structure_poi";
+  id: string;
+  contextId: string;
+  type: ICTEntryZoneType;
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  timeframe: string;
+  timeframeRoles: ICTStructurePoiTimeframeRole[];
+  componentIds: string[];
+  sourceEvidenceIds: string[];
+  sourceWindow: {
+    start: string;
+    end: string;
+  };
+  components: ICTEntryZoneComponentType[];
+  eligible: boolean;
+  score: number;
+  priceInsideZone: boolean;
+  distanceToZone: number;
+  reasons: string[];
+}
+
+export interface ICTStructurePoiEntryZoneSelection {
+  contractVersion: typeof ICT_ENTRY_ZONE_AUTHORITY_VERSION;
+  enforcement: "observe_only";
+  affectsAuthorization: false;
+  mode: "structure_poi";
+  setupFamily: "structure_poi";
+  contextId: string;
+  selected: ICTStructurePoiEntryZoneCandidate | null;
+  ranked: ICTStructurePoiEntryZoneCandidate[];
+  explanation: string;
+  componentCounts: {
+    received: number;
+    accepted: number;
+  };
 }
 
 export type ICTNestedEntryZoneType =
@@ -115,12 +188,15 @@ export interface ICTNestedEntryZoneSelection {
 
 export type ICTEntryZoneAuthorityInput =
   | readonly ICTEntryZoneComponent[]
-  | ICTNestedEntryZoneInput;
+  | ICTNestedEntryZoneInput
+  | ICTStructurePoiEntryZoneInput;
 
 export type ICTEntryZoneSelectionFor<
   T extends ICTEntryZoneAuthorityInput,
 > = T extends ICTNestedEntryZoneInput
   ? ICTNestedEntryZoneSelection
+  : T extends ICTStructurePoiEntryZoneInput
+  ? ICTStructurePoiEntryZoneSelection
   : ICTEntryZoneSelection;
 
 interface ICTNestedEntryZoneSeed {
@@ -143,10 +219,100 @@ interface ICTNestedEntryZoneSeed {
   widthRatio: number;
 }
 
-function overlap(a: ICTEntryZoneComponent, b: ICTEntryZoneComponent) {
+type ICTEntryZoneRankableComponent = Pick<
+  ICTEntryZoneComponent,
+  | "id"
+  | "type"
+  | "direction"
+  | "low"
+  | "high"
+  | "timeframe"
+  | "lifecycle"
+  | "fibDepth"
+  | "valueLocationScore"
+  | "displacementScore"
+  | "liquidityScore"
+  | "htfLineageScore"
+  | "historicalSRScore"
+  | "proximityScore"
+>;
+
+interface ICTEntryZoneCandidateCore {
+  id: string;
+  type: ICTEntryZoneType;
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  timeframe: string;
+  componentIds: string[];
+  components: ICTEntryZoneComponentType[];
+  eligible: boolean;
+  score: number;
+}
+
+interface ICTEntryZoneComponentGroup<T extends ICTEntryZoneRankableComponent> {
+  components: T[];
+  bounds?: { low: number; high: number };
+}
+
+function overlap(
+  a: Pick<ICTEntryZoneRankableComponent, "low" | "high">,
+  b: Pick<ICTEntryZoneRankableComponent, "low" | "high">,
+) {
   const low = Math.max(a.low, b.low);
   const high = Math.min(a.high, b.high);
   return high > low ? { low, high } : null;
+}
+
+function groupEntryZoneComponents<T extends ICTEntryZoneRankableComponent>(
+  components: readonly T[],
+  sameContext: (left: T, right: T) => boolean,
+): ICTEntryZoneComponentGroup<T>[] {
+  const consumed = new Set<string>();
+  const groups: ICTEntryZoneComponentGroup<T>[] = [];
+
+  for (const component of components) {
+    if (consumed.has(component.id)) continue;
+    const partner = components.find((other) =>
+      other.id !== component.id &&
+      !consumed.has(other.id) &&
+      other.direction === component.direction &&
+      other.timeframe === component.timeframe &&
+      sameContext(component, other) &&
+      ((component.type === "fvg" && other.type !== "fvg") ||
+        (other.type === "fvg" && component.type !== "fvg")) &&
+      overlap(component, other) !== null
+    );
+    if (partner) {
+      groups.push({
+        components: [component, partner],
+        bounds: overlap(component, partner)!,
+      });
+      consumed.add(component.id);
+      consumed.add(partner.id);
+    } else {
+      groups.push({ components: [component] });
+      consumed.add(component.id);
+    }
+  }
+
+  return groups;
+}
+
+function rankEntryZoneCandidates<
+  T extends {
+    eligible: boolean;
+    score: number;
+    components: readonly unknown[];
+    id: string;
+  },
+>(candidates: T[]): T[] {
+  return candidates.sort((a, b) =>
+    Number(b.eligible) - Number(a.eligible) ||
+    b.score - a.score ||
+    b.components.length - a.components.length ||
+    a.id.localeCompare(b.id)
+  );
 }
 
 function nestedEntryType(
@@ -384,7 +550,7 @@ function selectNestedICTEntryZone(
   };
 }
 
-function lifecycleScore(component: ICTEntryZoneComponent): number {
+function lifecycleScore(component: ICTEntryZoneRankableComponent): number {
   switch (component.lifecycle.state) {
     case "fresh": return 2;
     case "tapped_and_held": return 3;
@@ -393,7 +559,7 @@ function lifecycleScore(component: ICTEntryZoneComponent): number {
   }
 }
 
-function scoreComponents(components: ICTEntryZoneComponent[]): number {
+function scoreComponents(components: ICTEntryZoneRankableComponent[]): number {
   const strongest = components.reduce((best, item) =>
     lifecycleScore(item) > lifecycleScore(best) ? item : best
   );
@@ -407,10 +573,10 @@ function scoreComponents(components: ICTEntryZoneComponent[]): number {
   return base + (components.length > 1 ? 1.5 : 0);
 }
 
-function candidateFor(
-  components: ICTEntryZoneComponent[],
+function candidateCoreFor(
+  components: ICTEntryZoneRankableComponent[],
   bounds?: { low: number; high: number },
-): ICTEntryZoneCandidate {
+): ICTEntryZoneCandidateCore {
   const types = [...new Set(components.map((item) => item.type))].sort();
   const type: ICTEntryZoneType = types.includes("breaker") && types.includes("fvg")
     ? "breaker_fvg"
@@ -421,15 +587,37 @@ function candidateFor(
     item.lifecycle.state !== "violated"
   );
   const componentIds = components.map((item) => item.id).sort();
-  const zoneBounds = bounds ?? { low: components[0].low, high: components[0].high };
+  const zoneBounds = bounds ?? {
+    low: components[0].low,
+    high: components[0].high,
+  };
+  return {
+    id: componentIds.join("+"),
+    type,
+    direction: components[0].direction,
+    low: zoneBounds.low,
+    high: zoneBounds.high,
+    timeframe: components[0].timeframe,
+    componentIds,
+    components: types,
+    eligible,
+    score: eligible ? Number(scoreComponents(components).toFixed(4)) : -100,
+  };
+}
+
+function candidateFor(
+  components: ICTEntryZoneComponent[],
+  bounds?: { low: number; high: number },
+): ICTEntryZoneCandidate {
+  const core = candidateCoreFor(components, bounds);
   const validationTrades = components
     .map((item) => item.validationTrade)
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   const validationTrade = validationTrades.length > 0
     ? {
       entryPrice: components[0].direction === "bullish"
-        ? zoneBounds.low
-        : zoneBounds.high,
+        ? core.low
+        : core.high,
       stopLoss: components[0].direction === "bullish"
         ? Math.min(...validationTrades.map((item) => item.stopLoss))
         : Math.max(...validationTrades.map((item) => item.stopLoss)),
@@ -439,25 +627,135 @@ function candidateFor(
   return {
     contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
     enforcement: "observe_only",
-    id: componentIds.join("+"),
-    type,
-    direction: components[0].direction,
-    low: zoneBounds.low,
-    high: zoneBounds.high,
-    timeframe: components[0].timeframe,
+    ...core,
     impulseId: components[0].impulseId,
-    componentIds,
-    components: types,
-    eligible,
-    score: eligible ? Number(scoreComponents(components).toFixed(4)) : -100,
     reasons: [
       `belongs to ${components[0].timeframe} impulse ${components[0].impulseId}`,
       components.length > 1
-        ? `${types.join(" + ")} overlap forms one composite zone`
-        : `${types[0]} is evaluated without a type preference`,
+        ? `${core.components.join(" + ")} overlap forms one composite zone`
+        : `${core.components[0]} is evaluated without a type preference`,
       `lifecycle ${components.map((item) => item.lifecycle.state).join("/")}`,
     ],
     validationTrade,
+  };
+}
+
+function structurePoiTimeframeRoles(
+  input: ICTStructurePoiEntryZoneInput,
+  timeframe: string,
+): ICTStructurePoiTimeframeRole[] {
+  return (["setup", "structure", "confirmation"] as const).filter((role) =>
+    input.timeframes[role] === timeframe
+  );
+}
+
+function structurePoiCandidateFor(
+  input: ICTStructurePoiEntryZoneInput,
+  components: ICTStructurePoiComponent[],
+  bounds?: { low: number; high: number },
+): ICTStructurePoiEntryZoneCandidate {
+  const core = candidateCoreFor(components, bounds);
+  const contextId = input.contextId.trim();
+  const sourceTimes = components.flatMap((component) => [
+    component.sourceCandleStart,
+    component.sourceCandleEnd,
+  ]).sort((left, right) => Date.parse(left) - Date.parse(right));
+  const timeframeRoles = structurePoiTimeframeRoles(input, core.timeframe);
+  const priceDistance = distanceToBounds(core, { level: input.currentPrice });
+  return {
+    contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
+    enforcement: "observe_only",
+    affectsAuthorization: false,
+    mode: "structure_poi",
+    setupFamily: "structure_poi",
+    ...core,
+    id: `structure_poi:${core.id}`,
+    contextId,
+    timeframeRoles,
+    sourceEvidenceIds: [...new Set(components.map((item) => item.evidenceId))]
+      .sort(),
+    sourceWindow: {
+      start: sourceTimes[0],
+      end: sourceTimes[sourceTimes.length - 1],
+    },
+    priceInsideZone: priceDistance === 0,
+    distanceToZone: priceDistance,
+    reasons: [
+      `${
+        timeframeRoles.join("/")
+      } timeframe evidence in structure context ${contextId}`,
+      components.length > 1
+        ? `${core.components.join(" + ")} overlap forms one composite zone`
+        : `${core.components[0]} is evaluated without a type preference`,
+      `lifecycle ${components.map((item) => item.lifecycle.state).join("/")}`,
+      "closed-bar source evidence only",
+    ],
+  };
+}
+
+function selectStructurePoiEntryZone(
+  input: ICTStructurePoiEntryZoneInput,
+): ICTStructurePoiEntryZoneSelection {
+  const observedAtMs = Date.parse(input.observedAt);
+  const allowedTimeframes = new Set(Object.values(input.timeframes));
+  const contextId = input.contextId.trim();
+  const validContext = contextId.length > 0;
+  const validCurrentPrice = Number.isFinite(input.currentPrice);
+  const components = validContext && validCurrentPrice &&
+      Number.isFinite(observedAtMs)
+    ? input.components.filter((item) => {
+      const sourceStartMs = Date.parse(item.sourceCandleStart);
+      const sourceEndMs = Date.parse(item.sourceCandleEnd);
+      return item.id.trim().length > 0 &&
+        item.evidenceId.trim().length > 0 &&
+        item.timeframe.trim().length > 0 &&
+        Number.isFinite(item.low) &&
+        Number.isFinite(item.high) &&
+        item.high > item.low &&
+        item.direction === input.direction &&
+        allowedTimeframes.has(item.timeframe) &&
+        [
+          item.fibDepth,
+          item.valueLocationScore,
+          item.displacementScore,
+          item.liquidityScore,
+          item.htfLineageScore,
+          item.historicalSRScore,
+          item.proximityScore,
+        ].every((value) => Number.isFinite(value)) &&
+        Number.isFinite(sourceStartMs) &&
+        Number.isFinite(sourceEndMs) &&
+        sourceStartMs <= sourceEndMs &&
+        sourceEndMs <= observedAtMs;
+    })
+    : [];
+  components.sort((left, right) => left.id.localeCompare(right.id));
+  const candidates = groupEntryZoneComponents(
+    components,
+    () => true,
+  ).map((group) =>
+    structurePoiCandidateFor(input, group.components, group.bounds)
+  );
+  rankEntryZoneCandidates(candidates);
+  const selected = candidates.find((item) => item.eligible) ?? null;
+  return {
+    contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
+    enforcement: "observe_only",
+    affectsAuthorization: false,
+    mode: "structure_poi",
+    setupFamily: "structure_poi",
+    contextId,
+    selected,
+    ranked: candidates,
+    explanation: selected
+      ? `${selected.type} structure POI selected at ${selected.low}-${selected.high}: ${
+        selected.reasons.join("; ")
+      }`
+      : "No eligible closed-bar structure POI candidate on the resolved setup, structure, or confirmation timeframes",
+    componentCounts: {
+      received: input.components.length,
+      accepted: components.length,
+    },
   };
 }
 
@@ -465,45 +763,27 @@ export function selectICTEntryZone<T extends ICTEntryZoneAuthorityInput>(
   input: T,
 ): ICTEntryZoneSelectionFor<T> {
   if (!Array.isArray(input)) {
-    return selectNestedICTEntryZone(
-      input as ICTNestedEntryZoneInput,
-    ) as ICTEntryZoneSelectionFor<T>;
+    const mode = (input as { mode?: unknown }).mode;
+    if (mode === "nested_poi") {
+      return selectNestedICTEntryZone(
+        input as ICTNestedEntryZoneInput,
+      ) as ICTEntryZoneSelectionFor<T>;
+    }
+    if (mode === "structure_poi") {
+      return selectStructurePoiEntryZone(
+        input as ICTStructurePoiEntryZoneInput,
+      ) as ICTEntryZoneSelectionFor<T>;
+    }
+    throw new Error(`Unsupported ICT entry-zone authority mode: ${String(mode)}`);
   }
   const components = (input as readonly ICTEntryZoneComponent[]).filter((item) =>
     item.high > item.low && item.impulseId.length > 0
   );
-  const consumed = new Set<string>();
-  const candidates: ICTEntryZoneCandidate[] = [];
-
-  for (const component of components) {
-    if (consumed.has(component.id)) continue;
-    const partner = components.find((other) =>
-      other.id !== component.id &&
-      !consumed.has(other.id) &&
-      other.direction === component.direction &&
-      other.timeframe === component.timeframe &&
-      other.impulseId === component.impulseId &&
-      ((component.type === "fvg" && other.type !== "fvg") ||
-        (other.type === "fvg" && component.type !== "fvg")) &&
-      overlap(component, other) !== null
-    );
-    if (partner) {
-      const bounds = overlap(component, partner)!;
-      candidates.push(candidateFor([component, partner], bounds));
-      consumed.add(component.id);
-      consumed.add(partner.id);
-    } else {
-      candidates.push(candidateFor([component]));
-      consumed.add(component.id);
-    }
-  }
-
-  candidates.sort((a, b) =>
-    Number(b.eligible) - Number(a.eligible) ||
-    b.score - a.score ||
-    b.components.length - a.components.length ||
-    a.id.localeCompare(b.id)
-  );
+  const candidates = groupEntryZoneComponents(
+    components,
+    (left, right) => left.impulseId === right.impulseId,
+  ).map((group) => candidateFor(group.components, group.bounds));
+  rankEntryZoneCandidates(candidates);
   const selected = candidates.find((item) => item.eligible) ?? null;
   return {
     contractVersion: ICT_ENTRY_ZONE_AUTHORITY_VERSION,
