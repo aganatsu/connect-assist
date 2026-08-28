@@ -23,6 +23,7 @@ import {
   refineLowerTF,
   rankAndSelectBestZone,
   findBestEntryZone,
+  collectImpulseLegCandidates,
   qualifyImpulseLeg,
   qualifyImpulsePOIs,
   zoneQualityPercent,
@@ -179,6 +180,40 @@ function generateInvalidImpulseCandles(): Candle[] {
   return candles;
 }
 
+function generateMultiBreakBullishCandles(): Candle[] {
+  const anchors = [
+    { index: 0, price: 1.0200 },
+    { index: 8, price: 1.0000 },
+    { index: 16, price: 1.0400 },
+    { index: 24, price: 1.0200 },
+    { index: 32, price: 1.0600 },
+    { index: 40, price: 1.0400 },
+    { index: 48, price: 1.0800 },
+    { index: 64, price: 1.0600 },
+  ];
+  const candles: Candle[] = [];
+  for (let segment = 0; segment < anchors.length - 1; segment++) {
+    const start = anchors[segment];
+    const end = anchors[segment + 1];
+    const length = end.index - start.index;
+    for (let offset = segment === 0 ? 0 : 1; offset <= length; offset++) {
+      const index = start.index + offset;
+      const progress = offset / length;
+      const close = start.price + (end.price - start.price) * progress;
+      const rising = end.price >= start.price;
+      const open = close + (rising ? -0.0002 : 0.0002);
+      candles.push(makeCandle(
+        open,
+        Math.max(open, close) + 0.0003,
+        Math.min(open, close) - 0.0003,
+        close,
+        index,
+      ));
+    }
+  }
+  return candles;
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 Deno.test("findImpulseLeg — returns null for insufficient candles", () => {
@@ -210,6 +245,72 @@ Deno.test("findImpulseLeg — detects valid bearish impulse", () => {
     assertEquals(result.direction, "bearish");
     assert(result.high > result.low, "High should be above low");
   }
+});
+
+Deno.test("findImpulseLeg — extends a bullish leg beyond its break to the latest closed extreme", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const baseline = findImpulseLeg(candles, "bullish", "1H");
+  assertExists(baseline);
+
+  const extensionIndex = candles.length;
+  const priorClose = candles.at(-1)!.close;
+  const extensionHigh = baseline.high + 0.005;
+  candles.push(makeCandle(
+    priorClose,
+    extensionHigh,
+    priorClose - 0.0005,
+    priorClose,
+    extensionIndex,
+  ));
+
+  const extended = findImpulseLeg(candles, "bullish", "1H");
+  assertExists(extended);
+  assertEquals(extended.high, extensionHigh);
+  assertEquals(extended.low, candles[extended.startIndex].low);
+  assertEquals(extended.endIndex, extensionIndex);
+  assertEquals(extended.endDate, candles[extensionIndex].datetime);
+  assertEquals(extended.breakDate, candles[extended.breakIndex!].datetime);
+  assertEquals(extended.extendedBeyondBreak, true);
+  assert(
+    extended.breakIndex !== undefined && extended.breakIndex < extended.endIndex,
+    "The structural-break candle and terminal-extreme candle must remain separately traceable",
+  );
+});
+
+Deno.test("findImpulseLeg — extends a bearish leg beyond its break to the latest closed extreme", () => {
+  const candles = generateBullishImpulseCandles(50).map((candle) => ({
+    ...candle,
+    open: 2 - candle.open,
+    high: 2 - candle.low,
+    low: 2 - candle.high,
+    close: 2 - candle.close,
+  }));
+  const baseline = findImpulseLeg(candles, "bearish", "1H");
+  assertExists(baseline);
+
+  const extensionIndex = candles.length;
+  const priorClose = candles.at(-1)!.close;
+  const extensionLow = baseline.low - 0.005;
+  candles.push(makeCandle(
+    priorClose,
+    priorClose + 0.0005,
+    extensionLow,
+    priorClose,
+    extensionIndex,
+  ));
+
+  const extended = findImpulseLeg(candles, "bearish", "1H");
+  assertExists(extended);
+  assertEquals(extended.low, extensionLow);
+  assertEquals(extended.high, candles[extended.startIndex].high);
+  assertEquals(extended.endIndex, extensionIndex);
+  assertEquals(extended.endDate, candles[extensionIndex].datetime);
+  assertEquals(extended.breakDate, candles[extended.breakIndex!].datetime);
+  assertEquals(extended.extendedBeyondBreak, true);
+  assert(
+    extended.breakIndex !== undefined && extended.breakIndex < extended.endIndex,
+    "The structural-break candle and terminal-extreme candle must remain separately traceable",
+  );
 });
 
 Deno.test("findImpulseLeg — rejects impulse with >50% pullback", () => {
@@ -245,6 +346,28 @@ Deno.test("Impulse Zone Engine is the only selector; canonical module measures i
   assert(first.atrNormalizedSize !== null);
   assert(first.displacementPercentile !== null);
   assert(first.bodyStrengthPercentile !== null);
+});
+
+Deno.test("canonical impulse metrics keep BOS significance pinned to the break candle after extension", () => {
+  const candles = Array.from({ length: 20 }, (_, index) => {
+    const price = 1 + index * 0.001;
+    return makeCandle(price - 0.0005, price + 0.001, price - 0.001, price, index);
+  });
+  candles[10] = makeCandle(1.0100, 1.0130, 1.0090, 1.0120, 10);
+  candles[19] = makeCandle(1.0400, 1.0510, 1.0390, 1.0500, 19);
+
+  const metrics = measureCanonicalImpulseMetrics(candles, {
+    high: 1.0510,
+    low: 0.9990,
+    direction: "bullish",
+    startIndex: 0,
+    breakIndex: 10,
+    endIndex: 19,
+    isValid: true,
+    bosPrice: 1.0100,
+  });
+
+  assertEquals(Number(metrics.bosOvershootAbsolute.toFixed(6)), 0.002);
 });
 
 Deno.test("qualified impulse requires BOS, close, displacement, body strength, and POI", () => {
@@ -892,6 +1015,33 @@ Deno.test("findBestEntryZone — names an intact but unqualified leg as an impul
     `Reason should distinguish the candidate from an entry zone: ${result.reason}`,
   );
   assert(!result.reason.includes("Developing structural leg"));
+});
+
+Deno.test("findBestEntryZone — retains the strongest candidate when every candidate fails qualification", () => {
+  const htfCandles = generateMultiBreakBullishCandles();
+  const strongest = findImpulseLeg(htfCandles, "bullish");
+  assertExists(strongest);
+  const candidates = collectImpulseLegCandidates(htfCandles, "bullish")
+    .filter((candidate) => candidate.leg.isValid);
+  assert(
+    candidates.length > 1,
+    `Fixture must expose multiple intact candidates; found ${candidates.length}`,
+  );
+
+  const result = findBestEntryZone(
+    htfCandles,
+    generateBullishImpulseCandles(100),
+    "bullish",
+    1.03,
+    undefined,
+    { minDisplacementATR: 100 },
+  );
+
+  assertExists(result.impulse);
+  assertEquals(result.bestZone, null);
+  assertEquals(result.impulse.startIndex, strongest.startIndex);
+  assertEquals(result.impulse.breakIndex, strongest.breakIndex);
+  assertEquals(result.impulse.endIndex, strongest.endIndex);
 });
 
 Deno.test("findBestEntryZone — observe-only evidence does not change selection or score", () => {

@@ -343,6 +343,8 @@ describe("ZoneStoryPanel zone-local explanations", () => {
             timeframe: "1H",
             startDate: "2026-08-25T15:00:00Z",
             endDate: "2026-08-25T22:00:00Z",
+            breakDate: "2026-08-25T18:00:00Z",
+            extendedBeyondBreak: true,
             spanBars: 7,
             bosPrice: 1.62313,
             qualification: {
@@ -387,7 +389,9 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText("impulse via 1H")).toBeTruthy();
     expect(screen.getByText("1.63148 → 1.62313")).toBeTruthy();
     expect(screen.getByText("NOT YET QUALIFIED")).toBeTruthy();
+    expect(screen.getByText("Extended after CHoCH")).toBeTruthy();
     expect(screen.getByText("CHoCH")).toBeTruthy();
+    expect(screen.getByText(/confirmed/)).toBeTruthy();
     expect(screen.queryByText("BOS")).toBeNull();
     expect(screen.getByText("No qualified entry zone")).toBeTruthy();
     expect(screen.getByText("NOT APPLIED")).toBeTruthy();

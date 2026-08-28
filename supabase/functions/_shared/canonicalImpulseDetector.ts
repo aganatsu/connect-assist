@@ -13,6 +13,7 @@ export interface MeasurableImpulseLeg {
   direction: "bullish" | "bearish";
   startIndex: number;
   endIndex: number;
+  breakIndex?: number;
   isValid: boolean;
   bosPrice: number;
   spanBars?: number;
@@ -117,7 +118,7 @@ export function measureCanonicalImpulseMetrics(
       return range > 0 ? Math.abs(candle.close - candle.open) / range : 0;
     }))
     : null;
-  const bosClose = candles[impulse.endIndex]?.close ?? impulse.bosPrice;
+  const bosClose = candles[impulse.breakIndex ?? impulse.endIndex]?.close ?? impulse.bosPrice;
   const bosOvershootAbsolute = Math.abs(bosClose - impulse.bosPrice);
 
   const originLookback = candles.slice(

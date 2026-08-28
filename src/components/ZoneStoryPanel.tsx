@@ -52,6 +52,8 @@ interface ZoneStoryData {
     timeframe: string;
     startDate: string | null;
     endDate: string | null;
+    breakDate?: string | null;
+    extendedBeyondBreak?: boolean;
     spanBars: number;
     qualification?: { state: "developing" | "qualified" | "invalidated"; reasons: string[]; measurements: Record<string, unknown> } | null;
     bosPrice: number;
@@ -471,6 +473,11 @@ export function ZoneStoryPanel({
                   </span>
                   <span className="ml-2">{fmt(impulseStartPrice)} → {fmt(impulseEndPrice)}</span>
                   <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
+                  {unifiedData.impulse.extendedBeyondBreak && (
+                    <span className="ml-2 font-mono text-[10px] uppercase text-cyan-300">
+                      Extended after {impulseBreakLabel}
+                    </span>
+                  )}
                   {unifiedData.impulse.qualification && (
                     <span className={`ml-2 font-mono text-[10px] uppercase ${unifiedData.impulse.qualification.state === "qualified" ? "text-emerald-400" : unifiedData.impulse.qualification.state === "developing" ? "text-amber-400" : "text-red-400"}`}>
                       {unifiedData.impulse.qualification.state === "developing"
@@ -504,7 +511,14 @@ export function ZoneStoryPanel({
             <tr className="border-b border-zinc-800/50">
               <td className="py-1 pr-2"></td>
               <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">{impulseBreakLabel}</td>
-              <td className="py-1 font-mono text-zinc-200">{fmt(unifiedData.impulse.bosPrice)}</td>
+              <td className="py-1 font-mono text-zinc-200">
+                {fmt(unifiedData.impulse.bosPrice)}
+                {unifiedData.impulse.breakDate && (
+                  <span className="ml-2 text-zinc-500">
+                    confirmed {formatTraceDate(unifiedData.impulse.breakDate)}
+                  </span>
+                )}
+              </td>
             </tr>
           )}
 
