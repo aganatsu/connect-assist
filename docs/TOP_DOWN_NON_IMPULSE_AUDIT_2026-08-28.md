@@ -344,7 +344,15 @@ This is enough to count and inspect a descriptive cohort such as:
 > No accepted impulse zone, but direction was available, external structure did
 > not oppose it, an aligned HTF POI existed, and price was inside that POI.
 
-The companion query is `reports/non-impulse-top-down-opportunity-audit.sql`.
+The bounded summary query is
+`reports/non-impulse-top-down-opportunity-audit.sql`. It projects only the
+scalar fields and small evidence arrays needed for grouped counts; it does not
+materialize the full scan JSON or join other evidence tables.
+
+If the summary contains an `at_aligned_htf_poi_*` category, inspect a capped
+sample with `reports/non-impulse-top-down-candidate-details.sql`. The detail
+query defaults to three days and 250 rows. It is deliberately separate so
+routine baseline analysis cannot exhaust PostgreSQL temporary storage.
 
 ### Not available today
 
@@ -406,10 +414,17 @@ observation query has been run and reviewed.
 
 ### Phase 0 — Baseline only (this branch)
 
-1. Run the companion SQL over the most recent 21 days.
-2. Review rows in the final two categories, especially by style and pair.
-3. Confirm snapshot coverage and the actual volume of opportunities.
-4. Do not change `impulseZoneGateMode` for this experiment.
+1. Run the bounded summary SQL over the most recent 21 days.
+2. Review the final two categories, especially by style and pair.
+3. Only if those categories contain observations, run the capped detail SQL,
+   starting with its three-day default.
+4. Confirm the actual volume of descriptive opportunities and missing evidence.
+5. Do not change `impulseZoneGateMode` for this experiment.
+
+If Supabase returns SQLSTATE `53100` (`No space left on device`), reduce the
+summary lookback to one day before retrying. If a trivial `select now();` also
+fails, the database instance itself requires storage recovery; that is not an
+audit-query result.
 
 ### Phase 1 — Observation-only candidate adapter
 

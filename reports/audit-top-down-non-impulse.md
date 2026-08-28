@@ -23,12 +23,17 @@ setup lifecycle, risk, authorization, or execution behavior.
   - evidence limitations;
   - phased, observation-first implementation plan.
 - `reports/non-impulse-top-down-opportunity-audit.sql`
-  - read-only 21-day scan-log audit;
+  - read-only, bounded 21-day scan-log summary;
   - distinguishes no structural impulse from an impulse trace with no accepted
     zone;
   - classifies independent direction/structure/HTF-POI/liquidity evidence;
-  - exposes missing candidate geometry, confirmation, authorization, snapshot,
-    and outcome evidence without inventing a trade result.
+  - avoids materializing full scan JSON or joining large evidence tables.
+- `reports/non-impulse-top-down-candidate-details.sql`
+  - read-only detail follow-up for the summary's `at_aligned_htf_poi_*`
+    categories;
+  - defaults to three days and caps output at 250 rows;
+  - exposes the matched HTF POI and sequence state without inventing entry,
+    stop, target, confirmation, authorization, or outcome evidence.
 
 ## Tests added
 
@@ -51,13 +56,19 @@ git diff --check
 clean
 
 custom delimiter/quote balance check for
-reports/non-impulse-top-down-opportunity-audit.sql
+reports/non-impulse-top-down-opportunity-audit.sql and
+reports/non-impulse-top-down-candidate-details.sql
 balanced SQL delimiters
 ```
 
 A PostgreSQL parser package could not be downloaded in the execution
 environment. The SQL still needs its final schema/runtime validation in the
 Supabase SQL editor; it is deliberately read-only.
+
+The first wide audit query reached Supabase SQLSTATE `53100` while PostgreSQL
+was writing `pgsql_tmp`. It was replaced before merge with the bounded summary
+and capped detail queries listed above. The failing wide query should not be
+rerun.
 
 ## Regression check
 
@@ -79,7 +90,7 @@ created.
 ## Open questions
 
 1. How many recent no-zone scans reach the two descriptive
-   `at_aligned_htf_poi_*` categories in the companion SQL, split by style and
+   `at_aligned_htf_poi_*` categories in the bounded summary, split by style and
    pair?
 2. Which existing range should own location for a `structure_poi` candidate when
    no qualified impulse dealing range exists?
@@ -101,6 +112,6 @@ Description:
 
 ```text
 Documents the existing top-down analysis pipeline, identifies where executable
-setup ownership becomes impulse-specific, and adds a read-only query for the
-recent no-zone cohort. No runtime behavior changes.
+setup ownership becomes impulse-specific, and adds bounded read-only queries
+for the recent no-zone cohort. No runtime behavior changes.
 ```

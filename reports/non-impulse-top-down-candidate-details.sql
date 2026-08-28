@@ -1,42 +1,27 @@
--- Non-impulse top-down opportunity audit — bounded summary
+-- Non-impulse top-down opportunity audit — bounded candidate details
 --
--- Purpose:
---   Count scans where the existing unified/impulse engine produced no
---   executable zone, while independent top-down evidence had already been
---   computed (style, direction, structure, HTF POIs and liquidity sequence).
+-- Run the summary query first:
+--   reports/non-impulse-top-down-opportunity-audit.sql
 --
--- This query is READ ONLY. It does not create a setup, propose an entry, change
--- configuration, or infer a counterfactual win/loss.
+-- Use this only when the summary contains an `at_aligned_htf_poi_*` stage.
+-- It returns at most 250 descriptive rows and does not join candle snapshots or
+-- timeframe-evidence tables. It is READ ONLY and does not establish that a
+-- setup was executable or would have won.
 --
--- Why this version is intentionally compact:
---   scan_logs.details_json is large. Carrying the full JSON through multiple
---   MATERIALIZED CTEs can force PostgreSQL to spill gigabytes into pgsql_tmp.
---   This query expands each scan once, projects only the fields needed for the
---   summary, and returns grouped rows instead of every raw scan.
---
--- Interpretation:
---   * `no_structural_impulse` means no accepted structural leg was found.
---   * `*_no_accepted_zone` means an impulse trace existed, but it did not
---     produce an accepted entry POI. Seeing impulse dates with "No Zone" is
---     therefore expected and internally consistent.
---   * `at_aligned_htf_poi_*` is descriptive only. No candidate entry, stop,
---     target, confirmation, final authorization, or outcome was frozen on the
---     current hard no-zone path.
---
--- Edit only the params CTE. If Supabase still returns SQLSTATE 53100, change
--- lookback_days from 21 to 1. If even `select now();` fails, the database
--- instance itself is out of disk rather than this report exhausting temp space.
+-- Start with three days. Increase lookback_days only after this succeeds.
 
 WITH params AS (
   SELECT
     '57c79dee-db6b-4fae-b34a-4b64ce33ca34'::uuid AS user_id,
     'smc'::text AS bot_id,
-    21::integer AS lookback_days,
+    3::integer AS lookback_days,
+    250::integer AS row_limit,
     NULL::text AS style_filter,
     NULL::text AS symbol_filter
 ),
 pair_rows AS (
   SELECT
+    sl.id AS scan_log_id,
     sl.scanned_at,
     NULLIF(item.detail ->> 'pair', '') AS symbol,
     CASE lower(replace(COALESCE(
@@ -102,6 +87,16 @@ pair_rows AS (
       item.detail #>> '{unifiedZone,impulse,qualification,state}',
       ''
     ) AS impulse_qualification_state,
+    item.detail #> '{unifiedZone,impulse,qualification,reasons}'
+      AS impulse_qualification_reasons,
+    NULLIF(item.detail #>> '{unifiedZone,impulse,direction}', '')
+      AS impulse_direction,
+    NULLIF(item.detail #>> '{unifiedZone,impulse,timeframe}', '')
+      AS impulse_timeframe,
+    NULLIF(item.detail #>> '{unifiedZone,impulse,startDate}', '')
+      AS impulse_start_at,
+    NULLIF(item.detail #>> '{unifiedZone,impulse,endDate}', '')
+      AS impulse_end_at,
     CASE
       WHEN NULLIF(item.detail #>> '{unifiedZone,price,currentPrice}', '') ~
         '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
@@ -172,53 +167,44 @@ filtered_rows AS (
       p.symbol_filter IS NULL
       OR r.symbol = upper(p.symbol_filter)
     )
+    AND r.direction IS NOT NULL
+    AND NOT r.direction_should_block
+    AND r.structure_available
+    AND NOT (
+      (r.direction = 'long' AND r.external_trend = 'bearish')
+      OR (r.direction = 'short' AND r.external_trend = 'bullish')
+    )
 ),
-measured AS (
+candidate_pois AS (
   SELECT
     r.*,
-    COALESCE(htf.aligned_count, 0) AS aligned_htf_poi_count,
-    COALESCE(htf.inside_count, 0) AS inside_aligned_htf_poi_count,
-    COALESCE(sequence.aligned_count, 0) AS aligned_sequence_count,
-    COALESCE(sequence.ready_count, 0) AS ready_sequence_count
+    poi.timeframe AS poi_timeframe,
+    poi.poi_type,
+    poi.poi_direction,
+    poi.low_price AS poi_low,
+    poi.high_price AS poi_high,
+    sequence.aligned_count AS aligned_sequence_count,
+    sequence.ready_count AS ready_sequence_count
   FROM filtered_rows r
-  LEFT JOIN LATERAL (
+  CROSS JOIN LATERAL (
     SELECT
-      count(*) FILTER (WHERE p.direction_aligned)::integer AS aligned_count,
-      count(*) FILTER (
-        WHERE p.direction_aligned
-          AND r.current_price IS NOT NULL
-          AND p.low_price IS NOT NULL
-          AND p.high_price IS NOT NULL
-          AND r.current_price BETWEEN
-            LEAST(p.low_price, p.high_price)
-            AND GREATEST(p.low_price, p.high_price)
-      )::integer AS inside_count
-    FROM (
-      SELECT
-        CASE
-          WHEN r.direction = 'long'
-            THEN lower(COALESCE(poi.value ->> 'direction', ''))
-              IN ('bullish', 'bullish_breaker', 'long')
-          WHEN r.direction = 'short'
-            THEN lower(COALESCE(poi.value ->> 'direction', ''))
-              IN ('bearish', 'bearish_breaker', 'short')
-          ELSE false
-        END AS direction_aligned,
-        CASE
-          WHEN poi.value ->> 'low' ~
-            '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
-            THEN (poi.value ->> 'low')::numeric
-          ELSE NULL
-        END AS low_price,
-        CASE
-          WHEN poi.value ->> 'high' ~
-            '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
-            THEN (poi.value ->> 'high')::numeric
-          ELSE NULL
-        END AS high_price
-      FROM jsonb_array_elements(r.htf_pois) AS poi(value)
-    ) p
-  ) htf ON true
+      NULLIF(value ->> 'timeframe', '') AS timeframe,
+      NULLIF(value ->> 'type', '') AS poi_type,
+      NULLIF(value ->> 'direction', '') AS poi_direction,
+      CASE
+        WHEN value ->> 'low' ~
+          '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
+          THEN (value ->> 'low')::numeric
+        ELSE NULL
+      END AS low_price,
+      CASE
+        WHEN value ->> 'high' ~
+          '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
+          THEN (value ->> 'high')::numeric
+        ELSE NULL
+      END AS high_price
+    FROM jsonb_array_elements(r.htf_pois)
+  ) poi
   LEFT JOIN LATERAL (
     SELECT
       count(*) FILTER (WHERE q.direction_aligned)::integer AS aligned_count,
@@ -243,92 +229,58 @@ measured AS (
       FROM jsonb_array_elements(r.liquidity_sequences) AS seq(value)
     ) q
   ) sequence ON true
-),
-classified AS (
-  SELECT
-    m.*,
+  WHERE
     CASE
-      WHEN m.unified_state = 'no_impulse'
-        THEN 'no_structural_impulse'
-      WHEN m.unified_state = 'no_zone'
-        AND m.impulse_qualification_state = 'developing'
-        THEN 'developing_impulse_no_accepted_zone'
-      WHEN m.unified_state = 'no_zone'
-        AND m.impulse_qualification_state = 'invalidated'
-        THEN 'invalidated_impulse_no_accepted_zone'
-      WHEN m.unified_state = 'no_zone'
-        THEN 'impulse_trace_no_accepted_zone'
-      WHEN m.unified_state = 'error'
-        THEN 'zone_engine_error'
-      ELSE 'no_executable_impulse_zone'
-    END AS zone_failure_class,
-    CASE
-      WHEN m.direction IS NULL
-        THEN 'direction_unavailable'
-      WHEN m.direction_should_block
-        THEN 'direction_blocked'
-      WHEN NOT m.structure_available
-        THEN 'structure_evidence_unavailable'
-      WHEN
-        (m.direction = 'long' AND m.external_trend = 'bearish')
-        OR (m.direction = 'short' AND m.external_trend = 'bullish')
-        THEN 'external_structure_opposes_direction'
-      WHEN m.aligned_htf_poi_count = 0
-        THEN 'no_direction_aligned_htf_poi_detected'
-      WHEN m.current_price IS NULL
-        THEN 'aligned_htf_poi_price_unavailable'
-      WHEN m.inside_aligned_htf_poi_count = 0
-        THEN 'aligned_htf_poi_exists_price_not_inside'
-      WHEN m.ready_sequence_count > 0
-        THEN 'at_aligned_htf_poi_sequence_ready_geometry_not_frozen'
-      ELSE 'at_aligned_htf_poi_sequence_pending_geometry_not_frozen'
-    END AS opportunity_stage
-  FROM measured m
+      WHEN r.direction = 'long'
+        THEN lower(COALESCE(poi.poi_direction, ''))
+          IN ('bullish', 'bullish_breaker', 'long')
+      WHEN r.direction = 'short'
+        THEN lower(COALESCE(poi.poi_direction, ''))
+          IN ('bearish', 'bearish_breaker', 'short')
+      ELSE false
+    END
+    AND r.current_price IS NOT NULL
+    AND poi.low_price IS NOT NULL
+    AND poi.high_price IS NOT NULL
+    AND r.current_price BETWEEN
+      LEAST(poi.low_price, poi.high_price)
+      AND GREATEST(poi.low_price, poi.high_price)
 )
 SELECT
+  c.scanned_at,
+  c.scan_log_id,
+  c.symbol,
   c.trading_style,
+  c.session,
+  c.runtime_status,
+  c.direction,
+  c.external_trend,
+  c.internal_trend,
+  c.current_price,
+  c.poi_timeframe,
+  c.poi_type,
+  c.poi_direction,
+  c.poi_low,
+  c.poi_high,
+  c.ready_sequence_count > 0 AS structure_sequence_ready,
+  c.aligned_sequence_count,
+  c.ready_sequence_count,
+  c.require_liquidity_sweep,
+  c.unified_state,
+  c.impulse_qualification_state,
+  c.impulse_qualification_reasons,
+  c.impulse_direction,
+  c.impulse_timeframe,
+  c.impulse_start_at,
+  c.impulse_end_at,
+  c.score,
   c.bias_timeframe,
   c.structure_timeframe,
   c.setup_timeframe,
   c.confirmation_timeframe,
-  c.session,
-  c.zone_failure_class,
-  c.opportunity_stage,
-  count(*) AS scan_observations,
-  count(DISTINCT c.symbol) AS distinct_symbols,
-  string_agg(DISTINCT c.symbol, ', ' ORDER BY c.symbol) AS symbols,
-  min(c.scanned_at) AS first_seen_at,
-  max(c.scanned_at) AS last_seen_at,
-  round(avg(c.score), 1) AS average_legacy_score,
-  count(*) FILTER (
-    WHERE c.inside_aligned_htf_poi_count > 0
-  ) AS scans_at_aligned_htf_poi,
-  count(*) FILTER (
-    WHERE c.ready_sequence_count > 0
-  ) AS scans_with_ready_structure_sequence,
-  count(*) FILTER (
-    WHERE c.timeframe_evidence_id IS NULL
-  ) AS missing_timeframe_evidence_id,
-  'descriptive_only_no_entry_stop_target_confirmation_or_outcome'
-    AS evidence_limit
-FROM classified c
-GROUP BY
-  c.trading_style,
-  c.bias_timeframe,
-  c.structure_timeframe,
-  c.setup_timeframe,
-  c.confirmation_timeframe,
-  c.session,
-  c.zone_failure_class,
-  c.opportunity_stage
-ORDER BY
-  CASE
-    WHEN c.opportunity_stage =
-      'at_aligned_htf_poi_sequence_ready_geometry_not_frozen' THEN 0
-    WHEN c.opportunity_stage =
-      'at_aligned_htf_poi_sequence_pending_geometry_not_frozen' THEN 1
-    ELSE 2
-  END,
-  scan_observations DESC,
-  c.trading_style,
-  c.session;
+  c.timeframe_evidence_id,
+  c.runtime_reason,
+  'descriptive_only_geometry_and_outcome_not_frozen' AS evidence_limit
+FROM candidate_pois c
+ORDER BY c.scanned_at DESC, c.symbol, c.poi_timeframe, c.poi_type
+LIMIT (SELECT row_limit FROM params);
