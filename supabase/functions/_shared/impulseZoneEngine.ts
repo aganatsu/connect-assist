@@ -58,7 +58,8 @@ export interface ImpulseLeg {
   low: number;          // Swing low wick (Fib level 0)
   direction: "bullish" | "bearish";
   startIndex: number;   // Index of the swing that started the move
-  endIndex: number;     // Index of the BOS candle
+  endIndex: number;     // Index of the latest directional extreme on a closed candle
+  breakIndex?: number;  // Index of the BOS/CHoCH candle that confirmed the leg
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
   breakType?: "bos" | "choch";
@@ -66,7 +67,9 @@ export interface ImpulseLeg {
   structureSignificance?: "internal" | "external";
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
-  endDate?: string;     // ISO date of the BOS candle
+  endDate?: string;     // ISO date of the latest directional extreme
+  breakDate?: string;   // ISO date of the BOS/CHoCH confirmation candle
+  extendedBeyondBreak?: boolean; // True when continuation extended after the confirming break
   spanBars?: number;    // Number of candles in the impulse leg
 }
 
@@ -452,6 +455,10 @@ export function findStructuralLeg(
       if (endCandle?.datetime) {
         impulse.endDate = endCandle.datetime;
       }
+      const breakCandle = candles[impulse.breakIndex ?? impulse.endIndex];
+      if (breakCandle?.datetime) {
+        impulse.breakDate = breakCandle.datetime;
+      }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
       impulse.structureSignificance = bos.significance ?? "internal";
       validCandidates.push(impulse);
@@ -465,6 +472,7 @@ export function findStructuralLeg(
           direction,
           startIndex: bos.index,
           endIndex: bos.index,
+          breakIndex: bos.index,
           isValid: false,
           bosPrice: bos.price,
           breakType: bos.breakType,
@@ -472,6 +480,8 @@ export function findStructuralLeg(
           timeframe,
           startDate: candles[bos.index]?.datetime,
           endDate: candles[bos.index]?.datetime,
+          breakDate: candles[bos.index]?.datetime,
+          extendedBeyondBreak: false,
           spanBars: 0,
         },
         selected: false,
@@ -518,8 +528,10 @@ export function findStructuralLeg(
 }
 
 /**
- * Given a BOS, trace back to find the swing origin and validate that the
- * origin has not been broken by subsequent price action (after the BOS).
+ * Given a BOS/CHoCH, trace back to its swing origin and then advance the leg to
+ * the latest same-direction extreme printed by a closed candle. The structural
+ * break and terminal extreme are deliberately retained as separate indexes:
+ * the break confirms the leg, while the terminal extreme owns its Fib range.
  */
 function validateImpulseFromBOS(
   candles: Candle[],
@@ -544,28 +556,26 @@ function validateImpulseFromBOS(
   // Try each candidate swing as the impulse origin
   for (const origin of candidates.slice(0, 5)) { // Check up to 5 candidates
     const startIdx = origin.index;
-    const endIdx = bosIdx;
 
-    if (endIdx - startIdx < 3) continue; // Too short to be meaningful
+    if (bosIdx - startIdx < 3) continue; // Too short to be meaningful
 
-    // Determine impulse high and low from wicks within the range
-    let impulseHigh = -Infinity;
-    let impulseLow = Infinity;
+    const breakCandle = candles[bosIdx];
+    const originPrice = Number(origin.price);
+    if (!breakCandle || !Number.isFinite(originPrice)) continue;
 
-    for (let i = startIdx; i <= Math.min(endIdx, candles.length - 1); i++) {
-      if (candles[i].high > impulseHigh) impulseHigh = candles[i].high;
-      if (candles[i].low < impulseLow) impulseLow = candles[i].low;
-    }
-
-    const impulseRange = impulseHigh - impulseLow;
-    if (impulseRange <= 0) continue;
+    // The break candle is the earliest possible terminal bar. A later closed
+    // candle may extend the move without printing another BOS/CHoCH; that
+    // continuation still belongs to this impulse and must update its Fib range.
+    let endIdx = bosIdx;
+    let terminalPrice = direction === "bullish"
+      ? breakCandle.high
+      : breakCandle.low;
 
     // Validate: origin not broken — check candles AFTER the BOS to see if
     // price has retraced past the impulse origin (invalidating the leg).
     // Internal pullbacks within the impulse are expected (wave structure).
-    const originPrice = direction === "bullish" ? impulseLow : impulseHigh;
     let originBroken = false;
-    for (let j = endIdx + 1; j < candles.length; j++) {
+    for (let j = bosIdx + 1; j < candles.length; j++) {
       if (direction === "bullish" && candles[j].close < originPrice) {
         originBroken = true;
         break;
@@ -574,7 +584,22 @@ function validateImpulseFromBOS(
         originBroken = true;
         break;
       }
+      const directionalExtreme = direction === "bullish"
+        ? candles[j].high
+        : candles[j].low;
+      const extendsLeg = direction === "bullish"
+        ? directionalExtreme > terminalPrice
+        : directionalExtreme < terminalPrice;
+      if (extendsLeg) {
+        terminalPrice = directionalExtreme;
+        endIdx = j;
+      }
     }
+
+    const impulseHigh = direction === "bullish" ? terminalPrice : originPrice;
+    const impulseLow = direction === "bullish" ? originPrice : terminalPrice;
+    const impulseRange = impulseHigh - impulseLow;
+    if (impulseRange <= 0) continue;
 
     if (!originBroken) {
       return {
@@ -583,10 +608,13 @@ function validateImpulseFromBOS(
         direction,
         startIndex: startIdx,
         endIndex: endIdx,
+        breakIndex: bosIdx,
         isValid: true,
         bosPrice: bos.price,
         breakType: bos.breakType,
         closeBased: bos.closeBased === true,
+        breakDate: candles[bosIdx]?.datetime,
+        extendedBeyondBreak: endIdx > bosIdx,
       };
     }
     collector?.({
@@ -596,12 +624,15 @@ function validateImpulseFromBOS(
         direction,
         startIndex: startIdx,
         endIndex: endIdx,
+        breakIndex: bosIdx,
         isValid: false,
         bosPrice: bos.price,
         breakType: bos.breakType,
         timeframe: undefined,
         startDate: candles[startIdx]?.datetime,
         endDate: candles[endIdx]?.datetime,
+        breakDate: candles[bosIdx]?.datetime,
+        extendedBeyondBreak: endIdx > bosIdx,
         spanBars: endIdx - startIdx,
       },
       selected: false,
@@ -2226,6 +2257,14 @@ export function findBestEntryZone(
 
   let mappedPOIs: ImpulsePOI[] = [];
   let poiQualification = qualifyImpulsePOIs(htfCandles, impulse, [], options);
+  type CandidateEvaluation = {
+    impulse: ImpulseLeg;
+    mappedPOIs: ImpulsePOI[];
+    poiQualification: ZoneQualificationResult;
+    impulseQualification: ImpulseQualification;
+  };
+  let strongestFailedEvaluation: CandidateEvaluation | null = null;
+  let qualifiedEvaluation: CandidateEvaluation | null = null;
   for (const candidate of rankedLegs) {
     const candidatePOIs = mapImpulsePOIs(htfCandles, candidate, {
       originOBRetest: options?.originOBRetest,
@@ -2238,11 +2277,27 @@ export function findBestEntryZone(
     const candidateQualification = qualifyImpulseLeg(
       htfCandles, candidate, candidatePOIQualification.accepted, options,
     );
-    impulse = candidate;
-    mappedPOIs = candidatePOIs;
-    poiQualification = candidatePOIQualification;
-    impulseQualification = candidateQualification;
-    if (candidateQualification.qualified) break;
+    const evaluation = {
+      impulse: candidate,
+      mappedPOIs: candidatePOIs,
+      poiQualification: candidatePOIQualification,
+      impulseQualification: candidateQualification,
+    };
+    if (candidateQualification.qualified) {
+      qualifiedEvaluation = evaluation;
+      break;
+    }
+    // rankedLegs is strongest-first. If every candidate fails, retain the
+    // strongest failure for diagnostics instead of silently exposing the last
+    // (and therefore weakest) candidate inspected by the loop.
+    strongestFailedEvaluation ??= evaluation;
+  }
+  const retainedEvaluation = qualifiedEvaluation ?? strongestFailedEvaluation;
+  if (retainedEvaluation) {
+    impulse = retainedEvaluation.impulse;
+    mappedPOIs = retainedEvaluation.mappedPOIs;
+    poiQualification = retainedEvaluation.poiQualification;
+    impulseQualification = retainedEvaluation.impulseQualification;
   }
   collectedPOIs = mappedPOIs;
   if (!impulseQualification) {

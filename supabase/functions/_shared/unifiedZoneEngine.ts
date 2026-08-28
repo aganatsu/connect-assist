@@ -112,6 +112,8 @@ export interface ImpulseStory {
   timeframe: string;
   startDate: string | null;
   endDate: string | null;
+  breakDate: string | null;
+  extendedBeyondBreak: boolean;
   spanBars: number;
   bosPrice: number;
   qualification: import("./impulseZoneEngine.ts").ImpulseQualification | null;
@@ -382,6 +384,8 @@ export function findUnifiedZone(
     timeframe: impulse.timeframe ?? selectedTF,
     startDate: impulse.startDate ?? null,
     endDate: impulse.endDate ?? null,
+    breakDate: impulse.breakDate ?? null,
+    extendedBeyondBreak: impulse.extendedBeyondBreak === true,
     spanBars: impulse.spanBars ?? 0,
     bosPrice: impulse.bosPrice,
     qualification: selectedZoneResult?.impulseQualification ?? null,
@@ -705,6 +709,8 @@ function buildNoZoneResult(
     pips: Math.round((Math.abs(leg.high - leg.low) / pipSize) * 10) / 10,
     timeframe: developing?.timeframe ?? leg.timeframe ?? "unknown",
     startDate: leg.startDate ?? null, endDate: leg.endDate ?? null,
+    breakDate: leg.breakDate ?? null,
+    extendedBeyondBreak: leg.extendedBeyondBreak === true,
     spanBars: leg.spanBars ?? 0, bosPrice: leg.bosPrice, qualification,
   } : null;
   return {
