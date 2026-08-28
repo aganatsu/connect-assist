@@ -132,13 +132,17 @@ Deno.test("temporary final block rearms the same frozen retracement", () => {
 
 import { evaluateSingleOwnershipFillAuthorization } from "../../functions/_shared/singleOwnershipFillAuthorization.ts";
 
-Deno.test("fill inherits the persisted originating zone when the scan snapshot is absent", () => {
+Deno.test("fill inherits the persisted neutral entry zone when the scan snapshot is absent", () => {
   const result = evaluateSingleOwnershipFillAuthorization({
     frozenDecision: null,
     frozenStrategyContext: {
       candidateId: "candidate",
-      scenarioZoneStory: {
-        originatingZone: { type: "fvg", low: 1877.26, high: 1881.68 },
+      entryZone: {
+        candidateId: "zone-evidence",
+        setupFamily: "impulse",
+        sourceEvidenceIds: [],
+        sourceImpulseId: null,
+        type: "fvg",
       },
     } as any,
     evaluatedAt: new Date(0).toISOString(),
@@ -154,9 +158,9 @@ Deno.test("fill inherits the persisted originating zone when the scan snapshot i
     requestedMode: "enforce",
     runtimeTarget: "live",
   });
-  assertEquals(result.decision.authorities.zoneStory.available, true);
+  assertEquals(result.decision.authorities.entryZone.available, true);
   assertEquals(
-    result.decision.authorities.zoneStory.source,
+    result.decision.authorities.entryZone.source,
     "frozen_setup_context",
   );
   assertEquals(result.decision.completeness.complete, true);

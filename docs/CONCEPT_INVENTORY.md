@@ -58,6 +58,7 @@ instead of arbitrating.
 | Post-touch CHoCH/MSS trigger | 2 enforced checks | `detectZoneConfirmation` + `impulseConfirmationLock` | 🔴 DUPLICATE ENFORCEMENT |
 | Zone selection | 1 foundation + 2 strategies | `impulseZoneEngine` | 🟢 Correct layering |
 | Entry-zone eligibility/ranking | 1 authority: standard + 2 explicit modes | `ictEntryZoneAuthority.ts:selectICTEntryZone` | 🟢 Single owner |
+| Frozen setup entry-zone contract | 1 | `setupLifecycle.ts:FrozenEntryZone` | 🟢 Single versioned owner; v1 rows adapt on read |
 
 ---
 
@@ -271,6 +272,26 @@ timeframe belonging to the resolved style's setup, structure, or confirmation
 roles. Its candidate identity is deterministic across rescans and its output is
 hard-coded to `observe_only`. It is not yet wired into scanner admission,
 lifecycle, authorization, orders, or execution.
+
+## Neutral frozen entry-zone contract
+
+`_shared/setupLifecycle.ts` owns the versioned frozen setup contract. New rows
+use `setup-policy-freeze.v2` and carry one `FrozenEntryZone` for impulse,
+cascade, or future `structure_poi` setup families. The entry-zone object freezes
+the market-object candidate ID separately from the setup lifecycle ID, source
+evidence, source window, type, timeframe, bounds, lifecycle, executable
+geometry, style-policy hashes, timeframe roles, and freeze timestamp.
+
+The reader converts historical `setup-policy-freeze.v1`
+`scenarioZoneStory.originatingZone` data into the v2 in-memory shape without
+rewriting stored rows. The existing database freeze trigger accepts both
+versions and applies v2 structural validation to new contexts. New writers do
+not create a second zone-story contract.
+Single Ownership uses `entryZone`, and Canonical Scanner State uses the
+`entry_zone` authority role; their readers likewise normalize historical
+`zoneStory` and `impulse_zone` evidence. This migration changes contract naming
+and provenance only. It does not admit `structure_poi`, change a gate, or alter
+paper/live execution.
 
 ## Post-touch CHoCH/MSS trigger
 

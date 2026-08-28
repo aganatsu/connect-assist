@@ -8,6 +8,9 @@ export type SingleOwnershipScanOutcome =
 
 const REASON_LABELS: Record<string, string> = {
   direction_not_authorized: "HTF Bias does not authorize this direction",
+  entry_zone_invalid: "ICT Entry Zone is invalid",
+  entry_zone_waiting: "Entry Confirmation is not ready",
+  // Historical v1 rows retain these codes until read through the v2 adapter.
   zone_story_invalid: "ICT Setup Model is invalid",
   zone_story_waiting: "Entry Confirmation is not ready",
   confirmation_waiting: "Entry Confirmation is not ready",

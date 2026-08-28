@@ -1,6 +1,7 @@
 import type {
   SingleOwnershipDecisionResult,
 } from "./singleOwnershipDecision.ts";
+import { normalizeSingleOwnershipDecision } from "./singleOwnershipDecision.ts";
 
 function object(value: unknown): Record<string, any> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -19,10 +20,7 @@ function decisionFrom(row: Record<string, any>) {
   const payload = row.source === "closed"
     ? object(row.signal_reason)
     : object(row.raw_detail);
-  const decision = object(payload.singleOwnershipDecision);
-  return decision.contractVersion === "single-ownership-decision.v1"
-    ? decision as unknown as SingleOwnershipDecisionResult
-    : null;
+  return normalizeSingleOwnershipDecision(payload.singleOwnershipDecision);
 }
 
 export function buildSingleOwnershipComparison(

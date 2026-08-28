@@ -7,12 +7,29 @@ import {
 import type { SingleOwnershipDecisionResult } from "../../functions/_shared/singleOwnershipDecision.ts";
 
 const frozen = {
-  authorities: {
-    zoneStory: {
-      available: true, valid: true, entryReady: true, source: "unified",
-      reasonCodes: ["zone_story_available"],
-    },
+  contractVersion: "single-ownership-decision.v2",
+  observationOnly: true,
+  affectsAuthorization: false,
+  evaluatedAt: "2026-08-03T00:00:00Z",
+  identity: {
+    candidateId: "candidate-1",
+    symbol: "EUR/USD",
+    direction: "short",
   },
+  authorities: {
+    entryZone: {
+      available: true, valid: true, entryReady: true, source: "unified",
+      reasonCodes: ["entry_zone_available"],
+    },
+    direction: { verdict: "short", shouldBlock: false },
+    canonicalLocation: { required: true, available: true, allowed: true },
+    confirmation: { required: true, passed: true, reasonCodes: [] },
+    thesis: { required: true, valid: true, reasonCodes: [] },
+    safety: { complete: true, checks: [] },
+  },
+  decision: "allow",
+  reasonCodes: [],
+  completeness: { complete: true, unavailable: [] },
   legacyDiagnostics: { effectiveScore: 20, threshold: 55 },
 } as SingleOwnershipDecisionResult;
 
@@ -32,9 +49,9 @@ const base = {
   runtimeTarget: "paper" as const,
 };
 
-Deno.test("fill authorization refreshes frozen story and allows complete paper setup", () => {
+Deno.test("fill authorization refreshes frozen entry zone and allows complete paper setup", () => {
   const result = evaluateSingleOwnershipFillAuthorization(base);
-  assertEquals(result.decision.authorities.zoneStory.source, "unified");
+  assertEquals(result.decision.authorities.entryZone.source, "unified");
   assertEquals(result.authorized, true);
 });
 
@@ -80,14 +97,14 @@ Deno.test("fill authorization cannot override raw operational failure", () => {
   assertEquals(result.authorized, false);
 });
 
-Deno.test("fill enforcement fails closed without frozen Zone Story", () => {
+Deno.test("fill enforcement fails closed without frozen entry zone", () => {
   const result = evaluateSingleOwnershipFillAuthorization({
     ...base, frozenDecision: null,
   });
   assertEquals(result.authorized, false);
-  assertEquals(result.decision.completeness.unavailable, ["zone_story"]);
+  assertEquals(result.decision.completeness.unavailable, ["entry_zone"]);
   assertEquals(result.retryable, true);
-  assertEquals(result.reason.includes("zone_story_unavailable"), true);
+  assertEquals(result.reason.includes("entry_zone_unavailable"), true);
 });
 
 // ── composePendingFillBlockReason ───────────────────────────────────────────

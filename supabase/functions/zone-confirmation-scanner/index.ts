@@ -1946,10 +1946,10 @@ Deno.serve(async (req) => {
             evidenceId: ownershipFill.decision.authorities.direction.evidenceId || null,
           },
           zone: {
-            available: ownershipFill.decision.authorities.zoneStory.available,
-            valid: ownershipFill.decision.authorities.zoneStory.valid,
+            available: ownershipFill.decision.authorities.entryZone.available,
+            valid: ownershipFill.decision.authorities.entryZone.valid,
             atPoi: true,
-            evidenceId: ownershipFill.decision.authorities.zoneStory.candidateId || null,
+            evidenceId: ownershipFill.decision.authorities.entryZone.candidateId || null,
           },
           location: ownershipFill.decision.authorities.canonicalLocation,
           liquidity: {

@@ -1,4 +1,4 @@
-import type { CanonicalScannerStage, CanonicalScannerState } from "./canonicalScannerState.ts";
+import { type CanonicalScannerStage, type CanonicalScannerState, normalizeCanonicalScannerState } from "./canonicalScannerState.ts";
 
 export type WorkflowDecision = "allow" | "watch" | "block";
 
@@ -16,8 +16,7 @@ function stateFrom(row: Record<string, any>, source: "closed" | "rejected"): Can
     object(payload.authorization).canonicalScannerState,
     object(payload.tradeDecisionPresentation).canonicalScannerState,
   ];
-  const state = candidates.map(object).find((item) => item.contractVersion === "canonical-scanner-state.v1");
-  return state ? state as unknown as CanonicalScannerState : null;
+  return candidates.map(normalizeCanonicalScannerState).find((item) => item) || null;
 }
 
 export function workflowDecisionForStage(stage: CanonicalScannerStage): WorkflowDecision {

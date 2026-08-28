@@ -96,7 +96,7 @@ Deno.test("trade authority excludes legacy scores and labels diagnostics", () =>
     singleOwnershipDecision: {
       decision: "allow",
       authorities: {
-        zoneStory: { valid: true, entryReady: true },
+        entryZone: { valid: true, entryReady: true },
         canonicalLocation: { required: true, allowed: true },
         confirmation: { required: true, passed: true },
         thesis: { required: true, valid: true },
@@ -106,7 +106,7 @@ Deno.test("trade authority excludes legacy scores and labels diagnostics", () =>
     singleOwnershipEnforcement: { affectsAuthorization: true },
   });
   assertStringIncludes(out, "ALLOW · ENFORCED");
-  assertStringIncludes(out, "Zone Story:</b> valid · entry ready");
+  assertStringIncludes(out, "Entry Zone:</b> valid · entry ready");
   assertStringIncludes(out, "Operational Safety:</b> passed");
   assertEquals(out.includes("score"), false);
   assertStringIncludes(diagnosticScoreLine(8.5), "legacy score 8.5 · does not authorize");

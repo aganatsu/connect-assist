@@ -1,6 +1,8 @@
 import type { DirectionVerdictPolicy } from "./decisionContract.ts";
 
 export const SINGLE_OWNERSHIP_DECISION_VERSION =
+  "single-ownership-decision.v2";
+export const LEGACY_SINGLE_OWNERSHIP_DECISION_VERSION =
   "single-ownership-decision.v1";
 
 export type SingleOwnershipDecision =
@@ -8,6 +10,19 @@ export type SingleOwnershipDecision =
   | "watch"
   | "block"
   | "unavailable";
+
+export interface EntryZoneAuthorityDecision {
+  available: boolean;
+  valid: boolean | null;
+  entryReady: boolean | null;
+  source: string | null;
+  candidateId?: string | null;
+  setupFamily?: "impulse" | "cascade" | "structure_poi" | null;
+  sourceEvidenceIds?: string[];
+  impulseId?: string | null;
+  poiType?: string | null;
+  reasonCodes: string[];
+}
 
 export interface SingleOwnershipDecisionInput {
   evaluatedAt: string;
@@ -22,16 +37,7 @@ export interface SingleOwnershipDecisionInput {
     evidenceId?: string | null;
     policy?: DirectionVerdictPolicy;
   };
-  zoneStory: {
-    available: boolean;
-    valid: boolean | null;
-    entryReady: boolean | null;
-    source: string | null;
-    candidateId?: string | null;
-    impulseId?: string | null;
-    poiType?: string | null;
-    reasonCodes: string[];
-  };
+  entryZone: EntryZoneAuthorityDecision;
   canonicalLocation: {
     required: boolean;
     available: boolean;
@@ -73,7 +79,7 @@ export interface SingleOwnershipDecisionResult {
   identity: SingleOwnershipDecisionInput["identity"];
   authorities: {
     direction: SingleOwnershipDecisionInput["direction"];
-    zoneStory: SingleOwnershipDecisionInput["zoneStory"];
+    entryZone: SingleOwnershipDecisionInput["entryZone"];
     canonicalLocation: SingleOwnershipDecisionInput["canonicalLocation"];
     confirmation: SingleOwnershipDecisionInput["confirmation"];
     thesis: SingleOwnershipDecisionInput["thesis"];
@@ -111,6 +117,136 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort();
 }
 
+function record(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function currentEntryZoneReason(value: unknown): string {
+  return String(value || "")
+    .replace(/^zone_story/, "entry_zone")
+    .replace(/^frozen_zone_story/, "frozen_entry_zone");
+}
+
+function normalizeEntryZoneAuthorityDecision(
+  value: unknown,
+): EntryZoneAuthorityDecision | null {
+  const zone = record(value);
+  if (Object.keys(zone).length === 0) return null;
+  if (
+    typeof zone.available !== "boolean" ||
+    ![true, false, null].includes(zone.valid) ||
+    ![true, false, null].includes(zone.entryReady) ||
+    (zone.source !== null && typeof zone.source !== "string") ||
+    !Array.isArray(zone.reasonCodes)
+  ) return null;
+  const setupFamily = zone.setupFamily == null
+    ? null
+    : zone.setupFamily === "impulse" || zone.setupFamily === "cascade" ||
+        zone.setupFamily === "structure_poi"
+    ? zone.setupFamily
+    : undefined;
+  if (setupFamily === undefined) return null;
+  const optionalString = (item: unknown): string | null | undefined =>
+    item == null
+      ? item as null | undefined
+      : typeof item === "string" && item.length > 0
+      ? item
+      : undefined;
+  const candidateId = optionalString(zone.candidateId);
+  const impulseId = optionalString(zone.impulseId);
+  const poiType = optionalString(zone.poiType);
+  if (
+    (zone.candidateId != null && candidateId === undefined) ||
+    (zone.impulseId != null && impulseId === undefined) ||
+    (zone.poiType != null && poiType === undefined)
+  ) return null;
+  const sourceEvidenceIds = zone.sourceEvidenceIds == null
+    ? undefined
+    : Array.isArray(zone.sourceEvidenceIds) &&
+        zone.sourceEvidenceIds.every((item: unknown) =>
+          typeof item === "string" && item.length > 0
+        )
+    ? [...new Set(zone.sourceEvidenceIds as string[])].sort()
+    : null;
+  if (sourceEvidenceIds === null) return null;
+  return {
+    available: zone.available,
+    valid: zone.valid,
+    entryReady: zone.entryReady,
+    source: zone.source,
+    ...(candidateId !== undefined ? { candidateId } : {}),
+    ...(setupFamily !== null ? { setupFamily } : {}),
+    ...(sourceEvidenceIds !== undefined ? { sourceEvidenceIds } : {}),
+    ...(impulseId !== undefined ? { impulseId } : {}),
+    ...(poiType !== undefined ? { poiType } : {}),
+    reasonCodes: zone.reasonCodes.map(currentEntryZoneReason),
+  };
+}
+
+/**
+ * Reads both persisted v1 `zoneStory` decisions and current v2 `entryZone`
+ * decisions into one in-memory shape. Historical rows are never rewritten.
+ */
+export function normalizeSingleOwnershipDecision(
+  value: unknown,
+): SingleOwnershipDecisionResult | null {
+  const decision = record(value);
+  const version = decision.contractVersion;
+  if (
+    version !== SINGLE_OWNERSHIP_DECISION_VERSION &&
+    version !== LEGACY_SINGLE_OWNERSHIP_DECISION_VERSION
+  ) return null;
+  const authorities = record(decision.authorities);
+  const completeness = record(decision.completeness);
+  const rawEntryZone = record(
+    version === LEGACY_SINGLE_OWNERSHIP_DECISION_VERSION
+      ? authorities.zoneStory
+      : authorities.entryZone,
+  );
+  const normalizedEntryZone = normalizeEntryZoneAuthorityDecision(rawEntryZone);
+  if (
+    (version === SINGLE_OWNERSHIP_DECISION_VERSION &&
+      !normalizedEntryZone) ||
+    !["allow", "watch", "block", "unavailable"].includes(decision.decision) ||
+    !Array.isArray(decision.reasonCodes) ||
+    !Array.isArray(completeness.unavailable)
+  ) return null;
+  const entryZone = normalizedEntryZone
+    ? normalizedEntryZone
+    : {
+      available: false,
+      valid: null,
+      entryReady: null,
+      source: null,
+      reasonCodes: ["legacy_entry_zone_authority_unavailable"],
+    };
+  const normalizedAuthorities = {
+    direction: authorities.direction,
+    entryZone,
+    canonicalLocation: authorities.canonicalLocation,
+    confirmation: authorities.confirmation,
+    thesis: authorities.thesis,
+    safety: authorities.safety,
+  } as SingleOwnershipDecisionResult["authorities"];
+  return {
+    contractVersion: SINGLE_OWNERSHIP_DECISION_VERSION,
+    observationOnly: true,
+    affectsAuthorization: false,
+    evaluatedAt: String(decision.evaluatedAt || ""),
+    identity: decision.identity,
+    authorities: normalizedAuthorities,
+    decision: decision.decision,
+    reasonCodes: decision.reasonCodes.map(currentEntryZoneReason),
+    completeness: {
+      complete: completeness.complete === true,
+      unavailable: completeness.unavailable.map(currentEntryZoneReason),
+    },
+    legacyDiagnostics: record(decision.legacyDiagnostics),
+  } as SingleOwnershipDecisionResult;
+}
+
 export function evaluateSingleOwnershipDecision(
   input: SingleOwnershipDecisionInput,
 ): SingleOwnershipDecisionResult {
@@ -138,14 +274,14 @@ export function evaluateSingleOwnershipDecision(
     reasons.push("direction_not_authorized");
   }
 
-  if (!input.zoneStory.available || input.zoneStory.valid === null) {
-    unavailable.push("zone_story");
-  } else if (!input.zoneStory.valid) {
-    reasons.push("zone_story_invalid");
-  } else if (input.zoneStory.entryReady === false) {
-    reasons.push("zone_story_waiting");
-  } else if (input.zoneStory.entryReady === null) {
-    unavailable.push("zone_story_entry_readiness");
+  if (!input.entryZone.available || input.entryZone.valid === null) {
+    unavailable.push("entry_zone");
+  } else if (!input.entryZone.valid) {
+    reasons.push("entry_zone_invalid");
+  } else if (input.entryZone.entryReady === false) {
+    reasons.push("entry_zone_waiting");
+  } else if (input.entryZone.entryReady === null) {
+    unavailable.push("entry_zone_entry_readiness");
   }
 
   if (input.canonicalLocation.required) {
@@ -184,9 +320,9 @@ export function evaluateSingleOwnershipDecision(
   const normalizedReasons = unique(reasons);
   const normalizedUnavailable = unique(unavailable);
   const hardBlocked = normalizedReasons.some((reason) =>
-    reason !== "zone_story_waiting" && reason !== "confirmation_waiting"
+    reason !== "entry_zone_waiting" && reason !== "confirmation_waiting"
   );
-  const waiting = normalizedReasons.includes("zone_story_waiting") ||
+  const waiting = normalizedReasons.includes("entry_zone_waiting") ||
     normalizedReasons.includes("confirmation_waiting");
   const decision: SingleOwnershipDecision = hardBlocked
     ? "block"
@@ -204,7 +340,7 @@ export function evaluateSingleOwnershipDecision(
     identity: input.identity,
     authorities: {
       direction: input.direction,
-      zoneStory: input.zoneStory,
+      entryZone: input.entryZone,
       canonicalLocation: input.canonicalLocation,
       confirmation: input.confirmation,
       thesis: input.thesis,

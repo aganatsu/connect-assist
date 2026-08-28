@@ -1,7 +1,8 @@
 import { workflowDecisionForStage } from "./canonicalScannerComparison.ts";
+import { normalizeCanonicalScannerState } from "./canonicalScannerState.ts";
 
 type Row = Record<string, any>;
-const ROLES = ["direction", "impulse_zone", "location", "liquidity", "confirmation", "thesis", "safety", "execution"] as const;
+const ROLES = ["direction", "entry_zone", "location", "liquidity", "confirmation", "thesis", "safety", "execution"] as const;
 
 function object(value: unknown): Record<string, any> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
@@ -12,10 +13,10 @@ function object(value: unknown): Record<string, any> {
 function extract(row: Row, source: "closed" | "rejected") {
   const payload = source === "closed" ? object(row.signal_reason) : object(row.raw_detail);
   const snapshot = object(row.decision_outcome_snapshot);
-  const state = object(snapshot.authority).contractVersion === "canonical-scanner-state.v1"
-    ? object(snapshot.authority) : object(payload.canonicalScannerState);
+  const state = normalizeCanonicalScannerState(snapshot.authority) ||
+    normalizeCanonicalScannerState(payload.canonicalScannerState);
   const complete = snapshot.contractVersion === "decision-outcome.v1" && snapshot.compatibility === "complete";
-  const compatible = state.contractVersion === "canonical-scanner-state.v1";
+  const compatible = state !== null;
   return { snapshot, state, complete, compatible };
 }
 
@@ -28,14 +29,14 @@ export function buildAuthorityOutcomeComparison(closed: Row[], rejected: Row[]) 
   const rows = [...closed.map((row) => ({ row, source: "closed" as const })), ...rejected.map((row) => ({ row, source: "rejected" as const }))]
     .map(({ row, source }) => {
       const evidence = extract(row, source);
-      const stage = evidence.compatible ? String(evidence.state.stage) : null;
+      const stage = evidence.compatible ? String(evidence.state?.stage) : null;
       const decision = stage ? workflowDecisionForStage(stage as any) : null;
-      const authorities = Array.isArray(evidence.state.authorities) ? evidence.state.authorities : [];
+      const authorities = Array.isArray(evidence.state?.authorities) ? evidence.state.authorities : [];
       return {
         id: String(row.id), source, symbol: String(row.symbol || ""), direction: String(row.direction || ""),
         observedAt: String(row.closed_at || row.rejected_at || row.created_at || ""), outcome: outcome(row, source),
         outcomeR: Number.isFinite(Number(row.outcome_r)) ? Number(row.outcome_r) : null,
-        stage, decision, reasonCode: evidence.state.reasonCode || null, explanation: evidence.state.explanation || null,
+        stage, decision, reasonCode: evidence.state?.reasonCode || null, explanation: evidence.state?.explanation || null,
         evidenceQuality: evidence.complete ? "complete" : evidence.compatible ? "historical_compatible" : "unavailable",
         authorities,
       };

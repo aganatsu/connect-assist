@@ -36,7 +36,7 @@ describe("OperationsDashboard decision pipeline", () => {
     const waiting = pendingOrderNestedPoiPresentation({
       confirmation_config: { entryMode: "nested_poi_market" },
       frozen_strategy_context: {
-        contractVersion: "setup-policy-freeze.v1",
+        contractVersion: "setup-policy-freeze.v2",
         nestedPoiEntry: nestedPlan,
       },
       impulse_entry_lifecycle: {
@@ -48,7 +48,7 @@ describe("OperationsDashboard decision pipeline", () => {
     const touched = pendingOrderNestedPoiPresentation({
       confirmation_config: { entryMode: "nested_poi_market" },
       frozen_strategy_context: {
-        contractVersion: "setup-policy-freeze.v1",
+        contractVersion: "setup-policy-freeze.v2",
         nestedPoiEntry: nestedPlan,
       },
       impulse_entry_lifecycle: {

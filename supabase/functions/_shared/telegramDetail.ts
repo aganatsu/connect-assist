@@ -157,8 +157,8 @@ export function tradeAuthorityLines(sr: Json): string {
   const enforced = enforcement?.affectsAuthorization === true;
   let out = "🛡 <b>Trade Authority</b>\n";
   out += tgLine("Decision", String(decision.decision || "unavailable").toUpperCase() + " · " + (enforced ? "ENFORCED" : "OBSERVE ONLY"));
-  const zone = authorities.zoneStory;
-  if (zone) out += tgLine("Zone Story", zone.valid === true ? (zone.entryReady === true ? "valid · entry ready" : "valid · waiting") : zone.valid === false ? "invalid" : "unavailable");
+  const zone = authorities.entryZone || authorities.zoneStory;
+  if (zone) out += tgLine("Entry Zone", zone.valid === true ? (zone.entryReady === true ? "valid · entry ready" : "valid · waiting") : zone.valid === false ? "invalid" : "unavailable");
   const location = authorities.canonicalLocation;
   if (location) out += tgLine("Price Location", location.required === false ? "off" : location.allowed === true ? "allowed" : location.allowed === false ? "blocked" : "unavailable");
   const confirmation = authorities.confirmation;

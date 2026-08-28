@@ -151,7 +151,7 @@ Deno.test("database audit and UI preserve and explain the same lifecycle evidenc
   assertStringIncludes(scanner, "deriveWatchlistLifecyclePhase");
   assertStringIncludes(
     scanner.replace(/\s+/g, " "),
-    "stagedDecisionFields( originatingZone, executionEligible, )",
+    "stagedDecisionFields( originatingZone, executionEligible, frozenEntryZone, )",
   );
   assert(
     panel.indexOf("Observed price:") <

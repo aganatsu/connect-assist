@@ -1,7 +1,7 @@
 export type AuthorityGateOwner =
   | "legacy_diagnostic"
   | "direction"
-  | "zone_story"
+  | "entry_zone"
   | "canonical_location"
   | "confirmation"
   | "thesis"
@@ -30,7 +30,8 @@ const OWNERS: Record<string, AuthorityGateOwner> = {
   impulse_zone_score: "legacy_diagnostic",
   premium_discount: "canonical_location",
   direction_verdict: "direction",
-  zone_story: "zone_story",
+  entry_zone: "entry_zone",
+  zone_story: "entry_zone",
   confirmation: "confirmation",
   thesis: "thesis",
   instrument_disabled: "operational_safety",
@@ -53,7 +54,7 @@ const OWNERS: Record<string, AuthorityGateOwner> = {
   multiple_live_connections_require_per_connection_sizing: "operational_safety",
   freshness: "operational_safety",
   prop_firm: "operational_safety",
-  cross_timeframe_authority: "zone_story",
+  cross_timeframe_authority: "entry_zone",
 };
 
 export function authorityGateOwner(code: string): AuthorityGateOwner {

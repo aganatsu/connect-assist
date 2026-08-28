@@ -16,6 +16,7 @@ const TERMINAL_FINAL_CODES = new Set([
 
 const TERMINAL_OWNERSHIP_REASONS = new Set([
   "direction_not_authorized",
+  "entry_zone_invalid",
   "zone_story_invalid",
   "thesis_invalid",
 ]);
@@ -24,8 +25,9 @@ const TERMINAL_OWNERSHIP_REASONS = new Set([
  * Whether a blocked pending fill should be kept alive for another cycle.
  *
  * `false` means the caller cancels the order permanently, so anything that is
- * merely waiting must report `true` — the function already treats
- * `zone_story_waiting` and `confirmation_waiting` that way.
+ * merely waiting must report `true` — the function already treats current
+ * `entry_zone_waiting`, historical `zone_story_waiting`, and
+ * `confirmation_waiting` that way.
  *
  * Canonical scanner enforcement is a third gate alongside raw authorization and
  * single ownership, and it was not visible here. When it blocked with
@@ -77,6 +79,7 @@ export function pendingFinalAuthorizationRetryable(input: {
     reason === "wrong_side" ||
     reason === "strict_value_required" ||
     reason === "canonical_location_blocked" ||
+    reason === "entry_zone_waiting" ||
     reason === "zone_story_waiting" ||
     reason === "confirmation_waiting" ||
     reason.startsWith("safety_")

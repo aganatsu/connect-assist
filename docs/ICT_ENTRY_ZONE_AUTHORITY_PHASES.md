@@ -47,7 +47,10 @@ select the production entry zone.
       confirmation timeframes.
 - [x] Reuse the existing type-neutral scoring and overlap construction.
 - [x] Keep the result permanently `observe_only` at this phase.
-- [ ] Generalize and version the frozen setup contract before any paper rollout.
+- [x] Generalize and version the frozen setup contract before any paper rollout.
+      New writes use `setup-policy-freeze.v2` with one neutral `entryZone`;
+      historical `scenarioZoneStory` / `zoneStory` / `impulse_zone` evidence is
+      normalized by compatibility readers without changing runtime authority.
 - [ ] Wire identical observation inputs from live scanning and backtest.
 - [ ] Collect forward outcomes; retrospective replay cannot unlock execution.
 

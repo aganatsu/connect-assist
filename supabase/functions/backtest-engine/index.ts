@@ -4184,7 +4184,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               verdict: directionVerdict?.verdict || null,
               shouldBlock: directionVerdict?.shouldBlock ?? null,
             },
-            zoneStory: {
+            entryZone: {
               available: replayZone.hasZone,
               valid: replayZone.hasZone ? true : null,
               entryReady: prospectiveNestedLifecycle
@@ -4193,7 +4193,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 ? replayZone.entryReady
                 : null,
               source: replayZone.source,
-              reasonCodes: replayZone.hasZone ? ["zone_story_available"] : ["zone_story_unavailable"],
+              setupFamily: signalSource === "cascade" ? "cascade" : "impulse",
+              reasonCodes: replayZone.hasZone ? ["entry_zone_available"] : ["entry_zone_unavailable"],
             },
             canonicalLocation: {
               required: pairConfig.dealingRangeMode !== "off",

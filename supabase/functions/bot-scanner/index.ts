@@ -5104,6 +5104,29 @@ async function runScanForUser(
         new Map(evidence.map((item: any) => [item.evidenceId, item])).values(),
       );
     };
+    const entryZoneCandidateIdFor = (zone: any): string | null =>
+      zone?.candidateModel?.candidateId ||
+      zone?.localConfluence?.candidateId ||
+      zone?.evidence?.entityId ||
+      zone?.poi?.evidence?.entityId ||
+      null;
+    const entryZoneEvidenceIdsFor = (zone: any): string[] =>
+      Array.from(new Set([
+        zone?.evidence?.evidenceId,
+        zone?.poi?.evidence?.evidenceId,
+        ...(zone?.localConfluence?.items || []).map(
+          (item: any) => item?.evidence?.evidenceId,
+        ),
+      ].filter((value): value is string =>
+        typeof value === "string" && value.length > 0
+      ))).sort();
+    const entryZoneTimeframeFor = (zone: any): string | null =>
+      zone?.timeframeLineage?.candidateTimeframe ||
+      zone?.evidence?.timeframe ||
+      zone?.poi?.evidence?.timeframe ||
+      null;
+    const entryZoneLifecycleFor = (zone: any): string | null =>
+      zone?.candidateLifecycle?.state || null;
     const selectedZoneLocalConfluence = () =>
       (detail as any).impulseZone?.bestZone?.localConfluence ?? null;
     const selectedZoneShadowRanking = () =>
@@ -5244,6 +5267,7 @@ async function runScanForUser(
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
       executionEligible = true,
+      frozenEntryZone: Record<string, unknown> | null = originatingZone,
     ) => {
       const setupId = crypto.randomUUID();
       const candidateId = crypto.randomUUID();
@@ -5273,7 +5297,7 @@ async function runScanForUser(
             : "confirmation",
         ),
         nestedPoiEntry: frozenNestedPoiEntry,
-        originatingZone,
+        entryZone: frozenEntryZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
         liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
@@ -5939,6 +5963,9 @@ async function runScanForUser(
       const isCascade = (detail as any).signalSource === "cascade";
       const unifiedZone = unifiedZoneData?.zone;
       const cascadeZone = cascadeResult?.entryZone?.poi;
+      const selectedEntryZoneEvidence = isCascade
+        ? cascadeResult?.entryZone
+        : izData?.bestZone;
       const unifiedEntry = unifiedZoneData?.entry;
       const entryPrice = isCascade
         ? cascadeResult?.entry ?? analysis.lastPrice
@@ -5959,6 +5986,14 @@ async function runScanForUser(
         : unifiedEntry?.tpPrice ?? analysis.takeProfit;
       const originatingZone = executionEligible
         ? {
+          setupFamily: isCascade ? "cascade" : "impulse",
+          candidateId: entryZoneCandidateIdFor(selectedEntryZoneEvidence),
+          sourceEvidenceIds: entryZoneEvidenceIdsFor(
+            selectedEntryZoneEvidence,
+          ),
+          sourceImpulseId:
+            (detail as any).canonicalDealingRangeObservation?.canonical?.range
+              ?.impulseId || null,
           type: isCascade
             ? cascadeZone?.type || "cascade_zone"
             : unifiedZone?.type || "unified_zone",
@@ -5969,6 +6004,9 @@ async function runScanForUser(
           entry: entryPrice,
           stopLoss,
           takeProfit,
+          timeframe: entryZoneTimeframeFor(selectedEntryZoneEvidence) ||
+            (isCascade ? null : unifiedZoneData?.selectedTF || null),
+          lifecycle: entryZoneLifecycleFor(selectedEntryZoneEvidence),
           selectedTimeframe: isCascade
             ? "cascade"
             : unifiedZoneData?.selectedTF || null,
@@ -6008,6 +6046,12 @@ async function runScanForUser(
           stopLoss,
           isCascade ? null : unifiedZoneData?.impulse,
         )
+        : null;
+      const frozenEntryZone = executionEligible
+        ? {
+          ...originatingZone,
+          structuralInvalidation: watchlistInvalidation?.level ?? null,
+        }
         : null;
       const needsHandoff = requiresFreshCandidateHandoff(
         existingStaged,
@@ -6141,6 +6185,7 @@ async function runScanForUser(
       const decisionFields = stagedDecisionFields(
         originatingZone,
         executionEligible,
+        frozenEntryZone,
       );
       const { error } = await supabase.from("staged_setups").insert({
         user_id: userId,
@@ -7323,7 +7368,7 @@ async function runScanForUser(
           zoneLocalConfluence: selectedZoneLocalConfluence(),
           zoneCandidateShadowRanking: selectedZoneShadowRanking(),
           crossTimeframeContext: selectedCrossTimeframeContext(existingStaged.originating_zone || originatingZone),
-          originatingZone:
+          entryZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
             existingStaged.confirmation_method ||
@@ -7341,7 +7386,7 @@ async function runScanForUser(
           gamePlan: activeGamePlan,
           directionVerdict: activeDirectionVerdict,
           confirmationMethod: frozenStrategyContext.confirmation.method,
-          originatingZone,
+          entryZone: frozenStrategyContext.entryZone,
           frozenStrategyContext,
         }),
         directionVerdict:
@@ -7768,9 +7813,9 @@ async function runScanForUser(
         signal: candidateConfirmationSignal,
         indicators: candidateIndicatorConfirmation,
       };
-      const zoneStoryAvailable = cascadeResult?.state === "triggered" ||
+      const entryZoneAvailable = cascadeResult?.state === "triggered" ||
         unifiedZoneData?.hasZone === true || izData?.hasZone === true;
-      const zoneStoryEntryReady = cascadeResult?.state === "triggered"
+      const entryZoneReady = cascadeResult?.state === "triggered"
         ? true
         : unifiedZoneData?.hasZone
         ? unifiedGatePassed
@@ -7791,14 +7836,22 @@ async function runScanForUser(
             shouldBlock: streamlinedDirectionVerdict?.shouldBlock ?? null,
             evidenceId: streamlinedDirectionVerdict?.id || null,
           },
-          zoneStory: {
-            available: zoneStoryAvailable, valid: zoneStoryAvailable ? true : null,
-            entryReady: zoneStoryEntryReady,
+          entryZone: {
+            available: entryZoneAvailable, valid: entryZoneAvailable ? true : null,
+            entryReady: entryZoneReady,
             source: (detail as any).signalSource || null,
             candidateId: singleOwnershipCandidateId,
+            setupFamily: (detail as any).signalSource === "cascade"
+              ? "cascade"
+              : "impulse",
+            sourceEvidenceIds: selectedZoneConceptEvidence().map((item: any) =>
+              String(item.evidenceId)
+            ),
             impulseId: canonicalLocationObservation?.range?.impulseId || null,
             poiType: izData?.bestZone?.type || null,
-            reasonCodes: zoneStoryAvailable ? ["zone_story_available"] : ["zone_story_unavailable"],
+            reasonCodes: entryZoneAvailable
+              ? ["entry_zone_available"]
+              : ["entry_zone_unavailable"],
           },
           canonicalLocation: {
             required: ((pairConfig as any).dealingRangeMode || "avoid_wrong_side") !== "off",
@@ -7810,9 +7863,9 @@ async function runScanForUser(
             reasonCode: canonicalLocationObservation?.code || null,
           },
           confirmation: {
-            required: zoneStoryAvailable, passed: zoneStoryEntryReady,
+            required: entryZoneAvailable, passed: entryZoneReady,
             authorityVersion: "confirmation-authority.v1",
-            reasonCodes: zoneStoryEntryReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
+            reasonCodes: entryZoneReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
           },
           thesis: {
             required: streamlinedDecisionContext?.thesisValidity?.required === true,
@@ -7880,13 +7933,13 @@ async function runScanForUser(
           reasonCode: canonicalStructureDecision.reasonCode,
         },
         zone: {
-          available: ownedDecision.authorities.zoneStory.available,
-          valid: ownedDecision.authorities.zoneStory.valid,
-          atPoi: ownedDecision.authorities.zoneStory.available &&
+          available: ownedDecision.authorities.entryZone.available,
+          valid: ownedDecision.authorities.entryZone.valid,
+          atPoi: ownedDecision.authorities.entryZone.available &&
             (unifiedZoneData?.price?.atZone === true ||
               izData?.bestZone?.priceAtZone === true),
-          evidenceId: ownedDecision.authorities.zoneStory.candidateId || null,
-          reasonCode: ownedDecision.authorities.zoneStory.reasonCodes[0] || null,
+          evidenceId: ownedDecision.authorities.entryZone.candidateId || null,
+          reasonCode: ownedDecision.authorities.entryZone.reasonCodes[0] || null,
         },
         location: ownedDecision.authorities.canonicalLocation,
         liquidity: {
@@ -8792,14 +8845,27 @@ async function runScanForUser(
           const limitSL = pendingPlan.stopLoss;
           const limitTP = pendingPlan.takeProfit;
           const pendingOriginatingZone = {
+            setupFamily: (detail as any).signalSource === "cascade"
+              ? "cascade"
+              : "impulse",
             candidateId: limitEntry.candidateId,
+            sourceEvidenceIds: routedNestedPoiEntry?.selected
+              ?.supportingEvidenceIds ||
+              entryZoneEvidenceIdsFor(izData?.bestZone),
+            sourceImpulseId:
+              (detail as any).canonicalDealingRangeObservation?.canonical?.range
+                ?.impulseId || null,
             type: limitEntry.lifecycleCandidateType,
             displayType: limitEntry.zoneType,
             low: limitEntry.zoneLow,
             high: limitEntry.zoneHigh,
             entry: limitEntry.price,
             timeframe: limitEntry.timeframe,
+            lifecycle: routedNestedPoiEntry?.selected?.lifecycle ||
+              entryZoneLifecycleFor(izData?.bestZone),
             triggerKind: limitEntry.triggerKind,
+            stopLoss: limitSL,
+            takeProfit: limitTP,
             refinedLow: izData?.bestZone?.ltfRefined
                 ? Math.min(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
                 : null,
@@ -9054,7 +9120,11 @@ async function runScanForUser(
               zoneCandidateShadowRanking: selectedZoneShadowRanking(),
               crossTimeframeContext: pendingFrozenCrossTimeframeContext,
               nestedPoiEntry: observedNestedPoiEntry,
-              originatingZone: pendingOriginatingZone,
+              entryZone: {
+                ...pendingOriginatingZone,
+                structuralInvalidation:
+                  pendingStructuralInvalidation?.level ?? null,
+              },
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
               indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -9693,7 +9763,21 @@ async function runScanForUser(
             evaluatedAt: nowStr,
           }),
         );
+        const directEntryZoneEvidence =
+          (detail as any).signalSource === "cascade"
+            ? cascadeResult?.entryZone
+            : izData?.bestZone;
         const directOriginatingZone = {
+          setupFamily: (detail as any).signalSource === "cascade"
+            ? "cascade"
+            : "impulse",
+          candidateId: entryZoneCandidateIdFor(directEntryZoneEvidence),
+          sourceEvidenceIds: entryZoneEvidenceIdsFor(
+            directEntryZoneEvidence,
+          ),
+          sourceImpulseId:
+            (detail as any).canonicalDealingRangeObservation?.canonical?.range
+              ?.impulseId || null,
           type: izData?.bestZone?.type ||
             (detail as any).unifiedZone?.zoneType ||
             (detail as any).signalSource ||
@@ -9705,6 +9789,12 @@ async function runScanForUser(
             (detail as any).unifiedZone?.zoneHigh ||
             null,
           entry: marketEntryPrice,
+          timeframe: entryZoneTimeframeFor(directEntryZoneEvidence) ||
+            (detail as any).unifiedZone?.selectedTF || null,
+          lifecycle: entryZoneLifecycleFor(directEntryZoneEvidence),
+          structuralInvalidation: null,
+          stopLoss: sl,
+          takeProfit: tp,
           signalSource: (detail as any).signalSource || null,
           marketFillAtZone: useMarketFillAtZone,
         };
@@ -9738,7 +9828,7 @@ async function runScanForUser(
             zoneLocalConfluence: selectedZoneLocalConfluence(),
             zoneCandidateShadowRanking: selectedZoneShadowRanking(),
             crossTimeframeContext: selectedCrossTimeframeContext(directOriginatingZone),
-            originatingZone: directOriginatingZone,
+            entryZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
             indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -11162,10 +11252,21 @@ async function runScanForUser(
             const breakerExpiry = config.limitOrderExpiryMinutes || 60;
             const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
             const breakerOriginatingZone = {
+              setupFamily: "impulse",
+              candidateId: breakerCandidateObservation.candidateId,
+              sourceEvidenceIds: [],
+              sourceImpulseId: breakerCandidateObservation.impulseId,
               type: "breaker_block",
               low: breaker.entryZone.low,
               high: breaker.entryZone.high,
               entry: breakerEntry,
+              timeframe: breakerCandidateObservation.timeframe,
+              lifecycle: breaker.retestComplete ? "retested" : "fresh",
+              structuralInvalidation: breakerDir === "long"
+                ? breaker.entryZone.low
+                : breaker.entryZone.high,
+              stopLoss: breakerSL,
+              takeProfit: breakerTP,
             };
             const breakerFrozenStrategyContext =
               buildFrozenSetupStrategyContext({
@@ -11183,7 +11284,7 @@ async function runScanForUser(
                 gamePlan: activeGamePlan,
                 directionVerdict: activeDirectionVerdict,
                 crossTimeframeContext: selectedCrossTimeframeContext(breakerOriginatingZone),
-                originatingZone: breakerOriginatingZone,
+                entryZone: breakerOriginatingZone,
                 confirmationMethod:
                   pairConfig.confirmationMethod || "choch",
                 indicatorMinCount: pairConfig.indicatorMinCount || 3,
