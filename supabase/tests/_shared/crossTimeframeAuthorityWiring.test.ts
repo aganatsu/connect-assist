@@ -35,6 +35,19 @@ Deno.test("effective config exposes the certified Cross-TF maximum to the UI", a
   );
 });
 
+Deno.test("evidence UI reports Cross-TF activation and readiness separately from POI confluence", async () => {
+  const ui = await source("src/pages/RejectedSetups.tsx");
+  assertStringIncludes(
+    ui,
+    'crossTimeframeActivation={activationByFeature.get("cross_timeframe_authority")}',
+  );
+  assertStringIncludes(ui, "CROSS-TF ALIGNMENT");
+  assertStringIncludes(
+    ui,
+    'row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"',
+  );
+});
+
 Deno.test("Phase 7 scanner resolves requested, certified, and effective authority", async () => {
   const scanner = await source("supabase/functions/bot-scanner/index.ts");
   assertStringIncludes(scanner, "resolveCrossTimeframeAuthority");
