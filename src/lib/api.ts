@@ -735,9 +735,10 @@ export const brokerApi = {
   update: (data: any) => afterFreshTradingTruth(
     () => invokeFunction("broker-connections", { action: "update", ...data }),
   ),
-  delete: (id: string) => afterFreshTradingTruth(
-    () => invokeFunction("broker-connections", { action: "delete", id }),
-  ),
+  // Removing a connection must not depend on that (possibly unreachable) broker
+  // responding — a dead/unreachable account is exactly what users need to delete.
+  delete: (id: string) => invokeFunction("broker-connections", { action: "delete", id }),
+
   test: (id: string) => invokeFunction("broker-connections", { action: "test", id }),
   listSymbols: (id: string) => invokeFunction("broker-connections", { action: "list_symbols", id }),
   autoMapSymbols: (id: string) => afterFreshTradingTruth(
