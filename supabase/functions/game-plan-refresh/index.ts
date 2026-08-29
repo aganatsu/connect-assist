@@ -13,7 +13,10 @@ import {
   buildStyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
 import { generateGamePlansWithRetry } from "../_shared/gamePlanGeneration.ts";
-import { resolveGamePlanMarketScope } from "../_shared/gamePlanMarketScope.ts";
+import {
+  gamePlanSymbolsMatchScope,
+  resolveGamePlanMarketScope,
+} from "../_shared/gamePlanMarketScope.ts";
 import {
   beginScanSourceTally,
   endScanSourceTally,
@@ -33,6 +36,7 @@ import {
   applyGamePlanValidityWindow,
   buildGamePlanConfigSnapshot,
   enrichGamePlanWithDirectionalNews,
+  loadActiveGamePlan,
   persistActiveGamePlan,
 } from "../_shared/gamePlanStore.ts";
 import type { Candle } from "../_shared/smcAnalysis.ts";
@@ -151,28 +155,6 @@ Deno.serve(async (req) => {
       failure_message: null, updated_at: attemptAt.toISOString(),
     }, { onConflict: "user_id,bot_id" });
 
-    if (body.source === "scheduled") {
-      const { data: latestPlan } = await adminClient.from("active_game_plans")
-        .select("generated_at,expires_at").eq("user_id", userId)
-        .eq("bot_id", BOT_ID).eq("is_active", true)
-        .order("generated_at", { ascending: false }).limit(1).maybeSingle();
-      if (latestPlan?.generated_at && latestPlan?.expires_at) {
-        const generatedAt = Date.parse(latestPlan.generated_at);
-        const expiresAt = Date.parse(latestPlan.expires_at);
-        const refreshAt = generatedAt + (expiresAt - generatedAt) * 0.75;
-        if (Date.now() < refreshAt) {
-          await adminClient.from("game_plan_refresh_status").upsert({
-            user_id: userId, bot_id: BOT_ID, status: "skipped",
-            last_attempt_at: attemptAt.toISOString(),
-            next_retry_at: new Date(refreshAt).toISOString(),
-            active_plan_expires_at: latestPlan.expires_at,
-            details: { reason: "active_plan_inside_refresh_window" },
-            updated_at: new Date().toISOString(),
-          }, { onConflict: "user_id,bot_id" });
-          return respond({ success: true, skipped: true, nextRetryAt: new Date(refreshAt).toISOString() });
-        }
-      }
-    }
     const styleResolution = await loadConfig(adminClient, userId);
     const config = styleResolution.config;
     const stylePolicy = await buildResolvedStylePolicy({
@@ -208,14 +190,58 @@ Deno.serve(async (req) => {
     const marketScope = resolveGamePlanMarketScope(
       config.instruments,
       new Date(),
+      config.enabledDays,
     );
     if (marketScope.eligibleSymbols.length === 0) {
-      await recordRefreshFailure(adminClient, userId, "no_open_instruments", "No enabled instruments are open for Game Plan generation in the current market window", { marketScope });
+      const sourceSummary = endScanSourceTally();
+      await adminClient.from("game_plan_refresh_status").upsert({
+        user_id: userId, bot_id: BOT_ID, status: "skipped",
+        last_attempt_at: attemptAt.toISOString(), next_retry_at: null,
+        details: { reason: "no_open_instruments", marketScope },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id,bot_id" });
       return respond({
-        error:
+        success: true,
+        skipped: true,
+        reason:
           "No enabled instruments are open for Game Plan generation in the current market window",
+        source: sourceSummary,
         marketScope,
-      }, 409);
+      });
+    }
+    if (body.source === "scheduled") {
+      const latestPlan = await loadActiveGamePlan(adminClient, userId, BOT_ID);
+      const latestPlanMatchesMarketScope = latestPlan
+        ? gamePlanSymbolsMatchScope(
+          latestPlan.plans.map((plan) => plan.symbol),
+          marketScope,
+        )
+        : false;
+      if (
+        latestPlanMatchesMarketScope && latestPlan?.generatedAt &&
+        latestPlan?.validityPolicy?.expiresAt
+      ) {
+        const generatedAt = Date.parse(latestPlan.generatedAt);
+        const expiresAt = Date.parse(latestPlan.validityPolicy.expiresAt);
+        const refreshAt = generatedAt + (expiresAt - generatedAt) * 0.75;
+        if (Date.now() < refreshAt) {
+          const sourceSummary = endScanSourceTally();
+          await adminClient.from("game_plan_refresh_status").upsert({
+            user_id: userId, bot_id: BOT_ID, status: "skipped",
+            last_attempt_at: attemptAt.toISOString(),
+            next_retry_at: new Date(refreshAt).toISOString(),
+            active_plan_expires_at: latestPlan.validityPolicy.expiresAt,
+            details: { reason: "active_plan_inside_refresh_window" },
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "user_id,bot_id" });
+          return respond({
+            success: true,
+            skipped: true,
+            nextRetryAt: new Date(refreshAt).toISOString(),
+            source: sourceSummary,
+          });
+        }
+      }
     }
     const generateForSymbol = async (
       symbol: string,

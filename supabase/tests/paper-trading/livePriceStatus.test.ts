@@ -4,9 +4,9 @@
  *
  * Branch: manus/fix-live-price-display
  *
- * Verifies that the status handler now fetches live prices for open positions
- * on every poll (not just when processEngine=true), and that the impulse zone
- * panel uses the correct max score denominator.
+ * Verifies that the status handler fetches live prices for open-market
+ * positions on every poll (not just when processEngine=true), and that the
+ * impulse zone panel uses the correct max score denominator.
  */
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
@@ -17,16 +17,16 @@ const paperSource = Deno.readTextFileSync(
 // ═══════════════════════════════════════════════════════════════════════
 // Test 1: Status handler refreshes prices BEFORE processEngine check
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("status handler fetches live prices unconditionally for open positions", () => {
+Deno.test("status handler refreshes eligible live prices before optional engine processing", () => {
   // The live price refresh block should appear BEFORE the processEngine check
-  const livePriceBlock = paperSource.indexOf("Always refresh live prices on status poll");
+  const livePriceBlock = paperSource.indexOf("Refresh live prices on status poll for open markets");
   const processEngineBlock = paperSource.indexOf("payload.processEngine === true");
 
   assert(livePriceBlock > 0, "Live price refresh block should exist in paper-trading/index.ts");
   assert(processEngineBlock > 0, "processEngine block should still exist");
   assert(
     livePriceBlock < processEngineBlock,
-    "Live price refresh must run BEFORE processEngine check (unconditional price update)"
+    "Live price refresh must run BEFORE processEngine check"
   );
 });
 
@@ -35,7 +35,7 @@ Deno.test("status handler fetches live prices unconditionally for open positions
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("live price refresh calls fetchLivePrice for each unique symbol", () => {
   // Extract the live price refresh block
-  const startMarker = "Always refresh live prices on status poll";
+  const startMarker = "Refresh live prices on status poll for open markets";
   const endMarker = "Engine processing (SL/TP/trail/BE logic) only runs when explicitly triggered";
   const startIdx = paperSource.indexOf(startMarker);
   const endIdx = paperSource.indexOf(endMarker);
@@ -47,6 +47,11 @@ Deno.test("live price refresh calls fetchLivePrice for each unique symbol", () =
 
   // Should deduplicate symbols
   assert(block.includes("new Set(positions.map"), "Should deduplicate symbols using Set");
+  // Should exclude instruments whose market is closed
+  assert(
+    block.includes("isInstrumentMarketOpen(sym, marketNow)"),
+    "Should only request prices for symbols whose market is open",
+  );
   // Should call fetchLivePrice
   assert(block.includes("fetchLivePrice(sym)"), "Should call fetchLivePrice for each symbol");
   // Should update in-memory position objects

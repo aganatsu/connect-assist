@@ -780,6 +780,16 @@ function OperationsDashboard() {
   const currentScan = scans[safeScanIndex];
   const scanDetails = useMemo(() => cleanDetails(currentScan), [currentScan]);
   const meta = useMemo(() => detailMeta(currentScan), [currentScan]);
+  const marketSchedule = meta?.marketSchedule || null;
+  const marketScheduleEligible = Array.isArray(marketSchedule?.eligibleSymbols)
+    ? marketSchedule.eligibleSymbols.map(String)
+    : [];
+  const marketScheduleExcluded = Array.isArray(marketSchedule?.excludedSymbols)
+    ? marketSchedule.excludedSymbols.map(String)
+    : [];
+  const marketScheduleRestricted = marketSchedule &&
+    marketSchedule.reason !== "all_enabled_markets_open" &&
+    marketScheduleExcluded.length > 0;
   const sessionRotationObservation =
     meta?.impulseRotation?.sessionObservation?.contract ===
         "session-aware-rotation-observation.v1"
@@ -1306,6 +1316,28 @@ function OperationsDashboard() {
                     </button>
                   </div>
                 </div>
+
+                {marketScheduleRestricted && (
+                  <div
+                    className="apex-session-observation"
+                    role="status"
+                    aria-label="Market schedule"
+                    title={`Eligible: ${marketScheduleEligible.join(", ") || "none"} · Paused: ${marketScheduleExcluded.join(", ") || "none"}`}
+                  >
+                    <div className="apex-session-observation__heading">
+                      <span>Market schedule</span>
+                      <span className="apex-session-observation__mode">
+                        {marketSchedule.reason === "weekend_crypto_only"
+                          ? "Weekend"
+                          : "Configured day off"}
+                      </span>
+                    </div>
+                    <strong>{marketScheduleEligible.length > 0 ? "Crypto only" : "Scanner idle"}</strong>
+                    <span>
+                      {marketScheduleExcluded.length} {marketSchedule.reason === "weekend_crypto_only" ? "closed-market" : "non-crypto"} instrument{marketScheduleExcluded.length === 1 ? "" : "s"} paused · no calls for paused instruments
+                    </span>
+                  </div>
+                )}
 
                 {sessionRotationObservation && (
                   <div

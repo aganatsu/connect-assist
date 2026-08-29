@@ -47,6 +47,7 @@ instead of arbitrating.
 | Max drawdown | 2 | both, mutually exclusive | 🟢 Correct delegation |
 | Session detection | 2 | `sessions.ts` | 🟢 Correct delegation |
 | Session-pair affinity | 1 | `sessionAffinity.ts:getSessionAffinity` | 🟢 Single owner |
+| Market-day availability | 1 | `gamePlanMarketScope.ts` | 🟢 Single owner; crypto exempt from 24/5 closure |
 | Discovery scan rotation | 1 | `rotatingImpulseUniverse.ts:selectRotatingImpulseUniverse` | 🟢 Single owner; session-aware proposal is observation-only |
 | FVG | 1 | `detectFVGs` | 🟢 Single owner |
 | Order Block | 1 | `detectOrderBlocks` | 🟢 Single owner |
@@ -129,11 +130,29 @@ of a Game Plan version mismatch. Direction Verdict and every independent safety
 gate keep their configured enforcement. Hard and soft Game Plan behavior remains
 unchanged.
 
+## Market-day availability
+
+`_shared/gamePlanMarketScope.ts` owns the shared market-day boundary. Crypto is
+eligible continuously. Forex, commodities, and indices are closed from Friday
+17:00 New York time through Sunday 17:00; Sunday after 17:00 uses Monday's
+configured trading-day permission. Configured disabled weekdays pause new
+non-crypto discovery and Gameplan generation, but do not suspend risk management
+for an already-open position while its market is open.
+
+`bot-scanner`, `game-plan-refresh`, `zone-confirmation-scanner`, `paper-trading`,
+and the research-only `outcome-tracker` consume this owner. The cron jobs still
+wake so expiry and operational bookkeeping remain observable, but closed
+non-crypto instruments do not enter discovery rotation, confirmation or outcome
+candle fetching, FOTSI/currency-rate refreshes, or dashboard position quote
+polling. This contract covers the shared 24/5 boundary and configured weekdays;
+it is not an exchange-holiday calendar or a per-instrument intraday maintenance
+schedule.
+
 ## Discovery rotation and session priority
 
 `_shared/rotatingImpulseUniverse.ts:selectRotatingImpulseUniverse` is the single
-owner of discovery-slot selection. Its legacy call ranks eligible instruments by
-least-recently-scanned time. Lifecycle-owned staged setups, pending orders, and
+owner of discovery-slot selection. Its legacy call ranks market-schedule-eligible
+instruments by least-recently-scanned time. Lifecycle-owned staged setups, pending orders, and
 open positions are excluded from discovery slots and continue through the
 existing lifecycle monitoring lane.
 

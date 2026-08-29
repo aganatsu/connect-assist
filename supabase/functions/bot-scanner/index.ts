@@ -135,6 +135,7 @@ import {
 } from "../_shared/gamePlan.ts";
 import {
   gamePlanSymbolsMatchScope,
+  isInstrumentMarketOpen,
   resolveGamePlanMarketScope,
 } from "../_shared/gamePlanMarketScope.ts";
 import {
@@ -1664,21 +1665,20 @@ async function runScanForUser(
   });
   const timeframeAuthority = resolveTimeframeAuthority(scanStylePolicy);
 
-  // Day-of-week check — skip for crypto-only instrument lists.
-  // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
+  // Freeze one market-schedule decision for the entire cycle. This is the
+  // shared owner used by discovery and Gameplan; crypto remains eligible when
+  // the non-crypto market is closed or the configured trading day is disabled.
   const now = new Date();
-  const nyNow = toNYTime(now);
-  const nyHour = nyNow.t;
-  const nyDay = nyNow.nyDay; // 0=Sun … 6=Sat — NY local day, NOT UTC day
-  const isFxOpenSundayEvening = nyDay === 0 && nyHour >= 17;
-  const isFxClosedFridayEvening = nyDay === 5 && nyHour >= 17;
-  const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
-  const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
-  const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
-  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
-    await skipScannerOperation(supabase, opts?.operationRunId, "day_not_enabled");
-    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
-  }
+  const fullInstrumentUniverse = [...config.instruments];
+  const marketScheduleScope = resolveGamePlanMarketScope(
+    fullInstrumentUniverse,
+    now,
+    config.enabledDays,
+  );
+  const marketScheduleEligibleSet = new Set(
+    marketScheduleScope.eligibleSymbols,
+  );
+  const fxMarketClosed = marketScheduleScope.nonCryptoMarketsClosed;
 
   // S3 Fix: Capture session ONCE per scan cycle. detectSession() is time-based,
   // so calling it multiple times during a long scan could return different results
@@ -1804,7 +1804,13 @@ async function runScanForUser(
   // Without this, management reads stale entry-time prices and can't fire trailing/BE/TP logic.
   // Uses the same fetchCandles chain (MetaAPI→TwelveData→Polygon) as the rest of the scanner.
   if (openPosArr.length > 0) {
-    const posSymbols: string[] = Array.from(new Set(openPosArr.map((p: any) => p.symbol as string)));
+    const posSymbols: string[] = Array.from(
+      new Set(
+        openPosArr
+          .map((p: any) => p.symbol as string)
+          .filter((sym: string) => isInstrumentMarketOpen(sym, now)),
+      ),
+    );
     const livePriceMap: Record<string, number> = {};
     // Trade management uses live quotes. Closed candles remain exclusive to detection.
     await Promise.all(posSymbols.map(async (sym: string) => {
@@ -1826,9 +1832,9 @@ async function runScanForUser(
   }
 
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
-  // Weekend guard: skip management for non-crypto positions when FX market is closed
-  // FX closed: Saturday all day, Sunday before 17:00 ET, Friday after 17:00 ET
-  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
+  // Shared weekend guard: skip management for non-crypto positions while
+  // their market is closed. Configured no-trade weekdays do not suspend risk
+  // management for positions that are already open.
   const fxPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type !== "crypto");
   const cryptoPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type === "crypto");
   // Only manage crypto positions during FX closed hours; manage all when FX is open
@@ -2081,6 +2087,7 @@ async function runScanForUser(
   const WATCHLIST_MONITOR_LIMIT = 6;
   const executableWatchlist = activeStagedSetups
     .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
+    .filter((setup) => marketScheduleEligibleSet.has(setup.symbol))
     .sort((left: any, right: any) => String(left.last_eval_at || "").localeCompare(String(right.last_eval_at || "")))
     .slice(0, WATCHLIST_MONITOR_LIMIT);
   for (const setup of executableWatchlist) {
@@ -2182,8 +2189,10 @@ async function runScanForUser(
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
   // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  const rateMap: Record<string, number> = {};
-  try {
+  const rateMap: Record<string, number> = { ...FALLBACK_RATES };
+  if (fxMarketClosed) {
+    console.log(`[scan ${scanCycleId}] FX conversion-rate refresh skipped while non-crypto markets are closed — using fallbacks`);
+  } else try {
     // Pre-warm from the persistent kv_cache before touching the API.
     //
     // These are DAILY candles for six fixed majors — they change once a day.
@@ -2225,7 +2234,7 @@ async function runScanForUser(
     }
     console.log(`[scan ${scanCycleId}] rateMap built: ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`); 
   } catch (e: any) {
-    console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
+    console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — using fallback rates`);
   }
 
   // ── SL/TP Breach Check: close paper positions where price has crossed SL or TP ──
@@ -2234,6 +2243,7 @@ async function runScanForUser(
   // Runs AFTER price refresh (current_price is fresh) and AFTER rateMap build (PnL conversion available).
   try {
     const breachCandidates = openPosArr.filter((p: any) =>
+      isInstrumentMarketOpen(p.symbol, now) &&
       (p.stop_loss || p.take_profit) && p.current_price
     );
     const breachedIds: string[] = []; // track IDs to splice from openPosArr after loop
@@ -2421,8 +2431,13 @@ async function runScanForUser(
 
   // ── FOTSI: Fetch 28 pairs and compute currency strengths (with 4h cache) ──
   let _fotsiResult: FOTSIResult | null = null;
+  const hasEligibleForexInstrument = marketScheduleScope.eligibleSymbols.some(
+    (symbol) => SPECS[symbol]?.type === "forex",
+  );
   if (config.useFOTSI === false) {
     console.log(`[scan ${scanCycleId}] FOTSI disabled by config — skipping 28-pair fetch (saves ~28 API calls)`);
+  } else if (!hasEligibleForexInstrument) {
+    console.log(`[scan ${scanCycleId}] FOTSI skipped — no eligible forex instruments in the current market schedule (saves ~28 API calls)`);
   } else try {
     // Try cache first — avoids 28 API calls if result is fresh
     const { result: cachedFotsi, fromCache } = await getFOTSIWithCache(supabase);
@@ -2607,7 +2622,11 @@ async function runScanForUser(
         // reset or fill the same lifecycle using its original entry zone.
         if (pending.status !== "pending") {
           pendingConfirmationHunting++;
-          lifecycleDeepScanSymbols.add(pending.symbol);
+          if (isInstrumentMarketOpen(pending.symbol, now) && marketScheduleEligibleSet.has(pending.symbol)) {
+            lifecycleDeepScanSymbols.add(pending.symbol);
+          } else {
+            console.log(`[pending] ${pending.symbol} confirmation remains armed outside its active market schedule — no candle fetch scheduled`);
+          }
           continue;
         }
         const pendingPolicyResolution = resolvePendingStylePolicy(
@@ -2656,6 +2675,11 @@ async function runScanForUser(
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pendingExpired++;
           console.log(`[pending] Expired ${pending.symbol} ${pending.direction} limit @ ${pending.entry_price}`);
+          continue;
+        }
+
+        if (!isInstrumentMarketOpen(pending.symbol, now) || !marketScheduleEligibleSet.has(pending.symbol)) {
+          console.log(`[pending] ${pending.symbol} remains pending outside its active market schedule — expiry checked, market data skipped`);
           continue;
         }
 
@@ -3223,13 +3247,22 @@ async function runScanForUser(
 
   // Select eight discovery pairs before Gameplan and candle fetching.
   // Lifecycle-owned pairs are monitored separately and do not consume slots.
-  const fullInstrumentUniverse = [...config.instruments];
+  const scannableInstrumentUniverse = [...marketScheduleScope.eligibleSymbols];
+  if (marketScheduleScope.excludedSymbols.length > 0) {
+    const continuation = scannableInstrumentUniverse.length > 0
+      ? "continuing with crypto only"
+      : "recording an idle scan";
+    const scheduleReason = marketScheduleScope.nonCryptoMarketsClosed
+      ? "No eligible FX, commodity, or index instruments are open"
+      : `Non-crypto discovery is disabled for trading day ${marketScheduleScope.effectiveTradingDay}`;
+    console.log(`[scan ${scanCycleId}] ${scheduleReason}; ${continuation}. Excluded: [${marketScheduleScope.excludedSymbols.join(", ")}]`);
+  }
   const rotatingImpulseSlotCount = Math.max(1, Math.min(12, Number((config as any).rotatingImpulseSlotCount) || 8));
-  const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && fullInstrumentUniverse.length > rotatingImpulseSlotCount;
+  const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && scannableInstrumentUniverse.length > rotatingImpulseSlotCount;
   let rotationSelection: RotationSelection | null = null;
   let sessionRotationObservation: SessionRotationObservation | null = null;
-  let discoveryScanUniverse = fullInstrumentUniverse;
-  let scanUniverse = fullInstrumentUniverse;
+  let discoveryScanUniverse = scannableInstrumentUniverse;
+  let scanUniverse = scannableInstrumentUniverse;
   const lifecycleOwnedSymbols = new Set<string>([
     ...activeStagedSetups
       .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
@@ -3240,7 +3273,7 @@ async function runScanForUser(
   if (rotatingImpulseScanEnabled) {
     const rotationState = await loadRotatingImpulseState(supabase, userId, BOT_ID);
     rotationSelection = selectRotatingImpulseUniverse(
-      fullInstrumentUniverse,
+      scannableInstrumentUniverse,
       rotatingImpulseSlotCount,
       rotationState,
       new Date().toISOString(),
@@ -3250,7 +3283,7 @@ async function runScanForUser(
     scanUniverse = Array.from(new Set([
       ...discoveryScanUniverse,
       ...Array.from(lifecycleDeepScanSymbols),
-    ])).filter((symbol) => fullInstrumentUniverse.includes(symbol));
+    ])).filter((symbol) => scannableInstrumentUniverse.includes(symbol));
     console.log(
       `[scan ${scanCycleId}] Two-lane Impulse scan: discovery=${discoveryScanUniverse.length}/${fullInstrumentUniverse.length}, lifecycle=${scanUniverse.length - discoveryScanUniverse.length}; discovery=[${discoveryScanUniverse.join(", ")}], near-zone=[${Array.from(lifecycleDeepScanSymbols).join(", ")}]`,
     );
@@ -3263,10 +3296,6 @@ async function runScanForUser(
   if (gamePlanEnabled) {
     try {
       const currentSessionName = getCurrentSession();
-      const gamePlanMarketScope = resolveGamePlanMarketScope(
-        fullInstrumentUniverse,
-        now,
-      );
       const lastGP = _lastGamePlanForValidation;
       const reuseDecision = evaluateGamePlanReuse(lastGP, {
         session: currentSessionName,
@@ -3275,7 +3304,7 @@ async function runScanForUser(
       const lastPlanMatchesMarketScope = lastGP
         ? gamePlanSymbolsMatchScope(
           lastGP.plans.map((plan) => plan.symbol),
-          gamePlanMarketScope,
+          marketScheduleScope,
         )
         : false;
 
@@ -3328,7 +3357,7 @@ async function runScanForUser(
         ? activeGamePlan?.focusPairs || []
         : [];
       const proposedRotationSelection = selectRotatingImpulseUniverse(
-        fullInstrumentUniverse,
+        scannableInstrumentUniverse,
         rotatingImpulseSlotCount,
         rotationSelection.state,
         now.toISOString(),
@@ -3501,15 +3530,6 @@ async function runScanForUser(
     // Off-hours is implicitly allowed when all 3 core sessions are enabled (user wants 24/5).
     if (!pairAssetProfile.skipSessionGate && !restrictedAssetSessionGateOpen) {
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
-      continue;
-    }
-
-    // Skip non-crypto instruments on weekends (Fri 17:00 ET → Sun 17:00 ET).
-    // BUG FIX: use nyDay (NY local day) instead of utcDay to avoid UTC/NY day mismatch
-    // e.g. Thursday 9PM NY = Friday 01:00 UTC → utcDay was 5 (Fri), triggering false weekend close
-    const fxIsClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
-    if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
-      scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
     }
 
@@ -11831,6 +11851,15 @@ async function runScanForUser(
       },
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
+      marketSchedule: {
+        reason: marketScheduleScope.reason,
+        eligibleSymbols: marketScheduleScope.eligibleSymbols,
+        excludedSymbols: marketScheduleScope.excludedSymbols,
+        nonCryptoMarketsClosed: marketScheduleScope.nonCryptoMarketsClosed,
+        nonCryptoTradingDayEnabled: marketScheduleScope.nonCryptoTradingDayEnabled,
+        effectiveTradingDay: marketScheduleScope.effectiveTradingDay,
+        capturedAt: now.toISOString(),
+      },
       impulseRotation: rotationSelection ? {
         enabled: true,
         slotCount: rotatingImpulseSlotCount,

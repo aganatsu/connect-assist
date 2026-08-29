@@ -46,6 +46,9 @@ const SINGLE_OWNER: string[] = [
   "detectSweepReclaim",
   // ── Session and discovery scheduling ──
   "getSessionAffinity",
+  "areNonCryptoMarketsClosed",
+  "isInstrumentMarketOpen",
+  "resolveGamePlanMarketScope",
   "selectRotatingImpulseUniverse",
   // ── Consolidated 2026-08-10 (were duplicated in bot-scanner) ──
   "detectSMTDivergence",

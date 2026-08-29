@@ -3,6 +3,7 @@ import { SPECS } from "./smcAnalysis.ts";
 
 export type GamePlanMarketScopeReason =
   | "all_enabled_markets_open"
+  | "configured_day_crypto_only"
   | "weekend_crypto_only";
 
 export interface GamePlanMarketScope {
@@ -10,6 +11,8 @@ export interface GamePlanMarketScope {
   excludedSymbols: string[];
   reason: GamePlanMarketScopeReason;
   nonCryptoMarketsClosed: boolean;
+  nonCryptoTradingDayEnabled: boolean;
+  effectiveTradingDay: number;
 }
 
 /**
@@ -25,6 +28,23 @@ export function areNonCryptoMarketsClosed(now: Date): boolean {
 }
 
 /**
+ * Reports whether an instrument's market is available for live market-data
+ * work. Crypto is continuous; every other supported asset follows the shared
+ * Friday 17:00 through Sunday 17:00 New York boundary.
+ *
+ * Configured trading days are intentionally not part of this function. They
+ * control new opportunity discovery, while open positions still need risk
+ * management on an otherwise-open market day.
+ */
+export function isInstrumentMarketOpen(
+  symbol: string,
+  now = new Date(),
+): boolean {
+  return SPECS[symbol]?.type === "crypto" ||
+    !areNonCryptoMarketsClosed(now);
+}
+
+/**
  * Selects only instruments that are expected to produce an authoritative
  * Gameplan in the current market window. Closed instruments are excluded from
  * completeness checks so they cannot block an open crypto market.
@@ -32,14 +52,25 @@ export function areNonCryptoMarketsClosed(now: Date): boolean {
 export function resolveGamePlanMarketScope(
   enabledSymbols: string[],
   now = new Date(),
+  enabledDays?: number[],
 ): GamePlanMarketScope {
+  const ny = toNYTime(now);
   const nonCryptoMarketsClosed = areNonCryptoMarketsClosed(now);
-  if (!nonCryptoMarketsClosed) {
+  // The FX trading week opens Sunday at 17:00 New York time. Runtime day
+  // gating has always treated that window as Monday; keep the market scope in
+  // the same contract so discovery and Gameplan cannot disagree.
+  const effectiveTradingDay = ny.nyDay === 0 && ny.t >= 17 ? 1 : ny.nyDay;
+  const nonCryptoTradingDayEnabled = enabledDays === undefined ||
+    enabledDays.includes(effectiveTradingDay);
+
+  if (!nonCryptoMarketsClosed && nonCryptoTradingDayEnabled) {
     return {
       eligibleSymbols: [...enabledSymbols],
       excludedSymbols: [],
       reason: "all_enabled_markets_open",
       nonCryptoMarketsClosed: false,
+      nonCryptoTradingDayEnabled: true,
+      effectiveTradingDay,
     };
   }
 
@@ -52,8 +83,12 @@ export function resolveGamePlanMarketScope(
     excludedSymbols: enabledSymbols.filter((symbol) =>
       !eligibleSet.has(symbol)
     ),
-    reason: "weekend_crypto_only",
-    nonCryptoMarketsClosed: true,
+    reason: nonCryptoMarketsClosed
+      ? "weekend_crypto_only"
+      : "configured_day_crypto_only",
+    nonCryptoMarketsClosed,
+    nonCryptoTradingDayEnabled,
+    effectiveTradingDay,
   };
 }
 

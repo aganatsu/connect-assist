@@ -1,7 +1,8 @@
 import type { Candle } from "./candleSource.ts";
 import { checkCorrelationExposure } from "./gateCorrelation.ts";
 import { checkCooldown } from "./gateCooldown.ts";
-import { detectSession, isSessionEnabled, toNYTime } from "./sessions.ts";
+import { resolveGamePlanMarketScope } from "./gamePlanMarketScope.ts";
+import { detectSession, isSessionEnabled } from "./sessions.ts";
 import { getQuoteToUSDRate, SPECS } from "./smcAnalysis.ts";
 
 export interface FinalRuntimeGate {
@@ -216,19 +217,18 @@ export function checkSessionAtExecution(input: {
     };
   }
 
-  const ny = toNYTime(input.now);
-  const isSundayFxOpen = ny.nyDay === 0 && ny.t >= 17;
-  const effectiveDay = isSundayFxOpen ? 1 : ny.nyDay;
-  const fxClosed = ny.nyDay === 6 ||
-    (ny.nyDay === 0 && ny.t < 17) ||
-    (ny.nyDay === 5 && ny.t >= 17);
-  if (fxClosed) {
+  const marketScope = resolveGamePlanMarketScope(
+    [input.symbol],
+    input.now,
+    input.enabledDays,
+  );
+  if (marketScope.nonCryptoMarketsClosed) {
     return { passed: false, reason: "FX market is closed for the weekend" };
   }
-  if (!input.enabledDays.includes(effectiveDay)) {
+  if (!marketScope.nonCryptoTradingDayEnabled) {
     return {
       passed: false,
-      reason: `Trading day ${effectiveDay} is not enabled`,
+      reason: `Trading day ${marketScope.effectiveTradingDay} is not enabled`,
     };
   }
 

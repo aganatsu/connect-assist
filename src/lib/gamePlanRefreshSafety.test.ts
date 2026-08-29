@@ -46,6 +46,8 @@ describe("manual Game Plan refresh safety", () => {
     expect(refreshFunctionSource).toContain(
       "symbols: marketScope.eligibleSymbols",
     );
+    expect(refreshFunctionSource).toContain("latestPlanMatchesMarketScope");
+    expect(refreshFunctionSource).toContain("gamePlanSymbolsMatchScope");
     expect(scannerSource).toContain("gamePlanSymbolsMatchScope");
     expect(gamePlanPanelSource).toContain("STALE PLAN");
     expect(gamePlanPanelSource).toContain("currentPlanIsExpired");
@@ -90,8 +92,9 @@ describe("automatic Game Plan refresh safety", () => {
 
   it("keeps rotating discovery slots out of Game Plan authority scope", () => {
     expect(scannerSource).toContain(
-      "resolveGamePlanMarketScope(\n        fullInstrumentUniverse,"
+      "const marketScheduleScope = resolveGamePlanMarketScope("
     );
+    expect(scannerSource).toContain("fullInstrumentUniverse,");
     expect(scannerSource).not.toContain(
       "resolveGamePlanMarketScope(scanUniverse, now)"
     );

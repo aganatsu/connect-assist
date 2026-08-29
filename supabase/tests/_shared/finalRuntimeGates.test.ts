@@ -46,6 +46,36 @@ Deno.test("session gate blocks disabled sessions", () => {
   assertStringIncludes(result.reason, "not enabled");
 });
 
+Deno.test("session gate shares the weekend boundary while crypto remains open", () => {
+  const saturday = new Date("2026-08-01T16:00:00.000Z");
+  const common = {
+    enabledSessions: ["asian", "london", "newyork", "offhours"],
+    enabledDays: [1, 2, 3, 4, 5],
+    killZoneOnly: false,
+    now: saturday,
+  };
+
+  const fx = checkSessionAtExecution({ symbol: "EUR/USD", ...common });
+  const crypto = checkSessionAtExecution({ symbol: "BTC/USD", ...common });
+
+  assertEquals(fx.passed, false);
+  assertStringIncludes(fx.reason, "closed for the weekend");
+  assertEquals(crypto.passed, true);
+});
+
+Deno.test("Sunday reopen evaluates the configured Monday trading day", () => {
+  const result = checkSessionAtExecution({
+    symbol: "GBP/USD",
+    enabledSessions: ["asian", "london", "newyork", "offhours"],
+    enabledDays: [2, 3, 4, 5],
+    killZoneOnly: false,
+    now: new Date("2026-08-02T21:01:00.000Z"),
+  });
+
+  assertEquals(result.passed, false);
+  assertStringIncludes(result.reason, "Trading day 1 is not enabled");
+});
+
 Deno.test("freshness gate blocks stale candles", () => {
   const result = checkMarketFreshness({
     currentPrice: 1.88,
