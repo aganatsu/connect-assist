@@ -86,6 +86,7 @@ async function buildRuntimeAuthorityModes(client: RuntimeAuthorityClient, userId
     crossTimeframe: {
       requestedMode: crossTimeframe.requestedMode,
       effectiveMode: crossTimeframe.effectiveMode,
+      certifiedMaximum: crossTimeframe.certifiedMaximum,
       reason: crossTimeframe.reason,
     },
     impulseLifecycle: {
