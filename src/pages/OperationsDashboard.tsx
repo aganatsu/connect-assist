@@ -37,6 +37,7 @@ import { AppShell } from "@/components/AppShell";
 import { ScanDetailBreakdown } from "@/components/ScanDetailBreakdown";
 import { WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   brokerApi,
@@ -1388,7 +1389,7 @@ function OperationsDashboard() {
                             ) : <span />}
                           </div>
                           <div className="apex-score-track"><span style={{ width: `${Math.max(0, Math.min(100, Number.isFinite(score) ? score : 0))}%` }} /></div>
-                          <span className="apex-row-note">{scanStatusDetail(detail)}</span>
+                          <span className="apex-row-note" title={scanStatusDetail(detail)}>{scanStatusDetail(detail)}</span>
                         </div>
                       </button>
                     );
@@ -1544,7 +1545,7 @@ function OperationsDashboard() {
                       <div key={setup.id}>
                         <strong>{setup.symbol}</strong>
                         <span className={setup.direction}>{setup.direction}</span>
-                        <span>{setup.lifecycle_phase?.replace(/_/g, " ") || setup.status.replace(/_/g, " ")}</span>
+                        <span title={setup.lifecycle_phase?.replace(/_/g, " ") || setup.status.replace(/_/g, " ")}>{setup.lifecycle_phase?.replace(/_/g, " ") || setup.status.replace(/_/g, " ")}</span>
                         <span>{Number.isFinite(Number(setup.current_score)) ? `${Number(setup.current_score).toFixed(1)}%` : "—"}</span>
                         <button aria-label={`Dismiss ${setup.symbol} candidate`} disabled={dismissStagedMutation.isPending} onClick={() => {
                           if (window.confirm(`Dismiss ${setup.symbol} staged candidate?`)) dismissStagedMutation.mutate(setup.id);
@@ -1666,7 +1667,10 @@ function OperationsDashboard() {
                           <div className="apex-event" key={event.id}>
                             <time>{formatClock(event.time, false)}</time>
                             <span className={`event-dot ${event.tone}`} />
-                            <p><strong>{event.label}</strong><span>{event.detail}</span></p>
+                            <p>
+                              <strong>{event.label}</strong>
+                              <OverflowText text={event.detail} lines={2} />
+                            </p>
                           </div>
                         ))}
                       </div>

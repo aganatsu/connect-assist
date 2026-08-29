@@ -341,7 +341,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               </p>
             ) : (
               <>
-                <h2 className="truncate text-sm font-bold md:text-base">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
+                <h2
+                  className="truncate text-sm font-bold md:text-base"
+                  title={connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}
+                >
+                  {connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}
+                </h2>
                 {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
               </>
             )}
@@ -486,7 +491,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       onClick={() => applyPresetConfig(cp.config_json ?? cp.config, cp.name)}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`text-xs font-medium truncate ${isPresetActive(cp.config_json ?? cp.config) ? "text-primary" : ""}`}>
+                        <span
+                          className={`text-xs font-medium truncate ${isPresetActive(cp.config_json ?? cp.config) ? "text-primary" : ""}`}
+                          title={cp.name}
+                        >
                           {isPresetActive(cp.config_json ?? cp.config) && <span className="inline-block mr-1">✓</span>}
                           {cp.name}
                         </span>
@@ -497,7 +505,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
-                      {cp.description && <p className="text-[9px] text-muted-foreground mt-0.5 line-clamp-1">{cp.description}</p>}
+                      {cp.description && (
+                        <p
+                          className="mt-0.5 line-clamp-1 text-[9px] text-muted-foreground"
+                          title={cp.description}
+                        >
+                          {cp.description}
+                        </p>
+                      )}
                       <p className="text-[9px] text-muted-foreground/60 mt-1">{formatBrokerTime(cp.updated_at)}</p>
                     </div>
                   ))}

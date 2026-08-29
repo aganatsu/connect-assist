@@ -59,7 +59,7 @@ export function MobileTopBar() {
               <ChevronLeft className="h-5 w-5" />
             </button>
           )}
-          <h1 className="text-sm font-bold truncate">{title}</h1>
+          <h1 className="text-sm font-bold truncate" title={title}>{title}</h1>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span className="flex items-center gap-1.5 text-[10px] font-medium">

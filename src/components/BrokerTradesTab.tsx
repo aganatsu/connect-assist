@@ -94,7 +94,10 @@ function CollapsibleSection({
           className="flex items-center gap-1.5 flex-1 min-w-0 hover:bg-muted/20 rounded px-1 py-0.5 transition-colors"
         >
           <span className="text-muted-foreground/60">{icon}</span>
-          <h4 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground truncate">
+          <h4
+            className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground truncate"
+            title={title}
+          >
             {title}
           </h4>
           {badge}

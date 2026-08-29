@@ -73,7 +73,7 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
         {/* Main info */}
         <div className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-xs font-mono font-medium truncate">{p.symbol}</span>
+            <span className="text-xs font-mono font-medium truncate" title={p.symbol}>{p.symbol}</span>
             <span className={`text-[9px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
               {p.direction === "long" ? "LONG" : "SHORT"}
             </span>
@@ -108,7 +108,10 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
               </span>
             )}
             {holdEnabled && (
-              <span className="text-[8px] text-muted-foreground font-mono truncate">
+              <span
+                className="text-[8px] text-muted-foreground font-mono truncate"
+                title={`${holdHours.toFixed(1)}h/${ef.maxHoldHours}h`}
+              >
                 {holdHours.toFixed(1)}h/{ef.maxHoldHours}h
               </span>
             )}

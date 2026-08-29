@@ -313,7 +313,7 @@ export default function BrokersPage() {
                         <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${
                           c.is_active ? "bg-success" : "bg-muted-foreground"
                         }`} />
-                        <span className="text-sm font-medium truncate flex-1">{c.display_name}</span>
+                        <span className="text-sm font-medium truncate flex-1" title={c.display_name}>{c.display_name}</span>
                         <ChevronRight className={`h-3 w-3 transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-50"}`} />
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-0.5 ml-3.5">
@@ -600,7 +600,7 @@ export function ConnectionDetail({
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-bold truncate">{c.display_name}</h2>
+                <h2 className="text-lg font-bold break-words" title={c.display_name}>{c.display_name}</h2>
                 {c.is_live ? (
                   <Badge variant="destructive" className="h-5 text-[10px]">LIVE</Badge>
                 ) : (
@@ -750,7 +750,7 @@ export function ConnectionDetail({
                         ) : hasAlternates ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left">
+                              <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left" title={brokerSym}>
                                 <span className="truncate">{brokerSym}</span>
                                 <Badge variant="outline" className="h-4 px-1 text-[9px] shrink-0">
                                   {candidates.length}
@@ -777,7 +777,7 @@ export function ConnectionDetail({
                                   >
                                     <div className="flex items-center gap-1.5 min-w-0">
                                       {isPicked && <CheckCircle2 className="h-3 w-3 text-success shrink-0" />}
-                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`}>
+                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`} title={s}>
                                         {cand.brokerSymbol}
                                       </span>
                                     </div>
@@ -800,7 +800,7 @@ export function ConnectionDetail({
                           </DropdownMenu>
                         ) : (
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="font-mono text-primary truncate">{brokerSym}</span>
+                            <span className="font-mono text-primary truncate" title={brokerSym}>{brokerSym}</span>
                             {(() => {
                               const info = probeBySymbol[brokerSym];
                               if (!info) return null;
@@ -981,7 +981,7 @@ export function ConnectionDetail({
             {warnDialog.bad.map((b) => (
               <div key={b.sym} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
                 <div className="min-w-0">
-                  <div className="font-mono font-medium truncate">{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
+                  <div className="font-mono font-medium truncate" title={`${b.sym} → ${b.brokerSym}`}>{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
                   <div className="text-[10px] text-destructive mt-0.5">{b.reason}</div>
                 </div>
               </div>
@@ -1031,7 +1031,7 @@ function Field({ icon: Icon, label, value, mono }: { icon: any; label: string; v
     <div className="flex items-center gap-2 min-w-0">
       <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
       <span className="text-muted-foreground">{label}:</span>
-      <span className={`truncate ${mono ? "font-mono" : ""}`}>{value}</span>
+      <span className={`truncate ${mono ? "font-mono" : ""}`} title={value}>{value}</span>
     </div>
   );
 }

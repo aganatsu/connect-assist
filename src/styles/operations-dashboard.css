@@ -916,7 +916,7 @@
 .event-dot.cyan { background: var(--cyan); }
 .apex-event p { display: flex; min-width: 0; flex-direction: column; gap: 3px; margin: 0; }
 .apex-event p strong { font-size: 9px; }
-.apex-event p span { overflow: hidden; color: var(--ink-soft); font-size: 8px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.apex-event p span { color: var(--ink-soft); font-size: 8px; line-height: 1.35; }
 
 .apex-bottom-strip {
   position: relative;

@@ -7,6 +7,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
 import { paperApi, marketApi, smcApi, scannerApi } from "@/lib/api";
 import { TrendingUp, TrendingDown, Zap, Clock, Activity, AlertTriangle, CheckCircle } from "lucide-react";
@@ -284,7 +285,11 @@ export default function Dashboard() {
                   <span className="text-[10px] text-muted-foreground">{sig.status === 'trade_placed' ? '✓ Placed' : sig.status === 'rejected' ? '✗ Rejected' : 'Skip'}</span>
                 </div>
                 {(sig.summary || sig.trend) && (
-                  <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2">{sig.summary || sig.trend}</p>
+                  <OverflowText
+                    text={sig.summary || sig.trend}
+                    lines={2}
+                    className="mt-1 block text-[10px] text-muted-foreground"
+                  />
                 )}
               </div>
             ))}

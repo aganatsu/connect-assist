@@ -32,6 +32,7 @@ import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResea
 import { StructureAuthorityEvidenceCard } from "@/components/StructureAuthorityEvidenceCard";
 import { PendingLifecycleEvidenceCard } from "@/components/PendingLifecycleEvidenceCard";
 import { StopPolicyEvidenceCard } from "@/components/StopPolicyEvidenceCard";
+import { OverflowText } from "@/components/ui/overflow-text";
 import {
   buildPendingLifecycleEvidence,
   type PendingLifecycleOutcome,
@@ -2020,7 +2021,10 @@ function EvidenceBreakdownTable({
               className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded border border-border/40 px-2 py-1.5"
             >
               <div className="min-w-0">
-                <p className="text-[11px] font-medium truncate">{row.key}</p>
+                <OverflowText
+                  text={row.key}
+                  className="block text-[11px] font-medium"
+                />
                 <p className="text-[9px] text-muted-foreground">
                   {row.resolved} resolved · {row.changed} changed
                 </p>

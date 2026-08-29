@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
@@ -411,9 +412,10 @@ export default function ScheduledTasks() {
                             {/* Info */}
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <span className="font-medium text-sm truncate">
-                                  {task.display_name}
-                                </span>
+                                <OverflowText
+                                  text={task.display_name}
+                                  className="block text-sm font-medium"
+                                />
                                 {task.last_status === "success" && (
                                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                                 )}
@@ -427,15 +429,16 @@ export default function ScheduledTasks() {
                                   <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 )}
                               </div>
-                              <p className="text-xs text-muted-foreground truncate mt-0.5 hidden md:block">
-                                {task.runtime
+                              <OverflowText
+                                text={task.runtime
                                   ? `${formatPhase(task.runtime.phase)}${
                                     task.runtime.expected_pairs !== null
                                       ? ` · ${task.runtime.processed_pairs ?? 0}/${task.runtime.expected_pairs} pairs`
                                       : ""
                                   } · ${task.runtime.trigger_source}`
                                   : task.description}
-                              </p>
+                                className="mt-0.5 hidden text-xs text-muted-foreground md:block"
+                              />
                             </div>
 
                             {/* Interval selector */}

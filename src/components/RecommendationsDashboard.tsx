@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { applyRecommendationToConfig } from "@/lib/applyRecommendation";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -1479,7 +1480,11 @@ export function RecommendationsDashboard({
                     </div>
                     <span className="text-[9px] text-muted-foreground">{timeAgo(review.created_at)}</span>
                   </div>
-                  <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-2">{review.diagnosis}</p>
+                  <OverflowText
+                    text={review.diagnosis}
+                    lines={2}
+                    className="block text-[10px] leading-relaxed text-muted-foreground"
+                  />
 
                   <button
                     onClick={() => setExpandedReview(isExpanded ? null : review.id)}

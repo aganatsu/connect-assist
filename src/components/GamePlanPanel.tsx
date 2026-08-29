@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Tooltip,
   TooltipContent,
@@ -596,7 +597,10 @@ function NewsTimeline({ events }: { events: NewsEvent[] }) {
             >
               {ev.currency}
             </Badge>
-            <span className="text-[10px] font-mono text-foreground/80 truncate">{ev.event}</span>
+            <OverflowText
+              text={ev.event}
+              className="block flex-1 text-[10px] font-mono text-foreground/80"
+            />
             {isPast && <span className="text-[9px] text-zinc-600 font-mono">DONE</span>}
           </div>
         );

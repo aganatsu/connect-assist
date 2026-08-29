@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { scannerApi, type StagedSetup } from "@/lib/api";
 import { getWatchlistDisplay } from "@/lib/featureState";
 import { toast } from "sonner";
@@ -261,9 +262,10 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
             {setup.direction.toUpperCase()}
           </Badge>
           {setup.setup_type && (
-            <span className="text-[12px] text-foreground/70 truncate">
-              {setup.setup_type.replace(/_/g, " ")}
-            </span>
+            <OverflowText
+              text={setup.setup_type.replace(/_/g, " ")}
+              className="text-[12px] text-foreground/70"
+            />
           )}
           {monitoringOnly && (
             <Badge

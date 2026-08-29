@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { propFirmApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -437,7 +438,7 @@ function RecentEvents({ events }: { events: PropFirmEvent[] }) {
           <div key={event.id} className="flex items-start gap-2 text-xs border-b border-border/50 pb-2 last:border-0">
             <SeverityIcon severity={event.severity} />
             <div className="flex-1 min-w-0">
-              <p className="truncate">{event.message}</p>
+              <OverflowText text={event.message} className="block" />
               <p className="text-muted-foreground">{new Date(event.created_at).toLocaleString()}</p>
             </div>
           </div>

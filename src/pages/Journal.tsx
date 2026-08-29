@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { tradesApi, paperApi } from "@/lib/api";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
@@ -389,7 +390,7 @@ export default function JournalView() {
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1">
                               {tags.session && <Badge variant="outline" className={`h-5 px-1.5 text-[9px] ${getTagColor(tags.session)}`}>{tags.session}</Badge>}
-                              {tags.setupType && <Badge variant="outline" className="h-5 max-w-full truncate px-1.5 text-[9px]">{tags.setupType.replace(/_/g, " ")}</Badge>}
+                              {tags.setupType && <Badge title={tags.setupType.replace(/_/g, " ")} variant="outline" className="h-5 max-w-full truncate px-1.5 text-[9px]">{tags.setupType.replace(/_/g, " ")}</Badge>}
                               {tags.regime && <Badge variant="outline" className={`h-5 px-1.5 text-[9px] ${getTagColor(tags.regime)}`}>{tags.regime}</Badge>}
                             </div>
                           </button>
@@ -711,7 +712,10 @@ function TagPerformanceCard({ title, data, ct }: { title: string; data: Record<s
             const wr = stats.total > 0 ? (stats.wins / stats.total * 100) : 0;
             return (
               <div key={key} className="flex items-center justify-between text-[10px]">
-                <span className="text-muted-foreground truncate max-w-[100px]">{key.replace(/_/g, " ")}</span>
+                <OverflowText
+                  text={key.replace(/_/g, " ")}
+                  className="max-w-[100px] text-muted-foreground"
+                />
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-muted-foreground">{stats.total}t</span>
                   <span className={`font-mono font-medium ${wr >= 50 ? "text-success" : "text-destructive"}`}>{wr.toFixed(0)}%</span>
@@ -758,7 +762,10 @@ function FactorHeatmap({ trades }: { trades: any[] }) {
         const intensity = Math.min(1, stats.total / 10);
         return (
           <div key={name} className="p-2 rounded border border-border bg-secondary/20" style={{ opacity: 0.5 + intensity * 0.5 }}>
-            <p className="text-[9px] text-muted-foreground truncate">{name}</p>
+            <OverflowText
+              text={name}
+              className="block text-[9px] text-muted-foreground"
+            />
             <div className="flex items-baseline gap-1 mt-0.5">
               <span className={`text-sm font-bold font-mono ${wr >= 55 ? "text-success" : wr >= 45 ? "text-foreground" : "text-destructive"}`}>{wr.toFixed(0)}%</span>
               <span className="text-[9px] text-muted-foreground">({stats.total})</span>

@@ -4,6 +4,7 @@ import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/Work
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
@@ -672,7 +673,10 @@ export default function Backtest() {
                   {mt5Datasets.map((dataset) => <div key={dataset.id} className="flex items-center justify-between border border-border/60 p-2 text-[10px]">
                     <div className="min-w-0">
                       <p className="flex items-center gap-1 font-semibold"><Database className="h-3 w-3 text-cyan" /> {dataset.symbol} · {Number(dataset.candle_count).toLocaleString()} M1</p>
-                      <p className="truncate text-muted-foreground">{String(dataset.start_at).slice(0, 10)} to {String(dataset.end_at).slice(0, 10)} · {dataset.original_filename}</p>
+                      <OverflowText
+                        text={`${String(dataset.start_at).slice(0, 10)} to ${String(dataset.end_at).slice(0, 10)} · ${dataset.original_filename}`}
+                        className="block text-muted-foreground"
+                      />
                     </div>
                     <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete dataset" onClick={async () => {
                       try { await backtestApi.deleteMT5(dataset.id); await refreshMT5Datasets(); }
@@ -1773,7 +1777,12 @@ export default function Backtest() {
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
                             <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replace(/_/g, " ") || snapshot.decision?.lifecycle?.stage || "Recorded"}</Badge>
-                            <span className="truncate font-mono text-xs">{snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}</span>
+                            <span
+                              className="truncate font-mono text-xs"
+                              title={`${snapshot.symbol || "Setup"} ${snapshot.direction?.toUpperCase() || ""}`.trim()}
+                            >
+                              {snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}
+                            </span>
                           </div>
                           <span className="text-[9px] text-muted-foreground">{snapshot.evaluatedAt ? new Date(snapshot.evaluatedAt).toLocaleString() : "Time unavailable"}</span>
                         </div>
