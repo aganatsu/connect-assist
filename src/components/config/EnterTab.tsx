@@ -433,13 +433,15 @@ export function EnterTab({
               HTF-to-LTF POI Alignment
             </p>
             <p className="text-[10px] text-muted-foreground mt-1">
-              The saved mode is a request. Runtime cannot exceed the approved
-              evidence certificate for the current Paper or Live scope.
+              The saved mode is a request. Runtime cannot exceed an approved,
+              evidence-backed activation for the current Paper or Live scope.
+              Promotion is deliberately reviewed; the app never self-promotes
+              this control from Observe.
             </p>
           </div>
           <FieldGroup
             label="HTF-to-LTF Alignment Mode"
-            description="Observe records decisions only. Soft and Hard require an approved evidence certificate before they can affect trades."
+            description="Observe records decisions only. Soft and Hard require a reviewed activation record before they can affect trades."
             status={!runtimeAuthorityModes || runtimeAuthorityModes.crossTimeframe.effectiveMode === "observe" ? "monitoring" : "active"}
           >
             <Select

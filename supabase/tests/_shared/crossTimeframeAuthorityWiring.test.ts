@@ -20,7 +20,7 @@ Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
       "Maximum Candidates Per Timeframe",
       "RuntimeModeStatus",
       "runtimeAuthorityModes?.crossTimeframe",
-      "approved evidence certificate",
+      "evidence-backed activation",
     ]
   ) {
     assertStringIncludes(ui, label);
