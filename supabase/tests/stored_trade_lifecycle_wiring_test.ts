@@ -3,7 +3,8 @@ const store = await Deno.readTextFile(new URL("../functions/_shared/impulseEntry
 const scanner = await Deno.readTextFile(new URL("../functions/zone-confirmation-scanner/index.ts", import.meta.url));
 const diagnosticMigration = await Deno.readTextFile(new URL("../migrations/20260820134000_add_confirmation_build_diagnostic.sql", import.meta.url));
 Deno.test("live zone confirmation persists shared lifecycle authority events", () => {
-  assertStringIncludes(store, "advanceTradeLifecycle({ lifecycle, candle, completedCandles })");
+  assertStringIncludes(store, "advanceTradeLifecycle({");
+  assertStringIncludes(store, "completedCandles,");
   assertStringIncludes(scanner, "advanceStoredTradeLifecycle(");
   assertStringIncludes(scanner, "confirmation_build_diagnostic: buildDiagnostic");
   if (scanner.includes("observeImpulseEntryPrice(")) throw new Error("legacy price transition path remains");

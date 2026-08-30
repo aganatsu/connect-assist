@@ -7,13 +7,16 @@ import { normalizeAnalysisTimeframe } from "../_shared/timeframeAuthority.ts";
 import {
   observeImpulseConfirmationLock,
   observeImpulseEntryPrice,
+  resolveLinkedImpulseLifecycleTerminal,
+  resolveStoredImpulseEntryLifecycle,
 } from "../_shared/impulseEntryLifecycleStore.ts";
 
 const BOT_ID = "smc";
-const respond = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
-  status,
-  headers: { ...corsHeaders, "Content-Type": "application/json" },
-});
+const respond = (data: unknown, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
 
 async function publishEnforcementCertificate(client: any, userId: string) {
   const { data: summary, error } = await client
@@ -32,23 +35,39 @@ async function publishEnforcementCertificate(client: any, userId: string) {
     minimumSampleReady: summary.minimum_sample_ready === true,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(evidence));
-  const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+  const hash = Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+  )
     .map((value) => value.toString(16).padStart(2, "0")).join("");
-  const status = evidence.minimumSampleReady && evidence.rescuedWinners >= evidence.addedLosses
-    ? "eligible" : evidence.minimumSampleReady ? "rejected" : "collecting";
-  const { data: current } = await client.from("impulse_lifecycle_enforcement_certificates")
+  const status = evidence.minimumSampleReady &&
+      evidence.rescuedWinners >= evidence.addedLosses
+    ? "eligible"
+    : evidence.minimumSampleReady
+    ? "rejected"
+    : "collecting";
+  const { data: current } = await client.from(
+    "impulse_lifecycle_enforcement_certificates",
+  )
     .select("id,evidence_hash,reviewed,reviewed_at").eq("user_id", userId)
     .eq("bot_id", BOT_ID).eq("is_current", true).maybeSingle();
   if (current?.evidence_hash !== hash) {
     await client.from("impulse_lifecycle_enforcement_certificates")
-      .update({ is_current: false }).eq("user_id", userId).eq("bot_id", BOT_ID).eq("is_current", true);
+      .update({ is_current: false }).eq("user_id", userId).eq("bot_id", BOT_ID)
+      .eq("is_current", true);
   }
   const { data: certificate, error: certificateError } = await client
     .from("impulse_lifecycle_enforcement_certificates").upsert({
-      user_id: userId, bot_id: BOT_ID, evidence_hash: hash, status,
-      replay_count: evidence.replayCount, resolved_count: evidence.resolvedCount,
-      rescued_winners: evidence.rescuedWinners, added_losses: evidence.addedLosses,
-      minimum_sample_ready: evidence.minimumSampleReady, is_current: true, evidence,
+      user_id: userId,
+      bot_id: BOT_ID,
+      evidence_hash: hash,
+      status,
+      replay_count: evidence.replayCount,
+      resolved_count: evidence.resolvedCount,
+      rescued_winners: evidence.rescuedWinners,
+      added_losses: evidence.addedLosses,
+      minimum_sample_ready: evidence.minimumSampleReady,
+      is_current: true,
+      evidence,
       reviewed: current?.evidence_hash === hash ? current.reviewed : false,
       reviewed_at: current?.evidence_hash === hash ? current.reviewed_at : null,
       generated_at: new Date().toISOString(),
@@ -100,29 +119,94 @@ function latestTimestamp(...values: Array<unknown>): string | null {
 async function monitorOrphanedLifecycles(client: any) {
   const { data: lifecycles, error } = await client
     .from("impulse_entry_lifecycles")
-    .select("id,user_id,symbol,lifecycle,created_at,updated_at")
-    .eq("bot_id", BOT_ID).eq("status", "active").eq("mode", "observe")
+    .select("id,user_id,symbol,mode,lifecycle,created_at,updated_at")
+    .eq("bot_id", BOT_ID).eq("status", "active")
     .order("updated_at", { ascending: true }).limit(100);
   if (error) throw error;
   const lifecycleRows = lifecycles || [];
   const lifecycleIds = lifecycleRows.map((row: any) => row.id);
-  const { data: activeOrders, error: activeOrdersError } = lifecycleIds.length > 0
-    ? await client.from("pending_orders").select("impulse_entry_lifecycle_id")
-      .in("impulse_entry_lifecycle_id", lifecycleIds)
-      .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
-    : { data: [], error: null };
-  if (activeOrdersError) throw activeOrdersError;
+  const { data: linkedOrders, error: linkedOrdersError } =
+    lifecycleIds.length > 0
+      ? await client.from("pending_orders").select(
+        "impulse_entry_lifecycle_id,status,cancel_reason,resolved_at,updated_at",
+      ).in("impulse_entry_lifecycle_id", lifecycleIds)
+      : { data: [], error: null };
+  if (linkedOrdersError) throw linkedOrdersError;
+  const { data: linkedSetups, error: linkedSetupsError } =
+    lifecycleIds.length > 0
+      ? await client.from("staged_setups").select(
+        "impulse_entry_lifecycle_id,status,invalidation_reason,lifecycle_reason,resolved_at,updated_at",
+      ).in("impulse_entry_lifecycle_id", lifecycleIds)
+      : { data: [], error: null };
+  if (linkedSetupsError) throw linkedSetupsError;
+  const { data: linkedPositions, error: linkedPositionsError } =
+    lifecycleIds.length > 0
+      ? await client.from("paper_positions").select(
+        "impulse_entry_lifecycle_id",
+      )
+        .in("impulse_entry_lifecycle_id", lifecycleIds)
+      : { data: [], error: null };
+  if (linkedPositionsError) throw linkedPositionsError;
+  const ordersByLifecycle = new Map<string, any[]>();
+  for (const order of linkedOrders || []) {
+    const rows = ordersByLifecycle.get(order.impulse_entry_lifecycle_id) || [];
+    rows.push(order);
+    ordersByLifecycle.set(order.impulse_entry_lifecycle_id, rows);
+  }
+  const setupsByLifecycle = new Map<string, any[]>();
+  for (const setup of linkedSetups || []) {
+    const rows = setupsByLifecycle.get(setup.impulse_entry_lifecycle_id) || [];
+    rows.push(setup);
+    setupsByLifecycle.set(setup.impulse_entry_lifecycle_id, rows);
+  }
+  const positionLifecycleIds = new Set(
+    (linkedPositions || []).map((position: any) =>
+      position.impulse_entry_lifecycle_id
+    ),
+  );
   const activeOrderLifecycleIds = new Set(
-    (activeOrders || []).map((order: any) => order.impulse_entry_lifecycle_id),
+    (linkedOrders || []).filter((order: any) =>
+      ["pending", "awaiting_confirmation", "reconciliation_required"].includes(
+        order.status,
+      )
+    ).map((order: any) => order.impulse_entry_lifecycle_id),
   );
   let monitored = 0;
+  let terminalSynchronized = 0;
+  let terminalSyncFailed = 0;
   let activeOrderOwned = 0;
+  let enforcementOwned = 0;
   let snapshotUnavailable = 0;
   let insufficientSnapshot = 0;
   let noPostActivationCandle = 0;
   for (const row of lifecycleRows) {
+    const terminal = resolveLinkedImpulseLifecycleTerminal({
+      hasPosition: positionLifecycleIds.has(row.id),
+      pendingOrders: ordersByLifecycle.get(row.id) || [],
+      stagedSetups: setupsByLifecycle.get(row.id) || [],
+    });
+    if (terminal) {
+      try {
+        const transition = await resolveStoredImpulseEntryLifecycle(
+          client,
+          row.id,
+          terminal,
+        );
+        if (transition?.persisted) terminalSynchronized++;
+      } catch (terminalError) {
+        terminalSyncFailed++;
+        console.warn(
+          `[impulse-monitor] ${row.symbol} terminal synchronization failed: ${String(terminalError)}`,
+        );
+      }
+      continue;
+    }
     if (activeOrderLifecycleIds.has(row.id)) {
       activeOrderOwned++;
+      continue;
+    }
+    if (row.mode !== "observe") {
+      enforcementOwned++;
       continue;
     }
     const lifecycle = row.lifecycle;
@@ -167,7 +251,8 @@ async function monitorOrphanedLifecycles(client: any) {
         !last || !Number.isFinite(Number(last.close)) ||
         !Number.isFinite(lastCandleTime) ||
         !Number.isFinite(completedCandleTime) ||
-        (Number.isFinite(activationTime) && completedCandleTime < activationTime)
+        (Number.isFinite(activationTime) &&
+          completedCandleTime < activationTime)
       ) {
         noPostActivationCandle++;
         continue;
@@ -182,14 +267,21 @@ async function monitorOrphanedLifecycles(client: any) {
   return {
     monitored,
     eligible: lifecycleRows.length,
+    terminalSynchronized,
+    terminalSyncFailed,
     activeOrderOwned,
+    enforcementOwned,
     snapshotUnavailable,
     insufficientSnapshot,
     noPostActivationCandle,
   };
 }
 
-async function replayUserLifecycles(client: any, userId: string, limit: number) {
+async function replayUserLifecycles(
+  client: any,
+  userId: string,
+  limit: number,
+) {
   const { data: lifecycles, error } = await client
     .from("impulse_entry_lifecycles")
     .select("id,symbol,created_at")
@@ -247,13 +339,19 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
     const { error: insertError } = await client
       .from("impulse_entry_lifecycle_replays")
       .upsert({
-        user_id: userId, bot_id: BOT_ID, lifecycle_id: row.id,
-        snapshot_id: snapshot.id, evidence_source: "retrospective_replay",
-        contract_version: result.contractVersion, result,
-        outcome: result.outcome, entered: result.entered,
+        user_id: userId,
+        bot_id: BOT_ID,
+        lifecycle_id: row.id,
+        snapshot_id: snapshot.id,
+        evidence_source: "retrospective_replay",
+        contract_version: result.contractVersion,
+        result,
+        outcome: result.outcome,
+        entered: result.entered,
         rescued_deeper_entry: result.rescuedDeeperEntry,
         retained_winner: result.retainedWinner,
-        mfe: result.mfe, mae: result.mae,
+        mfe: result.mfe,
+        mae: result.mae,
       }, { onConflict: "lifecycle_id,snapshot_id,evidence_source" });
     if (insertError) throw insertError;
     replayed++;
@@ -269,24 +367,36 @@ async function replayUserLifecycles(client: any, userId: string, limit: number) 
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
   const client = createClient(
-    Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
   try {
     const body = await req.json().catch(() => ({}));
     if (body.action === "monitor") {
       const authError = verifyCronCaller(req);
       if (authError) return authError;
-      return respond({ success: true, ...(await monitorOrphanedLifecycles(client)) });
+      return respond({
+        success: true,
+        ...(await monitorOrphanedLifecycles(client)),
+      });
     }
     const userId = await resolveAuthenticatedUserId(req);
     if (!userId) return respond({ error: "Unauthorized" }, 401);
-    const replay = await replayUserLifecycles(client, userId, Math.min(100, Number(body.limit) || 100));
+    const replay = await replayUserLifecycles(
+      client,
+      userId,
+      Math.min(100, Number(body.limit) || 100),
+    );
     const certificate = await publishEnforcementCertificate(client, userId);
     return respond({ success: true, ...replay, certificate });
   } catch (error) {
     console.error("[impulse-lifecycle-replay]", error);
-    return respond({ error: error instanceof Error ? error.message : String(error) }, 500);
+    return respond({
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
   }
 });

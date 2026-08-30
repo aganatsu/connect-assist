@@ -9,12 +9,19 @@ export type EntryCandidateState =
   | "confirming"
   | "failed"
   | "entered"
-  | "expired";
+  | "expired"
+  | "cancelled";
 
 export interface ImpulseEntryCandidate {
   id: string;
-  type: "ob" | "fvg" | "breaker" | "ob_fvg" | "breaker_fvg" |
-    "support_resistance" | "fib";
+  type:
+    | "ob"
+    | "fvg"
+    | "breaker"
+    | "ob_fvg"
+    | "breaker_fvg"
+    | "support_resistance"
+    | "fib";
   low: number;
   high: number;
   timeframe: string;
@@ -63,7 +70,13 @@ export interface ImpulseEntryLifecycle {
     protectedLevel: number;
     expiresAt: string;
   };
-  status: "active" | "entered" | "invalidated" | "expired" | "exhausted";
+  status:
+    | "active"
+    | "entered"
+    | "invalidated"
+    | "expired"
+    | "exhausted"
+    | "cancelled";
   activeCandidateId: string | null;
   candidates: ImpulseEntryCandidate[];
   confirmation: CandidateConfirmationContract | null;
@@ -249,7 +262,13 @@ export type ImpulseEntryLifecycleEvent =
   }
   | { type: "confirmation_passed"; at: string }
   | { type: "impulse_invalidated"; at: string; reason: string }
-  | { type: "expired"; at: string };
+  | { type: "expired"; at: string }
+  | {
+    type: "setup_resolved";
+    at: string;
+    status: "entered" | "invalidated" | "expired" | "cancelled";
+    reason: string;
+  };
 
 export function transitionImpulseEntryLifecycle(
   current: ImpulseEntryLifecycle,
@@ -259,7 +278,7 @@ export function transitionImpulseEntryLifecycle(
     throw new Error("Unsupported impulse entry lifecycle version");
   }
   if (
-    ["entered", "invalidated", "expired", "exhausted"].includes(
+    ["entered", "invalidated", "expired", "exhausted", "cancelled"].includes(
       current.status,
     )
   ) {
@@ -272,6 +291,34 @@ export function transitionImpulseEntryLifecycle(
     candidate.id === next.activeCandidateId
   );
   const active = activeIndex >= 0 ? next.candidates[activeIndex] : null;
+
+  if (event.type === "setup_resolved") {
+    next.status = event.status;
+    next.activeCandidateId = null;
+    if (active) {
+      active.state = event.status === "entered"
+        ? "entered"
+        : event.status === "expired"
+        ? "expired"
+        : event.status === "cancelled"
+        ? "cancelled"
+        : "failed";
+      if (event.status !== "entered") {
+        active.failedAt = event.at;
+        active.failureReason = event.reason;
+      }
+    }
+    if (next.confirmation) {
+      next.confirmation.status = event.status === "entered"
+        ? "confirmed"
+        : "cancelled";
+      if (event.status === "entered") {
+        next.confirmation.confirmedAt = event.at;
+      }
+    }
+    next.lastTransitionReason = event.reason;
+    return next;
+  }
 
   if (event.type === "impulse_invalidated") {
     next.status = "invalidated";
