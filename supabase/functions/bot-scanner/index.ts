@@ -1500,7 +1500,7 @@ Deno.serve(async (req) => {
         started: true,
         accounts: accounts.length,
         observable_runs: operationRuns.size,
-        message: "Management loop started in background (~50s, ~8s intervals)",
+        message: "Management loop started in background (~50s, ~20s intervals)",
       });
     }
 
@@ -2021,7 +2021,7 @@ async function runScanForUser(
   let stagedExpired = 0;
   let stagedInvalidated = 0;
   let stagedNew = 0;
-  if (stagingEnabled) {
+  if (stagingEnabled && !opts?.isManagementOnly) {
     try {
       const { data: staged } = await supabase
         .from("staged_setups")
