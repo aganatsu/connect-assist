@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
-import { metaFetch } from "../_shared/metaApiClient.ts";
+import { fetchMetaApiProvisioningAccount, metaFetch } from "../_shared/metaApiClient.ts";
 import {
   type BrokerExecutionConfirmationMode,
   classifyBrokerMutationHttpResponse,
@@ -59,6 +59,7 @@ function respondWithBrokerReadFailure(
   upstreamStatus: number,
   error: string,
   details = "",
+  transportStatus = 200,
 ) {
   return respond({
     ok: false,
@@ -69,7 +70,7 @@ function respondWithBrokerReadFailure(
     error,
     details: details ? details.slice(0, 1000) : undefined,
     fallback: upstreamStatus >= 500,
-  }, upstreamStatus >= 500 ? 503 : 424);
+  }, transportStatus);
 }
 
 function respondWithBrokerMutationOutcome(
@@ -235,6 +236,7 @@ Deno.serve(async (req) => {
             instrumentRes.status,
             `OANDA instrument specification failed: ${instrumentRes.status}`,
             details,
+            instrumentRes.status >= 500 ? 503 : 424,
           );
         }
         const instrument = (await instrumentRes.json()).instruments?.[0];
@@ -458,18 +460,16 @@ Deno.serve(async (req) => {
     if (action === "connection_status") {
       if (conn.broker_type === "metaapi") {
         // Provisioning API — returns account state regardless of broker connection
-        const provUrl = `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`;
-        const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
-        const body = await res.text();
-        if (!res.ok) {
+        const provisioning = await fetchMetaApiProvisioningAccount(conn.account_id, conn.api_key);
+        if (!provisioning.res.ok || !provisioning.account) {
           return respondWithBrokerReadFailure(
             "metaapi",
-            res.status,
-            `MetaAPI provisioning ${res.status}`,
-            body,
+            provisioning.res.status,
+            `MetaAPI provisioning ${provisioning.res.status}`,
+            provisioning.body,
           );
         }
-        const info: any = JSON.parse(body);
+        const info = provisioning.account;
         return respond({
           ok: true,
           state: info.state ?? "UNKNOWN",          // DEPLOYED / UNDEPLOYED / DEPLOYING

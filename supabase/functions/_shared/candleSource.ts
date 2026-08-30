@@ -6,7 +6,7 @@
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
-import { META_REGIONS, regionCache } from "./metaApiClient.ts";
+import { metaFetch } from "./metaApiClient.ts";
 import { areNonCryptoMarketsClosed } from "./gamePlanMarketScope.ts";
 import { acquireApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
 
@@ -387,18 +387,11 @@ async function oandaFetchCandles(conn: BrokerConn, symbol: string, canon: string
   }
 }
 
-// META_REGIONS and regionCache are now imported from ./metaApiClient.ts (single source of truth)
+// MetaAPI requests delegate to metaApiClient.ts (single source of truth).
 // Cache of symbols we've already subscribed to per account (in-memory, per cold start)
 // Key: `${accountId}:${symbol}` → true
 const subscribedSymbols = new Set<string>();
 
-// Region circuit-breaker: skip a region for the rest of this cold start once
-// it has hit a hard infra failure (DNS error, repeated timeouts). Prevents
-// the singapore endpoint (which currently DNS-fails) from adding 5-10s of
-// latency to every single symbol/timeframe fetch and blowing the 150s budget.
-const deadRegions = new Set<string>();
-const REGION_FAIL_THRESHOLD = 2;
-const regionFailCounts = new Map<string, number>();
 export function classifyMetaApiOperationalIssue(
   message: string,
 ): "metaapi_certificate_failure" | "metaapi_connection_failure" {
@@ -407,7 +400,7 @@ export function classifyMetaApiOperationalIssue(
     : "metaapi_connection_failure";
 }
 
-function noteRegionFailure(
+function noteMetaApiFailure(
   region: string,
   err: string,
   symbol?: string,
@@ -422,17 +415,6 @@ function noteRegionFailure(
       message: `${region}: ${err}`.slice(0, 500),
     });
   }
-  const isInfra = /dns error|failed to lookup|timeout|connect/i.test(err);
-  if (!isInfra) return;
-  const n = (regionFailCounts.get(region) ?? 0) + 1;
-  regionFailCounts.set(region, n);
-  if (n >= REGION_FAIL_THRESHOLD) {
-    deadRegions.add(region);
-    console.warn(`[candleSource] MetaAPI region ${region} marked DEAD after ${n} infra failures`);
-  }
-}
-function activeRegions(order: string[]): string[] {
-  return order.filter((r) => !deadRegions.has(r));
 }
 
 // Bounded fetch — abort instead of letting a stuck connection eat the budget.
@@ -454,7 +436,6 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
 async function metaSubscribeSymbol(
   authToken: string,
   metaAccountId: string,
-  region: string,
   brokerSymbol: string,
   canon: string,
 ): Promise<boolean> {
@@ -462,26 +443,25 @@ async function metaSubscribeSymbol(
   if (subscribedSymbols.has(cacheKey)) return true;
 
   const tf = metaapiTimeframe(canon);
-  const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/current-candles/${tf}?keepSubscription=true`;
-  try {
-    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 6000);
-    if (res.ok) {
-      subscribedSymbols.add(cacheKey);
-      console.log(`[candleSource] MetaAPI subscribed ${brokerSymbol} on ${region}`);
-      return true;
-    }
-    if (res.status === 404) {
-      const body = await res.text();
-      console.warn(`[candleSource] MetaAPI subscribe 404 for ${brokerSymbol} on ${region}: ${body.slice(0, 120)}`);
-      return false;
-    }
-    console.warn(`[candleSource] MetaAPI subscribe ${res.status} for ${brokerSymbol}`);
-    return false;
-  } catch (e: any) {
-    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol} on ${region}: ${e?.message}`);
-    noteRegionFailure(region, e?.message ?? "", brokerSymbol, canon);
+  const { res, body, region } = await metaFetch(
+    metaAccountId,
+    authToken,
+    (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-candles/${tf}?keepSubscription=true`,
+    undefined,
+    { timeoutMs: 6000 },
+  );
+  if (res.ok) {
+    subscribedSymbols.add(cacheKey);
+    console.log(`[candleSource] MetaAPI subscribed ${brokerSymbol} on ${region}`);
+    return true;
+  }
+  if (res.status === 404) {
+    console.warn(`[candleSource] MetaAPI subscribe 404 for ${brokerSymbol} on ${region}: ${body.slice(0, 120)}`);
     return false;
   }
+  console.warn(`[candleSource] MetaAPI subscribe ${res.status} for ${brokerSymbol} on ${region}`);
+  noteMetaApiFailure(region || "provisioning", body, brokerSymbol, canon);
+  return false;
 }
 
 async function metaFetchCandles(
@@ -499,28 +479,23 @@ async function metaFetchCandles(
   }
 
   const tf = metaapiTimeframe(canon);
-  const cached = regionCache.get(metaAccountId);
-  const baseOrder = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
-  const order = activeRegions(baseOrder);
-  if (order.length === 0) {
-    console.warn(`[candleSource] all MetaAPI regions marked dead — skipping broker fetch for ${brokerSymbol}`);
-    noteSourceIssue({
-      code: "metaapi_connection_failure",
-      provider: "metaapi",
-      symbol: brokerSymbol,
-      interval: canon,
-      message: "All MetaAPI regions are marked unavailable",
-    });
-    return [];
-  }
-
-  const fetchHistorical = async (region: string): Promise<{ ok: boolean; status: number; body: string; candles?: Candle[] }> => {
-    const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
-    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 8000);
-    const body = await res.text();
+  const fetchHistorical = async (): Promise<{
+    ok: boolean;
+    status: number;
+    body: string;
+    region: string | null;
+    candles?: Candle[];
+  }> => {
+    const { res, body, region } = await metaFetch(
+      metaAccountId,
+      authToken,
+      (base) => `${base}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`,
+      undefined,
+      { timeoutMs: 8000 },
+    );
     if (res.ok) {
       const arr = JSON.parse(body);
-      if (!Array.isArray(arr)) return { ok: true, status: res.status, body, candles: [] };
+      if (!Array.isArray(arr)) return { ok: true, status: res.status, body, region, candles: [] };
       const candles = arr.map((c: any) => ({
         datetime: typeof c.time === "string" ? c.time : new Date(c.time).toISOString(),
         open: Number(c.open),
@@ -532,79 +507,53 @@ async function metaFetchCandles(
         Number.isFinite(c.open) && Number.isFinite(c.high) &&
         Number.isFinite(c.low) && Number.isFinite(c.close)
       );
-      return { ok: true, status: res.status, body, candles };
+      return { ok: true, status: res.status, body, region, candles };
     }
-    return { ok: false, status: res.status, body };
+    return { ok: false, status: res.status, body, region };
   };
 
-  for (const region of order) {
-    if (deadRegions.has(region)) continue;
-    try {
-      let result = await fetchHistorical(region);
+  let result = await fetchHistorical();
+  const cacheKey = `${metaAccountId}:${brokerSymbol}`;
 
-      // CASE A: historical 404'd. The symbol may need a subscription (HFMarkets-style).
-      // Probe + subscribe via current-candles?keepSubscription=true, then retry with backoff.
-      const cacheKey = `${metaAccountId}:${brokerSymbol}`;
-      if (!result.ok && result.status === 404 && /could not find path|notfounderror|symbol/i.test(result.body)) {
-        if (!subscribedSymbols.has(cacheKey)) {
-          const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, region, brokerSymbol, canon);
-          if (subscribed) {
-            // Retry with growing backoff — HFMarkets can take 5-10s to backfill history
-            for (const waitMs of [2000, 4000, 6000]) {
-              await new Promise((r) => setTimeout(r, waitMs));
-              result = await fetchHistorical(region);
-              if (result.ok && (result.candles?.length ?? 0) > 0) break;
-              if (!result.ok) break; // hard error, stop retrying
-            }
-          }
-        }
-      }
-
-      // CASE B: historical returned 200 OK but empty array. Two sub-cases:
-      //   B1: We've already subscribed → MetaAPI is backfilling, just wait.
-      //   B2: We haven't subscribed yet → broker requires subscription before serving history
-      //       (HFMarkets behavior). Subscribe now, then wait for backfill.
-      if (result.ok && (result.candles?.length ?? 0) === 0) {
-        if (!subscribedSymbols.has(cacheKey)) {
-          const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, region, brokerSymbol, canon);
-          if (!subscribed) {
-            // Symbol genuinely doesn't exist on this region — try next region
-            console.warn(`[candleSource] MetaAPI ${brokerSymbol} 200-empty + subscribe failed on ${region}`);
-            continue;
-          }
-        }
+  // Historical data can require an explicit symbol subscription first.
+  if (!result.ok && result.status === 404 && /could not find path|notfounderror|symbol/i.test(result.body)) {
+    if (!subscribedSymbols.has(cacheKey)) {
+      const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, brokerSymbol, canon);
+      if (subscribed) {
         for (const waitMs of [2000, 4000, 6000]) {
           await new Promise((r) => setTimeout(r, waitMs));
-          result = await fetchHistorical(region);
+          result = await fetchHistorical();
           if (result.ok && (result.candles?.length ?? 0) > 0) break;
+          if (!result.ok) break;
         }
       }
-
-      if (result.ok) {
-        regionCache.set(metaAccountId, region);
-        if ((result.candles?.length ?? 0) === 0) {
-          console.warn(`[candleSource] MetaAPI ${brokerSymbol} returned 200 but empty after ${subscribedSymbols.has(cacheKey) ? "subscribe + retries" : "first call"} on ${region}`);
-        }
-        return result.candles ?? [];
-      }
-
-      // 404 / NotFoundError → account isn't deployed in this region, try the next one.
-      // Other status codes (auth, rate-limit, etc.) are not region-specific → stop probing.
-      const isRegionMiss =
-        result.status === 404 ||
-        /region|not connected to broker|notfounderror|could not find path/i.test(result.body);
-      if (!isRegionMiss) {
-        console.warn(`[candleSource] MetaAPI ${region} non-region error ${result.status}: ${result.body.slice(0, 120)}`);
-        return [];
-      }
-      if (region === order[order.length - 1]) {
-        console.warn(`[candleSource] MetaAPI ${brokerSymbol} not found in any region (${order.join(", ")}) — last body: ${result.body.slice(0, 120)}`);
-      }
-    } catch (e: any) {
-      console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
-      noteRegionFailure(region, e?.message ?? "", brokerSymbol, canon);
     }
   }
+
+  if (result.ok && (result.candles?.length ?? 0) === 0) {
+    if (!subscribedSymbols.has(cacheKey)) {
+      const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, brokerSymbol, canon);
+      if (!subscribed) {
+        console.warn(`[candleSource] MetaAPI ${brokerSymbol} returned no candles and subscription failed on ${result.region}`);
+        return [];
+      }
+    }
+    for (const waitMs of [2000, 4000, 6000]) {
+      await new Promise((r) => setTimeout(r, waitMs));
+      result = await fetchHistorical();
+      if (result.ok && (result.candles?.length ?? 0) > 0) break;
+    }
+  }
+
+  if (result.ok) {
+    if ((result.candles?.length ?? 0) === 0) {
+      console.warn(`[candleSource] MetaAPI ${brokerSymbol} returned 200 but empty after subscription retries on ${result.region}`);
+    }
+    return result.candles ?? [];
+  }
+
+  console.warn(`[candleSource] MetaAPI ${result.region || "provisioning"} returned ${result.status} for ${brokerSymbol}: ${result.body.slice(0, 120)}`);
+  noteMetaApiFailure(result.region || "provisioning", result.body, brokerSymbol, canon);
   return [];
 }
 
@@ -630,22 +579,20 @@ const symbolListCache = new Map<string, string[]>(); // metaAccountId → symbol
 async function loadBrokerSymbolList(authToken: string, metaAccountId: string): Promise<string[]> {
   const cached = symbolListCache.get(metaAccountId);
   if (cached) return cached;
-  for (const region of META_REGIONS) {
-    try {
-      const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
-      const res = await fetch(url, { headers: { "auth-token": authToken } });
-      if (!res.ok) continue;
-      const arr = await res.json();
-      if (Array.isArray(arr)) {
-        const list = arr.map(String);
-        symbolListCache.set(metaAccountId, list);
-        return list;
-      }
-    } catch (e: any) {
-      console.warn(`[candleSource] symbol-list ${region} error: ${e?.message}`);
-    }
+  const { res, body, region } = await metaFetch(
+    metaAccountId,
+    authToken,
+    (base) => `${base}/symbols`,
+  );
+  if (!res.ok) {
+    console.warn(`[candleSource] symbol-list ${region || "provisioning"} error ${res.status}: ${body.slice(0, 120)}`);
+    return [];
   }
-  return [];
+  const arr = JSON.parse(body);
+  if (!Array.isArray(arr)) return [];
+  const list = arr.map(String);
+  symbolListCache.set(metaAccountId, list);
+  return list;
 }
 
 async function persistSymbolOverride(conn: BrokerConn, canonical: string, brokerSymbol: string): Promise<void> {

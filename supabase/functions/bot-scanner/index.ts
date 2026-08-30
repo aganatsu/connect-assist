@@ -147,7 +147,7 @@ import {
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
-import { metaFetch, metaBaseUrl, META_REGIONS, regionCache } from "../_shared/metaApiClient.ts";
+import { metaFetch } from "../_shared/metaApiClient.ts";
 import {
   reconcileBrokerState, reconcileFullBrokerClose, reconcilePartialClose,
   type ReconcilePosition, type BrokerConnection,
@@ -377,7 +377,7 @@ function canonicalEvidenceSnapshot(detail: Record<string, any>) {
   };
 }
 // resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
-// metaFetch, metaBaseUrl, META_REGIONS, regionCache are now imported from ../_shared/metaApiClient.ts
+// MetaAPI requests delegate to the provisioning-aware shared client.
 
 // ─── Unified Broker Spread Check ────────────────────────────────────
 // Single function for both OANDA and MetaApi spread checks.
@@ -3086,9 +3086,8 @@ async function runScanForUser(
       try {
         const metaAccountId = _scanBrokerConn.account_id;
         const authToken = _scanBrokerConn.api_key;
-        // Use region-failover metaFetch — the legacy non-regional URL
-        // (mt-client-api-v1.agiliumtrade.agiliumtrade.ai) has an expired TLS cert
-        // and fails, which blocks all scans via the fail-closed prop firm gate.
+        // Use the provisioning-aware shared client. The legacy non-regional
+        // endpoint is not a valid source of broker state.
         const { res: eqRes, body: eqBody } = await metaFetch(
           metaAccountId,
           authToken,

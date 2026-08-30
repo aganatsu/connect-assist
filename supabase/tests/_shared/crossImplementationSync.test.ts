@@ -41,6 +41,7 @@ function countDefinitions(pattern: RegExp, excludePaths: string[], searchPaths: 
 // Files to scan (all edge functions that historically had duplicates)
 const SCAN_PATHS = [
   "bot-scanner/index.ts",
+  "broker-connections/index.ts",
   "broker-execute/index.ts",
   "zone-confirmation-scanner/index.ts",
   "paper-trading/index.ts",
@@ -73,10 +74,10 @@ Deno.test("GUARD: metaFetch is only defined in _shared/metaApiClient.ts", () => 
   assertEquals(violations, [], `metaFetch re-defined outside canonical location:\n${violations.map(v => `  ${v.path}:${v.line}`).join("\n")}`);
 });
 
-Deno.test("GUARD: META_REGIONS is only defined in _shared/metaApiClient.ts", () => {
-  const pattern = /^\s*(export\s+)?const\s+META_REGIONS\s*=/;
+Deno.test("GUARD: MetaAPI account URLs are owned by _shared/metaApiClient.ts", () => {
+  const pattern = /mt-(client|provisioning)-api-v1/;
   const violations = countDefinitions(pattern, ["_shared/metaApiClient.ts"], SCAN_PATHS);
-  assertEquals(violations, [], `META_REGIONS re-defined outside canonical location:\n${violations.map(v => `  ${v.path}:${v.line}`).join("\n")}`);
+  assertEquals(violations, [], `MetaAPI account URL constructed outside canonical client:\n${violations.map(v => `  ${v.path}:${v.line}`).join("\n")}`);
 });
 
 Deno.test("GUARD: normalizeTradeRecord is only defined in _shared/advisorCore.ts", () => {

@@ -72,7 +72,8 @@ Deno.test("broker read failures preserve upstream origin across the execution bo
     ?.split("function respondWithBrokerMutationOutcome")[0] || "";
   assertStringIncludes(helper, 'errorOrigin: "broker"');
   assertStringIncludes(helper, "brokerStatus: upstreamStatus");
-  assertStringIncludes(helper, "upstreamStatus >= 500 ? 503 : 424");
+  assertStringIncludes(helper, "transportStatus = 200");
+  assertStringIncludes(helper, "}, transportStatus)");
 
   const readSections = [
     ['if (action === "account_summary")', 'if (action === "open_trades")'],
