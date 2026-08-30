@@ -51,11 +51,22 @@ export interface CrossTimeframeAuthorityResolution {
     | "runtime_not_enabled"
     | "runtime_scope_mismatch"
     | "capped_by_certified_authority"
-    | "certified_mode_enabled"
-    | "requested_mode_enabled";
+    | "certified_mode_enabled";
   config: CrossTimeframeAuthorityConfig;
   policy: CrossTimeframeShadowPolicy;
   activation: CrossTimeframeActivationSnapshot | null;
+}
+
+const MODE_RANK: Record<CrossTimeframeAuthorityMode, number> = {
+  observe: 0,
+  soft: 1,
+  hard: 2,
+};
+
+function modeAtRank(rank: number): CrossTimeframeAuthorityMode {
+  if (rank >= MODE_RANK.hard) return "hard";
+  if (rank >= MODE_RANK.soft) return "soft";
+  return "observe";
 }
 
 function finiteWithin(
@@ -198,16 +209,22 @@ export function resolveCrossTimeframeAuthority(input: {
     };
   }
   const certified = certifiedMaximum(input.activation, input.runtimeTarget);
-  const effectiveMode = config.mode;
+  const effectiveMode = modeAtRank(
+    Math.min(MODE_RANK[config.mode], MODE_RANK[certified.mode]),
+  );
   return {
     contractVersion: CROSS_TF_AUTHORITY_VERSION,
     available: true,
     requestedMode: config.mode,
-    certifiedMaximum: config.mode,
+    certifiedMaximum: certified.mode,
     effectiveMode,
     runtimeTarget: input.runtimeTarget,
     activationTrusted: certified.trusted,
-    reason: "requested_mode_enabled",
+    reason: effectiveMode === config.mode
+      ? certified.reason
+      : certified.mode === "observe"
+      ? certified.reason
+      : "capped_by_certified_authority",
     config,
     policy: crossTimeframePolicyFromConfig(config),
     activation: input.activation,

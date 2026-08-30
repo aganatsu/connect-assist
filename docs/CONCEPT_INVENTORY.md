@@ -103,7 +103,7 @@ certified maximum so the UI does not infer runtime state from draft config.
 | Trade Decision | Saved Bot Config directly | Re-evaluated by final authorization |
 | ICT Scanner Workflow | Saved mode, gated by effective Trade Decision enforcement | Re-evaluated by final authorization |
 | Market Structure Authority | Saved mode, gated by effective Trade Decision enforcement | Re-evaluated by final authorization |
-| Cross-TF Alignment | Saved Bot Config directly; activation evidence is advisory metadata | Frozen context remains the setup's evidence |
+| Cross-TF Alignment | Saved request capped by the approved activation certificate and Paper/Live scope | Frozen context remains the setup's evidence |
 | Impulse Entry Lifecycle | Saved Bot Config directly | Effective mode is frozen when the setup is created |
 | Nested POI Market Trigger | Saved paper/live-scoped mode plus Market Fill prerequisite | Effective route is frozen when the setup is created |
 | Zone Setup Stop Policy | Saved paper/live-scoped mode | Effective mode and stop inputs are frozen when the setup arms |

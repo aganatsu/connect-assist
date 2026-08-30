@@ -29,7 +29,7 @@ Deno.test("cross-timeframe controls normalize to safe defaults", () => {
   assertEquals(result.maximumCandidatesPerTimeframe, 3);
 });
 
-Deno.test("requested hard becomes effective without a certificate", () => {
+Deno.test("requested hard is capped at Observe without a certificate", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: { crossTfAuthorityMode: "hard" },
     runtimeTarget: "live",
@@ -37,13 +37,13 @@ Deno.test("requested hard becomes effective without a certificate", () => {
   });
   assertEquals(result.available, true);
   assertEquals(result.requestedMode, "hard");
-  assertEquals(result.certifiedMaximum, "hard");
-  assertEquals(result.effectiveMode, "hard");
+  assertEquals(result.certifiedMaximum, "observe");
+  assertEquals(result.effectiveMode, "observe");
   assertEquals(result.activationTrusted, false);
-  assertEquals(result.reason, "requested_mode_enabled");
+  assertEquals(result.reason, "activation_missing");
 });
 
-Deno.test("activation metadata remains available but does not gate hard mode", () => {
+Deno.test("certified hard can become effective in its approved runtime scope", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: {
       crossTfAuthorityMode: "hard",
@@ -53,9 +53,41 @@ Deno.test("activation metadata remains available but does not gate hard mode", (
     runtimeTarget: "live",
     activation: hardLiveActivation,
   });
+  assertEquals(result.certifiedMaximum, "hard");
   assertEquals(result.effectiveMode, "hard");
+  assertEquals(result.activationTrusted, true);
+  assertEquals(result.reason, "certified_mode_enabled");
   assertEquals(result.policy.requireSweepOrigin, true);
   assertEquals(result.policy.allowedRetestQuality, ["fresh"]);
+});
+
+Deno.test("hard request is capped to a certified Soft maximum", () => {
+  const result = resolveCrossTimeframeAuthority({
+    rawConfig: { crossTfAuthorityMode: "hard" },
+    runtimeTarget: "paper",
+    activation: {
+      ...hardLiveActivation,
+      authorityStage: "soft_adjustment",
+      runtimeScope: "paper",
+    },
+  });
+  assertEquals(result.requestedMode, "hard");
+  assertEquals(result.certifiedMaximum, "soft");
+  assertEquals(result.effectiveMode, "soft");
+  assertEquals(result.activationTrusted, true);
+  assertEquals(result.reason, "capped_by_certified_authority");
+});
+
+Deno.test("live authority is capped when the certificate is paper-only", () => {
+  const result = resolveCrossTimeframeAuthority({
+    rawConfig: { crossTfAuthorityMode: "hard" },
+    runtimeTarget: "live",
+    activation: { ...hardLiveActivation, runtimeScope: "paper" },
+  });
+  assertEquals(result.certifiedMaximum, "observe");
+  assertEquals(result.effectiveMode, "observe");
+  assertEquals(result.activationTrusted, false);
+  assertEquals(result.reason, "runtime_scope_mismatch");
 });
 
 Deno.test("config bounds are enforced before runtime use", () => {
@@ -69,7 +101,7 @@ Deno.test("config bounds are enforced before runtime use", () => {
   assertEquals(result.maximumCandidatesPerTimeframe, 5);
 });
 
-Deno.test("saved soft mode becomes effective directly", () => {
+Deno.test("saved soft mode remains Observe without approved activation", () => {
   const result = resolveCrossTimeframeAuthority({
     rawConfig: { crossTfAuthorityMode: "soft" },
     runtimeTarget: "paper",
@@ -77,6 +109,6 @@ Deno.test("saved soft mode becomes effective directly", () => {
   });
   assertStringIncludes(
     `${result.requestedMode}/${result.certifiedMaximum}/${result.effectiveMode}`,
-    "soft/soft/soft",
+    "soft/observe/observe",
   );
 });

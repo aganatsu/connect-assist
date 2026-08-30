@@ -433,13 +433,15 @@ export function EnterTab({
               HTF-to-LTF POI Alignment
             </p>
             <p className="text-[10px] text-muted-foreground mt-1">
-              The saved mode is the runtime authority. Evidence is still recorded for review.
-              Hard fails closed when parent-child evidence is unavailable.
+              The saved mode is a request. Runtime cannot exceed an approved,
+              evidence-backed activation for the current Paper or Live scope.
+              Promotion is deliberately reviewed; the app never self-promotes
+              this control from Observe.
             </p>
           </div>
           <FieldGroup
             label="HTF-to-LTF Alignment Mode"
-            description="Observe records decisions only. Soft adjusts scoring. Hard becomes entry authority immediately after Save."
+            description="Observe records decisions only. Soft and Hard require a reviewed activation record before they can affect trades."
             status={!runtimeAuthorityModes || runtimeAuthorityModes.crossTimeframe.effectiveMode === "observe" ? "monitoring" : "active"}
           >
             <Select
@@ -450,8 +452,8 @@ export function EnterTab({
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="observe">Observe — evidence only</SelectItem>
-                <SelectItem value="soft">Soft — score adjustment</SelectItem>
-                <SelectItem value="hard">Hard — entry authority</SelectItem>
+                <SelectItem value="soft">Soft — certified score adjustment</SelectItem>
+                <SelectItem value="hard">Hard — certified entry authority</SelectItem>
               </SelectContent>
             </Select>
           </FieldGroup>

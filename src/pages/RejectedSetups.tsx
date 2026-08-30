@@ -1813,6 +1813,7 @@ export default function RejectedSetups() {
                 <ZoneLocalValidationCard
                   rows={filteredZoneLocalValidation}
                   activation={activationByFeature.get("zone_local_confluence")}
+                  crossTimeframeActivation={activationByFeature.get("cross_timeframe_authority")}
                 />
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   <ShadowFeatureEvidenceCard
@@ -2239,11 +2240,16 @@ function ICTEntryZoneAuthorityCard({
 function ZoneLocalValidationCard({
   rows,
   activation,
+  crossTimeframeActivation,
 }: {
   rows: ZoneLocalValidationSummary[];
   activation?: StrategyActivationRecord;
+  crossTimeframeActivation?: StrategyActivationRecord;
 }) {
   const activationDisplay = getStrategyActivationDisplay(activation);
+  const crossTimeframeActivationDisplay = getStrategyActivationDisplay(
+    crossTimeframeActivation,
+  );
   const forwardRows = rows.filter(
     (row) => row.evidence_source === "forward_observation",
   );
@@ -2269,7 +2275,7 @@ function ZoneLocalValidationCard({
             </CardTitle>
             <p className="mt-0.5 text-[10px] text-muted-foreground">
               Reports zone-local ranking and parent/child timeframe evidence
-              separately. The activation status below applies only to POI Confluence.
+              separately, with an independent rollout status for each policy.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -2278,9 +2284,6 @@ function ZoneLocalValidationCard({
                 Run Historical Replay
               </Link>
             </Button>
-            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              {activationDisplay.runtimeLabel}
-            </Badge>
           </div>
         </div>
       </CardHeader>
@@ -2304,6 +2307,28 @@ function ZoneLocalValidationCard({
             {activationDisplay.description} Forward observations and historical
             replay are reported separately. Replay data is permanently
             ineligible to activate Soft or Hard enforcement.
+          </p>
+        </div>
+
+        <div className="rounded border border-cyan-500/25 bg-cyan-500/5 p-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+              CROSS-TF ALIGNMENT
+            </Badge>
+            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
+              {crossTimeframeActivationDisplay.authorityLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px]">
+              {crossTimeframeActivationDisplay.scopeLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+              {crossTimeframeActivationDisplay.runtimeLabel}
+            </Badge>
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            {crossTimeframeActivationDisplay.description} Cross-timeframe
+            readiness below is calculated from parent/child disagreements,
+            not from POI-ranking readiness.
           </p>
         </div>
 
@@ -2393,9 +2418,14 @@ function ZoneLocalDatasetTable({
                   {retrospective ? (
                     <Badge variant="outline" className="text-[10px]">{Number(row.replay_runs || 0)} replays</Badge>
                   ) : (
-                    <Badge variant="outline" className={`text-[10px] ${row.minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
-                      {row.minimum_sample_ready ? "Review ready" : "Collecting"}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-1">
+                      <Badge variant="outline" className={`text-[9px] ${row.minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
+                        {row.minimum_sample_ready ? "POI 30+ READY" : "POI COLLECTING"}
+                      </Badge>
+                      <Badge variant="outline" className={`text-[9px] ${row.cross_tf_minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
+                        {row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"}
+                      </Badge>
+                    </div>
                   )}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
@@ -2469,16 +2499,28 @@ function ZoneLocalDatasetTable({
                     {retrospective ? (
                       <span>{Number(row.replay_runs || 0)}</span>
                     ) : (
-                      <Badge
-                        variant="outline"
-                        className={`text-[8px] ${
-                          row.minimum_sample_ready
-                            ? "border-success/40 text-success"
-                            : "border-warning/40 text-warning"
-                        }`}
-                      >
-                        {row.minimum_sample_ready ? "30+ READY" : "COLLECTING"}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge
+                          variant="outline"
+                          className={`text-[8px] ${
+                            row.minimum_sample_ready
+                              ? "border-success/40 text-success"
+                              : "border-warning/40 text-warning"
+                          }`}
+                        >
+                          {row.minimum_sample_ready ? "POI 30+ READY" : "POI COLLECTING"}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className={`text-[8px] ${
+                            row.cross_tf_minimum_sample_ready
+                              ? "border-success/40 text-success"
+                              : "border-warning/40 text-warning"
+                          }`}
+                        >
+                          {row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"}
+                        </Badge>
+                      </div>
                     )}
                   </td>
                 </tr>

@@ -20,13 +20,35 @@ Deno.test("Phase 7 UI exposes every HTF-to-LTF alignment control", async () => {
       "Maximum Candidates Per Timeframe",
       "RuntimeModeStatus",
       "runtimeAuthorityModes?.crossTimeframe",
+      "evidence-backed activation",
     ]
   ) {
     assertStringIncludes(ui, label);
   }
 });
 
-Deno.test("Phase 7 scanner applies the saved authority mode directly", async () => {
+Deno.test("effective config exposes the certified Cross-TF maximum to the UI", async () => {
+  const endpoint = await source("supabase/functions/bot-config/index.ts");
+  assertStringIncludes(
+    endpoint,
+    "certifiedMaximum: crossTimeframe.certifiedMaximum",
+  );
+});
+
+Deno.test("evidence UI reports Cross-TF activation and readiness separately from POI confluence", async () => {
+  const ui = await source("src/pages/RejectedSetups.tsx");
+  assertStringIncludes(
+    ui,
+    'crossTimeframeActivation={activationByFeature.get("cross_timeframe_authority")}',
+  );
+  assertStringIncludes(ui, "CROSS-TF ALIGNMENT");
+  assertStringIncludes(
+    ui,
+    'row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"',
+  );
+});
+
+Deno.test("Phase 7 scanner resolves requested, certified, and effective authority", async () => {
   const scanner = await source("supabase/functions/bot-scanner/index.ts");
   assertStringIncludes(scanner, "resolveCrossTimeframeAuthority");
   assertStringIncludes(scanner, "crossTimeframePolicy:");
@@ -38,6 +60,12 @@ Deno.test("Phase 7 scanner applies the saved authority mode directly", async () 
     scanner,
     "effective=${crossTimeframeAuthority.effectiveMode}",
   );
+
+  const resolver = await source(
+    "supabase/functions/_shared/crossTimeframeAuthority.ts",
+  );
+  assertStringIncludes(resolver, "Math.min(");
+  assertStringIncludes(resolver, "certifiedMaximum: certified.mode");
 });
 
 Deno.test("Phase 7 audit view keeps availability and runtime modes separate", async () => {
