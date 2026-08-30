@@ -3,8 +3,9 @@ import { assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 const scanner = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
 const mapper = await Deno.readTextFile(new URL("../../functions/_shared/configMapper.ts", import.meta.url));
 
-Deno.test("pre-arming is disabled by default and requires pending route without market fill", () => {
+Deno.test("generic pre-arming is disabled by default while enforced nested routes retain a monitor", () => {
   assert(mapper.includes("preArmZoneSetups: false"));
+  assert(scanner.includes("const shouldPreArmZoneSetup = effectiveNestedPoiActivation.enforced"));
   assert(scanner.includes("pairConfig.preArmZoneSetups === true"));
   assert(scanner.includes("config.limitOrderEnabled && !config.marketFillAtZone"));
 });
@@ -35,7 +36,7 @@ Deno.test("both pre-arm routes persist observation-only reachability evidence", 
 });
 
 Deno.test("at-zone canonical waits remain in the pre-armed lifecycle", () => {
-  assert(scanner.includes("!izData.bestZone?.priceAtZone || preparePreArmLifecycle"));
+  assert(scanner.includes("!izData.bestZone?.priceAtZone || shouldPreArmZoneSetup"));
   assert(scanner.includes("canonicalScannerEnforcement?.disposition === \"wait\""));
   assert(scanner.includes("detail.rejectionReasons = []"));
 });

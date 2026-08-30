@@ -22,7 +22,7 @@ const scanner = await Deno.readTextFile(
 );
 
 function preArmBlock(): string {
-  const start = scanner.indexOf("const preparePreArmLifecycle");
+  const start = scanner.indexOf("const shouldPreArmZoneSetup");
   const end = scanner.indexOf("scanDetails.push(detail);", start);
   assert(start > 0 && end > start, "pre-arm block not found");
   return scanner.slice(start, end);

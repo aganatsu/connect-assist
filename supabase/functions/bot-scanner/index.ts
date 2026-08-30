@@ -5182,8 +5182,6 @@ async function runScanForUser(
         parentZone: frozenNestedPoiEntry.outerZone,
       }
       : null;
-    const nestedPoiLifecycleEnforced =
-      nestedPoiActivation.enforced && nestedPoiExecutableZone !== null;
     (detail as any).nestedPoiMarket = {
       ...nestedPoiActivation,
       plan: frozenNestedPoiEntry,
@@ -5220,9 +5218,7 @@ async function runScanForUser(
         timeframeEvidence: zoneEvidenceRows.find((row) =>
           row.id === (detail as any).timeframeEvidenceId
         ) || null,
-        impulseEntryLifecycleMode: nestedPoiLifecycleEnforced
-          ? "enforce"
-          : impulseLifecycleEnforcement.effectiveMode,
+        impulseEntryLifecycleMode: impulseLifecycleEnforcement.effectiveMode,
         impulseEntryMode,
         nestedPoiMonitoringTimeframe: impulseEntryMode === "nested_poi_market"
           ? timeframeAuthority.runtimeEntry
@@ -5232,14 +5228,13 @@ async function runScanForUser(
     const validatePendingLifecycle = (
       frozenStrategyContext: any,
       executableZone: unknown,
-      nestedEntryEnforced = nestedPoiLifecycleEnforced,
     ) => {
       const frozenContext = frozenStrategyContext?.crossTimeframeContext || null;
       const frozenLifecycleMode = frozenContext?.impulseEntryLifecycle?.mode ||
         frozenContext?.impulseEntryLifecycleAvailability?.mode ||
         "observe";
       return validateImpulseLifecycleExecutableZone({
-        mode: nestedEntryEnforced ? "enforce" : frozenLifecycleMode,
+        mode: frozenLifecycleMode,
         context: frozenContext,
         executableZone,
       });
@@ -5312,7 +5307,7 @@ async function runScanForUser(
           nestedPoiActivation.enforced && nestedPoiExecutableZone
             ? nestedPoiExecutableZone
             : originatingZone,
-          nestedPoiLifecycleEnforced
+          nestedPoiActivation.enforced && nestedPoiExecutableZone
             ? "nested_poi_market"
             : "confirmation",
         ),
@@ -5487,9 +5482,6 @@ async function runScanForUser(
           parentZone: effectiveFrozenNestedPoiEntry.outerZone,
         }
         : null;
-    const effectiveNestedPoiLifecycleEnforced =
-      effectiveNestedPoiActivation.enforced &&
-      effectiveNestedPoiExecutableZone !== null;
     const stagedNestedPoiRuntimeMismatch = existingStaged &&
       stagedNestedPoiActivation?.runtimeTargetMismatch === true;
     if (stagedNestedPoiPlanState && !stagedNestedPoiPlanState.valid) {
@@ -6387,10 +6379,10 @@ async function runScanForUser(
         scanDetails.push(detail);
         continue;
       }
-      const preparePreArmLifecycle = pairConfig.preArmZoneSetups === true &&
-        ((config.limitOrderEnabled && !config.marketFillAtZone) ||
-          effectiveNestedPoiActivation.enforced);
-      if (!izData.bestZone?.priceAtZone || preparePreArmLifecycle) {
+      const shouldPreArmZoneSetup = effectiveNestedPoiActivation.enforced ||
+        (pairConfig.preArmZoneSetups === true &&
+          config.limitOrderEnabled && !config.marketFillAtZone);
+      if (!izData.bestZone?.priceAtZone || shouldPreArmZoneSetup) {
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
         let zoneWatchPersisted = false;
         let zoneWatchPersistenceError: string | null = null;
@@ -6520,9 +6512,7 @@ async function runScanForUser(
         }
         if (
           !izData.bestZone?.priceAtZone && zoneWatchPersisted && frozenZoneWatch &&
-          pairConfig.preArmZoneSetups === true &&
-          ((config.limitOrderEnabled && !config.marketFillAtZone) ||
-            effectiveNestedPoiActivation.enforced)
+          shouldPreArmZoneSetup
         ) {
           const frozenWatchContext =
             readFrozenSetupStrategyContext(frozenZoneWatch);
@@ -6555,7 +6545,6 @@ async function runScanForUser(
             lifecycleDecision: validatePendingLifecycle(
               readFrozenSetupStrategyContext(frozenZoneWatch),
               zone,
-              effectiveNestedPoiLifecycleEnforced,
             ),
           });
           if (plan.valid) {
@@ -8868,9 +8857,7 @@ async function runScanForUser(
             );
           const prospectiveLifecycleValidation =
             validateImpulseLifecycleExecutableZone({
-              mode: effectiveNestedPoiActivation.enforced
-                ? "enforce"
-                : impulseLifecycleEnforcement.effectiveMode,
+              mode: impulseLifecycleEnforcement.effectiveMode,
               context: pendingFrozenCrossTimeframeContext,
               executableZone: pendingOriginatingZone,
             });
@@ -9122,7 +9109,6 @@ async function runScanForUser(
           const pendingLifecycleValidation = validatePendingLifecycle(
             pendingFrozenStrategyContext,
             pendingOriginatingZone,
-            effectiveNestedPoiLifecycleEnforced,
           );
           if (!pendingLifecycleValidation.valid) {
             detail.status = "zone_setup_rejected_lifecycle_identity";
