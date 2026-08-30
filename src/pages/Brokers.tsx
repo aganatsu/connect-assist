@@ -777,7 +777,7 @@ export function ConnectionDetail({
                                   >
                                     <div className="flex items-center gap-1.5 min-w-0">
                                       {isPicked && <CheckCircle2 className="h-3 w-3 text-success shrink-0" />}
-                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`} title={s}>
+                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`} title={cand.brokerSymbol}>
                                         {cand.brokerSymbol}
                                       </span>
                                     </div>
