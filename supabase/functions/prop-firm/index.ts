@@ -22,41 +22,29 @@ import {
   getCESTTradingDay,
   type PropFirmConfig,
 } from "../_shared/propFirmRisk.ts";
-import { META_REGIONS, metaBaseUrl, regionCache } from "../_shared/metaApiClient.ts";
-
-// MetaAPI region-aware fetch now uses shared metaApiClient.ts constants
+import { metaFetch } from "../_shared/metaApiClient.ts";
 
 async function fetchBrokerEquity(
   accountId: string,
   authToken: string,
 ): Promise<number | undefined> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  for (const region of order) {
-    try {
-      const url = `${metaBaseUrl(region, accountId)}/account-information`;
-      const res = await fetch(url, { headers: { "auth-token": authToken } });
-      const body = await res.text();
-      if (res.ok) {
-        const data = JSON.parse(body);
-        const equity = parseFloat(data.equity ?? data.balance ?? "0");
-        if (Number.isFinite(equity) && equity > 0) {
-          regionCache.set(accountId, region);
-          console.log(`[prop-firm-status] Broker equity fetched from ${region}: $${equity.toFixed(2)}`);
-          return equity;
-        }
-        // res.ok but equity invalid — likely data issue, not region mismatch
-        console.warn(`[prop-firm-status] MetaAPI ${region} returned ok but equity invalid: ${body.slice(0, 200)}`);
-        break;
-      }
-      // Non-ok: check if it's a region mismatch (retry next region) or a real error (stop)
-      if (!/region|not connected to broker/i.test(body)) break;
-      console.warn(`[prop-firm-status] MetaAPI ${region} returned ${res.status}, trying next...`);
-    } catch (e: any) {
-      console.warn(`[prop-firm-status] MetaAPI ${region} fetch error: ${e?.message}`);
-    }
+  const { res, body, region } = await metaFetch(
+    accountId,
+    authToken,
+    (base) => `${base}/account-information`,
+  );
+  if (!res.ok) {
+    console.warn(`[prop-firm-status] MetaAPI ${region || "provisioning"} returned ${res.status}: ${body.slice(0, 200)}`);
+    return undefined;
   }
-  return undefined;
+  const data = JSON.parse(body);
+  const equity = parseFloat(data.equity ?? data.balance ?? "0");
+  if (!Number.isFinite(equity) || equity <= 0) {
+    console.warn(`[prop-firm-status] MetaAPI ${region} returned invalid equity: ${body.slice(0, 200)}`);
+    return undefined;
+  }
+  console.log(`[prop-firm-status] Broker equity fetched from ${region}: $${equity.toFixed(2)}`);
+  return equity;
 }
 
 Deno.serve(async (req: Request) => {

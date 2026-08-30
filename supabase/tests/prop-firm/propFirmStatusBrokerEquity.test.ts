@@ -6,7 +6,7 @@
  * 2. fetchBrokerEquity is called when a broker connection exists
  * 3. currentBalance uses broker equity when available, falls back to paper
  * 4. equitySource field is returned in the derived object
- * 5. Region-aware MetaAPI fetch with fallback across regions
+ * 5. Region-aware MetaAPI fetch delegates to the shared provisioning owner
  * 6. No behavior change for users without broker connections
  */
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -20,6 +20,12 @@ async function src(): Promise<string> {
     );
   }
   return _src;
+}
+
+async function metaClientSrc(): Promise<string> {
+  return Deno.readTextFile(
+    new URL("../../functions/_shared/metaApiClient.ts", import.meta.url).pathname,
+  );
 }
 
 // ── Test 1: Status handler queries broker_connections table ──
@@ -40,31 +46,21 @@ Deno.test("fetchBrokerEquity function exists with region-aware logic", async () 
   assertStringIncludes(s, "Promise<number | undefined>");
 });
 
-// ── Test 3: Region-aware MetaAPI fetch with all 3 regions ──
-Deno.test("fetchBrokerEquity tries all 3 MetaAPI regions", async () => {
+// ── Test 3: Region-aware MetaAPI fetch has one owner ──
+Deno.test("fetchBrokerEquity delegates region routing to metaFetch", async () => {
   const s = await src();
-  // META_REGIONS is now imported from metaApiClient.ts (single source of truth)
   assertStringIncludes(s, 'from "../_shared/metaApiClient.ts"');
-  assertStringIncludes(s, "regionCache");
-  assertStringIncludes(s, "for (const region of order)");
+  assertStringIncludes(s, "await metaFetch(");
+  assertEquals(s.includes("META_REGIONS"), false);
+  assertEquals(s.includes("for (const region of order)"), false);
 });
 
-// ── Test 4: MetaAPI URL uses region-aware format (via imported metaBaseUrl) ──
-Deno.test("MetaAPI URL uses region-aware format (not the non-region variant)", async () => {
-  const s = await src();
-  // metaBaseUrl is now imported from metaApiClient.ts which contains the region-aware URL
-  // Verify the function uses metaBaseUrl (imported) for URL construction
-  assertStringIncludes(s, "metaBaseUrl(region, accountId)");
-  // It should NOT use the non-region URL (agiliumtrade.agiliumtrade.ai) which is less reliable
-  const fetchSection = s.substring(
-    s.indexOf("async function fetchBrokerEquity"),
-    s.indexOf("Deno.serve")
-  );
-  assertEquals(
-    fetchSection.includes("agiliumtrade.agiliumtrade.ai"),
-    false,
-    "fetchBrokerEquity should use region-aware URLs, not the non-region variant"
-  );
+// ── Test 4: Shared owner reads the dynamic provisioning region ──
+Deno.test("MetaAPI client resolves the account region from provisioning", async () => {
+  const shared = await metaClientSrc();
+  assertStringIncludes(shared, "mt-provisioning-api-v1");
+  assertStringIncludes(shared, "account?.region");
+  assertStringIncludes(shared, "metaBaseUrl(region, accountId)");
 });
 
 // ── Test 5: Broker equity takes priority over paper balance ──
@@ -87,19 +83,18 @@ Deno.test("derived object includes equitySource field", async () => {
 });
 
 // ── Test 7: Graceful fallback when broker fetch fails ──
-Deno.test("broker equity fetch has try/catch with graceful fallback", async () => {
+Deno.test("broker equity fetch preserves graceful paper fallback", async () => {
   const s = await src();
-  // The outer try/catch around fetchBrokerEquity call
   assertStringIncludes(s, "Broker equity fetch failed, falling back to paper");
-  // The inner try/catch in fetchBrokerEquity for each region
-  assertStringIncludes(s, "MetaAPI ${region} fetch error");
+  assertStringIncludes(s, "if (!res.ok)");
+  assertStringIncludes(s, 'region || "provisioning"');
 });
 
 // ── Test 8: NaN/invalid equity guard ──
 Deno.test("fetchBrokerEquity guards against NaN and non-positive equity", async () => {
   const s = await src();
   assertStringIncludes(s, "Number.isFinite(equity)");
-  assertStringIncludes(s, "equity > 0");
+  assertStringIncludes(s, "equity <= 0");
 });
 
 // ── Test 9: No behavior change for users without broker connections ──
@@ -112,29 +107,23 @@ Deno.test("users without broker connections still get paper balance (no regressi
   assertStringIncludes(s, '.select("balance")');
 });
 
-// ── Test 10: Response body consumed once (no double-consume bug) ──
-Deno.test("fetchBrokerEquity reads response body once with res.text() then JSON.parse", async () => {
+// ── Test 10: Shared result body is parsed without a second network read ──
+Deno.test("fetchBrokerEquity parses the body returned by the shared client", async () => {
   const s = await src();
   const fetchSection = s.substring(
     s.indexOf("async function fetchBrokerEquity"),
     s.indexOf("Deno.serve")
   );
-  // Should use res.text() + JSON.parse pattern (not res.json() which would double-consume)
-  assertStringIncludes(fetchSection, "const body = await res.text()");
+  assertStringIncludes(fetchSection, "const { res, body, region } = await metaFetch(");
   assertStringIncludes(fetchSection, "JSON.parse(body)");
-  // Should NOT use res.json() (which would leave body consumed for the error check)
-  assertEquals(
-    fetchSection.includes("res.json()"),
-    false,
-    "Should use res.text() + JSON.parse, not res.json() to avoid double-consume"
-  );
+  assertEquals(fetchSection.includes("fetch("), false);
 });
 
-// ── Test 11: Region cache is used for performance ──
-Deno.test("region cache stores successful region for subsequent calls", async () => {
-  const s = await src();
-  assertStringIncludes(s, "regionCache.set(accountId, region)");
-  assertStringIncludes(s, "regionCache.get(accountId)");
+// ── Test 11: Region cache remains inside the shared owner ──
+Deno.test("shared client caches the provisioning-reported region", async () => {
+  const shared = await metaClientSrc();
+  assertStringIncludes(shared, "regionCache.set(accountId, region)");
+  assertStringIncludes(shared, "regionCache.get(accountId)");
 });
 
 // ── Test 12: broker_connections query filters by user_id ──

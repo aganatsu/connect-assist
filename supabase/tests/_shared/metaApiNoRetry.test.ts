@@ -2,22 +2,27 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import {
-  META_REGIONS,
-  metaFetch,
-  regionCache,
-} from "../../functions/_shared/metaApiClient.ts";
+import { metaFetch, regionCache } from "../../functions/_shared/metaApiClient.ts";
 
-Deno.test("MetaAPI non-idempotent mode does not fail over after a region error", async () => {
+function requestDetails(input: string | URL | Request, init?: RequestInit) {
+  return {
+    url: typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url,
+    method: String(init?.method || "GET").toUpperCase(),
+  };
+}
+
+Deno.test("MetaAPI mutation uses one already-resolved region", async () => {
   const originalFetch = globalThis.fetch;
-  let calls = 0;
+  const calls: ReturnType<typeof requestDetails>[] = [];
   regionCache.clear();
   regionCache.set("account-1", "new-york");
-  globalThis.fetch = (() => {
-    calls++;
-    return Promise.resolve(
-      new Response("not connected to broker in this region", { status: 409 }),
-    );
+  globalThis.fetch = ((input, init) => {
+    calls.push(requestDetails(input, init));
+    return Promise.resolve(new Response("not connected to broker in this region", { status: 409 }));
   }) as typeof fetch;
 
   try {
@@ -28,7 +33,8 @@ Deno.test("MetaAPI non-idempotent mode does not fail over after a region error",
       { method: "POST" },
       { allowFailover: false },
     );
-    assertEquals(calls, 1);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].url.includes("new-york"), true);
     assertEquals(res.status, 409);
     assertStringIncludes(body, "not connected");
   } finally {
@@ -37,62 +43,109 @@ Deno.test("MetaAPI non-idempotent mode does not fail over after a region error",
   }
 });
 
-Deno.test("MetaAPI never sends a cold-cache mutation when region discovery fails", async () => {
+Deno.test("MetaAPI never guesses a region when provisioning fails", async () => {
   regionCache.clear();
   const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; method: string }> = [];
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({
-      url: String(input),
-      method: String(init?.method || "GET").toUpperCase(),
-    });
-    return Promise.resolve(
-      new Response('{"message":"account not connected to broker"}', {
-        status: 409,
-      }),
-    );
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  globalThis.fetch = ((input, init) => {
+    calls.push(requestDetails(input, init));
+    return Promise.resolve(new Response('{"message":"provisioning unavailable"}', { status: 503 }));
   }) as typeof fetch;
 
   try {
     const result = await metaFetch(
-      "account-4",
+      "account-no-region",
       "token",
       (base) => `${base}/trade`,
       { method: "POST", body: "{}" },
     );
     assertEquals(result.res.status, 503);
-    assertEquals(
-      result.body,
-      "MetaAPI account region could not be established; mutation was not sent",
-    );
-    const clientCalls = calls.filter((call) => !call.url.includes("provisioning"));
-    assertEquals(clientCalls.length, META_REGIONS.length);
-    assertEquals(calls.every((call) => call.method === "GET"), true);
-    assertEquals(
-      clientCalls.every((call) => call.url.endsWith("/account-information")),
-      true,
-    );
-
+    assertStringIncludes(result.body, "region could not be established");
+    assertEquals(calls.length, 1);
+    assertStringIncludes(calls[0].url, "mt-provisioning-api-v1");
+    assertEquals(calls[0].method, "GET");
   } finally {
     globalThis.fetch = originalFetch;
     regionCache.clear();
   }
 });
 
-Deno.test("MetaAPI ignores failover opt-in for mutating HTTP methods", async () => {
-  regionCache.set("account-5", "new-york");
+Deno.test("MetaAPI accepts dynamic provisioning regions such as vint-hill", async () => {
+  regionCache.clear();
   const originalFetch = globalThis.fetch;
-  const calls: string[] = [];
-  globalThis.fetch = ((input: RequestInfo | URL) => {
-    calls.push(String(input));
-    return Promise.resolve(
-      new Response('{"message":"region mismatch"}', { status: 409 }),
-    );
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  globalThis.fetch = ((input, init) => {
+    const call = requestDetails(input, init);
+    calls.push(call);
+    if (call.url.includes("mt-provisioning-api-v1")) {
+      return Promise.resolve(new Response('{"region":"vint-hill","state":"DEPLOYED"}'));
+    }
+    return Promise.resolve(new Response('{"balance":10000}'));
   }) as typeof fetch;
 
   try {
     const result = await metaFetch(
-      "account-5",
+      "account-vint-hill",
+      "token",
+      (base) => `${base}/account-information`,
+    );
+    assertEquals(result.res.status, 200);
+    assertEquals(result.region, "vint-hill");
+    assertEquals(calls.length, 2);
+    assertStringIncludes(calls[1].url, "mt-client-api-v1.vint-hill.");
+    assertEquals(calls.some((call) => call.url.includes(".london.")), false);
+    assertEquals(calls.some((call) => call.url.includes(".new-york.")), false);
+    assertEquals(calls.some((call) => call.url.includes(".singapore.")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    regionCache.clear();
+  }
+});
+
+Deno.test("MetaAPI refreshes provisioning once when a cached read region is stale", async () => {
+  regionCache.clear();
+  regionCache.set("account-moved", "london");
+  const originalFetch = globalThis.fetch;
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  globalThis.fetch = ((input, init) => {
+    const call = requestDetails(input, init);
+    calls.push(call);
+    if (call.url.includes(".london.")) {
+      return Promise.resolve(new Response("request URL does not match the account region", { status: 409 }));
+    }
+    if (call.url.includes("mt-provisioning-api-v1")) {
+      return Promise.resolve(new Response('{"region":"vint-hill","state":"DEPLOYED"}'));
+    }
+    return Promise.resolve(new Response("[]"));
+  }) as typeof fetch;
+
+  try {
+    const result = await metaFetch("account-moved", "token", (base) => `${base}/positions`);
+    assertEquals(result.res.status, 200);
+    assertEquals(result.region, "vint-hill");
+    assertEquals(calls.length, 3);
+    assertStringIncludes(calls[0].url, ".london.");
+    assertStringIncludes(calls[1].url, "mt-provisioning-api-v1");
+    assertStringIncludes(calls[2].url, ".vint-hill.");
+  } finally {
+    globalThis.fetch = originalFetch;
+    regionCache.clear();
+  }
+});
+
+Deno.test("MetaAPI never retries a mutation after a stale-region response", async () => {
+  regionCache.clear();
+  regionCache.set("account-mutation", "london");
+  const originalFetch = globalThis.fetch;
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  globalThis.fetch = ((input, init) => {
+    calls.push(requestDetails(input, init));
+    return Promise.resolve(new Response("request URL does not match the account region", { status: 409 }));
+  }) as typeof fetch;
+
+  try {
+    const result = await metaFetch(
+      "account-mutation",
       "token",
       (base) => `${base}/trade`,
       { method: "POST", body: "{}" },
@@ -100,83 +153,61 @@ Deno.test("MetaAPI ignores failover opt-in for mutating HTTP methods", async () 
     );
     assertEquals(result.res.status, 409);
     assertEquals(calls.length, 1);
-    assertEquals(calls[0].includes("new-york"), true);
+    assertEquals(calls[0].method, "POST");
   } finally {
     globalThis.fetch = originalFetch;
     regionCache.clear();
   }
 });
 
-Deno.test("MetaAPI non-idempotent mode returns one uncertain network result", async () => {
-  const originalFetch = globalThis.fetch;
-  let calls = 0;
+Deno.test("MetaAPI account lookup throttle suppresses repeated account requests", async () => {
   regionCache.clear();
-  regionCache.set("account-1", "singapore");
-  globalThis.fetch = (() => {
-    calls++;
-    return Promise.reject(new Error("connection reset"));
+  const originalFetch = globalThis.fetch;
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  const throttleBody = JSON.stringify({
+    error: "TooManyRequestsError",
+    message: "trying to access too many unexisting or undeployed trading accounts",
+  });
+  globalThis.fetch = ((input, init) => {
+    const call = requestDetails(input, init);
+    calls.push(call);
+    if (call.url.includes("mt-provisioning-api-v1")) {
+      return Promise.resolve(new Response('{"region":"vint-hill","state":"DEPLOYED"}'));
+    }
+    return Promise.resolve(new Response(throttleBody, { status: 429 }));
   }) as typeof fetch;
 
   try {
-    const { res, body } = await metaFetch(
-      "account-1",
-      "token",
-      (base) => `${base}/trade`,
-      { method: "POST" },
-      { allowFailover: false },
-    );
-    assertEquals(calls, 1);
-    assertEquals(res.status, 504);
-    assertStringIncludes(body, "connection reset");
+    const first = await metaFetch("account-throttled", "token", (base) => `${base}/positions`);
+    const second = await metaFetch("account-throttled", "token", (base) => `${base}/account-information`);
+    assertEquals(first.res.status, 429);
+    assertEquals(second.res.status, 429);
+    assertEquals(calls.length, 2);
+    assertEquals(calls.filter((call) => call.url.includes("mt-client-api-v1")).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     regionCache.clear();
   }
 });
 
-Deno.test("MetaAPI discovers a cold-cache account region before one mutation dispatch", async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; method: string }> = [];
+Deno.test("MetaAPI does not call the client API for an undeployed account", async () => {
   regionCache.clear();
-  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === "string"
-      ? input
-      : input instanceof URL
-      ? input.toString()
-      : input.url;
-    const method = init?.method || "GET";
-    calls.push({ url, method });
-
-    if (url.includes("london") && url.endsWith("/account-information")) {
-      return Promise.resolve(
-        new Response("not connected to broker in this region", { status: 409 }),
-      );
-    }
-    if (url.includes("new-york") && url.endsWith("/account-information")) {
-      return Promise.resolve(new Response("{}", { status: 200 }));
-    }
-    if (url.includes("new-york") && url.endsWith("/trade")) {
-      return Promise.resolve(
-        new Response('{"stringCode":"TRADE_RETCODE_DONE"}', {
-          status: 200,
-        }),
-      );
-    }
-    return Promise.resolve(new Response("unexpected request", { status: 500 }));
+  const originalFetch = globalThis.fetch;
+  const calls: ReturnType<typeof requestDetails>[] = [];
+  globalThis.fetch = ((input, init) => {
+    calls.push(requestDetails(input, init));
+    return Promise.resolve(new Response('{"region":"vint-hill","state":"UNDEPLOYED"}'));
   }) as typeof fetch;
 
   try {
-    const { res } = await metaFetch(
-      "account-cold",
+    const result = await metaFetch(
+      "account-undeployed",
       "token",
-      (base) => `${base}/trade`,
-      { method: "POST", body: "{}" },
-      { allowFailover: false },
+      (base) => `${base}/positions`,
     );
-    assertEquals(res.status, 200);
-    assertEquals(calls.filter((call) => call.method === "POST").length, 1);
-    assertEquals(calls.at(-1)?.url.includes("new-york"), true);
-    assertEquals(regionCache.get("account-cold"), "new-york");
+    assertEquals(result.res.status, 503);
+    assertEquals(calls.length, 1);
+    assertStringIncludes(calls[0].url, "mt-provisioning-api-v1");
   } finally {
     globalThis.fetch = originalFetch;
     regionCache.clear();

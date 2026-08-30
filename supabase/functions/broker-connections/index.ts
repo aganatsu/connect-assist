@@ -5,6 +5,10 @@ import {
   type CommissionMode,
   resolveRoundTripCommission,
 } from "../_shared/tradingCosts.ts";
+import {
+  fetchMetaApiProvisioningAccount,
+  metaFetch,
+} from "../_shared/metaApiClient.ts";
 
 // Canonical pairs the bot scanner cares about — used for auto-mapping.
 const CANONICAL_PAIRS = [
@@ -15,8 +19,6 @@ const CANONICAL_PAIRS = [
   "XAU/USD", "XAG/USD", "BTC/USD", "ETH/USD",
   "US30", "NAS100", "SPX500", "US Oil",
 ];
-
-const REGIONS = ["london", "new-york", "singapore"];
 
 function brokerFailure(broker: "oanda" | "metaapi", brokerStatus: number) {
   return { errorOrigin: "broker" as const, broker, brokerStatus };
@@ -42,26 +44,23 @@ function requestedCommissionMode(payload: any): CommissionMode {
 }
 
 async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Promise<{ symbols: string[]; region: string | null; error?: string; brokerStatus?: number }> {
-  let lastError = "No region returned symbols";
-  let lastStatus = 0;
-  for (const region of REGIONS) {
-    const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
-    try {
-      const res = await fetch(url, { headers: { "auth-token": authToken } });
-      const body = await res.text();
-      if (res.ok) {
-        const arr = JSON.parse(body);
-        if (Array.isArray(arr)) return { symbols: arr.map(String), region };
-      } else {
-        lastStatus = res.status;
-        lastError = `${region}: ${res.status} ${body.slice(0, 120)}`;
-      }
-    } catch (e: any) {
-      lastStatus = 0;
-      lastError = `${region}: ${e?.message || String(e)}`;
-    }
+  const { res, body, region } = await metaFetch(
+    metaAccountId,
+    authToken,
+    (base) => `${base}/symbols`,
+  );
+  if (!res.ok) {
+    return {
+      symbols: [],
+      region,
+      error: `${region || "provisioning"}: ${res.status} ${body.slice(0, 120)}`,
+      brokerStatus: res.status,
+    };
   }
-  return { symbols: [], region: null, error: lastError, brokerStatus: lastStatus };
+  const arr = JSON.parse(body);
+  return Array.isArray(arr)
+    ? { symbols: arr.map(String), region }
+    : { symbols: [], region, error: "MetaAPI symbols response was not an array", brokerStatus: 502 };
 }
 
 function unswap(api_key: string, account_id: string): { authToken: string; metaAccountId: string } {
@@ -76,29 +75,27 @@ function unswap(api_key: string, account_id: string): { authToken: string; metaA
  * Calls /symbols/{name}/specification and /symbols/{name}/current-price.
  * Both endpoints are cheap GETs; failures are swallowed (return null).
  */
-function makeMetaApiProbe(authToken: string, metaAccountId: string, region: string): TradabilityProbe {
-  const base = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
-  const headers = { "auth-token": authToken };
+function makeMetaApiProbe(authToken: string, metaAccountId: string): TradabilityProbe {
   const cache = new Map<string, { tradeMode?: string; hasLivePrice?: boolean } | null>();
 
   return async (sym: string) => {
     if (cache.has(sym)) return cache.get(sym)!;
     try {
       const enc = encodeURIComponent(sym);
-      const [specRes, priceRes] = await Promise.all([
-        fetch(`${base}/${enc}/specification`, { headers }),
-        fetch(`${base}/${enc}/current-price`, { headers }),
+      const [specResult, priceResult] = await Promise.all([
+        metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${enc}/specification`),
+        metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${enc}/current-price`),
       ]);
       let tradeMode: string | undefined;
       let hasLivePrice = false;
-      if (specRes.ok) {
-        const j = await specRes.json().catch(() => null);
+      if (specResult.res.ok) {
+        const j = JSON.parse(specResult.body);
         // MetaAPI returns either tradeMode or trade (depending on platform)
         tradeMode = j?.tradeMode ?? j?.trade ?? undefined;
         if (typeof tradeMode === "string") tradeMode = tradeMode.toUpperCase();
       }
-      if (priceRes.ok) {
-        const j = await priceRes.json().catch(() => null);
+      if (priceResult.res.ok) {
+        const j = JSON.parse(priceResult.body);
         hasLivePrice = !!(j && (j.bid ?? j.ask));
       }
       const out = { tradeMode, hasLivePrice };
@@ -132,7 +129,7 @@ async function autoMapBrokerSymbols(api_key: string, account_id: string): Promis
     }
 
     // Use probe-aware mapper to distinguish EURUSD vs EURUSDr vs EURUSDm
-    const probe = makeMetaApiProbe(authToken, metaAccountId, region);
+    const probe = makeMetaApiProbe(authToken, metaAccountId);
     const { overrides, suffix, unmapped, details } = await buildBrokerSymbolMapProbed(
       CANONICAL_PAIRS, symbols, probe, { concurrency: 4 },
     );
@@ -285,7 +282,7 @@ Deno.serve(async (req) => {
         return respond({ success: false, ...brokerFailure("metaapi", brokerStatus ?? 0), error: regionError || "No reachable MetaAPI region" });
       }
 
-      const probe = makeMetaApiProbe(authToken, metaAccountId, region);
+      const probe = makeMetaApiProbe(authToken, metaAccountId);
       // Probe in parallel (small concurrency to be polite to MetaAPI)
       const results: Record<string, { tradeMode?: string; hasLivePrice?: boolean } | null> = {};
       const queue = [...symbols];
@@ -329,59 +326,41 @@ Deno.serve(async (req) => {
       if (conn.broker_type === "metaapi") {
         const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
 
-        let provisioning: any = null;
-        try {
-          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
-            headers: { "auth-token": authToken, "Content-Type": "application/json" },
+        const provisioningResult = await fetchMetaApiProvisioningAccount(metaAccountId, authToken);
+        const provisioning = provisioningResult.account;
+        if (!provisioningResult.res.ok || !provisioningResult.region) {
+          return respond({
+            success: false,
+            ...brokerFailure("metaapi", provisioningResult.res.status),
+            stage: "provisioning",
+            error: `MetaAPI provisioning ${provisioningResult.res.status}: ${provisioningResult.body.slice(0, 200)}`,
+            hint: provisioningResult.res.status === 404
+              ? "Account ID not found in your MetaAPI account. Check the UUID in your MetaAPI dashboard."
+              : provisioningResult.res.status === 401
+              ? "Auth token is invalid or expired. Generate a new one in your MetaAPI dashboard."
+              : "Check MetaAPI dashboard for account status and region.",
           });
-          if (provRes.ok) {
-            provisioning = await provRes.json();
-          } else {
-            const errText = await provRes.text();
-            return respond({
-              success: false,
-              ...brokerFailure("metaapi", provRes.status),
-              stage: "provisioning",
-              error: `MetaAPI provisioning ${provRes.status}: ${errText.slice(0, 200)}`,
-              hint: provRes.status === 404
-                ? "Account ID not found in your MetaAPI account. Check the UUID in your MetaAPI dashboard."
-                : provRes.status === 401
-                ? "Auth token is invalid or expired. Generate a new one in your MetaAPI dashboard."
-                : "Check MetaAPI dashboard for account status.",
-            });
-          }
-        } catch (e: any) {
-          const msg = e?.message || String(e);
-          if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
-            return respond({ success: false, ...brokerFailure("metaapi", 0), error: "SSL certificate issue connecting to MetaApi." });
-          }
-          return respond({ success: false, ...brokerFailure("metaapi", 0), stage: "provisioning", error: msg });
         }
 
-        const regionResults = await Promise.all(REGIONS.map(async (region) => {
-          // Use current-price endpoint — supported on all MetaAPI account types
-          // (cloud-g2/FTMO accounts don't expose historical-market-data).
-          const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/EURUSD${conn.symbol_suffix || ""}/current-price`;
-          try {
-            const res = await fetch(url, { headers: { "auth-token": authToken } });
-            const body = await res.text();
-            if (res.ok) {
-              const j = JSON.parse(body);
-              return { region, ok: true, status: res.status, hasPrice: !!(j && (j.bid ?? j.ask)) };
-            }
-            return { region, ok: false, status: res.status, error: body.slice(0, 150) };
-          } catch (e: any) {
-            const msg = e?.message || String(e);
-            return { region, ok: false, status: 0, error: msg.includes("dns error") ? "DNS lookup failed (region not provisioned)" : msg.slice(0, 150) };
-          }
-        }));
-
-        const reachableRegion = regionResults.find((r) => r.ok)?.region ?? null;
-        const representativeFailure = regionResults.find((r) => r.status === 401 || r.status === 403)
-          ?? regionResults.find((r) => !r.ok);
+        const priceResult = await metaFetch(
+          metaAccountId,
+          authToken,
+          (base) => `${base}/symbols/EURUSD${conn.symbol_suffix || ""}/current-price`,
+        );
+        const priceData = priceResult.res.ok
+          ? await Promise.resolve().then(() => JSON.parse(priceResult.body)).catch(() => null)
+          : null;
+        const regionResults = [{
+          region: provisioningResult.region,
+          ok: priceResult.res.ok,
+          status: priceResult.res.status,
+          hasPrice: !!(priceData && (priceData.bid ?? priceData.ask)),
+          ...(!priceResult.res.ok ? { error: priceResult.body.slice(0, 150) } : {}),
+        }];
+        const reachableRegion = priceResult.res.ok ? provisioningResult.region : null;
         return respond({
           success: !!reachableRegion,
-          ...(!reachableRegion ? brokerFailure("metaapi", representativeFailure?.status ?? 0) : {}),
+          ...(!reachableRegion ? brokerFailure("metaapi", priceResult.res.status) : {}),
           name: provisioning?.name,
           type: provisioning?.type,
           platform: provisioning?.platform,
@@ -392,8 +371,8 @@ Deno.serve(async (req) => {
           regions: regionResults,
           hint: !reachableRegion
             ? (provisioning?.state === "DEPLOYED" && provisioning?.connectionStatus === "CONNECTED"
-                ? "Account is deployed and connected, but live-price probe failed on all regions. Broker may be offline (weekend) or EURUSD is named differently on this broker — check symbol mappings."
-                : "Account exists in MetaAPI but no region can serve price data. Most likely the account is UNDEPLOYED — deploy it from your MetaAPI dashboard.")
+                ? "Account is deployed and connected, but the live-price probe failed in its provisioned region. The broker may be offline or EURUSD may use another symbol mapping."
+                : "Account exists in MetaAPI but is not ready to serve price data. Check its deployment and broker connection status.")
             : undefined,
         });
       }

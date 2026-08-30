@@ -31,6 +31,7 @@ instead of arbitrating.
 | **Exit fill (SL/TP hit)** | 4 | *none — no shared owner* | 🔴 **DUPLICATE, drifted** |
 | **Paper final-close persistence** | 1 | `finalizePaperPositionClose` + `finalize_paper_position_close` RPC | 🟢 Single owner |
 | **Full broker close** | 1 | `reconcileBrokerState.ts:reconcileFullBrokerClose` | 🟢 Single owner |
+| MetaAPI account-region routing | 1 | `metaApiClient.ts` provisioning lookup | 🟢 Single owner; no guessed-region probes |
 | Instrument-aware P&L | 1 | `smcAnalysis.ts:calcPnl` | 🟢 Single owner |
 | Live broker target-count safety | 1 | `finalRuntimeGates.ts` | 🟢 Single owner |
 | Premium/Discount | 2 | scanner-local copy | 🔴 **DUPLICATE, identical** |
