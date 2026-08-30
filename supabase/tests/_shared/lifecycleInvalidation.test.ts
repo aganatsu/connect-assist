@@ -311,3 +311,124 @@ Deno.test("routine Watchlist refresh does not rewrite sl_level", () => {
     "a refresh may update observations, but the structural boundary is immutable",
   );
 });
+
+Deno.test("frozen candidate evaluation never re-derives its boundary from a nested trigger", () => {
+  const loopStart = scanner.indexOf(
+    "// Evaluate every frozen candidate for the pair",
+  );
+  const loopEnd = scanner.indexOf(
+    "// Apply FOTSI penalty",
+    loopStart,
+  );
+  const loop = scanner.slice(loopStart, loopEnd);
+
+  assert(loopStart >= 0, "expected the frozen-candidate evaluation loop");
+  assert(
+    loop.includes("proposedLevel: storedLevel"),
+    "the persisted staged level must be the only invalidation input",
+  );
+  assert(
+    !loop.includes("stagedCandidate.originating_zone"),
+    "a nested Fib trigger must never replace the frozen parent-zone boundary",
+  );
+  assert(
+    !loop.includes('reasonCode: "structural_boundary_repaired"'),
+    "routine evaluation must not mutate a frozen structural boundary",
+  );
+  assert(
+    !loop.includes("sl_level: boundaryLevel"),
+    "the scanner must not rewrite sl_level after staging",
+  );
+});
+
+Deno.test("nested zone-watch creation freezes complete geometry", () => {
+  const start = scanner.indexOf("const zoneWatchInvalidation =");
+  const end = scanner.indexOf(
+    "const zoneWatchRow =",
+    start,
+  );
+  const creation = scanner.slice(start, end);
+
+  assert(start >= 0, "expected the impulse zone-watch creation path");
+  assert(
+    creation.includes("structuralInvalidation: zoneWatchInvalidation.level"),
+    "the frozen entry-zone contract must contain the parent-derived boundary",
+  );
+  assert(
+    creation.includes("positionStop: analysis.stopLoss"),
+    "the discovery-time position stop must remain available as provenance",
+  );
+  assert(
+    creation.includes("target: analysis.takeProfit"),
+    "the frozen target must not live only in the staged table column",
+  );
+  assert(
+    /stagedDecisionFields\(\s*zoneWatchOrigin,\s*true,\s*zoneWatchFrozenEntryZone,?\s*\)/s
+      .test(creation),
+    "the complete geometry must be passed to the existing frozen-contract owner",
+  );
+});
+
+Deno.test("score refresh paths preserve all staged execution geometry", () => {
+  const confirmingStart = scanner.indexOf(
+    "// Score is above gate but hasn't been staged long enough",
+  );
+  const confirmingEnd = scanner.indexOf(
+    "scanDetails.push(detail);",
+    confirmingStart,
+  );
+  const confirming = scanner.slice(confirmingStart, confirmingEnd);
+
+  const belowThresholdStart = scanner.indexOf(
+    "// Update existing staged setup with new score and factors",
+  );
+  const belowThresholdEnd = scanner.indexOf(
+    "detail.status = \"staged_watching\"",
+    belowThresholdStart,
+  );
+  const belowThreshold = scanner.slice(
+    belowThresholdStart,
+    belowThresholdEnd,
+  );
+
+  for (const [name, refresh] of [
+    ["confirmation", confirming],
+    ["below-threshold", belowThreshold],
+  ] as const) {
+    assert(refresh.length > 0, `expected the ${name} refresh path`);
+    assert(
+      !refresh.includes("entry_price:"),
+      `${name} refresh must not move the frozen entry`,
+    );
+    assert(
+      !refresh.includes("sl_level:"),
+      `${name} refresh must not replace structural invalidation`,
+    );
+    assert(
+      !refresh.includes("tp_level:"),
+      `${name} refresh must not move the frozen target`,
+    );
+  }
+});
+
+const restoreMigration = await Deno.readTextFile(
+  new URL(
+    "../../migrations/20260830170000_restore_frozen_nested_boundaries.sql",
+    import.meta.url,
+  ),
+);
+
+Deno.test("active nested boundaries are restored only from their own audit history", () => {
+  assert(
+    restoreMigration.includes("reason_code = 'structural_boundary_repaired'"),
+    "the repair must use the exact recorded regression event",
+  );
+  assert(
+    restoreMigration.includes("s.sl_level = repair.repaired_boundary"),
+    "a later legitimate boundary change must not be overwritten",
+  );
+  assert(
+    restoreMigration.includes("s.status IN ('watching', 'qualified')"),
+    "terminal history must remain immutable",
+  );
+});
