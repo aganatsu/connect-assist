@@ -36,11 +36,22 @@ Deno.test("all staged setup protection writes use canonical boundaries", () => {
     );
   }
 
-  const canonicalWriteCount =
-    scannerSource.match(/sl_level: watchlistInvalidation/g)?.length ?? 0;
+  assertStringIncludes(
+    scannerSource,
+    "sl_level: executionEligible ? watchlistInvalidation?.level : null",
+  );
+  assertStringIncludes(
+    scannerSource,
+    "sl_level: zoneWatchInvalidation.level",
+  );
+  assertStringIncludes(
+    scannerSource,
+    "sl_level: sweepWatchInvalidation.level",
+  );
   assert(
-    canonicalWriteCount >= 3,
-    `Expected staged write paths to use the canonical helper; found ${canonicalWriteCount}`,
+    !/\.from\("staged_setups"\)\.update\(\{[\s\S]{0,700}?sl_level:/
+      .test(scannerSource),
+    "staged refreshes must not rewrite a boundary after its canonical creation",
   );
 });
 

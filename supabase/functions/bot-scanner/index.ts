@@ -5565,20 +5565,16 @@ async function runScanForUser(
         !stagingEnabled
       ) continue;
       const storedLevel = parseFloat(stagedCandidate.sl_level);
-      const frozenImpulse =
-        stagedCandidate.analysis_snapshot?.impulseZone?.impulse ||
-        stagedCandidate.analysis_snapshot?.impulse ||
-        null;
-      const invalidation = watchlistInvalidationFor(
-        stagedCandidate.direction as WatchlistDirection,
-        stagedCandidate.originating_zone,
-        storedLevel,
-        frozenImpulse,
-      );
+      // sl_level was derived once from the parent zone when this setup was
+      // staged. The originating zone may instead be an exact nested trigger
+      // (for example a zero-width Fib level), so feeding it back through the
+      // derivation owner silently replaces the parent boundary with
+      // trigger +/- buffer. Preserve the persisted level exactly.
+      const invalidation = deriveWatchlistInvalidation({
+        direction: stagedCandidate.direction as WatchlistDirection,
+        proposedLevel: storedLevel,
+      });
       const boundaryLevel = invalidation.level;
-      const boundaryChanged = boundaryLevel !== null &&
-        Number.isFinite(storedLevel) &&
-        Math.abs(boundaryLevel - storedLevel) > Number.EPSILON;
       const boundaryBreached = boundaryLevel !== null &&
         isWatchlistInvalidated(
           stagedCandidate.direction as WatchlistDirection,
@@ -5606,7 +5602,6 @@ async function runScanForUser(
             `Structural invalidation breached before entry (price ${analysis.lastPrice.toFixed(5)} vs boundary ${boundaryLevel.toFixed(5)}; source ${invalidation.source})`;
           await supabase.from("staged_setups").update({
             status: "invalidated",
-            sl_level: boundaryLevel,
             invalidation_reason: lifecycleReason,
             lifecycle_reason: lifecycleReason,
             lifecycle_reason_code: "structural_boundary_breached",
@@ -5636,39 +5631,6 @@ async function runScanForUser(
             boundary: boundaryLevel,
             source: invalidation.source,
           };
-        }
-      } else if (boundaryChanged) {
-        try {
-          const repairedAt = new Date().toISOString();
-          await supabase.from("staged_setups").update({
-            sl_level: boundaryLevel,
-            lifecycle_reason:
-              `Legacy Watchlist boundary repaired to frozen structural boundary ${boundaryLevel.toFixed(5)}`,
-            lifecycle_reason_code: "structural_boundary_repaired",
-            lifecycle_evidence: buildWatchlistLifecycleEvidence({
-              reasonCode: "structural_boundary_repaired",
-              observedAt: repairedAt,
-              observedPrice: analysis.lastPrice,
-              frozenDirection:
-                stagedCandidate.direction as WatchlistDirection,
-              freshDirection:
-                analysis.direction as WatchlistDirection | null,
-              invalidation,
-              detail: {
-                previousBoundary: storedLevel,
-                repairedBoundary: boundaryLevel,
-              },
-            }),
-            last_eval_at: repairedAt,
-          }).eq("id", stagedCandidate.id).eq("user_id", userId);
-          stagedCandidate.sl_level = boundaryLevel;
-          console.log(
-            `[staging] Repaired ${pair} ${stagedCandidate.direction} Watchlist boundary ${storedLevel.toFixed(5)} → ${boundaryLevel.toFixed(5)} (${invalidation.source})`,
-          );
-        } catch (e: any) {
-          console.warn(
-            `[staging] Failed to repair ${pair} Watchlist boundary: ${e?.message}`,
-          );
         }
       }
     }
@@ -6471,7 +6433,17 @@ async function runScanForUser(
                   : izData.impulse.high,
                 izData.impulse,
               );
-              const zoneWatchDecision = stagedDecisionFields(zoneWatchOrigin);
+              const zoneWatchFrozenEntryZone = {
+                ...zoneWatchOrigin,
+                structuralInvalidation: zoneWatchInvalidation.level,
+                positionStop: analysis.stopLoss ?? null,
+                target: analysis.takeProfit ?? null,
+              };
+              const zoneWatchDecision = stagedDecisionFields(
+                zoneWatchOrigin,
+                true,
+                zoneWatchFrozenEntryZone,
+              );
               const zoneWatchRow = {
                 user_id: userId,
                 bot_id: BOT_ID,
@@ -7321,14 +7293,6 @@ async function runScanForUser(
             missing_factors: missingFactors,
             scan_cycles: existingStaged.scan_cycles + 1,
             last_eval_at: new Date().toISOString(),
-            entry_price: analysis.lastPrice,
-            sl_level: watchlistInvalidationFor(
-              analysis.direction as WatchlistDirection,
-              existingStaged.originating_zone,
-              existingStaged.sl_level ?? analysis.stopLoss,
-              existingStaged.analysis_snapshot?.impulseZone?.impulse,
-            ).level,
-            tp_level: analysis.takeProfit,
           }).eq("id", existingStaged.id);
           console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
         } catch (e: any) {
@@ -11487,14 +11451,6 @@ async function runScanForUser(
                 missing_factors: missingFactors,
                 scan_cycles: existingStaged.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
-                entry_price: analysis.lastPrice,
-                sl_level: watchlistInvalidationFor(
-                  analysis.direction as WatchlistDirection,
-                  existingStaged.originating_zone,
-                  existingStaged.sl_level ?? analysis.stopLoss,
-                  existingStaged.analysis_snapshot?.impulseZone?.impulse,
-                ).level,
-                tp_level: analysis.takeProfit,
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
