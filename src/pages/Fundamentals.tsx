@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fundamentalsApi } from "@/lib/api";
 import { Calendar, Clock, AlertTriangle, TrendingUp, TrendingDown, Minus, Brain, ChevronDown, ChevronRight, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 const IMPACT_COLORS: Record<string, string> = {
   high: "bg-destructive/20 text-destructive border-destructive/30",
@@ -210,7 +211,10 @@ export default function Fundamentals() {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm font-medium truncate">{event.name || event.title || event.event}</p>
+                        <OverflowText
+                          text={event.name || event.title || event.event}
+                          className="block text-sm font-medium"
+                        />
                         <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground">
                           {event.forecast != null && <span>Forecast: {event.forecast}</span>}
                           {event.previous != null && <span>Previous: {event.previous}</span>}

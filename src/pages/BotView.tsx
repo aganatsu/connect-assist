@@ -617,7 +617,7 @@ export default function BotView() {
         {/* Live mode alert (compact, only when live) */}
         {executionMode === "live" && (
           <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
-            <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
+            <span className="min-w-0 truncate" title="LIVE TRADING — Real Money at Risk">⚠ LIVE TRADING — Real Money at Risk</span>
             <button
               className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!modeChangeEnabled || modeMut.isPending}
@@ -645,7 +645,7 @@ export default function BotView() {
               <div className="w-px h-5 bg-border mx-0.5" />
               <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${!accountStatusKnown ? "text-warning" : d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                <span className="truncate">{!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
+                <span className="truncate" title={!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}>{!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
               <span className={`text-[9px] font-medium px-1 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
                 {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
@@ -1342,7 +1342,7 @@ export default function BotView() {
                 {showScanPanel ? <ChevronDown className="h-3 w-3 md:h-2.5 md:w-2.5" /> : <ChevronUp className="h-3 w-3 md:h-2.5 md:w-2.5" />}
               </button>
               <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
-                <span className="truncate">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
+                <span className="truncate" title={safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}>{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
                 {currentScan?.scanned_at && (
                   <span className="shrink-0 text-foreground font-mono normal-case">
                     — {formatTimeOnly(currentScan.scanned_at)}
@@ -1443,11 +1443,23 @@ export default function BotView() {
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
                                 <span className="font-bold shrink-0 text-foreground">{sig.pair}</span>
 
-                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
+                                {sig.reason && (
+                                  <span
+                                    className="min-w-0 truncate text-[9px] text-muted-foreground font-sans"
+                                    title={sig.reason}
+                                  >
+                                    — {sig.reason}
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
+                                <span
+                                  className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}
+                                  title={statusLabel}
+                                >
+                                  {statusLabel}
+                                </span>
                               </div>
                             </button>
                           );
@@ -1481,7 +1493,7 @@ export default function BotView() {
         {/* Kill Switch Banner */}
         {d.killSwitchActive && (
           <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
-            <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
+            <span className="min-w-0 truncate text-xs font-bold" title="KILL SWITCH ACTIVE — All Trading Halted">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
             <div className="flex gap-2 shrink-0">
               <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" disabled={!tradingControlsEnabled || deactivateKill.isPending} onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
@@ -2365,21 +2377,24 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
           return (
             <div key={key} className={`border px-1.5 py-1 ${meta.color}`}>
               <div className="flex items-center justify-between text-[10px] font-medium">
-                <span className="truncate">{meta.icon} {meta.label}</span>
+                <span className="truncate" title={meta.label}>{meta.icon} {meta.label}</span>
                 <span className="font-mono font-bold ml-1">{count}</span>
               </div>
               {subEntries.length > 0 && (
                 <div className="mt-0.5 space-y-0.5">
                   {subEntries.map(([sk, sv]) => (
                     <div key={sk} className="flex items-center justify-between text-[9px] text-muted-foreground">
-                      <span className="truncate">└ {SUB_LABELS[sk] || sk}</span>
+                      <span className="truncate" title={SUB_LABELS[sk] || sk}>└ {SUB_LABELS[sk] || sk}</span>
                       <span className="font-mono ml-1">{sv as number}</span>
                     </div>
                   ))}
                 </div>
               )}
               {samples.length > 0 && (
-                <div className="mt-0.5 text-[9px] text-muted-foreground/80 truncate font-mono">
+                <div
+                  className="mt-0.5 text-[9px] text-muted-foreground/80 truncate font-mono"
+                  title={`${samples.join(", ")}${(count as number) > samples.length ? ` +${(count as number) - samples.length}` : ""}`}
+                >
                   {samples.join(", ")}{(count as number) > samples.length ? ` +${(count as number) - samples.length}` : ""}
                 </div>
               )}

@@ -59,13 +59,11 @@
 
 .workspace-page__titles h1 {
   margin: 0;
-  overflow: hidden;
   color: hsl(var(--foreground));
   font-size: 17px;
   font-weight: 700;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .workspace-page__eyebrow,
@@ -90,6 +88,9 @@
   margin-top: 3px;
   font-size: 10px;
   line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .workspace-page__actions {

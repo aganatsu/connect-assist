@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { TieredScoringMeta } from "./TierFactorBreakdown";
 import { LegacyDiagnosticsPanel } from "./LegacyDiagnosticsPanel";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -99,9 +100,10 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
   if (!s.direction && !s.factorCount && !s.score) {
     if (compact) {
       return (
-        <span className="text-[10px] text-muted-foreground font-mono truncate inline-block max-w-full">
-          {signalReason}
-        </span>
+        <OverflowText
+          text={signalReason}
+          className="inline-block text-[10px] text-muted-foreground font-mono"
+        />
       );
     }
     return (

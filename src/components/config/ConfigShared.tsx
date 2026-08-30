@@ -159,7 +159,12 @@ export function CollapsibleSection({
             {badge}
           </div>
           {subtitle && (
-            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{subtitle}</p>
+            <p
+              className="mt-0.5 break-words text-[10px] text-muted-foreground"
+              title={subtitle}
+            >
+              {subtitle}
+            </p>
           )}
         </div>
       </button>

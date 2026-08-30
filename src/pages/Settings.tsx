@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { toast } from "sonner";
 import { Settings, Link2, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor } from "lucide-react";
 import { settingsApi } from "@/lib/api";
@@ -198,8 +199,14 @@ function PreferencesSettings() {
               </div>
               {chats.map(c => (
                 <div key={c.id} className="grid grid-cols-[1fr_1.5fr_auto_auto] gap-2 px-3 py-2 text-xs items-center border-t border-border">
-                  <span className="font-medium truncate">{c.label || "—"}</span>
-                  <span className="font-mono text-primary truncate">{c.id}</span>
+                  <OverflowText
+                    text={c.label || "—"}
+                    className="font-medium"
+                  />
+                  <OverflowText
+                    text={c.id}
+                    className="font-mono text-primary"
+                  />
                   <TestNotificationButton chatId={c.id} compact />
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeChat(c.id)}><Trash2 className="h-3 w-3" /></Button>
                 </div>

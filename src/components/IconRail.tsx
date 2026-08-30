@@ -167,7 +167,7 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
                 <item.icon className="h-4 w-4 shrink-0" />
                 {!collapsed && (
                   <>
-                    <span className="text-sm truncate">{item.title}</span>
+                    <span className="text-sm truncate" title={item.title}>{item.title}</span>
                     {item.shortcut && (
                       <kbd className="ml-auto text-[10px] text-muted-foreground">{item.shortcut}</kbd>
                     )}

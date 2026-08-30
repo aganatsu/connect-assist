@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { getPipLabel } from "@/lib/pipDisplay";
 import type { StopPolicyEvidenceRow } from "@/lib/stopPolicyEvidence";
 
@@ -113,7 +114,10 @@ export function StopPolicyEvidenceCard({
                         {` · ${row.trading_style.replace(/_/g, " ")} · ${row.confirmation_timeframe} · ${row.execution_floor_source.replace(/_/g, " ")}`}
                       </span>
                       {row.shadow_plan_reason && (
-                        <p className="truncate text-destructive">{row.shadow_plan_reason.replace(/_/g, " ")}</p>
+                        <OverflowText
+                          text={row.shadow_plan_reason.replace(/_/g, " ")}
+                          className="block text-destructive"
+                        />
                       )}
                     </div>
                     <div className="font-mono text-muted-foreground sm:text-right">
