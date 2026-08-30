@@ -1178,12 +1178,15 @@ export function resolvePendingNestedPoiEntryPlanState(
         confirmation.timeframe,
       );
       if (
-        lifecycle.mode !== "enforce" ||
         lifecycle.entryMode !== "nested_poi_market" ||
         impulse.direction !== plan!.direction ||
         lifecycleMonitoringTimeframe !== plan!.monitoringTimeframe
       ) return false;
       try {
+        // Route identity is independent of whether Impulse Entry Lifecycle is
+        // observing or enforcing. Use the existing strict validator to prove
+        // that the frozen nested trigger is the lifecycle's active candidate;
+        // the lifecycle mode still controls whether its decisions execute.
         return validateImpulseLifecycleExecutableZone({
           mode: "enforce",
           context: context as FrozenCrossTimeframeContext,

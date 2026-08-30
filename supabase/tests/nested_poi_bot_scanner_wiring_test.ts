@@ -40,6 +40,37 @@ Deno.test("pre-arm observe mode keeps nested POI data observational", () => {
   );
 });
 
+Deno.test("nested POI route does not override the saved impulse lifecycle mode", () => {
+  assertStringIncludes(
+    scanner,
+    "impulseEntryLifecycleMode: impulseLifecycleEnforcement.effectiveMode",
+  );
+  assert(
+    !scanner.includes(
+      'impulseEntryLifecycleMode: nestedPoiLifecycleEnforced\n          ? "enforce"',
+    ),
+    "nested POI activation must not silently promote lifecycle Observe to Enforce",
+  );
+  assert(
+    !scanner.includes(
+      'mode: nestedEntryEnforced ? "enforce" : frozenLifecycleMode',
+    ),
+    "pending lifecycle validation must use the frozen lifecycle mode",
+  );
+});
+
+Deno.test("enforced nested POI route always creates its existing pending monitor", () => {
+  assertStringIncludes(scanner, "const shouldPreArmZoneSetup =");
+  assertMatch(
+    scanner,
+    /const shouldPreArmZoneSetup =[\s\S]*effectiveNestedPoiActivation\.enforced[\s\S]*pairConfig\.preArmZoneSetups === true/,
+  );
+  assertMatch(
+    scanner,
+    /!izData\.bestZone\?\.priceAtZone && zoneWatchPersisted && frozenZoneWatch &&[\s\S]*shouldPreArmZoneSetup/,
+  );
+});
+
 Deno.test("existing staged setups keep their frozen nested POI rollout mode", () => {
   assertMatch(
     scanner,

@@ -754,21 +754,47 @@ Deno.test("declared nested route rejects confirmation-mode or mismatched lifecyc
     false,
   );
 
-  const observedLifecycle = nestedLifecycleContext(plan);
-  observedLifecycle.impulseEntryLifecycle.mode = "observe";
-  assertEquals(
-    resolvePendingNestedPoiEntryPlanState({
-      cross_timeframe_context: observedLifecycle,
-      nested_poi_entry: plan,
-    }).valid,
-    false,
-  );
-
   const oppositeDirectionLifecycle = nestedLifecycleContext(plan);
   oppositeDirectionLifecycle.impulseEntryLifecycle.impulse.direction = "short";
   assertEquals(
     resolvePendingNestedPoiEntryPlanState({
       cross_timeframe_context: oppositeDirectionLifecycle,
+      nested_poi_entry: plan,
+    }).valid,
+    false,
+  );
+});
+
+Deno.test("declared nested route accepts an exact frozen plan when lifecycle is observe", () => {
+  const plan = nestedPoiPlan();
+  const observedLifecycle = nestedLifecycleContext(plan);
+  observedLifecycle.impulseEntryLifecycle.mode = "observe";
+  observedLifecycle.impulseEntryLifecycleAvailability.mode = "observe";
+
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: observedLifecycle,
+      nested_poi_entry: plan,
+    }),
+    {
+      declared: true,
+      valid: true,
+      plan,
+      reason: "nested_poi_frozen_plan_available",
+    },
+  );
+});
+
+Deno.test("declared nested route still rejects mismatched geometry when lifecycle is observe", () => {
+  const plan = nestedPoiPlan();
+  const observedLifecycle = nestedLifecycleContext(plan);
+  observedLifecycle.impulseEntryLifecycle.mode = "observe";
+  observedLifecycle.impulseEntryLifecycleAvailability.mode = "observe";
+  observedLifecycle.impulseEntryLifecycle.candidates[0].low = 1.103;
+
+  assertEquals(
+    resolvePendingNestedPoiEntryPlanState({
+      cross_timeframe_context: observedLifecycle,
       nested_poi_entry: plan,
     }).valid,
     false,
