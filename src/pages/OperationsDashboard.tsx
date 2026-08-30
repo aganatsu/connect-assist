@@ -35,6 +35,7 @@ import { toast } from "sonner";
 
 import { AppShell } from "@/components/AppShell";
 import { ScanDetailBreakdown } from "@/components/ScanDetailBreakdown";
+import { StagedSetupCard } from "@/components/WatchlistPanel";
 import { WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { OverflowText } from "@/components/ui/overflow-text";
@@ -57,6 +58,10 @@ import {
   verifyExecutionModeChange,
   type ExecutionMode,
 } from "@/lib/executionMode";
+import {
+  getStagedLifecyclePhaseLabel,
+  getStagedLifecycleStatusText,
+} from "@/lib/featureState";
 import { formatPrice } from "@/lib/formatTime";
 import { getCurrentSession } from "@/lib/marketData";
 import { formatPipDisplay, getPipSize } from "@/lib/pipDisplay";
@@ -560,6 +565,117 @@ function buildPipeline(order: PendingOrder | null): Array<{ label: string; detai
   return steps;
 }
 
+const ZONE_REACHED_PHASES = new Set([
+  "at_zone",
+  "local_trigger_active",
+  "local_trigger_swept",
+  "sweep_rejected",
+  "confirmation_ready",
+  "entry_authorized",
+  "position_managing",
+]);
+
+const CONFIRMATION_ACTIVE_PHASES = new Set([
+  "local_trigger_active",
+  "local_trigger_swept",
+  "sweep_rejected",
+]);
+
+function buildStagedPipeline(
+  setup: StagedSetup,
+): Array<{ label: string; detail: string; state: PipelineState }> {
+  const phase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase ||
+    "monitoring_pre_zone";
+  const zone = setup.lifecycle_evidence?.boundary?.zone;
+  const origin = setup.originating_zone &&
+      typeof setup.originating_zone === "object"
+    ? setup.originating_zone as Record<string, unknown>
+    : {};
+  const bounds = origin.bounds && typeof origin.bounds === "object"
+    ? origin.bounds as Record<string, unknown>
+    : {};
+  const hasFiniteBounds = (low: unknown, high: unknown) =>
+    low != null && high != null && low !== "" && high !== "" &&
+    Number.isFinite(Number(low)) && Number.isFinite(Number(high));
+  const hasStoredZone = (
+    hasFiniteBounds(bounds.low, bounds.high) ||
+    hasFiniteBounds(origin.low, origin.high) ||
+    hasFiniteBounds(zone?.low, zone?.high)
+  );
+  const hasFrozenZone = setup.execution_eligible !== false && hasStoredZone;
+  const phaseReportsZoneReached = ZONE_REACHED_PHASES.has(phase);
+  const zoneReached = hasFrozenZone && phaseReportsZoneReached;
+  const confirmationReady = phase === "confirmation_ready" ||
+    phase === "entry_authorized" || phase === "position_managing" ||
+    setup.status === "qualified";
+  const pendingCreated = Boolean(setup.pending_order_id);
+
+  return [
+    {
+      label: "Candidate staged",
+      detail: `${setup.direction.toUpperCase()} ${setup.setup_type?.replace(/_/g, " ") || "setup"} retained across scans`,
+      state: "complete",
+    },
+    {
+      label: "Executable zone",
+      detail: hasFrozenZone
+        ? "Frozen zone geometry is stored on this candidate"
+        : hasStoredZone
+        ? "Zone evidence is stored, but this candidate is observation-only"
+        : "Waiting for a complete executable zone",
+      state: hasFrozenZone ? "complete" : "active",
+    },
+    {
+      label: "Zone reached",
+      detail: zoneReached
+        ? "Persisted lifecycle evidence records price at the zone"
+        : phaseReportsZoneReached
+        ? "Lifecycle phase reports zone arrival, but executable geometry is unavailable"
+        : phase === "approaching_zone"
+        ? "Price is approaching the frozen zone"
+        : hasFrozenZone
+        ? "Waiting for price to reach the frozen zone"
+        : "Cannot begin until an executable zone is frozen",
+      state: zoneReached
+        ? "complete"
+        : phaseReportsZoneReached
+        ? "active"
+        : hasFrozenZone
+        ? "active"
+        : "pending",
+    },
+    {
+      label: "Confirmation",
+      detail: confirmationReady
+        ? "Persisted confirmation state is ready"
+        : CONFIRMATION_ACTIVE_PHASES.has(phase)
+        ? getStagedLifecycleStatusText(setup)
+        : "Waiting for zone arrival before confirmation",
+      state: confirmationReady
+        ? "complete"
+        : CONFIRMATION_ACTIVE_PHASES.has(phase)
+        ? "active"
+        : "pending",
+    },
+    {
+      label: "Pending-order handoff",
+      detail: pendingCreated
+        ? "A linked pending order was created"
+        : confirmationReady
+        ? "Candidate is ready for pending-order creation"
+        : "Not started",
+      state: pendingCreated ? "complete" : confirmationReady ? "active" : "pending",
+    },
+  ];
+}
+
+function stagedCommentary(setup: StagedSetup): string {
+  const phase = getStagedLifecyclePhaseLabel(
+    setup.lifecycle_phase || setup.lifecycle_evidence?.phase,
+  ).toLowerCase();
+  return `${setup.symbol} is a staged ${setup.direction} candidate at ${phase}. ${getStagedLifecycleStatusText(setup)} No broker order exists unless a linked pending-order ID is shown.`;
+}
+
 function commentary(order: PendingOrder | null): string {
   if (!order) {
     return "No zone setup is currently active. The scanner is still evaluating closed-bar structure and will publish the next executable candidate here.";
@@ -605,6 +721,7 @@ function OperationsDashboard() {
   const [selectedPair, setSelectedPair] = useState<string | null>(null);
   const [contextPanel, setContextPanel] = useState<ContextPanel>("detail");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedStagedSetupId, setSelectedStagedSetupId] = useState<string | null>(null);
   const [positionsOpen, setPositionsOpen] = useState(false);
   const [scanPolling, setScanPolling] = useState(false);
   const scanPollRef = useRef<number | null>(null);
@@ -677,7 +794,10 @@ function OperationsDashboard() {
     : "unknown";
   const accountStatusKnown = executionMode !== "unknown";
   const statusUnavailable = !accountStatusKnown;
-  const scans = Array.isArray(scansQuery.data) ? scansQuery.data : [];
+  const scans = useMemo(
+    () => Array.isArray(scansQuery.data) ? scansQuery.data : [],
+    [scansQuery.data],
+  );
   const pendingSnapshot: PendingOrderSnapshot = pendingQuery.data || {
     active: [],
     history: [],
@@ -687,7 +807,13 @@ function OperationsDashboard() {
     () => Array.isArray(pendingSnapshot.active) ? pendingSnapshot.active : [],
     [pendingSnapshot.active],
   );
-  const stagedSetups: StagedSetup[] = Array.isArray(stagedQuery.data) ? stagedQuery.data : [];
+  const stagedSetups = useMemo<StagedSetup[]>(
+    () => Array.isArray(stagedQuery.data) ? stagedQuery.data : [],
+    [stagedQuery.data],
+  );
+  const selectedStagedSetup = stagedSetups.find((setup) =>
+    setup.id === selectedStagedSetupId
+  ) || null;
   const brokerConnectionsKnown = connectionsQuery.isSuccess && Array.isArray(connectionsQuery.data);
   const connections = brokerConnectionsKnown ? connectionsQuery.data : [];
   const activeConnections = connections.filter((connection: any) => connection.is_active);
@@ -844,6 +970,25 @@ function OperationsDashboard() {
     () => selectedScanDetail ? scanSetupIdentity(selectedScanDetail) : null,
     [selectedScanDetail],
   );
+  useEffect(() => {
+    if (!selectedStagedSetupId || !stagedQuery.isSuccess || selectedStagedSetup) {
+      return;
+    }
+
+    const promotedOrder = activeOrders.find((order) =>
+      recordIdentifier(order.staged_setup_id) === selectedStagedSetupId
+    );
+    setSelectedStagedSetupId(null);
+    if (promotedOrder) {
+      setSelectedOrderId(promotedOrder.order_id);
+      setSelectedPair(promotedOrder.symbol);
+    }
+  }, [
+    activeOrders,
+    selectedStagedSetup,
+    selectedStagedSetupId,
+    stagedQuery.isSuccess,
+  ]);
   const huntingOrders = activeOrders.filter((order) => {
     const stage = pendingOrderDisplayStage(order);
     return stage === "confirmation" || stage === "retracement";
@@ -857,13 +1002,19 @@ function OperationsDashboard() {
     () => linkedOrderForScan(activeOrders, selectedScanDetail),
     [activeOrders, selectedScanDetail],
   );
-  const focusedOrder = explicitlySelectedOrder || linkedOrder?.order || null;
-  const focusedOrderLinkMethod: SetupLinkMethod | null = explicitlySelectedOrder
+  const focusedOrder = selectedStagedSetup
+    ? null
+    : explicitlySelectedOrder || linkedOrder?.order || null;
+  const focusedOrderLinkMethod: SetupLinkMethod | null = selectedStagedSetup
+    ? null
+    : explicitlySelectedOrder
     ? "order_id"
     : linkedOrder?.method || null;
   const watchingOrders = activeOrders.filter((order) => pendingOrderDisplayStage(order) === "watching");
   const priceHistory = focusedOrder ? scanPriceHistory(scans, focusedOrder.symbol) : [];
-  const pipeline = buildPipeline(focusedOrder);
+  const pipeline = selectedStagedSetup
+    ? buildStagedPipeline(selectedStagedSetup)
+    : buildPipeline(focusedOrder);
   const focusedNestedPoi = focusedOrder
     ? pendingOrderNestedPoiPresentation(focusedOrder)
     : null;
@@ -888,7 +1039,18 @@ function OperationsDashboard() {
   const focusedGeometry = focusedOrder ? zoneGeometry(focusedOrder) : null;
   const focusedStopPolicy = focusedOrder ? stopPolicyPresentation(focusedOrder) : null;
   const selectedLifecycleIdentity: SetupIdentity | null = useMemo(
-    () => focusedOrder
+    () => selectedStagedSetup
+      ? {
+          orderId: recordIdentifier(selectedStagedSetup.pending_order_id),
+          stagedSetupId: selectedStagedSetup.id,
+          candidateId: recordIdentifier(selectedStagedSetup.candidate_id),
+          impulseEntryLifecycleId: recordIdentifier(
+            selectedStagedSetup.impulse_entry_lifecycle_id,
+          ),
+          symbol: selectedStagedSetup.symbol,
+          direction: selectedStagedSetup.direction,
+        }
+      : focusedOrder
       ? {
           orderId: focusedOrder.order_id,
           stagedSetupId: recordIdentifier(focusedOrder.staged_setup_id),
@@ -900,7 +1062,7 @@ function OperationsDashboard() {
           direction: focusedOrder.direction,
         }
       : selectedScanIdentity,
-    [focusedOrder, selectedScanIdentity],
+    [focusedOrder, selectedScanIdentity, selectedStagedSetup],
   );
   const hasSetupLedgerIdentity = Boolean(
     selectedLifecycleIdentity?.stagedSetupId ||
@@ -908,6 +1070,12 @@ function OperationsDashboard() {
   );
   const hasImpulseLedgerIdentity = Boolean(
     selectedLifecycleIdentity?.impulseEntryLifecycleId,
+  );
+  const hasAnyLifecycleIdentity = Boolean(
+    selectedLifecycleIdentity?.orderId ||
+      selectedLifecycleIdentity?.stagedSetupId ||
+      selectedLifecycleIdentity?.candidateId ||
+      selectedLifecycleIdentity?.impulseEntryLifecycleId,
   );
   const lifecycleEventsQuery = useQuery({
     queryKey: [
@@ -993,7 +1161,7 @@ function OperationsDashboard() {
       tone: string;
     }> = [];
     const latestScan = scans[0];
-    if (latestScan?.scanned_at) {
+    if (!hasAnyLifecycleIdentity && latestScan?.scanned_at) {
       rows.push({
         id: `scan:${latestScan.scanned_at}`,
         time: latestScan.scanned_at,
@@ -1004,6 +1172,12 @@ function OperationsDashboard() {
     }
     const ordersById = new Map<string, PendingOrder>();
     for (const order of [...(pendingSnapshot.history || []), ...activeOrders]) {
+      if (
+        hasAnyLifecycleIdentity && selectedLifecycleIdentity &&
+        !orderMatchesIdentity(order, selectedLifecycleIdentity)
+      ) {
+        continue;
+      }
       ordersById.set(order.order_id, order);
     }
     for (const order of ordersById.values()) {
@@ -1042,10 +1216,11 @@ function OperationsDashboard() {
     ).slice(0, 8);
   }, [
     activeOrders,
+    hasAnyLifecycleIdentity,
     pendingSnapshot.history,
     scans,
     selectedLifecycleEvents,
-    selectedLifecycleIdentity?.symbol,
+    selectedLifecycleIdentity,
     selectedImpulseLifecycleTransitions,
   ]);
 
@@ -1142,7 +1317,10 @@ function OperationsDashboard() {
   });
   const dismissStagedMutation = useMutation({
     mutationFn: (setupId: string) => scannerApi.dismissStaged(setupId),
-    onSuccess: () => {
+    onSuccess: (_result, setupId) => {
+      if (selectedStagedSetupId === setupId) {
+        setSelectedStagedSetupId(null);
+      }
       queryClient.invalidateQueries({ queryKey: ["staged-setups-active"] });
       queryClient.invalidateQueries({ queryKey: ["setup-lifecycle-events"] });
       queryClient.invalidateQueries({ queryKey: ["impulse-entry-lifecycle-transitions"] });
@@ -1309,10 +1487,10 @@ function OperationsDashboard() {
                       </TooltipTrigger>
                       <TooltipContent>{scanPolling ? "Scan running" : "Run scan now"}</TooltipContent>
                     </Tooltip>
-                    <button onClick={() => { setScanIndex((value) => Math.min(scans.length - 1, value + 1)); setSelectedPair(null); setSelectedOrderId(null); }} disabled={safeScanIndex >= scans.length - 1}>
+                    <button onClick={() => { setScanIndex((value) => Math.min(scans.length - 1, value + 1)); setSelectedPair(null); setSelectedOrderId(null); setSelectedStagedSetupId(null); }} disabled={safeScanIndex >= scans.length - 1}>
                       <ChevronLeft /> older
                     </button>
-                    <button onClick={() => { setScanIndex((value) => Math.max(0, value - 1)); setSelectedPair(null); setSelectedOrderId(null); }} disabled={safeScanIndex === 0}>
+                    <button onClick={() => { setScanIndex((value) => Math.max(0, value - 1)); setSelectedPair(null); setSelectedOrderId(null); setSelectedStagedSetupId(null); }} disabled={safeScanIndex === 0}>
                       newer <ChevronRight />
                     </button>
                   </div>
@@ -1392,8 +1570,9 @@ function OperationsDashboard() {
                     return (
                       <button
                         key={`${symbol}-${detail.status}`}
-                        className={`apex-scan-row ${selectedPair === symbol ? "selected" : ""}`}
+                        className={`apex-scan-row ${!selectedStagedSetup && selectedPair === symbol ? "selected" : ""}`}
                         onClick={() => {
+                          setSelectedStagedSetupId(null);
                           setSelectedPair(symbol);
                           setSelectedOrderId(
                             linkedOrderForScan(activeOrders, detail)?.order.order_id || null,
@@ -1428,7 +1607,14 @@ function OperationsDashboard() {
                   })}
                 </div>
 
-                {selectedScanDetail && (
+                {selectedStagedSetup ? (
+                  <div className="apex-scan-footnote">
+                    <span>Selected staged candidate</span>
+                    <strong>{selectedStagedSetup.symbol}</strong>
+                    <span>{selectedStagedSetup.direction}</span>
+                    <span>{getStagedLifecyclePhaseLabel(selectedStagedSetup.lifecycle_phase || selectedStagedSetup.lifecycle_evidence?.phase)}</span>
+                  </div>
+                ) : selectedScanDetail && (
                   <div className="apex-scan-footnote">
                     <span>Selected</span>
                     <strong>{pairName(selectedScanDetail)}</strong>
@@ -1455,6 +1641,7 @@ function OperationsDashboard() {
                         className={focusedOrder?.order_id === order.order_id ? "active" : ""}
                         aria-label={`Select ${order.symbol} active setup`}
                         onClick={() => {
+                          setSelectedStagedSetupId(null);
                           setScanFilter("all");
                           setSelectedOrderId(order.order_id);
                           setSelectedPair(order.symbol);
@@ -1532,10 +1719,14 @@ function OperationsDashboard() {
                 ) : (
                   <div className="apex-focus-empty">
                     <Target />
-                    <strong>{selectedScanDetail
+                    <strong>{selectedStagedSetup
+                      ? `${selectedStagedSetup.symbol} is staged before pending-order creation`
+                      : selectedScanDetail
                       ? `No active setup linked to ${pairName(selectedScanDetail)}`
                       : "No active zone setup"}</strong>
-                    <span>{activeOrders.length > 0
+                    <span>{selectedStagedSetup
+                      ? "Use Detail Breakdown for the frozen candidate snapshot or Lifecycle for its persisted transition history."
+                      : activeOrders.length > 0
                       ? "Choose an active setup above, or select the scan that created it."
                       : "Qualified setups will appear after the scanner freezes executable geometry."}</span>
                   </div>
@@ -1551,7 +1742,7 @@ function OperationsDashboard() {
                   <thead><tr><th>Instrument</th><th>Direction</th><th>Zone</th><th>Distance</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{watchingOrders.slice(0, 6).map((order) => (
                     <tr key={order.order_id}>
-                      <td><button className="apex-row-select" onClick={() => { setScanFilter("all"); setSelectedOrderId(order.order_id); setSelectedPair(order.symbol); }}>{order.symbol}</button></td>
+                      <td><button className="apex-row-select" onClick={() => { setSelectedStagedSetupId(null); setScanFilter("all"); setSelectedOrderId(order.order_id); setSelectedPair(order.symbol); }}>{order.symbol}</button></td>
                       <td><span className={order.direction}>{order.direction}</span></td>
                       <td>{zoneType(order)}</td>
                       <td className="distance">{formatDistance(
@@ -1573,17 +1764,39 @@ function OperationsDashboard() {
                     <span>Before pending order</span>
                   </div>
                   <div className="apex-staged-list">
-                    {stagedSetups.slice(0, 5).map((setup) => (
-                      <div key={setup.id}>
-                        <strong>{setup.symbol}</strong>
-                        <span className={setup.direction}>{setup.direction}</span>
-                        <span title={setup.lifecycle_phase?.replace(/_/g, " ") || setup.status.replace(/_/g, " ")}>{setup.lifecycle_phase?.replace(/_/g, " ") || setup.status.replace(/_/g, " ")}</span>
-                        <span>{Number.isFinite(Number(setup.current_score)) ? `${Number(setup.current_score).toFixed(1)}%` : "—"}</span>
-                        <button aria-label={`Dismiss ${setup.symbol} candidate`} disabled={dismissStagedMutation.isPending} onClick={() => {
-                          if (window.confirm(`Dismiss ${setup.symbol} staged candidate?`)) dismissStagedMutation.mutate(setup.id);
-                        }}><X /></button>
-                      </div>
-                    ))}
+                    {stagedSetups.slice(0, 5).map((setup) => {
+                      const score = setup.current_score == null
+                        ? null
+                        : Number(setup.current_score);
+                      return (
+                        <div
+                          key={setup.id}
+                          className={selectedStagedSetup?.id === setup.id ? "selected" : ""}
+                        >
+                          <button
+                            className="apex-staged-select"
+                            type="button"
+                            aria-label={`View ${setup.symbol} staged candidate`}
+                            aria-pressed={selectedStagedSetup?.id === setup.id}
+                            onClick={() => {
+                              setSelectedStagedSetupId(setup.id);
+                              setSelectedOrderId(null);
+                              setContextPanel("detail");
+                            }}
+                          >
+                            <strong>{setup.symbol}</strong>
+                            <span className={setup.direction}>{setup.direction}</span>
+                            <span className="phase" title={getStagedLifecyclePhaseLabel(setup.lifecycle_phase || setup.lifecycle_evidence?.phase)}>
+                              {getStagedLifecyclePhaseLabel(setup.lifecycle_phase || setup.lifecycle_evidence?.phase)}
+                            </span>
+                            <span>{score != null && Number.isFinite(score) ? `${score.toFixed(1)}%` : "—"}</span>
+                          </button>
+                          <button className="apex-staged-dismiss" aria-label={`Dismiss ${setup.symbol} candidate`} disabled={dismissStagedMutation.isPending} onClick={() => {
+                            if (window.confirm(`Dismiss ${setup.symbol} staged candidate?`)) dismissStagedMutation.mutate(setup.id);
+                          }}><X /></button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </>}
               </section>
@@ -1625,14 +1838,30 @@ function OperationsDashboard() {
                   >
                     <div className="apex-subsection-head">
                       <div>
-                        <p className="apex-kicker">Selected scan</p>
-                        <h2>Detail Breakdown</h2>
+                        <p className="apex-kicker">{selectedStagedSetup ? "Persisted staged setup" : "Selected scan"}</p>
+                        <h2>{selectedStagedSetup ? "Staged Candidate" : "Detail Breakdown"}</h2>
                       </div>
-                      <span>{selectedScanDetail
+                      <span>{selectedStagedSetup
+                        ? `${selectedStagedSetup.symbol} · ${getStagedLifecyclePhaseLabel(selectedStagedSetup.lifecycle_phase || selectedStagedSetup.lifecycle_evidence?.phase)}`
+                        : selectedScanDetail
                         ? `${pairName(selectedScanDetail)} · scan ${formatClock(currentScan?.scanned_at)}`
                         : "No row"}</span>
                     </div>
-                    {selectedScanDetail ? (
+                    {selectedStagedSetup ? (
+                      <div className="apex-staged-detail">
+                        <StagedSetupCard
+                          key={selectedStagedSetup.id}
+                          setup={selectedStagedSetup}
+                          defaultExpanded
+                          onDismiss={(setupId) => {
+                            if (window.confirm(`Dismiss ${selectedStagedSetup.symbol} staged candidate?`)) {
+                              dismissStagedMutation.mutate(setupId);
+                            }
+                          }}
+                          isDismissing={dismissStagedMutation.isPending}
+                        />
+                      </div>
+                    ) : selectedScanDetail ? (
                       <ScanDetailBreakdown signal={selectedScanDetail} observedAt={currentScan?.scanned_at} />
                     ) : (
                       <p className="apex-detail-empty">Select a scan row to inspect its setup model.</p>
@@ -1641,14 +1870,29 @@ function OperationsDashboard() {
                 ) : (
                   <div id="lifecycle-panel" className="apex-lifecycle-context" role="tabpanel" aria-labelledby="lifecycle-tab">
                     <section className="apex-commentary">
-                      <p className="apex-kicker">Desk brief{selectedScanDetail ? ` · ${pairName(selectedScanDetail)}` : ""}</p>
+                      <p className="apex-kicker">Desk brief{selectedStagedSetup
+                        ? ` · ${selectedStagedSetup.symbol}`
+                        : selectedScanDetail
+                        ? ` · ${pairName(selectedScanDetail)}`
+                        : ""}</p>
                       <h2 id="now-title">What’s happening now</h2>
-                      <p>{focusedOrder
+                      <p>{selectedStagedSetup
+                        ? stagedCommentary(selectedStagedSetup)
+                        : focusedOrder
                         ? commentary(focusedOrder)
                         : selectedScanDetail
                         ? `No active order is linked to the selected ${pairName(selectedScanDetail)} scan. Its exact lifecycle is added to Recent Activity when available; another instrument's lifecycle is never substituted into this pipeline.`
                         : commentary(null)}</p>
-                      {focusedOrder && (
+                      {selectedStagedSetup ? (
+                        <>
+                          <p className="apex-lifecycle-provenance">
+                            Staged {formatClock(selectedStagedSetup.staged_at)} · Evaluated {formatClock(selectedStagedSetup.last_eval_at || selectedStagedSetup.updated_at)} · Persisted candidate snapshot
+                          </p>
+                          <button className="apex-text-action" onClick={() => navigate(`/chart?symbol=${encodeURIComponent(selectedStagedSetup.symbol)}`)}>
+                            Open {selectedStagedSetup.symbol} chart <ChevronRight />
+                          </button>
+                        </>
+                      ) : focusedOrder && (
                         <>
                           <p className="apex-lifecycle-provenance">
                             Frozen {formatClock(focusedOrder.placed_at)} · Updated {formatClock(focusedOrder.updated_at)}
@@ -1666,13 +1910,21 @@ function OperationsDashboard() {
                       <div className="apex-subsection-head">
                         <div>
                           <h3 id="pipeline-title">Decision Pipeline</h3>
-                          {focusedOrder && (
+                          {selectedStagedSetup ? (
+                            <p className="apex-pipeline-frozen">
+                              Persisted staged lifecycle · no latest-scan substitution
+                            </p>
+                          ) : focusedOrder && (
                             <p className="apex-pipeline-frozen">
                               {focusedConfirmationContext}
                             </p>
                           )}
                         </div>
-                        <span>{focusedOrder?.candidate_id ? `#${focusedOrder.candidate_id.slice(0, 8)}` : "No candidate"}</span>
+                        <span>{selectedStagedSetup?.candidate_id
+                          ? `#${selectedStagedSetup.candidate_id.slice(0, 8)}`
+                          : focusedOrder?.candidate_id
+                          ? `#${focusedOrder.candidate_id.slice(0, 8)}`
+                          : "No candidate"}</span>
                       </div>
                       <ol>
                         {pipeline.map((step, index) => (

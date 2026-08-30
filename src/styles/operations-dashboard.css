@@ -437,7 +437,7 @@
 
 .apex-cancel-setup,
 .apex-row-cancel,
-.apex-staged-list button {
+.apex-staged-dismiss {
   display: inline-grid;
   width: 25px;
   height: 25px;
@@ -447,7 +447,7 @@
 
 .apex-cancel-setup svg,
 .apex-row-cancel svg,
-.apex-staged-list button svg { width: 13px; height: 13px; }
+.apex-staged-dismiss svg { width: 13px; height: 13px; }
 
 .apex-focus-heading {
   display: flex;
@@ -690,9 +690,9 @@
 .apex-staged-list > div {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(80px, 1fr) 0.7fr minmax(100px, 1.5fr) 0.65fr 28px;
+  grid-template-columns: minmax(0, 1fr) 28px;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-height: 34px;
   padding: 0 3px;
   border-bottom: 1px solid var(--rule);
@@ -701,8 +701,29 @@
   font-size: 8px;
 }
 
-.apex-staged-list strong { color: var(--ink); }
-.apex-staged-list > div > span:nth-of-type(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apex-staged-list > div.selected {
+  box-shadow: inset 2px 0 0 var(--cyan);
+  background: hsl(var(--primary) / 0.07);
+}
+
+.apex-staged-select {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  grid-template-columns: minmax(80px, 1fr) 0.7fr minmax(100px, 1.5fr) 0.65fr;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  text-align: left;
+}
+
+.apex-staged-select:hover { color: var(--ink); }
+.apex-staged-select strong { color: var(--ink); }
+.apex-staged-select .phase { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.apex-staged-detail {
+  margin-top: 12px;
+}
 
 .apex-table-empty,
 .apex-empty {
@@ -1256,7 +1277,11 @@
   }
 
   .apex-staged-list > div {
-    grid-template-columns: minmax(72px, 1fr) 0.7fr minmax(86px, 1.2fr) 0.6fr 28px;
+    gap: 4px;
+  }
+
+  .apex-staged-select {
+    grid-template-columns: minmax(72px, 1fr) 0.7fr minmax(86px, 1.2fr) 0.6fr;
     gap: 4px;
   }
 }
