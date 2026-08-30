@@ -1,3 +1,5 @@
+import type { StagedSetup } from "@/lib/api";
+
 export type FeatureState =
   | "active"
   | "shadow"
@@ -69,4 +71,48 @@ export function getWatchlistDisplay(executionEligible: boolean | null | undefine
     label: null,
     description: null,
   };
+}
+
+const STAGED_LIFECYCLE_PHASE_LABELS: Record<string, string> = {
+  monitoring_pre_zone: "MONITORING",
+  zone_discovered: "ZONE DISCOVERED",
+  approaching_zone: "APPROACHING",
+  at_zone: "AT ZONE",
+  local_trigger_active: "LOCAL TRIGGER ACTIVE",
+  local_trigger_swept: "LOCAL TRIGGER SWEPT",
+  sweep_rejected: "SWEEP REJECTED",
+  confirmation_ready: "CONFIRMATION READY",
+  entry_authorized: "ENTRY AUTHORIZED",
+  position_managing: "POSITION MANAGING",
+};
+
+export function getStagedLifecyclePhaseLabel(
+  phase: string | null | undefined,
+): string {
+  if (!phase) return "PHASE UNAVAILABLE";
+  return STAGED_LIFECYCLE_PHASE_LABELS[phase] ||
+    phase.replace(/_/g, " ").toUpperCase();
+}
+
+export function getStagedLifecycleStatusText(
+  setup: Pick<
+    StagedSetup,
+    "lifecycle_phase" | "lifecycle_evidence" | "lifecycle_reason"
+  >,
+): string {
+  const phase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase;
+  const labels: Record<string, string> = {
+    monitoring_pre_zone: "Searching for a complete executable zone.",
+    zone_discovered: "Frozen zone is valid; price is still outside the approach area.",
+    approaching_zone: "Price is approaching the frozen zone; deeper monitoring is active.",
+    at_zone: "Price is inside the frozen zone; waiting for liquidity and confirmation.",
+    local_trigger_active: "A local BSL/SSL trigger is active inside the frozen setup.",
+    local_trigger_swept: "Liquidity has been swept; waiting for rejection and confirmation.",
+    sweep_rejected: "The liquidity sweep rejected; confirmation is developing.",
+    confirmation_ready: "Entry confirmation is ready for final authorization.",
+    entry_authorized: "Entry was authorized and handed to order execution.",
+    position_managing: "The resulting position is under trade management.",
+  };
+  return labels[phase || ""] || setup.lifecycle_reason ||
+    "Lifecycle status is awaiting its next monitor update.";
 }

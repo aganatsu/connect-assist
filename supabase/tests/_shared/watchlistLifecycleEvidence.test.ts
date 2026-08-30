@@ -17,6 +17,9 @@ const scanner = Deno.readTextFileSync(
 const panel = Deno.readTextFileSync(
   new URL("src/components/WatchlistPanel.tsx", root),
 );
+const featureState = Deno.readTextFileSync(
+  new URL("src/lib/featureState.ts", root),
+);
 const migration = Deno.readTextFileSync(
   new URL(
     "supabase/migrations/20260802143000_add_watchlist_lifecycle_evidence.sql",
@@ -126,6 +129,7 @@ Deno.test("scanner assigns canonical codes to terminal and retained Watchlist de
 });
 
 Deno.test("database audit and UI preserve and explain the same lifecycle evidence", () => {
+  const lifecycleUi = `${panel}\n${featureState}`;
   assertStringIncludes(migration, "lifecycle_reason_code");
   assertStringIncludes(migration, "lifecycle_evidence");
   assertStringIncludes(migration, "reason_code");
@@ -133,14 +137,14 @@ Deno.test("database audit and UI preserve and explain the same lifecycle evidenc
     migration,
     "'lifecycleEvidence', NEW.lifecycle_evidence",
   );
-  assertStringIncludes(panel, "STRUCTURE BROKEN");
-  assertStringIncludes(panel, "Frozen zone:");
-  assertStringIncludes(panel, "Boundary buffer:");
-  assertStringIncludes(panel, "Observed price:");
-  assertStringIncludes(panel, "WAITING FOR LOCAL SWEEP");
-  assertStringIncludes(panel, "LOCAL TRIGGER ACTIVE");
-  assertStringIncludes(panel, "SWEEP REJECTED");
-  assertStringIncludes(panel, "Observed chain:");
+  assertStringIncludes(lifecycleUi, "STRUCTURE BROKEN");
+  assertStringIncludes(lifecycleUi, "Frozen zone:");
+  assertStringIncludes(lifecycleUi, "Boundary buffer:");
+  assertStringIncludes(lifecycleUi, "Observed price:");
+  assertStringIncludes(lifecycleUi, "WAITING FOR LOCAL SWEEP");
+  assertStringIncludes(lifecycleUi, "LOCAL TRIGGER ACTIVE");
+  assertStringIncludes(lifecycleUi, "SWEEP REJECTED");
+  assertStringIncludes(lifecycleUi, "Observed chain:");
   assertStringIncludes(phaseMigration, "lifecycle_phase");
   assertStringIncludes(
     phaseMigration,

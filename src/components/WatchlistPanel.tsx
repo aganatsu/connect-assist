@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { scannerApi, type StagedSetup } from "@/lib/api";
-import { getWatchlistDisplay } from "@/lib/featureState";
+import {
+  getStagedLifecyclePhaseLabel,
+  getStagedLifecycleStatusText,
+  getWatchlistDisplay,
+} from "@/lib/featureState";
+import { formatPrice, formatPct } from "@/lib/formatTime";
 import { toast } from "sonner";
 import {
   Eye, EyeOff, TrendingUp, TrendingDown, X, Clock,
@@ -64,57 +69,35 @@ const LIFECYCLE_REASON_LABELS: Record<string, string> = {
   legacy_transition: "LEGACY RECORD",
 };
 
-const LIFECYCLE_PHASE_LABELS: Record<string, string> = {
-  monitoring_pre_zone: "MONITORING",
-  zone_discovered: "ZONE DISCOVERED",
-  approaching_zone: "APPROACHING",
-  at_zone: "AT ZONE",
-  local_trigger_active: "LOCAL TRIGGER ACTIVE",
-  local_trigger_swept: "LOCAL TRIGGER SWEPT",
-  sweep_rejected: "SWEEP REJECTED",
-  confirmation_ready: "CONFIRMATION READY",
-  entry_authorized: "ENTRY AUTHORIZED",
-  position_managing: "POSITION MANAGING",
-};
-
 function lifecycleReasonLabel(code: string | null | undefined): string {
   if (!code) return "UNCLASSIFIED";
   return LIFECYCLE_REASON_LABELS[code] ||
     code.replace(/_/g, " ").toUpperCase();
 }
 
-function lifecyclePhaseLabel(phase: string | null | undefined): string {
-  if (!phase) return "PHASE UNAVAILABLE";
-  return LIFECYCLE_PHASE_LABELS[phase] ||
-    phase.replace(/_/g, " ").toUpperCase();
-}
-
-function lifecycleStatusText(setup: StagedSetup): string {
-  const phase = setup.lifecycle_phase || setup.lifecycle_evidence?.phase;
-  const labels: Record<string, string> = {
-    monitoring_pre_zone: "Searching for a complete executable zone.",
-    zone_discovered: "Frozen zone is valid; price is still outside the approach area.",
-    approaching_zone: "Price is approaching the frozen zone; deeper monitoring is active.",
-    at_zone: "Price is inside the frozen zone; waiting for liquidity and confirmation.",
-    local_trigger_active: "A local BSL/SSL trigger is active inside the frozen setup.",
-    local_trigger_swept: "Liquidity has been swept; waiting for rejection and confirmation.",
-    sweep_rejected: "The liquidity sweep rejected; confirmation is developing.",
-    confirmation_ready: "Entry confirmation is ready for final authorization.",
-    entry_authorized: "Entry was authorized and handed to order execution.",
-    position_managing: "The resulting position is under trade management.",
-  };
-  return labels[phase || ""] || setup.lifecycle_reason || "Lifecycle status is awaiting its next monitor update.";
-}
-
-function formatEvidencePrice(value: unknown): string {
+function formatEvidencePrice(value: unknown, symbol: string): string {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return "—";
-  return Math.abs(parsed) >= 100 ? parsed.toFixed(3) : parsed.toFixed(5);
+  return formatPrice(parsed, symbol);
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function LifecycleEvidenceSummary({
+  symbol,
   evidence,
 }: {
+  symbol: string;
   evidence: StagedSetup["lifecycle_evidence"];
 }) {
   if (!evidence) return null;
@@ -133,25 +116,25 @@ function LifecycleEvidenceSummary({
       {milestones.length > 0 && (
         <span className="sm:col-span-2">
           Observed chain:{" "}
-          {milestones.map(lifecyclePhaseLabel).join(" → ")}
+          {milestones.map(getStagedLifecyclePhaseLabel).join(" → ")}
         </span>
       )}
       {evidence.observedPrice != null && (
-        <span>Observed price: <strong className="font-mono text-foreground/80">{formatEvidencePrice(evidence.observedPrice)}</strong></span>
+        <span>Observed price: <strong className="font-mono text-foreground/80">{formatEvidencePrice(evidence.observedPrice, symbol)}</strong></span>
       )}
       {boundary?.level != null && (
-        <span>Boundary: <strong className="font-mono text-destructive">{formatEvidencePrice(boundary.level)}</strong></span>
+        <span>Boundary: <strong className="font-mono text-destructive">{formatEvidencePrice(boundary.level, symbol)}</strong></span>
       )}
       {zone?.low != null && zone?.high != null && (
         <span>
           Frozen zone:{" "}
           <strong className="font-mono text-foreground/80">
-            {formatEvidencePrice(zone.low)}–{formatEvidencePrice(zone.high)}
+            {formatEvidencePrice(zone.low, symbol)}–{formatEvidencePrice(zone.high, symbol)}
           </strong>
         </span>
       )}
       {boundary?.bufferPrice != null && (
-        <span>Boundary buffer: <strong className="font-mono text-foreground/80">{formatEvidencePrice(boundary.bufferPrice)}</strong></span>
+        <span>Boundary buffer: <strong className="font-mono text-foreground/80">{formatEvidencePrice(boundary.bufferPrice, symbol)}</strong></span>
       )}
       {evidence.frozenDirection && (
         <span>
@@ -166,9 +149,9 @@ function LifecycleEvidenceSummary({
       )}
       {evidence.score != null && (
         <span>
-          Fresh score: <strong>{Number(evidence.score).toFixed(1)}%</strong>
+          Fresh score: <strong>{formatPct(finiteNumber(evidence.score))}</strong>
           {evidence.threshold != null &&
-            ` · threshold ${Number(evidence.threshold).toFixed(1)}%`}
+            ` · threshold ${formatPct(finiteNumber(evidence.threshold))}`}
         </span>
       )}
       {sweepReason && (
@@ -179,8 +162,10 @@ function LifecycleEvidenceSummary({
 }
 
 function ImpulseEntryLifecycleSummary({
+  symbol,
   lifecycle,
 }: {
+  symbol: string;
   lifecycle: StagedSetup["impulse_entry_lifecycle"];
 }) {
   if (!lifecycle || lifecycle.mode === "off") return null;
@@ -197,12 +182,12 @@ function ImpulseEntryLifecycleSummary({
           IMPULSE PATH · {lifecycle.mode.toUpperCase()}
         </Badge>
         <span>{lifecycle.impulse.timeframe} impulse</span>
-        <span>Protected level <strong className="font-mono">{formatEvidencePrice(lifecycle.impulse.protectedLevel)}</strong></span>
+        <span>Protected level <strong className="font-mono">{formatEvidencePrice(lifecycle.impulse.protectedLevel, symbol)}</strong></span>
       </div>
       {active ? (
         <div className="mt-0.5">
           Active {active.timeframe} {active.type.replace(/_/g, " + ").toUpperCase()} zone{" "}
-          <strong className="font-mono">{formatEvidencePrice(active.low)}–{formatEvidencePrice(active.high)}</strong>
+          <strong className="font-mono">{formatEvidencePrice(active.low, symbol)}–{formatEvidencePrice(active.high, symbol)}</strong>
           {deeper > 0 && ` · ${deeper} deeper prequalified zone${deeper === 1 ? "" : "s"} queued`}
         </div>
       ) : (
@@ -226,12 +211,18 @@ function FactorPill({ name, tier, present }: { name: string; tier?: string; pres
 }
 
 // ── Single staged setup card ──
-function StagedSetupCard({ setup, onDismiss, isDismissing }: {
+export function StagedSetupCard({
+  setup,
+  onDismiss,
+  isDismissing = false,
+  defaultExpanded = false,
+}: {
   setup: StagedSetup;
-  onDismiss: (id: string) => void;
-  isDismissing: boolean;
+  onDismiss?: (id: string) => void;
+  isDismissing?: boolean;
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const ttl = ttlRemaining(setup.staged_at, setup.ttl_minutes);
   const watchlistDisplay = getWatchlistDisplay(setup.execution_eligible);
   const monitoringOnly = watchlistDisplay.state === "monitoring";
@@ -239,6 +230,32 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
   const scannerState = setup.authorization_result?.canonicalScannerState ||
     setup.analysis_snapshot?.canonicalScannerState || null;
   const isNearZone = ["approaching_zone", "at_zone", "local_trigger_active", "local_trigger_swept", "sweep_rejected", "confirmation_ready"].includes(lifecyclePhase || "");
+  const origin = asRecord(setup.originating_zone);
+  const originBounds = asRecord(origin.bounds);
+  const originGeometry = asRecord(origin.geometry);
+  const evidenceZone = setup.lifecycle_evidence?.boundary?.zone;
+  const frozenZoneLow = finiteNumber(originBounds.low) ??
+    finiteNumber(origin.low) ??
+    finiteNumber(evidenceZone?.low);
+  const frozenZoneHigh = finiteNumber(originBounds.high) ??
+    finiteNumber(origin.high) ??
+    finiteNumber(evidenceZone?.high);
+  const plannedEntry = finiteNumber(originGeometry.entry) ??
+    finiteNumber(origin.entry);
+  const stagedReference = finiteNumber(setup.entry_price);
+  const structuralInvalidation = finiteNumber(
+    originGeometry.structuralInvalidation,
+  ) ?? finiteNumber(origin.structuralInvalidation) ?? finiteNumber(setup.sl_level);
+  const plannedPositionStop = finiteNumber(originGeometry.positionStop) ??
+    finiteNumber(origin.positionStop) ?? finiteNumber(origin.stopLoss);
+  const projectedTarget = finiteNumber(originGeometry.target) ??
+    finiteNumber(origin.target) ?? finiteNumber(origin.takeProfit) ??
+    finiteNumber(setup.tp_level);
+  const stagedReferenceDiffers = stagedReference != null &&
+    plannedEntry != null && Math.abs(stagedReference - plannedEntry) > 1e-12;
+  const currentScore = finiteNumber(setup.current_score);
+  const initialScore = finiteNumber(setup.initial_score);
+  const watchThreshold = finiteNumber(setup.watch_threshold);
 
   return (
     <div className={`border rounded-md p-2 transition-all ${
@@ -293,7 +310,7 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
               variant="outline"
               className="text-[9px] h-4 px-1.5 border-violet-500/40 text-violet-300"
             >
-              {lifecyclePhaseLabel(
+              {getStagedLifecyclePhaseLabel(
                 setup.lifecycle_phase || setup.lifecycle_evidence?.phase,
               )}
             </Badge>
@@ -303,14 +320,16 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
           <span className="text-[10px] text-foreground/60">
             checked {timeAgo(setup.last_eval_at || setup.updated_at)}
           </span>
-          <button
-            onClick={() => onDismiss(setup.id)}
-            disabled={isDismissing}
-            className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-            title="Dismiss this setup"
-          >
-            {isDismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-          </button>
+          {onDismiss && (
+            <button
+              onClick={() => onDismiss(setup.id)}
+              disabled={isDismissing}
+              className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              title="Dismiss this setup"
+            >
+              {isDismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+            </button>
+          )}
         </div>
       </div>
 
@@ -318,14 +337,14 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
       {!monitoringOnly && (
         <div className="mt-1.5 rounded border border-border/40 bg-background/25 px-2 py-1.5 text-[10px] text-foreground/70">
           <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-            {setup.lifecycle_evidence?.boundary?.zone?.low != null && setup.lifecycle_evidence?.boundary?.zone?.high != null && (
-              <span>Frozen zone <strong className="font-mono text-foreground">{formatEvidencePrice(setup.lifecycle_evidence.boundary.zone.low)}–{formatEvidencePrice(setup.lifecycle_evidence.boundary.zone.high)}</strong></span>
+            {frozenZoneLow != null && frozenZoneHigh != null && (
+              <span>Frozen zone <strong className="font-mono text-foreground">{formatEvidencePrice(frozenZoneLow, setup.symbol)}–{formatEvidencePrice(frozenZoneHigh, setup.symbol)}</strong></span>
             )}
-            {setup.sl_level != null && (
-              <span>Invalidation <strong className="font-mono text-destructive">{formatEvidencePrice(setup.sl_level)}</strong></span>
+            {structuralInvalidation != null && (
+              <span>Invalidation <strong className="font-mono text-destructive">{formatEvidencePrice(structuralInvalidation, setup.symbol)}</strong></span>
             )}
             {setup.lifecycle_evidence?.observedPrice != null && (
-              <span>Current <strong className="font-mono text-foreground">{formatEvidencePrice(setup.lifecycle_evidence.observedPrice)}</strong></span>
+              <span>Last observed <strong className="font-mono text-foreground">{formatEvidencePrice(setup.lifecycle_evidence.observedPrice, setup.symbol)}</strong></span>
             )}
           </div>
         </div>
@@ -359,7 +378,7 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
       <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
         {scannerState?.explanation || (monitoringOnly
           ? setup.observation_reason || watchlistDisplay.description
-          : lifecycleStatusText(setup))}
+          : getStagedLifecycleStatusText(setup))}
       </p>
 
       {/* Expand/collapse for factors */}
@@ -373,9 +392,17 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
 
       {expanded && (
         <div className="mt-1.5 space-y-1">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 border border-border/40 bg-background/30 p-1.5 text-[10px] text-foreground/65 sm:grid-cols-3">
+            <span>Current <strong className="text-foreground/85">{formatPct(currentScore)}</strong></span>
+            <span>Initial <strong className="text-foreground/85">{formatPct(initialScore)}</strong></span>
+            <span>Watch floor <strong className="text-foreground/85">{formatPct(watchThreshold)}</strong></span>
+            <span>Status <strong className="uppercase text-foreground/85">{setup.status.replace(/_/g, " ")}</strong></span>
+            <span>Cycles <strong className="text-foreground/85">{setup.scan_cycles} / min {setup.min_cycles}</strong></span>
+            <span>Execution <strong className={setup.execution_eligible ? "text-success" : "text-info-c"}>{setup.execution_eligible ? "eligible" : "monitoring only"}</strong></span>
+          </div>
           <div className="border border-border/40 bg-background/30 p-1.5 text-[10px] font-mono text-foreground/65 space-y-0.5">
             <div>
-              Candidate {setup.candidate_id?.slice(0, 8) || "legacy"}
+              Candidate <span title={setup.candidate_id || undefined}>{setup.candidate_id?.slice(0, 8) || "legacy"}</span>
               {" · "}
               GP v{setup.game_plan_version?.slice(0, 8) || "none"}
               {" · "}
@@ -399,9 +426,13 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
               </div>
             )}
             <LifecycleEvidenceSummary
+              symbol={setup.symbol}
               evidence={setup.lifecycle_evidence}
             />
-            <ImpulseEntryLifecycleSummary lifecycle={setup.impulse_entry_lifecycle} />
+            <ImpulseEntryLifecycleSummary
+              symbol={setup.symbol}
+              lifecycle={setup.impulse_entry_lifecycle}
+            />
             {setup.observation_parent_id && (
               <div className="font-sans text-foreground/55">
                 Fresh candidate from observation{" "}
@@ -411,7 +442,7 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
           </div>
           <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Legacy scores and factors — diagnostics only; does not authorize entry</div>
           <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-            <span>Score <strong className="text-foreground/80">{setup.current_score.toFixed(1)}%</strong></span>
+            <span>Score <strong className="text-foreground/80">{formatPct(currentScore)}</strong></span>
             <span>Legacy core <strong className="text-foreground/80">{setup.tier1_count}/4</strong></span>
             <span>Supporting <strong className="text-foreground/80">{setup.tier2_count}/5</strong></span>
             <span>Context <strong className="text-foreground/80">{setup.tier3_count}</strong></span>
@@ -437,21 +468,35 @@ function StagedSetupCard({ setup, onDismiss, isDismissing }: {
             </div>
           )}
           {/* Key levels */}
-          {(setup.entry_price || setup.sl_level || setup.tp_level) && (
-            <div className="flex gap-3 text-[11px] font-mono mt-1">
-              {setup.entry_price && <span className="text-foreground/60">Entry: <span className="text-foreground">{Number(setup.entry_price).toFixed(5)}</span></span>}
-              {setup.sl_level && (
+          {(frozenZoneLow != null || frozenZoneHigh != null || plannedEntry != null || stagedReference != null || structuralInvalidation != null || plannedPositionStop != null || projectedTarget != null) && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono mt-1">
+              {frozenZoneLow != null && frozenZoneHigh != null && (
+                <span className="text-foreground/60">Frozen zone: <span className="text-foreground">{formatEvidencePrice(frozenZoneLow, setup.symbol)}–{formatEvidencePrice(frozenZoneHigh, setup.symbol)}</span></span>
+              )}
+              {plannedEntry != null && <span className="text-foreground/60">Planned entry: <span className="text-foreground">{formatEvidencePrice(plannedEntry, setup.symbol)}</span></span>}
+              {stagedReferenceDiffers && (
+                <span className="text-foreground/60" title="Price stored when this candidate was staged; it is not necessarily the executable entry.">
+                  Latest staged reference: <span className="text-foreground">{formatEvidencePrice(stagedReference, setup.symbol)}</span>
+                </span>
+              )}
+              {plannedEntry == null && stagedReference != null && (
+                <span className="text-foreground/60" title="Legacy staged price; no immutable planned-entry value is present in the stored zone contract.">
+                  Staged entry/reference: <span className="text-foreground">{formatEvidencePrice(stagedReference, setup.symbol)}</span>
+                </span>
+              )}
+              {structuralInvalidation != null && (
                 <span
                   className="text-foreground/60"
                   title="The price that invalidates this Watchlist thesis before a trade opens. It is not an active trade stop loss."
                 >
-                  Invalidation:{" "}
+                  Structural invalidation:{" "}
                   <span className="text-destructive">
-                    {Number(setup.sl_level).toFixed(5)}
+                    {formatEvidencePrice(structuralInvalidation, setup.symbol)}
                   </span>
                 </span>
               )}
-              {setup.tp_level && <span className="text-foreground/60">TP: <span className="text-success">{Number(setup.tp_level).toFixed(5)}</span></span>}
+              {plannedPositionStop != null && <span className="text-foreground/60">Planned position stop: <span className="text-destructive">{formatEvidencePrice(plannedPositionStop, setup.symbol)}</span></span>}
+              {projectedTarget != null && <span className="text-foreground/60">Projected target: <span className="text-success">{formatEvidencePrice(projectedTarget, setup.symbol)}</span></span>}
             </div>
           )}
         </div>
@@ -487,7 +532,9 @@ export function WatchlistPanel({ confluenceGate: _confluenceGate }: { confluence
       queryClient.invalidateQueries({ queryKey: ["staged-setups-all"] });
       toast.success("Setup dismissed");
     },
-    onError: (err: any) => toast.error(err.message || "Failed to dismiss"),
+    onError: (err) => toast.error(
+      err instanceof Error ? err.message : "Failed to dismiss",
+    ),
   });
 
   const active = activeSetups || [];
@@ -608,6 +655,7 @@ export function WatchlistPanel({ confluenceGate: _confluenceGate }: { confluence
                               </p>
                             </div>
                             <LifecycleEvidenceSummary
+                              symbol={s.symbol}
                               evidence={s.lifecycle_evidence}
                             />
                           </div>

@@ -642,4 +642,162 @@ describe("OperationsDashboard", () => {
     expect(screen.getByText("Frozen target already reached")).toBeInTheDocument();
     expect(screen.queryByText("No persisted events for this selected setup.")).toBeNull();
   });
+
+  it("opens the selected staged candidate from its persisted snapshot and lifecycle identity", async () => {
+    api.activeStaged.mockResolvedValue([{
+      id: "staged-usdcad",
+      user_id: "user-1",
+      bot_id: "smc",
+      symbol: "USD/CAD",
+      direction: "long",
+      initial_score: 40.1,
+      current_score: 44.3,
+      watch_threshold: 35,
+      initial_factors: [{ name: "Order Block", weight: 2, tier: "T1" }],
+      current_factors: [{ name: "Order Block", weight: 2, tier: "T1" }],
+      missing_factors: [{ name: "Confirmation", weight: 1, tier: "T2" }],
+      entry_price: 1.3542,
+      sl_level: 1.349,
+      tp_level: 1.361,
+      status: "watching",
+      candidate_id: "candidate-usdcad",
+      lifecycle_version: "phase4.v1",
+      lifecycle_reason: "Frozen zone retained; waiting for price and confirmation",
+      lifecycle_phase: "zone_discovered",
+      lifecycle_reason_code: "waiting_for_zone_confirmation",
+      lifecycle_evidence: {
+        phase: "zone_discovered",
+        milestones: ["zone_discovered"],
+        observedAt: "2026-08-29T21:58:00Z",
+        observedPrice: 1.3542,
+        frozenDirection: "long",
+        boundary: {
+          level: 1.349,
+          source: "impulse_origin",
+          bufferPrice: 0.0005,
+        },
+        score: 44.3,
+        threshold: 35,
+      },
+      impulse_entry_lifecycle_id: "impulse-life-usdcad",
+      impulse_entry_lifecycle: {
+        mode: "observe",
+        status: "active",
+        activeCandidateId: "zone-usdcad",
+        impulse: { timeframe: "1H", protectedLevel: 1.349 },
+        candidates: [{
+          id: "zone-usdcad",
+          type: "order_block",
+          low: 1.351,
+          high: 1.352,
+          timeframe: "15m",
+          state: "active",
+        }],
+        lastTransitionReason: "Initial zone activated",
+      },
+      qualified_at: null,
+      pending_order_id: null,
+      position_id: null,
+      game_plan_id: "plan-usdcad",
+      game_plan_version: "gameplan-v3",
+      direction_verdict_id: "verdict-usdcad",
+      direction_verdict: { verdict: "long" },
+      thesis_version: "thesis-v2",
+      originating_zone: {
+        type: "ob",
+        low: 1.351,
+        high: 1.352,
+        entry: 1.3515,
+        stopLoss: 1.3485,
+        takeProfit: 1.361,
+      },
+      execution_eligible: true,
+      observation_parent_id: null,
+      observation_reason: null,
+      confirmation_method: "choch",
+      confirmation_config: {
+        indicatorMinCount: 3,
+        afterChochMode: "confirmation_close",
+        afterChochExpiryMinutes: 30,
+      },
+      authorization_result: null,
+      scan_cycles: 3,
+      min_cycles: 1,
+      ttl_minutes: 240,
+      promotion_reason: null,
+      invalidation_reason: null,
+      setup_type: "order_block_retest",
+      tier1_count: 1,
+      tier2_count: 0,
+      tier3_count: 0,
+      analysis_snapshot: {},
+      staged_at: "2026-08-29T21:45:00Z",
+      last_eval_at: "2026-08-29T21:58:00Z",
+      resolved_at: null,
+      created_at: "2026-08-29T21:45:00Z",
+      updated_at: "2026-08-29T21:58:00Z",
+    }]);
+    api.lifecycleEvents.mockResolvedValue([{
+      id: "event-usdcad",
+      staged_setup_id: "staged-usdcad",
+      candidate_id: "candidate-usdcad",
+      symbol: "USD/CAD",
+      direction: "long",
+      from_status: null,
+      to_status: "watching",
+      lifecycle_phase: "zone_discovered",
+      reason: "Frozen USD/CAD zone discovered",
+      reason_code: "waiting_for_zone_confirmation",
+      evidence: {},
+      created_at: "2026-08-29T21:45:00Z",
+      bot_id: "smc",
+      user_id: "user-1",
+    }]);
+    api.impulseLifecycleTransitions.mockResolvedValue([]);
+
+    renderDashboard();
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "View USD/CAD staged candidate",
+    }));
+
+    expect(screen.getByRole("heading", { name: "Staged Candidate" })).toBeInTheDocument();
+    expect(screen.getAllByText("1.35100–1.35200").length).toBeGreaterThan(0);
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Planned entry: 1.35150"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Latest staged reference: 1.35420"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Structural invalidation: 1.34900"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Planned position stop: 1.34850"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Projected target: 1.36100"
+    )).toBeInTheDocument();
+    expect(screen.getByText(/Frozen zone retained; waiting for price and confirmation/i)).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Initial 40.1%"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, element) =>
+      element?.textContent === "Watch floor 35.0%"
+    )).toBeInTheDocument();
+    expect(screen.queryByText("ICT Setup Model")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Lifecycle" }));
+    await waitFor(() => {
+      expect(api.lifecycleEvents).toHaveBeenLastCalledWith({
+        stagedSetupId: "staged-usdcad",
+        candidateId: "candidate-usdcad",
+      });
+      expect(api.impulseLifecycleTransitions).toHaveBeenLastCalledWith(
+        "impulse-life-usdcad",
+      );
+    });
+    expect(screen.getByText("Frozen USD/CAD zone discovered")).toBeInTheDocument();
+    expect(screen.queryByText("Indicator consensus")).toBeNull();
+  });
 });
