@@ -72,3 +72,30 @@ Deno.test("the existing lifecycle monitor reconciles linked terminal setup rows"
   assertStringIncludes(migration, "'cancelled'");
   assertStringIncludes(migration, "'setup_resolved'");
 });
+
+Deno.test("terminal lifecycle migration preserves every earlier transition event", async () => {
+  const [terminalMigration, repairMigration, lifecycleSource] = await Promise.all([
+    read(
+      "supabase/migrations/20260830190000_sync_terminal_impulse_lifecycles.sql",
+    ),
+    read(
+      "supabase/migrations/20260830200000_preserve_impulse_lifecycle_event_contract.sql",
+    ),
+    read("supabase/functions/_shared/impulseEntryLifecycle.ts"),
+  ]);
+  const eventUnion = lifecycleSource.slice(
+    lifecycleSource.indexOf("export type ImpulseEntryLifecycleEvent ="),
+    lifecycleSource.indexOf("export function transitionImpulseEntryLifecycle"),
+  );
+  const supportedEvents = [
+    "created",
+    ...new Set(
+      [...eventUnion.matchAll(/type: "([^"]+)"/g)].map((match) => match[1]),
+    ),
+  ];
+
+  for (const eventType of supportedEvents) {
+    assertStringIncludes(terminalMigration, `'${eventType}'`);
+    assertStringIncludes(repairMigration, `'${eventType}'`);
+  }
+});

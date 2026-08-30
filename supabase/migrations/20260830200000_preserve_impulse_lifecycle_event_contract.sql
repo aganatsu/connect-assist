@@ -1,15 +1,11 @@
--- Keep the shared impulse lifecycle truthful when its linked staged setup,
--- pending order, or position reaches a terminal state outside candle replay.
-
-ALTER TABLE public.impulse_entry_lifecycles
-  DROP CONSTRAINT IF EXISTS impulse_entry_lifecycles_status_check;
-ALTER TABLE public.impulse_entry_lifecycles
-  ADD CONSTRAINT impulse_entry_lifecycles_status_check CHECK (
-    status IN ('active', 'entered', 'invalidated', 'expired', 'exhausted', 'cancelled')
-  );
+-- Repair databases that applied the terminal lifecycle migration before its
+-- event contract was corrected. The lifecycle state machine still emits the
+-- nested-trigger and pre-lock revision events introduced by earlier migrations;
+-- terminal synchronization adds setup_resolved without replacing those events.
 
 ALTER TABLE public.impulse_entry_lifecycle_transitions
   DROP CONSTRAINT IF EXISTS impulse_entry_lifecycle_transitions_event_type_check;
+
 ALTER TABLE public.impulse_entry_lifecycle_transitions
   ADD CONSTRAINT impulse_entry_lifecycle_transitions_event_type_check CHECK (
     event_type IN (
