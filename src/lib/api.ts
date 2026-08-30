@@ -1110,16 +1110,7 @@ export const scannerApi = {
     return data || [];
   },
   dismissStaged: async (setupId: string) => {
-    const { error } = await (supabase as any)
-      .from("staged_setups")
-      .update({
-        status: "invalidated",
-        invalidation_reason: "Manually dismissed by user",
-        resolved_at: new Date().toISOString(),
-      })
-      .eq("id", setupId);
-    if (error) throw new Error(error.message);
-    return { success: true };
+    return invokeFunction("bot-scanner", { action: "dismiss_staged", setupId });
   },
   // Pending / Limit Orders — routed through bot-scanner edge function (uses adminClient, bypasses RLS)
   activePending: async (): Promise<PendingOrder[]> => {
@@ -1194,7 +1185,7 @@ export interface StagedSetup {
   impulse_entry_lifecycle_id?: string | null;
   impulse_entry_lifecycle?: {
     mode: "off" | "observe" | "enforce";
-    status: "active" | "entered" | "invalidated" | "expired" | "exhausted";
+    status: "active" | "entered" | "invalidated" | "expired" | "exhausted" | "cancelled";
     activeCandidateId: string | null;
     impulse: { timeframe: string; protectedLevel: number };
     candidates: Array<{ id: string; type: string; low: number; high: number; timeframe: string; state: string }>;

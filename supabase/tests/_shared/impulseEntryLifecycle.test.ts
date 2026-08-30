@@ -132,18 +132,26 @@ Deno.test("nested POI market entry becomes ready on the frozen trigger touch", (
     lifecycle,
     candle: {
       datetime: "2026-08-05T20:05:00.000Z",
-      open: 1.14, high: 1.14, low: 1.139, close: 1.1395,
+      open: 1.14,
+      high: 1.14,
+      low: 1.139,
+      close: 1.1395,
     },
     completedCandles: [],
   });
   if (before.disposition !== "watch") {
-    throw new Error("outer-zone presence must not authorize before trigger touch");
+    throw new Error(
+      "outer-zone presence must not authorize before trigger touch",
+    );
   }
   const touched = advanceTradeLifecycle({
     lifecycle: before.after,
     candle: {
       datetime: "2026-08-05T20:10:00.000Z",
-      open: 1.1395, high: 1.1398, low: 1.1380, close: 1.1388,
+      open: 1.1395,
+      high: 1.1398,
+      low: 1.1380,
+      close: 1.1388,
     },
     completedCandles: [],
   });
@@ -199,5 +207,27 @@ Deno.test("confirmation must lock before it can authorize entry", () => {
   });
   if (entered.status !== "entered") {
     throw new Error("locked confirmation should enter");
+  }
+});
+
+Deno.test("external setup resolution makes the shared lifecycle terminal", () => {
+  for (
+    const status of ["entered", "invalidated", "expired", "cancelled"] as const
+  ) {
+    const initial = buildImpulseEntryLifecycle(input);
+    const resolved = transitionImpulseEntryLifecycle(initial, {
+      type: "setup_resolved",
+      at: "2026-08-05T20:15:00.000Z",
+      status,
+      reason: `Linked setup resolved as ${status}`,
+    });
+    if (resolved.status !== status || resolved.activeCandidateId !== null) {
+      throw new Error(`expected terminal lifecycle status ${status}`);
+    }
+    if (
+      resolved.lastTransitionReason !== `Linked setup resolved as ${status}`
+    ) {
+      throw new Error("terminal resolution reason must be preserved");
+    }
   }
 });

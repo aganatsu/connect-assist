@@ -163,6 +163,7 @@ interface ImpulseEntryLifecycleEvidence {
   activeCount: number;
   enteredCount: number;
   exhaustedCount: number;
+  cancelledCount: number;
   transitionCount: number;
   zoneTouches: number;
   candidateFailures: number;
@@ -382,6 +383,7 @@ async function fetchImpulseEntryLifecycleEvidence(
     activeCount: lifecycles.filter((row: any) => row.status === "active").length,
     enteredCount: lifecycles.filter((row: any) => row.status === "entered").length,
     exhaustedCount: lifecycles.filter((row: any) => row.status === "exhausted").length,
+    cancelledCount: lifecycles.filter((row: any) => row.status === "cancelled").length,
     transitionCount: transitions.length,
     zoneTouches: count("zone_touched"),
     candidateFailures: count("candidate_failed"),
@@ -2104,6 +2106,7 @@ function ImpulseEntryLifecycleEvidenceCard({
               <div><span className="text-muted-foreground">Confirmed entries</span><p className="font-mono font-bold text-success">{evidence.confirmations}</p></div>
               <div><span className="text-muted-foreground">Entered</span><p className="font-mono font-bold">{evidence.enteredCount}</p></div>
               <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{evidence.exhaustedCount}</p></div>
+              <div><span className="text-muted-foreground">Cancelled</span><p className="font-mono font-bold">{evidence.cancelledCount}</p></div>
               <div><span className="text-muted-foreground">Transitions</span><p className="font-mono font-bold">{evidence.transitionCount}</p></div>
             </div>
             {replay && (

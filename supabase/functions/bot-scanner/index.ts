@@ -192,6 +192,9 @@ import {
   deriveWatchlistLifecyclePhase,
 } from "../_shared/watchlistLifecycleEvidence.ts";
 import {
+  resolveStoredImpulseEntryLifecycle,
+} from "../_shared/impulseEntryLifecycleStore.ts";
+import {
   persistStopPolicyEvidence,
   type StopPolicyPlanObservation,
 } from "../_shared/stopPolicyEvidence.ts";
@@ -1270,10 +1273,11 @@ Deno.serve(async (req) => {
       const setupId = body.setupId;
       if (!setupId) return respond({ error: "Missing setupId" }, 400);
       const dismissedAt = new Date().toISOString();
-      const { error: updateErr } = await adminClient.from("staged_setups").update({
+      const reason = "Manually dismissed by user";
+      const { data: dismissed, error: updateErr } = await adminClient.from("staged_setups").update({
         status: "invalidated",
-        invalidation_reason: "Manually dismissed by user",
-        lifecycle_reason: "Manually dismissed by user",
+        invalidation_reason: reason,
+        lifecycle_reason: reason,
         lifecycle_reason_code: "manual_dismissal",
         lifecycle_evidence: buildWatchlistLifecycleEvidence({
           reasonCode: "manual_dismissal",
@@ -1281,8 +1285,21 @@ Deno.serve(async (req) => {
           detail: { actor: "user" },
         }),
         resolved_at: dismissedAt,
-      }).eq("id", setupId).eq("user_id", userId);
+      }).eq("id", setupId).eq("user_id", userId)
+        .select("impulse_entry_lifecycle_id").maybeSingle();
       if (updateErr) return respond({ error: updateErr.message }, 500);
+      if (dismissed?.impulse_entry_lifecycle_id) {
+        await resolveStoredImpulseEntryLifecycle(
+          adminClient,
+          dismissed.impulse_entry_lifecycle_id,
+          {
+            status: "invalidated",
+            reason,
+            resolvedAt: dismissedAt,
+            source: "staged_setup",
+          },
+        );
+      }
       return respond({ success: true });
     }
 
@@ -1355,13 +1372,28 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const orderId = body.orderId;
       if (!orderId) return respond({ error: "Missing orderId" }, 400);
-      const { error: updateErr } = await adminClient.from("pending_orders").update({
+      const resolvedAt = new Date().toISOString();
+      const reason = "Manually cancelled by user";
+      const { data: cancelled, error: updateErr } = await adminClient.from("pending_orders").update({
         status: "cancelled",
-        cancel_reason: "Manually cancelled by user",
-        resolved_at: new Date().toISOString(),
+        cancel_reason: reason,
+        resolved_at: resolvedAt,
       }).eq("order_id", orderId).eq("user_id", userId)
-        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"]);
+        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
+        .select("impulse_entry_lifecycle_id").maybeSingle();
       if (updateErr) return respond({ error: updateErr.message }, 500);
+      if (cancelled?.impulse_entry_lifecycle_id) {
+        await resolveStoredImpulseEntryLifecycle(
+          adminClient,
+          cancelled.impulse_entry_lifecycle_id,
+          {
+            status: "cancelled",
+            reason,
+            resolvedAt,
+            source: "pending_order",
+          },
+        );
+      }
       return respond({ success: true });
     }
 
