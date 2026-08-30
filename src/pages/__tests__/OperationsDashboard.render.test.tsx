@@ -282,6 +282,35 @@ describe("OperationsDashboard", () => {
     expect(within(sessionPriority).getByText(/scan continued unchanged/i)).toBeInTheDocument();
   });
 
+  it("shows when the shared market schedule has reduced scanning to crypto", async () => {
+    api.logs.mockResolvedValue([{
+      scanned_at: "2026-08-29T16:00:00Z",
+      pairs_scanned: 2,
+      signals_found: 0,
+      trades_placed: 0,
+      details_json: [{
+        __meta: true,
+        activeStyle: "scalper",
+        marketSchedule: {
+          reason: "weekend_crypto_only",
+          eligibleSymbols: ["BTC/USD", "ETH/USD"],
+          excludedSymbols: ["EUR/USD", "XAU/USD"],
+          nonCryptoMarketsClosed: true,
+          nonCryptoTradingDayEnabled: false,
+          effectiveTradingDay: 6,
+        },
+      }],
+    }]);
+
+    renderDashboard();
+    const marketSchedule = await screen.findByRole("status", {
+      name: "Market schedule",
+    });
+    expect(within(marketSchedule).getByText("Weekend")).toBeInTheDocument();
+    expect(within(marketSchedule).getByText("Crypto only")).toBeInTheDocument();
+    expect(within(marketSchedule).getByText(/2 closed-market instruments paused/i)).toBeInTheDocument();
+  });
+
   it("describes an unqualified impulse candidate without claiming no impulse exists", async () => {
     api.logs.mockResolvedValue([{
       scanned_at: "2026-08-26T22:12:37Z",

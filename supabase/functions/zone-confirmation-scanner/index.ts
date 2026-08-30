@@ -33,6 +33,10 @@ import {
   SPECS,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
+import {
+  isInstrumentMarketOpen,
+  resolveGamePlanMarketScope,
+} from "../_shared/gamePlanMarketScope.ts";
 import { buildPreArmedPositionPlan, frozenTargetAlreadyReached } from "../_shared/pendingOrderPlan.ts";
 import {
   calculateBrokerExecutionFloor,
@@ -329,6 +333,7 @@ Deno.serve(async (req) => {
   }
 
   const startTime = Date.now();
+  const marketNow = new Date(startTime);
   const operationRuns = new Map<string, string>();
   // Observation-only Phase 1: one immutable evidence row per confirmation attempt.
   const confirmScanCycleId = crypto.randomUUID();
@@ -612,6 +617,17 @@ Deno.serve(async (req) => {
             `[zone-confirm] ${pending.symbol} ${pending.direction} — execution disabled`
             + ` (account=${!!account}, running=${account?.is_running}, paused=${account?.is_paused}, kill=${account?.kill_switch_active})`,
           );
+          continue;
+        }
+
+        const pendingMarketScope = resolveGamePlanMarketScope(
+          [pending.symbol],
+          marketNow,
+          config.enabledDays,
+        );
+        if (!isInstrumentMarketOpen(pending.symbol, marketNow) || pendingMarketScope.eligibleSymbols.length === 0) {
+          stillHunting++;
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} remains armed outside its active market schedule — candle fetch skipped`);
           continue;
         }
 

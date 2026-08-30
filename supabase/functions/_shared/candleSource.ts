@@ -7,7 +7,7 @@
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
 import { META_REGIONS, regionCache } from "./metaApiClient.ts";
-import { toNYTimeAt } from "./sessions.ts";
+import { areNonCryptoMarketsClosed } from "./gamePlanMarketScope.ts";
 import { acquireApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
 
 export interface Candle {
@@ -29,12 +29,7 @@ export function isForexSymbol(symbol: string): boolean {
 export function isForexMarketOpenAt(datetime: string): boolean {
   const timestamp = Date.parse(datetime);
   if (!Number.isFinite(timestamp)) return false;
-  const { nyDay, h, m } = toNYTimeAt(timestamp);
-  const minutes = h * 60 + m;
-  if (nyDay === 6) return false;
-  if (nyDay === 0) return minutes >= 17 * 60;
-  if (nyDay === 5) return minutes < 17 * 60;
-  return true;
+  return !areNonCryptoMarketsClosed(new Date(timestamp));
 }
 
 export function filterClosedMarketCandles(symbol: string, candles: Candle[]): Candle[] {

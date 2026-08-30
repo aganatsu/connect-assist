@@ -9,6 +9,7 @@ import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClos
 import { reconcileFullBrokerClose } from "../_shared/reconcileBrokerState.ts";
 import { acquireApiCredit, setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { fetchLivePrice, TWELVE_DATA_SYMBOLS } from "../_shared/candleSource.ts";
+import { areNonCryptoMarketsClosed, isInstrumentMarketOpen } from "../_shared/gamePlanMarketScope.ts";
 
 
 setCreditCallerContext("paper-trading");
@@ -60,9 +61,10 @@ async function fetchATR(symbol: string): Promise<number> {
   }
 }
 
-async function updatePositionPrices(supabase: any, positions: any[]): Promise<void> {
+async function updatePositionPrices(supabase: any, positions: any[], marketNow = new Date()): Promise<void> {
   if (!positions || positions.length === 0) return;
-  const symbols = [...new Set(positions.map((p: any) => p.symbol))];
+  const symbols = [...new Set(positions.map((p: any) => p.symbol))]
+    .filter((sym) => isInstrumentMarketOpen(sym, marketNow));
   const priceMap: Record<string, number> = {};
   await Promise.all(symbols.map(async (sym) => {
     const price = await fetchLivePrice(sym);
@@ -79,10 +81,14 @@ async function updatePositionPrices(supabase: any, positions: any[]): Promise<vo
 // Module-level rateMap built once per invocation from live prices
 let _rateMap: Record<string, number> = {};
 
-async function buildRateMap(): Promise<Record<string, number>> {
+async function buildRateMap(marketNow = new Date()): Promise<Record<string, number>> {
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
   // Start with fallback rates so we always have something reasonable
   const map: Record<string, number> = { ...FALLBACK_RATES };
+  if (areNonCryptoMarketsClosed(marketNow)) {
+    console.log("[rateMap] Non-crypto markets are closed — using fallback conversion rates");
+    return map;
+  }
   await Promise.all(RATE_PAIRS.map(async (pair) => {
     const price = await fetchLivePrice(pair);
     if (price !== null) map[pair] = price; // Override fallback with live rate
@@ -276,6 +282,7 @@ Deno.serve(async (req) => {
       : null;
 
     const { action, ...payload } = await req.json().catch(() => ({ action: "status" }));
+    const marketNow = new Date();
 
     // Build live conversion rates only for write/engine actions. The dashboard
     // status endpoint is polled frequently and must stay fast/read-only; doing
@@ -283,7 +290,7 @@ Deno.serve(async (req) => {
     // runtime churn and intermittent hosted 503s.
     if (action !== "status" && Object.keys(_rateMap).length === 0) {
       try {
-        _rateMap = await buildRateMap();
+        _rateMap = await buildRateMap(marketNow);
       } catch (e: any) {
         console.warn(`rateMap build failed: ${e?.message} — using fallback rates`);
         _rateMap = { ...FALLBACK_RATES };
@@ -330,11 +337,12 @@ Deno.serve(async (req) => {
           code: "position_status_read_failed",
         }, 503);
       }
-      // ── Always refresh live prices on status poll ──
+      // ── Refresh live prices on status poll for open markets ──
       // Without this, positions show stale entry-time prices ($0 PnL) between scanner cycles.
       // Uses the lightweight TwelveData /price endpoint (single quote per symbol).
       if (positions && positions.length > 0) {
-        const symbols = [...new Set(positions.map((p: any) => p.symbol))] as string[];
+        const symbols = ([...new Set(positions.map((p: any) => p.symbol))] as string[])
+          .filter((sym) => isInstrumentMarketOpen(sym, marketNow));
         const priceMap: Record<string, number> = {};
         await Promise.all(symbols.map(async (sym: string) => {
           const price = await fetchLivePrice(sym);
@@ -368,7 +376,7 @@ Deno.serve(async (req) => {
         runtimeManagementConfig = cfgRowTop?.config_json || {};
       } catch {}
       if (payload.processEngine === true && positions && positions.length > 0) {
-        await updatePositionPrices(supabase, positions);
+        await updatePositionPrices(supabase, positions, marketNow);
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
         positions = refreshed || positions;
 
@@ -381,7 +389,9 @@ Deno.serve(async (req) => {
         } catch {}
         runtimeManagementConfig = liveConfig;
         const closedIds: string[] = [];
-        for (const pos of (positions || [])) {
+        for (const pos of (positions || []).filter((candidate) =>
+          isInstrumentMarketOpen(candidate.symbol, marketNow)
+        )) {
           const currentPrice = parseFloat(pos.current_price);
           const entryPrice = parseFloat(pos.entry_price);
           let sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;

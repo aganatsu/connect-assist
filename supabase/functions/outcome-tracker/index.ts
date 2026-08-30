@@ -18,6 +18,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { isInstrumentMarketOpen } from "../_shared/gamePlanMarketScope.ts";
 import { SPECS } from "../_shared/smcAnalysis.ts";
 import {
   classifyTrackedOutcome,
@@ -67,6 +68,7 @@ Deno.serve(async (req: Request) => {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
+  const marketNow = new Date();
 
   try {
     const results: Record<string, any> = {
@@ -105,6 +107,9 @@ Deno.serve(async (req: Request) => {
       console.log(`[outcome-tracker] Processing ${pendingSetups.length} pending setups`);
 
       for (const setup of pendingSetups) {
+        if (!isInstrumentMarketOpen(setup.symbol, marketNow)) {
+          continue;
+        }
         results.processed++;
         try {
           const evaluatedAt = new Date().toISOString();
@@ -220,6 +225,9 @@ Deno.serve(async (req: Request) => {
       } else if (shadowRows && shadowRows.length > 0) {
         const candleCache = new Map<string, any[]>();
         for (const row of shadowRows) {
+          if (!isInstrumentMarketOpen(row.symbol, marketNow)) {
+            continue;
+          }
           results.shadow_processed++;
           try {
             let candles = candleCache.get(row.symbol);
@@ -308,6 +316,9 @@ Deno.serve(async (req: Request) => {
       } else if (authorityRows && authorityRows.length > 0) {
         const candleCache = new Map<string, any[]>();
         for (const row of authorityRows) {
+          if (!isInstrumentMarketOpen(row.symbol, marketNow)) {
+            continue;
+          }
           try {
             let candles = candleCache.get(row.symbol);
             if (!candles) {
