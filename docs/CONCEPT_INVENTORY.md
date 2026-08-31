@@ -301,7 +301,10 @@ The adapter requires stable entity and evidence IDs, source-candle start/end
 timestamps that are closed by the observation time, direction alignment, and a
 timeframe belonging to the resolved style's setup, structure, or confirmation
 roles. Its candidate identity is deterministic across rescans and its output is
-hard-coded to `observe_only`. It is not yet wired into scanner admission,
+hard-coded to `observe_only`. `unifiedZoneEngine.ts` now feeds it the same
+style-role candle inputs in live scanning and backtest, invoking the existing
+OB/FVG/breaker detector owners without adding a market-data request. The result
+is retained in scan/backtest diagnostics but is not wired into scanner admission,
 lifecycle, authorization, orders, or execution.
 
 ## Neutral frozen entry-zone contract
