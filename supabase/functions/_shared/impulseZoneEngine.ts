@@ -81,7 +81,7 @@ export type ImpulseQualificationState =
   | "invalidated";
 
 export interface ImpulseQualification {
-  contractVersion: "impulse-zone-qualification.v3";
+  contractVersion: "impulse-zone-qualification.v4";
   state: ImpulseQualificationState;
   qualified: boolean;
   reasons: string[];
@@ -99,7 +99,6 @@ export interface ImpulseQualification {
     strongestDirectionalBodyRatio: number | null;
     strongestDirectionalRangeATR: number | null;
     recencyBars: number;
-    poiCount: number;
     directionalCandleRatio: number | null;
     directionalBodyDominance: number | null;
     pathEfficiency: number | null;
@@ -239,6 +238,7 @@ export interface ZoneEngineResult {
   bestZone: BestZone | null;
   impulse: ImpulseLeg | null;
   impulseQualification?: ImpulseQualification | null;
+  entryZoneQualification?: EntryZoneQualification | null;
   allZones: RankedPOI[];
   reason: string;         // Human-readable explanation of outcome
   /** Present only when the observation-only collector is explicitly enabled. */
@@ -255,11 +255,54 @@ export interface ZoneEngineEvidenceSnapshot {
   canonicalImpulse: { detectorVersion: string; timeframe: string | null; direction: "bullish" | "bearish"; impulse: ImpulseLeg; metrics: CanonicalImpulseMetrics; selectionKey: string } | null;
   canonicalMatchesLegacy: boolean | null;
   impulseQualification: ImpulseQualification | null;
+  entryZoneQualification: EntryZoneQualification | null;
 }
 
 export interface ZoneQualificationResult {
+  contractVersion: "entry-zone-qualification.v1";
+  state: "missing" | "rejected" | "candidate_available";
+  stage: "mapping" | "quality";
+  qualified: false;
+  reasons: string[];
+  measurements: EntryZoneQualification["measurements"];
   accepted: ImpulsePOI[];
   rejected: Record<"age" | "body_ratio" | "displacement", number>;
+}
+
+export type EntryZoneQualificationState =
+  | "not_evaluated"
+  | "missing"
+  | "rejected"
+  | "candidate_available"
+  | "selected";
+
+export type EntryZoneQualificationStage =
+  | "mapping"
+  | "quality"
+  | "impulse"
+  | "fib"
+  | "daily_bounds"
+  | "ranking"
+  | "selected";
+
+/**
+ * Entry-zone status is intentionally separate from impulse qualification.
+ * A structural impulse can be valid even when no executable POI survives the
+ * zone-selection pipeline.
+ */
+export interface EntryZoneQualification {
+  contractVersion: "entry-zone-qualification.v1";
+  state: EntryZoneQualificationState;
+  stage: EntryZoneQualificationStage;
+  qualified: boolean;
+  reasons: string[];
+  measurements: {
+    mappedCount: number;
+    qualityAcceptedCount: number;
+    fibAlignedCount: number | null;
+    finalCandidateCount: number | null;
+    rejected: Record<"age" | "body_ratio" | "displacement", number>;
+  };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -671,7 +714,6 @@ export function findImpulseLeg(
 export function qualifyImpulseLeg(
   candles: Candle[],
   leg: ImpulseLeg,
-  pois: ImpulsePOI[],
   options?: Pick<
     ZoneEngineOptions,
     "maxAgeBars" | "minBodyRatio" | "minDisplacementATR" | "softQualification"
@@ -695,8 +737,8 @@ export function qualifyImpulseLeg(
     ? Math.max(...directionalRanges) / atr
     : null;
 
-  // Two kinds of reason. STRUCTURAL ones say the leg cannot be traded at all —
-  // its origin is gone, or there is nowhere inside it to enter. QUALITY ones ask
+  // Two kinds of reason. STRUCTURAL ones say the leg itself is invalid because
+  // its origin is gone. QUALITY ones ask
   // "is this really an impulse?", which is exactly the judgement a person makes
   // when they draw one by hand. Only quality reasons can be softened.
   const structuralReasons: string[] = [];
@@ -730,9 +772,6 @@ export function qualifyImpulseLeg(
   if (maxAgeBars > 0 && metrics.recencyBars > maxAgeBars) {
     qualityReasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
   }
-  // Structural: a leg with nowhere to enter is untradeable however good it looks.
-  if (pois.length === 0) structuralReasons.push("No accepted FVG or Order Block was created by the impulse");
-
   const blocking = soft ? structuralReasons : [...structuralReasons, ...qualityReasons];
   const reasons = [...structuralReasons, ...qualityReasons];
   const softenedReasons = soft ? [...qualityReasons] : [];
@@ -751,7 +790,7 @@ export function qualifyImpulseLeg(
     ? "forming"
     : "completed_unqualified";
   return {
-    contractVersion: "impulse-zone-qualification.v3",
+    contractVersion: "impulse-zone-qualification.v4",
     state,
     qualified: state === "qualified",
     softenedReasons,
@@ -764,7 +803,6 @@ export function qualifyImpulseLeg(
       strongestDirectionalBodyRatio: metrics.strongestDirectionalBodyRatio,
       strongestDirectionalRangeATR: strongestDirectionalRangeATR === null ? null : Number(strongestDirectionalRangeATR.toFixed(6)),
       recencyBars: metrics.recencyBars,
-      poiCount: pois.length,
       directionalCandleRatio: metrics.directionalCandleRatio,
       directionalBodyDominance: metrics.directionalBodyDominance,
       pathEfficiency: metrics.pathEfficiency,
@@ -1056,7 +1094,77 @@ export function qualifyImpulsePOIs(
     return true;
   });
 
-  return { accepted, rejected };
+  const rejectedSummary = Object.entries(rejected)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(", ");
+  const state = pois.length === 0
+    ? "missing" as const
+    : accepted.length === 0
+    ? "rejected" as const
+    : "candidate_available" as const;
+  return {
+    contractVersion: "entry-zone-qualification.v1",
+    state,
+    stage: pois.length === 0 ? "mapping" : "quality",
+    qualified: false,
+    reasons: state === "missing"
+      ? ["No FVG or Order Block candidate was mapped to the impulse"]
+      : state === "rejected"
+      ? [
+        `Bot Config zone qualification rejected all mapped candidates${
+          rejectedSummary ? ` (${rejectedSummary})` : ""
+        }`,
+      ]
+      : ["Entry-zone candidates passed mapping and quality checks"],
+    measurements: {
+      mappedCount: pois.length,
+      qualityAcceptedCount: accepted.length,
+      fibAlignedCount: null,
+      finalCandidateCount: null,
+      rejected,
+    },
+    accepted,
+    rejected,
+  };
+}
+
+function describeEntryZoneQualification(
+  qualification: ZoneQualificationResult,
+): EntryZoneQualification {
+  return {
+    contractVersion: qualification.contractVersion,
+    state: qualification.state,
+    stage: qualification.stage,
+    qualified: qualification.qualified,
+    reasons: qualification.reasons,
+    measurements: qualification.measurements,
+  };
+}
+
+function advanceEntryZoneQualification(
+  current: EntryZoneQualification,
+  update: Pick<EntryZoneQualification, "state" | "stage" | "qualified" | "reasons"> & {
+    fibAlignedCount?: number | null;
+    finalCandidateCount?: number | null;
+  },
+): EntryZoneQualification {
+  return {
+    ...current,
+    state: update.state,
+    stage: update.stage,
+    qualified: update.qualified,
+    reasons: update.reasons,
+    measurements: {
+      ...current.measurements,
+      ...(update.fibAlignedCount !== undefined
+        ? { fibAlignedCount: update.fibAlignedCount }
+        : {}),
+      ...(update.finalCandidateCount !== undefined
+        ? { finalCandidateCount: update.finalCandidateCount }
+        : {}),
+    },
+  };
 }
 
 export function zoneQualityPercent(zone: RankedPOI): number {
@@ -2211,10 +2319,25 @@ export function findBestEntryZone(
   let collectedRankedZones: RankedPOI[] = [];
   let canonicalImpulse: ZoneEngineEvidenceSnapshot["canonicalImpulse"] = null;
   let impulseQualification: ImpulseQualification | null = null;
+  let entryZoneQualification: EntryZoneQualification = {
+    contractVersion: "entry-zone-qualification.v1",
+    state: "not_evaluated",
+    stage: "mapping",
+    qualified: false,
+    reasons: ["No structural impulse was available for entry-zone evaluation"],
+    measurements: {
+      mappedCount: 0,
+      qualityAcceptedCount: 0,
+      fibAlignedCount: null,
+      finalCandidateCount: null,
+      rejected: { age: 0, body_ratio: 0, displacement: 0 },
+    },
+  };
   const finish = (result: ZoneEngineResult): ZoneEngineResult => {
-    if (!options?.collectEvidence) return result;
+    const completedResult = { ...result, entryZoneQualification };
+    if (!options?.collectEvidence) return completedResult;
     return {
-      ...result,
+      ...completedResult,
       evidence: {
         timeframe: options.evidenceContext?.timeframe ?? null,
         currentPrice,
@@ -2225,6 +2348,7 @@ export function findBestEntryZone(
         canonicalImpulse,
         canonicalMatchesLegacy: canonicalImpulse?.selectionKey === null ? null : true,
         impulseQualification,
+        entryZoneQualification,
       },
     };
   };
@@ -2246,7 +2370,9 @@ export function findBestEntryZone(
   );
   if (!impulse) {
     const rejectedLeg = collectedImpulses.findLast((candidate) => !candidate.selected)?.leg ?? null;
-    impulseQualification = rejectedLeg ? qualifyImpulseLeg(htfCandles, rejectedLeg, [], options) : null;
+    impulseQualification = rejectedLeg
+      ? qualifyImpulseLeg(htfCandles, rejectedLeg, options)
+      : null;
     return finish({
       bestZone: null,
       impulse: rejectedLeg,
@@ -2258,9 +2384,10 @@ export function findBestEntryZone(
     });
   }
 
-  // Step 2: A qualified impulse must own at least one accepted FVG/OB. Try
-  // lower-ranked intact candidates when the structurally strongest leg has no
-  // usable displacement zone.
+  // Step 2: Evaluate impulse quality and entry-zone availability independently.
+  // Existing execution behavior is preserved: a candidate advances only when
+  // both contracts pass. Lower-ranked intact legs are still tried when the
+  // structurally strongest leg lacks a usable displacement zone.
   const rankedLegs = collectedImpulses
     .filter((candidate) => candidate.leg.isValid)
     .map((candidate) => candidate.leg)
@@ -2278,6 +2405,7 @@ export function findBestEntryZone(
     mappedPOIs: ImpulsePOI[];
     poiQualification: ZoneQualificationResult;
     impulseQualification: ImpulseQualification;
+    entryZoneQualification: EntryZoneQualification;
   };
   let strongestFailedEvaluation: CandidateEvaluation | null = null;
   let qualifiedEvaluation: CandidateEvaluation | null = null;
@@ -2291,15 +2419,22 @@ export function findBestEntryZone(
       htfCandles, candidate, candidatePOIs, options,
     );
     const candidateQualification = qualifyImpulseLeg(
-      htfCandles, candidate, candidatePOIQualification.accepted, options,
+      htfCandles, candidate, options,
+    );
+    const candidateEntryZoneQualification = describeEntryZoneQualification(
+      candidatePOIQualification,
     );
     const evaluation = {
       impulse: candidate,
       mappedPOIs: candidatePOIs,
       poiQualification: candidatePOIQualification,
       impulseQualification: candidateQualification,
+      entryZoneQualification: candidateEntryZoneQualification,
     };
-    if (candidateQualification.qualified) {
+    if (
+      candidateQualification.qualified &&
+      candidateEntryZoneQualification.state === "candidate_available"
+    ) {
       qualifiedEvaluation = evaluation;
       break;
     }
@@ -2314,6 +2449,7 @@ export function findBestEntryZone(
     mappedPOIs = retainedEvaluation.mappedPOIs;
     poiQualification = retainedEvaluation.poiQualification;
     impulseQualification = retainedEvaluation.impulseQualification;
+    entryZoneQualification = retainedEvaluation.entryZoneQualification;
   }
   collectedPOIs = mappedPOIs;
   if (!impulseQualification) {
@@ -2331,6 +2467,19 @@ export function findBestEntryZone(
     };
   }
   if (!impulseQualification.qualified) {
+    if (entryZoneQualification.state === "candidate_available") {
+      entryZoneQualification = advanceEntryZoneQualification(
+        entryZoneQualification,
+        {
+          state: "candidate_available",
+          stage: "impulse",
+          qualified: false,
+          reasons: [
+            "Entry-zone candidates passed their own checks, but the impulse did not qualify",
+          ],
+        },
+      );
+    }
     return finish({
       bestZone: null,
       impulse,
@@ -2338,7 +2487,11 @@ export function findBestEntryZone(
       allZones: [],
       reason: (impulseQualification.state === "invalidated"
         ? "Invalidated structural leg"
-        : "Impulse candidate not yet qualified") + ": " + impulseQualification.reasons.join("; "),
+        : impulseQualification.state === "stale"
+        ? "Stale structural leg"
+        : impulseQualification.state === "forming"
+        ? "Structural leg is still forming"
+        : "Completed structural leg did not qualify") + ": " + impulseQualification.reasons.join("; "),
     });
   }
   const qualification = poiQualification;
@@ -2352,18 +2505,12 @@ export function findBestEntryZone(
   }
   const pois = qualification.accepted;
   if (pois.length === 0) {
-    const rejected = Object.entries(qualification.rejected)
-      .filter(([, count]) => count > 0)
-      .map(([reason, count]) => `${reason}=${count}`)
-      .join(", ");
     return finish({
       bestZone: null,
       impulse,
       impulseQualification,
       allZones: [],
-      reason: mappedPOIs.length === 0
-        ? `Impulse found but no POIs (FVGs/OBs) detected within it`
-        : `POIs found but Bot Config zone qualification rejected all (${rejected})`,
+      reason: entryZoneQualification.reasons.join("; "),
     });
   }
 
@@ -2378,6 +2525,21 @@ export function findBestEntryZone(
   });
   collectedRankedZones = rankedZones;
   if (rankedZones.length === 0) {
+    entryZoneQualification = advanceEntryZoneQualification(
+      entryZoneQualification,
+      {
+        state: "rejected",
+        stage: "fib",
+        qualified: false,
+        reasons: [
+          `No entry-zone candidate aligned with the accepted Fib range (50%-${
+            ((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)
+          }%)`,
+        ],
+        fibAlignedCount: 0,
+        finalCandidateCount: 0,
+      },
+    );
     return finish({
       bestZone: null,
       impulse,
@@ -2386,6 +2548,17 @@ export function findBestEntryZone(
       reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
     });
   }
+  entryZoneQualification = advanceEntryZoneQualification(
+    entryZoneQualification,
+    {
+      state: "candidate_available",
+      stage: "fib",
+      qualified: false,
+      reasons: ["Entry-zone candidates passed mapping, quality and Fib checks"],
+      fibAlignedCount: rankedZones.length,
+      finalCandidateCount: rankedZones.length,
+    },
+  );
 
   // Step 3b: Filter by Daily zone bounds (if provided)
   if (options?.dailyZoneBounds) {
@@ -2398,13 +2571,38 @@ export function findBestEntryZone(
     });
     collectedRankedZones = rankedZones;
     if (rankedZones.length === 0) {
+      entryZoneQualification = advanceEntryZoneQualification(
+        entryZoneQualification,
+        {
+          state: "rejected",
+          stage: "daily_bounds",
+          qualified: false,
+          reasons: [
+            `No entry-zone candidate overlaps the configured Daily zone [${
+              bounds.low.toFixed(5)
+            }-${bounds.high.toFixed(5)}]`,
+          ],
+          finalCandidateCount: 0,
+        },
+      );
       return finish({
         bestZone: null,
         impulse,
+        impulseQualification,
         allZones: [],
         reason: `POIs found at Fib levels but none overlap with Daily zone [${bounds.low.toFixed(5)}-${bounds.high.toFixed(5)}]`,
       });
     }
+    entryZoneQualification = advanceEntryZoneQualification(
+      entryZoneQualification,
+      {
+        state: "candidate_available",
+        stage: "daily_bounds",
+        qualified: false,
+        reasons: ["Entry-zone candidates passed the configured Daily bounds"],
+        finalCandidateCount: rankedZones.length,
+      },
+    );
   }
 
   // Step 4: Check historical S/R
@@ -2447,6 +2645,18 @@ export function findBestEntryZone(
   // Step 6: Rank and select best
   const bestZonePOI = rankAndSelectBestZone(rankedZones);
   if (!bestZonePOI) {
+    entryZoneQualification = advanceEntryZoneQualification(
+      entryZoneQualification,
+      {
+        state: "rejected",
+        stage: "ranking",
+        qualified: false,
+        reasons: [
+          "Entry-zone candidates did not meet the minimum ranking depth",
+        ],
+        finalCandidateCount: rankedZones.length,
+      },
+    );
     return finish({
       bestZone: null,
       impulse,
@@ -2458,6 +2668,18 @@ export function findBestEntryZone(
   const minQualityScore = Math.max(0, Math.min(100, Number(options?.minQualityScore ?? 0)));
   const qualityPercent = zoneQualityPercent(bestZonePOI);
   if (qualityPercent < minQualityScore) {
+    entryZoneQualification = advanceEntryZoneQualification(
+      entryZoneQualification,
+      {
+        state: "rejected",
+        stage: "ranking",
+        qualified: false,
+        reasons: [
+          `Best entry-zone quality ${qualityPercent.toFixed(1)}% is below the configured minimum ${minQualityScore.toFixed(1)}%`,
+        ],
+        finalCandidateCount: rankedZones.length,
+      },
+    );
     return finish({
       bestZone: null,
       impulse,
@@ -2466,6 +2688,17 @@ export function findBestEntryZone(
       reason: `Best zone quality ${qualityPercent.toFixed(1)}% is below Bot Config minimum ${minQualityScore.toFixed(1)}%`,
     });
   }
+
+  entryZoneQualification = advanceEntryZoneQualification(
+    entryZoneQualification,
+    {
+      state: "selected",
+      stage: "selected",
+      qualified: true,
+      reasons: ["An executable entry zone completed the selection pipeline"],
+      finalCandidateCount: rankedZones.length,
+    },
+  );
 
   // Step 7: Check if current price is at the zone
   const atr = zoneATR;
@@ -2582,8 +2815,8 @@ export interface ZoneEngineOptions {
    * Record but do not enforce the "is this really an impulse?" quality checks.
    * Set when a hand-marked leg is supplied: the person drawing it has already
    * made that judgement, and the thresholds exist to stop AUTOMATIC detection
-   * promoting a choppy drift. Structural checks — origin intact, at least one
-   * POI to enter at — are never softened.
+   * promoting a choppy drift. The structural-origin check is never softened;
+   * entry-zone availability is reported by entryZoneQualification instead.
    */
   softQualification?: boolean;
   /**

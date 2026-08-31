@@ -137,9 +137,16 @@ export function findDailyZone(
 
   // Step 2: Map POIs within the Daily impulse
   const pois = mapImpulsePOIs(dailyCandles, impulse);
-  const impulseQualification = qualifyImpulseLeg(dailyCandles, impulse, pois, options?.zoneEngineOpts);
+  const impulseQualification = qualifyImpulseLeg(
+    dailyCandles,
+    impulse,
+    options?.zoneEngineOpts,
+  );
   if (!impulseQualification.qualified) {
     return { zone: null, reason: `Daily ${impulseQualification.state} structural leg: ${impulseQualification.reasons.join("; ")}` };
+  }
+  if (pois.length === 0) {
+    return { zone: null, reason: "Daily impulse found but no FVG or Order Block entry-zone candidate was mapped" };
   }
 
   // Step 3: Overlay Fib and rank by depth
@@ -373,9 +380,16 @@ export function findEntryZoneWithinDailyZone(
 
   // Step 2: Map POIs within the 1H impulse
   const pois = mapImpulsePOIs(h1Candles, impulse);
-  const impulseQualification = qualifyImpulseLeg(h1Candles, impulse, pois, zoneEngineOpts);
+  const impulseQualification = qualifyImpulseLeg(
+    h1Candles,
+    impulse,
+    zoneEngineOpts,
+  );
   if (!impulseQualification.qualified) {
     return { zone: null, allZones: [], reason: `1H ${impulseQualification.state} structural leg: ${impulseQualification.reasons.join("; ")}` };
+  }
+  if (pois.length === 0) {
+    return { zone: null, allZones: [], reason: "1H impulse found but no FVG or Order Block entry-zone candidate was mapped" };
   }
 
   // Step 3: Overlay Fib

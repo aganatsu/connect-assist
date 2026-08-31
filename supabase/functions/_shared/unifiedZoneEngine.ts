@@ -25,6 +25,7 @@ import {
   type ImpulseLeg,
   type RankedPOI,
   type BestZone,
+  type EntryZoneQualification,
   type TFSlotLabels,
   DEFAULT_TF_LABELS,
 } from "./impulseZoneEngine.ts";
@@ -61,6 +62,9 @@ export interface UnifiedZoneResult {
 
   /** The zone details */
   zone: ZoneStory | null;
+
+  /** Why entry-zone selection succeeded, failed, or was not reached. */
+  entryZoneQualification: EntryZoneQualification | null;
 
   /** Price proximity to the zone */
   price: PriceStory;
@@ -502,6 +506,8 @@ export function findUnifiedZone(
     selectedTF,
     impulse: impulseStory,
     zone: zoneStory,
+    entryZoneQualification:
+      selectedZoneResult?.entryZoneQualification ?? null,
     price: priceStory,
     liquidity,
     confirmation,
@@ -703,6 +709,8 @@ function buildNoZoneResult(
   ].find((candidate) => candidate.result?.impulse && candidate.result.impulseQualification);
   const leg = developing?.result?.impulse ?? null;
   const qualification = developing?.result?.impulseQualification ?? null;
+  const entryZoneQualification =
+    developing?.result?.entryZoneQualification ?? null;
   const impulse: ImpulseStory | null = leg ? {
     direction: leg.direction, breakType: leg.breakType ?? null,
     high: leg.high, low: leg.low,
@@ -718,6 +726,7 @@ function buildNoZoneResult(
     selectedTF: developing?.timeframe ?? null,
     impulse,
     zone: null,
+    entryZoneQualification,
     price: { currentPrice, atZone: false, atZoneStrict: false, insideZone: false, distancePips: 0, sideOk: false },
     liquidity: null,
     confirmation: null,
@@ -725,7 +734,12 @@ function buildNoZoneResult(
     unifiedScore: 0,
     scoreBreakdown: { baseScore: 0, liquidityBonus: 0, confirmationBonus: 0, tfBonus: 0, total: 0 },
     storySummary: qualification
-      ? `${qualification.state === "forming"
+      ? qualification.state === "qualified"
+        ? `Qualified structural impulse; ${
+          entryZoneQualification?.reasons.join("; ") ||
+          "no executable entry zone was selected"
+        }`
+        : `${qualification.state === "forming"
         ? "Structural leg is still forming"
         : qualification.state === "completed_unqualified"
         ? "Completed structural leg did not qualify"
@@ -733,7 +747,7 @@ function buildNoZoneResult(
         ? "Structural leg is stale"
         : qualification.state === "invalidated"
         ? "Invalidated structural leg"
-        : "Qualified structural leg has no executable entry zone"}: ${qualification.reasons.join("; ")}`
+        : "Structural leg did not qualify"}: ${qualification.reasons.join("; ")}`
       : `No valid ${direction} structural leg found on any timeframe.`,
     multiTFResult,
     state: impulse ? "no_zone" : "no_impulse",

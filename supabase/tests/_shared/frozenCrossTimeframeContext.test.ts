@@ -45,7 +45,7 @@ Deno.test("frozen cross-TF context binds plan, verdict, zone, lineage and certif
         selected: { id: "child-1+fvg-1", type: "ob_fvg" },
       },
       impulseQualification: {
-        contractVersion: "impulse-zone-qualification.v3",
+        contractVersion: "impulse-zone-qualification.v4",
         state: "qualified",
         qualified: true,
       },

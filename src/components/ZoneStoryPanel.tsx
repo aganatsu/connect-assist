@@ -81,6 +81,18 @@ interface ZoneStoryData {
     totalScore: number;
     zonesFound: number;
   } | null;
+  entryZoneQualification?: {
+    state:
+      | "not_evaluated"
+      | "missing"
+      | "rejected"
+      | "candidate_available"
+      | "selected";
+    stage: string;
+    qualified: boolean;
+    reasons: string[];
+    measurements?: Record<string, unknown>;
+  } | null;
   price: {
     currentPrice: number;
     atZone: boolean;
@@ -375,6 +387,16 @@ export function ZoneStoryPanel({
     : impulseQualificationState === "completed_unqualified"
     ? "text-orange-400"
     : "text-red-400";
+  const entryZoneQualification = unifiedData.entryZoneQualification;
+  const missingZoneLabel = entryZoneQualification?.state === "missing"
+    ? "No entry-zone candidate mapped"
+    : entryZoneQualification?.state === "rejected"
+    ? `Entry-zone candidates rejected at ${entryZoneQualification.stage.replaceAll("_", " ")}`
+    : entryZoneQualification?.state === "candidate_available"
+    ? "Entry-zone candidate available; setup blocked before selection"
+    : entryZoneQualification?.state === "not_evaluated"
+    ? "Entry zone not evaluated"
+    : "No qualified entry zone";
   const impulseBreakType = String(
     unifiedData.impulse?.breakType ??
       unifiedData.impulse?.qualification?.measurements?.breakType ??
@@ -564,7 +586,14 @@ export function ZoneStoryPanel({
                   <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
                 </div>
               ) : (
-                <span className="text-zinc-400">No qualified entry zone</span>
+                <div>
+                  <span className="text-zinc-400">{missingZoneLabel}</span>
+                  {entryZoneQualification?.reasons?.[0] && (
+                    <p className="mt-0.5 text-[9px] text-zinc-500">
+                      {entryZoneQualification.reasons[0]}
+                    </p>
+                  )}
+                </div>
               )}
             </td>
           </tr>

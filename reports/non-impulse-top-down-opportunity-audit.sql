@@ -104,6 +104,14 @@ pair_rows AS (
       item.detail #>> '{unifiedZone,impulse,qualification,state}',
       ''
     ) AS impulse_qualification_state,
+    NULLIF(
+      item.detail #>> '{unifiedZone,entryZoneQualification,state}',
+      ''
+    ) AS entry_zone_qualification_state,
+    NULLIF(
+      item.detail #>> '{unifiedZone,entryZoneQualification,stage}',
+      ''
+    ) AS entry_zone_qualification_stage,
     CASE
       WHEN NULLIF(item.detail #>> '{unifiedZone,price,currentPrice}', '') ~
         '^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
@@ -251,6 +259,15 @@ classified AS (
       WHEN m.unified_state = 'no_impulse'
         THEN 'no_structural_impulse'
       WHEN m.unified_state = 'no_zone'
+        AND m.entry_zone_qualification_state = 'missing'
+        THEN 'qualified_impulse_no_entry_zone_candidate'
+      WHEN m.unified_state = 'no_zone'
+        AND m.entry_zone_qualification_state = 'rejected'
+        THEN 'entry_zone_rejected_' || COALESCE(
+          m.entry_zone_qualification_stage,
+          'unknown_stage'
+        )
+      WHEN m.unified_state = 'no_zone'
         AND m.impulse_qualification_state IN ('developing', 'forming')
         THEN 'forming_impulse_no_accepted_zone'
       WHEN m.unified_state = 'no_zone'
@@ -300,6 +317,9 @@ SELECT
   c.session,
   c.runtime_status,
   c.zone_failure_class,
+  c.impulse_qualification_state,
+  c.entry_zone_qualification_state,
+  c.entry_zone_qualification_stage,
   c.opportunity_stage,
   count(*) AS scan_observations,
   count(DISTINCT c.symbol) AS distinct_symbols,
@@ -328,6 +348,9 @@ GROUP BY
   c.session,
   c.runtime_status,
   c.zone_failure_class,
+  c.impulse_qualification_state,
+  c.entry_zone_qualification_state,
+  c.entry_zone_qualification_stage,
   c.opportunity_stage
 ORDER BY
   CASE
