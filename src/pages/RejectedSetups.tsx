@@ -122,7 +122,10 @@ interface ICTEntryZoneAuthoritySummary {
   bot_id: string;
   trading_style: string;
   symbol: string;
+  setup_family: "impulse" | "structure_poi";
   observed_scans: number;
+  comparable_scans: number;
+  geometry_unavailable_scans: number;
   disagreement_scans: number;
   resolved_authority_setups: number;
   authority_winners: number;
@@ -2157,6 +2160,8 @@ function ICTEntryZoneAuthorityCard({
   const summarize = (dataset: ICTEntryZoneAuthoritySummary[]) =>
     dataset.reduce((sum, row) => ({
       observed: sum.observed + Number(row.observed_scans || 0),
+      comparable: sum.comparable + Number(row.comparable_scans || 0),
+      unavailable: sum.unavailable + Number(row.geometry_unavailable_scans || 0),
       disagreements: sum.disagreements + Number(row.disagreement_scans || 0),
       resolved: sum.resolved + Number(row.resolved_authority_setups || 0),
       winners: sum.winners + Number(row.authority_winners || 0),
@@ -2166,6 +2171,8 @@ function ICTEntryZoneAuthorityCard({
       missed: sum.missed + Number(row.missed_opportunities || 0),
     }), {
       observed: 0,
+      comparable: 0,
+      unavailable: 0,
       disagreements: 0,
       resolved: 0,
       winners: 0,
@@ -2177,24 +2184,34 @@ function ICTEntryZoneAuthorityCard({
   const forwardRows = rows.filter(
     (row) => row.evidence_source === "forward_observation",
   );
+  const forwardImpulseRows = forwardRows.filter(
+    (row) => row.setup_family !== "structure_poi",
+  );
+  const forwardStructureRows = forwardRows.filter(
+    (row) => row.setup_family === "structure_poi",
+  );
   const replayRows = rows.filter(
     (row) => row.evidence_source === "retrospective_replay",
   );
-  const forward = summarize(forwardRows);
+  const forwardImpulse = summarize(forwardImpulseRows);
+  const forwardStructure = summarize(forwardStructureRows);
   const replay = summarize(replayRows);
-  const ready = forwardRows.some(
+  const impulseReady = forwardImpulseRows.some(
     (row) => row.activation_eligible && row.minimum_sample_ready,
   );
-  const metrics = (totals: ReturnType<typeof summarize>) => (
+  const structureReady = forwardStructureRows.some(
+    (row) => row.activation_eligible && row.minimum_sample_ready,
+  );
+  const metrics = (totals: ReturnType<typeof summarize>, setupFamily: "impulse" | "structure_poi") => (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
       <div><p className="text-[9px] text-muted-foreground">Observed</p><p className="font-mono font-bold">{totals.observed}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Different choice</p><p className="font-mono font-bold">{totals.disagreements}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Comparable" : "Different choice"}</p><p className="font-mono font-bold">{setupFamily === "structure_poi" ? totals.comparable : totals.disagreements}</p></div>
       <div><p className="text-[9px] text-muted-foreground">Resolved</p><p className="font-mono font-bold">{totals.resolved}</p></div>
       <div><p className="text-[9px] text-muted-foreground">Would win</p><p className="font-mono font-bold text-success">{totals.winners}</p></div>
       <div><p className="text-[9px] text-muted-foreground">Would lose</p><p className="font-mono font-bold text-destructive">{totals.losers}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Winners kept</p><p className="font-mono font-bold text-success">{totals.retained}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Losers avoided</p><p className="font-mono font-bold text-success">{totals.avoided}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Missed</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Geometry unavailable" : "Winners kept"}</p><p className="font-mono font-bold">{setupFamily === "structure_poi" ? totals.unavailable : totals.retained}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Added losses" : "Losers avoided"}</p><p className={`font-mono font-bold ${setupFamily === "structure_poi" ? "text-destructive" : "text-success"}`}>{setupFamily === "structure_poi" ? totals.losers : totals.avoided}</p></div>
+      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Missed winners" : "Missed"}</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
     </div>
   );
   return (
@@ -2215,12 +2232,24 @@ function ICTEntryZoneAuthorityCard({
       <CardContent className="space-y-3 px-4 pb-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium">Forward Observation</p>
+            <p className="text-[11px] font-medium">Forward Observation · Impulse-owned</p>
             <Badge variant="outline" className="border-success/40 text-success text-[9px]">
-              {ready ? "READY FOR REVIEW" : "COLLECTING"}
+              {impulseReady ? "READY FOR REVIEW" : "COLLECTING"}
             </Badge>
           </div>
-          {metrics(forward)}
+          {metrics(forwardImpulse, "impulse")}
+        </div>
+        <div className="space-y-2 rounded border border-amber-500/25 bg-amber-500/5 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-medium">Forward Observation · Structure POI</p>
+              <p className="text-[9px] text-muted-foreground">Existing OB/FVG/breaker selector when the impulse path has no executable zone.</p>
+            </div>
+            <Badge variant="outline" className="border-amber-500/40 text-amber-500 text-[9px]">
+              {structureReady ? "READY FOR REVIEW" : "COLLECTING"}
+            </Badge>
+          </div>
+          {metrics(forwardStructure, "structure_poi")}
         </div>
         <div className="space-y-2 rounded border border-cyan-500/25 bg-cyan-500/5 p-2">
           <div className="flex items-center justify-between gap-2">
@@ -2229,7 +2258,7 @@ function ICTEntryZoneAuthorityCard({
               RESEARCH ONLY
             </Badge>
           </div>
-          {metrics(replay)}
+          {metrics(replay, "impulse")}
         </div>
         <p className="text-[9px] text-muted-foreground">
           Replay uses only later candles for outcomes and can never satisfy the

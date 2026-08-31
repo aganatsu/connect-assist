@@ -307,6 +307,7 @@ Deno.serve(async (req: Request) => {
       const { data: authorityRows, error: authorityFetchErr } = await supabase
         .from("ict_entry_zone_authority_observations")
         .select("id, symbol, direction, entry_price, stop_loss, take_profit, observed_at")
+        .eq("comparison_status", "comparable")
         .eq("outcome_status", "pending")
         .lt("observed_at", authorityCutoff)
         .order("observed_at", { ascending: true })

@@ -55,7 +55,12 @@ select the production entry zone.
       `findUnifiedZone`, using the existing closed-bar OB/FVG/breaker detectors
       and the existing `structure_poi` selector mode. The result is diagnostics
       only and does not affect admission or execution.
-- [ ] Collect forward outcomes; retrospective replay cannot unlock execution.
+- [x] Collect forward outcomes for distinct `structure_poi` disagreements in
+      the existing entry-zone observation table. Comparable rows reuse the
+      shared stop/target, effective R:R, immutable candle-snapshot references,
+      and outcome simulation owners. Geometry failures remain visible as
+      unavailable evidence. Retrospective replay remains ineligible and this
+      path has no setup-admission or execution authority.
 
 ## Safety Rule
 

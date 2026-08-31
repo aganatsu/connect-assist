@@ -738,12 +738,20 @@ export type Database = {
           authority_zone_low: number
           authority_zone_type: string
           bot_id: string
+          candle_snapshot_refs: Json
+          comparison_status: string
           component_ids: string[]
+          cost_assumptions: Json | null
           created_at: string
+          current_impulse_decision: Json | null
+          decision_observations: Json | null
           direction: string
           disagreed: boolean
-          entry_price: number
+          effective_risk_reward: number | null
+          entry_price: number | null
           evidence_source: string
+          geometry_failure_reason: string | null
+          gross_risk_reward: number | null
           id: string
           legacy_candidate_id: string | null
           legacy_outcome_status: string | null
@@ -751,18 +759,29 @@ export type Database = {
           legacy_zone_low: number | null
           legacy_zone_type: string | null
           mae_pips: number | null
+          minimum_risk_reward: number | null
           mfe_pips: number | null
           observed_at: string
+          opportunity_key: string | null
           outcome_checked_at: string | null
           outcome_status: string
           price_reached_entry: boolean | null
           replay_contract_version: string | null
           replay_run_id: string | null
+          risk_reward_passed: boolean | null
           scan_cycle_id: string
+          setup_family: string
           sl_hit: boolean | null
-          stop_loss: number
+          source_evidence_ids: string[]
+          source_window: Json | null
+          stop_loss: number | null
+          style_base_policy_hash: string | null
+          style_policy_hash: string | null
+          style_policy_version: string | null
           symbol: string
-          take_profit: number
+          take_profit: number | null
+          timeframe_evidence_id: string | null
+          timeframe_roles: Json | null
           tp_hit: boolean | null
           trading_style: string
           user_id: string
@@ -776,12 +795,20 @@ export type Database = {
           authority_zone_low: number
           authority_zone_type: string
           bot_id?: string
+          candle_snapshot_refs?: Json
+          comparison_status?: string
           component_ids?: string[]
+          cost_assumptions?: Json | null
           created_at?: string
+          current_impulse_decision?: Json | null
+          decision_observations?: Json | null
           direction: string
           disagreed?: boolean
-          entry_price: number
+          effective_risk_reward?: number | null
+          entry_price?: number | null
           evidence_source?: string
+          geometry_failure_reason?: string | null
+          gross_risk_reward?: number | null
           id?: string
           legacy_candidate_id?: string | null
           legacy_outcome_status?: string | null
@@ -789,18 +816,29 @@ export type Database = {
           legacy_zone_low?: number | null
           legacy_zone_type?: string | null
           mae_pips?: number | null
+          minimum_risk_reward?: number | null
           mfe_pips?: number | null
           observed_at: string
+          opportunity_key?: string | null
           outcome_checked_at?: string | null
           outcome_status?: string
           price_reached_entry?: boolean | null
           replay_contract_version?: string | null
           replay_run_id?: string | null
+          risk_reward_passed?: boolean | null
           scan_cycle_id: string
+          setup_family?: string
           sl_hit?: boolean | null
-          stop_loss: number
+          source_evidence_ids?: string[]
+          source_window?: Json | null
+          stop_loss?: number | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
           symbol: string
-          take_profit: number
+          take_profit?: number | null
+          timeframe_evidence_id?: string | null
+          timeframe_roles?: Json | null
           tp_hit?: boolean | null
           trading_style: string
           user_id: string
@@ -814,12 +852,20 @@ export type Database = {
           authority_zone_low?: number
           authority_zone_type?: string
           bot_id?: string
+          candle_snapshot_refs?: Json
+          comparison_status?: string
           component_ids?: string[]
+          cost_assumptions?: Json | null
           created_at?: string
+          current_impulse_decision?: Json | null
+          decision_observations?: Json | null
           direction?: string
           disagreed?: boolean
-          entry_price?: number
+          effective_risk_reward?: number | null
+          entry_price?: number | null
           evidence_source?: string
+          geometry_failure_reason?: string | null
+          gross_risk_reward?: number | null
           id?: string
           legacy_candidate_id?: string | null
           legacy_outcome_status?: string | null
@@ -827,18 +873,29 @@ export type Database = {
           legacy_zone_low?: number | null
           legacy_zone_type?: string | null
           mae_pips?: number | null
+          minimum_risk_reward?: number | null
           mfe_pips?: number | null
           observed_at?: string
+          opportunity_key?: string | null
           outcome_checked_at?: string | null
           outcome_status?: string
           price_reached_entry?: boolean | null
           replay_contract_version?: string | null
           replay_run_id?: string | null
+          risk_reward_passed?: boolean | null
           scan_cycle_id?: string
+          setup_family?: string
           sl_hit?: boolean | null
-          stop_loss?: number
+          source_evidence_ids?: string[]
+          source_window?: Json | null
+          stop_loss?: number | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
           symbol?: string
-          take_profit?: number
+          take_profit?: number | null
+          timeframe_evidence_id?: string | null
+          timeframe_roles?: Json | null
           tp_hit?: boolean | null
           trading_style?: string
           user_id?: string
@@ -4312,16 +4369,19 @@ export type Database = {
           authority_losers: number | null
           authority_winners: number | null
           bot_id: string | null
+          comparable_scans: number | null
           disagreement_scans: number | null
           enforcement: string | null
           evidence_source: string | null
           false_positives: number | null
+          geometry_unavailable_scans: number | null
           losers_avoided: number | null
           minimum_sample_ready: boolean | null
           missed_opportunities: number | null
           observed_scans: number | null
           replay_runs: number | null
           resolved_authority_setups: number | null
+          setup_family: string | null
           symbol: string | null
           trading_style: string | null
           user_id: string | null
