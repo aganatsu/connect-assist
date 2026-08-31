@@ -759,8 +759,8 @@ export type Database = {
           legacy_zone_low: number | null
           legacy_zone_type: string | null
           mae_pips: number | null
-          minimum_risk_reward: number | null
           mfe_pips: number | null
+          minimum_risk_reward: number | null
           observed_at: string
           opportunity_key: string | null
           outcome_checked_at: string | null
@@ -816,8 +816,8 @@ export type Database = {
           legacy_zone_low?: number | null
           legacy_zone_type?: string | null
           mae_pips?: number | null
-          minimum_risk_reward?: number | null
           mfe_pips?: number | null
+          minimum_risk_reward?: number | null
           observed_at: string
           opportunity_key?: string | null
           outcome_checked_at?: string | null
@@ -873,8 +873,8 @@ export type Database = {
           legacy_zone_low?: number | null
           legacy_zone_type?: string | null
           mae_pips?: number | null
-          minimum_risk_reward?: number | null
           mfe_pips?: number | null
+          minimum_risk_reward?: number | null
           observed_at?: string
           opportunity_key?: string | null
           outcome_checked_at?: string | null
