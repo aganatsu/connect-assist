@@ -725,7 +725,15 @@ function buildNoZoneResult(
     unifiedScore: 0,
     scoreBreakdown: { baseScore: 0, liquidityBonus: 0, confirmationBonus: 0, tfBonus: 0, total: 0 },
     storySummary: qualification
-      ? `${qualification.state === "developing" ? "Impulse candidate not yet qualified" : "Invalidated structural leg"}: ${qualification.reasons.join("; ")}`
+      ? `${qualification.state === "forming"
+        ? "Structural leg is still forming"
+        : qualification.state === "completed_unqualified"
+        ? "Completed structural leg did not qualify"
+        : qualification.state === "stale"
+        ? "Structural leg is stale"
+        : qualification.state === "invalidated"
+        ? "Invalidated structural leg"
+        : "Qualified structural leg has no executable entry zone"}: ${qualification.reasons.join("; ")}`
       : `No valid ${direction} structural leg found on any timeframe.`,
     multiTFResult,
     state: impulse ? "no_zone" : "no_impulse",

@@ -235,7 +235,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
 
   it("shows the engine-owned impulse qualification state", () => {
     render(<ZoneStoryPanel unifiedData={unifiedData} gateData={gateData} symbol="GBP/USD" />);
-    expect(screen.getByText("qualified")).toBeTruthy();
+    expect(screen.getByText("QUALIFIED")).toBeTruthy();
   });
 
   it("keeps timeframe diagnostics available when no impulse was found", () => {
@@ -348,7 +348,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
             spanBars: 7,
             bosPrice: 1.62313,
             qualification: {
-              state: "developing",
+              state: "forming",
               reasons: ["No accepted FVG or Order Block was created by the impulse"],
               measurements: { breakType: "choch" },
             },
@@ -388,7 +388,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText("— No Entry Zone")).toBeTruthy();
     expect(screen.getByText("impulse via 1H")).toBeTruthy();
     expect(screen.getByText("1.63148 → 1.62313")).toBeTruthy();
-    expect(screen.getByText("NOT YET QUALIFIED")).toBeTruthy();
+    expect(screen.getByText("FORMING")).toBeTruthy();
     expect(screen.getByText("Extended after CHoCH")).toBeTruthy();
     expect(screen.getByText("CHoCH")).toBeTruthy();
     expect(screen.getByText(/confirmed/)).toBeTruthy();
@@ -401,5 +401,31 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText(/1H impulse candidate inspected; no entry zone selected/)).toBeTruthy();
     expect(screen.queryByText(/1H zone selected/)).toBeNull();
     expect(screen.queryByText(/Waiting for confirmation/)).toBeNull();
+  });
+
+  it("labels a completed BOS leg without an entry zone as completed rather than forming", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          hasZone: false,
+          state: "no_zone",
+          zone: null,
+          selectedTF: "1H",
+          impulse: {
+            ...unifiedData.impulse!,
+            qualification: {
+              state: "completed_unqualified",
+              reasons: ["No accepted FVG or Order Block was created by the impulse"],
+              measurements: { breakType: "bos" },
+            },
+          },
+        }}
+        symbol="AUD/USD"
+      />,
+    );
+
+    expect(screen.getByText("COMPLETED — NOT QUALIFIED")).toBeTruthy();
+    expect(screen.queryByText("FORMING")).toBeNull();
   });
 });

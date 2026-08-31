@@ -381,21 +381,21 @@ Deno.test("qualified impulse requires BOS, close, displacement, body strength, a
   assert(result.measurements.poiCount > 0);
 });
 
-Deno.test("CHoCH-only structural leg remains developing", () => {
+Deno.test("CHoCH-only structural leg remains forming", () => {
   const candles = generateBullishImpulseCandles(50);
   const leg = findImpulseLeg(candles, "bullish");
   assertExists(leg);
   const result = qualifyImpulseLeg(candles, { ...leg, breakType: "choch" }, mapImpulsePOIs(candles, leg), { minDisplacementATR: 1, minBodyRatio: 0.5 });
-  assertEquals(result.state, "developing");
+  assertEquals(result.state, "forming");
   assert(result.reasons.some((reason) => reason.includes("continuation BOS")));
 });
 
-Deno.test("structural leg without an impulse POI remains developing", () => {
+Deno.test("completed structural leg without an impulse POI is not called developing", () => {
   const candles = generateBullishImpulseCandles(50);
   const leg = findImpulseLeg(candles, "bullish");
   assertExists(leg);
   const result = qualifyImpulseLeg(candles, leg, [], { minDisplacementATR: 1, minBodyRatio: 0.5 });
-  assertEquals(result.state, "developing");
+  assertEquals(result.state, "completed_unqualified");
   assert(result.reasons.some((reason) => reason.includes("No accepted FVG or Order Block")));
 });
 
@@ -413,7 +413,7 @@ Deno.test("weak displacement cannot authorize an impulse zone", () => {
   const leg = findImpulseLeg(candles, "bullish");
   assertExists(leg);
   const result = qualifyImpulseLeg(candles, leg, mapImpulsePOIs(candles, leg), { minDisplacementATR: 5, minBodyRatio: 0.5 });
-  assertEquals(result.state, "developing");
+  assertEquals(result.state, "completed_unqualified");
   assert(result.reasons.some((reason) => reason.includes("Directional displacement")));
 });
 
@@ -436,13 +436,46 @@ Deno.test("choppy overlapping leg cannot qualify from one strong candle", () => 
     type: "fvg", high: 1.003, low: 1.002, candleIndex: 22,
     direction: "bullish",
   }], { minDisplacementATR: 0.5, minBodyRatio: 0.5 });
-  assertEquals(result.contractVersion, "impulse-zone-qualification.v2");
-  assertEquals(result.state, "developing");
+  assertEquals(result.contractVersion, "impulse-zone-qualification.v3");
+  assertEquals(result.state, "completed_unqualified");
   assert(result.reasons.some((reason) =>
     reason.includes("directional body dominance") ||
     reason.includes("displacement efficiency") ||
     reason.includes("candle overlap")
   ));
+});
+
+Deno.test("over-age structural leg is classified stale without changing authorization", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const oldLeg = { ...leg, endIndex: Math.max(0, candles.length - 12) };
+  const result = qualifyImpulseLeg(candles, oldLeg, mapImpulsePOIs(candles, leg), {
+    maxAgeBars: 5,
+    minDisplacementATR: 0.5,
+    minBodyRatio: 0.1,
+  });
+
+  assertEquals(result.state, "stale");
+  assertEquals(result.qualified, false);
+  assert(result.reasons.some((reason) => reason.includes("bars old")));
+});
+
+Deno.test("soft qualification keeps over-age evidence advisory", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const leg = findImpulseLeg(candles, "bullish");
+  assertExists(leg);
+  const oldLeg = { ...leg, endIndex: Math.max(0, candles.length - 12) };
+  const result = qualifyImpulseLeg(candles, oldLeg, mapImpulsePOIs(candles, leg), {
+    maxAgeBars: 5,
+    minDisplacementATR: 0.5,
+    minBodyRatio: 0.1,
+    softQualification: true,
+  });
+
+  assertEquals(result.state, "qualified");
+  assertEquals(result.qualified, true);
+  assert(result.softenedReasons.some((reason) => reason.includes("bars old")));
 });
 Deno.test("mapImpulsePOIs — returns empty for invalid impulse", () => {
   const candles = generateBullishImpulseCandles(50);
