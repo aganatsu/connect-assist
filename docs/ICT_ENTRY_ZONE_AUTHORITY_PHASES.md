@@ -51,7 +51,10 @@ select the production entry zone.
       New writes use `setup-policy-freeze.v2` with one neutral `entryZone`;
       historical `scenarioZoneStory` / `zoneStory` / `impulse_zone` evidence is
       normalized by compatibility readers without changing runtime authority.
-- [ ] Wire identical observation inputs from live scanning and backtest.
+- [x] Wire identical observation inputs from live scanning and backtest through
+      `findUnifiedZone`, using the existing closed-bar OB/FVG/breaker detectors
+      and the existing `structure_poi` selector mode. The result is diagnostics
+      only and does not affect admission or execution.
 - [ ] Collect forward outcomes; retrospective replay cannot unlock execution.
 
 ## Safety Rule

@@ -1,11 +1,14 @@
-import type {
-  CanonicalZoneLifecycleObservation,
+import {
+  classifyZoneCandidateLifecycle,
+  type CanonicalZoneLifecycleObservation,
 } from "./zoneCandidateModel.ts";
 import type {
   ZoneLocalEvidenceObservation,
   ZoneLocalEvidenceSource,
 } from "./zoneLocalConfluence.ts";
-import { distanceToBounds } from "./conceptEvidence.ts";
+import { buildConceptEvidence, distanceToBounds } from "./conceptEvidence.ts";
+import type { BreakerBlock, Candle, FairValueGap, OrderBlock } from "./smcAnalysis.ts";
+import { normalizeAnalysisTimeframeOrNull } from "./timeframeAuthority.ts";
 
 export const ICT_ENTRY_ZONE_AUTHORITY_VERSION = "ict-entry-zone-authority.v1";
 
@@ -132,6 +135,24 @@ export interface ICTStructurePoiEntryZoneSelection {
   };
 }
 
+/** Closed-bar output from the existing shared OB/FVG/breaker detectors. */
+export interface ICTDetectedStructurePoiSource {
+  timeframe: string;
+  candles: readonly Candle[];
+  orderBlocks: readonly OrderBlock[];
+  fairValueGaps: readonly FairValueGap[];
+  breakerBlocks: readonly BreakerBlock[];
+}
+
+export interface ICTDetectedStructurePoiMappingInput {
+  symbol: string;
+  direction: "bullish" | "bearish";
+  currentPrice: number;
+  observedAt: string;
+  timeframes: Record<ICTStructurePoiTimeframeRole, string>;
+  sources: readonly ICTDetectedStructurePoiSource[];
+}
+
 export type ICTNestedEntryZoneType =
   | ICTEntryZoneComponentType
   | "support_resistance"
@@ -253,6 +274,166 @@ interface ICTEntryZoneCandidateCore {
 interface ICTEntryZoneComponentGroup<T extends ICTEntryZoneRankableComponent> {
   components: T[];
   bounds?: { low: number; high: number };
+}
+
+function sourceCandle(candles: readonly Candle[], index: number): Candle | null {
+  return Number.isInteger(index) && index >= 0 && index < candles.length ? candles[index] : null;
+}
+
+function sameAnalysisTimeframe(left: string, right: string): boolean {
+  const leftTimeframe = normalizeAnalysisTimeframeOrNull(left);
+  const rightTimeframe = normalizeAnalysisTimeframeOrNull(right);
+  return leftTimeframe !== null && leftTimeframe === rightTimeframe;
+}
+
+function structurePoiLifecycle(input: {
+  direction: "bullish" | "bearish";
+  low: number;
+  high: number;
+  formationEndIndex: number;
+  candles: readonly Candle[];
+}): CanonicalZoneLifecycleObservation {
+  return classifyZoneCandidateLifecycle({
+    zone: { direction: input.direction, low: input.low, high: input.high },
+    candlesAfterFormation: input.candles.slice(input.formationEndIndex + 1),
+  });
+}
+
+/**
+ * Adapts existing detector output to the structure_poi selector contract.
+ * It deliberately preserves POIs formed before the current impulse; impulse
+ * ownership is not part of this observation-only setup family.
+ */
+export function mapDetectedStructurePoiComponents(
+  input: ICTDetectedStructurePoiMappingInput,
+): ICTStructurePoiComponent[] {
+  const components: ICTStructurePoiComponent[] = [];
+  const append = (source: ICTDetectedStructurePoiSource, candidate: {
+    concept: "order_block" | "fvg" | "breaker";
+    type: ICTEntryZoneComponentType;
+    direction: "bullish" | "bearish";
+    low: number;
+    high: number;
+    sourceStartIndex: number;
+    sourceEndIndex: number;
+    lifecycle: string;
+    displacementScore: number;
+    discriminator: string | number;
+    attributes?: Record<string, unknown>;
+  }) => {
+    const sourceStart = sourceCandle(source.candles, candidate.sourceStartIndex);
+    const sourceEnd = sourceCandle(source.candles, candidate.sourceEndIndex);
+    if (!sourceStart || !sourceEnd || candidate.direction !== input.direction) return;
+    const evidence = buildConceptEvidence({
+      concept: candidate.concept,
+      detector: {
+        name: candidate.type === "ob"
+          ? "smcAnalysis.detectOrderBlocks"
+          : candidate.type === "fvg"
+          ? "smcAnalysis.detectFVGs"
+          : "smcAnalysis.detectBreakerBlocks",
+        version: "1",
+      },
+      symbol: input.symbol,
+      timeframe: source.timeframe,
+      sourceCandleStart: sourceStart.datetime,
+      sourceCandleEnd: sourceEnd.datetime,
+      observedAt: input.observedAt,
+      direction: candidate.direction,
+      bounds: { low: candidate.low, high: candidate.high },
+      lifecycle: candidate.lifecycle,
+      discriminator: candidate.discriminator,
+      attributes: candidate.attributes,
+    });
+    components.push({
+      id: evidence.entityId,
+      evidenceId: evidence.evidenceId,
+      type: candidate.type,
+      direction: candidate.direction,
+      low: Math.min(candidate.low, candidate.high),
+      high: Math.max(candidate.low, candidate.high),
+      timeframe: source.timeframe,
+      sourceCandleStart: evidence.sourceCandleStart,
+      sourceCandleEnd: evidence.sourceCandleEnd,
+      lifecycle: structurePoiLifecycle({
+        direction: candidate.direction,
+        low: candidate.low,
+        high: candidate.high,
+        formationEndIndex: candidate.sourceEndIndex,
+        candles: source.candles,
+      }),
+      fibDepth: 0,
+      valueLocationScore: 0,
+      displacementScore: candidate.displacementScore,
+      liquidityScore: 0,
+      htfLineageScore: sameAnalysisTimeframe(source.timeframe, input.timeframes.structure) ? 1 : 0,
+      historicalSRScore: 0,
+      proximityScore: input.currentPrice >= candidate.low && input.currentPrice <= candidate.high ? 1 : 0,
+    });
+  };
+
+  for (const source of input.sources) {
+    for (const orderBlock of source.orderBlocks) {
+      if (orderBlock.type !== input.direction || orderBlock.state === "broken" || orderBlock.state === "mitigated") continue;
+      append(source, {
+        concept: "order_block", type: "ob", direction: orderBlock.type,
+        low: orderBlock.low, high: orderBlock.high,
+        sourceStartIndex: orderBlock.index, sourceEndIndex: orderBlock.index,
+        lifecycle: orderBlock.state,
+        displacementScore: orderBlock.hasDisplacement ? 2 : 0,
+        discriminator: orderBlock.index,
+        attributes: {
+          testedCount: orderBlock.testedCount,
+          hasDisplacement: orderBlock.hasDisplacement === true,
+          hasFVGAdjacency: orderBlock.hasFVGAdjacency === true,
+        },
+      });
+    }
+
+    for (const fvg of source.fairValueGaps) {
+      if (fvg.type !== input.direction || fvg.state === "filled") continue;
+      append(source, {
+        concept: "fvg", type: "fvg", direction: fvg.type,
+        low: fvg.low, high: fvg.high,
+        sourceStartIndex: Math.max(0, fvg.index - 1),
+        sourceEndIndex: Math.min(source.candles.length - 1, fvg.index + 1),
+        lifecycle: fvg.state,
+        displacementScore: Math.min(2, Math.max(0, fvg.quality ?? 0) / 4),
+        discriminator: fvg.index,
+        attributes: {
+          quality: fvg.quality ?? null,
+          fillPercent: fvg.fillPercent,
+          respectedCount: fvg.respectedCount,
+        },
+      });
+    }
+
+    for (const breaker of source.breakerBlocks) {
+      const breakerDirection = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
+      if (breakerDirection !== input.direction || breaker.subtype !== "breaker" || !breaker.isActive || breaker.state === "broken") continue;
+      const sourceOrderBlock = source.orderBlocks.find((orderBlock) =>
+        orderBlock.type === breaker.originalOBType &&
+        orderBlock.low === breaker.low && orderBlock.high === breaker.high
+      );
+      append(source, {
+        concept: "breaker", type: "breaker", direction: breakerDirection,
+        low: breaker.low, high: breaker.high,
+        sourceStartIndex: sourceOrderBlock?.index ?? breaker.mitigatedAt,
+        sourceEndIndex: breaker.mitigatedAt,
+        lifecycle: breaker.state,
+        displacementScore: sourceOrderBlock?.hasDisplacement ? 2 : 0,
+        discriminator: `${sourceOrderBlock?.index ?? "unknown"}:${breaker.mitigatedAt}`,
+        attributes: {
+          subtype: breaker.subtype,
+          originalOBType: breaker.originalOBType,
+          testedCount: breaker.testedCount,
+          breakIndex: breaker.mitigatedAt,
+        },
+      });
+    }
+  }
+
+  return components;
 }
 
 function overlap(
@@ -645,7 +826,7 @@ function structurePoiTimeframeRoles(
   timeframe: string,
 ): ICTStructurePoiTimeframeRole[] {
   return (["setup", "structure", "confirmation"] as const).filter((role) =>
-    input.timeframes[role] === timeframe
+    sameAnalysisTimeframe(input.timeframes[role], timeframe)
   );
 }
 
@@ -697,7 +878,7 @@ function selectStructurePoiEntryZone(
   input: ICTStructurePoiEntryZoneInput,
 ): ICTStructurePoiEntryZoneSelection {
   const observedAtMs = Date.parse(input.observedAt);
-  const allowedTimeframes = new Set(Object.values(input.timeframes));
+  const allowedTimeframes = Object.values(input.timeframes);
   const contextId = input.contextId.trim();
   const validContext = contextId.length > 0;
   const validCurrentPrice = Number.isFinite(input.currentPrice);
@@ -713,7 +894,7 @@ function selectStructurePoiEntryZone(
         Number.isFinite(item.high) &&
         item.high > item.low &&
         item.direction === input.direction &&
-        allowedTimeframes.has(item.timeframe) &&
+        allowedTimeframes.some((timeframe) => sameAnalysisTimeframe(timeframe, item.timeframe)) &&
         [
           item.fibDepth,
           item.valueLocationScore,

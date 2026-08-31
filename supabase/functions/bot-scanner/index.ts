@@ -4560,6 +4560,8 @@ async function runScanForUser(
           scoreBreakdown: unifiedResult.scoreBreakdown,
           candidateAuthorityObservation:
             unifiedResult.candidateAuthorityObservation ?? null,
+          structurePoiObservation:
+            unifiedResult.structurePoiObservation ?? null,
           impulse: unifiedResult.impulse,
           zone: unifiedResult.zone,
           entryZoneQualification:
@@ -4678,6 +4680,8 @@ async function runScanForUser(
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
           candidateAuthorityObservation:
             unifiedResult.candidateAuthorityObservation ?? null,
+          structurePoiObservation:
+            unifiedResult.structurePoiObservation ?? null,
           nestedPoiEntry,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };

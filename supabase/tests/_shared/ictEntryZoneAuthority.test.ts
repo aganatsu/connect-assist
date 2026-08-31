@@ -4,6 +4,7 @@ import {
   type ICTEntryZoneComponent,
   type ICTStructurePoiComponent,
   type ICTStructurePoiEntryZoneInput,
+  mapDetectedStructurePoiComponents,
   selectICTEntryZone,
 } from "../../functions/_shared/ictEntryZoneAuthority.ts";
 import { classifyZoneCandidateLifecycle } from "../../functions/_shared/zoneCandidateModel.ts";
@@ -167,6 +168,17 @@ Deno.test("structure POI selection accepts only stable closed-bar evidence on re
   assertEquals(selection.selected?.componentIds, ["valid"]);
 });
 
+Deno.test("structure POI role matching normalizes equivalent timeframe labels", () => {
+  const selection = selectICTEntryZone(structurePoiInput([
+    structurePoiComponent("one-hour", "ob", { timeframe: "1h" }),
+  ], {
+    timeframes: { setup: "1H", structure: "4H", confirmation: "15m" },
+  }));
+
+  assertEquals(selection.componentCounts, { received: 1, accepted: 1 });
+  assertEquals(selection.selected?.timeframeRoles, ["setup"]);
+});
+
 Deno.test("overlapping structure POIs form one stable composite candidate", () => {
   const components = [
     structurePoiComponent("ob:entity-2", "ob", {
@@ -194,6 +206,52 @@ Deno.test("overlapping structure POIs form one stable composite candidate", () =
     rescanned.selected?.sourceEvidenceIds,
     first.selected?.sourceEvidenceIds,
   );
+});
+
+Deno.test("pre-existing breaker evidence is selectable without current impulse ownership", () => {
+  const candles = Array.from({ length: 24 }, (_, index) => ({
+    open: 1.105, high: 1.106, low: 1.104, close: 1.105,
+    datetime: `2026-08-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
+  }));
+  const components = mapDetectedStructurePoiComponents({
+    symbol: "GBP/CHF",
+    direction: "bearish",
+    currentPrice: 1.103,
+    observedAt: candles[23].datetime,
+    timeframes: { setup: "1H", structure: "4H", confirmation: "15m" },
+    sources: [{
+      timeframe: "4H",
+      candles,
+      orderBlocks: [{
+        index: 4, high: 1.106, low: 1.104, type: "bullish",
+        datetime: candles[4].datetime, mitigated: true, mitigatedPercent: 100,
+        hasDisplacement: true, state: "broken", testedCount: 1,
+        brokenAt: 9, mitigatedAt: 9,
+      }],
+      fairValueGaps: [],
+      breakerBlocks: [{
+        type: "bearish_breaker", subtype: "breaker", high: 1.106, low: 1.104,
+        mitigatedAt: 9, originalOBType: "bullish", isActive: true,
+        state: "active", testedCount: 0,
+      }],
+    }],
+  });
+  const selection = selectICTEntryZone(structurePoiInput(components, {
+    direction: "bearish",
+    currentPrice: 1.103,
+    timeframes: { setup: "1H", structure: "4H", confirmation: "15m" },
+    observedAt: candles[23].datetime,
+  }));
+
+  assertEquals(components.length, 1);
+  assertEquals(components[0].type, "breaker");
+  assertEquals(components[0].sourceCandleStart, candles[4].datetime);
+  assertEquals(components[0].sourceCandleEnd, candles[9].datetime);
+  assertEquals(selection.selected?.type, "breaker");
+  assertEquals(selection.selected?.sourceWindow, {
+    start: candles[4].datetime,
+    end: candles[9].datetime,
+  });
 });
 
 Deno.test("legacy impulse selection still rejects components without impulse ownership", () => {

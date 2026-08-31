@@ -16,7 +16,15 @@
  *   - "Don't catch a falling knife" — never trade against the impulse
  */
 
-import { type Candle, type LiquidityPool, calculateATR } from "./smcAnalysis.ts";
+import {
+  analyzeMarketStructure,
+  type Candle,
+  type LiquidityPool,
+  calculateATR,
+  detectBreakerBlocks,
+  detectFVGs,
+  detectOrderBlocks,
+} from "./smcAnalysis.ts";
 import {
   findBestEntryZoneMultiTF,
   type MultiTFZoneResult,
@@ -40,10 +48,13 @@ import {
 } from "./zoneCandidateModel.ts";
 import { buildCrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
 import {
+  mapDetectedStructurePoiComponents,
   selectICTEntryZone,
   type ICTEntryZoneComponent,
   type ICTEntryZoneSelection,
+  type ICTStructurePoiEntryZoneSelection,
 } from "./ictEntryZoneAuthority.ts";
+import { normalizeAnalysisTimeframeOrNull } from "./timeframeAuthority.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -51,6 +62,8 @@ import {
 export interface UnifiedZoneResult {
   /** Type-neutral OB/FVG/Breaker comparison; observation-only until certified. */
   candidateAuthorityObservation?: ICTEntryZoneSelection;
+  /** Existing non-impulse POIs on style-owned timeframes; observation only. */
+  structurePoiObservation?: ICTStructurePoiEntryZoneSelection | null;
   /** Whether a valid zone was found */
   hasZone: boolean;
 
@@ -359,12 +372,22 @@ export function findUnifiedZone(
   const candidateAuthorityObservation = buildCandidateAuthorityObservation({
     multiTFResult, htfData, h4Candles, labels, direction,
   });
+  const structurePoiObservation = buildStructurePoiObservation({
+    setupCandles: h1Candles,
+    structureCandles: h4Candles,
+    confirmationCandles: entryCandles,
+    labels,
+    direction,
+    currentPrice,
+    options,
+  });
 
   // No zone found
   if (!multiTFResult.bestZone) {
     return {
       ...buildNoZoneResult(multiTFResult, direction, currentPrice, options?.pipSize ?? 0.0001, labels),
       candidateAuthorityObservation,
+      structurePoiObservation,
     };
   }
 
@@ -519,6 +542,7 @@ export function findUnifiedZone(
     state,
     reason: multiTFResult.reason,
     candidateAuthorityObservation,
+    structurePoiObservation,
   };
 }
 
@@ -616,6 +640,75 @@ function buildCandidateAuthorityObservation(input: {
     });
   }
   return selectICTEntryZone(components);
+}
+
+function buildStructurePoiObservation(input: {
+  setupCandles: Candle[];
+  structureCandles: Candle[];
+  confirmationCandles: Candle[];
+  labels: TFSlotLabels;
+  direction: "bullish" | "bearish";
+  currentPrice: number;
+  options?: ZoneEngineOptions;
+}): ICTStructurePoiEntryZoneSelection | null {
+  const evidenceContext = input.options?.evidenceContext;
+  if (!input.options?.collectEvidence || !evidenceContext) return null;
+
+  const confirmationTimeframe = input.options.entryTimeframe || evidenceContext.timeframe;
+  const sourceByTimeframe = new Map<string, { timeframe: string; candles: Candle[] }>();
+  for (const source of [
+    { timeframe: input.labels.low, candles: input.setupCandles },
+    { timeframe: input.labels.mid, candles: input.structureCandles },
+    { timeframe: confirmationTimeframe, candles: input.confirmationCandles },
+  ]) {
+    const sourceKey = normalizeAnalysisTimeframeOrNull(source.timeframe) ?? source.timeframe;
+    const existing = sourceByTimeframe.get(sourceKey);
+    if (!existing || source.candles.length > existing.candles.length) {
+      sourceByTimeframe.set(sourceKey, source);
+    }
+  }
+
+  const detectedSources = [...sourceByTimeframe.values()]
+    .filter(({ candles }) => candles.length >= 20)
+    .map(({ timeframe, candles }) => {
+      const structure = analyzeMarketStructure(candles);
+      const structureBreaks = [...structure.bos, ...structure.choch].map((event) => ({
+        index: event.index,
+        type: event.type,
+      }));
+      const orderBlocks = detectOrderBlocks(candles, structureBreaks);
+      const fairValueGaps = detectFVGs(candles, structureBreaks);
+      const breakerBlocks = detectBreakerBlocks(orderBlocks, candles, structureBreaks);
+      return { timeframe, candles, orderBlocks, fairValueGaps, breakerBlocks };
+    });
+  const observedAt = evidenceContext.observedAt ||
+    input.confirmationCandles[input.confirmationCandles.length - 1]?.datetime ||
+    input.setupCandles[input.setupCandles.length - 1]?.datetime ||
+    input.structureCandles[input.structureCandles.length - 1]?.datetime;
+  if (!observedAt) return null;
+  const contextAnchor = input.structureCandles[input.structureCandles.length - 1]?.datetime || observedAt;
+  const timeframes = {
+    setup: input.labels.low,
+    structure: input.labels.mid,
+    confirmation: confirmationTimeframe,
+  };
+  const components = mapDetectedStructurePoiComponents({
+    symbol: evidenceContext.symbol,
+    direction: input.direction,
+    currentPrice: input.currentPrice,
+    observedAt,
+    timeframes,
+    sources: detectedSources,
+  });
+  return selectICTEntryZone({
+    mode: "structure_poi",
+    contextId: `structure:${evidenceContext.symbol}:${input.direction}:${input.labels.mid}:${contextAnchor}`,
+    direction: input.direction,
+    observedAt,
+    currentPrice: input.currentPrice,
+    timeframes,
+    components,
+  });
 }
 
 function annotateZoneLiquidityObservations(input: {

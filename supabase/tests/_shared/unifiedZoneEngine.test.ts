@@ -209,6 +209,37 @@ Deno.test("findUnifiedZone — observe-only local evidence does not change the d
   );
 });
 
+Deno.test("findUnifiedZone — observes pre-existing structure POIs without requiring an impulse-owned zone", () => {
+  const setup = generateFlatCandles(24, 1.1000);
+  setup[19] = makeCandle(1.0998, 1.1002, 1.0996, 1.1000, "2026-01-20T00:00:00Z");
+  setup[20] = makeCandle(1.1001, 1.1004, 1.0999, 1.1003, "2026-01-21T00:00:00Z");
+  setup[21] = makeCandle(1.1010, 1.1030, 1.1009, 1.1028, "2026-01-22T00:00:00Z");
+  setup[22] = makeCandle(1.1032, 1.1038, 1.1031, 1.1036, "2026-01-23T00:00:00Z");
+  setup[23] = makeCandle(1.1035, 1.1040, 1.1033, 1.1038, "2026-01-24T00:00:00Z");
+  const structure = generateFlatCandles(24, 1.1000);
+  const confirmation = generateFlatCandles(24, 1.1038);
+
+  const result = findUnifiedZone(
+    setup, structure, confirmation, "bullish", 1.1038, [], undefined,
+    {
+      collectEvidence: true,
+      entryTimeframe: "15m",
+      evidenceContext: {
+        symbol: "EUR/USD",
+        timeframe: "1H",
+        observedAt: "2026-01-24T00:00:00Z",
+      },
+    },
+    undefined, undefined, undefined, undefined,
+    { top: "D", mid: "4H", low: "1H" },
+  );
+
+  assertEquals(result.structurePoiObservation?.enforcement, "observe_only");
+  assertEquals(result.structurePoiObservation?.affectsAuthorization, false);
+  assert(result.structurePoiObservation?.selected?.components.includes("fvg"));
+  assertEquals(result.structurePoiObservation?.selected?.timeframe, "1H");
+});
+
 Deno.test("findUnifiedZone — entry direction matches impulse direction (continuation)", () => {
   const h4 = generateBearishImpulseCandles(40, 1.1000, 0.0200);
   const h1 = generateBearishImpulseCandles(50, 1.1000, 0.0150);
