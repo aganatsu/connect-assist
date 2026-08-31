@@ -73,10 +73,15 @@ export interface ImpulseLeg {
   spanBars?: number;    // Number of candles in the impulse leg
 }
 
-export type ImpulseQualificationState = "developing" | "qualified" | "invalidated";
+export type ImpulseQualificationState =
+  | "forming"
+  | "completed_unqualified"
+  | "qualified"
+  | "stale"
+  | "invalidated";
 
 export interface ImpulseQualification {
-  contractVersion: "impulse-zone-qualification.v2";
+  contractVersion: "impulse-zone-qualification.v3";
   state: ImpulseQualificationState;
   qualified: boolean;
   reasons: string[];
@@ -731,11 +736,22 @@ export function qualifyImpulseLeg(
   const blocking = soft ? structuralReasons : [...structuralReasons, ...qualityReasons];
   const reasons = [...structuralReasons, ...qualityReasons];
   const softenedReasons = soft ? [...qualityReasons] : [];
+  // Hand-marked soft qualification deliberately treats age as advisory. Keep
+  // that authorization behavior intact while making hard-mode diagnostics
+  // distinguish an old leg from one that can still complete structurally.
+  const stale = !soft && maxAgeBars > 0 && metrics.recencyBars > maxAgeBars;
+  const structureStillForming = leg.breakType !== "bos" || leg.closeBased !== true;
   const state: ImpulseQualificationState = !leg.isValid
     ? "invalidated"
-    : blocking.length === 0 ? "qualified" : "developing";
+    : stale
+    ? "stale"
+    : blocking.length === 0
+    ? "qualified"
+    : structureStillForming
+    ? "forming"
+    : "completed_unqualified";
   return {
-    contractVersion: "impulse-zone-qualification.v2",
+    contractVersion: "impulse-zone-qualification.v3",
     state,
     qualified: state === "qualified",
     softenedReasons,

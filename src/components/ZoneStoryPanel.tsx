@@ -55,7 +55,17 @@ interface ZoneStoryData {
     breakDate?: string | null;
     extendedBeyondBreak?: boolean;
     spanBars: number;
-    qualification?: { state: "developing" | "qualified" | "invalidated"; reasons: string[]; measurements: Record<string, unknown> } | null;
+    qualification?: {
+      state:
+        | "forming"
+        | "completed_unqualified"
+        | "qualified"
+        | "stale"
+        | "invalidated"
+        | "developing";
+      reasons: string[];
+      measurements: Record<string, unknown>;
+    } | null;
     bosPrice: number;
   } | null;
   zone: {
@@ -344,9 +354,27 @@ export function ZoneStoryPanel({
     unifiedData.impulse &&
       (!impulseQualificationState || impulseQualificationState === "qualified"),
   );
-  const impulseIsDeveloping = Boolean(
-    unifiedData.impulse && impulseQualificationState === "developing",
+  const impulseIsForming = Boolean(
+    unifiedData.impulse &&
+      (impulseQualificationState === "forming" ||
+        impulseQualificationState === "developing"),
   );
+  const impulseQualificationLabel = impulseQualificationState === "forming" ||
+      impulseQualificationState === "developing"
+    ? "FORMING"
+    : impulseQualificationState === "completed_unqualified"
+    ? "COMPLETED — NOT QUALIFIED"
+    : impulseQualificationState === "stale"
+    ? "STALE"
+    : impulseQualificationState?.toUpperCase();
+  const impulseQualificationColor = impulseQualificationState === "qualified"
+    ? "text-emerald-400"
+    : impulseQualificationState === "forming" ||
+        impulseQualificationState === "developing"
+    ? "text-amber-400"
+    : impulseQualificationState === "completed_unqualified"
+    ? "text-orange-400"
+    : "text-red-400";
   const impulseBreakType = String(
     unifiedData.impulse?.breakType ??
       unifiedData.impulse?.qualification?.measurements?.breakType ??
@@ -460,7 +488,7 @@ export function ZoneStoryPanel({
           {/* Impulse Row */}
           <tr className="border-b border-zinc-800/50">
             <td className="py-1.5 pr-2 align-top w-5">
-              <Bullet filled={impulseIsQualified} partial={impulseIsDeveloping} />
+              <Bullet filled={impulseIsQualified} partial={impulseIsForming} />
             </td>
             <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap w-24">
               Impulse
@@ -479,10 +507,8 @@ export function ZoneStoryPanel({
                     </span>
                   )}
                   {unifiedData.impulse.qualification && (
-                    <span className={`ml-2 font-mono text-[10px] uppercase ${unifiedData.impulse.qualification.state === "qualified" ? "text-emerald-400" : unifiedData.impulse.qualification.state === "developing" ? "text-amber-400" : "text-red-400"}`}>
-                      {unifiedData.impulse.qualification.state === "developing"
-                        ? "NOT YET QUALIFIED"
-                        : unifiedData.impulse.qualification.state}
+                    <span className={`ml-2 font-mono text-[10px] uppercase ${impulseQualificationColor}`}>
+                      {impulseQualificationLabel}
                     </span>
                   )}
                 </div>
