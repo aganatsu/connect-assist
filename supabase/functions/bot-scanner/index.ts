@@ -4816,6 +4816,145 @@ async function runScanForUser(
               rollingPercent: analysis.pd.zonePercent,
             }),
           };
+
+          // Forward research only: when the impulse path has no executable
+          // zone but the existing type-neutral selector found a structure POI,
+          // freeze a comparable counterfactual through the same stop, target,
+          // cost and outcome owners used elsewhere. This row is never read by
+          // setup admission, staging, pending orders, sizing, or execution.
+          const structurePoiAuthority = unifiedResult.structurePoiObservation;
+          const structurePoiCandidate = structurePoiAuthority?.selected;
+          if (!multiTF.bestZone && structurePoiAuthority && structurePoiCandidate) {
+            try {
+              const structurePoiDirection = structurePoiCandidate.direction === "bullish"
+                ? "long"
+                : "short";
+              const structurePoiSpec = SPECS[pair] || SPECS["EUR/USD"];
+              const structurePoiZone: PendingEntryZone = {
+                price: structurePoiCandidate.entryPrice,
+                zoneType: structurePoiCandidate.type,
+                zoneLow: structurePoiCandidate.low,
+                zoneHigh: structurePoiCandidate.high,
+              };
+              const structurePoiInvalidation = deriveWatchlistInvalidation({
+                direction: structurePoiDirection,
+                zone: structurePoiZone,
+                proposedLevel: structurePoiCandidate.structuralInvalidation,
+                bufferPrice: adjustedSlBuffer * structurePoiSpec.pipSize,
+              });
+              const structurePoiStructuralLevel = Number(structurePoiInvalidation.level);
+              const structurePoiForwardPlan = Number.isFinite(structurePoiStructuralLevel) && structurePoiStructuralLevel > 0
+                ? buildConfiguredPreArmedPlan({
+                  direction: structurePoiDirection,
+                  zone: structurePoiZone,
+                  structuralInvalidation: structurePoiStructuralLevel,
+                  preferredPositionStop: null,
+                  symbol: pair,
+                  atrValue: (analysis as any).atrValue,
+                  config: pairConfig,
+                  analysis,
+                })
+                : { valid: false as const, reason: "Structural invalidation unavailable" };
+              const structurePoiTrade = structurePoiForwardPlan.valid
+                ? {
+                  entryPrice: structurePoiForwardPlan.plan.entryPrice,
+                  stopLoss: structurePoiForwardPlan.plan.stopLoss,
+                  takeProfit: structurePoiForwardPlan.plan.takeProfit,
+                }
+                : null;
+              const structurePoiLocation = evaluateCanonicalDealingRange({
+                range: canonicalRangeSelection.range,
+                direction: structurePoiDirection,
+                price: structurePoiCandidate.entryPrice,
+                mode: canonicalMode,
+              });
+              const structurePoiThesis = validatePendingOrderThesis({
+                order_id: `observe:structure_poi:${scanCycleId}:${pair}`,
+                symbol: pair,
+                direction: structurePoiDirection,
+                entry_price: structurePoiCandidate.entryPrice,
+                signal_reason: {
+                  directionVerdict: (detail as any).directionVerdict || null,
+                },
+              }, {
+                fotsiResult: _fotsiResult,
+                lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
+                dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
+                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+                h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
+                decisionEvidence: pairDecisionEvidence,
+              });
+              const structurePoiStructureDecision = evaluateCanonicalStructureDecision({
+                direction: structurePoiDirection,
+                structure: canonicalStructureAuthority,
+                liquidity: canonicalLiquiditySequence,
+                requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
+              });
+              const snapshotTimeframes = [...new Set(Object.values(structurePoiAuthority.timeframes))];
+              await persistICTEntryZoneObservation(supabase, {
+                setupFamily: "structure_poi",
+                userId,
+                botId: BOT_ID,
+                scanCycleId,
+                symbol: pair,
+                tradingStyle: resolvedStyle,
+                observedAt: timeframeEvidenceRow.observed_at,
+                stylePolicyVersion: pairStylePolicy.contractVersion,
+                styleBasePolicyHash: pairStylePolicy.basePolicyHash,
+                stylePolicyHash: pairStylePolicy.policyHash,
+                authority: structurePoiAuthority,
+                validationTrade: structurePoiTrade,
+                geometryFailureReason: structurePoiForwardPlan.valid
+                  ? null
+                  : structurePoiForwardPlan.reason,
+                minimumRiskReward: Number(pairConfig.minRiskReward ?? 1),
+                spreadPips: Number(structurePoiSpec.typicalSpread || 0),
+                spreadSource: "instrument_typical",
+                commissionPerLot: avgCommissionPerLot,
+                rateMap,
+                currentImpulseDecision: {
+                  hasExecutableZone: false,
+                  state: unifiedResult.state,
+                  selectedTimeframe: multiTF.selectedTF,
+                  reason: unifiedResult.reason,
+                  impulseQualification: unifiedResult.impulse?.qualification ?? null,
+                  entryZoneQualification: unifiedResult.entryZoneQualification ?? null,
+                },
+                decisionObservations: {
+                  contractVersion: "structure-poi-forward-observation.v1",
+                  observationOnly: true,
+                  affectsAuthorization: false,
+                  direction: (detail as any).directionVerdict || null,
+                  structure: structurePoiStructureDecision,
+                  location: structurePoiLocation,
+                  liquidity: {
+                    evaluated: true,
+                    candidateSequencingEvaluated: false,
+                    reason: "Candidate is not activated; sequence is preserved without inferring post-touch order",
+                    authority: canonicalLiquiditySequence,
+                  },
+                  confirmation: {
+                    evaluated: false,
+                    method: pairConfig.confirmationMethod || "choch",
+                    reason: "zone_touch_pending",
+                  },
+                  thesis: structurePoiThesis,
+                  safety: {
+                    evaluated: false,
+                    reason: "Observation-only candidate has not reached final authorization",
+                  },
+                },
+                timeframeEvidenceId: timeframeEvidenceRow.id,
+                candleSnapshotRefs: snapshotTimeframes.map((timeframe) => ({
+                  scanCycleId,
+                  symbol: pair,
+                  timeframe,
+                })),
+              });
+            } catch (structurePoiEvidenceError: any) {
+              console.warn(`[scan ${scanCycleId}] ${pair} structure POI forward evidence unavailable (non-fatal): ${structurePoiEvidenceError?.message}`);
+            }
+          }
         } catch (tfEvidenceErr: any) {
           console.warn(
             `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`

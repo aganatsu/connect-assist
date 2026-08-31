@@ -121,7 +121,7 @@ export async function persistICTEntryZoneReplayEvidence(
       mae_pips: Number((authorityOutcome.mae_pips / input.pipSize).toFixed(2)),
       legacy_outcome_status: legacyOutcome ? resolvedStatus(legacyOutcome) : null,
     }, {
-      onConflict: "user_id,bot_id,scan_cycle_id,symbol",
+      onConflict: "user_id,bot_id,scan_cycle_id,symbol,setup_family",
       ignoreDuplicates: true,
     })
     .select("id");

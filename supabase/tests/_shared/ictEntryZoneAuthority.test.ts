@@ -139,7 +139,12 @@ Deno.test("structure POIs use the existing type-neutral selector without an impu
   assertEquals(selection.selected?.affectsAuthorization, false);
   assertEquals(selection.mode, "structure_poi");
   assertEquals(selection.setupFamily, "structure_poi");
+  assertEquals(selection.timeframes, {
+    setup: "5m", structure: "15m", confirmation: "5m",
+  });
   assertEquals(selection.selected?.type, "fvg");
+  assertEquals(selection.selected?.entryPrice, 1.103);
+  assertEquals(selection.selected?.structuralInvalidation, 1.102);
   assertEquals(selection.selected?.contextId, "liquidity:sweep-1:choch-1");
   assertEquals(selection.selected?.timeframeRoles, ["setup", "confirmation"]);
   assertEquals(selection.selected?.sourceEvidenceIds, [
@@ -252,6 +257,8 @@ Deno.test("pre-existing breaker evidence is selectable without current impulse o
     start: candles[4].datetime,
     end: candles[9].datetime,
   });
+  assertEquals(selection.selected?.entryPrice, 1.104);
+  assertEquals(selection.selected?.structuralInvalidation, 1.106);
 });
 
 Deno.test("legacy impulse selection still rejects components without impulse ownership", () => {

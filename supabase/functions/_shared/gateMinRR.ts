@@ -46,6 +46,11 @@ export interface MinRRGateInput {
 export interface MinRRGateResult {
   passed: boolean;
   reason: string;
+  rawRiskReward: number | null;
+  effectiveRiskReward: number | null;
+  spreadPips: number;
+  commissionPerLot: number;
+  totalCostInPrice: number;
 }
 
 /**
@@ -54,34 +59,44 @@ export interface MinRRGateResult {
  */
 export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
   const { lastPrice, stopLoss, takeProfit, symbol, minRiskReward } = input;
+  const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
+  const effectiveSpreadPips = resolveEffectiveSpreadPips(
+    input.spreadPipsOverride,
+    pairSpec.typicalSpread ?? 1,
+  );
+  const commPerLot = input.commissionPerLot ?? 0;
 
   if (!stopLoss || !takeProfit) {
     return {
       passed: false,
       reason: "Trade rejected: Risk/Reward cannot be calculated because a valid stop-loss and take-profit are required",
+      rawRiskReward: null,
+      effectiveRiskReward: null,
+      spreadPips: effectiveSpreadPips,
+      commissionPerLot: commPerLot,
+      totalCostInPrice: 0,
     };
   }
 
-  const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
   const risk = Math.abs(lastPrice - stopLoss);
   const rawReward = Math.abs(takeProfit - lastPrice);
   if (risk <= 0) {
     return {
       passed: false,
       reason: "Trade rejected: Risk/Reward cannot be calculated because stop-loss risk is zero",
+      rawRiskReward: null,
+      effectiveRiskReward: null,
+      spreadPips: effectiveSpreadPips,
+      commissionPerLot: commPerLot,
+      totalCostInPrice: 0,
     };
   }
 
   // Spread cost in price terms
-  const effectiveSpreadPips = resolveEffectiveSpreadPips(
-    input.spreadPipsOverride,
-    pairSpec.typicalSpread ?? 1,
-  );
   const spreadCostInPrice = effectiveSpreadPips * pairSpec.pipSize;
 
   // Commission cost in price terms (optional — live path only)
   let commCostInPrice = 0;
-  const commPerLot = input.commissionPerLot ?? 0;
   if (commPerLot > 0) {
     const quoteToUSD = getQuoteToUSDRate(symbol, input.rateMap);
     commCostInPrice = commPerLot / (pairSpec.lotUnits * quoteToUSD);
@@ -105,11 +120,21 @@ export function checkMinRR(input: MinRRGateInput): MinRRGateResult {
     return {
       passed: false,
       reason: `Trade rejected: effective R:R is ${effectiveRR.toFixed(2)}, below the required ${minRiskReward.toFixed(2)}. Raw R:R is ${rawRR.toFixed(2)} before costs (${costDetail})`,
+      rawRiskReward: Number(rawRR.toFixed(4)),
+      effectiveRiskReward: Number(effectiveRR.toFixed(4)),
+      spreadPips: effectiveSpreadPips,
+      commissionPerLot: commPerLot,
+      totalCostInPrice,
     };
   }
 
   return {
     passed: true,
     reason: `Risk/Reward passed: effective R:R ${effectiveRR.toFixed(2)} meets the required ${minRiskReward.toFixed(2)} (${rawRR.toFixed(2)} raw before ${costDetail})`,
+    rawRiskReward: Number(rawRR.toFixed(4)),
+    effectiveRiskReward: Number(effectiveRR.toFixed(4)),
+    spreadPips: effectiveSpreadPips,
+    commissionPerLot: commPerLot,
+    totalCostInPrice,
   };
 }

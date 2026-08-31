@@ -103,6 +103,10 @@ export interface ICTStructurePoiEntryZoneCandidate {
   direction: "bullish" | "bearish";
   low: number;
   high: number;
+  /** First-touch entry at the near edge of the frozen POI. */
+  entryPrice: number;
+  /** Unbuffered far edge; the shared invalidation owner applies policy buffer. */
+  structuralInvalidation: number;
   timeframe: string;
   timeframeRoles: ICTStructurePoiTimeframeRole[];
   componentIds: string[];
@@ -126,6 +130,7 @@ export interface ICTStructurePoiEntryZoneSelection {
   mode: "structure_poi";
   setupFamily: "structure_poi";
   contextId: string;
+  timeframes: Record<ICTStructurePoiTimeframeRole, string>;
   selected: ICTStructurePoiEntryZoneCandidate | null;
   ranked: ICTStructurePoiEntryZoneCandidate[];
   explanation: string;
@@ -852,6 +857,10 @@ function structurePoiCandidateFor(
     ...core,
     id: `structure_poi:${core.id}`,
     contextId,
+    entryPrice: core.direction === "bullish" ? core.high : core.low,
+    structuralInvalidation: core.direction === "bullish"
+      ? core.low
+      : core.high,
     timeframeRoles,
     sourceEvidenceIds: [...new Set(components.map((item) => item.evidenceId))]
       .sort(),
@@ -926,6 +935,7 @@ function selectStructurePoiEntryZone(
     mode: "structure_poi",
     setupFamily: "structure_poi",
     contextId,
+    timeframes: { ...input.timeframes },
     selected,
     ranked: candidates,
     explanation: selected

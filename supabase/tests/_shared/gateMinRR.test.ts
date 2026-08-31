@@ -40,8 +40,10 @@ Deno.test("checkMinRR: bot-scanner path (no spread override) matches backtest pa
   assertEquals(botScannerResult.passed, backtestResult.passed,
     "Bot-scanner and backtest-engine disagree on pass/fail for identical spread");
   assertEquals(botScannerResult.passed, true);
-  // Verify the effective R:R calculation: reward = 0.0060 - (1 * 0.0001) = 0.0059
-  // effectiveRR = 0.0059 / 0.0020 = 2.95 → passes min 2.0
+  assertEquals(botScannerResult.rawRiskReward, 3);
+  assertEquals(botScannerResult.effectiveRiskReward, 2.8095);
+  // Verify the effective R:R calculation: reward = 0.0060 - 0.0001,
+  // risk = 0.0020 + 0.0001, so effectiveRR = 2.8095.
 });
 
 Deno.test("checkMinRR: both engines FAIL for identical inputs below threshold", () => {
