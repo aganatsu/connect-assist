@@ -349,11 +349,17 @@ describe("ZoneStoryPanel zone-local explanations", () => {
             bosPrice: 1.62313,
             qualification: {
               state: "forming",
-              reasons: ["No accepted FVG or Order Block was created by the impulse"],
+              reasons: ["CHoCH detected, but a continuation BOS is still required"],
               measurements: { breakType: "choch" },
             },
           },
           zone: null,
+          entryZoneQualification: {
+            state: "missing",
+            stage: "mapping",
+            qualified: false,
+            reasons: ["No FVG or Order Block candidate was mapped to the impulse"],
+          },
           price: {
             currentPrice: 1.624,
             atZone: false,
@@ -393,7 +399,8 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText("CHoCH")).toBeTruthy();
     expect(screen.getByText(/confirmed/)).toBeTruthy();
     expect(screen.queryByText("BOS")).toBeNull();
-    expect(screen.getByText("No qualified entry zone")).toBeTruthy();
+    expect(screen.getByText("No entry-zone candidate mapped")).toBeTruthy();
+    expect(screen.getByText("No FVG or Order Block candidate was mapped to the impulse")).toBeTruthy();
     expect(screen.getByText("NOT APPLIED")).toBeTruthy();
     expect(screen.queryByText("ALLOWED")).toBeNull();
     expect(screen.getAllByText("Not evaluated — no entry zone")).toHaveLength(2);
@@ -416,9 +423,15 @@ describe("ZoneStoryPanel zone-local explanations", () => {
             ...unifiedData.impulse!,
             qualification: {
               state: "completed_unqualified",
-              reasons: ["No accepted FVG or Order Block was created by the impulse"],
+              reasons: ["Directional displacement 1.20x ATR is below 2.50x"],
               measurements: { breakType: "bos" },
             },
+          },
+          entryZoneQualification: {
+            state: "missing",
+            stage: "mapping",
+            qualified: false,
+            reasons: ["No FVG or Order Block candidate was mapped to the impulse"],
           },
         }}
         symbol="AUD/USD"
@@ -426,6 +439,7 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     );
 
     expect(screen.getByText("COMPLETED — NOT QUALIFIED")).toBeTruthy();
+    expect(screen.getByText("No entry-zone candidate mapped")).toBeTruthy();
     expect(screen.queryByText("FORMING")).toBeNull();
   });
 });

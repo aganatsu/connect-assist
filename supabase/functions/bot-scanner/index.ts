@@ -4562,6 +4562,8 @@ async function runScanForUser(
             unifiedResult.candidateAuthorityObservation ?? null,
           impulse: unifiedResult.impulse,
           zone: unifiedResult.zone,
+          entryZoneQualification:
+            unifiedResult.entryZoneQualification ?? null,
           price: unifiedResult.price,
           liquidity: unifiedResult.liquidity ? {
             liquidityScore: unifiedResult.liquidity.liquidityScore,
@@ -4608,6 +4610,8 @@ async function runScanForUser(
           hasZone: !!multiTF.bestZone,
           selectedTF: multiTF.selectedTF,
           impulseQualification: unifiedResult.impulse?.qualification ?? null,
+          entryZoneQualification:
+            unifiedResult.entryZoneQualification ?? null,
           reason: multiTF.reason,
           impulse: multiTF.bestZone?.impulse ? {
             high: multiTF.bestZone.impulse.high,

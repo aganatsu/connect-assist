@@ -221,6 +221,17 @@ returns reconciliation-required. Only a position locked as paper-only may
 finalize without broker work. Partial-close and protective-order reconciliation
 remain distinct operations in the same owner module.
 
+## Impulse and entry-zone qualification ownership
+
+`impulseZoneEngine.ts:qualifyImpulseLeg` owns only the structural impulse
+contract: origin validity, BOS/CHoCH completion, close confirmation, recency and
+impulse-quality measurements. It must not decide whether an FVG or Order Block
+exists. `qualifyImpulsePOIs` and the existing downstream Fib, bounds and ranking
+stages own entry-zone qualification. `ZoneEngineResult.entryZoneQualification`
+records the exact stage that selected or rejected the zone. Runtime eligibility
+still requires both contracts; this separation changes diagnostics, not which
+setups execute.
+
 ## Impulse entry lifecycle zone identity
 
 `frozenCrossTimeframeContext.ts` seeds the lifecycle active candidate from the exact

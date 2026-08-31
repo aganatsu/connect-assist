@@ -257,7 +257,8 @@ export function buildFrozenCrossTimeframeContext(input: {
   const lifecycleImpulseQualified = impulseQualification.qualified === true &&
     impulseQualification.state === "qualified" &&
     (qualificationContractVersion === "impulse-zone-qualification.v2" ||
-      qualificationContractVersion === "impulse-zone-qualification.v3");
+      qualificationContractVersion === "impulse-zone-qualification.v3" ||
+      qualificationContractVersion === "impulse-zone-qualification.v4");
   const requestedExecutableZone = record(input.executableZone);
   const executableZone = Object.keys(requestedExecutableZone).length > 0
     ? {

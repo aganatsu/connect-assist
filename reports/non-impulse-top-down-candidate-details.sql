@@ -91,6 +91,16 @@ pair_rows AS (
     ) AS impulse_qualification_state,
     item.detail #> '{unifiedZone,impulse,qualification,reasons}'
       AS impulse_qualification_reasons,
+    NULLIF(
+      item.detail #>> '{unifiedZone,entryZoneQualification,state}',
+      ''
+    ) AS entry_zone_qualification_state,
+    NULLIF(
+      item.detail #>> '{unifiedZone,entryZoneQualification,stage}',
+      ''
+    ) AS entry_zone_qualification_stage,
+    item.detail #> '{unifiedZone,entryZoneQualification,reasons}'
+      AS entry_zone_qualification_reasons,
     NULLIF(item.detail #>> '{unifiedZone,impulse,direction}', '')
       AS impulse_direction,
     NULLIF(item.detail #>> '{unifiedZone,impulse,timeframe}', '')
@@ -284,6 +294,9 @@ SELECT
   c.unified_state,
   c.impulse_qualification_state,
   c.impulse_qualification_reasons,
+  c.entry_zone_qualification_state,
+  c.entry_zone_qualification_stage,
+  c.entry_zone_qualification_reasons,
   c.impulse_direction,
   c.impulse_timeframe,
   c.impulse_start_at,

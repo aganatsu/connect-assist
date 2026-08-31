@@ -274,7 +274,8 @@ Deno.test("the origin is still the closest bar, not merely a recent one", () => 
 // ratio, path efficiency, candle overlap. Those thresholds exist to stop
 // AUTOMATIC detection promoting a choppy drift. A person drawing a leg has
 // already made that judgement, so for a marked leg they are recorded, not
-// enforced. Structural reasons are never softened.
+// enforced. A broken origin is never softened. Entry-zone availability is
+// evaluated separately by the existing POI pipeline.
 
 Deno.test("soft qualification records quality failures without blocking", async () => {
   const { qualifyImpulseLeg } = await import(
@@ -292,13 +293,8 @@ Deno.test("soft qualification records quality failures without blocking", async 
     startIndex: 0, endIndex: 29, isValid: true, bosPrice: 1.0890,
     breakType: "bos" as const, closeBased: true,
   };
-  const poi = [{
-    type: "ob" as const, high: 1.0820, low: 1.0810,
-    candleIndex: 5, direction: "bullish" as const,
-  }];
-
-  const strict = qualifyImpulseLeg(bars, leg, poi as any);
-  const soft = qualifyImpulseLeg(bars, leg, poi as any, { softQualification: true });
+  const strict = qualifyImpulseLeg(bars, leg);
+  const soft = qualifyImpulseLeg(bars, leg, { softQualification: true });
 
   assertEquals(strict.qualified, false, "a choppy leg must fail strict qualification");
   assert(strict.reasons.length > 0);
@@ -312,7 +308,7 @@ Deno.test("soft qualification records quality failures without blocking", async 
   );
 });
 
-Deno.test("soft qualification still blocks structural failures", async () => {
+Deno.test("soft qualification still blocks a broken impulse origin", async () => {
   const { qualifyImpulseLeg } = await import(
     "../../functions/_shared/impulseZoneEngine.ts"
   );
@@ -323,21 +319,10 @@ Deno.test("soft qualification still blocks structural failures", async () => {
     breakType: "bos" as const, closeBased: true,
   };
 
-  // No POI to enter at — untradeable however good the leg looks.
-  const noPoi = qualifyImpulseLeg(bars, { ...base, isValid: true }, [], {
+  // Origin gone — the premise of the leg is void.
+  const broken = qualifyImpulseLeg(bars, { ...base, isValid: false }, {
     softQualification: true,
   });
-  assertEquals(noPoi.qualified, false, "nowhere to enter must still block");
-  assert(noPoi.reasons.some((r) => r.includes("No accepted FVG or Order Block")));
-  assert(
-    !noPoi.softenedReasons.some((r) => r.includes("No accepted FVG or Order Block")),
-    "a structural reason must never be softened",
-  );
-
-  // Origin gone — the premise of the leg is void.
-  const broken = qualifyImpulseLeg(bars, { ...base, isValid: false }, [
-    { type: "ob", high: 1.0820, low: 1.0810, candleIndex: 3, direction: "bullish" },
-  ] as any, { softQualification: true });
   assertEquals(broken.qualified, false);
   assertEquals(broken.state, "invalidated");
 });
