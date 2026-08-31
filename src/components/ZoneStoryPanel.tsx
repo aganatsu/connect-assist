@@ -391,7 +391,7 @@ export function ZoneStoryPanel({
   const missingZoneLabel = entryZoneQualification?.state === "missing"
     ? "No entry-zone candidate mapped"
     : entryZoneQualification?.state === "rejected"
-    ? `Entry-zone candidates rejected at ${entryZoneQualification.stage.replaceAll("_", " ")}`
+    ? `Entry-zone candidates rejected at ${entryZoneQualification.stage.replace(/_/g, " ")}`
     : entryZoneQualification?.state === "candidate_available"
     ? "Entry-zone candidate available; setup blocked before selection"
     : entryZoneQualification?.state === "not_evaluated"
