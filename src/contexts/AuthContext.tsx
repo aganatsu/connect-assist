@@ -24,46 +24,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let mounted = true;
-    // Tracks whether a live auth event (e.g. OAuth sign-in) already delivered a
-    // session, so the slower initial getSession() check can never overwrite it.
-    let sawAuthEvent = false;
+    let fallback: number | undefined;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) return;
-      sawAuthEvent = true;
-      setSession(session);
+      if (fallback !== undefined) window.clearTimeout(fallback);
+      setSession(nextSession);
       setLoading(false);
     });
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    // onAuthStateChange emits INITIAL_SESSION after the async preview storage has
+    // initialized. This fallback prevents an indefinite loader if initialization
+    // is interrupted without racing a second session snapshot against that event.
+    fallback = window.setTimeout(async () => {
+      const { data, error } = await supabase.auth.getSession();
       if (!mounted) return;
-      if (session) {
-        // Validate session against the server. Only sign out when the server
-        // explicitly rejects the token (401/403) — transient network failures
-        // must not log a valid user out.
-        const { error } = await supabase.auth.getUser();
-        if (!mounted) return;
-        const status = (error as { status?: number } | null)?.status;
-        if (error && (status === 401 || status === 403)) {
-          console.warn("[Auth] Invalid session detected, signing out:", error.message);
-          await supabase.auth.signOut();
-          if (!mounted) return;
-          setSession(null);
-          setLoading(false);
-          return;
-        }
-      }
-      if (sawAuthEvent) {
-        // A newer auth event already set state; don't clobber it with this snapshot.
-        setLoading(false);
-        return;
-      }
-      setSession(session);
+      if (!error) setSession(data.session);
       setLoading(false);
-    });
+    }, 5000);
 
     return () => {
       mounted = false;
+      if (fallback !== undefined) window.clearTimeout(fallback);
       subscription.unsubscribe();
     };
   }, []);
