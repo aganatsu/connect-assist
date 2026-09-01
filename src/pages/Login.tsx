@@ -37,15 +37,19 @@ const Login = () => {
       toast.error("Enter your email address first");
       return;
     }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    if (resetting) return;
+    setResetting(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     if (error) {
       toast.error(error.message);
     } else {
-      toast.success("Password reset email sent");
+      toast.success("Password reset email sent — open the newest link only");
     }
+    setResetting(false);
   };
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
