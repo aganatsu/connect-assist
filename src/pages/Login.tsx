@@ -15,6 +15,8 @@ const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
 
   useEffect(() => {
     if (!authLoading && user) navigate("/", { replace: true });
@@ -37,15 +39,19 @@ const Login = () => {
       toast.error("Enter your email address first");
       return;
     }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    if (resetting) return;
+    setResetting(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     if (error) {
       toast.error(error.message);
     } else {
-      toast.success("Password reset email sent");
+      toast.success("Password reset email sent — open the newest link only");
     }
+    setResetting(false);
   };
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -87,11 +93,14 @@ const Login = () => {
           </form>
 
           <button
+            type="button"
             onClick={handleForgotPassword}
-            className="text-sm text-muted-foreground hover:text-primary w-full text-center"
+            disabled={resetting}
+            className="text-sm text-muted-foreground hover:text-primary w-full text-center disabled:opacity-50"
           >
-            Forgot password?
+            {resetting ? "Sending reset email..." : "Forgot password?"}
           </button>
+
         </CardContent>
         <CardFooter className="justify-center">
           <p className="text-sm text-muted-foreground">
