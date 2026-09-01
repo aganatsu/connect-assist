@@ -5,9 +5,7 @@ import {
   ComposedChart, Line, CartesianGrid, ReferenceLine, BarChart, Bar, Cell,
 } from "recharts";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { OverflowText } from "@/components/ui/overflow-text";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
 import { paperApi, marketApi, smcApi, scannerApi } from "@/lib/api";
 import { TrendingUp, TrendingDown, Zap, Clock, Activity, AlertTriangle, CheckCircle } from "lucide-react";
@@ -23,7 +21,7 @@ export default function Dashboard() {
   const { resolvedTheme } = useTheme();
   const ct = getChartTheme(resolvedTheme);
 
-  const { data: botStatus, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
+  const { data: botStatus } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 10000,
@@ -68,24 +66,9 @@ export default function Dashboard() {
     refetchInterval: 30000,
   });
 
-  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!botStatus;
-  const balance = accountStatusKnown ? Number(botStatus.balance) : 0;
-  // Derive actual starting balance from equity curve (balance minus all closed PnL)
-  const startingBalance = useMemo(() => {
-    const curve = botStatus?.equityCurve;
-    if (!curve || curve.length === 0) return 10000;
-    // The first point in equityCurve is: startingBalance + first trade PnL
-    // But the backend already calculates it as: balance - totalClosedPnl
-    // So the starting balance = first equity point minus first trade's contribution
-    // Simpler: balance - sum of all trade PnLs = starting balance
-    // The backend builds equityCurve starting from (balance - totalClosedPnl)
-    // So the value BEFORE the first trade is: curve[0].equity - (first trade pnl)
-    // Actually the simplest: curve[0].equity is after first trade, so starting = balance - totalPnl from history
-    const totalPnl = (botStatus?.tradeHistory || []).reduce((s: number, t: any) => s + (t.pnl || 0), 0);
-    return balance - totalPnl;
-  }, [botStatus?.equityCurve, botStatus?.tradeHistory, balance]);
-  const profit = balance - startingBalance;
-  const profitPct = startingBalance > 0 ? ((profit / startingBalance) * 100).toFixed(1) : "0.0";
+  const balance = botStatus?.balance ?? 10000;
+  const profit = balance - 10000;
+  const profitPct = ((profit / 10000) * 100).toFixed(1);
   const dailyPnl = botStatus?.dailyPnl ?? 0;
   const positions = botStatus?.positions ?? [];
   const winRate = botStatus?.winRate ?? 0;
@@ -157,31 +140,6 @@ export default function Dashboard() {
     return details.filter((d: any) => d.score >= 4).slice(0, 5);
   }, [scanLogs]);
 
-  // ─── Pipeline Funnel Metrics ──────────────────────────────────────
-  const pipelineMetrics = useMemo(() => {
-    const logs = Array.isArray(scanLogs) ? scanLogs : [];
-    // Aggregate from last 24h of scans
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const recentLogs = logs.filter((l: any) => new Date(l.scanned_at).getTime() > cutoff);
-    let totalScanned = 0, totalSignals = 0, totalTradesPlaced = 0;
-    let gateRejected = 0, belowThreshold = 0, staged = 0, zoneSetups = 0;
-    recentLogs.forEach((log: any) => {
-      totalScanned += log.pairs_scanned || 0;
-      totalSignals += log.signals_found || 0;
-      totalTradesPlaced += log.trades_placed || 0;
-      const details = Array.isArray(log.details_json) ? log.details_json : [];
-      details.forEach((d: any) => {
-        if (d.status === "rejected") gateRejected++;
-        if (d.status === "below_threshold") belowThreshold++;
-        if (d.status?.startsWith("staged_")) staged++;
-        if (d.status?.startsWith("zone_setup")) zoneSetups++;
-      });
-    });
-    const passRate = totalScanned > 0 ? ((totalSignals / totalScanned) * 100) : 0;
-    const conversionRate = totalSignals > 0 ? ((totalTradesPlaced / totalSignals) * 100) : 0;
-    return { totalScanned, totalSignals, totalTradesPlaced, gateRejected, belowThreshold, staged, zoneSetups, passRate, conversionRate, scanCount: recentLogs.length };
-  }, [scanLogs]);
-
   // Bot activity timeline
   const activityLog = useMemo(() => {
     const logs = Array.isArray(scanLogs) ? scanLogs : [];
@@ -195,30 +153,36 @@ export default function Dashboard() {
 
   return (
     <AppShell>
-      <WorkspacePage>
-        <WorkspaceHeader
-          icon={Activity}
-          eyebrow="Portfolio overview"
-          title="SMC Trading Dashboard"
-          description={`${session}${kz.active ? ` · ${kz.name}` : ""}`}
-          actions={(
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
-              !accountStatusKnown ? "text-warning" : botStatus?.isRunning ? "text-success" : "text-muted-foreground"
-            }`}>
-              <span className={`${accountStatusKnown && botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
-              {!accountStatusKnown ? "Bot Status Unknown" : botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
-            </span>
-          )}
-        />
-        <WorkspaceBody className="space-y-3 md:space-y-4">
+      <div className="space-y-3 md:space-y-4">
+        <div className="hidden md:flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold">SMC Trading Dashboard</h1>
+            <p className="text-muted-foreground text-xs flex items-center gap-2">
+              <Clock className="h-3 w-3" /> {session}
+              {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
+            </p>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
+            botStatus?.isRunning ? "text-success" : "text-muted-foreground"
+          }`}>
+            <span className={`${botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
+            {botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
+          </span>
+        </div>
+
+        {/* Mobile session strip */}
+        <div className="md:hidden flex items-center justify-between text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5"><Clock className="h-3 w-3" /> {session}</span>
+          {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
+        </div>
 
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { label: "Balance", value: accountStatusKnown ? formatMoney(balance) : "—", sub: accountStatusKnown ? `${formatMoney(profit, true)} (${profitPct}%)` : "Account unavailable", color: accountStatusKnown ? (profit >= 0 ? "text-success" : "text-destructive") : "text-warning" },
-            { label: "Today P&L", value: accountStatusKnown ? formatMoney(dailyPnl, true) : "—", sub: accountStatusKnown ? `${totalTrades} trades` : "Account unavailable", color: accountStatusKnown ? (dailyPnl >= 0 ? "text-success" : "text-destructive") : "text-warning" },
-            { label: "Open Positions", value: accountStatusKnown ? String(positions.length) : "—", sub: accountStatusKnown ? `${formatMoney(positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0), true)} unrealized` : "Position state unavailable", color: accountStatusKnown ? (positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0) >= 0 ? "text-success" : "text-destructive") : "text-warning" },
-            { label: "Win Rate", value: accountStatusKnown ? `${winRate.toFixed(1)}%` : "—", sub: accountStatusKnown ? `${wins}W / ${losses}L` : "History unavailable", color: accountStatusKnown ? (winRate >= 50 ? "text-success" : "text-destructive") : "text-warning" },
+            { label: "Balance", value: formatMoney(balance), sub: `${formatMoney(profit, true)} (${profitPct}%)`, color: profit >= 0 ? "text-success" : "text-destructive" },
+            { label: "Today P&L", value: formatMoney(dailyPnl, true), sub: `${totalTrades} trades`, color: dailyPnl >= 0 ? "text-success" : "text-destructive" },
+            { label: "Open Positions", value: String(positions.length), sub: `${formatMoney(positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0), true)} unrealized`, color: positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0) >= 0 ? "text-success" : "text-destructive" },
+            { label: "Win Rate", value: `${winRate.toFixed(1)}%`, sub: `${wins}W / ${losses}L`, color: winRate >= 50 ? "text-success" : "text-destructive" },
           ].map((kpi) => (
             <Card key={kpi.label}>
               <CardContent className="pt-4 pb-3">
@@ -285,11 +249,7 @@ export default function Dashboard() {
                   <span className="text-[10px] text-muted-foreground">{sig.status === 'trade_placed' ? '✓ Placed' : sig.status === 'rejected' ? '✗ Rejected' : 'Skip'}</span>
                 </div>
                 {(sig.summary || sig.trend) && (
-                  <OverflowText
-                    text={sig.summary || sig.trend}
-                    lines={2}
-                    className="mt-1 block text-[10px] text-muted-foreground"
-                  />
+                  <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2">{sig.summary || sig.trend}</p>
                 )}
               </div>
             ))}
@@ -312,12 +272,7 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            {!accountStatusKnown ? (
-              <div className="h-[240px] flex flex-col items-center justify-center text-warning border border-warning/30">
-                <AlertTriangle className="h-8 w-8 mb-2" />
-                <p className="text-sm font-medium">Account equity is unavailable</p>
-              </div>
-            ) : (!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
+            {(!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
               <div className="h-[240px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
                 <TrendingUp className="h-10 w-10 mb-3 opacity-20" />
                 <p className="text-sm font-medium">No trade history yet</p>
@@ -329,9 +284,9 @@ export default function Dashboard() {
                   <ComposedChart data={equityData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(equityData.length / 8))} angle={-30} textAnchor="end" height={50} />
-                    <YAxis tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} />
-                    <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "11px", color: ct.axis }} labelStyle={{ color: ct.axis }} formatter={(value: number, name: string) => [`$${Math.round(value).toLocaleString()}`, name === 'equity' ? 'Equity' : name]} />
-                    <ReferenceLine y={startingBalance} stroke={ct.grid} strokeDasharray="3 3" strokeOpacity={0.6} />
+                    <YAxis tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
+                    <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "11px", color: ct.axis }} labelStyle={{ color: ct.axis }} />
+                    <ReferenceLine y={10000} stroke={ct.grid} strokeDasharray="3 3" strokeOpacity={0.6} />
                     <Line type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" strokeWidth={2.5} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -383,15 +338,10 @@ export default function Dashboard() {
           {/* Active Positions */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Active Positions ({accountStatusKnown ? positions.length : "unknown"})</CardTitle>
+              <CardTitle className="text-sm">Active Positions ({positions.length})</CardTitle>
             </CardHeader>
             <CardContent>
-              {!accountStatusKnown ? (
-                <div className="flex flex-col items-center justify-center py-8 text-warning">
-                  <AlertTriangle className="h-6 w-6 mb-2" />
-                  <p className="text-xs font-medium">Open-position state unavailable</p>
-                </div>
-              ) : positions.length === 0 ? (
+              {positions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                   <Activity className="h-8 w-8 mb-2 opacity-20" />
                   <p className="text-xs font-medium">No open positions</p>
@@ -439,46 +389,15 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Scanner Pipeline (24h) */}
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Scanner Pipeline <span className="text-[10px] text-muted-foreground font-normal ml-2">(last 24h — {pipelineMetrics.scanCount} scans)</span></CardTitle></CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center">
-              {[
-                { label: "Pairs Scanned", value: pipelineMetrics.totalScanned, color: "" },
-                { label: "Signals Found", value: pipelineMetrics.totalSignals, color: "text-primary" },
-                { label: "Gate Rejected", value: pipelineMetrics.gateRejected, color: "text-destructive" },
-                { label: "Below Threshold", value: pipelineMetrics.belowThreshold, color: "text-warning" },
-                { label: "Staged", value: pipelineMetrics.staged, color: "text-violet-400" },
-                { label: "Zone Setups", value: pipelineMetrics.zoneSetups, color: "text-sky-400" },
-                { label: "Trades Placed", value: pipelineMetrics.totalTradesPlaced, color: "text-success" },
-              ].map(m => (
-                <div key={m.label} className="p-2 bg-secondary/30 border border-border rounded">
-                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">{m.label}</p>
-                  <p className={`text-lg font-bold font-mono ${m.color}`}>{m.value}</p>
-                </div>
-              ))}
-            </div>
-            {/* Funnel rates */}
-            <div className="flex items-center gap-4 mt-3 text-[10px] text-muted-foreground">
-              <span>Signal Rate: <strong className="text-foreground">{pipelineMetrics.passRate.toFixed(1)}%</strong></span>
-              <span>→</span>
-              <span>Conversion: <strong className="text-foreground">{pipelineMetrics.conversionRate.toFixed(1)}%</strong></span>
-              <span>→</span>
-              <span>Net: <strong className="text-foreground">{pipelineMetrics.totalScanned > 0 ? ((pipelineMetrics.totalTradesPlaced / pipelineMetrics.totalScanned) * 100).toFixed(2) : "0.00"}%</strong> of scanned pairs become trades</span>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Bot Activity Timeline */}
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">Bot Activity</CardTitle></CardHeader>
           <CardContent>
             <div className="flex gap-4 text-xs text-muted-foreground mb-3">
-              <span>Scans: <strong className="text-foreground">{accountStatusKnown ? botStatus.scanCount : "—"}</strong></span>
-              <span>Signals: <strong className="text-foreground">{accountStatusKnown ? botStatus.signalCount : "—"}</strong></span>
-              <span>Trades: <strong className="text-foreground">{accountStatusKnown ? botStatus.totalTrades : "—"}</strong></span>
-              <span>Rejected: <strong className="text-warning">{accountStatusKnown ? botStatus.rejectedCount : "—"}</strong></span>
+              <span>Scans: <strong className="text-foreground">{botStatus?.scanCount ?? 0}</strong></span>
+              <span>Signals: <strong className="text-foreground">{botStatus?.signalCount ?? 0}</strong></span>
+              <span>Trades: <strong className="text-foreground">{botStatus?.totalTrades ?? 0}</strong></span>
+              <span>Rejected: <strong className="text-warning">{botStatus?.rejectedCount ?? 0}</strong></span>
             </div>
             {activityLog.length > 0 ? (
                 <div className="space-y-1 max-h-48 overflow-y-auto">
@@ -499,8 +418,7 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }

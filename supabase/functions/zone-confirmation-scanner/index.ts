@@ -19,33 +19,13 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import {
-  beginScanSourceTally,
-  endScanSourceTally,
-  fetchCandlesWithFallback,
-  type BrokerConn,
-} from "../_shared/candleSource.ts";
-import {
-  ATR_SL_FLOOR_MULTIPLIER,
-  calculateATR,
-  evaluateStyleAwareStopPolicy,
-  MIN_SL_PIPS,
   SPECS,
+  analyzeMarketStructure,
+  normalizeSymKey,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
-import {
-  isInstrumentMarketOpen,
-  resolveGamePlanMarketScope,
-} from "../_shared/gamePlanMarketScope.ts";
-import { buildPreArmedPositionPlan, frozenTargetAlreadyReached } from "../_shared/pendingOrderPlan.ts";
-import {
-  calculateBrokerExecutionFloor,
-  resolveZoneStopPolicyMode,
-} from "../_shared/stopPolicyMode.ts";
-import {
-  recordConfirmationMatrixObservation,
-  recordFinalAuthorizationObservation,
-} from "../_shared/pendingAuthorizationObservation.ts";
 import {
   detectZoneConfirmation,
   isPriceInZone,
@@ -53,173 +33,66 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
-import {
-  buildConfirmationAuthorityObservation,
-  buildRoutedConfirmationObservation,
-} from "../_shared/confirmationAuthority.ts";
-import {
-  advanceStoredTradeLifecycle,
-  loadImpulseEntryLifecycle,
-} from "../_shared/impulseEntryLifecycleStore.ts";
-import {
-  completedCandlesSinceCursor,
-  cursorAfterLatestTouchCandle,
-} from "../_shared/pendingZoneTouch.ts";
-import {
-  derivePostChochEntryPlan,
-  evaluatePostChochRetracement,
-  normalizeAfterChochMode,
-  rearmPostChochRetracement,
-  type PostChochEntryPlan,
-} from "../_shared/postChochRetracement.ts";
-import { resolveSymbol } from "../_shared/brokerSymbols.ts";
-import {
-  confirmationEvidenceLines,
-  confirmationMethodLabel,
-  diagnosticScoreLine,
-  directionVerdictLines,
-  durationLabel,
-  parseSignalReason,
-  styleLadderLines,
-  tgLine,
-  tradeAuthorityLines,
-  zoneEvidenceLines,
-} from "../_shared/telegramDetail.ts";
-import { metaFetch } from "../_shared/metaApiClient.ts";
-import { verifyCronCaller } from "../_shared/cronAuth.ts";
-import {
-  buildConfirmationEvidenceRow,
-  findParentEvidenceId,
-  nextConfirmationAttempt,
-  persistZoneTimeframeEvidence,
-} from "../_shared/zoneTimeframeEvidence.ts";
-import type { RuntimeConfig } from "../_shared/configMapper.ts";
-import {
-  loadEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigStore.ts";
-import {
-  buildResolvedStylePolicy,
-  type ResolvedStylePolicy,
-} from "../_shared/stylePolicy.ts";
-import {
-  resolveTimeframeAuthority,
-} from "../_shared/timeframeAuthority.ts";
-import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
-import {
-  evaluateFinalTradeAuthorization,
-} from "../_shared/finalTradeAuthorization.ts";
-import {
-  composePendingFillBlockReason,
-  evaluateSingleOwnershipFillAuthorization,
-} from "../_shared/singleOwnershipFillAuthorization.ts";
-import { pendingFinalAuthorizationRetryable } from "../_shared/pendingFinalAuthorization.ts";
-import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
-import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
-import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
-import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
-import {
-  evaluateCanonicalDealingRange,
-  normalizeDealingRangeMode,
-  readFrozenCanonicalDealingRange,
-} from "../_shared/canonicalDealingRange.ts";
-import {
-  attachDecisionContext,
-  buildTradeDecisionContext,
-  evaluateDecisionHierarchy,
-  type DirectionVerdictDecision,
-  type EntryConfirmationDecision,
-} from "../_shared/decisionContract.ts";
-import {
-  buildFinalRuntimeGateStates,
-} from "../_shared/finalRuntimeGates.ts";
-import {
-  buildDirectionVerdictThesisOptions,
-  validatePendingOrderThesis,
-  type ThesisValidationResult,
-} from "../_shared/thesisValidator.ts";
-import { runPropFirmGate, type PropFirmGateResult } from "../_shared/propFirmGate.ts";
-import type { SessionGamePlan } from "../_shared/gamePlan.ts";
-import { loadActiveGamePlan } from "../_shared/gamePlanStore.ts";
-import {
-  directionVerdictMatchesGamePlan,
-  loadActiveDirectionVerdicts,
-} from "../_shared/directionVerdictStore.ts";
-import {
-  executeBrokerOrderWithLedger,
-} from "../_shared/brokerExecutionLedger.ts";
-import { calculateFinalPendingSize, loadCachedSizingRateMap } from "../_shared/finalPendingSize.ts";
-import { averageRoundTripCommission } from "../_shared/tradingCosts.ts";
-import {
-  readFrozenCrossTimeframeAuthority,
-  readFrozenSetupStrategyContext,
-  resolvePendingConfirmationMethod,
-  resolvePendingDealingRangeMode,
-  resolvePendingIndicatorMinimum,
-  resolvePendingMaxConfirmationAttempts,
-  resolvePendingNestedPoiEntryPlanState,
-  resolvePendingStylePolicy,
-  validateFrozenSetupIdentity,
-} from "../_shared/setupLifecycle.ts";
-import {
-  loadCrossTimeframeActivation,
-} from "../_shared/crossTimeframeActivationStore.ts";
-import {
-  resolveCrossTimeframeAuthority,
-  type CrossTimeframeAuthorityResolution,
-} from "../_shared/crossTimeframeAuthority.ts";
-import {
-  evaluateCrossTimeframeEntryAuthority,
-} from "../_shared/crossTimeframeEntryAuthority.ts";
-import {
-  resolveFrozenNestedPoiMarketRoute,
-} from "../_shared/botConfigBehavior.ts";
-import {
-  beginScannerOperation,
-  completeScannerOperation,
-  failScannerOperation,
-  markScannerOperation,
-  publishCandleSourceAlerts,
-  recordScannerAuthorizationFailure,
-  type ScannerTriggerSource,
-} from "../_shared/scannerRuntime.ts";
 
-import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-
-setCreditCallerContext("zone-confirmation-scanner");
-
-// ─── Constants ──────────────────────────────────────────────────────────────────
+// ─── Constants ──────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
-// metaFetch + resolveSymbol are now imported from ../_shared/ (single source of truth)
+
+// MetaAPI regions for broker execution
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+
+async function metaFetch(
+  accountId: string,
+  authToken: string,
+  pathBuilder: (base: string) => string,
+  init?: RequestInit,
+): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const res = await fetch(url, { ...init, headers });
+    const body = await res.text();
+    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+    lastBody = body; lastStatus = res.status;
+    if (!/region|not connected to broker/i.test(body)) {
+      return { res: new Response(body, { status: res.status }), body };
+    }
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+}
+
+// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
+function resolveSymbol(pair: string, conn: any): string {
+  const overrides = conn.symbol_overrides || {};
+  const norm = normalizeSymKey(pair);
+  for (const [k, v] of Object.entries(overrides)) {
+    if (normalizeSymKey(k) === norm) return v as string;
+  }
+  return pair.replace("/", "");
+}
 
 // ─── Candle Fetching ────────────────────────────────────────────────────────
 
-async function fetchCandles(
-  symbol: string,
-  interval = "5m",
-  brokerConn: BrokerConn | null = null,
-  limit = 100,
-): Promise<Candle[]> {
+// Minimal broker connection for candle fetching
+let _brokerConn: BrokerConn | null = null;
+
+async function fetchCandles(symbol: string, interval = "5m"): Promise<Candle[]> {
   const result = await fetchCandlesWithFallback({
     symbol,
     interval,
-    limit,
-    brokerConn,
+    limit: 100, // Only need recent candles for CHoCH detection
+    brokerConn: _brokerConn,
   });
   return result.candles;
 }
 
 // ─── Spread Check (for broker mirroring) ────────────────────────────────────
-
-interface BrokerMarketConstraints {
-  bid: number;
-  ask: number;
-  spreadPips: number;
-  passed: boolean;
-  effectiveMax: number;
-  digits: number;
-  stopsLevel: number;
-  tickSize: number;
-}
 
 async function fetchBrokerSpread(
   conn: any,
@@ -227,14 +100,11 @@ async function fetchBrokerSpread(
   config: { spreadFilterEnabled: boolean; maxSpreadPips: number },
   metaAccountId?: string,
   authToken?: string,
-): Promise<BrokerMarketConstraints | null> {
+): Promise<{ bid: number; ask: number; spreadPips: number; passed: boolean; effectiveMax: number } | null> {
   const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
   const effectiveMax = config.maxSpreadPips > 0 ? config.maxSpreadPips : pairSpec.maxSpread;
   try {
     let bid = 0, ask = 0;
-    let digits = 0;
-    let stopsLevel = 0;
-    let tickSize = 0;
     if (conn.broker_type === "oanda") {
       const oandaBase = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
       const oandaSym = resolveSymbol(pair, conn).replace(/([A-Z]{3})([A-Z]{3})/, "$1_$2");
@@ -248,16 +118,6 @@ async function fetchBrokerSpread(
       if (!pricing) return null;
       bid = parseFloat(pricing.bids?.[0]?.price ?? "0");
       ask = parseFloat(pricing.asks?.[0]?.price ?? "0");
-      const specRes = await fetch(
-        `${oandaBase}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaSym)}`,
-        { headers: { Authorization: `Bearer ${conn.api_key}` } },
-      );
-      if (!specRes.ok) return null;
-      const specData: any = await specRes.json();
-      const instrument = specData.instruments?.[0];
-      if (!instrument) return null;
-      digits = Number(instrument.displayPrecision);
-      tickSize = Math.pow(10, -digits);
     } else if (conn.broker_type === "metaapi" && metaAccountId && authToken) {
       const brokerSymbol = resolveSymbol(pair, conn);
       const { res: priceRes, body: priceBody } = await metaFetch(
@@ -268,31 +128,13 @@ async function fetchBrokerSpread(
       const priceData: any = JSON.parse(priceBody);
       bid = priceData.bid ?? 0;
       ask = priceData.ask ?? 0;
-      const { res: specRes, body: specBody } = await metaFetch(
-        metaAccountId, authToken,
-        (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/specification`,
-      );
-      if (!specRes.ok) return null;
-      const specData: any = JSON.parse(specBody);
-      digits = Number(specData.digits);
-      stopsLevel = Number(specData.stopsLevel || 0);
-      tickSize = Number(specData.tickSize || specData.point || Math.pow(10, -digits));
     } else {
       return null;
     }
-    if (bid <= 0 || ask <= 0 || digits < 0 || !Number.isInteger(digits) || tickSize <= 0) return null;
+    if (bid <= 0 || ask <= 0) return null;
     const spreadPips = (ask - bid) / pairSpec.pipSize;
     const passed = !config.spreadFilterEnabled || spreadPips <= effectiveMax;
-    return {
-      bid,
-      ask,
-      spreadPips,
-      passed,
-      effectiveMax,
-      digits,
-      stopsLevel,
-      tickSize,
-    };
+    return { bid, ask, spreadPips, passed, effectiveMax };
   } catch {
     return null;
   }
@@ -301,71 +143,12 @@ async function fetchBrokerSpread(
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
-  // Gate 0: Only the cron scheduler may invoke this function.
-  const authError = verifyCronCaller(req);
-  if (authError) {
-    const authHeader = req.headers.get("authorization") || "";
-    const likelySchedulerRequest = req.headers.has("x-cron-secret") ||
-      authHeader === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""}`;
-    if (likelySchedulerRequest) {
-      try {
-        const failureClient = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-        );
-        const failureBody = await authError.clone().json().catch(() => ({}));
-        await recordScannerAuthorizationFailure(
-          failureClient,
-          "zone-confirmation-scanner",
-          failureBody?.reason || "Rejected scheduler request",
-          {
-            has_cron_header: req.headers.has("x-cron-secret"),
-            has_authorization: authHeader.startsWith("Bearer "),
-          },
-        );
-      } catch (recordError: any) {
-        console.warn(
-          `[zone-confirm] Could not record auth failure: ${recordError?.message}`,
-        );
-      }
-    }
-    return authError;
-  }
-
   const startTime = Date.now();
-  const marketNow = new Date(startTime);
-  const operationRuns = new Map<string, string>();
-  // Observation-only Phase 1: one immutable evidence row per confirmation attempt.
-  const confirmScanCycleId = crypto.randomUUID();
-  let supabase: any = null;
 
   try {
-    beginScanSourceTally();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    supabase = createClient(supabaseUrl, supabaseKey);
-    const requestBody = await req.clone().json().catch(() => ({}));
-    const triggerSource: ScannerTriggerSource =
-      requestBody?.trigger_source === "manual" ? "manual" : "cron";
-
-    // Persist one observable run per active bot before doing background work.
-    // This makes an idle confirmation cycle visible instead of looking missing.
-    const { data: activeAccounts } = await supabase
-      .from("paper_accounts")
-      .select("user_id")
-      .eq("is_running", true)
-      .eq("kill_switch_active", false)
-      .or(`bot_id.eq.${BOT_ID},bot_id.is.null`);
-    for (const account of activeAccounts || []) {
-      const operation = await beginScannerOperation(supabase, {
-        userId: account.user_id,
-        botId: BOT_ID,
-        functionName: "zone-confirmation-scanner",
-        operation: "zone_confirmation",
-        triggerSource,
-      });
-      if (operation.persisted) operationRuns.set(account.user_id, operation.runId);
-    }
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
     // ── 1. Query all orders in "awaiting_confirmation" status ──
     const { data: huntingOrders, error: queryErr } = await supabase
@@ -376,20 +159,12 @@ Deno.serve(async (req) => {
       .order("placed_at", { ascending: true });
 
     if (queryErr) {
-      endScanSourceTally();
       console.error("[zone-confirm] Query error:", queryErr.message);
       return new Response(JSON.stringify({ error: queryErr.message }), { status: 500 });
     }
 
     if (!huntingOrders || huntingOrders.length === 0) {
-      endScanSourceTally();
       // Nothing to do — no orders are hunting for confirmation
-      await Promise.all([...operationRuns.values()].map((runId) =>
-        completeScannerOperation(supabase, runId, "zone_confirmation", {
-          processed: 0,
-          outcome: "idle",
-        })
-      ));
       return new Response(JSON.stringify({
         status: "idle",
         message: "No orders awaiting confirmation",
@@ -400,41 +175,16 @@ Deno.serve(async (req) => {
     console.log(`[zone-confirm] Processing ${huntingOrders.length} order(s) awaiting confirmation`);
 
     // ── 2. Get unique user IDs to load their configs and broker connections ──
-    const userIds: string[] = [
-      ...new Set<string>(
-        huntingOrders.map((order: any) => String(order.user_id)),
-      ),
-    ];
-    await Promise.all(userIds.map((userId) =>
-      markScannerOperation(
-        supabase,
-        operationRuns.get(userId),
-        "confirmation_processing_started",
-        {
-          status: "running",
-          scan_started_at: new Date().toISOString(),
-          expected_pairs: huntingOrders.filter((order: any) =>
-            order.user_id === userId
-          ).length,
-        },
-      )
-    ));
+    const userIds = [...new Set(huntingOrders.map(o => o.user_id))];
 
     // Load user settings (for telegram) and broker connections per user
     const userDataMap: Record<string, {
       telegramChatIds: string[];
-      notifyCategories: Record<string, boolean>;
       brokerConnections: any[];
-      brokerConn: BrokerConn | null;
       openPositions: any[];
-      account: any | null;
-      config: RuntimeConfig;
-      stylePolicy: ResolvedStylePolicy;
-      gamePlan: SessionGamePlan | null;
-      directionVerdicts: Map<string, DirectionVerdictDecision>;
-      crossTimeframeAuthority: CrossTimeframeAuthorityResolution;
+      account: any;
+      config: any;
     }> = {};
-    const configFailureUsers = new Map<string, Error>();
 
     for (const userId of userIds) {
       // Telegram chat IDs
@@ -442,7 +192,6 @@ Deno.serve(async (req) => {
         .from("user_settings").select("preferences_json")
         .eq("user_id", userId).maybeSingle();
       const prefs = (userSettings?.preferences_json as any) || {};
-      const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
       const telegramChatIds: string[] = (() => {
         const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
         const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
@@ -465,26 +214,13 @@ Deno.serve(async (req) => {
         .from("paper_accounts").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
-      let styleResolution;
-      try {
-        styleResolution = await loadEffectiveRuntimeConfig(supabase, {
-          userId,
-        });
-      } catch (error: any) {
-        const configError = error instanceof Error
-          ? error
-          : new Error(String(error));
-        configFailureUsers.set(userId, configError);
-        console.error(
-          `[zone-confirm] Runtime configuration unavailable for ${userId}; pending fills remain untouched: ${configError.message}`,
-        );
-        continue;
-      }
+      // Bot config
+      const { data: botConfig } = await supabase
+        .from("bot_configs").select("config_json")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
-      // Keep the candle connection scoped to this user. A module-global
-      // connection can leak the last loaded user's feed into another account.
+      // Set up broker connection for candle fetching (MetaApi preferred)
       const metaConn = (connections || []).find((c: any) => c.broker_type === "metaapi");
-      let brokerConn: BrokerConn | null = null;
       if (metaConn) {
         let authToken = metaConn.api_key;
         let metaAccountId = metaConn.account_id;
@@ -492,63 +228,15 @@ Deno.serve(async (req) => {
           authToken = metaConn.account_id;
           metaAccountId = metaConn.api_key;
         }
-        brokerConn = { api_key: authToken, account_id: metaAccountId };
+        _brokerConn = { api_key: authToken, account_id: metaAccountId };
       }
 
-      // Load both dedicated, versioned strategy authorities. General scan logs
-      // are observability only and are never used to authorize a fill.
-      let gamePlan: SessionGamePlan | null = null;
-      let directionVerdicts = new Map<
-        string,
-        DirectionVerdictDecision
-      >();
-      try {
-        gamePlan = await loadActiveGamePlan(supabase, userId, BOT_ID);
-      } catch (error: any) {
-        console.warn(
-          `[zone-confirm] Active Gameplan unavailable for ${userId}: ${error?.message}`,
-        );
-      }
-      try {
-        directionVerdicts = await loadActiveDirectionVerdicts(
-          supabase,
-          userId,
-          BOT_ID,
-        );
-      } catch (error: any) {
-        console.warn(
-          `[zone-confirm] Active Direction Verdicts unavailable for ${userId}: ${error?.message}`,
-        );
-      }
-
-      const stylePolicy = await buildResolvedStylePolicy({
-        resolution: styleResolution,
-        config: styleResolution.config,
-      });
-      const crossTimeframeActivation = await loadCrossTimeframeActivation(
-        supabase,
-        { userId, botId: BOT_ID },
-      );
-      const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
-        rawConfig: styleResolution.config as unknown as Record<
-          string,
-          unknown
-        >,
-        runtimeTarget: account?.execution_mode === "live" ? "live" : "paper",
-        activation: crossTimeframeActivation,
-      });
       userDataMap[userId] = {
         telegramChatIds,
-        notifyCategories,
         brokerConnections: connections || [],
-        brokerConn,
         openPositions: openPositions || [],
-        account: account || null,
-        config: styleResolution.config,
-        stylePolicy,
-        gamePlan,
-        directionVerdicts,
-        crossTimeframeAuthority,
+        account: account || { execution_mode: "paper" },
+        config: botConfig?.config_json || {},
       };
     }
 
@@ -558,479 +246,25 @@ Deno.serve(async (req) => {
     let cancelled = 0;
     let stillHunting = 0;
 
-    for (let pendingIndex = 0; pendingIndex < huntingOrders.length; pendingIndex++) {
-      const pending = huntingOrders[pendingIndex];
+    for (const pending of huntingOrders) {
       try {
         const userId = pending.user_id;
-        const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
-        if (pending.expires_at && new Date(pending.expires_at).getTime() <= Date.now()) {
-          await supabase.from("pending_orders").update({
-            status: "expired",
-            cancel_reason: "TTL expired before confirmation fill",
-            resolved_at: new Date().toISOString(),
-          }).eq("id", pending.id).eq("status", "awaiting_confirmation");
-          cancelled++;
-          console.log(`[zone-confirm] EXPIRED ${pending.symbol} ${pending.direction} before confirmation processing`);
-          continue;
-        }
-        await markScannerOperation(
-          supabase,
-          operationRuns.get(userId),
-          "confirmation_processing",
-          {
-            status: "running",
-            processed_pairs: huntingOrders
-              .slice(0, pendingIndex)
-              .filter((order: any) => order.user_id === userId)
-              .length,
-            metadata: { current_order_id: pending.order_id, current_pair: pending.symbol },
-          },
-        );
         const userData = userDataMap[userId];
         if (!userData) { stillHunting++; continue; }
-        const confirmationCheckStartedAt = new Date().toISOString();
-        const confirmationReplayCursor = String(
-          pending.last_confirmation_checked_at || pending.zone_touch_time ||
-            pending.placed_at || pending.created_at ||
-            confirmationCheckStartedAt,
-        );
 
-        const {
-          telegramChatIds,
-          notifyCategories,
-          brokerConnections,
-          brokerConn,
-          openPositions,
-          account,
-          config,
-          stylePolicy: runtimeStylePolicy,
-          gamePlan,
-          directionVerdicts,
-          crossTimeframeAuthority,
-        } = userData;
+        const { telegramChatIds, brokerConnections, openPositions, account, config } = userData;
+        const strategyConfig = config.strategy || {};
 
-        // Avoid market-data work when execution is administratively disabled.
-        // The atomic RPC repeats these checks immediately before insertion.
-        if (!account || account.kill_switch_active === true || account.is_running !== true || account.is_paused === true) {
-          stillHunting++;
-          console.log(
-            `[zone-confirm] ${pending.symbol} ${pending.direction} — execution disabled`
-            + ` (account=${!!account}, running=${account?.is_running}, paused=${account?.is_paused}, kill=${account?.kill_switch_active})`,
-          );
-          continue;
-        }
-
-        const pendingMarketScope = resolveGamePlanMarketScope(
-          [pending.symbol],
-          marketNow,
-          config.enabledDays,
-        );
-        if (!isInstrumentMarketOpen(pending.symbol, marketNow) || pendingMarketScope.eligibleSymbols.length === 0) {
-          stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} remains armed outside its active market schedule — candle fetch skipped`);
-          continue;
-        }
-
-        const frozenNestedPlanState =
-          resolvePendingNestedPoiEntryPlanState(pending);
-        if (!frozenNestedPlanState.valid) {
-          const reason = frozenNestedPlanState.reason;
-          const { data: invalidatedPending } = await supabase
-            .from("pending_orders")
-            .update({
-              status: "invalidated",
-              cancel_reason: reason,
-              resolved_at: new Date().toISOString(),
-            })
-            .eq("id", pending.id)
-            .eq("user_id", userId)
-            .eq("status", "awaiting_confirmation")
-            .select("id")
-            .maybeSingle();
-          if (!invalidatedPending) continue;
-          cancelled++;
-          console.warn(
-            "[zone-confirm] " + pending.symbol + " invalidated: " + reason,
-          );
-          continue;
-        }
-        const frozenNestedPoiEntry = frozenNestedPlanState.plan;
-        const nestedPoiActivation = frozenNestedPoiEntry
-          ? resolveFrozenNestedPoiMarketRoute({
-            mode: frozenNestedPoiEntry.mode,
-            route: frozenNestedPoiEntry.route,
-            runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-          })
-          : null;
-        if (nestedPoiActivation?.runtimeTargetMismatch === true) {
-          const reason =
-            "nested_poi_runtime_target_mismatch: paper-only setup cannot execute live";
-          const { data: cancelledPending } = await supabase
-            .from("pending_orders")
-            .update({
-              status: "cancelled",
-              cancel_reason: reason,
-              resolved_at: new Date().toISOString(),
-            })
-            .eq("id", pending.id)
-            .eq("user_id", userId)
-            .eq("status", "awaiting_confirmation")
-            .select("id")
-            .maybeSingle();
-          if (!cancelledPending) continue;
-          cancelled++;
-          continue;
-        }
-        const nestedPoiEnforced = nestedPoiActivation?.enforced === true;
-
-        const pendingPolicyResolution = resolvePendingStylePolicy(
-          pending,
-          runtimeStylePolicy,
-        );
-        const pendingTimeframeAuthority = resolveTimeframeAuthority(
-          pendingPolicyResolution.policy,
-        );
-        const pendingDealingRangeMode = resolvePendingDealingRangeMode(
-          pending,
-          (config as any).dealingRangeMode,
-        );
-        const frozenIdentity = validateFrozenSetupIdentity(
-          pending,
-          pendingPolicyResolution.frozenContext,
-        );
-        if (!frozenIdentity.valid) {
-          await supabase.from("pending_orders").update({
-            status: "invalidated",
-            cancel_reason: frozenIdentity.reason,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", pending.id).eq("user_id", userId);
-          cancelled++;
-          console.warn(
-            `[zone-confirm] ${pending.symbol} invalidated: ${frozenIdentity.reason}`,
-          );
-          continue;
-        }
-
-        let directionVerdict = directionVerdicts.get(pending.symbol) || null;
-        const frozenPendingConfig =
-          pendingPolicyResolution.frozenContext?.runtimeConfig
-            ?.effectiveConfig || null;
-        const pendingGamePlanExpected = frozenPendingConfig
-          ? frozenPendingConfig.gamePlanEnabled !== false &&
-            frozenPendingConfig.gpEnforcementMode !== "off"
-          : config.gamePlanEnabled !== false &&
-            config.gpEnforcementMode !== "off";
-        if (
-          directionVerdict && pendingGamePlanExpected &&
-          !directionVerdictMatchesGamePlan(
-            directionVerdict,
-            gamePlan,
-            pending.symbol,
-          )
-        ) {
-          console.warn(
-            `[zone-confirm] ${pending.symbol}: Direction Verdict and Gameplan versions do not match`,
-          );
-          directionVerdict = null;
-        }
-        const directionVerdictThesisOptions =
-          buildDirectionVerdictThesisOptions({
-            frozenDirectionVerdict:
-              pendingPolicyResolution.frozenContext?.directionVerdict || null,
-            currentDirectionVerdict: directionVerdict,
-            expectedDecisionEvidence: {
-              style: pendingTimeframeAuthority.style,
-              roles: pendingTimeframeAuthority.roles,
-            },
-            frozenEffectiveConfig: frozenPendingConfig,
-          });
-        const requireThesisValidation = true;
-        let thesisResult: ThesisValidationResult | null = null;
-        try {
-          thesisResult = validatePendingOrderThesis(
-            {
-              order_id: pending.order_id,
-              symbol: pending.symbol,
-              direction: pending.direction as "long" | "short",
-              entry_price: pending.entry_price,
-              signal_reason: pending.signal_reason,
-            },
-            {
-              fotsiResult: null,
-              lastGamePlan: gamePlan,
-              dailyCandles: null,
-              h4Candles: null,
-              h1Candles: null,
-              decisionEvidence: directionVerdict?.decisionEvidence || null,
-              ...directionVerdictThesisOptions,
-            },
-          );
-        } catch (error: any) {
-          console.warn(
-            `[zone-confirm] Thesis validation failed open for ${pending.symbol}: ${error?.message}`,
-          );
-        }
-        if (thesisResult && !thesisResult.valid) {
-          const { data: invalidatedPending } = await supabase
-            .from("pending_orders")
-            .update({
-              status: "invalidated",
-              cancel_reason: thesisResult.reason,
-              thesis_cancel_reason: thesisResult.cancelReason,
-              resolved_at: new Date().toISOString(),
-            })
-            .eq("id", pending.id)
-            .eq("user_id", userId)
-            .eq("status", "awaiting_confirmation")
-            .select("id")
-            .maybeSingle();
-          if (!invalidatedPending) continue;
-          cancelled++;
-          console.log(
-            `[zone-confirm] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`,
-          );
-          continue;
-        }
-
-        const confirmationTimeframe =
-          pendingTimeframeAuthority.roles.confirmation;
-        const refinementTimeframe =
-          pendingTimeframeAuthority.roles.refinement;
-        const lifecycleMonitoringTimeframe = nestedPoiEnforced
-          ? frozenNestedPoiEntry!.monitoringTimeframe
-          : confirmationTimeframe;
-        const candles5m = await fetchCandles(
-          pending.symbol,
-          lifecycleMonitoringTimeframe,
-          brokerConn,
-        );
+        // Fetch fresh 5m candles for this pair
+        const candles5m = await fetchCandles(pending.symbol, "5m");
         if (candles5m.length < 10) {
-          console.log(`[zone-confirm] ${pending.symbol} — insufficient ${lifecycleMonitoringTimeframe} frozen-lifecycle candles (${candles5m.length})`);
+          console.log(`[zone-confirm] ${pending.symbol} — insufficient 5m candles (${candles5m.length})`);
           stillHunting++;
           continue;
         }
 
+        // Get current price from latest candle
         const currentPrice = candles5m[candles5m.length - 1].close;
-        const frozenTakeProfit = Number(pending.take_profit);
-        const touchTime = Date.parse(String(pending.zone_touch_time || ""));
-        const targetReachedCandle = candles5m.find((candle) => {
-          const candleTime = Date.parse(candle.datetime);
-          const targetSidePrice = pending.direction === "long" ? candle.high : candle.low;
-          return Number.isFinite(touchTime) && candleTime > touchTime &&
-            frozenTargetAlreadyReached(
-              pending.direction as "long" | "short", targetSidePrice, frozenTakeProfit,
-            );
-        });
-        if (targetReachedCandle) {
-          const targetSidePrice = pending.direction === "long"
-            ? targetReachedCandle.high : targetReachedCandle.low;
-          const reason = "frozen_target_already_reached: price=" + targetSidePrice +
-            " target=" + frozenTakeProfit + " candle=" + targetReachedCandle.datetime;
-          const { data: targetCancelled } = await supabase.from("pending_orders").update({
-            status: "cancelled", cancel_reason: reason, resolved_at: new Date().toISOString(),
-          }).eq("id", pending.id).eq("status", "awaiting_confirmation").select("id").maybeSingle();
-          if (!targetCancelled) continue;
-          cancelled++;
-          console.log("[zone-confirm] CANCELLED " + pending.symbol + " " + pending.direction + ": " + reason);
-          continue;
-        }
-
-        let impulseLifecycleObservation: any = null;
-        let lifecycleAfterLock: any = null;
-        let lifecycleObservationSucceeded = false;
-        let nextConfirmationReplayCursor: string | null = null;
-        try {
-          if (nestedPoiEnforced) {
-            const nestedCandles = completedCandlesSinceCursor({
-              candles: candles5m,
-              observedAfter: confirmationReplayCursor,
-              interval: lifecycleMonitoringTimeframe,
-            });
-            const transitions: any[] = [];
-            const processedNestedCandles: Candle[] = [];
-            for (
-              let candleIndex = 0;
-              candleIndex < nestedCandles.length;
-              candleIndex++
-            ) {
-              const step = await advanceStoredTradeLifecycle(
-                supabase,
-                pending.impulse_entry_lifecycle_id,
-                nestedCandles[candleIndex],
-                nestedCandles.slice(0, candleIndex + 1),
-              );
-              if (!step) continue;
-              processedNestedCandles.push(nestedCandles[candleIndex]);
-              transitions.push(...(step.transitions || []));
-              impulseLifecycleObservation = { ...step, transitions };
-              lifecycleAfterLock = step.after || lifecycleAfterLock;
-              if (step.disposition !== "watch") break;
-            }
-            if (processedNestedCandles.length > 0 && lifecycleAfterLock) {
-              nextConfirmationReplayCursor = cursorAfterLatestTouchCandle(
-                processedNestedCandles,
-                lifecycleMonitoringTimeframe,
-                confirmationReplayCursor,
-              );
-            }
-            if (nestedCandles.length === 0) {
-              lifecycleAfterLock = await loadImpulseEntryLifecycle(
-                supabase,
-                pending.impulse_entry_lifecycle_id,
-              );
-              impulseLifecycleObservation = lifecycleAfterLock
-                ? { after: lifecycleAfterLock, transitions: [] }
-                : null;
-            }
-          } else {
-            impulseLifecycleObservation = await advanceStoredTradeLifecycle(
-              supabase,
-              pending.impulse_entry_lifecycle_id,
-              candles5m[candles5m.length - 1],
-              candles5m,
-            );
-            lifecycleAfterLock = impulseLifecycleObservation?.after || null;
-          }
-          lifecycleObservationSucceeded = true;
-          for (
-            const transition of impulseLifecycleObservation?.transitions || []
-          ) {
-            console.log(
-              `[zone-confirm] ${pending.symbol} lifecycle ${transition.event?.type}: ${transition.after.lastTransitionReason}`,
-            );
-          }
-          const buildDiagnostic =
-            impulseLifecycleObservation?.confirmationBuildDiagnostic || null;
-          if (
-            buildDiagnostic &&
-            JSON.stringify(pending.confirmation_build_diagnostic || null) !==
-              JSON.stringify(buildDiagnostic)
-          ) {
-            const { error: diagnosticError } = await supabase
-              .from("pending_orders")
-              .update({ confirmation_build_diagnostic: buildDiagnostic })
-              .eq("id", pending.id)
-              .eq("status", "awaiting_confirmation");
-            if (diagnosticError) throw diagnosticError;
-          }
-        } catch (lifecycleError: any) {
-          console.warn(
-            `[zone-confirm] ${pending.symbol} shared lifecycle observation failed (non-blocking): ${lifecycleError?.message}`,
-          );
-        }
-        const persistedConfirmationCursor = nestedPoiEnforced
-          ? nextConfirmationReplayCursor
-          : confirmationCheckStartedAt;
-        if (
-          lifecycleObservationSucceeded &&
-          persistedConfirmationCursor &&
-          (!nestedPoiEnforced || lifecycleAfterLock !== null)
-        ) {
-          const { error: cursorError } = await supabase.from("pending_orders")
-            .update({
-              last_confirmation_checked_at: persistedConfirmationCursor,
-            })
-            .eq("id", pending.id)
-            .eq("status", "awaiting_confirmation");
-          if (cursorError) {
-            console.warn(
-              `[zone-confirm] ${pending.symbol} confirmation cursor update failed: ${cursorError.message}`,
-            );
-          }
-        }
-        const lifecycleFailure = impulseLifecycleObservation?.transitions.find(
-          (transition: any) => transition.event?.type === "candidate_failed",
-        ) || null;
-        const pendingLifecycleMode = lifecycleAfterLock?.mode ||
-          pendingPolicyResolution.frozenContext?.crossTimeframeContext
-            ?.impulseEntryLifecycle?.mode ||
-          pendingPolicyResolution.frozenContext?.crossTimeframeContext
-            ?.impulseEntryLifecycleAvailability?.mode ||
-          "observe";
-        const pendingLifecycleEnforced = pendingLifecycleMode === "enforce";
-        if (
-          nestedPoiEnforced && lifecycleAfterLock &&
-          lifecycleAfterLock.status !== "active" &&
-          lifecycleAfterLock.status !== "entered"
-        ) {
-          const reason = "nested_poi_" +
-            String(lifecycleAfterLock.status) + ": " +
-            String(
-              lifecycleAfterLock.lastTransitionReason ||
-                "Frozen nested trigger became terminal",
-            );
-          await supabase.from("pending_orders").update({
-            status: lifecycleAfterLock.status === "expired"
-              ? "expired"
-              : "invalidated",
-            cancel_reason: reason,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", pending.id).eq("user_id", userId);
-          cancelled++;
-          continue;
-        }
-        if (nestedPoiEnforced && !lifecycleAfterLock) {
-          stillHunting++;
-          console.warn(
-            "[zone-confirm] " + pending.symbol +
-              " nested POI lifecycle unavailable; fill withheld",
-          );
-          continue;
-        }
-
-        if (
-          !nestedPoiEnforced && pendingLifecycleEnforced &&
-          lifecycleFailure &&
-          lifecycleFailure.after.status === "active"
-        ) {
-          const { data: retarget, error: retargetError } = await supabase.rpc(
-            "retarget_pending_to_impulse_candidate",
-            { p_pending_id: pending.id, p_user_id: userId, p_bot_id: BOT_ID },
-          );
-          if (retargetError) throw retargetError;
-          if (retarget?.retargeted) {
-            resetToPending++;
-            console.log(
-              `[zone-confirm] ${pending.symbol} retargeted to frozen impulse candidate ${retarget.candidate_id}`,
-            );
-            continue;
-          }
-        }
-
-        let retracementReadyPlan: PostChochEntryPlan | null = null;
-        const storedRetracementPlan = pending.post_confirmation_entry as
-          | PostChochEntryPlan
-          | null;
-        if (storedRetracementPlan?.state === "awaiting_retracement") {
-          const evaluatedPlan = evaluatePostChochRetracement(
-            storedRetracementPlan,
-            candles5m[candles5m.length - 1],
-          );
-          if (evaluatedPlan !== storedRetracementPlan) {
-            const { error: planUpdateError } = await supabase
-              .from("pending_orders")
-              .update({ post_confirmation_entry: evaluatedPlan })
-              .eq("id", pending.id).eq("user_id", userId);
-            if (planUpdateError) throw planUpdateError;
-          }
-          if (evaluatedPlan.state === "invalidated" || evaluatedPlan.state === "expired") {
-            await supabase.from("pending_orders").update({
-              status: evaluatedPlan.state === "expired" ? "cancelled" : "invalidated",
-              cancel_reason: evaluatedPlan.reason,
-              resolved_at: evaluatedPlan.resolvedAt,
-            }).eq("id", pending.id).eq("user_id", userId);
-            cancelled++;
-            continue;
-          }
-          if (evaluatedPlan.state !== "ready") {
-            stillHunting++;
-            console.log(`[zone-confirm] ${pending.symbol} waiting for post-CHoCH ${evaluatedPlan.zone.type} retracement ${evaluatedPlan.zone.low}-${evaluatedPlan.zone.high}`);
-            continue;
-          }
-          retracementReadyPlan = evaluatedPlan;
-        } else if (storedRetracementPlan?.state === "ready") {
-          retracementReadyPlan = storedRetracementPlan;
-        }
 
         // ── Check impulse invalidation ──
         let impulseData: { high: number; low: number } | null = null;
@@ -1044,7 +278,7 @@ Deno.serve(async (req) => {
 
         if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
           await supabase.from("pending_orders").update({
-            status: "invalidated",
+            status: "cancelled",
             cancel_reason: `[fast-confirm] Impulse broken — price ${currentPrice} exceeded origin`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -1058,51 +292,17 @@ Deno.serve(async (req) => {
         const rawRefinedLow = parseFloat(pending.refined_zone_low || "0");
         const rawRefinedHigh = parseFloat(pending.refined_zone_high || "0");
         const hasRefinedZone = rawRefinedLow > 0 && rawRefinedHigh > 0;
-        const zoneLow = hasRefinedZone
-          ? rawRefinedLow
-          : parseFloat(pending.entry_zone_low || "0");
-        const zoneHigh = hasRefinedZone
-          ? rawRefinedHigh
-          : parseFloat(pending.entry_zone_high || "0");
-        if (
-          !retracementReadyPlan &&
-          !(nestedPoiEnforced && lifecycleAfterLock?.status === "entered") &&
-          zoneLow > 0 && zoneHigh > 0 &&
-          !isPriceInZone(
-            currentPrice,
-            zoneLow,
-            zoneHigh,
-            pending.direction as "long" | "short",
-          )
-        ) {
+        const zoneLow = hasRefinedZone ? rawRefinedLow : parseFloat(pending.entry_zone_low || "0");
+        const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
+        if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
-          const maxAttempts = resolvePendingMaxConfirmationAttempts(
-            pending,
-            config,
-          );
-          if (attempts >= maxAttempts) {
-            // Cap reached — cancel the order instead of retrying indefinitely
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              cancel_reason:
-                `Max confirmation attempts reached (${attempts}/${maxAttempts})`,
-              resolved_at: new Date().toISOString(),
-            }).eq("order_id", pending.order_id).eq("user_id", userId);
-            cancelled++;
-            console.log(
-              `[zone-confirm] ${pending.symbol} ${pending.direction} — CANCELLED: max confirmation attempts reached (${attempts}/${maxAttempts})`,
-            );
-            continue;
-          }
           await supabase.from("pending_orders").update({
             status: "pending",
             zone_touch_time: null,
             confirmation_attempts: attempts,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           resetToPending++;
-          console.log(
-            `[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts}/${maxAttempts})`,
-          );
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
           continue;
         }
 
@@ -1110,7 +310,7 @@ Deno.serve(async (req) => {
         // If price closes THROUGH the refined zone (not just wicks), the level has failed.
         // For longs: a 5m candle close below refined_zone_low = invalidation
         // For shorts: a 5m candle close above refined_zone_high = invalidation
-        if (!retracementReadyPlan && hasRefinedZone && candles5m.length > 0) {
+        if (hasRefinedZone && candles5m.length > 0) {
           const lastCandle = candles5m[candles5m.length - 1];
           const dir = pending.direction as "long" | "short";
           const closedThrough = dir === "long"
@@ -1118,7 +318,7 @@ Deno.serve(async (req) => {
             : lastCandle.close > rawRefinedHigh;
           if (closedThrough) {
             await supabase.from("pending_orders").update({
-              status: "invalidated",
+              status: "cancelled",
               cancel_reason: `[zone-confirm] Refined zone failed — 5m close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -1138,983 +338,94 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch the exact lower timeframe frozen with this setup.
-        let candles1m: Candle[] = [];
-        if (!nestedPoiEnforced) {
-          try {
-            candles1m = await fetchCandles(
-              pending.symbol,
-              refinementTimeframe,
-              brokerConn,
-            );
-          } catch { /* non-critical: LTF path just won't fire */ }
-        }
-
-        // Extract sweep data from signal_reason (stored at order placement time)
-        let sweepEventData: { level: number; type: string } | null = null;
-        let candlestickProfile: "unified" | "standalone" | "cascade" = "standalone";
-        try {
-          const sr = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {});
-          candlestickProfile = sr?.signalSource === "cascade" ? "cascade"
-            : sr?.signalSource === "unified" ? "unified" : "standalone";
-          if (sr?.sweepReclaim?.bestReclaim?.sweptLevel) {
-            sweepEventData = { level: sr.sweepReclaim.bestReclaim.sweptLevel, type: sr.sweepReclaim.bestReclaim.type || "buy-side" };
-          } else if (sr?.sweepReclaim?.sweeps?.[0]?.sweptLevel) {
-            sweepEventData = { level: sr.sweepReclaim.sweeps[0].sweptLevel, type: sr.sweepReclaim.sweeps[0].type || "buy-side" };
-          }
-        } catch { /* non-critical */ }
-
-        // Respect the confirmation contract frozen when this setup was created.
-        // Runtime config is only a legacy fallback for pre-Phase 4 rows.
-        const legacyConfirmationMethod = resolvePendingConfirmationMethod(
-          pending,
-          config,
+        const confirmationSignal = detectZoneConfirmation(
+          candles5m,
+          pending.direction as "long" | "short",
+          DEFAULT_ZONE_CONFIRMATION_CONFIG,
+          zoneTouchIdx,
+          pending.symbol,
+          (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
         );
-        const confirmationMethod = nestedPoiEnforced
-          ? "nested_poi_market"
-          : legacyConfirmationMethod;
-        const confirmationIndicatorMinimum = resolvePendingIndicatorMinimum(
-          pending,
-          config,
-        );
-        const nestedTriggerReady = nestedPoiEnforced &&
-          lifecycleAfterLock?.status === "entered";
-        let confirmationSignal: any = nestedPoiEnforced
-          ? nestedTriggerReady
-            ? {
-              type: "nested_poi_trigger",
-              tier: 1,
-              price: currentPrice,
-              candleIndex: candles5m.length - 1,
-              displacement: 0,
-              significance: undefined,
-              closeBased: false,
-              supportingSignals: [
-                "nested_poi:" + frozenNestedPoiEntry!.selected!.type,
-                ...frozenNestedPoiEntry!.selected!.supportingFamilies.map(
-                  (family) => "nested_support:" + family,
-                ),
-              ],
-            }
-            : null
-          : retracementReadyPlan
-          ? {
-            ...retracementReadyPlan.confirmation,
-            significance: retracementReadyPlan.confirmation.significance ||
-              undefined,
-          } as any
-          : legacyConfirmationMethod === "indicators"
-          ? null
-          : detectZoneConfirmation(
-            candles5m,
-            pending.direction as "long" | "short",
-            DEFAULT_ZONE_CONFIRMATION_CONFIG,
-            zoneTouchIdx,
-            pending.symbol,
-            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
-            candles1m.length >= 15 ? candles1m : undefined,
-            sweepEventData,
-            candlestickProfile,
-          );
-        const indicatorConfirmation = nestedPoiEnforced ||
-            retracementReadyPlan || legacyConfirmationMethod === "choch"
-          ? null
-          : checkIndicatorConfirmation(
-            candles5m,
-            pending.direction as "long" | "short",
-            { minIndicators: confirmationIndicatorMinimum },
-          );
-        const confirmationPassed = nestedPoiEnforced
-          ? nestedTriggerReady
-          : retracementReadyPlan
-          ? true
-          : legacyConfirmationMethod === "choch"
-          ? !!confirmationSignal
-          : legacyConfirmationMethod === "indicators"
-          ? !!indicatorConfirmation?.confirmed
-          : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
-        const lifecycleConfirmationPassed = nestedPoiEnforced
-          ? nestedTriggerReady
-          : !pendingLifecycleEnforced || lifecycleAfterLock?.status === "entered";
-        const confirmationCandleTime =
-          candles5m[candles5m.length - 1]?.datetime || new Date().toISOString();
-        const previousConfirmationObservationUpdatedAt =
-          pending.pending_authorization_observation?.updatedAt || null;
-        const confirmationObservation = recordConfirmationMatrixObservation(
-          pending.pending_authorization_observation,
-          {
-            sampledAt: new Date().toISOString(),
-            candleTime: confirmationCandleTime,
-            timeframe: lifecycleMonitoringTimeframe,
-            method: confirmationMethod,
-            lifecycleMode: nestedPoiEnforced ? "enforce" : pendingLifecycleMode,
-            lifecycleAvailable: lifecycleAfterLock !== null,
-            lifecycleStatus: lifecycleAfterLock?.status || null,
-            detectorPassed: confirmationPassed,
-          },
-        );
-        pending.pending_authorization_observation = confirmationObservation;
-        try {
-          if (
-            confirmationObservation.updatedAt !==
-              previousConfirmationObservationUpdatedAt
-          ) {
-            const { error: observationError } = await supabase
-              .from("pending_orders")
-              .update({
-                pending_authorization_observation: confirmationObservation,
-              })
-              .eq("id", pending.id).eq("user_id", userId)
-              .eq("status", "awaiting_confirmation");
-            if (observationError) throw observationError;
-          }
-        } catch (observationError: any) {
-          console.warn(
-            "[zone-confirm] " + pending.symbol +
-              " confirmation matrix observation unavailable (non-fatal): " +
-              observationError?.message,
-          );
-        }
-        const confirmationAuthority = nestedPoiEnforced
-          ? buildConfirmationAuthorityObservation({
-            source: "nested_poi_entry",
-            level: "nested_poi_trigger",
-            direction: pending.direction as "long" | "short",
-            entryReadyUnderCurrentBehavior: nestedTriggerReady,
-            evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
-            candleIndex: candles5m.length - 1,
-            candleTime: candles5m[candles5m.length - 1]?.datetime || null,
-            price: currentPrice,
-            closeBased: false,
-            supportingSignals: frozenNestedPoiEntry!.selected!
-              .supportingFamilies.map(
-                (family) => "nested_support:" + family,
-              ),
-            reasonCodes: [
-              nestedTriggerReady
-                ? "frozen_nested_poi_trigger_touched"
-                : "frozen_nested_poi_trigger_waiting",
-            ],
-          })
-          : buildRoutedConfirmationObservation({
-            method: legacyConfirmationMethod,
-            direction: pending.direction as "long" | "short",
-            structural: confirmationSignal?.authority || null,
-            indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
-            indicatorsRequired: confirmationIndicatorMinimum,
-            indicatorConfirmed: indicatorConfirmation?.confirmed === true,
-            evaluatedAt: candles5m[candles5m.length - 1]?.datetime || null,
-            candleIndex: candles5m.length - 1,
-            candleTime: candles5m[candles5m.length - 1]?.datetime || null,
-            price: currentPrice,
-          });
-        if (confirmationSignal) {
-          confirmationSignal.authority = confirmationAuthority;
-        }
 
-        // ── Phase 1: confirmation-attempt evidence (observation only) ──
-        // Never feeds the confirmation decision below; failures are swallowed.
-        try {
-          const evidencePolicy = pendingPolicyResolution.policy;
-          const attempt = await nextConfirmationAttempt(supabase, {
-            userId,
-            botId: BOT_ID,
-            symbol: pending.symbol,
-            direction: pending.direction === "long" ? "bullish" : "bearish",
-            pendingOrderId: pending.id,
-          });
-          let parsedSignalReason: Record<string, any> = {};
-          try {
-            parsedSignalReason = typeof pending.signal_reason === "string"
-              ? JSON.parse(pending.signal_reason)
-              : (pending.signal_reason || {});
-          } catch {
-            parsedSignalReason = {};
-          }
-          const frozenContext = readFrozenSetupStrategyContext(pending);
-          // New orders carry the exact originating evidence UUID. The
-          // time-based lookup remains only as compatibility for orders created
-          // before this corrective release.
-          const parentEvidenceId =
-            parsedSignalReason.timeframeEvidenceId ||
-            frozenContext?.timeframeEvidenceId ||
-            await findParentEvidenceId(supabase, {
-              userId,
-              botId: BOT_ID,
-              symbol: pending.symbol,
-              direction: pending.direction === "long" ? "bullish" : "bearish",
-              before: pending.placed_at ?? undefined,
-            });
-          const row = buildConfirmationEvidenceRow(
-            {
-              userId,
-              botId: BOT_ID,
-              scanCycleId: confirmScanCycleId,
-              symbol: pending.symbol,
-              direction: pending.direction === "long" ? "bullish" : "bearish",
-              observedAt: candles5m[candles5m.length - 1]?.datetime ||
-                new Date().toISOString(),
-              evaluatedAt: new Date().toISOString(),
-              tradingStyle: evidencePolicy.style,
-              stylePolicyVersion: evidencePolicy.contractVersion,
-              styleBasePolicyHash: evidencePolicy.basePolicyHash,
-              stylePolicyHash: evidencePolicy.policyHash,
-              stylePolicySnapshot: {
-                style: evidencePolicy.style,
-                timeframes: evidencePolicy.timeframes,
-              },
-              parentEvidenceId,
-              pendingOrderId: pending.id,
-              confirmationAttempt: attempt,
-            },
-            {
-              timeframe: evidencePolicy.timeframes.runtimeEntry,
-              candleCount: candles5m.length,
-              confirmationMethod,
-              confirmationPassed,
-              reason: confirmationPassed
-                ? "confirmation_passed"
-                : `no_${confirmationMethod}_confirmation`,
-              chochTier: confirmationSignal?.tier ?? null,
-              chochType: confirmationSignal?.type ?? null,
-              indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
-              indicatorsRequired: confirmationIndicatorMinimum ?? null,
-              hasRefinedZone,
-              zoneHigh: zoneHigh > 0 ? zoneHigh : null,
-              zoneLow: zoneLow > 0 ? zoneLow : null,
-              currentPrice: currentPrice ?? null,
-              authority: confirmationAuthority,
-            },
-          );
-          await persistZoneTimeframeEvidence(supabase, [row], {
-            onError: (err: any) =>
-              console.warn(
-                `[zone-confirm] ${pending.symbol} confirmation evidence write`
-                + ` failed (non-fatal): ${err?.message}`,
-              ),
-          });
-        } catch (confirmEvidenceErr: any) {
-          console.warn(
-            `[zone-confirm] ${pending.symbol} confirmation evidence unavailable`
-            + ` (non-fatal): ${confirmEvidenceErr?.message}`,
-          );
-        }
-
-        if (!confirmationPassed || !lifecycleConfirmationPassed) {
+        if (!confirmationSignal) {
           stillHunting++;
-          console.log(
-            `[zone-confirm] ${pending.symbol} ${pending.direction} — ${!confirmationPassed ? `no ${confirmationMethod} confirmation yet` : "frozen confirmation contract not satisfied"}`
-            + ` (CHoCH=${confirmationSignal ? `T${confirmationSignal.tier}` : "none"}, indicators=${indicatorConfirmation?.passedCount ?? 0}/4)`,
-          );
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
           continue;
         }
 
-        if (!confirmationSignal && indicatorConfirmation?.confirmed) {
-          confirmationSignal = {
-            type: (pending.direction === "long" ? "bullish_choch" : "bearish_choch") as any,
-            tier: 2,
-            price: currentPrice,
-            candleIndex: candles5m.length - 1,
-            displacement: 0.5,
-            significance: undefined,
-            closeBased: false,
-            supportingSignals: ["indicator_confirmation", indicatorConfirmation.summary],
-            authority: confirmationAuthority,
-          };
-        }
-        confirmationSignal!.authority = confirmationAuthority;
-        const confirmedSignal = confirmationSignal!;
-
-        // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──
-        // Tier 1 (close-based CHoCH) and Tier 2 (wick CHoCH + supporting signal)
-        // are both valid structural confirmations. Only block Tier 3 (reversal
-        // pattern without any CHoCH) when there's no refined zone.
-        if (confirmationMethod !== "indicators" && !hasRefinedZone && confirmedSignal.tier === 3) {
+        // ── Tier gate: require Tier 1 when no refined zone is available ──
+        // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
+        // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
+        // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
+        // enough evidence that the level is holding.
+        if (!hasRefinedZone && confirmationSignal.tier !== 1) {
           stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmedSignal.tier} signal rejected (no refined zone, Tier 1/2 required)`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
           continue;
-        }
-
-        const pendingConfirmationConfig =
-          pending.confirmation_config &&
-            typeof pending.confirmation_config === "object"
-            ? pending.confirmation_config
-            : {};
-        const afterChochMode = normalizeAfterChochMode(
-          pendingConfirmationConfig.afterChochMode ?? config.afterChochMode,
-        );
-        const afterChochExpiryMinutes = Math.max(
-          5,
-          Number(
-            pendingConfirmationConfig.afterChochExpiryMinutes ??
-              config.afterChochExpiryMinutes ??
-              30,
-          ),
-        );
-        const isChochSignal = confirmedSignal.type.includes("choch");
-        let observedPostChochPlan =
-          (pending.post_confirmation_observation as PostChochEntryPlan | null) ||
-          null;
-        if (
-          !retracementReadyPlan &&
-          isChochSignal &&
-          afterChochMode !== "confirmation_close"
-        ) {
-          const postChochPlan = derivePostChochEntryPlan({
-            candles: candles5m,
-            direction: pending.direction as "long" | "short",
-            signal: confirmedSignal,
-            protectedLevel: Number(
-              lifecycleAfterLock?.confirmation?.protectedLevel ??
-                pending.stop_loss,
-            ),
-            candidateId:
-              lifecycleAfterLock?.confirmation?.candidateId ??
-              pending.candidate_id ??
-              null,
-            confirmationGeneration:
-              lifecycleAfterLock?.confirmation?.generation ?? null,
-            mode: afterChochMode,
-            createdAt:
-              candles5m[candles5m.length - 1]?.datetime ||
-              new Date().toISOString(),
-            expiryMinutes: afterChochExpiryMinutes,
-          });
-          if (postChochPlan) {
-            observedPostChochPlan = postChochPlan;
-            const column = afterChochMode === "wait_retracement"
-              ? "post_confirmation_entry"
-              : "post_confirmation_observation";
-            const { error: planPersistError } = await supabase
-              .from("pending_orders").update({ [column]: postChochPlan })
-              .eq("id", pending.id).eq("user_id", userId);
-            if (planPersistError) throw planPersistError;
-            if (afterChochMode === "wait_retracement") {
-              if (
-                telegramChatIds.length > 0 &&
-                notifyCategories.confirmed_entry !== false
-              ) {
-                const directionLabel = pending.direction === "long" ? "BULLISH" : "BEARISH";
-                const spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
-                const decimals = Math.max(2, Math.round(-Math.log10(spec.pipSize)) + 1);
-                const fmt = (value: unknown) => {
-                  const number = Number(value);
-                  return Number.isFinite(number) ? number.toFixed(decimals) : String(value);
-                };
-                const expiryLabel = new Date(postChochPlan.expiresAt).toLocaleString(
-                  "en-US",
-                  {
-                    timeZone: "America/New_York",
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                    timeZoneName: "short",
-                  },
-                );
-                const lockedBreakLevel = Number(
-                  lifecycleAfterLock?.confirmation?.breakLevel,
-                );
-                const lockedBreakLine = Number.isFinite(lockedBreakLevel)
-                  ? tgLine("Locked structure break", fmt(lockedBreakLevel))
-                  : "";
-                const message =
-                  "<b>" + pending.symbol + " " + directionLabel + " CHoCH CONFIRMED</b>\n\n" +
-                  lockedBreakLine +
-                  tgLine("Confirmation close", fmt(confirmedSignal.price)) +
-                  tgLine("Confirmation", pendingTimeframeAuthority.roles.confirmation) +
-                  tgLine("Waiting for", postChochPlan.zone.type.toUpperCase() + " retracement") +
-                  tgLine("Retracement zone", fmt(postChochPlan.zone.low) + " - " + fmt(postChochPlan.zone.high)) +
-                  tgLine("Protected level", fmt(postChochPlan.protectedLevel)) +
-                  tgLine("Expires", expiryLabel) +
-                  "\n<b>No trade has opened yet.</b> Entry requires a retracement into the frozen zone and fresh final authorization.";
-                await Promise.allSettled(
-                  telegramChatIds.map((chatId: string) =>
-                    fetch(supabaseUrl + "/functions/v1/telegram-notify", {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: "Bearer " + supabaseKey,
-                      },
-                      body: JSON.stringify({ chat_id: chatId, message }),
-                    })
-                  ),
-                );
-              }
-              stillHunting++;
-              console.log(`[zone-confirm] ${pending.symbol} CHoCH confirmed; waiting for ${postChochPlan.zone.type} retracement ${postChochPlan.zone.low}-${postChochPlan.zone.high}`);
-              continue;
-            }
-          } else if (afterChochMode === "wait_retracement") {
-            stillHunting++;
-            console.warn(
-              `[zone-confirm] ${pending.symbol} CHoCH passed but no deterministic retracement zone could be frozen; fill withheld`,
-            );
-            continue;
-          }
         }
 
         // ═══════════════════════════════════════════════════════════════════
         // CONFIRMED! Enter the trade (tiered confirmation passed).
         // ═══════════════════════════════════════════════════════════════
-        console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmedSignal)}`);
-        console.log(`[zone-confirm] Tier: ${confirmedSignal.tier}, Type: ${confirmedSignal.type}, Method: ${confirmationMethod}`);
+        console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
+        console.log(`[zone-confirm] Tier: ${confirmationSignal.tier}, Type: ${confirmationSignal.type}`);
 
-        // Fill at the current market price. In retracement mode this is the
-        // first touch of the frozen post-CHoCH FVG/OB; otherwise it remains the
-        // confirmation close for backward compatibility.
+        // Check max positions gate
+        const maxOpenPositions = parseInt(String(config.risk?.maxOpenPositions || config.maxOpenPositions || 3), 10);
+        const maxPerSymbol = config.risk?.maxPerSymbol || config.maxPerSymbol || 2;
+        const currentOpenCount = openPositions.length;
+        const currentSymbolCount = openPositions.filter((p: any) => p.symbol === pending.symbol).length;
+
+        if (currentOpenCount >= maxOpenPositions) {
+          await supabase.from("pending_orders").update({
+            status: "cancelled",
+            cancel_reason: `[fast-confirm] Max open positions reached (${currentOpenCount}/${maxOpenPositions})`,
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          cancelled++;
+          console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max positions (${currentOpenCount}/${maxOpenPositions})`);
+          continue;
+        }
+        if (currentSymbolCount >= maxPerSymbol) {
+          await supabase.from("pending_orders").update({
+            status: "cancelled",
+            cancel_reason: `[fast-confirm] Max per symbol reached (${currentSymbolCount}/${maxPerSymbol})`,
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          cancelled++;
+          console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max per symbol (${currentSymbolCount}/${maxPerSymbol})`);
+          continue;
+        }
+
+        // Confirmation is a go/no-go signal — fill at current market price.
+        // Since we already verified price is inside the refined zone (15m OB/FVG),
+        // the current price IS the optimal entry. The confirmation just validates
+        // that the level is holding (CHoCH/reversal/rejection observed).
         const actualFillPrice = currentPrice;
         const entryPrice = parseFloat(pending.entry_price);
         const positionId = pending.order_id;
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
-        let brokerEquity: number | undefined;
-        if (account.execution_mode === "live" && brokerConn) {
-          try {
-            const { res, body } = await metaFetch(
-              brokerConn.account_id,
-              brokerConn.api_key,
-              (base) => `${base}/account-information`,
-            );
-            if (res.ok) {
-              const equityData = JSON.parse(body);
-              const parsedEquity = Number(equityData.equity ?? equityData.balance);
-              if (Number.isFinite(parsedEquity) && parsedEquity > 0) brokerEquity = parsedEquity;
-            }
-          } catch (e: any) {
-            console.warn(`[zone-confirm] Broker equity unavailable for ${pending.symbol}: ${e?.message}`);
-          }
-        }
-
-        const sizingRateMap = await loadCachedSizingRateMap(supabase);
-
-        let propFirmResult: PropFirmGateResult | null = null;
-        try {
-          propFirmResult = await runPropFirmGate(
-            supabase,
-            userId,
-            BOT_ID,
-            Number(account.balance || 0),
-            openPositions,
-            `fast-confirm-${pending.id}`,
-            {
-              brokerEquity,
-              isLiveAccount: account.execution_mode === "live",
-              hasBrokerConnection: account.execution_mode === "live" && !!brokerConn,
-              rateMap: sizingRateMap,
-            },
-          );
-        } catch (e: any) {
-          propFirmResult = {
-            enabled: true,
-            allowed: false,
-            reason: `Prop-firm verification error: ${e?.message}`,
-            maxPositionSizeMultiplier: 0,
-            shouldCloseAll: false,
-            compliance: null,
-            configId: null,
-          };
-        }
-
-        const spreadConfig = {
-          spreadFilterEnabled: config.spreadFilterEnabled,
-          maxSpreadPips: config.maxSpreadPips,
-        };
-        const liveMode = account.execution_mode === "live";
-        const pendingRuntimeConfig = readFrozenSetupStrategyContext(pending)
-          ?.runtimeConfig?.effectiveConfig;
-        const pendingMinimumRiskReward = Number(
-          pendingRuntimeConfig?.minRiskReward ?? config.minRiskReward,
-        );
-        const requestedStopPolicyResolution = resolveZoneStopPolicyMode(
-          parsedPendingEvidence.zoneSetupStopPolicyMode ?? "observe",
-          liveMode ? "live" : "paper",
-        );
-        const pendingStopPolicyResolution =
-          parsedPendingEvidence.zoneSetupStopPolicyAppliedAtArm === true
-            ? requestedStopPolicyResolution
-            : {
-              ...requestedStopPolicyResolution,
-              enforced: false,
-              reason: "Stop policy was not active when this order was armed",
-            };
-        const spreadResults: Array<{ conn: any; result: Awaited<ReturnType<typeof fetchBrokerSpread>> }> = [];
-        if (liveMode) {
-          for (const conn of brokerConnections) {
-            let metaAccountId: string | undefined;
-            let authToken: string | undefined;
-            if (conn.broker_type === "metaapi") {
-              metaAccountId = conn.account_id;
-              authToken = conn.api_key;
-              if (metaAccountId?.startsWith("eyJ") && authToken && /^[0-9a-f-]{36}$/.test(authToken)) {
-                authToken = conn.account_id;
-                metaAccountId = conn.api_key;
-              }
-            }
-            spreadResults.push({
-              conn,
-              result: await fetchBrokerSpread(conn, pending.symbol, spreadConfig, metaAccountId, authToken),
-            });
-          }
-        }
-        const availableSpreads = spreadResults.filter((item) => !!item.result);
-        const passingSpreads = spreadResults.filter((item) => item.result?.passed);
-        const approvedBrokerConnections = liveMode && config.spreadFilterEnabled
-          ? passingSpreads.map((item) => item.conn)
-          : brokerConnections;
-        const executionCommissionPerLot = liveMode
-          ? averageRoundTripCommission(approvedBrokerConnections)
-          : 0;
-        const bestSpread = availableSpreads
-          .map((item) => item.result!)
-          .sort((a, b) => a.spreadPips - b.spreadPips)[0];
-
-        const runtimeGates = await buildFinalRuntimeGateStates({
-          supabase,
-          userId,
-          accountExecutionMode: account.execution_mode,
-          brokerExecutionConnectionCount: approvedBrokerConnections.length,
-          symbol: pending.symbol,
-          direction: pending.direction as "long" | "short",
-          currentPrice: actualFillPrice,
-          candles: candles5m,
-          interval: pendingTimeframeAuthority.runtimeEntry,
-          openPositions,
-          accountBalance: account.balance,
-          config: {
-            portfolioHeat: config.portfolioHeat,
-            riskPerTrade: config.riskPerTrade,
-            correlationFilterEnabled: config.correlationFilterEnabled,
-            maxCorrelation: config.maxCorrelation,
-            maxCorrelatedPositions: config.maxCorrelatedPositions,
-            cooldownMinutes: config.cooldownMinutes,
-            newsFilterEnabled: config.newsFilterEnabled,
-            newsFilterPauseMinutes: config.newsFilterPauseMinutes,
-            enabledSessions: config.enabledSessions,
-            enabledDays: config.enabledDays,
-            killZoneOnly: config.killZoneOnly,
-          },
-        });
-        const entryConfirmation: EntryConfirmationDecision = {
-          required: true,
-          passed: true,
-          method: confirmationMethod,
-          reason:
-            `Entry timing confirmed by ${confirmedSignal.type} (${confirmationMethod})`,
-          evidence: {
-            type: confirmedSignal.type,
-            tier: confirmedSignal.tier,
-            price: confirmedSignal.price,
-            displacement: confirmedSignal.displacement,
-            supportingSignals: confirmedSignal.supportingSignals,
-            authority: confirmedSignal.authority || null,
-          },
-          evaluatedAt: nowStr,
-        };
-        const pendingCanonicalDealingRange = evaluateCanonicalDealingRange({
-          range: readFrozenCanonicalDealingRange(
-            readFrozenSetupStrategyContext(pending)?.crossTimeframeContext,
-          ),
-          direction: pending.direction as "long" | "short",
-          price: actualFillPrice,
-          mode: normalizeDealingRangeMode(pendingDealingRangeMode, {
-            onlyBuyInDiscount: config.onlyBuyInDiscount,
-            onlySellInPremium: config.onlySellInPremium,
-          }),
-        });
-        const pendingSpecForObservation = SPECS[pending.symbol] || SPECS["EUR/USD"];
-        let selectedExecutionStop = Number(pending.stop_loss);
-        let executionStructuralInvalidation = Number(pending.structural_invalidation);
-        let stopPolicyEvaluation: ReturnType<typeof evaluateStyleAwareStopPolicy> | null = null;
-        if (pendingStopPolicyResolution.enforced) {
-          const protectedLevel = Number(
-            lifecycleAfterLock?.confirmation?.protectedLevel,
-          );
-          const structuralBufferQuoteDistance = Number(
-            parsedPendingEvidence.zoneSetupStopPolicyBufferQuoteDistance,
-          );
-          if (
-            !Number.isFinite(protectedLevel) ||
-            !Number.isFinite(structuralBufferQuoteDistance) ||
-            structuralBufferQuoteDistance < 0
-          ) {
-            const reason =
-              "Style-aware stop policy rejected fill: protected_pivot_or_buffer_unavailable";
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              cancel_reason: reason,
-              resolved_at: nowStr,
-            }).eq("id", pending.id).eq("user_id", userId);
-            cancelled++;
-            console.warn(`[zone-confirm] ${pending.symbol} ${reason}`);
-            continue;
-          }
-          executionStructuralInvalidation = pending.direction === "long"
-            ? protectedLevel - structuralBufferQuoteDistance
-            : protectedLevel + structuralBufferQuoteDistance;
-          const confirmationAtr = calculateATR(
-            candles5m,
-            Number(config.slATRPeriod || 14),
-          );
-          let executionFloorQuoteDistance =
-            Number(pendingSpecForObservation.typicalSpread || 0) *
-            pendingSpecForObservation.pipSize * 1.5;
-          let executionFloorSource: "spread_proxy" | "broker_snapshot" = "spread_proxy";
-
-          if (liveMode) {
-            const exactConstraints = spreadResults.filter((item) => item.result !== null);
-            if (
-              brokerConnections.length === 0 ||
-              exactConstraints.length !== brokerConnections.length
-            ) {
-              console.warn(
-                `[zone-confirm] ${pending.symbol} live stop policy waiting: exact broker constraints unavailable`,
-              );
-              stillHunting++;
-              continue;
-            }
-            const brokerFloor = calculateBrokerExecutionFloor(
-              exactConstraints.map((item) => item.result!),
-            );
-            if (brokerFloor === null) {
-              console.warn(`[zone-confirm] ${pending.symbol} live broker floor invalid`);
-              stillHunting++;
-              continue;
-            }
-            executionFloorQuoteDistance = brokerFloor;
-            executionFloorSource = "broker_snapshot";
-          }
-
-          stopPolicyEvaluation = evaluateStyleAwareStopPolicy({
-            observationOnly: false,
-            direction: pending.direction as "long" | "short",
-            entryPrice: actualFillPrice,
-            structuralInvalidation: executionStructuralInvalidation,
-            confirmationAtr,
-            atrMultiplier: 1.5,
-            executionFloorQuoteDistance,
-            executionFloorSource,
-            riskCapAtrMultiplier:
-              pendingPolicyResolution.policy.style === "swing_trader" ? 6 : 4,
-          });
-          if (!stopPolicyEvaluation.valid || stopPolicyEvaluation.stopLoss === null) {
-            const reason = `Style-aware stop policy rejected fill: ${stopPolicyEvaluation.reason || "stop_unavailable"}`;
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              cancel_reason: reason,
-              resolved_at: nowStr,
-            }).eq("id", pending.id).eq("user_id", userId);
-            cancelled++;
-            console.warn(`[zone-confirm] ${pending.symbol} ${reason}`);
-            continue;
-          }
-          selectedExecutionStop = stopPolicyEvaluation.stopLoss;
-        }
-        const wouldBeExecutionPlan = buildPreArmedPositionPlan({
-          direction: pending.direction,
-          zone: {
-            price: actualFillPrice,
-            zoneType: pending.entry_zone_type || "impulse_zone",
-            zoneLow: Number(pending.entry_zone_low),
-            zoneHigh: Number(pending.entry_zone_high),
-          },
-          structuralInvalidation: executionStructuralInvalidation,
-          preferredPositionStop: selectedExecutionStop,
-          finalPositionStop: pendingStopPolicyResolution.enforced ? selectedExecutionStop : undefined,
-          pipSize: pendingSpecForObservation.pipSize,
-          minimumStopPips: pendingStopPolicyResolution.enforced ? 0 : MIN_SL_PIPS[pending.symbol] ?? 15,
-          atrValue: pendingStopPolicyResolution.enforced ? null : parsedPendingEvidence?.atrValue,
-          atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-          frozenTakeProfit: Number(pending.take_profit),
-        });
-        if (parsedPendingEvidence.preArmed === true && !wouldBeExecutionPlan.valid) {
-          console.warn(
-            `[zone-confirm] Final risk geometry failed ${pending.symbol}: ${wouldBeExecutionPlan.reason}`,
-          );
-          continue;
-        }
-        const authorizationStop = wouldBeExecutionPlan.valid
-          ? wouldBeExecutionPlan.plan.stopLoss : Number(pending.stop_loss);
-        let rawAuthorization = evaluateFinalTradeAuthorization({
-          account,
-          candidate: {
-            symbol: pending.symbol,
-            direction: pending.direction as "long" | "short",
-            entryPrice: actualFillPrice,
-            stopLoss: authorizationStop,
-            takeProfit: Number(pending.take_profit),
-          },
-          openPositions,
-          maxOpenPositions: config.maxOpenPositions,
-          maxPerSymbol: config.maxPerSymbol,
-          allowSameDirectionStacking: config.allowSameDirectionStacking,
-          maxDailyLoss: config.maxDailyLoss,
-          maxDrawdown: config.maxDrawdown,
-          minimumRiskReward: pendingMinimumRiskReward,
-          commissionPerLot: executionCommissionPerLot,
-          rateMap: sizingRateMap,
-          directionVerdict,
-          requireDirectionVerdict: true,
-          directionVerdictPolicy: "retain_frozen_until_opposed",
-          gamePlan,
-          gamePlanEnabled: config.gamePlanEnabled !== false,
-          gamePlanMode: config.gpEnforcementMode,
-          gamePlanMinimumConfidence: config.gpHardBlockThreshold,
-          thesisResult,
-          requireThesisValidation,
-          entryConfirmation,
-          propFirm: propFirmResult
-            ? { enabled: propFirmResult.enabled, allowed: propFirmResult.allowed, reason: propFirmResult.reason }
-            : null,
-          requirePropFirmResult: true,
-          spread: {
-            required: liveMode && config.spreadFilterEnabled,
-            available: !liveMode || !config.spreadFilterEnabled || availableSpreads.length > 0,
-            passed: !liveMode || !config.spreadFilterEnabled || passingSpreads.length > 0,
-            spreadPips: bestSpread?.spreadPips,
-            maximumPips: bestSpread?.effectiveMax,
-          },
-          runtimeGates,
-          crossTimeframeAuthority:
-            readFrozenCrossTimeframeAuthority(pending) ||
-            evaluateCrossTimeframeEntryAuthority({
-              authorityResolution: crossTimeframeAuthority,
-              evaluation: null,
-            }),
-          requireCrossTimeframeAuthority: true,
-        });
-        if (pending.entry_zone_type === "breaker_block") {
-          const breakerFill = evaluateBreakerFillLifecycle({
-            direction: pending.direction as "long" | "short",
-            bounds: {
-              low: Number(pending.entry_zone_low),
-              high: Number(pending.entry_zone_high),
-            },
-            currentClose: actualFillPrice,
-            structureBreakIndex:
-              parsedPendingEvidence.breakerData?.structureBreakIndex,
-          });
-          if (!breakerFill.allowed) {
-            rawAuthorization = {
-              ...rawAuthorization,
-              authorized: false,
-              code: "additional_gate" as const,
-              retryable: false,
-              reason: `Breaker fill rejected: ${breakerFill.reason}`,
-            };
-          }
-        }
-        const hierarchy = rawAuthorization.decisionHierarchy ||
-          evaluateDecisionHierarchy({
-            symbol: pending.symbol,
-            direction: pending.direction as "long" | "short",
-            gamePlan,
-            gamePlanEnabled: config.gamePlanEnabled !== false,
-            gamePlanMode: config.gpEnforcementMode,
-            gamePlanMinimumConfidence: config.gpHardBlockThreshold,
-            directionVerdict,
-            requireDirectionVerdict: true,
-            directionVerdictPolicy: "retain_frozen_until_opposed",
-            thesisResult,
-            requireThesisValidation,
-            entryConfirmation,
-          });
-        const ownershipFill = evaluateSingleOwnershipFillAuthorization({
-          frozenDecision: parsedPendingEvidence.singleOwnershipDecision || null,
-          frozenStrategyContext: readFrozenSetupStrategyContext(pending),
-          evaluatedAt: nowStr,
-          candidateId: parsedPendingEvidence.candidateId || pending.id,
-          symbol: pending.symbol,
-          direction: pending.direction as "long" | "short",
-          directionVerdict,
-          canonicalLocation: {
-            required: normalizeDealingRangeMode(pendingDealingRangeMode) !== "off",
-            available: pendingCanonicalDealingRange.available,
-            allowed: pendingCanonicalDealingRange.available ? pendingCanonicalDealingRange.allowed : null,
-            rangeId: pendingCanonicalDealingRange.range?.impulseId || null,
-            reasonCode: pendingCanonicalDealingRange.code,
-          },
-          confirmation: { passed: true, authorityVersion: "confirmation-authority.v1", reasonCodes: ["zone_confirmation_ready"] },
-          thesis: thesisResult
-            ? {
-              valid: thesisResult.valid,
-              reasonCodes: [thesisResult.checkType || "thesis_valid"],
-            }
-            : { valid: null, reasonCodes: ["thesis_unavailable"] },
-          finalChecks: rawAuthorization.checks,
-          rawFinalAuthorized: rawAuthorization.authorized,
-          requestedMode: (config as any).singleOwnershipMode,
-          runtimeTarget: liveMode ? "live" : "paper",
-        });
-        const pendingLiquidityState = parsedPendingEvidence?.unifiedZone?.liquidity?.entryTriggerState ||
-          parsedPendingEvidence?.impulseZone?.liquidity?.entryTriggerState || "none";
-        const frozenLiquidityPolicy =
-          readFrozenSetupStrategyContext(pending)?.liquidityActivation || null;
-        const pendingScannerState = projectCanonicalScannerState({
-          evaluatedAt: nowStr,
-          identity: ownershipFill.decision.identity,
-          direction: {
-            available: !!ownershipFill.decision.authorities.direction.verdict,
-            allowed: ownershipFill.decision.authorities.direction.shouldBlock === null
-              ? null : !ownershipFill.decision.authorities.direction.shouldBlock &&
-                ownershipFill.decision.authorities.direction.verdict === pending.direction,
-            evidenceId: ownershipFill.decision.authorities.direction.evidenceId || null,
-          },
-          zone: {
-            available: ownershipFill.decision.authorities.entryZone.available,
-            valid: ownershipFill.decision.authorities.entryZone.valid,
-            atPoi: true,
-            evidenceId: ownershipFill.decision.authorities.entryZone.candidateId || null,
-          },
-          location: ownershipFill.decision.authorities.canonicalLocation,
-          liquidity: {
-            policy: frozenLiquidityPolicy?.role ||
-              (config.requireLiquiditySweep === true ? "required" :
-                pendingLiquidityState === "none" ? "not_required" : "supporting"),
-            state: ["unswept", "swept_rejected", "swept_absorbed"].includes(pendingLiquidityState)
-              ? pendingLiquidityState : "none",
-          },
-          confirmation: { required: true, passed: true, evidenceId: null },
-          thesis: ownershipFill.decision.authorities.thesis,
-          safety: {
-            complete: ownershipFill.decision.authorities.safety.complete,
-            passed: ownershipFill.decision.authorities.safety.checks.every((check) => check.passed),
-            reasonCode: ownershipFill.decision.authorities.safety.checks.find((check) => !check.passed)?.code || null,
-          },
-          execution: { authorized: ownershipFill.authorized, source: "final_trade_authorization" },
-        });
-        const pendingCanonicalEnforcement = evaluateCanonicalScannerEnforcement({
-          requestedMode: (config as any).canonicalScannerMode,
-          singleOwnershipEffectiveMode: ownershipFill.enforcement.effectiveMode,
-          state: pendingScannerState,
-        });
-        const pendingDecisionPresentation = buildTradeDecisionPresentation({
-          state: pendingScannerState,
-          legacyDiagnostics: parsedPendingEvidence.legacyGateDiagnostics || [],
-        });
-        const canonicalFillAuthorized = ownershipFill.authorized &&
-          pendingCanonicalEnforcement.authorized;
-        const authorityRawAuthorization = canonicalFillAuthorized
-          ? { ...rawAuthorization, singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement }
-          : { ...rawAuthorization, authorized: false, code: "additional_gate" as const, retryable: pendingFinalAuthorizationRetryable({ raw: rawAuthorization, ownership: ownershipFill.decision, canonical: pendingCanonicalEnforcement }), reason: "Trade Decision did not authorize entry: " + composePendingFillBlockReason({ raw: rawAuthorization, ownership: ownershipFill, canonical: pendingCanonicalEnforcement }), singleOwnershipDecision: ownershipFill.decision, singleOwnershipEnforcement: ownershipFill.enforcement, canonicalDealingRange: pendingCanonicalDealingRange, canonicalScannerState: pendingScannerState, tradeDecisionPresentation: pendingDecisionPresentation, canonicalScannerEnforcement: pendingCanonicalEnforcement };
-        const authorization = attachDecisionContext(
-          authorityRawAuthorization,
-          buildTradeDecisionContext({
-            stage: "fill",
-            symbol: pending.symbol,
-            direction: pending.direction as "long" | "short",
-            gamePlan,
-            directionVerdict,
-            thesisResult,
-            requireThesisValidation,
-            thesisConviction:
-              parsedPendingEvidence?.decisionContext?.thesisConviction
-                ?.evidence ||
-              parsedPendingEvidence?.thesisConviction ||
-              null,
-            entryConfirmation,
-            hierarchy,
-            stylePolicy: pendingPolicyResolution.policy,
-            evaluatedAt: nowStr,
-          }),
-        );
-
-        const finalAuthorizationObservation = recordFinalAuthorizationObservation(
-          pending.pending_authorization_observation,
-          {
-            evaluatedAt: nowStr,
-            direction: pending.direction as "long" | "short",
-            plannedEntryPrice: entryPrice,
-            authorizationEntryPrice: actualFillPrice,
-            storedStopLoss: Number(pending.stop_loss),
-            storedTakeProfit: Number(pending.take_profit),
-            effectiveTargetRiskReward: Number(
-              pendingRuntimeConfig?.tpRatio ?? config.tpRatio ?? 2,
-            ),
-            effectiveMinimumRiskReward: pendingMinimumRiskReward,
-            executionGeometry: wouldBeExecutionPlan.valid
-              ? {
-                valid: true,
-                entryPrice: wouldBeExecutionPlan.plan.entryPrice,
-                stopLoss: wouldBeExecutionPlan.plan.stopLoss,
-                takeProfit: wouldBeExecutionPlan.plan.takeProfit,
-              }
-              : { valid: false, reason: wouldBeExecutionPlan.reason },
-            authorization: {
-              authorized: authorization.authorized,
-              code: authorization.code,
-              retryable: authorization.retryable,
-              reason: authorization.reason,
-            },
-          },
-        );
-        pending.pending_authorization_observation = finalAuthorizationObservation;
-        try {
-          const { error: observationError } = await supabase
-            .from("pending_orders")
-            .update({ pending_authorization_observation: finalAuthorizationObservation })
-            .eq("id", pending.id).eq("user_id", userId)
-            .eq("status", "awaiting_confirmation");
-          if (observationError) throw observationError;
-        } catch (observationError: any) {
-          console.warn(
-            "[zone-confirm] " + pending.symbol +
-              " final authorization observation unavailable (non-fatal): " +
-              observationError?.message,
-          );
-        }
-
-        if (!authorization.authorized) {
-          const cancelPermanently = !authorization.retryable;
-          const rearmedRetracement = !cancelPermanently && retracementReadyPlan
-            ? rearmPostChochRetracement(retracementReadyPlan, authorization.reason)
-            : null;
-          await supabase.from("pending_orders").update({
-            ...(cancelPermanently ? {
-              status: "cancelled",
-              cancel_reason: `[final-auth:${authorization.code}] ${authorization.reason}`,
-              resolved_at: nowStr,
-            } : {}),
-            ...(rearmedRetracement ? { post_confirmation_entry: rearmedRetracement } : {}),
-            final_authorization: authorization,
-          }).eq("id", pending.id).eq("user_id", userId);
-          if (cancelPermanently) cancelled++;
-          else stillHunting++;
-          console.warn(`[zone-confirm] FINAL AUTH BLOCKED ${pending.symbol}: ${authorization.code} — ${authorization.reason}`);
-          continue;
-        }
-
-        // Build signal_reason with confirmation and final authorization data.
-        const parsedSignalReason = parsedPendingEvidence;
+        // Build signal_reason with confirmation data
+        let parsedSignalReason: any = {};
+        try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
         const signalReason = {
           ...parsedSignalReason,
           filledFromLimitOrder: true,
           confirmationEntry: true,
           fastConfirmScanner: true, // Flag that this was filled by the fast-confirm scanner
           confirmation: {
-            type: confirmedSignal.type,
-            tier: confirmedSignal.tier,
-            price: confirmedSignal.price,
-            displacement: confirmedSignal.displacement,
-            significance: confirmedSignal.significance,
-            closeBased: confirmedSignal.closeBased,
-            supportingSignals: confirmedSignal.supportingSignals,
-            authority: confirmedSignal.authority || null,
+            type: confirmationSignal.type,
+            tier: confirmationSignal.tier,
+            price: confirmationSignal.price,
+            displacement: confirmationSignal.displacement,
+            significance: confirmationSignal.significance,
+            closeBased: confirmationSignal.closeBased,
+            supportingSignals: confirmationSignal.supportingSignals,
             zoneTouchTime: pending.zone_touch_time,
             confirmationAttempts: pending.confirmation_attempts || 0,
-            method: confirmationMethod,
           },
-          zoneSetupStopPolicyEnforcement: {
-            ...pendingStopPolicyResolution,
-            protectedLevel: lifecycleAfterLock?.confirmation?.protectedLevel ?? null,
-            structuralBufferQuoteDistance:
-              parsedPendingEvidence.zoneSetupStopPolicyBufferQuoteDistance ?? null,
-            evaluation: stopPolicyEvaluation,
-            finalStopLoss: authorizationStop,
-          },
-          postChochEntry:
-            retracementReadyPlan || observedPostChochPlan || null,
           limitOrderOrigin: {
             orderType: pending.order_type,
             entryPrice,
@@ -2126,95 +437,28 @@ Deno.serve(async (req) => {
             fromWatchlist: pending.from_watchlist,
             stagedCycles: pending.staged_cycles,
           },
-          finalAuthorization: authorization,
-          decisionContext: authorization.decisionContext,
-          singleOwnershipDecision: authorization.singleOwnershipDecision,
-          singleOwnershipEnforcement: authorization.singleOwnershipEnforcement,
-          canonicalScannerState: authorization.canonicalScannerState,
-          tradeDecisionPresentation: authorization.tradeDecisionPresentation,
-          canonicalScannerEnforcement: authorization.canonicalScannerEnforcement,
-          directionVerdict,
-          streamlinedDecisionOrigin: pending.streamlined_decision_origin || parsedPendingEvidence.streamlinedDecisionOrigin || null,
-          streamlinedDecisionLatest: {
-            ...(parsedPendingEvidence.streamlinedDecisionLatest || {}),
-            contractVersion: "streamlined-decision-lifecycle.v1",
-            evaluatedAt: nowStr, stage: "fill", currentPrice,
-          },
         };
 
-        // One database transaction claims the pending order, rechecks account
-        // state, inserts the position and resolves the order. Only the winning
-        // scanner may continue to notifications or broker mirroring.
-        const fillReason = `[fast-confirm] ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
-          + ` (method: ${confirmationMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
-          + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
-        const finalRiskPlan = wouldBeExecutionPlan;
-        if (parsedPendingEvidence.preArmed === true && !finalRiskPlan.valid) {
-          console.warn(`[zone-confirm] Final risk geometry failed ${pending.symbol}: ${finalRiskPlan.reason}`);
-          continue;
-        }
-        if (parsedPendingEvidence.preArmed === true && finalRiskPlan.valid) {
-          pending.stop_loss = finalRiskPlan.plan.stopLoss;
-          pending.take_profit = finalRiskPlan.plan.takeProfit;
-        }
-        const finalPendingSizing = calculateFinalPendingSize({
-          balance: Number(account.balance),
-          riskPercent: Number(config.riskPerTrade),
-          fillPrice: actualFillPrice,
-          stopLoss: Number(pending.stop_loss),
+        // Insert paper position
+        await supabase.from("paper_positions").insert({
+          user_id: userId,
+          position_id: positionId,
           symbol: pending.symbol,
-          method: (config as any).positionSizingMethod,
-          fixedLotSize: (config as any).fixedLotSize,
-          rateMap: sizingRateMap,
-          commissionPerLot: executionCommissionPerLot,
-          regimeInfo: parsedPendingEvidence.regimeData,
-          propFirmSizeMultiplier: propFirmResult?.enabled
-            ? propFirmResult.maxPositionSizeMultiplier : undefined,
-          signalSource: parsedPendingEvidence.signalSource,
-          standaloneMultiplier: (config as any).standaloneMultiplier,
+          direction: pending.direction,
+          size: pending.size.toString(),
+          entry_price: actualFillPrice.toString(),
+          current_price: currentPrice.toString(),
+          stop_loss: pending.stop_loss.toString(),
+          take_profit: pending.take_profit.toString(),
+          open_time: nowStr,
+          signal_reason: JSON.stringify(signalReason),
+          signal_score: pending.signal_score?.toString() || "0",
+          order_id: orderId,
+          position_status: "open",
+          bot_id: BOT_ID,
+          order_type: "limit",
+          trigger_price: entryPrice.toString(),
         });
-        if (finalPendingSizing.rejected) {
-          console.warn(
-            `[zone-confirm] Final sizing rejected ${pending.symbol}: ${finalPendingSizing.rejectionReason || "no executable size"}`,
-          );
-          continue;
-        }
-        const finalPendingSize = finalPendingSizing.lots;
-        const { error: finalSizeError } = await supabase.from("pending_orders").update({
-          size: finalPendingSize,
-          ...(parsedPendingEvidence.preArmed === true ? {
-            stop_loss: pending.stop_loss,
-            take_profit: pending.take_profit,
-          } : {}),
-        })
-          .eq("id", pending.id).eq("user_id", userId)
-          .eq("status", "awaiting_confirmation");
-        if (finalSizeError) {
-          console.warn(`[zone-confirm] Final size persistence failed ${pending.symbol}: ${finalSizeError.message}`);
-          continue;
-        }
-        pending.size = finalPendingSize;
-        const { data: fillResult, error: fillError } = await supabase.rpc("finalize_pending_order_fill", {
-          p_pending_id: pending.id,
-          p_user_id: userId,
-          p_bot_id: BOT_ID,
-          p_fill_price: actualFillPrice,
-          p_current_price: currentPrice,
-          p_position_order_id: orderId,
-          p_signal_reason: signalReason,
-          p_fill_reason: fillReason,
-          p_authorization: authorization,
-          p_max_open_positions: config.maxOpenPositions,
-          p_max_per_symbol: config.maxPerSymbol,
-          p_allow_same_direction: config.allowSameDirectionStacking,
-        });
-        if (fillError || !fillResult?.filled) {
-          console.warn(
-            `[zone-confirm] Atomic fill declined ${pending.symbol}:`
-            + ` ${fillError?.message || fillResult?.code || "unknown"}`,
-          );
-          continue;
-        }
 
         // Insert trade reasoning
         await supabase.from("trade_reasonings").insert({
@@ -2223,66 +467,42 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           direction: pending.direction,
           confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-          summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+          summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
           bias: pending.direction === "long" ? "bullish" : "bearish",
           session: "confirmation_fill",
           timeframe: "5m",
         });
 
+        // Update pending order to filled
+        await supabase.from("pending_orders").update({
+          status: "filled",
+          fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
+          filled_at: nowStr,
+          resolved_at: nowStr,
+        }).eq("order_id", pending.order_id).eq("user_id", userId);
+
         confirmed++;
 
         // Update openPositions array for subsequent max-position checks in same batch
-        openPositions.push({
-          symbol: pending.symbol,
-          direction: pending.direction,
-          size: pending.size,
-          entry_price: actualFillPrice,
-          stop_loss: pending.stop_loss,
-          position_id: positionId,
-          position_status: liveMode ? "pending" : "open",
-        });
+        openPositions.push({ symbol: pending.symbol, position_id: positionId, position_status: "open" });
 
         // ── Telegram notification ──
         if (telegramChatIds.length > 0) {
           const emoji = pending.direction === "long" ? "🟢" : "🔴";
-          const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
-          const _spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
-          const _decimals = Math.max(2, Math.round(-Math.log10(_spec.pipSize)) + 1);
-          const fmt = (v: any) => {
-            const n = typeof v === "number" ? v : parseFloat(String(v));
-            return isFinite(n) ? n.toFixed(_decimals) : String(v);
-          };
-          const fastSR = signalReason;
-          const fastRR = (() => {
-            const e = Number(actualFillPrice), s = Number(pending.stop_loss), t = Number(pending.take_profit);
-            if (![e, s, t].every(Number.isFinite) || Math.abs(e - s) <= 0) return null;
-            return (Math.abs(t - e) / Math.abs(e - s)).toFixed(2);
-          })();
-          const fastMethodLabel = confirmationMethodLabel(confirmationMethod, confirmationIndicatorMinimum);
-          const msg = emoji + " <b>" + mode + " CONFIRMED Entry</b> ⚡\n\n" +
-            tgLine("Symbol", pending.symbol) +
-            tgLine("Direction", String(pending.direction).toUpperCase()) +
-            tgLine("Size", `${pending.size} lots`) +
-            tgLine("Entry", fmt(actualFillPrice)) +
-            tgLine("Zone Level", fmt(entryPrice)) +
-            tgLine("SL", fmt(pending.stop_loss)) +
-            tgLine("TP", fmt(pending.take_profit)) +
-            (fastRR ? tgLine("Planned R:R", `${fastRR}:1`) : "") +
-            tgLine("Time in Zone", durationLabel(pending.zone_touch_time)) +
-            "\n" +
-            tradeAuthorityLines(fastSR) +
-            zoneEvidenceLines(fastSR) +
-            directionVerdictLines(fastSR.directionVerdict) +
-            styleLadderLines(fastSR) +
-            "\n" +
-            `🎯 <b>Confirmation</b>\n` +
-            tgLine("Method", fastMethodLabel) +
-            confirmationEvidenceLines(confirmedSignal) +
-            tgLine("Attempts", (pending.confirmation_attempts || 0) > 0 ? pending.confirmation_attempts : null) +
-            tgLine("Scanner", "Fast-confirm (60s poll)") +
-            tgLine("Zone", pending.entry_zone_type + " [" + fmt(pending.entry_zone_low || "0") + " – " + fmt(pending.entry_zone_high || "0") + "]") +
-            diagnosticScoreLine(pending.signal_score) +
-            (pending.from_watchlist ? `\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
+          const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+          const msg = `${emoji} <b>${mode} CONFIRMED Entry</b> ⚡\n\n` +
+            `<b>Symbol:</b> ${pending.symbol}\n` +
+            `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+            `<b>Size:</b> ${pending.size} lots\n` +
+            `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (${confirmationSignal.type})\n` +
+            `<b>Zone Level:</b> ${entryPrice}\n` +
+            `<b>SL:</b> ${pending.stop_loss}\n` +
+            `<b>TP:</b> ${pending.take_profit}\n` +
+            `<b>Score:</b> ${pending.signal_score}\n` +
+            `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
+            `<b>Scanner:</b> Fast-confirm (60s poll)\n` +
+            `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+            (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${supabaseUrl}/functions/v1/telegram-notify`, {
@@ -2295,9 +515,14 @@ Deno.serve(async (req) => {
         }
 
         // ── Broker mirroring ──
-        if (account.execution_mode === "live" && approvedBrokerConnections.length > 0) {
+        if (account.execution_mode === "live" && brokerConnections.length > 0) {
+          const spreadConfig = {
+            spreadFilterEnabled: strategyConfig.spreadFilterEnabled ?? config.spreadFilterEnabled ?? true,
+            maxSpreadPips: strategyConfig.maxSpreadPips ?? config.maxSpreadPips ?? 0,
+          };
+
           const mirroredConnIds: string[] = [];
-          for (const conn of approvedBrokerConnections) {
+          for (const conn of brokerConnections) {
             try {
               let metaAccountId: string | undefined;
               let authToken: string | undefined;
@@ -2310,59 +535,30 @@ Deno.serve(async (req) => {
                 }
               }
 
+              // Spread check
+              const spreadResult = await fetchBrokerSpread(conn, pending.symbol, spreadConfig, metaAccountId, authToken);
+              if (spreadResult && !spreadResult.passed) {
+                console.warn(`[zone-confirm] Spread too wide for ${pending.symbol} on ${conn.display_name} — skipping`);
+                continue;
+              }
+
               if (conn.broker_type !== "metaapi") {
                 // OANDA or other — use broker-execute function
-                const ledgerExecution = await executeBrokerOrderWithLedger(
-                  supabase,
-                  {
+                const exRes = await fetch(`${supabaseUrl}/functions/v1/broker-execute`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
+                  body: JSON.stringify({
+                    action: "place_order",
+                    connectionId: conn.id,
+                    symbol: pending.symbol,
+                    direction: pending.direction,
+                    size: parseFloat(pending.size),
+                    stopLoss: parseFloat(pending.stop_loss),
+                    takeProfit: parseFloat(pending.take_profit),
                     userId,
-                    botId: BOT_ID,
-                    positionId,
-                    brokerConnectionId: conn.id,
-                    route: "fast_confirmation",
-                    requestPayload: {
-                      symbol: pending.symbol,
-                      direction: pending.direction,
-                      size: parseFloat(pending.size),
-                      stopLoss: parseFloat(pending.stop_loss),
-                      takeProfit: parseFloat(pending.take_profit),
-                    },
-                  },
-                  async () => {
-                    const exRes = await fetch(`${supabaseUrl}/functions/v1/broker-execute`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
-                      body: JSON.stringify({
-                        action: "place_order",
-                        connectionId: conn.id,
-                        symbol: pending.symbol,
-                        direction: pending.direction,
-                        size: parseFloat(pending.size),
-                        stopLoss: parseFloat(pending.stop_loss),
-                        takeProfit: parseFloat(pending.take_profit),
-                        positionId,
-                        userId,
-                      }),
-                    });
-                    const rawBody = await exRes.text();
-                    let parsedBody: any = null;
-                    try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
-                    return {
-                      ok: exRes.ok,
-                      httpStatus: exRes.status,
-                      parsedBody,
-                      rawBody,
-                    };
-                  },
-                );
-                if (ledgerExecution.status === "succeeded") {
-                  mirroredConnIds.push(conn.id);
-                } else {
-                  console.warn(
-                    `[zone-confirm] Broker execution ${ledgerExecution.status}`
-                    + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
-                  );
-                }
+                  }),
+                });
+                if (exRes.ok) mirroredConnIds.push(conn.id);
                 continue;
               }
 
@@ -2376,54 +572,12 @@ Deno.serve(async (req) => {
               };
               if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
               if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
-              const ledgerExecution = await executeBrokerOrderWithLedger(
-                supabase,
-                {
-                  userId,
-                  botId: BOT_ID,
-                  positionId,
-                  brokerConnectionId: conn.id,
-                  route: "fast_confirmation",
-                  requestPayload: {
-                    symbol: pending.symbol,
-                    brokerSymbol,
-                    direction: pending.direction,
-                    volume: parseFloat(pending.size),
-                    stopLoss: pending.stop_loss ? parseFloat(pending.stop_loss) : null,
-                    takeProfit: pending.take_profit ? parseFloat(pending.take_profit) : null,
-                  },
-                },
-                async () => {
-                  const { res: mt5Res, body: rawBody } = await metaFetch(
-                    metaAccountId!,
-                    authToken!,
-                    (base) => `${base}/trade`,
-                    {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify(mt5Body),
-                    },
-                    { allowFailover: false },
-                  );
-                  let parsedBody: any = null;
-                  try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
-                  return {
-                    ok: mt5Res.ok,
-                    httpStatus: mt5Res.status,
-                    parsedBody,
-                    rawBody,
-                    confirmationMode: "metaapi_position_open",
-                  };
-                },
-              );
-              if (ledgerExecution.status === "succeeded") {
-                mirroredConnIds.push(conn.id);
-              } else {
-                console.warn(
-                  `[zone-confirm] Broker execution ${ledgerExecution.status}`
-                  + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
-                );
-              }
+              const { res: mt5Res } = await metaFetch(metaAccountId!, authToken!, (base) => `${base}/trade`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(mt5Body),
+              });
+              if (mt5Res.ok) mirroredConnIds.push(conn.id);
             } catch (e: any) {
               console.warn(`[zone-confirm] Broker mirror error [${conn.display_name}]: ${e?.message}`);
             }
@@ -2434,43 +588,12 @@ Deno.serve(async (req) => {
               .eq("position_id", positionId).eq("user_id", userId);
           }
         }
-        if (account.execution_mode === "live") {
-          const { data: brokerLifecycle } = await supabase.rpc("finalize_live_broker_position", {
-            p_user_id: userId, p_bot_id: BOT_ID, p_position_id: positionId,
-          });
-          console.log("[zone-confirm] Broker lifecycle " + pending.symbol + ": " + (brokerLifecycle?.state || "unknown"));
-        }
 
       } catch (e: any) {
         console.warn(`[zone-confirm] Error processing ${pending.symbol}: ${e?.message}`);
         stillHunting++;
       }
     }
-
-    const sourceTally = endScanSourceTally();
-    const normalizeIssueSymbol = (value: string) =>
-      String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    await Promise.all(userIds.map((userId) => {
-      const userSymbols = new Set<string>(
-        huntingOrders
-          .filter((order: any) => order.user_id === userId)
-          .map((order: any) => normalizeIssueSymbol(order.symbol)),
-      );
-      const userIssues = sourceTally.issues.filter((issue) => {
-        const issueSymbol = normalizeIssueSymbol(issue.symbol);
-        return [...userSymbols].some((symbol) =>
-          issueSymbol === symbol || issueSymbol.startsWith(symbol)
-        );
-      });
-      return publishCandleSourceAlerts(supabase, {
-        userId,
-        botId: BOT_ID,
-        runId: operationRuns.get(userId),
-        issues: userIssues,
-        metaapiAttempted: Boolean(userDataMap[userId]?.brokerConn) &&
-          sourceTally.metaapiAttempted,
-      });
-    }));
 
     const elapsed = Date.now() - startTime;
     const summary = {
@@ -2480,22 +603,9 @@ Deno.serve(async (req) => {
       reset_to_pending: resetToPending,
       cancelled,
       still_hunting: stillHunting,
-      config_failures: configFailureUsers.size,
       elapsed_ms: elapsed,
     };
     console.log(`[zone-confirm] Done in ${elapsed}ms: ${JSON.stringify(summary)}`);
-    await Promise.all([...operationRuns.entries()].map(([userId, runId]) => {
-      const configError = configFailureUsers.get(userId);
-      if (configError) {
-        return failScannerOperation(supabase, runId, configError);
-      }
-      return completeScannerOperation(supabase, runId, "zone_confirmation", {
-        ...summary,
-        user_processed: huntingOrders.filter((order: any) =>
-          order.user_id === userId
-        ).length,
-      });
-    }));
 
     return new Response(JSON.stringify(summary), {
       status: 200,
@@ -2503,13 +613,7 @@ Deno.serve(async (req) => {
     });
 
   } catch (e: any) {
-    endScanSourceTally();
     console.error("[zone-confirm] Fatal error:", e?.message, e?.stack);
-    if (supabase) {
-      await Promise.all([...operationRuns.values()].map((runId) =>
-        failScannerOperation(supabase, runId, e)
-      ));
-    }
     return new Response(JSON.stringify({ error: e?.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },

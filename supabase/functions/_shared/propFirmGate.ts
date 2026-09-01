@@ -23,9 +23,6 @@ import {
   type PropFirmEventType,
   type EventSeverity,
 } from "./propFirmRisk.ts";
-import { finalizePaperPositionClose } from "./finalizePaperPositionClose.ts";
-import { reconcileFullBrokerClose } from "./reconcileBrokerState.ts";
-import { calcPnl } from "./smcAnalysis.ts";
 
 export interface PropFirmGateResult {
   enabled: boolean;
@@ -64,7 +61,6 @@ export async function runPropFirmGate(
     isLiveAccount?: boolean; // Whether this is a live (broker-connected) account
     hasBrokerConnection?: boolean; // Whether a broker connection exists (even in paper mode)
     fxMarketClosed?: boolean; // Whether FX market is currently closed (weekends)
-    rateMap?: Record<string, number>; // Quote-currency conversion for paper P&L
   },
 ): Promise<PropFirmGateResult> {
   // ── 1. Load active prop firm config ──
@@ -77,10 +73,8 @@ export async function runPropFirmGate(
     .maybeSingle();
 
   if (cfgErr) {
-    console.warn(`[prop-firm-gate] ⚠️ Config query error: ${cfgErr.message} — BLOCKING (fail-closed)`);
-    // FAIL-CLOSED: If we can't load the config, we can't verify compliance.
-    // Block new trades until the DB is reachable again.
-    return { enabled: true, allowed: false, reason: `Prop firm config query failed: ${cfgErr.message} — cannot verify compliance`, maxPositionSizeMultiplier: 0, shouldCloseAll: false, compliance: null, configId: null };
+    console.warn(`[prop-firm-gate] Config query error: ${cfgErr.message}`);
+    return { enabled: false, allowed: true, reason: "Config query error (non-blocking)", maxPositionSizeMultiplier: 1, shouldCloseAll: false, compliance: null, configId: null };
   }
 
   if (!pfConfig) {
@@ -97,16 +91,15 @@ export async function runPropFirmGate(
   if (opts?.brokerEquity && opts.brokerEquity > 0) {
     currentEquity = opts.brokerEquity;
   } else if (opts?.isLiveAccount || opts?.hasBrokerConnection) {
-    // FAIL-CLOSED: Broker connection exists but equity fetch failed.
+    // SAFETY: Broker connection exists but equity fetch failed.
     // Do NOT fall back to paper balance — it may not reflect the real MT5 account.
-    // Block new trades until equity data is available. Do NOT trigger emergency close
-    // (shouldCloseAll: false) because we can't confirm the account is actually in breach.
-    console.warn(`[prop-firm-gate] ⚠️ Broker connection exists but equity unavailable. BLOCKING new trades (fail-closed) — cannot verify compliance without equity data.`);
+    // Skip the prop firm gate entirely rather than act on bad data.
+    console.warn(`[prop-firm-gate] ⚠️ Broker connection exists but equity unavailable. Skipping prop firm check to avoid false emergency on stale/wrong data.`);
     return {
       enabled: true,
-      allowed: false,
-      reason: "Broker equity unavailable — cannot verify prop firm compliance (blocking)",
-      maxPositionSizeMultiplier: 0,
+      allowed: true,
+      reason: "Broker equity unavailable — prop firm check skipped (safety)",
+      maxPositionSizeMultiplier: 1,
       shouldCloseAll: false,
       compliance: null,
       configId: config.id,
@@ -118,45 +111,29 @@ export async function runPropFirmGate(
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
-      const pnlResult = calcPnl(
-        pos.direction,
-        entry,
-        current,
-        size,
-        pos.symbol,
-        opts?.rateMap,
-      );
-      if (!pnlResult.valid) {
-        console.error(
-          `[prop-firm-gate] Cannot calculate paper equity for ${pos.symbol}: ${pnlResult.reason}. BLOCKING new trades.`,
-        );
-        return {
-          enabled: true,
-          allowed: false,
-          reason: "Paper equity unavailable — an open position has invalid P&L inputs (blocking)",
-          maxPositionSizeMultiplier: 0,
-          shouldCloseAll: false,
-          compliance: null,
-          configId: config.id,
-        };
+      if (entry > 0 && current > 0 && size > 0) {
+        const diff = pos.direction === "long" ? current - entry : entry - current;
+        // Approximate P&L in account currency (simplified — uses pip value estimation)
+        // For accurate P&L, we'd need lot units and quote-to-USD rate, but for the gate
+        // check we use the same approximation as the paper account balance tracking.
+        const pnlEstimate = diff * size * 100_000; // Assumes standard lot = 100K units
+        floatingPnL += pnlEstimate;
       }
-      floatingPnL += pnlResult.pnl;
     }
     currentEquity = paperBalance + floatingPnL;
   }
 
   // ── 2b. Sanity check: equity vs initial_balance ──
-  // If currentEquity is less than 50% of initial_balance, this is likely a data error
-  // (stale price, wrong account, etc.) — but it COULD be a real catastrophic loss.
-  // FAIL-CLOSED: Block new trades until a human verifies. Do NOT trigger emergency close
-  // (the data might be wrong, and closing positions on bad data could lock in phantom losses).
+  // If currentEquity is less than 50% of initial_balance, this is almost certainly
+  // a data error (stale price, wrong account, etc.), not a real 50%+ drawdown.
+  // Skip the check rather than triggering a false emergency.
   if (currentEquity < config.initial_balance * 0.50) {
-    console.warn(`[prop-firm-gate] ⚠️ SANITY CHECK FAILED: equity $${currentEquity.toFixed(2)} is less than 50% of initial_balance $${config.initial_balance}. BLOCKING new trades — cannot determine if data error or real loss.`);
+    console.warn(`[prop-firm-gate] ⚠️ SANITY CHECK FAILED: equity $${currentEquity.toFixed(2)} is less than 50% of initial_balance $${config.initial_balance}. Likely data error — skipping prop firm check.`);
     return {
       enabled: true,
-      allowed: false,
-      reason: `Equity sanity check failed ($${currentEquity.toFixed(2)} < 50% of $${config.initial_balance}) — blocking until verified`,
-      maxPositionSizeMultiplier: 0,
+      allowed: true,
+      reason: `Equity sanity check failed ($${currentEquity.toFixed(2)} < 50% of $${config.initial_balance}) — skipped`,
+      maxPositionSizeMultiplier: 1,
       shouldCloseAll: false,
       compliance: null,
       configId: config.id,
@@ -289,13 +266,6 @@ export async function runPropFirmGate(
   };
 }
 
-export interface PropFirmEmergencyCloseResult {
-  attemptedCount: number;
-  closedCount: number;
-  complete: boolean;
-  unresolved: Array<{ positionId: string; reason: string }>;
-}
-
 /**
  * Emergency close all open positions.
  * Called when prop firm compliance triggers shouldCloseAll.
@@ -307,13 +277,12 @@ export async function propFirmEmergencyClose(
   openPositions: any[],
   reason: string,
   scanCycleId: string,
-  opts?: { fxMarketClosed?: boolean; rateMap?: Record<string, number> },
-): Promise<PropFirmEmergencyCloseResult> {
+  opts?: { fxMarketClosed?: boolean },
+): Promise<number> {
   // Weekend guard: when FX market is closed, only close crypto positions.
   // FX positions can't be executed on weekends anyway, and stale prices
   // could produce incorrect P&L calculations.
   let positionsToClose = openPositions;
-  const unresolved: Array<{ positionId: string; reason: string }> = [];
   if (opts?.fxMarketClosed) {
     const cryptoSymbols = new Set(["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "LTCUSD", "ADAUSD", "DOTUSD", "DOGEUSD", "AVAXUSD", "LINKUSD"]);
     const cryptoOnly = openPositions.filter((p: any) => {
@@ -323,14 +292,6 @@ export async function propFirmEmergencyClose(
     const fxSkipped = openPositions.length - cryptoOnly.length;
     if (fxSkipped > 0) {
       console.log(`[prop-firm-emergency] FX market closed — skipping ${fxSkipped} FX position(s), only closing ${cryptoOnly.length} crypto position(s)`);
-      for (const position of openPositions.filter((p: any) =>
-        !cryptoOnly.some((crypto: any) => crypto.id === p.id)
-      )) {
-        unresolved.push({
-          positionId: position.position_id,
-          reason: "fx_market_closed",
-        });
-      }
     }
     positionsToClose = cryptoOnly;
   }
@@ -342,84 +303,67 @@ export async function propFirmEmergencyClose(
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
-      const pnlResult = calcPnl(
-        pos.direction,
-        entry,
-        current,
-        size,
-        pos.symbol,
-        opts?.rateMap,
-      );
-      if (!pnlResult.valid) {
-        console.error(
-          `[prop-firm-emergency] Refusing to settle ${pos.symbol}: invalid P&L calculation (${pnlResult.reason})`,
-        );
-        unresolved.push({
-          positionId: pos.position_id,
-          reason: `invalid_pnl_inputs:${pnlResult.reason}`,
-        });
-        continue;
-      }
-      const { pnl } = pnlResult;
+      const diff = pos.direction === "long" ? current - entry : entry - current;
+      const pnl = diff * size * 100_000; // Simplified P&L
 
-      const brokerClose = await reconcileFullBrokerClose({
-        supabase,
-        userId,
-        botId: pos.bot_id || botId,
-        position: pos,
-        route: "prop_firm_emergency",
-        closeReason: "prop_firm_emergency",
+      // Close the paper position
+      await supabase.from("paper_positions").delete().eq("id", pos.id);
+
+      // Record in trade history
+      await supabase.from("paper_trade_history").insert({
+        user_id: userId,
+        position_id: pos.position_id,
+        order_id: pos.order_id || crypto.randomUUID().slice(0, 8),
+        symbol: pos.symbol,
+        direction: pos.direction,
+        size: pos.size,
+        entry_price: pos.entry_price,
+        exit_price: current.toString(),
+        open_time: pos.open_time || new Date().toISOString(),
+        closed_at: new Date().toISOString(),
+        close_reason: "prop_firm_emergency",
+        pnl: pnl.toFixed(2),
+        signal_score: pos.signal_score || "0",
+        bot_id: botId,
       });
-      if (!brokerClose.readyToFinalize) {
-        if (brokerClose.state !== "already_resolved") {
-          unresolved.push({
-            positionId: pos.position_id,
-            reason: brokerClose.reason || brokerClose.state,
-          });
-        }
-        continue;
-      }
-      const finalization = await finalizePaperPositionClose(supabase, {
-        positionRowId: pos.id,
-        userId,
-        botId: pos.bot_id || botId,
-        exitPrice: current,
-        pnl,
-        pnlPips: null,
-        closeReason: "prop_firm_emergency",
-      });
-      if (!finalization.closed) {
-        console.log(`[prop-firm-emergency] Skipped ${pos.symbol}: ${finalization.code}`);
-        if (finalization.code !== "already_resolved") {
-          unresolved.push({
-            positionId: pos.position_id,
-            reason: finalization.reason || finalization.code,
-          });
-        }
-        continue;
-      }
 
       closedCount++;
       console.log(`[prop-firm-emergency] Closed ${pos.symbol} ${pos.direction} — PnL: $${pnl.toFixed(2)} — reason: ${reason}`);
     } catch (e: any) {
       console.warn(`[prop-firm-emergency] Failed to close ${pos.symbol}: ${e?.message}`);
-      unresolved.push({
-        positionId: pos.position_id,
-        reason: `close_exception:${e?.message || String(e)}`,
-      });
     }
   }
 
+  // Update account balance after all closes
+  if (closedCount > 0) {
+    // Recalculate balance from trade history (most accurate)
+    const { data: acct } = await supabase
+      .from("paper_accounts")
+      .select("balance")
+      .eq("user_id", userId)
+      .eq("bot_id", botId)
+      .maybeSingle();
 
+    if (acct) {
+      let totalPnL = 0;
+      for (const pos of openPositions) {
+        const entry = parseFloat(pos.entry_price || "0");
+        const current = parseFloat(pos.current_price || pos.entry_price || "0");
+        const size = parseFloat(pos.size || "0");
+        const diff = pos.direction === "long" ? current - entry : entry - current;
+        totalPnL += diff * size * 100_000;
+      }
+      const newBalance = parseFloat(acct.balance) + totalPnL;
+      await supabase
+        .from("paper_accounts")
+        .update({ balance: newBalance.toFixed(2) })
+        .eq("user_id", userId)
+        .eq("bot_id", botId);
+    }
+  }
 
-  const result = {
-    attemptedCount: openPositions.length,
-    closedCount,
-    complete: unresolved.length === 0,
-    unresolved,
-  };
-  console.log(`[prop-firm-emergency] ${scanCycleId} | Closed ${closedCount}/${openPositions.length} positions; ${unresolved.length} unresolved — ${reason}`);
-  return result;
+  console.log(`[prop-firm-emergency] ${scanCycleId} | Closed ${closedCount}/${openPositions.length} positions — ${reason}`);
+  return closedCount;
 }
 
 // ─── Helper: Log prop firm event ──────────────────────────────────────────────

@@ -10,7 +10,6 @@
  * 6. Suggested trade (entry/SL/TP from analysis)
  */
 import { TrendingUp, TrendingDown, Minus, Clock, Zap, Target, Radio, ChevronDown, X } from 'lucide-react';
-import { OverflowText } from '@/components/ui/overflow-text';
 import { getCurrentSession, isInKillzone } from '@/lib/marketData';
 import type { UnifiedConfluence, FactorItem } from '@/lib/confluenceUnify';
 
@@ -149,12 +148,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
                   {f.weight != null && (
                     <span className="ml-1 text-[8px] text-muted-foreground font-mono">({f.weight.toFixed(2)})</span>
                   )}
-                  {f.detail && (
-                    <OverflowText
-                      text={f.detail}
-                      className="block text-[9px] text-muted-foreground"
-                    />
-                  )}
+                  {f.detail && <p className="text-[9px] text-muted-foreground truncate">{f.detail}</p>}
                 </div>
               </div>
             ))}

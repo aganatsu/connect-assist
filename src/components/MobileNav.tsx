@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Bot, Search, MoreHorizontal,
-  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX, Zap,
+  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX,
 } from "lucide-react";
 
 const PRIMARY_ITEMS = [
@@ -11,23 +11,16 @@ const PRIMARY_ITEMS = [
   { title: "Bot", url: "/bot", icon: Bot },
 ];
 
-const MORE_GROUPS = [
-  { label: "Review", items: [
-    { title: "Journal", url: "/journal", icon: BookOpen },
-    { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
-    { title: "Trade Replay", url: "/trade-replay", icon: Play },
-  ] },
-  { label: "Research", items: [
-    { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
-    { title: "Backtest", url: "/backtest", icon: FlaskConical },
-    { title: "Optimizer", url: "/optimizer", icon: Zap },
-  ] },
-  { label: "System", items: [
-    { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
-    { title: "Brokers", url: "/brokers", icon: Server },
-    { title: "Prop Firm", url: "/prop-firm", icon: Shield },
-    { title: "Settings", url: "/settings", icon: Settings },
-  ] },
+const MORE_ITEMS = [
+  { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
+  { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
+  { title: "Journal", url: "/journal", icon: BookOpen },
+  { title: "Backtest", url: "/backtest", icon: FlaskConical },
+  { title: "Brokers", url: "/brokers", icon: Server },
+  { title: "Trade Replay", url: "/trade-replay", icon: Play },
+  { title: "Prop Firm", url: "/prop-firm", icon: Shield },
+  { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 interface MobileNavProps {
@@ -48,39 +41,32 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
       {moreOpen && (
         <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm" onClick={() => setMoreOpen(false)}>
           <div
-            className="absolute bottom-[calc(3.5rem+env(safe-area-inset-bottom))] left-0 right-0 max-h-[72dvh] overflow-y-auto overscroll-contain bg-card border-t border-border p-3 pb-5 shadow-lg"
+            className="absolute bottom-14 left-0 right-0 bg-card border-t border-border p-3 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">More</span>
-              <button onClick={() => setMoreOpen(false)} className="h-11 w-11 inline-flex items-center justify-center text-muted-foreground" aria-label="Close menu">
+              <button onClick={() => setMoreOpen(false)} className="text-muted-foreground">
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="space-y-4">
-              {MORE_GROUPS.map((group) => (
-                <section key={group.label} aria-label={group.label}>
-                  <p className="mb-1.5 text-[11px] font-semibold uppercase text-muted-foreground">{group.label}</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {group.items.map((item) => (
-                      <button
-                        key={item.url}
-                        onClick={() => {
-                          navigate(item.url);
-                          setMoreOpen(false);
-                        }}
-                        className={`min-h-16 flex flex-col items-center justify-center gap-1 p-2 rounded-md transition-colors ${
-                          isActive(item.url)
-                            ? "bg-primary/10 text-primary"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                        }`}
-                      >
-                        <item.icon className="h-5 w-5" />
-                        <span className="text-[11px] font-medium">{item.title}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+            <div className="grid grid-cols-3 gap-2">
+              {MORE_ITEMS.map((item) => (
+                <button
+                  key={item.url}
+                  onClick={() => {
+                    navigate(item.url);
+                    setMoreOpen(false);
+                  }}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-colors ${
+                    isActive(item.url)
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
+                >
+                  <item.icon className="h-5 w-5" />
+                  <span className="text-[10px] font-medium">{item.title}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -89,7 +75,7 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
 
       {/* Bottom tab bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 max-w-full overflow-hidden bg-card border-t border-border safe-area-bottom">
-        <div className="grid grid-cols-5 h-14 w-full" role="navigation" aria-label="Primary navigation">
+        <div className="grid grid-cols-5 h-14 w-full">
           {PRIMARY_ITEMS.map((item) => (
             <button
               key={item.url}

@@ -1,10 +1,8 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { OverflowText } from "@/components/ui/overflow-text";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
@@ -15,8 +13,7 @@ import {
   TrendingUp, TrendingDown, BarChart3, Zap, ShieldCheck, ListChecks,
   Trophy, Skull, AlertTriangle, Info, Target, Clock, Timer, XCircle,
   ArrowLeftRight, Layers, Box, Crosshair, Sparkles, Activity, Eye,
-  Shield, Gauge, CalendarDays, Globe, Upload, Database, Trash2,
-  GitBranch, LockKeyhole, Route, CheckCircle2,
+  Shield, Gauge, CalendarDays, Globe,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, Cell,
@@ -25,39 +22,17 @@ import {
 } from "recharts";
 import { INSTRUMENTS, formatMoney } from "@/lib/marketData";
 import { botConfigApi, backtestApi } from "@/lib/api";
-import { STYLE_META, TRADING_STYLE_MODES } from "@/lib/botStyleClassifier";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
-import { useSearchParams } from "react-router-dom";
-import { toast } from "sonner";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface BacktestTrade {
   id: string; symbol: string; direction: "long" | "short";
   entryTime: string; exitTime: string; entryPrice: number; exitPrice: number;
-  size: number; pnl: number; pnlPips: number; grossPnl?: number;
-  commission: number; spreadCost?: number; totalTradingCost?: number; confluenceScore: number;
+  size: number; pnl: number; pnlPips: number; commission: number; confluenceScore: number;
   closeReason: string;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
-  goldenReplaySnapshot?: GoldenReplaySnapshot;
-}
-interface GoldenReplaySnapshot {
-  evaluatedAt?: string;
-  symbol?: string;
-  direction?: "long" | "short";
-  canonicalScannerState?: {
-    stage?: string;
-    reasonCode?: string;
-    explanation?: string;
-    authorities?: Array<{ role: string; passed: boolean | null; reasonCode?: string | null }>;
-  };
-  finalTradeAuthorization?: { authorized?: boolean; code?: string; reason?: string };
-  lifecycleEvidence?: { reason?: string | null };
-  decision?: {
-    lifecycle?: { stage?: string | null; outcome?: string | null };
-    execution?: { eligible?: boolean; entryPrice?: number };
-  };
 }
 interface BacktestStats {
   totalTrades: number; wins: number; losses: number; winRate: number;
@@ -67,17 +42,14 @@ interface BacktestStats {
   bestTrade: number; worstTrade: number;
   consecutiveWins: number; consecutiveLosses: number;
   longsWinRate: number; shortsWinRate: number; tradesPerMonth: number;
-  totalCommission: number; totalSpreadCost?: number; totalTradingCosts?: number; netPnl: number;
+  totalCommission: number; netPnl: number;
 }
 interface BacktestResponse {
   trades: BacktestTrade[];
   equityCurve: { date: string; equity: number }[];
   stats: BacktestStats;
   factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }>;
-  gateBreakdown: Record<string, {
-    blocked: number; wouldHaveWon: number | null; wouldHaveLost: number | null;
-    outcomesAvailable?: boolean;
-  }>;
+  gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>;
   dataCoverage?: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }>;
   diagnostics?: {
     totalCandlesFetched: number;
@@ -90,13 +62,10 @@ interface BacktestResponse {
     skippedNoDirection: number;
     skippedBelowThreshold: number;
     skippedGateBlocked: number;
-    skippedLifecycleWaiting?: number;
     skippedNoSLTP: number;
     skippedImpulseNoZone?: number;
     skippedImpulseNotAtZone?: number;
     gateBlockReasons?: Record<string, number>;
-    lifecycleStageObservations?: Record<string, number>;
-    lifecycleTransitionCounts?: Record<string, number>;
     signalsGenerated: number;
     tradesOpened: number;
     // Actionable advice fields
@@ -105,7 +74,6 @@ interface BacktestResponse {
     totalFactorCount: number;
     scoreDistribution: { below20: number; below40: number; below60: number; below80: number; above80: number };
   };
-  dataSource?: { mode: "provider" | "mt5"; datasets: Record<string, any>; limitations?: string[] };
   config?: {
     minConfluence: number;
     enabledSessions: string[];
@@ -128,17 +96,6 @@ interface BacktestResponse {
       verdict: "robust" | "moderate" | "fragile";
     };
   };
-  goldenReplay?: {
-    contractVersion: string;
-    snapshotCount: number;
-    snapshots: GoldenReplaySnapshot[];
-  };
-  zoneLocalReplay?: {
-    contractVersion: string;
-    evidenceSource: "retrospective_replay";
-    observations: number;
-    activationEligible: false;
-  } | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -150,6 +107,12 @@ const SYMBOL_GROUPS: Record<string, string[]> = {
   "Crypto": ["BTC/USD", "ETH/USD"],
 };
 const ALL_SYMBOLS = Object.values(SYMBOL_GROUPS).flat();
+
+const TRADING_STYLES = [
+  { value: "scalper", label: "Scalper" },
+  { value: "day_trader", label: "Day Trader" },
+  { value: "swing_trader", label: "Swing Trader" },
+];
 
 const SL_METHODS = [
   { value: "structure", label: "Structure (Swing)" },
@@ -176,25 +139,6 @@ const CLOSE_REASONS: Record<string, { label: string; color: string; icon: any }>
   circuit_breaker: { label: "Circuit Breaker", color: "text-destructive", icon: Shield },
 };
 
-const finiteResultNumber = (value: unknown, fallback = 0) => {
-  if (value === null || value === undefined || value === "") return fallback;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-const fixedResult = (value: unknown, digits: number, fallback = "—") => {
-  if (value === null || value === undefined || value === "") return fallback;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed.toFixed(digits) : fallback;
-};
-const profitFactorLabel = (value: unknown, wins = 0, losses = 0) => {
-  if (value !== null && value !== undefined && value !== "") {
-    const parsed = typeof value === "number" ? value : Number(value);
-    if (Number.isFinite(parsed)) return parsed.toFixed(2);
-  }
-  return wins > 0 && losses === 0 ? "∞" : "—";
-};
-
-
 // C4: Local defaults removed. Config is now loaded from the canonical
 // bot-config Edge Function defaults endpoint on page load.
 // This ensures the backtest page always uses the same defaults as the scanner.
@@ -217,21 +161,11 @@ function FieldRow({ label, description, children }: { label: string; description
       <div className="flex items-center justify-between">
         <div>
           <span className="text-[10px] font-medium uppercase tracking-wider">{label}</span>
-          {description && <p className="text-[11px] text-muted-foreground">{description}</p>}
+          {description && <p className="text-[9px] text-muted-foreground">{description}</p>}
         </div>
       </div>
       {children}
     </div>
-  );
-}
-
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return (
-    <FieldRow label={label}>
-      <select value={value} onChange={event => onChange(event.target.value)} className="w-full bg-secondary border border-border rounded px-2 py-1.5 text-xs">
-        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </FieldRow>
   );
 }
 
@@ -249,7 +183,6 @@ function Toggle({ label, description, checked, onChange }: { label: string; desc
 
 // ── Main Component ─────────────────────────────────────────────────────
 export default function Backtest() {
-  const [searchParams] = useSearchParams();
   const { resolvedTheme } = useTheme();
   const ct = getChartTheme(resolvedTheme);
 
@@ -269,19 +202,11 @@ export default function Backtest() {
   const [spreadPips, setSpreadPips] = useState(0); // 0 = use per-instrument typicalSpread from SPECS
   const [commissionPerLot, setCommissionPerLot] = useState(0); // USD per standard lot round-trip (e.g. 7 for ECN)
   const [walkForwardFolds, setWalkForwardFolds] = useState(0); // 0=disabled, 2-20 folds
-  const [zoneLocalReplayEvidence, setZoneLocalReplayEvidence] = useState(
-    () => searchParams.get("zoneLocalReplay") === "1",
-  );
   const [selectedSymbols, setSelectedSymbols] = useState(["EUR/USD", "GBP/USD", "XAU/USD"]);
-  const [historySource, setHistorySource] = useState<"provider" | "mt5">("provider");
-  const [mt5Datasets, setMt5Datasets] = useState<any[]>([]);
-  const [mt5Symbol, setMt5Symbol] = useState("EUR/USD");
-  const [mt5UtcOffsetHours, setMt5UtcOffsetHours] = useState(0);
-  const [isUploadingMT5, setIsUploadingMT5] = useState(false);
 
   // UI state
   const [showConfig, setShowConfig] = useState(true);
-  const [configTab, setConfigTab] = useState("workflow");
+  const [configTab, setConfigTab] = useState("strategy");
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [progressPct, setProgressPct] = useState(0);
@@ -291,34 +216,6 @@ export default function Backtest() {
   const [expandedTrade, setExpandedTrade] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const refreshMT5Datasets = useCallback(async () => {
-    try { setMt5Datasets(await backtestApi.listMT5()); }
-    catch { setMt5Datasets([]); }
-  }, []);
-  useEffect(() => { void refreshMT5Datasets(); }, [refreshMT5Datasets]);
-  useEffect(() => {
-    if (historySource === "mt5" && mt5Datasets.length > 0) {
-      setSelectedSymbols([...new Set(mt5Datasets.map((dataset) => String(dataset.symbol)))]);
-    }
-  }, [historySource, mt5Datasets]);
-
-  const uploadMT5History = useCallback(async (file: File) => {
-    setIsUploadingMT5(true);
-    try {
-      const dataset = await backtestApi.uploadMT5(mt5Symbol, file, mt5UtcOffsetHours * 60);
-      await refreshMT5Datasets();
-      setHistorySource("mt5");
-      setSelectedSymbols((current) => current.includes(mt5Symbol) ? current : [...current, mt5Symbol]);
-      setStartDate(String(dataset.start_at).slice(0, 10));
-      setEndDate(String(dataset.end_at).slice(0, 10));
-      toast.success(`${mt5Symbol}: ${Number(dataset.candle_count).toLocaleString()} M1 candles imported`);
-    } catch (error: any) {
-      toast.error(error?.message || "MT5 history import failed");
-    } finally {
-      setIsUploadingMT5(false);
-    }
-  }, [mt5Symbol, mt5UtcOffsetHours, refreshMT5Datasets]);
 
   // C4: Load live config + canonical defaults on mount
   useEffect(() => {
@@ -367,12 +264,11 @@ export default function Backtest() {
 
   // Config update helper
   const updateConfig = useCallback((section: string, field: string, value: any) => {
-    if (useCurrentConfig) return;
     setConfig(prev => ({
       ...prev,
       [section]: { ...(prev as any)[section], [field]: value },
     }));
-  }, [useCurrentConfig]);
+  }, []);
 
   const toggleSymbol = useCallback((sym: string) => {
     setSelectedSymbols(prev => prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]);
@@ -447,11 +343,6 @@ export default function Backtest() {
   // Run backtest (background mode)
   const runBacktest = useCallback(async () => {
     if (selectedSymbols.length === 0) { setError("Select at least one instrument."); return; }
-    if (historySource === "mt5") {
-      const available = new Set(mt5Datasets.map((dataset) => dataset.symbol));
-      const missing = selectedSymbols.filter((symbol) => !available.has(symbol));
-      if (missing.length) { setError("Import MT5 M1 history for: " + missing.join(", ")); return; }
-    }
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
@@ -468,11 +359,8 @@ export default function Backtest() {
     try {
       const response = await backtestApi.start({
         instruments: selectedSymbols, startDate, endDate, startingBalance,
-        config, tradingStyle, slippagePips, spreadPips, commissionPerLot, historySource,
+        config, tradingStyle, slippagePips, spreadPips, commissionPerLot,
         ...(walkForwardFolds >= 2 ? { walkForwardFolds } : {}),
-        ...(zoneLocalReplayEvidence
-          ? { researchMode: true, zoneLocalReplayEvidence: true }
-          : {}),
       });
       if ((response as any)?.error) throw new Error((response as any).error);
       const runId = response.runId;
@@ -487,7 +375,7 @@ export default function Backtest() {
       setProgressPct(0);
       setIsRunning(false);
     }
-  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, zoneLocalReplayEvidence, config, startPolling, historySource, mt5Datasets]);
+  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, config, startPolling]);
 
   // ── Derived Data ──
   const monthlyPnl = useMemo(() => {
@@ -500,28 +388,9 @@ export default function Backtest() {
     return Object.entries(groups).sort().map(([month, pnl]) => ({ month, pnl }));
   }, [results]);
 
-  const effectiveFactorBreakdown = useMemo(() => {
-    if (!results) return {};
-    if (Object.keys(results.factorBreakdown ?? {}).length > 0) {
-      return results.factorBreakdown;
-    }
-    const derived: BacktestResponse["factorBreakdown"] = {};
-    for (const trade of results.trades.filter((item) =>
-      !item.id.includes("_partial")
-    )) {
-      for (const factor of trade.factors ?? []) {
-        if (!factor.present) continue;
-        derived[factor.name] ||= { appeared: 0, wonWhen: 0, lostWhen: 0 };
-        derived[factor.name].appeared++;
-        if (trade.pnl > 0) derived[factor.name].wonWhen++;
-        else derived[factor.name].lostWhen++;
-      }
-    }
-    return derived;
-  }, [results]);
-
   const factorRadar = useMemo(() => {
-    return Object.entries(effectiveFactorBreakdown)
+    if (!results?.factorBreakdown) return [];
+    return Object.entries(results.factorBreakdown)
       .filter(([, v]) => v.appeared > 0)
       .map(([name, v]) => ({
         name: name.length > 15 ? name.slice(0, 14) + "…" : name,
@@ -529,7 +398,7 @@ export default function Backtest() {
         appearances: v.appeared,
       }))
       .sort((a, b) => b.appearances - a.appearances).slice(0, 12);
-  }, [effectiveFactorBreakdown]);
+  }, [results]);
 
   const equityCurveWithDD = useMemo(() => {
     if (!results?.equityCurve) return [];
@@ -556,62 +425,21 @@ export default function Backtest() {
     }));
   }, [results]);
 
-  const lifecycleSummary = useMemo(() => {
-    const snapshots = results?.goldenReplay?.snapshots ?? [];
-    const observed = results?.diagnostics?.lifecycleStageObservations ?? {};
-    const stageCounts: Record<string, number> = { ...observed };
-    const outcomeCounts: Record<string, number> = {};
-    for (const snapshot of snapshots) {
-      const rawStage = snapshot.decision?.lifecycle?.stage || "unavailable";
-      const outcome = rawStage === "position" ? "entered"
-        : rawStage === "gates" || rawStage === "final_authorization"
-        ? "blocked" : ["invalidated", "expired", "exhausted"].includes(rawStage)
-        ? rawStage : null;
-      if (outcome) outcomeCounts[outcome] = (outcomeCounts[outcome] || 0) + 1;
-    }
-    if (Object.keys(stageCounts).length === 0) {
-      for (const snapshot of snapshots) {
-        const stage = snapshot.canonicalScannerState?.stage;
-        if (stage) stageCounts[stage] = (stageCounts[stage] || 0) + 1;
-      }
-    }
-    return { snapshots, stageCounts, outcomeCounts, transitionCounts: results?.diagnostics?.lifecycleTransitionCounts ?? {} };
-  }, [results]);
-
-  const effectiveAuthority = useMemo(() => {
-    if (!config) return [];
-    return [
-      ["Trade decision", config.strategy?.singleOwnershipMode ?? "observe"],
-      ["Scanner workflow", config.strategy?.canonicalScannerMode ?? "observe"],
-      ["Impulse & zones", config.strategy?.impulseEntryLifecycleMode ?? "observe"],
-      ["Market structure", config.strategy?.canonicalStructureMode ?? "observe"],
-      ["Game Plan", config.gamePlan?.enabled === false ? "disabled" : (config.gamePlan?.enforcementMode ?? config.strategy?.gpEnforcementMode ?? "hard")],
-      ["Premium / discount", config.strategy?.dealingRangeMode ?? "avoid_wrong_side"],
-      ["Confirmation", config.entry?.confirmationMethod ?? "choch"],
-      ["After CHoCH", config.entry?.afterChochMode ?? "confirmation_close"],
-    ];
-  }, [config]);
-
   // ─── Render ──────────────────────────────────────────────────────────
   return (
     <AppShell>
-      <WorkspacePage>
-        <WorkspaceHeader
-          icon={FlaskConical}
-          eyebrow="Strategy research"
-          title="Backtest Engine"
-          actions={results ? (
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-[10px]">
-                {results.dataSource?.mode === "mt5" ? "MT5 HISTORY" : "MARKET DATA PROVIDER"}
-              </Badge>
-              <Badge variant={results.stats.totalPnl >= 0 ? "default" : "destructive"} className="text-sm px-3 py-1">
-                {results.stats.totalTrades} trades | {fixedResult(results.stats.winRate, 1, "0.0")}% WR | {formatMoney(results.stats.totalPnl, true)}
-              </Badge>
-            </div>
-          ) : undefined}
-        />
-        <WorkspaceBody className="space-y-4">
+      <div className="space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold flex items-center gap-2 font-mono">
+            <FlaskConical className="h-6 w-6 text-cyan" /> BACKTEST ENGINE
+          </h1>
+          {results && (
+            <Badge variant={results.stats.totalPnl >= 0 ? "default" : "destructive"} className="text-sm px-3 py-1">
+              {results.stats.totalTrades} trades | {results.stats.winRate.toFixed(1)}% WR | {formatMoney(results.stats.totalPnl, true)}
+            </Badge>
+          )}
+        </div>
 
         {/* ═══════════════════════════════════════════════════════════════
             CONFIGURATION PANEL — Full Bot Config Surface
@@ -620,9 +448,9 @@ export default function Backtest() {
           <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowConfig(!showConfig)}>
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">
-                <Settings2 className="h-4 w-4 text-cyan" /> Backtest Configuration
+                <Settings2 className="h-4 w-4 text-cyan" /> Configuration
                 <span className="text-[10px] text-muted-foreground font-normal ml-2">
-                  {useCurrentConfig ? "Live config snapshot" : "Custom test config"}
+                  {useCurrentConfig ? "(using live bot config)" : "(custom)"}
                 </span>
               </CardTitle>
               {showConfig ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -637,57 +465,8 @@ export default function Backtest() {
                   <span className="ml-2 text-xs text-muted-foreground">Loading config...</span>
                 </div>
               ) : (<>
-              <div className="space-y-3 border-b border-border pb-4">
-                <div className="flex flex-wrap items-end gap-3">
-                  <div>
-                    <label className="text-[10px] text-muted-foreground uppercase">Candle Source</label>
-                    <Select value={historySource} onValueChange={(value) => setHistorySource(value as "provider" | "mt5")}>
-                      <SelectTrigger className="mt-1 h-8 w-48 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="provider">Market Data Provider</SelectItem>
-                        <SelectItem value="mt5">Imported MT5 History</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-muted-foreground uppercase">Import Symbol</label>
-                    <Select value={mt5Symbol} onValueChange={setMt5Symbol}>
-                      <SelectTrigger className="mt-1 h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>{INSTRUMENTS.map((instrument) => <SelectItem key={instrument.symbol} value={instrument.symbol}>{instrument.symbol}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-muted-foreground uppercase">Broker UTC Offset</label>
-                    <input type="number" min={-12} max={14} step={0.5} value={mt5UtcOffsetHours}
-                      onChange={(event) => setMt5UtcOffsetHours(Number(event.target.value) || 0)}
-                      className="mt-1 block h-8 w-24 border border-border bg-secondary px-2 text-xs" />
-                  </div>
-                  <label className="inline-flex h-8 cursor-pointer items-center gap-2 border border-border px-3 text-xs hover:bg-secondary">
-                    {isUploadingMT5 ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                    Import MT5 M1 CSV
-                    <input type="file" accept=".csv,.txt" className="hidden" disabled={isUploadingMT5}
-                      onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadMT5History(file); event.currentTarget.value = ""; }} />
-                  </label>
-                </div>
-                {mt5Datasets.length > 0 && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {mt5Datasets.map((dataset) => <div key={dataset.id} className="flex items-center justify-between border border-border/60 p-2 text-[10px]">
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-1 font-semibold"><Database className="h-3 w-3 text-cyan" /> {dataset.symbol} · {Number(dataset.candle_count).toLocaleString()} M1</p>
-                      <OverflowText
-                        text={`${String(dataset.start_at).slice(0, 10)} to ${String(dataset.end_at).slice(0, 10)} · ${dataset.original_filename}`}
-                        className="block text-muted-foreground"
-                      />
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete dataset" onClick={async () => {
-                      try { await backtestApi.deleteMT5(dataset.id); await refreshMT5Datasets(); }
-                      catch (error: any) { toast.error(error?.message || "Delete failed"); }
-                    }}><Trash2 className="h-3.5 w-3.5" /></Button>
-                  </div>)}
-                </div>}
-              </div>
-
               {/* Row 1: Date Range + Balance + Style + Run */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Start Date</label>
                   <input type="date" value={startDate} max={endDate} onChange={e => setStartDate(e.target.value)}
@@ -707,9 +486,7 @@ export default function Backtest() {
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Trading Style</label>
                   <select value={tradingStyle} onChange={e => setTradingStyle(e.target.value)}
                     className="w-full mt-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs">
-                    {TRADING_STYLE_MODES.map(style => (
-                      <option key={style} value={style}>{STYLE_META[style].label}</option>
-                    ))}
+                    {TRADING_STYLES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
                 <div className="flex items-end gap-2">
@@ -742,7 +519,7 @@ export default function Backtest() {
                   <label className="text-[10px] text-muted-foreground uppercase">Spread</label>
                   <input type="number" value={spreadPips} onChange={e => setSpreadPips(Number(e.target.value))}
                     min={0} max={10} step={0.1} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
-                  <span className="text-[9px] text-muted-foreground">full RT pips (0=instrument default)</span>
+                  <span className="text-[9px] text-muted-foreground">pips (0=auto)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-[10px] text-muted-foreground uppercase">Commission</label>
@@ -759,47 +536,8 @@ export default function Backtest() {
                 <Separator orientation="vertical" className="h-5" />
                 <div className="flex items-center gap-2">
                   <Switch checked={useCurrentConfig} onCheckedChange={setUseCurrentConfig} className="scale-90" />
-                  <span className="text-[10px] text-muted-foreground">Use live bot configuration</span>
+                  <span className="text-[10px] text-muted-foreground">Use live bot config</span>
                 </div>
-                <Separator orientation="vertical" className="h-5" />
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={zoneLocalReplayEvidence}
-                    onCheckedChange={setZoneLocalReplayEvidence}
-                    className="scale-90"
-                  />
-                  <span className="text-[10px] text-muted-foreground">
-                    Collect ICT zone replay evidence
-                  </span>
-                </div>
-              </div>
-
-              {zoneLocalReplayEvidence && (
-                <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-2">
-                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    Historical research only. This run compares the current
-                    selector with both nearby-evidence ranking and the new ICT
-                    Entry Zone Authority. Replay cannot activate enforcement.
-                  </p>
-                </div>
-              )}
-
-              <div className="border border-border/70 bg-secondary/20 p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="flex items-center gap-1.5 text-xs font-semibold"><LockKeyhole className="h-3.5 w-3.5 text-cyan" /> Effective Entry Authority</p>
-                    <p className="text-[10px] text-muted-foreground">Exact authority modes submitted with this run.</p>
-                  </div>
-                  {useCurrentConfig && <Badge variant="outline" className="w-fit text-[9px]">READ ONLY · LIVE SNAPSHOT</Badge>}
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-px bg-border sm:grid-cols-4 xl:grid-cols-7">
-                  {effectiveAuthority.map(([label, value]) => <div key={label} className="min-w-0 bg-background px-2 py-2">
-                    <p className="break-words text-[10px] uppercase text-muted-foreground">{label}</p>
-                    <p className="break-words text-xs font-semibold capitalize">{String(value).replace(/_/g, " ")}</p>
-                  </div>)}
-                </div>
-                {!["enforce", "enforce_live"].includes(config.strategy?.singleOwnershipMode) && <div className="mt-2 border border-warning/40 bg-warning/5 px-3 py-2"><p className="text-[10px] font-semibold text-warning">Comparison mode: the canonical workflow records evidence only. Existing legacy gates still authorize and reject setups.</p><p className="mt-0.5 text-[10px] text-muted-foreground">Choose Trade Decision Authority = Enforce to make the canonical workflow own the trade decision.</p></div>}
-                {useCurrentConfig && <p className="mt-2 text-[10px] text-muted-foreground">Turn off <strong>Use live bot configuration</strong> to edit test-only settings.</p>}
               </div>
 
               <Separator />
@@ -807,39 +545,18 @@ export default function Backtest() {
               {/* Config Tabs */}
               <Tabs value={configTab} onValueChange={setConfigTab}>
                 <TabsList className="bg-secondary/50 border border-border flex-wrap h-auto gap-0.5 p-1">
-                  <TabsTrigger value="workflow" className="text-[10px] gap-1 h-7"><Route className="h-3 w-3" /> ICT Workflow</TabsTrigger>
+                  <TabsTrigger value="strategy" className="text-[10px] gap-1 h-7"><Crosshair className="h-3 w-3" /> Strategy</TabsTrigger>
                   <TabsTrigger value="risk" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Risk</TabsTrigger>
-                  <TabsTrigger value="entry_exit" className="text-[10px] gap-1 h-7"><Target className="h-3 w-3" /> Management</TabsTrigger>
+                  <TabsTrigger value="entry_exit" className="text-[10px] gap-1 h-7"><Target className="h-3 w-3" /> Entry/Exit</TabsTrigger>
                   <TabsTrigger value="sessions" className="text-[10px] gap-1 h-7"><Clock className="h-3 w-3" /> Sessions</TabsTrigger>
-                  <TabsTrigger value="protection" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Safety</TabsTrigger>
-                  <TabsTrigger value="strategy" className="text-[10px] gap-1 h-7"><Gauge className="h-3 w-3" /> Diagnostics</TabsTrigger>
+                  <TabsTrigger value="protection" className="text-[10px] gap-1 h-7"><Shield className="h-3 w-3" /> Protection</TabsTrigger>
                   <TabsTrigger value="opening_range" className="text-[10px] gap-1 h-7"><Activity className="h-3 w-3" /> Opening Range</TabsTrigger>
                   <TabsTrigger value="instruments" className="text-[10px] gap-1 h-7"><Globe className="h-3 w-3" /> Instruments</TabsTrigger>
                 </TabsList>
 
-
-                <TabsContent value="workflow" className="mt-3 space-y-4">
-                  <SectionHeader title="ICT Trade Workflow" description="These settings own whether a historical setup can advance from discovery to entry" icon={GitBranch} />
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <SelectField label="Trade Decision Authority" value={config.strategy?.singleOwnershipMode === "enforce_live" ? "enforce" : (config.strategy?.singleOwnershipMode ?? "observe")} options={[{ value: "observe", label: "Observe - Compare With Legacy" }, { value: "enforce", label: "Enforce - Canonical Owns Decision" }]} onChange={v => updateConfig("strategy", "singleOwnershipMode", v)} />
-                    <SelectField label="ICT Scanner Workflow" value={config.strategy?.canonicalScannerMode ?? "observe"} options={[{ value: "observe", label: "Observe - Record Only" }, { value: "enforce", label: "Enforce - Advance Workflow" }]} onChange={v => updateConfig("strategy", "canonicalScannerMode", v)} />
-                    <SelectField label="Impulse & Entry Zones" value={config.strategy?.impulseEntryLifecycleMode ?? "observe"} options={[{ value: "off", label: "Off" }, { value: "observe", label: "Observe - Record Only" }, { value: "enforce", label: "Enforce - Require Lifecycle" }]} onChange={v => updateConfig("strategy", "impulseEntryLifecycleMode", v)} />
-                    <SelectField label="Market Structure Authority" value={config.strategy?.canonicalStructureMode ?? "observe"} options={[{ value: "observe", label: "Observe - Record Only" }, { value: "enforce", label: "Enforce - Structure Can Block" }]} onChange={v => updateConfig("strategy", "canonicalStructureMode", v)} />
-                    <SelectField label="Game Plan Alignment" value={config.gamePlan?.enabled === false ? "disabled" : (config.gamePlan?.enforcementMode ?? config.strategy?.gpEnforcementMode ?? "hard")} options={[{ value: "disabled", label: "Disabled" }, { value: "off", label: "Off - Log Only" }, { value: "soft", label: "Soft - Direction Input" }, { value: "hard", label: "Hard - Final Block" }]} onChange={v => { if (useCurrentConfig) return; setConfig((previous: any) => ({ ...previous, gamePlan: { ...previous.gamePlan, enabled: v !== "disabled", enforcementMode: v === "disabled" ? (previous.gamePlan?.enforcementMode ?? "hard") : v } })); }} />
-                    <SelectField label="Premium/Discount Entry Rule" value={config.strategy?.dealingRangeMode ?? "avoid_wrong_side"} options={[{ value: "off", label: "Off" }, { value: "avoid_wrong_side", label: "Block Wrong-Side Entries" }, { value: "strict_value", label: "Require Discount Buys / Premium Sells" }]} onChange={v => updateConfig("strategy", "dealingRangeMode", v)} />
-                    <SelectField label="Entry Confirmation" value={config.entry?.confirmationMethod ?? "choch"} options={[{ value: "choch", label: "MSS / CHoCH / Reversal Candle" }, { value: "indicators", label: "Indicator Consensus" }, { value: "choch_and_indicators", label: "Structure + Indicators" }]} onChange={v => updateConfig("entry", "confirmationMethod", v)} />
-                    <SelectField label="After CHoCH" value={config.entry?.afterChochMode ?? "confirmation_close"} options={[{ value: "confirmation_close", label: "Enter at CHoCH Close" }, { value: "observe_retracement", label: "Observe FVG / OB Retracement" }, { value: "wait_retracement", label: "Wait for FVG / OB Retracement" }]} onChange={v => updateConfig("entry", "afterChochMode", v)} />
-                    {(config.entry?.afterChochMode === "observe_retracement" || config.entry?.afterChochMode === "wait_retracement") && <FieldRow label="Retracement Expiry (minutes)"><input type="number" value={config.entry?.afterChochExpiryMinutes ?? 30} min={5} max={240} step={5} onChange={e => updateConfig("entry", "afterChochExpiryMinutes", Math.max(5, Number(e.target.value) || 30))} className="w-full border border-border bg-secondary px-2 py-1.5 text-xs" /></FieldRow>}
-                  </div>
-                  <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4 xl:grid-cols-7">
-                    {["HTF bias", "Frozen impulse", "Entry zone", "Liquidity", "Confirmation", "Final safety", "Entry"].map((step, index) => <div key={step} className="bg-background px-2 py-3 text-center"><span className="mx-auto mb-1 flex h-5 w-5 items-center justify-center rounded-full border border-cyan/50 text-[9px] text-cyan">{index + 1}</span><p className="text-[9px] font-medium">{step}</p></div>)}
-                  </div>
-                </TabsContent>
-
-                {/* ── Diagnostic Factors Tab ── */}
+                {/* ── Strategy Tab ── */}
                 <TabsContent value="strategy" className="mt-3 space-y-3">
-                  <div className="border border-warning/30 bg-warning/5 p-3"><p className="flex items-center gap-1.5 text-xs font-semibold text-warning"><Info className="h-3.5 w-3.5" /> Diagnostic scoring only</p><p className="mt-1 text-[10px] text-muted-foreground">Legacy percentages and factor scores explain context. They do not replace the ICT workflow authority.</p></div>
-                  <SectionHeader title="Legacy Confluence Diagnostics" description="Measure factor correlation without treating the score as entry authority" icon={Gauge} />
+                  <SectionHeader title="Confluence Factors" description="Toggle each SMC factor on/off to test its impact on performance" icon={Crosshair} />
                   <FieldRow label="Min Confluence Score" description="Minimum percentage score to trigger a trade">
                     <div className="flex items-center gap-3">
                       <Slider value={[config.strategy.confluenceThreshold]} onValueChange={v => updateConfig("strategy", "confluenceThreshold", v[0])}
@@ -869,6 +586,8 @@ export default function Backtest() {
                   <div className="grid grid-cols-2 gap-2">
                     <Toggle label="Require HTF Bias" description="Only trade in direction of daily bias" checked={config.strategy.requireHTFBias} onChange={v => updateConfig("strategy", "requireHTFBias", v)} />
                     <Toggle label="HTF Bias Hard Veto" description="Hard block: no ranging exception" checked={config.strategy.htfBiasHardVeto} onChange={v => updateConfig("strategy", "htfBiasHardVeto", v)} />
+                    <Toggle label="Only Buy in Discount" description="Longs only in discount zone" checked={config.strategy.onlyBuyInDiscount} onChange={v => updateConfig("strategy", "onlyBuyInDiscount", v)} />
+                    <Toggle label="Only Sell in Premium" description="Shorts only in premium zone" checked={config.strategy.onlySellInPremium} onChange={v => updateConfig("strategy", "onlySellInPremium", v)} />
                   </div>
                 </TabsContent>
 
@@ -1157,7 +876,6 @@ export default function Backtest() {
               <div className="flex items-center gap-3">
                 <Loader2 className="h-5 w-5 animate-spin text-cyan flex-shrink-0" />
                 <div className="flex-1">
-                  <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Historical data processing</p>
                   <p className="text-sm font-medium">{progress || "Processing..."}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {activeRunId ? `Run ID: ${activeRunId.slice(0, 8)}...` : "Submitting..."}
@@ -1185,9 +903,9 @@ export default function Backtest() {
                   <XCircle className="h-3 w-3 mr-1" /> Cancel
                 </Button>
               </div>
-              <div className="h-2 w-full overflow-hidden bg-secondary/50">
+              <div className="w-full bg-secondary/50 rounded-full h-2 overflow-hidden">
                 <div
-                  className="h-full bg-cyan transition-all duration-500 ease-out"
+                  className="h-full bg-cyan rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${Math.max(2, progressPct)}%` }}
                 />
               </div>
@@ -1213,12 +931,11 @@ export default function Backtest() {
         {results && results.stats.totalTrades === 0 && results.diagnostics && (() => {
           const d = results.diagnostics!;
           const cfg = results.config;
-          const processed = d.totalCandlesEvaluated || 0;
-          const weekdayBars = Math.max(0, processed - d.skippedWeekend);
-          const sessionPct = weekdayBars > 0 ? Math.round((d.skippedSession / weekdayBars) * 100) : 0;
-          const reachedAnalysis = Math.max(0, processed - d.skippedWeekend - d.skippedSession - d.skippedDay);
-          const noDirPct = reachedAnalysis > 0 ? Math.round((d.skippedNoDirection / reachedAnalysis) * 100) : 0;
-          const scored = Math.max(0, reachedAnalysis - d.skippedNoDirection); // candles that got a score
+          const total = d.totalCandlesFetched || 0;
+          const evaluated = d.totalCandlesEvaluated;
+          const sessionPct = total > 0 ? Math.round((d.skippedSession / total) * 100) : 0;
+          const noDirPct = evaluated > 0 ? Math.round((d.skippedNoDirection / evaluated) * 100) : 0;
+          const scored = evaluated - d.skippedNoDirection; // candles that got a score
           const highScore = d.highestScoreSeen || 0;
           const threshold = cfg?.minConfluence || 55;
           const enabledFactors = d.enabledFactorCount || 0;
@@ -1255,8 +972,8 @@ export default function Backtest() {
             advice.push({
               priority: 2,
               icon: "\u{1F570}\uFE0F",
-              title: `Session filter removed ${sessionPct}% of eligible weekday bars`,
-              detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${weekdayBars.toLocaleString()} weekday entry bars reaching the session filter were outside these sessions.`,
+              title: `Session filter removed ${sessionPct}% of candles`,
+              detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${total.toLocaleString()} candles were outside these sessions.`,
               action: `Enable more sessions to analyze more candles. Asian covers 8:00 PM–2:00 AM ET, London 2:00–8:30 AM ET, New York 8:30 AM–4:00 PM ET, Off-Hours 4:00–8:00 PM ET.`,
             });
           }
@@ -1283,30 +1000,15 @@ export default function Backtest() {
             });
           }
 
-          if ((d.skippedLifecycleWaiting || 0) > 0) {
-            const stages = Object.entries(d.lifecycleStageObservations || {})
-              .sort(([, left], [, right]) => right - left)
-              .slice(0, 3)
-              .map(([stage, count]) => `${stage.replace(/_/g, " ")} (${count.toLocaleString()})`)
-              .join(", ");
-            advice.push({
-              priority: 5,
-              icon: "⏳",
-              title: `${(d.skippedLifecycleWaiting || 0).toLocaleString()} setup observations were still developing`,
-              detail: stages ? `Most observed stages: ${stages}.` : "The enforced ICT lifecycle had not reached final authorization.",
-              action: `This is not a safety rejection. Open Lifecycle to see whether setups were mostly approaching zones, building confirmation, or waiting for retracement.`,
-            });
-          }
-
           // Advice 5: Gate blocked
-          if (d.skippedGateBlocked > 0) {
+          if (d.skippedGateBlocked > 0 && d.signalsGenerated > 0) {
             const topGate = d.gateBlockReasons ? Object.entries(d.gateBlockReasons).sort(([, a], [, b]) => b - a)[0] : null;
             advice.push({
               priority: 5,
               icon: "\u{1F6E1}\uFE0F",
-              title: `${d.skippedGateBlocked.toLocaleString()} candidates rejected by entry gates`,
+              title: `${d.skippedGateBlocked} signals blocked by safety gates`,
               detail: topGate ? `Top blocker: ${topGate[0]} (${topGate[1]} times).` : `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
-              action: `Review the Gates tab before changing settings. Keep an authority enforced when it is rejecting the setups you intended it to reject.`,
+              action: `Check your Risk and Protection settings. Common blockers: max concurrent trades too low, cooldown too long, or max daily drawdown too tight.`,
             });
           }
 
@@ -1316,7 +1018,7 @@ export default function Backtest() {
               icon: "\u{1F4CD}",
               title: "Impulse zone gate blocked entries",
               detail: `${(d.skippedImpulseNoZone || 0).toLocaleString()} candles had no valid zone; ${(d.skippedImpulseNotAtZone || 0).toLocaleString()} had a zone but price was not at it.`,
-              action: `Set Impulse & Entry Zones to Observe/Off for discovery runs, or keep it Enforce when you only want exact zone-touch entries.`,
+              action: `Set Impulse Zone gate to Soft/Off for discovery runs, or keep it Hard when you only want exact zone-touch entries.`,
             });
           }
 
@@ -1354,12 +1056,12 @@ export default function Backtest() {
           }
 
           // Advice 9: All candles filtered (nothing to analyze)
-          if (reachedAnalysis === 0 && processed > 0) {
+          if (evaluated === 0 && total > 0) {
             advice.push({
               priority: 0,
               icon: "\u26A0\uFE0F",
               title: "All candles were filtered out before analysis",
-              detail: `${processed.toLocaleString()} entry bars were processed but none survived the pre-analysis filters (weekend, session, day).`,
+              detail: `${total.toLocaleString()} candles were fetched but none survived the pre-analysis filters (weekend, session, day).`,
               action: `Your session + day filters are too restrictive. Enable more sessions or check that your date range includes weekdays.`,
             });
           }
@@ -1437,8 +1139,8 @@ export default function Backtest() {
                 {/* Row 1: Total candles in range */}
                 <div className="grid grid-cols-1 gap-2">
                   <div className="px-3 py-2 border rounded text-center border-border/40">
-                    <p className="text-[10px] text-muted-foreground">Entry Bars Processed</p>
-                    <p className="text-lg font-mono font-bold">{processed.toLocaleString()}</p>
+                    <p className="text-[10px] text-muted-foreground">Total Candles In Range</p>
+                    <p className="text-lg font-mono font-bold">{total.toLocaleString()}</p>
                   </div>
                 </div>
                 {/* Row 2: Pre-filters */}
@@ -1457,18 +1159,17 @@ export default function Backtest() {
                 </div>
                 {/* Row 3: Candles analyzed */}
                 <div className="grid grid-cols-1 gap-2">
-                  <div className={`px-3 py-2 border rounded text-center ${reachedAnalysis === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
-                    <p className="text-[10px] text-muted-foreground">Entry Bars Reaching Market Analysis</p>
-                    <p className={`text-lg font-mono font-bold ${reachedAnalysis === 0 ? 'text-warning' : 'text-primary'}`}>{reachedAnalysis.toLocaleString()}</p>
+                  <div className={`px-3 py-2 border rounded text-center ${evaluated === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
+                    <p className="text-[10px] text-muted-foreground">Candles Analyzed (survived filters)</p>
+                    <p className={`text-lg font-mono font-bold ${evaluated === 0 ? 'text-warning' : 'text-primary'}`}>{evaluated.toLocaleString()}</p>
                   </div>
                 </div>
                 {/* Row 4: Analysis results */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { label: "\u2796 No Direction", value: d.skippedNoDirection, warn: noDirPct > 60 },
                     { label: "\u2796 Below Threshold", value: d.skippedBelowThreshold, warn: d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 },
-                    { label: "Entry Gate Rejected", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
-                    { label: "Lifecycle Waiting", value: d.skippedLifecycleWaiting || 0, warn: false },
+                    { label: "\u2796 Gate Blocked", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
                     { label: "\u2796 No SL/TP", value: d.skippedNoSLTP, warn: d.skippedNoSLTP > 0 },
                   ].map(item => (
                     <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
@@ -1480,7 +1181,7 @@ export default function Backtest() {
                 {/* Row 5: Final outcome */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
-                    { label: "Candidates Sent to Entry Gates", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
+                    { label: "Signals Passed", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
                     { label: "Trades Opened", value: d.tradesOpened, warn: d.tradesOpened === 0 },
                     { label: "Unsupported Symbol", value: d.skippedUnsupportedSymbol, warn: d.skippedUnsupportedSymbol > 0 },
                   ].map(item => (
@@ -1507,24 +1208,9 @@ export default function Backtest() {
             RESULTS DASHBOARD
             ═══════════════════════════════════════════════════════════════ */}
         {results && (
-          <div className="space-y-3">
-            {results.zoneLocalReplay && (
-              <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-2">
-                <p className="text-xs font-medium">
-                  Zone-local historical replay collected
-                </p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground">
-                  {results.zoneLocalReplay.observations} candidate observations
-                  were stored as research-only evidence. View the separate
-                  Retrospective Replay section on Rejected Setups; these rows
-                  cannot activate runtime enforcement.
-                </p>
-              </div>
-            )}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="bg-secondary/50 border border-border">
               <TabsTrigger value="overview" className="text-xs gap-1"><BarChart3 className="h-3 w-3" /> Overview</TabsTrigger>
-              <TabsTrigger value="lifecycle" className="text-xs gap-1"><Route className="h-3 w-3" /> Lifecycle</TabsTrigger>
               <TabsTrigger value="trades" className="text-xs gap-1"><ListChecks className="h-3 w-3" /> Trades</TabsTrigger>
               <TabsTrigger value="factors" className="text-xs gap-1"><Zap className="h-3 w-3" /> Factors</TabsTrigger>
               <TabsTrigger value="gates" className="text-xs gap-1"><ShieldCheck className="h-3 w-3" /> Gates</TabsTrigger>
@@ -1559,20 +1245,19 @@ export default function Backtest() {
               })()}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
                 {[
-                  { label: "Total Trades", value: results.stats.totalTrades, sub: `${fixedResult(results.stats.tradesPerMonth, 1, "0.0")}/mo` },
-                  { label: "Win Rate", value: `${fixedResult(results.stats.winRate, 1, "0.0")}%`, color: results.stats.winRate >= 50 ? "text-success" : "text-destructive", sub: `${results.stats.wins}W / ${results.stats.losses}L` },
-                  { label: "Net P&L", value: formatMoney(results.stats.totalPnl, true), color: results.stats.totalPnl >= 0 ? "text-success" : "text-destructive", sub: `${fixedResult(results.stats.totalPnlPips, 0, "0")} pips` },
-                  { label: "Profit Factor", value: profitFactorLabel(results.stats.profitFactor, results.stats.wins, results.stats.losses), color: finiteResultNumber(results.stats.profitFactor) >= 1.5 ? "text-success" : finiteResultNumber(results.stats.profitFactor) >= 1 ? "text-warning" : "text-destructive" },
-                  { label: "Max Drawdown", value: `${fixedResult(results.stats.maxDrawdownPct, 1, "0.0")}%`, color: "text-destructive", sub: formatMoney(-results.stats.maxDrawdown) },
-                  { label: "Sharpe Ratio", value: fixedResult(results.stats.sharpeRatio, 2), color: results.stats.sharpeRatio >= 1 ? "text-success" : "text-muted-foreground" },
-                  { label: "Avg RR", value: fixedResult(results.stats.avgRR, 2), color: results.stats.avgRR >= 1.5 ? "text-success" : "text-muted-foreground" },
+                  { label: "Total Trades", value: results.stats.totalTrades, sub: `${results.stats.tradesPerMonth.toFixed(1)}/mo` },
+                  { label: "Win Rate", value: `${results.stats.winRate.toFixed(1)}%`, color: results.stats.winRate >= 50 ? "text-success" : "text-destructive", sub: `${results.stats.wins}W / ${results.stats.losses}L` },
+                  { label: "Net P&L", value: formatMoney(results.stats.totalPnl, true), color: results.stats.totalPnl >= 0 ? "text-success" : "text-destructive", sub: `${results.stats.totalPnlPips.toFixed(0)} pips` },
+                  { label: "Profit Factor", value: results.stats.profitFactor === Infinity ? "∞" : results.stats.profitFactor.toFixed(2), color: results.stats.profitFactor >= 1.5 ? "text-success" : results.stats.profitFactor >= 1 ? "text-warning" : "text-destructive" },
+                  { label: "Max Drawdown", value: `${results.stats.maxDrawdownPct.toFixed(1)}%`, color: "text-destructive", sub: formatMoney(-results.stats.maxDrawdown) },
+                  { label: "Sharpe Ratio", value: results.stats.sharpeRatio.toFixed(2), color: results.stats.sharpeRatio >= 1 ? "text-success" : "text-muted-foreground" },
+                  { label: "Avg RR", value: results.stats.avgRR.toFixed(2), color: results.stats.avgRR >= 1.5 ? "text-success" : "text-muted-foreground" },
                   { label: "Expectancy", value: formatMoney(results.stats.expectancy, true), color: results.stats.expectancy >= 0 ? "text-success" : "text-destructive" },
                   { label: "Avg Win", value: formatMoney(results.stats.avgWin), color: "text-success" },
                   { label: "Avg Loss", value: formatMoney(-results.stats.avgLoss), color: "text-destructive" },
-                  { label: "Longs WR", value: `${fixedResult(results.stats.longsWinRate, 1, "0.0")}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
-                  { label: "Shorts WR", value: `${fixedResult(results.stats.shortsWinRate, 1, "0.0")}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
+                  { label: "Longs WR", value: `${results.stats.longsWinRate.toFixed(1)}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
+                  { label: "Shorts WR", value: `${results.stats.shortsWinRate.toFixed(1)}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
                   ...(results.stats.totalCommission > 0 ? [{ label: "Total Commission", value: formatMoney(-results.stats.totalCommission), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
-                  ...((results.stats.totalSpreadCost ?? 0) > 0 ? [{ label: "Total Spread Cost", value: formatMoney(-(results.stats.totalSpreadCost ?? 0)), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
                 ].map(s => (
                   <Card key={s.label} className="border-border/30">
                     <CardContent className="pt-2.5 pb-2">
@@ -1612,9 +1297,9 @@ export default function Backtest() {
                           <div className="text-[9px] text-muted-foreground">{f.startDate} → {f.endDate}</div>
                           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
                             <span>{f.trades} trades</span>
-                            <span className={f.winRate >= 50 ? 'text-success' : 'text-destructive'}>{fixedResult(f.winRate, 1, "0.0")}% WR</span>
-                            <span>PF: {profitFactorLabel(f.profitFactor, f.wins, f.losses)}</span>
-                            <span>DD: {fixedResult(f.maxDrawdownPct, 1, "0.0")}%</span>
+                            <span className={f.winRate >= 50 ? 'text-success' : 'text-destructive'}>{f.winRate.toFixed(1)}% WR</span>
+                            <span>PF: {f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</span>
+                            <span>DD: {f.maxDrawdownPct.toFixed(1)}%</span>
                           </div>
                         </div>
                       ))}
@@ -1641,12 +1326,12 @@ export default function Backtest() {
                               <td className="py-1 px-2 font-mono">{f.fold}</td>
                               <td className="py-1 px-2 text-muted-foreground">{f.startDate} → {f.endDate}</td>
                               <td className="py-1 px-2 text-right font-mono">{f.trades}</td>
-                              <td className={`py-1 px-2 text-right font-mono ${f.winRate >= 50 ? 'text-success' : 'text-destructive'}`}>{fixedResult(f.winRate, 1, "0.0")}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.winRate >= 50 ? 'text-success' : 'text-destructive'}`}>{f.winRate.toFixed(1)}%</td>
                               <td className={`py-1 px-2 text-right font-mono ${f.totalPnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(f.totalPnl, true)}</td>
-                              <td className={`py-1 px-2 text-right font-mono ${finiteResultNumber(f.profitFactor) >= 1.5 ? 'text-success' : finiteResultNumber(f.profitFactor) >= 1 ? 'text-warning' : 'text-destructive'}`}>{profitFactorLabel(f.profitFactor, f.wins, f.losses)}</td>
-                              <td className="py-1 px-2 text-right font-mono text-destructive">{fixedResult(f.maxDrawdownPct, 1, "0.0")}%</td>
-                              <td className={`py-1 px-2 text-right font-mono ${f.sharpeRatio >= 1 ? 'text-success' : 'text-muted-foreground'}`}>{fixedResult(f.sharpeRatio, 2)}</td>
-                              <td className="py-1 px-2 text-right font-mono">{fixedResult(f.avgRR, 2)}</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.profitFactor >= 1.5 ? 'text-success' : f.profitFactor >= 1 ? 'text-warning' : 'text-destructive'}`}>{f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</td>
+                              <td className="py-1 px-2 text-right font-mono text-destructive">{f.maxDrawdownPct.toFixed(1)}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.sharpeRatio >= 1 ? 'text-success' : 'text-muted-foreground'}`}>{f.sharpeRatio.toFixed(2)}</td>
+                              <td className="py-1 px-2 text-right font-mono">{f.avgRR.toFixed(2)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1671,10 +1356,10 @@ export default function Backtest() {
                         <ComposedChart data={equityCurveWithDD}>
                           <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
                           <XAxis dataKey="date" tick={{ fontSize: 8, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
-                          <YAxis yAxisId="equity" tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v/1000)}k` : `$${Math.round(v)}`} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} />
-                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: 'hsl(0, 72%, 51%)' }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
+                          <YAxis yAxisId="equity" tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
+                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: 'hsl(0, 72%, 51%)' }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
                           <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: '6px', fontSize: '11px', color: ct.axis }} labelStyle={{ color: ct.axis }}
-                            formatter={(value: number, name: string) => name === "equity" ? [`$${Math.round(value).toLocaleString()}`, "Equity"] : [`${value.toFixed(1)}%`, "Drawdown"]} />
+                            formatter={(value: number, name: string) => name === "equity" ? [`$${value.toFixed(2)}`, "Equity"] : [`${value.toFixed(1)}%`, "Drawdown"]} />
                           <Area yAxisId="equity" type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.08} strokeWidth={2} />
                           <Line yAxisId="dd" type="monotone" dataKey="drawdown" stroke="hsl(0, 72%, 51%)" strokeWidth={1} dot={false} strokeDasharray="3 3" />
                         </ComposedChart>
@@ -1737,67 +1422,6 @@ export default function Backtest() {
               </div>
             </TabsContent>
 
-            <TabsContent value="lifecycle" className="mt-4 space-y-4">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-sm"><Route className="h-4 w-4 text-cyan" /> Canonical Trade Lifecycle</CardTitle>
-                  <p className="text-[10px] text-muted-foreground">Repeated candle observations by lifecycle stage, not unique setups. These are separate from safety-gate failure occurrences.</p>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                    {[
-                      ["discovery", "Discovery"], ["watching", "Watching"],
-                      ["awaiting_confirmation", "Confirmation"],
-                      ["awaiting_retracement", "Retracement"], ["authorized", "Entry ready"],
-                    ].map(([stage, label]) => <div key={stage} className="border border-border/60 px-3 py-3">
-                      <p className="text-[9px] uppercase text-muted-foreground">{label}</p>
-                      <p className="mt-1 font-mono text-xl font-bold">{lifecycleSummary.stageCounts[stage] ?? 0}</p>
-                    </div>)}
-                  </div>
-                  <div>
-                    <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Retained decision outcomes (latest 500 evidence records)</p>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {[['blocked', 'Blocked'], ['entered', 'Entered'], ['invalidated', 'Invalidated'], ['expired', 'Expired'], ['exhausted', 'Exhausted']].map(([stage, label]) => <div key={stage} className="flex items-center justify-between border border-border/50 px-3 py-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono font-semibold">{lifecycleSummary.outcomeCounts[stage] ?? 0}</span></div>)}
-                    </div>
-                  </div>
-                  {Object.keys(lifecycleSummary.transitionCounts).length > 0 && <div className="border-t border-border/50 pt-3">
-                    <p className="mb-2 text-[9px] font-semibold uppercase text-muted-foreground">Lifecycle transitions</p>
-                    <div className="flex flex-wrap gap-2">{Object.entries(lifecycleSummary.transitionCounts).map(([event, count]) => <span key={event} className="border border-border/60 px-2 py-1 text-[9px]"><span className="capitalize">{event.replace(/_/g, " ")}</span> <strong className="ml-1 font-mono">{count}</strong></span>)}</div>
-                  </div>}
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">Decision Evidence</CardTitle></CardHeader>
-                <CardContent>
-                  {lifecycleSummary.snapshots.length === 0 ? <div className="border border-dashed border-border py-10 text-center"><Info className="mx-auto mb-2 h-5 w-5 text-muted-foreground" /><p className="text-xs text-muted-foreground">This run contains no canonical lifecycle snapshots. Run a new backtest after deploying the updated engine.</p></div> : <div className="max-h-[520px] space-y-1.5 overflow-y-auto">
-                    {[...lifecycleSummary.snapshots].reverse().map((snapshot, index) => {
-                      const state = snapshot.canonicalScannerState;
-                      const authorization = snapshot.finalTradeAuthorization;
-                      return <div key={`${snapshot.evaluatedAt}-${index}`} className="border border-border/60 p-3">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <Badge variant="outline" className="shrink-0 text-[9px] uppercase">{state?.stage?.replace(/_/g, " ") || snapshot.decision?.lifecycle?.stage || "Recorded"}</Badge>
-                            <span
-                              className="truncate font-mono text-xs"
-                              title={`${snapshot.symbol || "Setup"} ${snapshot.direction?.toUpperCase() || ""}`.trim()}
-                            >
-                              {snapshot.symbol || "Setup"} {snapshot.direction?.toUpperCase()}
-                            </span>
-                          </div>
-                          <span className="text-[9px] text-muted-foreground">{snapshot.evaluatedAt ? new Date(snapshot.evaluatedAt).toLocaleString() : "Time unavailable"}</span>
-                        </div>
-                        <p className="mt-2 text-[10px]">{state?.explanation || authorization?.reason || snapshot.lifecycleEvidence?.reason || "Decision evidence recorded"}</p>
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {state?.authorities?.map(authority => <span key={authority.role} className={`border px-1.5 py-0.5 text-[8px] uppercase ${authority.passed === false ? "border-destructive/40 text-destructive" : authority.passed === true ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>{authority.role.replace(/_/g, " ")}</span>)}
-                          {authorization?.code && <span className={`border px-1.5 py-0.5 text-[8px] uppercase ${authorization.authorized ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>Final: {authorization.code.replace(/_/g, " ")}</span>}
-                        </div>
-                      </div>;
-                    })}
-                  </div>}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
             {/* ── Trades Tab ── */}
             <TabsContent value="trades" className="mt-4">
               <Card>
@@ -1821,22 +1445,19 @@ export default function Backtest() {
                         <div className="flex items-center justify-between text-[9px] text-muted-foreground">
                           <span>{t.entryTime.slice(5, 16).replace('T', ' ')}</span>
                           <span className={`${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span>
-                          <span>{t.pnlPips >= 0 ? '+' : ''}{fixedResult(t.pnlPips, 1, "0")} pips</span>
+                          <span>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)} pips</span>
                         </div>
                         {expandedTrade === t.id && (
                           <div className="mt-1 pt-1 border-t border-border/30 space-y-1">
-                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{fixedResult(t.entryPrice, 5, "0")}</span></div>
-                              <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{fixedResult(t.exitPrice, 5, "0")}</span></div>
-                              <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{fixedResult(t.size, 2, "0")} lots</span></div>
-                              <div><span className="text-muted-foreground">Diagnostic score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</span></div>
-                              <div><span className="text-muted-foreground">Spread cost:</span> <span className="font-mono">{formatMoney(-(t.spreadCost ?? 0))}</span></div>
-                              <div><span className="text-muted-foreground">Commission:</span> <span className="font-mono">{formatMoney(-t.commission)}</span></div>
+                            <div className="grid grid-cols-2 gap-2 text-[9px]">
+                              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{t.entryPrice.toFixed(5)}</span></div>
+                              <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{t.exitPrice.toFixed(5)}</span></div>
+                              <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{t.size.toFixed(2)} lots</span></div>
+                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</span></div>
                             </div>
-                            <p className="text-[10px] text-muted-foreground">Legacy diagnostics - do not authorize the trade</p>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {t.factors.filter(f => f.present).map((f, fi) => (
-                                <span key={fi} className="text-[10px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{fixedResult(f.weight, 1, "0.0")}</span>
+                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{f.weight.toFixed(1)}</span>
                               ))}
                             </div>
                           </div>
@@ -1854,7 +1475,7 @@ export default function Backtest() {
                           <th className="text-left py-2 px-1.5">Dir</th>
                           <th className="text-left py-2 px-1.5">Entry</th>
                           <th className="text-left py-2 px-1.5">Exit</th>
-                          <th className="text-right py-2 px-1.5">Diagnostic Score</th>
+                          <th className="text-right py-2 px-1.5">Score</th>
                           <th className="text-right py-2 px-1.5">P&L</th>
                           <th className="text-right py-2 px-1.5">Pips</th>
                           <th className="text-left py-2 px-1.5">Close</th>
@@ -1874,9 +1495,9 @@ export default function Backtest() {
                               </td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.entryTime.slice(0, 16).replace('T', ' ')}</td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.exitTime.slice(0, 16).replace('T', ' ')}</td>
-                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${fixedResult(t.confluenceScore, 0, "0")}%` : fixedResult(t.confluenceScore, 1, "0")}</Badge></td>
+                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</Badge></td>
                               <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${t.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(t.pnl, true)}</td>
-                              <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{fixedResult(t.pnlPips, 1, "0")}</td>
+                              <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)}</td>
                               <td className="py-1.5 px-1.5"><span className={`text-[10px] ${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span></td>
                               <td className="py-1.5 px-1.5 text-center">{expandedTrade === t.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}</td>
                             </tr>
@@ -1884,19 +1505,17 @@ export default function Backtest() {
                               <tr key={`${t.id}-detail`}>
                                 <td colSpan={10} className="py-2 px-3 bg-secondary/10">
                                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
-                                    <div><span className="text-[9px] text-muted-foreground">Entry Price</span><p className="text-xs font-mono">{fixedResult(t.entryPrice, 5, "0")}</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{fixedResult(t.exitPrice, 5, "0")}</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Size</span><p className="text-xs font-mono">{fixedResult(t.size, 2, "0")} lots</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Entry Price</span><p className="text-xs font-mono">{t.entryPrice.toFixed(5)}</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{t.exitPrice.toFixed(5)}</p></div>
+                                    <div><span className="text-[9px] text-muted-foreground">Size</span><p className="text-xs font-mono">{t.size.toFixed(2)} lots</p></div>
                                     <div><span className="text-[9px] text-muted-foreground">Hold Time</span><p className="text-xs font-mono">{((new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()) / 3600000).toFixed(1)}h</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Spread Cost</span><p className="text-xs font-mono">{formatMoney(-(t.spreadCost ?? 0))}</p></div>
-                                    <div><span className="text-[9px] text-muted-foreground">Commission</span><p className="text-xs font-mono">{formatMoney(-t.commission)}</p></div>
                                   </div>
                                   <div>
-                                    <div className="flex flex-wrap items-center gap-2"><span className="text-[9px] text-muted-foreground uppercase">Legacy Diagnostic Factors</span><span className="text-[9px] text-muted-foreground">Context only - does not authorize trades</span></div>
+                                    <span className="text-[9px] text-muted-foreground uppercase">Confluence Factors</span>
                                     <div className="flex flex-wrap gap-1 mt-1">
                                       {t.factors.map((f, fi) => (
                                         <Badge key={fi} variant={f.present ? "default" : "outline"} className={`text-[9px] ${f.present ? '' : 'opacity-40'}`}>
-                                          {f.name} {f.present ? `+${fixedResult(f.weight, 1, "0.0")}` : ''}
+                                          {f.name} {f.present ? `+${f.weight.toFixed(1)}` : ''}
                                         </Badge>
                                       ))}
                                     </div>
@@ -1958,7 +1577,7 @@ export default function Backtest() {
                           </tr>
                         </thead>
                         <tbody>
-                          {Object.entries(effectiveFactorBreakdown).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
+                          {Object.entries(results.factorBreakdown ?? {}).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
                             const wr = v.appeared > 0 ? (v.wonWhen / v.appeared) * 100 : 0;
                             return (
                               <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
@@ -1983,7 +1602,7 @@ export default function Backtest() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-cyan" /> Safety Gate Analytics</CardTitle>
-                  <p className="text-[10px] text-muted-foreground mt-1">Counts gate-failure occurrences, not unique setups. A setup may fail multiple gates or repeat across candles, so rows are not additive. Winner/loser accuracy requires counterfactual research.</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Shows how many trades each gate blocked, and whether those blocked trades would have been winners or losers.</p>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-y-auto max-h-[400px]">
@@ -1991,7 +1610,7 @@ export default function Backtest() {
                       <thead className="sticky top-0 bg-card">
                         <tr className="border-b border-border text-muted-foreground">
                           <th className="text-left py-2 px-1.5">Gate</th>
-                          <th className="text-right py-2 px-1.5">Failure Occurrences</th>
+                          <th className="text-right py-2 px-1.5">Blocked</th>
                           <th className="text-right py-2 px-1.5">Would Win</th>
                           <th className="text-right py-2 px-1.5">Would Lose</th>
                           <th className="text-right py-2 px-1.5">Accuracy</th>
@@ -1999,19 +1618,14 @@ export default function Backtest() {
                       </thead>
                       <tbody>
                         {Object.entries(results.gateBreakdown ?? {}).sort(([, a], [, b]) => b.blocked - a.blocked).map(([name, v]) => {
-                          const outcomesAvailable = v.outcomesAvailable === true &&
-                            v.wouldHaveWon !== null && v.wouldHaveLost !== null;
-                          const resolved = outcomesAvailable
-                            ? Number(v.wouldHaveWon) + Number(v.wouldHaveLost) : 0;
-                          const accuracy = resolved > 0
-                            ? (Number(v.wouldHaveLost) / resolved) * 100 : null;
+                          const accuracy = v.blocked > 0 ? (v.wouldHaveLost / v.blocked) * 100 : 0;
                           return (
                             <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
-                              <td className="py-1.5 px-1.5 capitalize">{name.replace(/_/g, " ")}</td>
+                              <td className="py-1.5 px-1.5">{name}</td>
                               <td className="py-1.5 px-1.5 text-right font-mono">{v.blocked}</td>
-                              <td className="py-1.5 px-1.5 text-right font-mono text-warning">{outcomesAvailable ? v.wouldHaveWon : "—"}</td>
-                              <td className="py-1.5 px-1.5 text-right font-mono text-success">{outcomesAvailable ? v.wouldHaveLost : "—"}</td>
-                              <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${accuracy === null ? "text-muted-foreground" : accuracy >= 60 ? "text-success" : accuracy >= 40 ? "text-warning" : "text-destructive"}`}>{accuracy === null ? "Not measured" : `${accuracy.toFixed(1)}%`}</td>
+                              <td className="py-1.5 px-1.5 text-right font-mono text-warning">{v.wouldHaveWon}</td>
+                              <td className="py-1.5 px-1.5 text-right font-mono text-success">{v.wouldHaveLost}</td>
+                              <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${accuracy >= 60 ? 'text-success' : accuracy >= 40 ? 'text-warning' : 'text-destructive'}`}>{accuracy.toFixed(1)}%</td>
                             </tr>
                           );
                         })}
@@ -2025,7 +1639,6 @@ export default function Backtest() {
               </Card>
             </TabsContent>
           </Tabs>
-          </div>
         )}
 
         {/* Empty State */}
@@ -2043,8 +1656,7 @@ export default function Backtest() {
             </CardContent>
           </Card>
         )}
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }

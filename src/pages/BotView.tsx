@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,17 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
-import {
-  STYLE_META,
-  getActiveStyle,
-  getScanLogMeta,
-  isTradingStyleMode,
-  readRuntimeStylePolicy,
-} from "@/lib/botStyleClassifier";
+import { STYLE_META, STYLE_PARAMS, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
-  TrendingUp, TrendingDown, Minus, Clock,
+  TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
   Eye, EyeOff, PanelRightClose, PanelRightOpen, MoreVertical, Wallet,
 } from "lucide-react";
@@ -35,56 +29,20 @@ import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
-import { LegacyDiagnosticsPanel } from "@/components/LegacyDiagnosticsPanel";
-import { formatNewsGateCountdown } from "@/lib/newsGateCountdown";
-import { uniqueRejectionReasons } from "@/lib/rejectedSetupAnalytics";
+import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
-import { ScanDetailBreakdown, TradeDecisionPanel } from "@/components/ScanDetailBreakdown";
 import type { CandleSource } from "@/lib/api";
-import {
-  canReturnToPaper,
-  canUseTradingControls,
-  readExecutionMode,
-  verifyExecutionModeChange,
-  type ExecutionMode,
-} from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { MobilePositionCard } from "@/components/MobilePositionCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-function ReadUnavailable({ label }: { label: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center border border-warning/30 py-10 text-warning">
-      <AlertTriangle className="mb-2 h-5 w-5" />
-      <p className="text-xs font-medium">{label} is unavailable</p>
-    </div>
-  );
-}
-
-function isRemoteReadUnavailable(value: unknown): value is { error?: string; fallback?: boolean; state?: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const payload = value as Record<string, unknown>;
-  return payload.fallback === true || payload.state === "unknown" || payload.state === "unavailable";
-}
-
-function readUnavailableText(value: unknown, fallback: string) {
-  if (isRemoteReadUnavailable(value) && typeof value.error === "string" && value.error.trim()) {
-    return value.error;
-  }
-  return fallback;
-}
-
-function accountControlError(fallback: string) {
-  return (error: unknown) =>
-    toast.error(error instanceof Error && error.message ? error.message : fallback);
-}
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -123,8 +81,8 @@ export default function BotView() {
     try {
       const stored = localStorage.getItem("botview-show-scan");
       if (stored !== null) return stored !== "false";
-      // Default: expanded on both mobile and desktop so scan results are immediately visible
-      return true;
+      // Default: collapsed on mobile, expanded on desktop
+      return typeof window !== "undefined" ? window.innerWidth >= 768 : true;
     } catch { return true; }
   });
   const toggleSidebar = useCallback(() => {
@@ -145,19 +103,10 @@ export default function BotView() {
   const [orderReason, setOrderReason] = useState("");
   const [orderScore, setOrderScore] = useState("5");
 
-  const {
-    data: status,
-    isPending: statusPending,
-    isError: statusReadFailed,
-    error: statusReadError,
-  } = useQuery({
+  const { data: status } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
-    // Shared key with StatusBar and MobileTopBar; React Query refetches at the
-    // SHORTEST observer interval, so 5s here set the rate for the whole app and
-    // each poll costs one TwelveData credit per open symbol. Matched to the
-    // others at 10s.
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
 
   const { data: scanLogs } = useQuery({
@@ -171,149 +120,40 @@ export default function BotView() {
     queryFn: () => botConfigApi.get(),
   });
 
-  const { data: brokerConns, isError: brokerConnectionsReadFailed } = useQuery({
+  const { data: brokerConns } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     refetchInterval: 30000,
   });
-  const brokerConnectionsKnown = !brokerConnectionsReadFailed && Array.isArray(brokerConns);
-  const activeConnections = brokerConnectionsKnown ? brokerConns.filter((c: any) => c.is_active) : [];
+  const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
   const [selectedConnIdx, setSelectedConnIdx] = useState(0);
   const selectedConnection = activeConnections[selectedConnIdx] || activeConnections[0];
 
-  // Live controls stay disabled until every active destination has confirmed
-  // connectivity, account state, and open-position state. The selected account
-  // controls presentation only; it must not narrow the safety check.
-  const executionMode = !statusPending && !statusReadFailed
-    ? readExecutionMode(status)
-    : "unknown";
-  const accountStatusKnown = executionMode !== "unknown";
-  const isLiveMode = executionMode === "live";
-  const brokerConnectionStateQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-connection-status", connection.id],
-      queryFn: () => brokerExecApi.connectionStatus(connection.id),
-      enabled: isLiveMode,
-      refetchInterval: 30000,
-    })),
+  // Live broker account data (only when in live mode with an active connection)
+  const isLiveMode = status?.executionMode === "live";
+  const { data: brokerAccount } = useQuery({
+    queryKey: ["broker-account", selectedConnection?.id],
+    queryFn: () => brokerExecApi.accountSummary(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
+    refetchInterval: 10000,
   });
-  const brokerAccountQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-account", connection.id],
-      queryFn: () => brokerExecApi.accountSummary(connection.id),
-      enabled: isLiveMode,
-      refetchInterval: 10000,
-    })),
+
+  const { data: brokerOpenTrades } = useQuery({
+    queryKey: ["broker-open-trades", selectedConnection?.id],
+    queryFn: () => brokerExecApi.openTrades(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
+    refetchInterval: 10000,
   });
-  const brokerPositionQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-open-trades", connection.id],
-      queryFn: () => brokerExecApi.openTrades(connection.id),
-      enabled: isLiveMode,
-      refetchInterval: 10000,
-    })),
-  });
-  const selectedConnectionIndex = selectedConnection
-    ? activeConnections.findIndex((connection) => connection.id === selectedConnection.id)
-    : -1;
-  const selectedConnectionStateQuery = selectedConnectionIndex >= 0
-    ? brokerConnectionStateQueries[selectedConnectionIndex]
-    : undefined;
-  const selectedBrokerAccountQuery = selectedConnectionIndex >= 0
-    ? brokerAccountQueries[selectedConnectionIndex]
-    : undefined;
-  const selectedBrokerPositionQuery = selectedConnectionIndex >= 0
-    ? brokerPositionQueries[selectedConnectionIndex]
-    : undefined;
-  const selectedBrokerAccountData = selectedBrokerAccountQuery?.data;
-  const selectedBrokerPositionData = selectedBrokerPositionQuery?.data;
-  const brokerAccountUnavailable = isRemoteReadUnavailable(selectedBrokerAccountData);
-  const brokerPositionsUnavailable = isRemoteReadUnavailable(selectedBrokerPositionData);
-  const brokerAccount = brokerAccountUnavailable ? undefined : selectedBrokerAccountData;
-  const brokerAccountReadFailed = selectedBrokerAccountQuery?.isError === true || brokerAccountUnavailable;
-  const brokerAccountReadError = selectedBrokerAccountQuery?.error;
-  const brokerAccountReadMessage = brokerAccountUnavailable
-    ? readUnavailableText(selectedBrokerAccountData, "Broker account unavailable")
-    : brokerAccountReadError instanceof Error
-      ? brokerAccountReadError.message
-      : "Broker account unavailable";
-  const brokerOpenTrades = Array.isArray(selectedBrokerPositionData) ? selectedBrokerPositionData : undefined;
-  const brokerPositionsReadFailed = selectedBrokerPositionQuery?.isError === true ||
-    brokerPositionsUnavailable ||
-    (selectedBrokerPositionQuery?.isSuccess === true && selectedBrokerPositionData != null && !Array.isArray(selectedBrokerPositionData));
-  const brokerPositionsReadError = selectedBrokerPositionQuery?.error;
-  const brokerPositionsReadMessage = brokerPositionsUnavailable
-    ? readUnavailableText(selectedBrokerPositionData, "Broker positions unavailable")
-    : brokerPositionsReadError instanceof Error
-      ? brokerPositionsReadError.message
-      : "Broker positions unavailable";
-  const liveBrokerReadPending = activeConnections.some((_, index) =>
-    brokerConnectionStateQueries[index]?.isPending ||
-    brokerAccountQueries[index]?.isPending ||
-    brokerPositionQueries[index]?.isPending
-  );
-  const liveBrokerReadFailed = activeConnections.some((_, index) =>
-    brokerConnectionStateQueries[index]?.isError ||
-    isRemoteReadUnavailable(brokerConnectionStateQueries[index]?.data) ||
-    brokerAccountQueries[index]?.isError ||
-    isRemoteReadUnavailable(brokerAccountQueries[index]?.data) ||
-    brokerPositionQueries[index]?.isError
-    || isRemoteReadUnavailable(brokerPositionQueries[index]?.data)
-  );
-  const liveBrokerStates = activeConnections.map((_, index) =>
-    brokerConnectionStateQueries[index]?.isSuccess === true &&
-    brokerConnectionStateQueries[index]?.data?.ready === true &&
-    brokerAccountQueries[index]?.isSuccess === true &&
-    !!brokerAccountQueries[index]?.data &&
-    !isRemoteReadUnavailable(brokerAccountQueries[index]?.data) &&
-    brokerPositionQueries[index]?.isSuccess === true &&
-    Array.isArray(brokerPositionQueries[index]?.data)
-  );
-  const tradingControlsEnabled = canUseTradingControls(executionMode, liveBrokerStates);
-  const canSwitchBackToPaper = canReturnToPaper(
-    executionMode,
-    brokerConnectionsKnown,
-    activeConnections.map((_, index) => ({
-      available: brokerPositionQueries[index]?.isSuccess === true && Array.isArray(brokerPositionQueries[index]?.data),
-      positions: brokerPositionQueries[index]?.data,
-    })),
-  );
-  const modeChangeEnabled = accountStatusKnown && (
-    executionMode === "paper" ? brokerConnectionsKnown : canSwitchBackToPaper
-  );
 
-  useEffect(() => {
-    if (tradingControlsEnabled) return;
-    setOrderFormOpen(false);
-    setShowSetBalance(false);
-    setConfigOpen(false);
-  }, [tradingControlsEnabled]);
-
-  const requireTradingControls = () => {
-    if (!tradingControlsEnabled) {
-      throw new Error("Current account and broker state must be available before trading controls can be used.");
-    }
-  };
-
-  const closePositionFromDashboard = async (positionId: string) => {
-    try {
-      if (!positionId) throw new Error("A known position is required to close.");
-      await paperApi.closePosition(positionId);
-      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to close position");
-    }
-  };
-
-  const startMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.startEngine(); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); }, onError: accountControlError("Failed to start engine") });
-  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); }, onError: accountControlError("Failed to pause engine") });
-  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); }, onError: accountControlError("Failed to stop engine") });
-  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); }, onError: accountControlError("Failed to activate kill switch") });
-  const deactivateKill = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.killSwitch(false); }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); }, onError: accountControlError("Failed to deactivate kill switch") });
-  const resetMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetAccount(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to ${data?.startingBalance || "10,000"}`); }, onError: accountControlError("Failed to reset account") });
-  const resetBalMut = useMutation({ mutationFn: () => { requireTradingControls(); return paperApi.resetBalanceOnly(); }, onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to ${data?.startingBalance || "10,000"} — history preserved`); }, onError: accountControlError("Failed to reset balance") });
+  const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
+  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
+  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
+  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); } });
+  const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
+  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); } });
+  const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); } });
   const setBalMut = useMutation({
-    mutationFn: (balance: number) => { requireTradingControls(); return paperApi.setBalance(balance); },
+    mutationFn: (balance: number) => paperApi.setBalance(balance),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       toast.success(`Balance set to $${parseFloat(data?.balance || "0").toLocaleString()}`);
@@ -322,34 +162,8 @@ export default function BotView() {
     },
     onError: (err: any) => toast.error(err.message || "Failed to set balance"),
   });
-  const modeMut = useMutation({
-    mutationFn: async (mode: ExecutionMode) => {
-      const result = await paperApi.setExecutionMode(mode);
-      const executionMode = await verifyExecutionModeChange(
-        result,
-        mode,
-        async () => {
-          const persistedStatus = await paperApi.status();
-          return persistedStatus?.executionMode
-            || persistedStatus?.account?.execution_mode;
-        },
-      );
-      return { ...result, executionMode };
-    },
-    onSuccess: (result, mode) => {
-      queryClient.setQueryData(["paper-status"], (current: any) => ({
-        ...(current || {}),
-        executionMode: result.executionMode,
-      }));
-      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
-      toast.success(mode === "live"
-        ? "Live execution enabled and verified"
-        : "Paper execution enabled and verified");
-    },
-    onError: accountControlError("Execution mode was not changed"),
-  });
   const scanMut = useMutation({
-    mutationFn: () => { requireTradingControls(); return scannerApi.manualScan(); },
+    mutationFn: () => scannerApi.manualScan(),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
@@ -461,24 +275,21 @@ export default function BotView() {
 
 
   const orderMut = useMutation({
-    mutationFn: () => {
-      requireTradingControls();
-      return paperApi.placeOrder({
+    mutationFn: () => paperApi.placeOrder({
       symbol: orderSymbol, direction: orderDirection, size: parseFloat(orderSize) || 0.01,
       entryPrice: parseFloat(orderTrigger) || 0,
       stopLoss: orderSL ? parseFloat(orderSL) : undefined,
       takeProfit: orderTP ? parseFloat(orderTP) : undefined,
       signalReason: orderReason, signalScore: parseInt(orderScore) || 5,
-      });
-    },
+    }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Order placed"); setOrderFormOpen(false); },
     onError: (err: any) => toast.error(err.message),
   });
 
-  const d = accountStatusKnown ? status : {
-    isRunning: false, isPaused: false, balance: 0, equity: 0, dailyPnl: 0,
+  const d = status || {
+    isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
-    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "unknown",
+    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
     killSwitchActive: false, drawdown: 0,
   };
 
@@ -501,11 +312,6 @@ export default function BotView() {
     return Array.isArray(dj) ? dj : [];
   })();
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
-  const selectedScanStylePolicy = readRuntimeStylePolicy(latestMeta?.stylePolicy);
-  const latestRuntimeMeta = getScanLogMeta(logs[0]);
-  const effectiveRuntimeStylePolicy = readRuntimeStylePolicy(
-    latestRuntimeMeta?.stylePolicy,
-  );
   const latestDetailsCleanRaw: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   // Group/sort by status so the most actionable rows surface first.
   const STATUS_PRIORITY: Record<string, number> = {
@@ -589,41 +395,17 @@ export default function BotView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-[calc(100dvh-7.5rem-env(safe-area-inset-bottom))] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden overflow-y-auto md:overflow-y-hidden">
-        {!accountStatusKnown && (
-          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
-            {statusPending
-              ? "Loading account status. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available."
-              : "Account status unavailable. Risk-increasing controls are disabled; Pause, Stop, and Kill remain available. " + (statusReadError instanceof Error ? statusReadError.message : "Refresh to retry.")}
-          </div>
-        )}
-        {isLiveMode && !tradingControlsEnabled && (
-          <div className="border border-warning/40 bg-warning/10 text-warning px-2 py-1.5 text-[10px] font-medium mb-1">
-            {!brokerConnectionsKnown
-              ? "Broker connection state is unavailable. Live trading controls are disabled."
-              : activeConnections.length === 0
-                ? "No active broker connection is available. Live trading controls are disabled."
-                : liveBrokerReadPending
-                  ? "Loading every active broker account. Live trading controls are disabled."
-                  : liveBrokerReadFailed
-                    ? "At least one active broker account is unavailable. Live trading controls are disabled."
-                    : "At least one active broker connection is not ready. Live trading controls are disabled."}
-          </div>
-        )}
+      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
         {/* Phase-1 cleanup: removed duplicate desktop stats strip.
             StatusBar (bottom of app shell) and the Account drawer already cover
             balance, equity, P&L, win rate, open positions, and engine status. */}
 
         {/* Live mode alert (compact, only when live) */}
-        {executionMode === "live" && (
+        {d.executionMode === "live" && (
           <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
-            <span className="min-w-0 truncate" title="LIVE TRADING — Real Money at Risk">⚠ LIVE TRADING — Real Money at Risk</span>
-            <button
-              className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!modeChangeEnabled || modeMut.isPending}
-              onClick={() => modeMut.mutate("paper")}
-            >
-              {modeMut.isPending ? "Verifying…" : "Switch to Paper"}
+            <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
+            <button className="underline hover:no-underline" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
+              Switch to Paper
             </button>
           </div>
         )}
@@ -633,28 +415,28 @@ export default function BotView() {
           <div className="flex items-center justify-between gap-1.5 pb-2 border-b border-border min-w-0 overflow-hidden">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
             <div className="flex items-center gap-1 min-w-0">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)} title="Start">
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))} title="Pause">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused} title="Pause">
                 <Pause className="h-3 w-3" />
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)} title="Stop">
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!d.isRunning} title="Stop">
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${!accountStatusKnown ? "text-warning" : d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                <span className="truncate" title={!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}>{!accountStatusKnown ? "Unknown" : d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
+                <span className="truncate">{d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
-              <span className={`text-[9px] font-medium px-1 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-                {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
+              <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+                {d.executionMode === "live" ? "LIVE" : "PAPER"}
               </span>
             </div>
 
             {/* Right: Scan + Overflow menu */}
             <div className="flex items-center gap-1 shrink-0">
-              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling} title="Scan Now">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
               </Button>
               <DropdownMenu>
@@ -664,10 +446,10 @@ export default function BotView() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem disabled={!tradingControlsEnabled} onClick={() => setOrderFormOpen(!orderFormOpen)}>
+                  <DropdownMenuItem onClick={() => setOrderFormOpen(!orderFormOpen)}>
                     <Plus className="h-3.5 w-3.5 mr-2" /> New Order
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={!tradingControlsEnabled} onClick={() => setConfigOpen(true)}>
+                  <DropdownMenuItem onClick={() => setConfigOpen(true)}>
                     <Settings className="h-3.5 w-3.5 mr-2" /> Bot Config
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setMobileAccountSheet(true)}>
@@ -676,7 +458,6 @@ export default function BotView() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
-                    disabled={killMut.isPending}
                     onClick={() => {
                       if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
                     }}
@@ -690,61 +471,40 @@ export default function BotView() {
         ) : (
           <div className="flex items-center gap-2 px-2 py-1.5 border border-border bg-card/40 flex-wrap text-[11px]">
             <div className="flex items-center gap-1">
-              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={!tradingControlsEnabled || (d.isRunning && !d.isPaused)}>
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
                 <Play className="h-3 w-3 mr-1" /> Start
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending || (accountStatusKnown && (!d.isRunning || d.isPaused))}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
                 <Pause className="h-3 w-3 mr-1" /> Pause
               </Button>
-              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={stopMut.isPending || (accountStatusKnown && !d.isRunning)}>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
                 <Square className="h-3 w-3 mr-1" /> Stop
               </Button>
             </div>
 
             <div className="w-px h-5 bg-border" />
 
-            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)} disabled={!tradingControlsEnabled}>
+            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
               <Plus className="h-3 w-3 mr-1" /> Order
             </Button>
-            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)} disabled={!tradingControlsEnabled}>
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
               <Settings className="h-3 w-3 mr-1" /> Config
             </Button>
 
             <div className="w-px h-5 bg-border" />
 
-            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${executionMode === "unknown" ? "bg-warning/20 text-warning" : executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-              {executionMode === "unknown" ? "UNKNOWN" : executionMode.toUpperCase()}
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+              {d.executionMode === "live" ? "LIVE" : "PAPER"}
             </span>
-            {executionMode === "paper" ? (
-              <button
-                className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!modeChangeEnabled || activeConnections.length === 0 || modeMut.isPending}
-                onClick={() => {
-                  if (window.confirm("Switch to LIVE mode? New bot trades will be mirrored to your active broker connection(s).")) {
-                    modeMut.mutate("live");
-                  }
-                }}
-              >
-                {modeMut.isPending ? "Verifying…" : "→ Live"}
-              </button>
-            ) : executionMode === "live" ? (
-              <button
-                className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={!canSwitchBackToPaper || modeMut.isPending}
-                title={!canSwitchBackToPaper ? "Broker positions must be confirmed empty before switching to Paper" : "Switch new execution back to Paper"}
-                onClick={() => {
-                  if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
-                    modeMut.mutate("paper");
-                  }
-                }}
-              >
-                {modeMut.isPending ? "Verifying…" : "→ Paper"}
-              </button>
-            ) : (
-              <span className="text-[9px] uppercase tracking-wider text-warning">Mode unavailable</span>
+            {d.executionMode !== "live" && (
+              <button className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline" onClick={() => {
+                if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected broker account(s).")) {
+                  paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                }
+              }}>→ Live</button>
             )}
 
-            {brokerConnectionsKnown ? activeConnections.length > 0 ? (
+            {activeConnections.length > 0 ? (
               activeConnections.map((conn: any) => (
                 <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
                   <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
@@ -754,36 +514,18 @@ export default function BotView() {
               <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
                 <Monitor className="h-2.5 w-2.5" /> Connect Broker
               </button>
-            ) : (
-              <span className="text-[10px] font-medium px-1.5 py-0.5 bg-warning/10 text-warning flex items-center gap-1">
-                <Monitor className="h-2.5 w-2.5" /> Broker status unknown
-              </span>
             )}
 
-            {/* Trading Style Badge — the persisted runtime policy is authoritative */}
+            {/* Trading Style Badge — shows the style from the LAST SCAN (not just config) */}
             {(() => {
-              const configStyle = getActiveStyle(botConfig);
-              const legacyScanStyle = isTradingStyleMode(
-                latestRuntimeMeta?.activeStyle,
-              )
-                ? latestRuntimeMeta.activeStyle
-                : null;
-              const runtimeStyle = effectiveRuntimeStylePolicy?.style ||
-                legacyScanStyle;
-              const displayStyle = runtimeStyle || configStyle;
+              const configStyle = botConfig?.tradingStyle?.mode || "day_trader";
+              const scanStyle = latestMeta?.activeStyle as keyof typeof STYLE_META | undefined;
+              const displayStyle = scanStyle || configStyle;
               const meta = STYLE_META[displayStyle as keyof typeof STYLE_META];
-              const mismatch = runtimeStyle && runtimeStyle !== configStyle;
+              const mismatch = scanStyle && scanStyle !== configStyle;
               if (meta) {
-                const policyTitle = effectiveRuntimeStylePolicy
-                  ? `Effective runtime: ${meta.label}; ${effectiveRuntimeStylePolicy.cadence.scanIntervalMinutes}m scan; ${effectiveRuntimeStylePolicy.lifecycle.gamePlanValidityMinutes}m Gameplan; ${effectiveRuntimeStylePolicy.timeframes.runtimeEntry}/${effectiveRuntimeStylePolicy.timeframes.runtimeHTF}; gate ≥${effectiveRuntimeStylePolicy.qualification.effectiveMinConfluence}%; ${effectiveRuntimeStylePolicy.contractVersion} ${effectiveRuntimeStylePolicy.basePolicyHash.slice(0, 12)}`
-                  : `Active style: ${meta.label} (legacy scan metadata)`;
                 return (
-                  <span
-                    className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}
-                    title={mismatch
-                      ? `${policyTitle}. Config is now set to ${STYLE_META[configStyle].label}; save and run a new scan to apply.`
-                      : policyTitle}
-                  >
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`} title={mismatch ? `Last scan used ${meta.label} — config now set to ${STYLE_META[configStyle as keyof typeof STYLE_META]?.label || configStyle}. Run a new scan to apply.` : `Active style: ${meta.label}`}>
                     {meta.icon} {meta.label}{mismatch && " ⟳"}
                   </span>
                 );
@@ -792,11 +534,11 @@ export default function BotView() {
             })()}
 
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Scan Now"}
               </Button>
               <div className="w-px h-5 bg-border" />
-              <Button size="sm" variant="destructive" className="h-7 text-[11px]" disabled={killMut.isPending} onClick={() => {
+              <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
                 if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
               }}>
                 <AlertTriangle className="h-3 w-3 mr-1" /> Kill
@@ -804,9 +546,9 @@ export default function BotView() {
 
               <div className="flex gap-3 text-[10px] text-muted-foreground font-mono">
                 <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
-                <span>Scans: <strong className="text-foreground">{accountStatusKnown ? d.scanCount : "—"}</strong></span>
-                <span>Signals: <strong className="text-foreground">{accountStatusKnown ? d.signalCount : "—"}</strong></span>
-                <span>Trades: <strong className="text-foreground">{accountStatusKnown ? d.totalTrades : "—"}</strong></span>
+                <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
+                <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
+                <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
               </div>
             </div>
           </div>
@@ -835,7 +577,7 @@ export default function BotView() {
               <div className="w-20"><Label className="text-[10px]">SL</Label><Input value={orderSL} onChange={e => setOrderSL(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-20"><Label className="text-[10px]">TP</Label><Input value={orderTP} onChange={e => setOrderTP(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-14"><Label className="text-[10px]">Score</Label><Input type="number" min={0} max={10} value={orderScore} onChange={e => setOrderScore(e.target.value)} className="h-7 text-[11px]" /></div>
-              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()} disabled={!tradingControlsEnabled || orderMut.isPending}>
+              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()}>
                 {orderDirection === "long" ? "BUY" : "SELL"} {orderSymbol}
               </Button>
             </div>
@@ -850,27 +592,27 @@ export default function BotView() {
           >
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Balance</div>
-              <div className="text-[12px] font-mono font-bold truncate">{accountStatusKnown ? "$" + (d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—"}</div>
+              <div className="text-[12px] font-mono font-bold truncate">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
               <div className={`text-[12px] font-mono font-bold truncate ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
-                {accountStatusKnown ? ((d.equity - d.balance) >= 0 ? "+" : "") + formatMoney(d.equity - d.balance) : "—"}
+                {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">WR</div>
               <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
-                {accountStatusKnown ? (d.winRate || 0).toFixed(0) + "%" : "—"}
+                {(d.winRate || 0).toFixed(0)}%
               </div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
-              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? d.totalTrades : "—"}</div>
+              <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">DD</div>
-              <div className="text-[12px] font-mono font-bold">{accountStatusKnown ? (d.drawdown || 0).toFixed(1) + "%" : "—"}</div>
+              <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
             </div>
           </button>
         )}
@@ -878,7 +620,7 @@ export default function BotView() {
         {/* Main workspace: 65/35 split */}
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0 min-w-0 max-w-full overflow-x-hidden">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
-          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 md:min-h-0`}>
+          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 min-h-[300px] md:min-h-0`}>
             <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full overflow-x-hidden">
               {(() => {
                 const tabs: [string, string][] = [
@@ -887,7 +629,7 @@ export default function BotView() {
                   ["history", "All History"],
                   ["audit", "Close Audit"],
                   ["broker-log", "Broker Log"],
-                  ["ai-advisor", "Advisor"],
+                  ["ai-advisor", "AI Advisor"],
                   ["broker-live", "MT4/MT5 Live"],
                   ["watchlist", "Watchlist"],
                   ["pending-orders", "Zone Setups"],
@@ -923,12 +665,7 @@ export default function BotView() {
                 );
               })()}
               <TabsContent value="open" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                {!accountStatusKnown ? (
-                  <div className="flex flex-col items-center justify-center py-12 border border-warning/30 text-warning">
-                    <AlertTriangle className="h-6 w-6 mb-2" />
-                    <p className="text-xs font-medium">Open-position state unavailable</p>
-                  </div>
-                ) : botPositions.length === 0 ? (
+                {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
                     <p className="text-xs font-medium text-muted-foreground">No open positions</p>
@@ -941,16 +678,13 @@ export default function BotView() {
                       <MobilePositionCard
                         key={p.id}
                         position={p}
-                        mutationsEnabled={tradingControlsEnabled}
-                        closeEnabled={Boolean(p.id)}
                         isExpanded={expandedPosition === p.id}
                         onToggle={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}
                         onClose={(id) => {
                           if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                            void closePositionFromDashboard(id);
+                            paperApi.closePosition(id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
                           }
                         }}
-                        onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })}
                       />
                     ))}
                   </div>
@@ -1032,22 +766,19 @@ export default function BotView() {
                             </td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
-                                disabled={!p.id}
                                 onClick={() => {
                                   if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                    void closePositionFromDashboard(p.id);
+                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
                                   }
                                 }}
-                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
                               >✕ Close</button>
                             </td>
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
                               <td colSpan={15} className="border-b border-border p-2">
-                                <fieldset disabled={!tradingControlsEnabled} className="contents disabled:opacity-60">
-                                  <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
-                                </fieldset>
+                                <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                               </td>
                             </tr>
                           )}
@@ -1059,13 +790,13 @@ export default function BotView() {
                 )}
               </TabsContent>
               <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                {accountStatusKnown ? <TradeHistoryTable trades={closedToday} /> : <ReadUnavailable label="Trade history" />}
+                <TradeHistoryTable trades={closedToday} />
               </TabsContent>
               <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                {accountStatusKnown ? <TradeHistoryTable trades={botTradeHistory} /> : <ReadUnavailable label="Trade history" />}
+                <TradeHistoryTable trades={botTradeHistory} />
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
-                {brokerConnectionsKnown ? <CloseAuditLog brokerConns={brokerConns} /> : <ReadUnavailable label="Broker audit" />}
+                <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
               </TabsContent>
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
@@ -1074,15 +805,17 @@ export default function BotView() {
                 <RecommendationsDashboard botId="smc" />
               </TabsContent>
               <TabsContent value="broker-live" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <BrokerTradesTab mutationsAllowed={tradingControlsEnabled} />
+                <BrokerTradesTab />
               </TabsContent>
               <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <WatchlistPanel confluenceGate={(() => {
-                  const effectiveGate =
-                    effectiveRuntimeStylePolicy?.qualification
-                      .effectiveMinConfluence;
-                  if (typeof effectiveGate === "number") return effectiveGate;
-                  return botConfig?.strategy?.confluenceThreshold ?? 55;
+                  if (!botConfig?.strategy) return 55;
+                  const DEFAULT_CONFLUENCE = 55;
+                  const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                  const activeStyle = getActiveStyle(botConfig);
+                  const styleParams = STYLE_PARAMS[activeStyle];
+                  const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                  return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
                 })()} />
               </TabsContent>
               <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
@@ -1111,13 +844,6 @@ export default function BotView() {
 
             {/* Account Summary */}
             {(() => {
-              if (!accountStatusKnown) {
-                return (
-                  <div className="border border-warning/30 bg-warning/5 p-3 text-[10px] text-warning">
-                    Account balances, exposure, and performance are unavailable.
-                  </div>
-                );
-              }
               const positions = botPositions;
               const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
               const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -1190,7 +916,7 @@ export default function BotView() {
             <FOTSIStrengthMeter
               strengths={fotsiStrengths}
               lastScanTime={currentScan?.scanned_at}
-              onRefresh={tradingControlsEnabled ? () => scanMut.mutate() : undefined}
+              onRefresh={() => scanMut.mutate()}
               isRefreshing={scanMut.isPending}
             />
 
@@ -1198,11 +924,11 @@ export default function BotView() {
             <Card>
               <CardContent className="pt-3 pb-2 space-y-2 text-[11px]">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Engine</p>
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
                   {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                 </Button>
                 {/* Set Balance — inline expandable */}
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)} disabled={!tradingControlsEnabled}>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)}>
                   <Settings className="h-3 w-3 mr-1" /> Set Balance
                 </Button>
                 {showSetBalance && (
@@ -1217,9 +943,8 @@ export default function BotView() {
                         value={customBalanceInput}
                         onChange={(e) => setCustomBalanceInput(e.target.value)}
                         className="h-7 text-[11px] pl-5 font-mono"
-                        disabled={!tradingControlsEnabled}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter" && tradingControlsEnabled) {
+                          if (e.key === "Enter") {
                             const val = parseFloat(customBalanceInput);
                             if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
                           }
@@ -1229,7 +954,7 @@ export default function BotView() {
                     <Button
                       size="sm"
                       className="h-7 text-[11px] px-3 bg-cyan-600 hover:bg-cyan-700 text-white"
-                      disabled={!tradingControlsEnabled || setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
+                      disabled={setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
                       onClick={() => {
                         const val = parseFloat(customBalanceInput);
                         if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
@@ -1241,12 +966,12 @@ export default function BotView() {
                 )}
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-warn hover:bg-badge-warn" onClick={() => {
                   if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
-                }} disabled={!tradingControlsEnabled || resetBalMut.isPending}>
+                }} disabled={resetBalMut.isPending}>
                   {resetBalMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Reset Balance
                 </Button>
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => {
                   if (window.confirm("⚠️ FULL RESET — This will:\n\n• Close all open positions\n• Delete ALL trade history\n• Delete ALL scan logs\n• Delete ALL reasonings & post-mortems\n• Reset balance to configured starting amount\n• Stop the engine\n\nThis CANNOT be undone. Are you sure?")) resetMut.mutate();
-                }} disabled={!tradingControlsEnabled || resetMut.isPending}>
+                }} disabled={resetMut.isPending}>
                   {resetMut.isPending ? <Loader2 className="h-3 w-3 mr-1" /> : null} Full Reset
                 </Button>
               </CardContent>
@@ -1268,15 +993,7 @@ export default function BotView() {
                     </select>
                   )}
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {selectedConnection?.display_name}</p>
-                  {selectedConnectionStateQuery?.isError ? (
-                    <p className="text-warning text-[10px]">{selectedConnectionStateQuery.error instanceof Error ? selectedConnectionStateQuery.error.message : "Broker connection status unavailable"}</p>
-                  ) : isRemoteReadUnavailable(selectedConnectionStateQuery?.data) ? (
-                    <p className="text-warning text-[10px]">{readUnavailableText(selectedConnectionStateQuery?.data, "Broker connection status unavailable")}</p>
-                  ) : selectedConnectionStateQuery?.data?.ready === false ? (
-                    <p className="text-warning text-[10px]">Broker connection is not ready</p>
-                  ) : brokerAccountReadFailed ? (
-                    <p className="text-warning text-[10px]">{brokerAccountReadMessage}</p>
-                  ) : brokerAccount ? (
+                  {brokerAccount ? (
                     <>
                       <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
                       {brokerAccount.equity && <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{brokerAccount.equity} {brokerAccount.currency || ""}</span></div>}
@@ -1293,17 +1010,11 @@ export default function BotView() {
             )}
 
             {/* Live Broker Open Trades */}
-            {isLiveMode && selectedConnection && (
+            {isLiveMode && selectedConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
               <Card>
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions</p>
-                  {brokerPositionsReadFailed ? (
-                    <p className="text-warning text-[10px]">{brokerPositionsReadMessage}</p>
-                  ) : !brokerOpenTrades ? (
-                    <p className="text-muted-foreground text-[10px]">Loading broker positions...</p>
-                  ) : brokerOpenTrades.length === 0 ? (
-                    <p className="text-muted-foreground text-[10px]">No open positions reported by broker</p>
-                  ) : brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions ({brokerOpenTrades.length})</p>
+                  {brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
                     <div key={t.id || i} className="flex items-center justify-between text-[10px] py-0.5 border-b border-border/20 last:border-0">
                       <div className="flex items-center gap-1">
                         <span className={t.type === "SELL" || t.currentUnits < 0 || t.type === "POSITION_TYPE_SELL" ? "text-destructive" : "text-success"}>
@@ -1328,48 +1039,44 @@ export default function BotView() {
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 min-w-0 max-w-full overflow-hidden ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div
-            onClick={isMobile ? toggleScanPanel : undefined}
-            className={`flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1.5 md:py-1 min-w-0 max-w-full overflow-hidden ${isMobile ? "cursor-pointer active:bg-secondary/40 transition-colors" : ""}`}
-          >
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0 max-w-full overflow-hidden">
             <div className="flex items-center gap-1.5 min-w-0 max-w-full">
               <button
-                onClick={(e) => { e.stopPropagation(); toggleScanPanel(); }}
+                onClick={toggleScanPanel}
                 className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
                 title={showScanPanel ? "Hide scan results" : "Show scan results"}
               >
-                {showScanPanel ? <Eye className="h-3.5 w-3.5 md:h-3 md:w-3" /> : <EyeOff className="h-3.5 w-3.5 md:h-3 md:w-3" />}
-                {showScanPanel ? <ChevronDown className="h-3 w-3 md:h-2.5 md:w-2.5" /> : <ChevronUp className="h-3 w-3 md:h-2.5 md:w-2.5" />}
+                {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
               </button>
               <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
-                <span className="truncate" title={safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}>{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
+                <span className="truncate min-w-[120px]">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
                 {currentScan?.scanned_at && (
                   <span className="shrink-0 text-foreground font-mono normal-case">
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
-                {(selectedScanStylePolicy?.style || latestMeta?.activeStyle) && (() => {
-                  const style = selectedScanStylePolicy?.style || latestMeta.activeStyle;
-                  const sm = STYLE_META[style as keyof typeof STYLE_META];
+                {latestMeta?.activeStyle && (() => {
+                  const sm = STYLE_META[latestMeta.activeStyle as keyof typeof STYLE_META];
                   return sm ? <span className={`shrink-0 text-[9px] font-medium px-1 py-0 border rounded-sm ${sm.color}`}>{sm.icon} {sm.label}</span> : null;
                 })()}
                 {logs.length > 1 && (
-                  <span className="inline-flex items-center gap-0.5 shrink-0 ml-auto" onClick={(e) => e.stopPropagation()}>
+                  <span className="inline-flex items-center gap-0.5 ml-auto shrink-0">
                     <button
-                      onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
+                      onClick={() => { setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx >= logs.length - 1}
-                      className="px-1.5 py-0.5 h-6 md:h-5 w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed text-center"
+                      className="px-1.5 py-0 h-5 min-w-[52px] text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Older scan"
-                    >‹ older</button>
+                    ><span className="md:hidden">‹</span><span className="hidden md:inline">‹ older</span></button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
+                      onClick={() => { setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx <= 0}
-                      className="px-1.5 py-0.5 h-6 md:h-5 w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed text-center"
+                      className="px-1.5 py-0 h-5 min-w-[52px] text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Newer scan"
-                    >newer ›</button>
+                    ><span className="md:hidden">›</span><span className="hidden md:inline">newer ›</span></button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(0); setSelectedPairIdx(0); }}
-                      className={`px-1.5 py-0.5 h-6 md:h-5 w-[44px] text-[10px] md:text-[9px] rounded border border-primary/40 text-primary hover:bg-primary/10 text-center ${safeScanIdx === 0 ? 'invisible' : ''}`}
+                      onClick={() => { setSelectedScanIdx(0); setSelectedPairIdx(0); }}
+                      className={`px-1.5 py-0 h-5 min-w-[40px] text-[9px] rounded border border-primary/40 text-primary hover:bg-primary/10 ${safeScanIdx === 0 ? 'invisible' : ''}`}
                       title="Jump to latest"
                       disabled={safeScanIdx === 0}
                     >latest</button>
@@ -1380,26 +1087,28 @@ export default function BotView() {
             </div>
             <div className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden md:flex-wrap md:shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} className="min-w-0 max-w-full truncate" />
-              {(selectedScanStylePolicy || botConfig?.strategy) && (() => {
-                const configuredGate = botConfig?.strategy?.confluenceThreshold ?? 55;
-                const resolvedGate =
-                  selectedScanStylePolicy?.qualification
-                    .effectiveMinConfluence ?? configuredGate;
-                const style = selectedScanStylePolicy?.style ||
-                  getActiveStyle(botConfig);
-                const styleLabel = STYLE_META[style]?.label || style;
-                const preservedOverrides =
-                  selectedScanStylePolicy?.provenance.userOverridesPreserved
-                    .length ?? 0;
+              {botConfig?.strategy && (() => {
+                const activeStyle = getActiveStyle(botConfig);
+                const styleParams = STYLE_PARAMS[activeStyle];
+                const styleMeta = STYLE_META[activeStyle];
+                // Replicate bot-scanner resolution: style override applies when
+                // the user's value matches the global default (55), because the
+                // scanner can't distinguish "user set 55" from "never touched".
+                const DEFAULT_CONFLUENCE = 55;
+                const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                const resolvedGate = rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
+                const styleLabel = styleMeta?.label || activeStyle;
+                const isStyleOverride = resolvedGate !== rawThreshold;
                 return (
-                  <Badge
+                    <Badge
                     variant="outline"
-                    className="hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-primary/40 text-primary"
-                    title={selectedScanStylePolicy
-                      ? `Effective policy for this scan: ${styleLabel}; gate ≥${resolvedGate}%; ${selectedScanStylePolicy.cadence.scanIntervalMinutes}m cadence; ${preservedOverrides} explicit override(s) preserved.`
-                      : `No policy snapshot on this scan. Showing configured confluence gate ≥${resolvedGate}%.`}
+                      className={`hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
+                      isStyleOverride ? 'border-warning/40 text-warning' : ''
+                    }`}
+                    title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
                   >
-                    Effective: {styleLabel} · ≥{resolvedGate}%
+                    Gate: ≥{resolvedGate}%{isStyleOverride ? ` (${styleLabel})` : ''}
                   </Badge>
                 );
               })()}
@@ -1430,8 +1139,8 @@ export default function BotView() {
                       <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
                           const s = sig.status as string | undefined;
-                          const statusLabel = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : s === "limit_order_placed" || s === "zone_setup_active" ? "🔍 ZONE SETUP" : s === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : s === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : s === "trade_placed" ? "✅ PLACED" : s === "rejected" ? "REJECTED" : s === "below_threshold" ? "SKIP" : s === "watching_zone" ? "⏳ WATCHING" : s === "watchlist_persistence_failed" ? "⚠ WATCHLIST ERROR" : s === "waiting_zone_untracked" ? "ZONE AWAY" : s === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : s === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : s === "paused" ? "⏸ PAUSED" : s === "no_direction" ? "— NO DIR" : s === "zone_setup_rejected_orientation" ? "⚠ ORIENT" : s === "staged_new" ? "\u2B50 NEW WATCH" : s === "staged_watching" ? "\uD83D\uDC41 WATCHING" : s === "staged_confirming" ? "\u23F3 CONFIRMING" : s === "staged_invalidated" ? "\u274C INVALIDATED" : s?.startsWith("skipped_") ? "SKIPPED" : s?.toUpperCase() || "\u2014";
-                          const statusColor = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : s === "limit_order_placed" || s === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : s === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : s?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : s === "rejected" || s === "zone_setup_rejected_orientation" || s === "watchlist_persistence_failed" ? "text-destructive bg-destructive/10 border-destructive/30" : s === "watching_zone" || s === "waiting_zone_untracked" ? "text-warn bg-badge-warn border-amber-500/30" : s === "waiting_for_sweep" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : s === "waiting_for_reconfirmation" ? "text-orange-400 bg-orange-500/10 border-orange-500/30" : s === "paused" || s === "no_direction" ? "text-zinc-400 bg-zinc-500/10 border-zinc-500/30" : s?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : s === "limit_order_placed" || s === "zone_setup_active" ? "🔍 ZONE SETUP" : s === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : s === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : s === "trade_placed" ? "✅ PLACED" : s === "rejected" ? "REJECTED" : s === "below_threshold" ? "SKIP" : s === "watching_zone" ? "⏳ WATCHING" : s === "staged_new" ? "\u2B50 NEW WATCH" : s === "staged_watching" ? "\uD83D\uDC41 WATCHING" : s === "staged_confirming" ? "\u23F3 CONFIRMING" : s === "staged_invalidated" ? "\u274C INVALIDATED" : s?.startsWith("skipped_") ? "SKIPPED" : s?.toUpperCase() || "\u2014";
+                          const statusColor = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : s === "limit_order_placed" || s === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : s === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : s?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : s === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : s === "watching_zone" ? "text-warn bg-badge-warn border-amber-500/30" : s?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1443,23 +1152,11 @@ export default function BotView() {
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
                                 <span className="font-bold shrink-0 text-foreground">{sig.pair}</span>
 
-                                {sig.reason && (
-                                  <span
-                                    className="min-w-0 truncate text-[9px] text-muted-foreground font-sans"
-                                    title={sig.reason}
-                                  >
-                                    — {sig.reason}
-                                  </span>
-                                )}
+                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span
-                                  className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}
-                                  title={statusLabel}
-                                >
-                                  {statusLabel}
-                                </span>
+                                <span className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
                           );
@@ -1481,7 +1178,7 @@ export default function BotView() {
                     if (!selected) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                     }
-                    return <ScanDetailBreakdown signal={selected} observedAt={currentScan?.scanned_at} />;
+                    return <ScanDetailInline signal={selected} />;
                   })()}
               </div>
             </div>
@@ -1493,18 +1190,14 @@ export default function BotView() {
         {/* Kill Switch Banner */}
         {d.killSwitchActive && (
           <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
-            <span className="min-w-0 truncate text-xs font-bold" title="KILL SWITCH ACTIVE — All Trading Halted">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
+            <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
             <div className="flex gap-2 shrink-0">
-              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" disabled={!tradingControlsEnabled || deactivateKill.isPending} onClick={() => deactivateKill.mutate()}>Deactivate</Button>
+              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
           </div>
         )}
 
-        <BotConfigModal
-          open={configOpen && tradingControlsEnabled}
-          onClose={() => setConfigOpen(false)}
-          effectiveStylePolicy={effectiveRuntimeStylePolicy}
-        />
+        <BotConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
 
         {/* Mobile: Account & Performance Bottom Sheet */}
         <Sheet open={mobileAccountSheet} onOpenChange={setMobileAccountSheet}>
@@ -1514,13 +1207,6 @@ export default function BotView() {
             </SheetHeader>
             <div className="space-y-3 pb-4">
               {(() => {
-                if (!accountStatusKnown) {
-                  return (
-                    <div className="rounded border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
-                      Account balances, exposure, and performance are unavailable.
-                    </div>
-                  );
-                }
                 const positions = botPositions;
                 const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
                 const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
@@ -1569,10 +1255,10 @@ export default function BotView() {
                     {/* Engine Controls */}
                     <div className="rounded-lg border border-border p-3 space-y-2 text-[12px]">
                       <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Engine Controls</p>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={!tradingControlsEnabled || scanMut.isPending || scanPolling}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={scanMut.isPending || scanPolling}>
                         {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                       </Button>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)} disabled={!tradingControlsEnabled}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)}>
                         <Settings className="h-3 w-3 mr-1" /> Set Balance
                       </Button>
                       {showSetBalance && (
@@ -1582,18 +1268,17 @@ export default function BotView() {
                             placeholder="e.g. 10000"
                             value={customBalanceInput}
                             onChange={e => setCustomBalanceInput(e.target.value)}
-                            disabled={!tradingControlsEnabled}
                             className="h-7 text-[11px] flex-1 pl-5"
                           />
-                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={!tradingControlsEnabled || setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
+                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
                             {setBalMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
                           </Button>
                         </div>
                       )}
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={!tradingControlsEnabled || resetBalMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
                         <RefreshCw className="h-3 w-3 mr-1" /> Reset Balance
                       </Button>
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={!tradingControlsEnabled || resetMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetMut.isPending}>
                         Full Reset
                       </Button>
                     </div>
@@ -1626,7 +1311,7 @@ export default function BotView() {
               {(() => {
                 const selected = latestDetailsClean[selectedPairIdx];
                 if (!selected) return <p className="text-xs text-muted-foreground text-center py-8">No pair selected</p>;
-                return <ScanDetailBreakdown signal={selected} observedAt={currentScan?.scanned_at} />;
+                return <ScanDetailInline signal={selected} />;
               })()}
             </div>
           </SheetContent>
@@ -1665,10 +1350,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 <span className="font-medium text-[11px]">{t.symbol}</span>
                 <span className={`text-[10px] ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲ BUY" : "▼ SELL"}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className={`text-[11px] font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</span>
-                <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${expanded === key ? "rotate-180" : ""}`} />
-              </div>
+              <span className={`text-[11px] font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</span>
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
               <span>{formatBrokerTime(t.closedAt)}</span>
@@ -1679,54 +1361,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
               <span>Exit: {parseFloat(t.exitPrice)?.toFixed(5)}</span>
               <span>{t.pnlPips?.toFixed(1)} pips</span>
             </div>
-            {expanded === key && (
-              <div className="mt-1.5 pt-1.5 border-t border-border/40 space-y-1.5">
-                {/* Score + Signal source */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {(() => { try { const sr = JSON.parse(t.signalReason || "{}"); return sr?.signalSource ? (
-                    <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
-                      sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
-                      sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
-                      "bg-orange-500/15 text-orange-400 border border-orange-500/30"
-                    }`}>{sr.signalSource === "unified" ? "UNIFIED" : sr.signalSource === "cascade" ? "CASCADE" : "STANDALONE"}</span>
-                  ) : null; } catch { return null; } })()}
-                </div>
-                {/* Post-Mortem */}
-                {t.postMortem && (
-                  <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[8px] uppercase tracking-wider font-bold text-amber-400">Post-Mortem</span>
-                      {t.postMortem.outcome && (
-                        <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
-                          t.postMortem.outcome === "Win" ? "bg-success/15 text-success border border-success/30" :
-                          t.postMortem.outcome === "Loss" ? "bg-destructive/15 text-destructive border border-destructive/30" :
-                          "bg-muted/30 text-muted-foreground border border-border"
-                        }`}>{t.postMortem.outcome}</span>
-                      )}
-                      {t.postMortem.holdDuration && (
-                        <span className="text-[8px] text-muted-foreground font-mono">{t.postMortem.holdDuration}</span>
-                      )}
-                    </div>
-                    {t.postMortem.whatWorked && (
-                      <div className="text-[9px] text-foreground/80"><span className="text-success font-semibold">✓</span> {t.postMortem.whatWorked}</div>
-                    )}
-                    {t.postMortem.whatFailed && (
-                      <div className="text-[9px] text-foreground/80"><span className="text-destructive font-semibold">✗</span> {t.postMortem.whatFailed}</div>
-                    )}
-                    {t.postMortem.lessonLearned && (
-                      <div className="text-[9px] text-foreground/80 italic">💡 {t.postMortem.lessonLearned}</div>
-                    )}
-                  </div>
-                )}
-                {/* Metadata */}
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px]">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Size</span><span className="font-mono">{t.size}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Order</span><span className="font-mono text-[8px]">{t.orderId?.slice(0,8)}</span></div>
-                  {t.stopLoss != null && <div className="flex justify-between"><span className="text-muted-foreground">SL</span><span className="font-mono text-loss">{Number(t.stopLoss).toFixed(5)}</span></div>}
-                  {t.takeProfit != null && <div className="flex justify-between"><span className="text-muted-foreground">TP</span><span className="font-mono text-profit">{Number(t.takeProfit).toFixed(5)}</span></div>}
-                </div>
-              </div>
-            )}
           </div>
         );
       })}
@@ -1768,13 +1402,13 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot || sr.decisionContext || sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
                   <td colSpan={10} className="p-2">
                     <div className="space-y-2 text-[10px]">
-                      {/* Header: Close reason badge + Score + Signal source + Tier summary */}
+                      {/* Header: Close reason badge + Score + Tier summary */}
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 border rounded ${
                           t.closeReason === "tp_hit" || t.closeReason === "trail_hit" ? "bg-success/15 border-success/40 text-success" :
@@ -1786,80 +1420,16 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {t.closeReason === "trail_hit" && " (trailing stop locked profit)"}
                           {t.closeReason === "be_hit" && " (break-even SL)"}
                         </span>
-                        {sr?.signalSource && (
-                          <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
-                            sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
-                            sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
-                            "bg-orange-500/15 text-orange-400 border border-orange-500/30"
-                          }`}>
-                            {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
-                          </span>
-                        )}
+                        <span className={`text-[10px] font-mono font-bold ${
+                          t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
+                        }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
+                        {sr?.tieredScoring && <TierScoreSummary tieredScoring={sr.tieredScoring} />}
                       </div>
-                      {/* Signal source context note for standalone trades */}
-                      {sr?.signalSource && sr.signalSource !== "unified" && sr.signalSource !== "cascade" && (
-                        <div className="text-[9px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/20 text-orange-300">
-                          Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
-                        </div>
-                      )}
-                      <LegacyDiagnosticsPanel
-                        score={Number(t.signalScore)}
-                        factors={sr?.factorScores}
-                        tieredScoring={sr?.tieredScoring}
-                        gates={sr?.gates}
-                        ownershipDiagnostics={sr?.legacyGateDiagnostics}
-                        compact
-                      />
 
                       {hasRichData ? (
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
-                          <ZoneStoryPanel
-                            unifiedData={sr.unifiedZone}
-                            gateData={sr.impulseZone}
-                            zoneLocalEnforcement={sr.zoneLocalEnforcement}
-                            symbol={t.symbol}
-                            direction={t.direction}
-                            timeframeEvidenceId={sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId}
-                            frozenCrossTimeframeContext={sr.frozenStrategyContext?.crossTimeframeContext}
-                            frozenExecutablePlan={sr.frozenExecutablePlan}
-                          />
-                          {sr.decisionContext && (
-                            <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-primary uppercase tracking-wider font-bold">
-                                Unified Entry Decision · {sr.decisionContext.contractVersion}
-                              </p>
-                              <div className="flex flex-wrap gap-2 text-[9px] font-mono">
-                                <span>
-                                  GP v{sr.decisionContext.gamePlan?.version?.slice(0, 8) || "none"}
-                                </span>
-                                <span>
-                                  DV {(sr.decisionContext.directionVerdict?.verdict || "missing").toUpperCase()}{" "}
-                                  {Math.round(Number(sr.decisionContext.directionVerdict?.confidence || 0))}%
-                                </span>
-                                <span className={
-                                  sr.decisionContext.thesisValidity?.valid
-                                    ? "text-success"
-                                    : "text-destructive"
-                                }>
-                                  Thesis {sr.decisionContext.thesisValidity?.valid ? "VALID" : "INVALID"}
-                                </span>
-                                <span className={
-                                  sr.decisionContext.entryConfirmation?.passed
-                                    ? "text-success"
-                                    : "text-warning"
-                                }>
-                                  Confirmation {sr.decisionContext.entryConfirmation?.passed ? "PASSED" : "WAITING"}
-                                </span>
-                              </div>
-                              <p className="text-[8px] text-muted-foreground">
-                                {sr.decisionContext.hierarchy?.reason}
-                              </p>
-                              <p className="text-[8px] text-muted-foreground">
-                                Thesis Conviction is observational and did not authorize this trade.
-                              </p>
-                            </div>
-                          )}
+                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} />
                           {/* ── Direction Verdict ── */}
                           {sr.directionVerdict && !sr.directionVerdict.error && (
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1883,50 +1453,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   adj: {sr.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{sr.directionVerdict.scoreAdjustment.toFixed(2)}
                                 </span>
                               )}
-                            </div>
-                          )}
-                          {/* ── Immutable entry-time Game Plan snapshot ── */}
-                          {sr.gamePlanSnapshot && (
-                            <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Entry Game Plan</p>
-                                <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
-                                  sr.gamePlanSnapshot.state === "tradeable" ? "bg-success/15 text-success"
-                                  : sr.gamePlanSnapshot.state === "wait" ? "bg-warning/15 text-warning"
-                                  : "bg-muted/30 text-muted-foreground"
-                                }`}>
-                                  {(sr.gamePlanSnapshot.state || "legacy").toUpperCase()}
-                                </span>
-                                <span className={`text-[9px] font-bold ${
-                                  sr.gamePlanSnapshot.bias === "bullish" ? "text-success"
-                                  : sr.gamePlanSnapshot.bias === "bearish" ? "text-destructive"
-                                  : "text-muted-foreground"
-                                }`}>
-                                  {(sr.gamePlanSnapshot.bias || "neutral").toUpperCase()} {sr.gamePlanSnapshot.legacyConfidence ?? 0}%
-                                </span>
-                                <span className="text-[8px] text-muted-foreground">
-                                  {sr.gamePlanSnapshot.enforcementMode || "unknown"} mode
-                                </span>
-                              </div>
-                              {sr.gamePlanSnapshot.stateReason && (
-                                <p className="text-[9px] text-foreground/80">{sr.gamePlanSnapshot.stateReason}</p>
-                              )}
-                              {sr.gamePlanSnapshot.conviction && (
-                                <div className="flex gap-2 text-[8px] font-mono text-muted-foreground flex-wrap">
-                                  <span>V2 {Math.round(sr.gamePlanSnapshot.conviction.confidence)}%</span>
-                                  <span>Direction {Math.round(sr.gamePlanSnapshot.conviction.directionalStrength)}%</span>
-                                  <span>Coverage {Math.round(sr.gamePlanSnapshot.conviction.evidenceCoverage)}%</span>
-                                  <span>Quality {Math.round(sr.gamePlanSnapshot.conviction.planQuality)}%</span>
-                                </div>
-                              )}
-                              {sr.gamePlanSnapshot.gateDecision?.reason && (
-                                <p className={`text-[9px] ${sr.gamePlanSnapshot.gateDecision.passed ? "text-muted-foreground" : "text-destructive"}`}>
-                                  {sr.gamePlanSnapshot.gateDecision.passed ? "✓" : "✕"} {sr.gamePlanSnapshot.gateDecision.reason}
-                                </p>
-                              )}
-                              <div className="text-[8px] text-muted-foreground">
-                                Captured {sr.gamePlanSnapshot.capturedAt ? new Date(sr.gamePlanSnapshot.capturedAt).toLocaleString() : "at entry"}
-                              </div>
                             </div>
                           )}
                           {/* ── Regime Detection ── */}
@@ -1992,6 +1518,21 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   </span>
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {/* Phase-1 cleanup: TierFactorBreakdown removed here — it now renders
+                              only inside the position detail drawer to avoid duplication. */}
+                          {/* ── Risk Gates ── */}
+                          {sr.gates && sr.gates.length > 0 && (
+                            <div className="space-y-0.5">
+                              <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+                              {sr.gates.map((g: any, gi: number) => (
+                                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                                  <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+                                  <span>{g.reason}</span>
+                                </div>
+                              ))}
                             </div>
                           )}
 
@@ -2102,45 +1643,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                         <SignalReasoningCard signalReason={t.signalReason || ""} />
                       )}
 
-                      {/* ── Post-Mortem Analysis ── */}
-                      {t.postMortem && (
-                        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-                          <div className="flex items-center gap-1.5">
-                            <p className="text-[8px] uppercase tracking-wider font-bold text-amber-400">Post-Mortem</p>
-                            {t.postMortem.outcome && (
-                              <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
-                                t.postMortem.outcome === "Win" ? "bg-success/15 text-success border border-success/30" :
-                                t.postMortem.outcome === "Loss" ? "bg-destructive/15 text-destructive border border-destructive/30" :
-                                "bg-muted/30 text-muted-foreground border border-border"
-                              }`}>{t.postMortem.outcome}</span>
-                            )}
-                            {t.postMortem.holdDuration && (
-                              <span className="text-[8px] text-muted-foreground font-mono">Hold: {t.postMortem.holdDuration}</span>
-                            )}
-                          </div>
-                          {t.postMortem.whatWorked && (
-                            <div className="flex gap-1">
-                              <span className="text-[8px] text-success font-semibold shrink-0">✓ Worked:</span>
-                              <span className="text-[9px] text-foreground/80">{t.postMortem.whatWorked}</span>
-                            </div>
-                          )}
-                          {t.postMortem.whatFailed && (
-                            <div className="flex gap-1">
-                              <span className="text-[8px] text-destructive font-semibold shrink-0">✗ Failed:</span>
-                              <span className="text-[9px] text-foreground/80">{t.postMortem.whatFailed}</span>
-                            </div>
-                          )}
-                          {t.postMortem.lessonLearned && (
-                            <div className="flex gap-1">
-                              <span className="text-[8px] text-amber-400 font-semibold shrink-0">💡 Lesson:</span>
-                              <span className="text-[9px] text-foreground/80 italic">{t.postMortem.lessonLearned}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
                       {/* ── Trade Metadata Grid ── */}
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px] border-t border-border/30 pt-1.5">
+                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
@@ -2208,14 +1713,8 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
-  const [newsClock, setNewsClock] = useState(() => Date.now());
-  useEffect(() => {
-    const interval = window.setInterval(() => setNewsClock(Date.now()), 60_000);
-    return () => window.clearInterval(interval);
-  }, []);
-  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : d.status === "trade_placed" ? "✅ PLACED" : d.status === "waiting_for_sweep" ? "⏳ SWEEP WAIT" : d.status === "waiting_for_reconfirmation" ? "⏳ RECONFIRM" : d.status === "watching_zone" ? "⏳ WATCHING" : d.status === "watchlist_persistence_failed" ? "⚠ WATCHLIST ERROR" : d.status === "waiting_zone_untracked" ? "ZONE AWAY" : d.status === "paused" ? "⏸ PAUSED" : d.status === "no_direction" ? "— NO DIR" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.startsWith("skipped_") ? "SKIPPED" : d.status?.startsWith("staged_") ? "⏳ STAGED" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : d.status === "rejected" || d.status === "watchlist_persistence_failed" ? "text-destructive bg-destructive/10 border-destructive/30" : d.status === "waiting_for_sweep" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : d.status === "waiting_for_reconfirmation" ? "text-orange-400 bg-orange-500/10 border-orange-500/30" : d.status === "paused" || d.status === "no_direction" ? "text-zinc-400 bg-zinc-500/10 border-zinc-500/30" : "text-muted-foreground bg-muted/20 border-border";
-  const visibleRejectionReasons = uniqueRejectionReasons(d.gates, d.rejectionReasons);
+  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -2223,40 +1722,18 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
         <div className="flex items-center gap-1.5">
           {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
           <span className="font-medium">{d.pair}</span>
-          {d.signalSource && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
-            <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
-              d.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
-              d.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
-              "bg-orange-500/15 text-orange-400 border border-orange-500/30"
-            }`}>
-              {d.signalSource === "unified" ? "UNIFIED ×1" : d.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
-            </span>
-          )}
+          {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
         </div>
         <div className="flex items-center gap-1.5">
+          <span className={`font-mono font-bold ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : d.score?.toFixed(1)}</span>
           <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
           <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </div>
       </button>
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
-          {/* Signal source context note */}
-          {d.signalSource && d.signalSource !== "unified" && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
-            <div className="text-[9px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/20 text-orange-300">
-              Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
-            </div>
-          )}
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel
-            unifiedData={d.unifiedZone}
-            gateData={d.impulseZone}
-            zoneLocalEnforcement={d.zoneLocalEnforcement}
-            isLiveContext
-            symbol={d.pair}
-            direction={d.direction}
-            timeframeEvidenceId={d.timeframeEvidenceId}
-            frozenExecutablePlan={d.frozenExecutablePlan}
-          />
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2283,23 +1760,28 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
 
-          <LegacyDiagnosticsPanel
-            score={d.score}
-            factorCount={d.factorCount}
-            factors={d.factors}
-            tieredScoring={d.tieredScoring}
-            gates={d.gates}
-            ownershipDiagnostics={d.legacyGateDiagnostics}
-            formatGateReason={(reason) => formatNewsGateCountdown(reason, newsClock, d.scanned_at)}
-            compact
-          />
-          <TradeDecisionPanel detail={d} />
+          {/* Tier-Grouped Factors */}
+          {d.factors && (
+            <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
+          )}
+          {/* Risk Gates (legacy gates from runSafetyGates — tier gates are shown inside TierFactorBreakdown) */}
+          {d.gates && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
+              {d.gates.map((g: any, gi: number) => (
+                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                  <span>{g.passed ? "✓" : "✗"}</span>
+                  <span>{g.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {/* Rejection Reasons */}
-          {visibleRejectionReasons.length > 0 && (
+          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
             <div className="space-y-0.5">
               <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
-              {visibleRejectionReasons.map((r: string, ri: number) => (
-                <p key={ri} className="text-[9px] text-destructive">⚠ {formatNewsGateCountdown(r, newsClock, d.scanned_at)}</p>
+              {d.rejectionReasons.map((r: string, ri: number) => (
+                <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
               ))}
             </div>
           )}
@@ -2316,7 +1798,7 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
   const { buckets, impulseZoneBreakdown = {}, directionBreakdown = {}, samplePairs = {}, totalScanned = 0 } = summary;
 
   const STATUS_META: Record<string, { label: string; color: string; icon: string }> = {
-    skipped_no_impulse_zone: { label: "No valid entry zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
+    skipped_no_impulse_zone: { label: "No impulse zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
     skipped_weak_zone: { label: "Weak zone rejected", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⛔" },
     watching_zone: { label: "Watching zone", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
     no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },
@@ -2377,24 +1859,21 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
           return (
             <div key={key} className={`border px-1.5 py-1 ${meta.color}`}>
               <div className="flex items-center justify-between text-[10px] font-medium">
-                <span className="truncate" title={meta.label}>{meta.icon} {meta.label}</span>
+                <span className="truncate">{meta.icon} {meta.label}</span>
                 <span className="font-mono font-bold ml-1">{count}</span>
               </div>
               {subEntries.length > 0 && (
                 <div className="mt-0.5 space-y-0.5">
                   {subEntries.map(([sk, sv]) => (
                     <div key={sk} className="flex items-center justify-between text-[9px] text-muted-foreground">
-                      <span className="truncate" title={SUB_LABELS[sk] || sk}>└ {SUB_LABELS[sk] || sk}</span>
+                      <span className="truncate">└ {SUB_LABELS[sk] || sk}</span>
                       <span className="font-mono ml-1">{sv as number}</span>
                     </div>
                   ))}
                 </div>
               )}
               {samples.length > 0 && (
-                <div
-                  className="mt-0.5 text-[9px] text-muted-foreground/80 truncate font-mono"
-                  title={`${samples.join(", ")}${(count as number) > samples.length ? ` +${(count as number) - samples.length}` : ""}`}
-                >
+                <div className="mt-0.5 text-[9px] text-muted-foreground/80 truncate font-mono">
                   {samples.join(", ")}{(count as number) > samples.length ? ` +${(count as number) - samples.length}` : ""}
                 </div>
               )}
@@ -2402,6 +1881,303 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ScanDetailInline({ signal: d }: { signal: any }) {
+  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+
+  // Only show failed gates
+  const failedGates = d.gates?.filter((g: any) => !g.passed) || [];
+
+  return (
+    <div className="space-y-2">
+      {/* 1. Header — Pair + Status + Score */}
+      <div className="flex items-center gap-2">
+        {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
+        <span className="text-[12px] font-bold">{d.pair}</span>
+        <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
+        <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
+      </div>
+
+      {/* 2. Tier Score Summary */}
+      {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
+
+      {/* 3. Narrative — plain-English thesis */}
+      {d.direction && d.direction !== "none" && (
+        <p className="text-[11px] text-muted-foreground/80 italic leading-tight">
+          {generateDetailNarrative({
+            pair: d.pair,
+            direction: d.direction,
+            score: d.score,
+            status: d.status,
+            factors: d.factors,
+            tieredScoring: d.tieredScoring,
+            regimeData: d.regimeData,
+            rejectionReasons: d.rejectionReasons,
+            gates: d.gates,
+            staging: d.staging,
+            limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
+          })}
+        </p>
+      )}
+
+      {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+      {/* Direction Verdict */}
+      {d.directionVerdict && !d.directionVerdict.error && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-sm ${
+            d.directionVerdict.verdict === "long" ? "bg-success/15 text-success border border-success/30" :
+            d.directionVerdict.verdict === "short" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+            "bg-muted/30 text-muted-foreground border border-border"
+          }`}>
+            {d.directionVerdict.verdict === "long" ? "↑ LONG" : d.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
+          </span>
+          <span className={`text-[10px] font-mono font-bold ${
+            d.directionVerdict.confidence >= 70 ? "text-success" :
+            d.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
+          }`}>{d.directionVerdict.confidence}%</span>
+          <span className="text-[9px] text-muted-foreground">{Math.round(d.directionVerdict.agreement * 100)}% agree</span>
+          {d.directionVerdict.shouldBlock && (
+            <span className="text-[9px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
+          )}
+          {d.directionVerdict.scoreAdjustment !== 0 && (
+            <span className={`text-[9px] font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
+              adj: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
+      {d.factors && (
+        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
+      )}
+
+      {/* 6. Regime Detection */}
+      {d.regimeData && (
+        <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+          <p className="text-[11px] text-tier3 uppercase tracking-wider font-bold">Regime Detection</p>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {/* Daily Regime */}
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">Daily:</span>
+              <span className={`text-[11px] font-bold ${
+                d.regimeData.daily?.regime?.includes("trend") ? "text-profit"
+                : d.regimeData.daily?.regime?.includes("range") ? "text-warn"
+                : "text-highlight"
+              }`}>
+                {(d.regimeData.daily?.regime || "—").replace(/_/g, " ")}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                ({Math.round((d.regimeData.daily?.confidence || 0) * 100)}%)
+              </span>
+              {d.regimeData.daily?.bias && d.regimeData.daily.bias !== "neutral" && (
+                <span className={`text-[11px] ${d.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                  {d.regimeData.daily.bias === "bullish" ? "↑" : "↓"}
+                </span>
+              )}
+            </div>
+            {/* 4H Regime */}
+            {d.regimeData.h4 && (
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-muted-foreground">4H:</span>
+                <span className={`text-[11px] font-bold ${
+                  d.regimeData.h4.regime?.includes("trend") ? "text-profit"
+                  : d.regimeData.h4.regime?.includes("range") ? "text-warn"
+                  : "text-highlight"
+                }`}>
+                  {(d.regimeData.h4.regime || "—").replace(/_/g, " ")}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  ({Math.round((d.regimeData.h4.confidence || 0) * 100)}%)
+                </span>
+                {d.regimeData.h4.bias && d.regimeData.h4.bias !== "neutral" && (
+                  <span className={`text-[11px] ${d.regimeData.h4.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                    {d.regimeData.h4.bias === "bullish" ? "↑" : "↓"}
+                  </span>
+                )}
+              </div>
+            )}
+            {/* Multi-TF Alignment */}
+            {d.regimeData.multiTFAlignment && d.regimeData.multiTFAlignment !== "mixed" && (
+              <div className="flex items-center gap-1">
+                <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
+                  d.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
+                  : d.regimeData.multiTFAlignment === "disagree" ? "bg-badge-loss text-loss"
+                  : "bg-badge-warn text-highlight"
+                }`}>
+                  {d.regimeData.multiTFAlignment === "agree" ? "TF ✓ AGREE"
+                    : d.regimeData.multiTFAlignment === "disagree" ? "TF ✗ DISAGREE"
+                    : "TF ~ MIXED"}
+                </span>
+              </div>
+            )}
+          </div>
+          {/* Transition State */}
+          {d.regimeData.daily?.transition && d.regimeData.daily.transition.state !== "stable" && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
+                d.regimeData.daily.transition.state === "range_to_trending" ? "bg-badge-profit text-profit"
+                : d.regimeData.daily.transition.state === "accelerating" ? "bg-badge-info text-info-c"
+                : d.regimeData.daily.transition.state === "trending_to_range" ? "bg-badge-warn text-warn"
+                : d.regimeData.daily.transition.state === "decelerating" ? "bg-badge-loss text-loss"
+                : "bg-muted text-muted-foreground"
+              }`}>
+                {d.regimeData.daily.transition.state === "range_to_trending" ? "⚡ RANGE → TREND"
+                  : d.regimeData.daily.transition.state === "accelerating" ? "🚀 ACCELERATING"
+                  : d.regimeData.daily.transition.state === "trending_to_range" ? "⏸ TREND → RANGE"
+                  : d.regimeData.daily.transition.state === "decelerating" ? "📉 DECELERATING"
+                  : d.regimeData.daily.transition.state.replace(/_/g, " ").toUpperCase()}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                ({Math.round(d.regimeData.daily.transition.confidence * 100)}% conf, momentum {d.regimeData.daily.transition.momentum > 0 ? "+" : ""}{d.regimeData.daily.transition.momentum.toFixed(3)}/candle)
+              </span>
+            </div>
+          )}
+          {/* 4H Transition */}
+          {d.regimeData.h4?.transition && d.regimeData.h4.transition.state !== "stable" && (
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">4H:</span>
+              <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
+                d.regimeData.h4.transition.state.includes("trending") || d.regimeData.h4.transition.state === "accelerating" ? "bg-badge-profit text-profit"
+                : "bg-badge-warn text-warn"
+              }`}>
+                {d.regimeData.h4.transition.state.replace(/_/g, " ")}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                (mom: {d.regimeData.h4.transition.momentum > 0 ? "+" : ""}{d.regimeData.h4.transition.momentum.toFixed(3)})
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 7. Failed Gates Only */}
+      {d.gates && (
+        <div className="space-y-0.5">
+          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">
+            {failedGates.length > 0 ? `Failed Gates (${failedGates.length})` : "✓ All gates passed"}
+          </p>
+          {failedGates.map((g: any, gi: number) => (
+            <div key={gi} className="flex items-center gap-1 text-[11px] text-destructive">
+              <span><ShieldX className="h-2.5 w-2.5" /></span>
+              <span>{g.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 8. Rejection Reasons (conditional) */}
+      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[11px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+          {d.rejectionReasons.map((r: string, ri: number) => (
+            <p key={ri} className="text-[11px] text-destructive">⚠ {r}</p>
+          ))}
+        </div>
+      )}
+
+      {/* 9. Structure Intelligence — compact */}
+      {d.structureIntel && (
+        <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-tier3">Structure Intelligence</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">Internal BOS:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.internalBOS ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">External BOS:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.externalBOS ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">Internal CHoCH:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.internalCHoCH ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">External CHoCH:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.externalCHoCH ?? 0}</span>
+            </div>
+          </div>
+          {/* S2F Rate */}
+          {d.structureIntel.s2f && (
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[11px] text-muted-foreground">S2F Rate:</span>
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
+                d.structureIntel.s2f.overallRate > 0.4 ? "bg-badge-profit text-profit"
+                : d.structureIntel.s2f.overallRate > 0.2 ? "bg-badge-warn text-warn"
+                : "bg-badge-loss text-loss"
+              }`}>
+                {(d.structureIntel.s2f.overallRate * 100).toFixed(0)}%
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                ({d.structureIntel.s2f.totalFractals} fractals | Bull {(d.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(d.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
+              </span>
+            </div>
+          )}
+          {/* Active S/R only */}
+          {d.structureIntel.derivedSR?.active?.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap mt-0.5">
+              <span className="text-[11px] text-profit font-semibold">Active S/R:</span>
+              {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
+                <span key={i} className={`text-[11px] font-mono px-1 py-0.5 rounded ${
+                  sr.type === "support" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"
+                }`}>
+                  {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Trade Entry Thesis — shown for placed trades */}
+      {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
+        <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
+          <p className="text-[11px] text-success/90 leading-tight">
+            {generateTradeEntryNarrative({
+              pair: d.pair,
+              direction: d.direction,
+              score: d.score,
+              factors: d.factors,
+              tieredScoring: d.tieredScoring,
+              regimeData: d.regimeData,
+              staging: d.staging,
+              limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
+            })}
+          </p>
+        </div>
+      )}
+
+      {/* Watchlist Origin Banner */}
+      {d.staging?.action === "promoted_and_traded" && (
+        <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
+          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
+          <p className="mt-1 text-[12px] text-cyan-300">
+            Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
+          </p>
+        </div>
+      )}
+
+      {/* Zone Setup Banner */}
+      {d.limitOrder && (
+        <div className="rounded border border-blue-500/30 bg-badge-info px-2 py-1.5">
+          <p className="text-[11px] text-info-c uppercase tracking-wider font-bold">🔍 Zone Setup Active</p>
+          <p className="mt-1 text-[12px] text-info-c">
+            Trigger: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
+          </p>
+          <p className="text-[12px] text-info-c/70">
+            Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </p>
+          <p className="text-[10px] text-warn/80 mt-1 italic">
+            Will hunt for 5m CHoCH confirmation when price reaches zone
+          </p>
+        </div>
+      )}
     </div>
   );
 }

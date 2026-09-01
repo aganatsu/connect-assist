@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, Zap, Crosshair, PenLine, SlidersHorizontal,
-  PanelLeftClose, PanelLeftOpen,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -14,9 +13,6 @@ const NAV_ITEMS = [
   { title: "ICT Analysis", url: "/ict-analysis", icon: Brain, shortcut: "3" },
   { title: "Fundamentals", url: "/fundamentals", icon: Calendar, shortcut: "4" },
   { title: "Bot", url: "/bot", icon: Bot, shortcut: "5" },
-  { title: "Game Plan", url: "/game-plan", icon: Crosshair },
-  { title: "Manual Impulse", url: "/manual-impulse", icon: PenLine },
-  { title: "Bot Config", url: "/bot-config", icon: SlidersHorizontal },
   { title: "Journal", url: "/journal", icon: BookOpen, shortcut: "6" },
   { title: "Backtest", url: "/backtest", icon: FlaskConical, shortcut: "7" },
   { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
@@ -24,7 +20,6 @@ const NAV_ITEMS = [
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
   { title: "Scheduled Tasks", url: "/scheduled-tasks", icon: Clock },
-  { title: "Optimizer", url: "/optimizer", icon: Zap },
   { title: "Settings", url: "/settings", icon: Settings, shortcut: "9" },
 ];
 
@@ -36,18 +31,6 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, setTheme } = useTheme();
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("iconRail.collapsed") === "1";
-  });
-
-  const toggleCollapsed = () => {
-    setCollapsed((c) => {
-      const next = !c;
-      try { localStorage.setItem("iconRail.collapsed", next ? "1" : "0"); } catch {}
-      return next;
-    });
-  };
 
   const cycleTheme = () => {
     const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
@@ -76,74 +59,31 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [navigate, onSearchToggle]);
 
-  const rowBase = collapsed
-    ? "w-10 h-10 flex items-center justify-center"
-    : "w-full h-10 flex items-center gap-3 px-3";
-
   return (
-    <div
-      className={`${collapsed ? "w-12" : "w-52"} shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col ${collapsed ? "items-center" : "items-stretch"} py-3 gap-1 transition-[width] duration-200`}
-    >
-      {/* Brand + collapse toggle */}
-      <div className={`mb-3 flex items-center ${collapsed ? "justify-center w-8 h-8" : "justify-between px-3 w-full h-8"}`}>
-        <div className="flex items-center gap-2">
-          <Activity className="h-5 w-5 text-primary" />
-          {!collapsed && <span className="text-sm font-semibold text-foreground">SMC</span>}
-        </div>
-        {!collapsed && (
-          <button
-            onClick={toggleCollapsed}
-            className="text-sidebar-foreground hover:text-foreground p-1"
-            title="Collapse sidebar"
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </button>
-        )}
+    <div className="w-12 shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col items-center py-3 gap-1">
+      {/* Brand mark */}
+      <div className="w-8 h-8 flex items-center justify-center mb-3">
+        <Activity className="h-5 w-5 text-primary" />
       </div>
-
-      {collapsed && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={toggleCollapsed}
-              className="w-10 h-10 flex items-center justify-center text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors"
-            >
-              <PanelLeftOpen className="h-4 w-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" className="text-xs">Expand sidebar</TooltipContent>
-        </Tooltip>
-      )}
 
       {/* Search */}
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             onClick={onSearchToggle}
-            className={`${rowBase} text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors`}
+            className="w-10 h-10 flex items-center justify-center text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors"
           >
-            <Search className="h-4 w-4 shrink-0" />
-            {!collapsed && (
-              <>
-                <span className="text-sm">Search</span>
-                <kbd className="ml-auto text-[10px] text-muted-foreground">/</kbd>
-              </>
-            )}
+            <Search className="h-4 w-4" />
           </button>
         </TooltipTrigger>
-        {collapsed && (
-          <TooltipContent side="right" className="text-xs">
-            Search <kbd className="ml-1 text-muted-foreground">/</kbd>
-          </TooltipContent>
-        )}
+        <TooltipContent side="right" className="text-xs">
+          Search <kbd className="ml-1 text-muted-foreground">/</kbd>
+        </TooltipContent>
       </Tooltip>
 
-      <div className={`${collapsed ? "w-6" : "w-full"} border-t border-sidebar-border my-1`} />
+      <div className="w-6 border-t border-sidebar-border my-1" />
 
-      {/* Nav items — scrollable. The rail is a fixed-height flex column, so
-          without this the tail of the list is simply clipped on a short
-          viewport with no way to reach it. It has grown to 17 entries. */}
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 w-full items-stretch">
+      {/* Nav items */}
       {NAV_ITEMS.map((item) => {
         const isActive =
           item.url === "/"
@@ -155,7 +95,7 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
             <TooltipTrigger asChild>
               <button
                 onClick={() => navigate(item.url)}
-                className={`relative ${rowBase} transition-colors ${
+                className={`relative w-10 h-10 flex items-center justify-center transition-colors ${
                   isActive
                     ? "text-primary bg-primary/10"
                     : "text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent"
@@ -164,44 +104,32 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
                 {isActive && (
                   <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary" />
                 )}
-                <item.icon className="h-4 w-4 shrink-0" />
-                {!collapsed && (
-                  <>
-                    <span className="text-sm truncate" title={item.title}>{item.title}</span>
-                    {item.shortcut && (
-                      <kbd className="ml-auto text-[10px] text-muted-foreground">{item.shortcut}</kbd>
-                    )}
-                  </>
-                )}
+                <item.icon className="h-4 w-4" />
               </button>
             </TooltipTrigger>
-            {collapsed && (
-              <TooltipContent side="right" className="text-xs">
-                {item.title} {item.shortcut && <kbd className="ml-1 text-muted-foreground">{item.shortcut}</kbd>}
-              </TooltipContent>
-            )}
+            <TooltipContent side="right" className="text-xs">
+              {item.title} <kbd className="ml-1 text-muted-foreground">{item.shortcut}</kbd>
+            </TooltipContent>
           </Tooltip>
         );
       })}
 
       {/* Spacer */}
-      </div>
-
+      <div className="flex-1" />
 
       {/* Theme toggle */}
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             onClick={cycleTheme}
-            className={`${rowBase} text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors mb-2`}
+            className="w-10 h-10 flex items-center justify-center text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors mb-2"
           >
-            <ThemeIcon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span className="text-sm capitalize">{theme}</span>}
+            <ThemeIcon className="h-4 w-4" />
           </button>
         </TooltipTrigger>
-        {collapsed && (
-          <TooltipContent side="right" className="text-xs">Theme: {theme}</TooltipContent>
-        )}
+        <TooltipContent side="right" className="text-xs">
+          Theme: {theme}
+        </TooltipContent>
       </Tooltip>
     </div>
   );

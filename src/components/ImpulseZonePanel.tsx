@@ -11,7 +11,7 @@
 
 interface ImpulseZoneData {
   hasZone: boolean;
-  selectedTF: string | null;
+  selectedTF: "1H" | "4H" | null;
   reason: string;
   impulse: {
     high: number;

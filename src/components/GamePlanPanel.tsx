@@ -1,11 +1,10 @@
 import React, { useState, useMemo } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Tooltip,
   TooltipContent,
@@ -19,12 +18,6 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { formatPrice } from "@/lib/formatTime";
-import { scannerApi } from "@/lib/api";
-import {
-  activeGamePlanRowsToLogs,
-  type ActiveGamePlanDisplayRow,
-} from "@/lib/activeGamePlans";
-import { toast } from "sonner";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -60,28 +53,7 @@ interface NewsEvent {
   previous?: string;
 }
 
-type GamePlanState = "tradeable" | "wait" | "skip";
-
-interface BiasEvidence {
-  id: string;
-  label: string;
-  direction: "bullish" | "bearish" | "neutral";
-  weight: number;
-  available: boolean;
-  contribution: number;
-  reason: string;
-}
-
-interface GamePlanConviction {
-  directionalStrength: number;
-  evidenceCoverage: number;
-  planQuality: number;
-  confidence: number;
-}
-
 interface InstrumentPlan {
-  gamePlanId?: string;
-  planVersion?: string;
   symbol: string;
   bias: "bullish" | "bearish" | "neutral";
   biasConfidence: number;
@@ -92,52 +64,14 @@ interface InstrumentPlan {
   zone: string;
   htfTrend: string;
   h4Trend: string;
-  decisionEvidence?: {
-    version: string;
-    style: string;
-    labels: {
-      bias: string;
-      structure: string;
-      setup: string;
-      confirmation: string;
-      refinement: string;
-    };
-  };
   tradeable: boolean;
-  state?: GamePlanState;
-  stateReason?: string;
-  conviction?: GamePlanConviction;
-  evidence?: BiasEvidence[];
-  supportingEvidence?: BiasEvidence[];
-  conflictingEvidence?: BiasEvidence[];
-  expiresAt?: string;
-  validityPolicy?: {
-    contractVersion: string;
-    style: "scalper" | "day_trader" | "swing_trader";
-    durationMinutes: number;
-    validFrom: string;
-    expiresAt: string;
-  };
   skipReason?: string;
   scenarios: Scenario[];
   keyLevels: KeyLevel[];
-  directionVerdict?: {
-    id: string;
-    verdictVersion: string;
-    verdict: "long" | "short" | "neutral";
-    confidence: number;
-    shouldBlock: boolean;
-    blockReason?: string | null;
-    evaluatedAt: string;
-    gamePlanVersion?: string | null;
-  } | null;
 }
 
 interface GamePlanData {
   type: "game_plan";
-  plan_version: string;
-  source: "automatic_scan" | "manual_refresh";
-  contract_version: string;
   session: string;
   generated_at: string;
   focus_pairs: string[];
@@ -152,75 +86,17 @@ interface GamePlanLog {
   details_json: GamePlanData;
 }
 
-interface GamePlanRefreshStatus {
-  status: "idle" | "running" | "succeeded" | "failed" | "skipped";
-  last_attempt_at: string | null;
-  last_success_at: string | null;
-  next_retry_at: string | null;
-  active_plan_expires_at: string | null;
-  failure_code: string | null;
-  failure_message: string | null;
-}
-
 // ─── API ────────────────────────────────────────────────────────────
 
 async function fetchGamePlans(): Promise<GamePlanLog[]> {
-  const [plansResult, verdictsResult] = await Promise.all([
-    (supabase as any)
-      .from("active_game_plans")
-      .select("id,plan_version,symbol,session,bias,bias_confidence,v2_conviction,state,state_reason,generated_at,expires_at,invalidation_conditions,source_candle_timestamps,plan_json,focus_pairs,news_events,news_impacts,summary,generation_source,contract_version,is_active")
-      .eq("bot_id", "smc")
-      .order("generated_at", { ascending: false })
-      .limit(300),
-    (supabase as any)
-      .from("active_direction_verdicts")
-      .select("id,verdict_version,symbol,game_plan_version,verdict,confidence,should_block,block_reason,evaluated_at,is_active")
-      .eq("bot_id", "smc")
-      .eq("is_active", true),
-  ]);
-  if (plansResult.error) throw new Error(plansResult.error.message);
-  if (verdictsResult.error) throw new Error(verdictsResult.error.message);
-  const logs = activeGamePlanRowsToLogs(
-    (plansResult.data || []) as ActiveGamePlanDisplayRow[],
-  ) as unknown as GamePlanLog[];
-  const verdicts = verdictsResult.data || [];
-  return logs.map((log) => ({
-    ...log,
-    details_json: {
-      ...log.details_json,
-      plans: log.details_json.plans.map((plan) => {
-        const verdict = verdicts.find((item: any) =>
-          item.symbol === plan.symbol &&
-          item.game_plan_version === plan.planVersion
-        );
-        return {
-          ...plan,
-          directionVerdict: verdict
-            ? {
-              id: verdict.id,
-              verdictVersion: verdict.verdict_version,
-              verdict: verdict.verdict,
-              confidence: Number(verdict.confidence),
-              shouldBlock: verdict.should_block,
-              blockReason: verdict.block_reason,
-              evaluatedAt: verdict.evaluated_at,
-              gamePlanVersion: verdict.game_plan_version,
-            }
-            : null,
-        };
-      }),
-    },
-  }));
-}
-
-async function fetchGamePlanRefreshStatus(): Promise<GamePlanRefreshStatus | null> {
   const { data, error } = await (supabase as any)
-    .from("game_plan_refresh_status")
-    .select("status,last_attempt_at,last_success_at,next_retry_at,active_plan_expires_at,failure_code,failure_message")
-    .eq("bot_id", "smc")
-    .maybeSingle();
+    .from("scan_logs")
+    .select("id, scanned_at, details_json")
+    .eq("details_json->>type", "game_plan")
+    .order("scanned_at", { ascending: false })
+    .limit(10);
   if (error) throw new Error(error.message);
-  return data as GamePlanRefreshStatus | null;
+  return (data || []).filter((d: any) => d.details_json?.type === "game_plan");
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -247,16 +123,6 @@ function getConfidenceColor(confidence: number) {
   if (confidence >= 60) return "text-profit";
   if (confidence >= 40) return "text-highlight";
   return "text-muted-foreground";
-}
-
-function getPlanState(plan: InstrumentPlan): GamePlanState {
-  return plan.state || (plan.tradeable && plan.bias !== "neutral" ? "tradeable" : "skip");
-}
-
-function getStateBadge(state: GamePlanState) {
-  if (state === "tradeable") return "bg-badge-profit text-profit border-emerald-500/30";
-  if (state === "wait") return "bg-badge-warn text-warn border-orange-500/30";
-  return "bg-zinc-800/50 text-muted-foreground border-zinc-600";
 }
 
 function getLevelTypeIcon(type: string) {
@@ -304,11 +170,6 @@ function formatDateTime(isoStr: string) {
 
 function BiasCard({ plan }: { plan: InstrumentPlan }) {
   const [expanded, setExpanded] = useState(false);
-  const state = getPlanState(plan);
-  const biasLabel = plan.decisionEvidence?.labels.bias || "D1";
-  const structureLabel =
-    plan.decisionEvidence?.labels.structure || "4H";
-  const setupLabel = plan.decisionEvidence?.labels.setup || "1H";
 
   return (
     <div
@@ -320,19 +181,18 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
         <div className="flex items-center gap-2">
           {getBiasIcon(plan.bias)}
           <span className="font-mono text-sm font-semibold">{plan.symbol}</span>
-          <Badge variant="outline" className={`text-[9px] h-4 ${getStateBadge(state)}`}>
-            {state.toUpperCase()}
-          </Badge>
+          {!plan.tradeable && (
+            <Badge variant="outline" className="text-[9px] h-4 bg-zinc-800/50 text-muted-foreground border-zinc-600">
+              SKIP
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className={`font-mono text-xs font-bold uppercase ${getBiasColor(plan.bias)}`}>
             {plan.bias}
           </span>
-          <span
-            className={`font-mono text-[10px] ${getConfidenceColor(plan.biasConfidence)}`}
-            title="Weighted directional support from the legacy vote model; this is not a win probability."
-          >
-            {plan.biasConfidence}% support
+          <span className={`font-mono text-[10px] ${getConfidenceColor(plan.biasConfidence)}`}>
+            {plan.biasConfidence}%
           </span>
           {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
         </div>
@@ -340,50 +200,13 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
 
       {/* Quick info row */}
       <div className="flex items-center gap-3 mt-1.5 text-[10px] text-muted-foreground font-mono">
-        <span>{biasLabel}: {plan.htfTrend}</span>
+        <span>D1: {plan.htfTrend}</span>
         <span className="text-zinc-600">|</span>
-        <span>{structureLabel}: {plan.h4Trend}</span>
-        <span className="text-zinc-600">|</span>
-        <span>Setup: {setupLabel}</span>
+        <span>4H: {plan.h4Trend}</span>
         <span className="text-zinc-600">|</span>
         <span>{plan.zone}</span>
         <span className="text-zinc-600">|</span>
         <span>{plan.regime}</span>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[9px] font-mono">
-        <span className="text-muted-foreground">
-          GP v{plan.planVersion?.slice(0, 8) || "unversioned"}
-        </span>
-        {plan.directionVerdict ? (
-          <span className={
-            plan.directionVerdict.shouldBlock ||
-              plan.directionVerdict.verdict === "neutral"
-              ? "text-loss"
-              : plan.directionVerdict.verdict === "long"
-              ? "text-profit"
-              : "text-loss"
-          }>
-            DV {plan.directionVerdict.verdict.toUpperCase()}{" "}
-            {Math.round(plan.directionVerdict.confidence)}% · v
-            {plan.directionVerdict.verdictVersion.slice(0, 8)}
-          </span>
-        ) : (
-          <span className="text-highlight">
-            HTF Bias pending next scan
-          </span>
-        )}
-        <span className="text-muted-foreground">
-          Thesis validity: checked per candidate and again at fill
-        </span>
-        {plan.validityPolicy && (
-          <span className="text-muted-foreground">
-            {plan.validityPolicy.style.replace("_", " ")} plan · valid{" "}
-            {plan.validityPolicy.durationMinutes >= 60
-              ? `${plan.validityPolicy.durationMinutes / 60}h`
-              : `${plan.validityPolicy.durationMinutes}m`}
-          </span>
-        )}
       </div>
 
       {/* DOL row */}
@@ -404,78 +227,11 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           <span className="text-[10px] text-highlight font-mono">{plan.skipReason}</span>
         </div>
       )}
-      {!plan.skipReason && plan.stateReason && state !== "tradeable" && (
-        <div className="flex items-center gap-1.5 mt-1.5">
-          <AlertTriangle className="h-3 w-3 text-highlight shrink-0" />
-          <span className="text-[10px] text-highlight font-mono">{plan.stateReason}</span>
-        </div>
-      )}
 
       {/* Expanded content */}
       {expanded && (
         <div className="mt-3 space-y-3">
           <Separator className="bg-border/50" />
-
-          {plan.conviction && (
-            <div>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-                Decision Evidence
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
-                {[
-                  ["Actionable Conviction", plan.conviction.confidence],
-                  ["Net Directional Edge", plan.conviction.directionalStrength],
-                  ["Input Coverage", plan.conviction.evidenceCoverage],
-                  ["Plan Coherence", plan.conviction.planQuality],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="border border-border/50 bg-background/30 p-1.5">
-                    <div className="text-[8px] uppercase text-muted-foreground">{label}</div>
-                    <div className="text-xs font-mono font-semibold">{Number(value).toFixed(0)}%</div>
-                  </div>
-                ))}
-              </div>
-              {plan.stateReason && (
-                <div className="text-[10px] text-foreground/70 font-mono mt-1.5">
-                  {plan.stateReason}
-                </div>
-              )}
-              {plan.expiresAt && (
-                <div className="text-[9px] text-muted-foreground font-mono mt-1">
-                  Expires: {formatDateTime(plan.expiresAt)}
-                  {plan.validityPolicy
-                    ? ` · ${plan.validityPolicy.contractVersion}`
-                    : ""}
-                </div>
-              )}
-            </div>
-          )}
-
-          {plan.evidence && plan.evidence.length > 0 && (
-            <div>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-                Evidence
-              </div>
-              <div className="space-y-1">
-                {plan.evidence.map((item) => (
-                  <div key={item.id} className="flex items-start justify-between gap-2 text-[10px] font-mono">
-                    <div className="min-w-0">
-                      <span className={
-                        !item.available ? "text-muted-foreground"
-                        : item.direction === plan.bias ? "text-profit"
-                        : item.direction === "neutral" ? "text-muted-foreground"
-                        : "text-loss"
-                      }>
-                        {!item.available ? "○" : item.direction === plan.bias ? "✓" : item.direction === "neutral" ? "—" : "×"}
-                      </span>
-                      <span className="ml-1.5 text-foreground/80">{item.label}</span>
-                      <div className="text-[9px] text-muted-foreground ml-4">{item.reason}</div>
-                    </div>
-                    <span className="text-muted-foreground shrink-0">{item.weight}w</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Bias Reasoning */}
           <div>
@@ -597,10 +353,7 @@ function NewsTimeline({ events }: { events: NewsEvent[] }) {
             >
               {ev.currency}
             </Badge>
-            <OverflowText
-              text={ev.event}
-              className="block flex-1 text-[10px] font-mono text-foreground/80"
-            />
+            <span className="text-[10px] font-mono text-foreground/80 truncate">{ev.event}</span>
             {isPast && <span className="text-[9px] text-zinc-600 font-mono">DONE</span>}
           </div>
         );
@@ -635,26 +388,6 @@ export function GamePlanPanel() {
     refetchInterval: 60000, // refresh every minute
   });
 
-  const { data: refreshStatus, refetch: refetchRefreshStatus } = useQuery({
-    queryKey: ["game-plan-refresh-status"],
-    queryFn: fetchGamePlanRefreshStatus,
-    refetchInterval: 60000,
-  });
-
-  const refreshGamePlan = useMutation({
-    mutationFn: scannerApi.refreshGamePlan,
-    onSuccess: async (result) => {
-      setSelectedPlanIdx(0);
-      await Promise.all([refetch(), refetchRefreshStatus()]);
-      toast.success(
-        `Game Plan regenerated: ${result.tradeableCount} tradeable, ${result.waitCount} wait, ${result.skipCount} skip`,
-      );
-    },
-    onError: (refreshError: Error) => {
-      toast.error(`Game Plan refresh failed: ${refreshError.message}`);
-    },
-  });
-
   const currentPlan = useMemo(() => {
     if (!gamePlanLogs || gamePlanLogs.length === 0) return null;
     return gamePlanLogs[selectedPlanIdx]?.details_json || null;
@@ -665,27 +398,15 @@ export function GamePlanPanel() {
     return gamePlanLogs[selectedPlanIdx] || null;
   }, [gamePlanLogs, selectedPlanIdx]);
 
-  const currentPlanIsExpired = useMemo(() => {
-    if (!currentPlan?.plans?.length) return false;
-    return currentPlan.plans.every((plan) => {
-      if (!plan.expiresAt) return false;
-      return new Date(plan.expiresAt).getTime() <= Date.now();
-    });
-  }, [currentPlan]);
-
-  const tradeablePairs = useMemo(() => {
+  // Separate focus and skip pairs
+  const focusPairs = useMemo(() => {
     if (!currentPlan) return [];
-    return currentPlan.plans.filter(p => getPlanState(p) === "tradeable");
-  }, [currentPlan]);
-
-  const waitPairs = useMemo(() => {
-    if (!currentPlan) return [];
-    return currentPlan.plans.filter(p => getPlanState(p) === "wait");
+    return currentPlan.plans.filter(p => p.tradeable && p.bias !== "neutral");
   }, [currentPlan]);
 
   const skipPairs = useMemo(() => {
     if (!currentPlan) return [];
-    return currentPlan.plans.filter(p => getPlanState(p) === "skip");
+    return currentPlan.plans.filter(p => !p.tradeable || p.bias === "neutral");
   }, [currentPlan]);
 
   if (isLoading) return <GamePlanSkeleton />;
@@ -713,14 +434,8 @@ export function GamePlanPanel() {
               <span className="text-sm font-semibold font-mono">
                 {currentPlan.session} Session
               </span>
-              <Badge variant="outline" className="text-[9px] h-4 bg-badge-profit text-profit border-emerald-500/30">
-                {tradeablePairs.length} TRADEABLE
-              </Badge>
-              <Badge variant="outline" className="text-[9px] h-4 bg-badge-warn text-warn border-orange-500/30">
-                {waitPairs.length} WAIT
-              </Badge>
-              <Badge variant="outline" className="text-[9px] h-4 bg-zinc-500/10 text-muted-foreground border-zinc-500/30">
-                {skipPairs.length} SKIP
+              <Badge variant="outline" className="text-[9px] h-4 bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
+                {currentPlan.focus_pairs.length} FOCUS
               </Badge>
             </div>
             <div className="flex items-center gap-1.5">
@@ -740,17 +455,14 @@ export function GamePlanPanel() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    type="button"
-                    aria-label="Regenerate game plan"
-                    onClick={() => refreshGamePlan.mutate()}
-                    disabled={refreshGamePlan.isPending}
-                    className="p-1 hover:bg-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => refetch()}
+                    className="p-1 hover:bg-accent/50 transition-colors"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 text-muted-foreground ${refreshGamePlan.isPending ? "animate-spin" : ""}`} />
+                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-[10px]">
-                  {refreshGamePlan.isPending ? "Generating new game plan…" : "Regenerate game plan now"}
+                  Refresh game plan
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -762,33 +474,10 @@ export function GamePlanPanel() {
             Generated: {formatDateTime(currentPlan.generated_at)}
             {currentLog && (
               <span className="text-zinc-600 ml-1">
-                ({currentPlan.source === "manual_refresh" ? "manual" : "automatic"} · version {currentPlan.plan_version.slice(0, 8)})
+                (scan: {formatDateTime(currentLog.scanned_at)})
               </span>
             )}
           </div>
-
-          {selectedPlanIdx === 0 && currentPlanIsExpired && (
-            <div
-              role="status"
-              className="flex items-start gap-2 border border-orange-500/30 bg-orange-500/10 p-2 text-[10px] font-mono text-orange-300"
-            >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                {refreshStatus?.status === "failed" ? (
-                  <>REFRESH FAILED — {refreshStatus.failure_message || "the scheduled refresh did not complete"}.
-                    {refreshStatus.last_attempt_at && <> Last attempt: {formatDateTime(refreshStatus.last_attempt_at)} ET.</>}
-                    {refreshStatus.next_retry_at && <> Next retry: {formatDateTime(refreshStatus.next_retry_at)} ET.</>}
-                    {" "}This expired version is history only and cannot authorize trading.</>
-                ) : refreshStatus?.status === "running" ? (
-                  <>REFRESH IN PROGRESS — this expired version is history only and cannot authorize trading.</>
-                ) : (
-                  <>STALE PLAN — this version has expired and is shown only for history. It is not current trading authority.
-                    {refreshStatus?.next_retry_at && <> Next scheduled attempt: {formatDateTime(refreshStatus.next_retry_at)} ET.</>}
-                  </>
-                )}
-              </span>
-            </div>
-          )}
 
           {/* History selector */}
           {showHistory && gamePlanLogs && gamePlanLogs.length > 1 && (
@@ -833,47 +522,30 @@ export function GamePlanPanel() {
             </Card>
           )}
 
-          {/* Tradeable Pairs */}
-          {tradeablePairs.length > 0 && (
+          {/* Focus Pairs */}
+          {focusPairs.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <Eye className="h-3.5 w-3.5 text-cyan-400" />
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Tradeable Pairs ({tradeablePairs.length})
+                  Focus Pairs ({focusPairs.length})
                 </span>
               </div>
               <div className="space-y-1.5">
-                {tradeablePairs.map(plan => (
+                {focusPairs.map(plan => (
                   <BiasCard key={plan.symbol} plan={plan} />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Waiting Pairs */}
-          {waitPairs.length > 0 && (
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <Clock className="h-3.5 w-3.5 text-warn" />
-                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Waiting for Conditions ({waitPairs.length})
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                {waitPairs.map(plan => (
-                  <BiasCard key={plan.symbol} plan={plan} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Skip Pairs */}
+          {/* Skip / Neutral Pairs */}
           {skipPairs.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Skipped ({skipPairs.length})
+                  Skipped / Neutral ({skipPairs.length})
                 </span>
               </div>
               <div className="space-y-1.5">

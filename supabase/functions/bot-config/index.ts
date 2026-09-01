@@ -1,134 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { loadEffectiveRuntimeConfig } from "../_shared/runtimeConfigStore.ts";
-import { buildLast100Comparison } from "../_shared/canonicalDealingRangeComparison.ts";
-import { buildStreamlinedReplay } from "../_shared/streamlinedDecisionReplay.ts";
-import { buildSingleOwnershipComparison } from "../_shared/singleOwnershipComparison.ts";
-import { buildCanonicalScannerComparison } from "../_shared/canonicalScannerComparison.ts";
-import { buildAuthorityOutcomeComparison } from "../_shared/authorityOutcomeComparison.ts";
-import { resolveNestedPoiMarketActivation } from "../_shared/botConfigBehavior.ts";
-import { resolveCanonicalScannerMode } from "../_shared/canonicalScannerEnforcement.ts";
-import { resolveCanonicalStructureMode } from "../_shared/canonicalStructureDecision.ts";
-import { loadCrossTimeframeActivation } from "../_shared/crossTimeframeActivationStore.ts";
-import { resolveCrossTimeframeAuthority } from "../_shared/crossTimeframeAuthority.ts";
-import { resolveImpulseLifecycleEnforcement } from "../_shared/impulseLifecycleEnforcement.ts";
-import { resolveSingleOwnershipMode } from "../_shared/singleOwnershipEnforcement.ts";
-import { resolveZoneStopPolicyMode } from "../_shared/stopPolicyMode.ts";
-import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
-import { resolveZoneLocalMode } from "../_shared/zoneLocalEnforcement.ts";
-
-type RuntimeAuthorityClient = Parameters<typeof loadZoneLocalActivation>[0];
-
-async function loadRuntimeTarget(client: RuntimeAuthorityClient, userId: string): Promise<"paper" | "live"> {
-  const { data: botAccount, error: botAccountError } = await client
-    .from("paper_accounts")
-    .select("execution_mode")
-    .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .maybeSingle();
-  if (botAccountError) throw botAccountError;
-  if (botAccount) return botAccount.execution_mode === "live" ? "live" : "paper";
-
-  const { data: legacyAccount, error: legacyAccountError } = await client
-    .from("paper_accounts")
-    .select("execution_mode")
-    .eq("user_id", userId)
-    .is("bot_id", null)
-    .limit(1)
-    .maybeSingle();
-  if (legacyAccountError) throw legacyAccountError;
-  return legacyAccount?.execution_mode === "live" ? "live" : "paper";
-}
-
-// Read-only UI projection. Every mode is resolved by its existing runtime
-// owner; this endpoint never grants authority or reconciles competing results.
-async function buildRuntimeAuthorityModes(client: RuntimeAuthorityClient, userId: string, config: Record<string, unknown>) {
-  const runtimeTarget = await loadRuntimeTarget(client, userId);
-  const [zoneLocalActivation, crossTimeframeActivation] = await Promise.all([
-    loadZoneLocalActivation(client, { userId, botId: "smc" }),
-    loadCrossTimeframeActivation(client, { userId, botId: "smc" }),
-  ]);
-  const zoneLocal = resolveZoneLocalMode({
-    requestedMode: config.zoneLocalEnforcementMode,
-    runtimeTarget,
-    activation: zoneLocalActivation,
-  });
-  const crossTimeframe = resolveCrossTimeframeAuthority({
-    rawConfig: config,
-    runtimeTarget,
-    activation: crossTimeframeActivation,
-  });
-  const impulseLifecycle = resolveImpulseLifecycleEnforcement(config.impulseEntryLifecycleMode, null);
-  const tradeDecision = resolveSingleOwnershipMode(config.singleOwnershipMode);
-  const scannerWorkflow = resolveCanonicalScannerMode({
-    requestedMode: config.canonicalScannerMode,
-    singleOwnershipEffectiveMode: tradeDecision.effectiveMode,
-  });
-  const marketStructure = resolveCanonicalStructureMode({
-    requestedMode: config.canonicalStructureMode,
-    singleOwnershipEffectiveMode: tradeDecision.effectiveMode,
-  });
-  const nestedPoiMarket = resolveNestedPoiMarketActivation({
-    marketFillAtZone: config.marketFillAtZone === true,
-    mode: config.nestedPoiMarketMode,
-    runtimeTarget,
-  });
-  const zoneStopPolicy = resolveZoneStopPolicyMode(config.zoneSetupStopPolicyMode, runtimeTarget);
-
-  return {
-    runtimeTarget,
-    zoneLocal: {
-      requestedMode: zoneLocal.requestedMode,
-      effectiveMode: zoneLocal.effectiveMode,
-      certifiedMaximum: zoneLocal.certifiedMaximum,
-      reason: zoneLocal.reason,
-    },
-    crossTimeframe: {
-      requestedMode: crossTimeframe.requestedMode,
-      effectiveMode: crossTimeframe.effectiveMode,
-      certifiedMaximum: crossTimeframe.certifiedMaximum,
-      reason: crossTimeframe.reason,
-    },
-    impulseLifecycle: {
-      requestedMode: impulseLifecycle.requestedMode,
-      effectiveMode: impulseLifecycle.effectiveMode,
-      reason: impulseLifecycle.effectiveMode === "off"
-        ? "disabled"
-        : impulseLifecycle.effectiveMode === "observe"
-        ? "observing"
-        : "requested_mode_enabled",
-    },
-    tradeDecision: {
-      requestedMode: tradeDecision.requestedMode,
-      effectiveMode: tradeDecision.effectiveMode,
-      reason: tradeDecision.reasonCode,
-    },
-    scannerWorkflow: {
-      requestedMode: scannerWorkflow.requestedMode,
-      effectiveMode: scannerWorkflow.effectiveMode,
-      reason: scannerWorkflow.reasonCode,
-    },
-    marketStructure: {
-      requestedMode: marketStructure.requestedMode,
-      effectiveMode: marketStructure.effectiveMode,
-      reason: marketStructure.reasonCode,
-    },
-    nestedPoiMarket: {
-      requestedMode: nestedPoiMarket.mode,
-      effectiveMode: nestedPoiMarket.enforced ? "enforce" : nestedPoiMarket.observing ? "observe" : "off",
-      reason: nestedPoiMarket.reason,
-    },
-    zoneStopPolicy: {
-      requestedMode: zoneStopPolicy.requestedMode,
-      effectiveMode: zoneStopPolicy.enforced ? zoneStopPolicy.requestedMode : "observe",
-      reason: zoneStopPolicy.enforced
-        ? "requested_mode_enabled"
-        : zoneStopPolicy.requestedMode === "enforce_paper" && runtimeTarget === "live"
-        ? "paper_scope_only"
-        : "observing",
-    },
-  };
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -176,32 +47,12 @@ Deno.serve(async (req) => {
       if (error) throw error;
       // If no connection-specific config, fall back to global
       if (!data && connectionId) {
-        const { data: globalData, error: globalError } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
-        if (globalError) throw globalError;
+        const { data: globalData } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
         return new Response(JSON.stringify(globalData?.config_json || getDefaultConfig()), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       return new Response(JSON.stringify(data?.config_json || getDefaultConfig()), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (action === "effective") {
-      const loaded = await loadEffectiveRuntimeConfig(supabase, {
-        userId: user.id,
-        connectionId: connectionId || undefined,
-      });
-      const authorityModes = await buildRuntimeAuthorityModes(
-        supabase,
-        user.id,
-        loaded.config as Record<string, unknown>,
-      );
-      return new Response(JSON.stringify({
-        effectiveConfig: loaded.config,
-        provenance: loaded.provenance,
-        authorityModes,
-      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -220,8 +71,7 @@ Deno.serve(async (req) => {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const { data: existing, error: existingError } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
-      if (existingError) throw existingError;
+      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
       if (existing) {
         const { error } = await supabase.from("bot_configs").update({ config_json: payload.config }).eq("id", existing.id);
         if (error) throw error;
@@ -231,119 +81,22 @@ Deno.serve(async (req) => {
         const { error } = await supabase.from("bot_configs").insert(insertData);
         if (error) throw error;
       }
-      const verified = await loadEffectiveRuntimeConfig(supabase, {
-        userId: user.id,
-        connectionId: connectionId || undefined,
-      });
-      return new Response(JSON.stringify({
-        success: true,
-        provenance: verified.provenance,
-      }), {
+      return new Response(JSON.stringify({ success: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (action === "reset") {
       const defaultConfig = getDefaultConfig();
-      const { data: existing, error: existingError } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
-      if (existingError) throw existingError;
+      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
       if (existing) {
-        const { error } = await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("id", existing.id);
-        if (error) throw error;
+        await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("id", existing.id);
       } else {
         const insertData: any = { user_id: user.id, config_json: defaultConfig };
         if (connectionId) insertData.connection_id = connectionId;
-        const { error } = await supabase.from("bot_configs").insert(insertData);
-        if (error) throw error;
+        await supabase.from("bot_configs").insert(insertData);
       }
       return new Response(JSON.stringify(defaultConfig), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (action === "ict_scanner.comparison") {
-      const [closedResult, rejectedResult] = await Promise.all([
-        supabase.from("paper_trade_history")
-          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason")
-          .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
-        supabase.from("rejected_setups")
-          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail")
-          .eq("user_id", user.id).eq("bot_id", "smc")
-          .order("rejected_at", { ascending: false }).limit(100),
-      ]);
-      if (closedResult.error) throw closedResult.error;
-      if (rejectedResult.error) throw rejectedResult.error;
-      return new Response(JSON.stringify(buildCanonicalScannerComparison(
-        closedResult.data || [], rejectedResult.data || [],
-      )), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (action === "authority_outcome.comparison") {
-      const [closedResult, rejectedResult] = await Promise.all([
-        supabase.from("paper_trade_history").select("id,symbol,direction,pnl,closed_at,created_at,signal_reason").eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
-        supabase.from("rejected_setups").select("id,symbol,direction,outcome_status,outcome_r,rejected_at,created_at,raw_detail,decision_outcome_snapshot").eq("user_id", user.id).eq("bot_id", "smc").order("rejected_at", { ascending: false }).limit(100),
-      ]);
-      if (closedResult.error) throw closedResult.error;
-      if (rejectedResult.error) throw rejectedResult.error;
-      return new Response(JSON.stringify(buildAuthorityOutcomeComparison(closedResult.data || [], rejectedResult.data || [])), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (action === "single_ownership.comparison") {
-      const [closedResult, rejectedResult] = await Promise.all([
-        supabase.from("paper_trade_history")
-          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason")
-          .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
-        supabase.from("rejected_setups")
-          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail")
-          .eq("user_id", user.id).eq("bot_id", "smc")
-          .order("rejected_at", { ascending: false }).limit(100),
-      ]);
-      if (closedResult.error) throw closedResult.error;
-      if (rejectedResult.error) throw rejectedResult.error;
-      return new Response(JSON.stringify(buildSingleOwnershipComparison(
-        closedResult.data || [], rejectedResult.data || [],
-      )), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (action === "streamlined_decision.comparison") {
-      const [closedResult, rejectedResult] = await Promise.all([
-        supabase.from("paper_trade_history")
-          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason,streamlined_decision_origin")
-          .eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
-        supabase.from("rejected_setups")
-          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail,streamlined_decision_origin")
-          .eq("user_id", user.id).eq("bot_id", "smc")
-          .order("rejected_at", { ascending: false }).limit(100),
-      ]);
-      if (closedResult.error) throw closedResult.error;
-      if (rejectedResult.error) throw rejectedResult.error;
-      return new Response(JSON.stringify(buildStreamlinedReplay(
-        closedResult.data || [], rejectedResult.data || [],
-      )), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (action === "dealing_range.comparison") {
-      const [closedResult, rejectedResult] = await Promise.all([
-        supabase
-          .from("paper_trade_history")
-          .select("id,symbol,direction,pnl,closed_at,created_at,signal_reason")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(100),
-        supabase
-          .from("rejected_setups")
-          .select("id,symbol,direction,outcome_status,rejected_at,created_at,raw_detail")
-          .eq("user_id", user.id)
-          .eq("bot_id", "smc")
-          .order("rejected_at", { ascending: false })
-          .limit(100),
-      ]);
-      if (closedResult.error) throw closedResult.error;
-      if (rejectedResult.error) throw rejectedResult.error;
-      return new Response(JSON.stringify(buildLast100Comparison(
-        closedResult.data || [],
-        rejectedResult.data || [],
-      )), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -452,11 +205,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.warn(`[bot-config] Unknown action received: ${JSON.stringify(action)}`);
-    return new Response(
-      JSON.stringify({ error: `Unknown action: ${String(action ?? "(missing)")}` }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: "Unknown action" }), {
+      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -484,26 +235,6 @@ function validateConfig(config: any): string[] {
   // Strategy validations
   const s = config.strategy;
   if (s) {
-    if (s.dealingRangeMode !== undefined &&
-      !["off", "avoid_wrong_side", "strict_value"].includes(s.dealingRangeMode)) {
-      errors.push("strategy.dealingRangeMode must be off, avoid_wrong_side, or strict_value");
-    }
-    if (s.streamlinedDecisionMode !== undefined &&
-      !["off", "observe", "enforce"].includes(s.streamlinedDecisionMode)) {
-      errors.push("strategy.streamlinedDecisionMode must be off, observe, or enforce");
-    }
-    if (s.singleOwnershipMode !== undefined &&
-      !["observe", "enforce", "enforce_live"].includes(s.singleOwnershipMode)) {
-      errors.push("strategy.singleOwnershipMode must be observe, enforce, or enforce_live");
-    }
-    if (s.canonicalScannerMode !== undefined &&
-      !["observe", "enforce"].includes(s.canonicalScannerMode)) {
-      errors.push("strategy.canonicalScannerMode must be observe or enforce");
-    }
-    if (s.canonicalStructureMode !== undefined &&
-      !["observe", "enforce"].includes(s.canonicalStructureMode)) {
-      errors.push("strategy.canonicalStructureMode must be observe or enforce");
-    }
     if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
       errors.push("strategy.confluenceThreshold must be between 0 and 100");
     }
@@ -523,72 +254,6 @@ function validateConfig(config: any): string[] {
     if (typeof s.fvgFillPercentInvalidate === "number" && (s.fvgFillPercentInvalidate < 0 || s.fvgFillPercentInvalidate > 100)) {
       errors.push("strategy.fvgFillPercentInvalidate must be between 0 and 100");
     }
-    if (
-      s.zoneLocalEnforcementMode !== undefined &&
-      !["observe", "soft", "hard"].includes(s.zoneLocalEnforcementMode)
-    ) {
-      errors.push(
-        "strategy.zoneLocalEnforcementMode must be observe, soft, or hard",
-      );
-    }
-    if (
-      typeof s.zoneLocalSoftPenalty === "number" &&
-      (s.zoneLocalSoftPenalty < 0 || s.zoneLocalSoftPenalty > 30)
-    ) {
-      errors.push("strategy.zoneLocalSoftPenalty must be between 0 and 30");
-    }
-    if (
-      typeof s.zoneLocalMinimumScore === "number" &&
-      (s.zoneLocalMinimumScore < 0 || s.zoneLocalMinimumScore > 9)
-    ) {
-      errors.push("strategy.zoneLocalMinimumScore must be between 0 and 9");
-    }
-    if (
-      s.crossTfAuthorityMode !== undefined &&
-      !["observe", "soft", "hard"].includes(s.crossTfAuthorityMode)
-    ) {
-      errors.push(
-        "strategy.crossTfAuthorityMode must be observe, soft, or hard",
-      );
-    }
-    if (
-      typeof s.crossTfMaximumZoneSeparationATR === "number" &&
-      (s.crossTfMaximumZoneSeparationATR < 0 ||
-        s.crossTfMaximumZoneSeparationATR > 3)
-    ) {
-      errors.push(
-        "strategy.crossTfMaximumZoneSeparationATR must be between 0 and 3",
-      );
-    }
-    if (
-      typeof s.crossTfMinimumParentChildOverlapPercent === "number" &&
-      (s.crossTfMinimumParentChildOverlapPercent < 0 ||
-        s.crossTfMinimumParentChildOverlapPercent > 100)
-    ) {
-      errors.push(
-        "strategy.crossTfMinimumParentChildOverlapPercent must be between 0 and 100",
-      );
-    }
-    if (
-      s.crossTfRetestQuality !== undefined &&
-      !["fresh_only", "fresh_or_held", "any_non_violated"].includes(
-        s.crossTfRetestQuality,
-      )
-    ) {
-      errors.push(
-        "strategy.crossTfRetestQuality must be fresh_only, fresh_or_held, or any_non_violated",
-      );
-    }
-    if (
-      typeof s.crossTfMaximumCandidatesPerTimeframe === "number" &&
-      (s.crossTfMaximumCandidatesPerTimeframe < 1 ||
-        s.crossTfMaximumCandidatesPerTimeframe > 5 ||
-        !Number.isInteger(s.crossTfMaximumCandidatesPerTimeframe))
-    ) {
-      errors.push(
-        "strategy.crossTfMaximumCandidatesPerTimeframe must be an integer between 1 and 5",
-      );
-    }
   }
 
   // Risk validations
@@ -603,16 +268,8 @@ function validateConfig(config: any): string[] {
     if (typeof r.maxDrawdown === "number" && (r.maxDrawdown < 0 || r.maxDrawdown > 100)) {
       errors.push("risk.maxDrawdown must be between 0 and 100");
     }
-    // Canonical field: risk.maxConcurrentTrades. risk.maxOpenPositions is deprecated
-    // and rejected outright to prevent config drift (see 2026-07-11 dedup migration).
-    if (Object.prototype.hasOwnProperty.call(r, "maxOpenPositions")) {
-      errors.push("risk.maxOpenPositions is deprecated — use risk.maxConcurrentTrades instead");
-    }
-    if (typeof r.maxConcurrentTrades === "number" && (r.maxConcurrentTrades < 1 || r.maxConcurrentTrades > 50)) {
-      errors.push("risk.maxConcurrentTrades must be between 1 and 50");
-    }
-    if (typeof r.minRR === "number" && (r.minRR < 0.1 || r.minRR > 20)) {
-      errors.push("risk.minRR must be between 0.1 and 20");
+    if (typeof r.maxOpenPositions === "number" && (r.maxOpenPositions < 1 || r.maxOpenPositions > 50)) {
+      errors.push("risk.maxOpenPositions must be between 1 and 50");
     }
     if (typeof r.minRiskReward === "number" && (r.minRiskReward < 0.1 || r.minRiskReward > 20)) {
       errors.push("risk.minRiskReward must be between 0.1 and 20");
@@ -647,8 +304,8 @@ function validateConfig(config: any): string[] {
     for (const [sym, val] of Object.entries(config.pairGateOverrides)) {
       if (val && typeof val === "object") {
         const v = val as any;
-        if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0.1 || v.minRiskReward > 20)) {
-          errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0.1 and 20`);
+        if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0 || v.minRiskReward > 20)) {
+          errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0 and 20`);
         }
         if (typeof v.minTier1Factors === "number" && (v.minTier1Factors < 0 || v.minTier1Factors > 5)) {
           errors.push(`pairGateOverrides.${sym}.minTier1Factors must be between 0 and 5`);
@@ -726,14 +383,11 @@ function getDefaultConfig() {
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
       liquiditySweepRequired: false, equalHighsLowsSensitivity: 3, liquidityPoolMinTouches: 2,
-      premiumDiscountEnabled: true, dealingRangeMode: "avoid_wrong_side", singleOwnershipMode: "observe", canonicalScannerMode: "observe", canonicalStructureMode: "observe", streamlinedDecisionMode: "observe", onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
+      premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
       // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
       normalizedScoring: true,
-      zoneLocalEnforcementMode: "observe",
-      zoneLocalSoftPenalty: 10,
-      zoneLocalMinimumScore: 1,
 
       // ── ICT 2022 Mentorship modules ───────────────────────────────────
       // All gates default to "off" (log-only, no trade impact). Flip to
@@ -752,7 +406,7 @@ function getDefaultConfig() {
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-      fixedLotSize: 0.1, maxConcurrentTrades: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRR: 1.5,
+      fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
     },
     entry: {
       defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",

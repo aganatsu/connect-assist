@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef } from "react";
-import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,8 +19,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { brokerApi, brokerExecApi, paperApi } from "@/lib/api";
-import { canUseTradingControls, readExecutionMode } from "@/lib/executionMode";
+import { brokerApi, brokerExecApi } from "@/lib/api";
 import { BotConfigModal } from "@/components/BotConfigModal";
 
 type Connection = {
@@ -36,33 +34,7 @@ type Connection = {
   created_at?: string;
   commission_per_lot?: number;
   detected_commission_per_lot?: number;
-  commission_mode?: CommissionMode;
-  commission_source?: "manual_round_trip" | "detected_per_side" | "none" | "unavailable";
-  effective_commission_per_lot?: number;
 };
-
-type CommissionMode = "auto" | "manual" | "none";
-
-function connectionCommissionMode(connection: Connection): CommissionMode {
-  if (["auto", "manual", "none"].includes(connection.commission_mode || "")) {
-    return connection.commission_mode as CommissionMode;
-  }
-  return Number(connection.commission_per_lot || 0) > 0 ? "manual" : "auto";
-}
-
-function commissionSummary(connection: Connection): string {
-  const mode = connectionCommissionMode(connection);
-  if (mode === "none") return "$0/lot (no commission)";
-  if (mode === "manual") {
-    return `$${Number(connection.commission_per_lot || 0).toFixed(2)}/lot round trip (manual)`;
-  }
-  const detectedPerSide = Number(connection.detected_commission_per_lot || 0);
-  if (!(detectedPerSide > 0)) return "Automatic (waiting for broker fill)";
-  const roundTrip = Number(
-    connection.effective_commission_per_lot ?? detectedPerSide * 2,
-  );
-  return `$${roundTrip.toFixed(2)}/lot round trip (auto; $${detectedPerSide.toFixed(2)}/side)`;
-}
 
 type ProbedCandidate = {
   brokerSymbol: string;
@@ -87,65 +59,10 @@ export default function BrokersPage() {
   // Per-connection probe results from latest auto-map (in-memory only)
   const [probeByConn, setProbeByConn] = useState<Record<string, ProbeDetails>>({});
 
-  const {
-    data: connectionData,
-    isPending: connectionsPending,
-    isError: connectionsUnavailable,
-    error: connectionsError,
-    refetch: refetchConnections,
-  } = useQuery<Connection[]>({
+  const { data: connections = [] } = useQuery<Connection[]>({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
   });
-  const connections = !connectionsUnavailable && Array.isArray(connectionData) ? connectionData : [];
-  const activeConnections = connections.filter((connection) => connection.is_active);
-
-  const {
-    data: paperStatus,
-    isSuccess: paperStatusAvailable,
-  } = useQuery({
-    queryKey: ["paper-status"],
-    queryFn: () => paperApi.status(),
-    refetchInterval: 10000,
-  });
-  const executionMode = paperStatusAvailable
-    ? readExecutionMode(paperStatus)
-    : "unknown";
-  const liveBrokerStatusQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-connection-status", connection.id],
-      queryFn: () => brokerExecApi.connectionStatus(connection.id),
-      enabled: executionMode === "live",
-      refetchInterval: 30000,
-    })),
-  });
-  const liveBrokerAccountQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-account", connection.id],
-      queryFn: () => brokerExecApi.accountSummary(connection.id),
-      enabled: executionMode === "live",
-      refetchInterval: 10000,
-    })),
-  });
-  const liveBrokerPositionQueries = useQueries({
-    queries: activeConnections.map((connection) => ({
-      queryKey: ["broker-open-trades", connection.id],
-      queryFn: () => brokerExecApi.openTrades(connection.id),
-      enabled: executionMode === "live",
-      refetchInterval: 10000,
-    })),
-  });
-  const configurationMutationsEnabled = canUseTradingControls(
-    executionMode,
-    activeConnections.map((_, index) =>
-      liveBrokerStatusQueries[index]?.isSuccess === true &&
-      liveBrokerStatusQueries[index]?.data?.ready === true &&
-      liveBrokerAccountQueries[index]?.isSuccess === true &&
-      !!liveBrokerAccountQueries[index]?.data &&
-      liveBrokerPositionQueries[index]?.isSuccess === true &&
-      Array.isArray(liveBrokerPositionQueries[index]?.data)
-    ),
-  );
 
   const selected = useMemo(
     () => connections.find((c) => c.id === selectedId) ?? connections[0] ?? null,
@@ -164,7 +81,6 @@ export default function BrokersPage() {
       toast.success("Connection removed");
       setSelectedId(null);
     },
-    onError: (error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to remove connection"),
   });
 
   const testMutation = useMutation({
@@ -258,17 +174,21 @@ export default function BrokersPage() {
 
   return (
     <AppShell>
-      <WorkspacePage layout="canvas">
-        <WorkspaceHeader
-          icon={Server}
-          eyebrow="Execution infrastructure"
-          title="Brokers"
-          description="Manage broker connections and symbol mappings"
-          actions={<Button size="sm" disabled={connectionsPending || connectionsUnavailable} onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
+      <div className="h-full flex flex-col">
+        {/* Page header */}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <Server className="h-5 w-5 text-primary" /> Brokers
+            </h1>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Manage broker connections and symbol mappings
+            </p>
+          </div>
+          <Button size="sm" onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
             <Plus className="h-4 w-4 mr-1.5" /> Add Connection
-          </Button>}
-        />
-        <WorkspaceBody className="flex min-h-0 flex-col">
+          </Button>
+        </div>
 
         {/* Split view */}
         <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
@@ -276,23 +196,12 @@ export default function BrokersPage() {
           <Card className="w-full md:w-64 shrink-0 flex flex-col overflow-hidden max-h-48 md:max-h-none">
             <div className="px-3 py-2 border-b border-border">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Connections ({connectionsUnavailable ? "unknown" : connections.length})
+                Connections ({connections.length})
               </p>
             </div>
             <ScrollArea className="flex-1">
               <div className="p-1.5 space-y-0.5">
-                {connectionsPending && (
-                  <div className="flex justify-center p-6">
-                    <Activity className="h-4 w-4 animate-pulse text-muted-foreground" />
-                  </div>
-                )}
-                {connectionsUnavailable && (
-                  <div className="p-4 text-center text-xs text-warning">
-                    <p className="font-medium">Broker connection state is unavailable.</p>
-                    <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" onClick={() => refetchConnections()}>Retry</Button>
-                  </div>
-                )}
-                {!connectionsPending && !connectionsUnavailable && connections.length === 0 && !showAddForm && (
+                {connections.length === 0 && !showAddForm && (
                   <div className="p-6 text-center text-xs text-muted-foreground">
                     No brokers yet. Click <span className="text-foreground font-medium">Add Connection</span> to get started.
                   </div>
@@ -313,7 +222,7 @@ export default function BrokersPage() {
                         <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${
                           c.is_active ? "bg-success" : "bg-muted-foreground"
                         }`} />
-                        <span className="text-sm font-medium truncate flex-1" title={c.display_name}>{c.display_name}</span>
+                        <span className="text-sm font-medium truncate flex-1">{c.display_name}</span>
                         <ChevronRight className={`h-3 w-3 transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-50"}`} />
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-0.5 ml-3.5">
@@ -328,19 +237,7 @@ export default function BrokersPage() {
 
           {/* RIGHT: detail panel */}
           <div className="flex-1 min-w-0 overflow-auto min-h-0">
-            {connectionsPending ? (
-              <div className="flex h-full items-center justify-center text-muted-foreground">
-                <Activity className="h-5 w-5 animate-pulse" />
-              </div>
-            ) : connectionsUnavailable ? (
-              <Card className="border-warning/40 bg-warning/5">
-                <CardContent className="p-6 text-center">
-                  <p className="text-sm font-medium text-warning">Broker connection state is unavailable</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{connectionsError instanceof Error ? connectionsError.message : "Refresh and try again."}</p>
-                  <Button size="sm" variant="outline" className="mt-4" onClick={() => refetchConnections()}>Retry</Button>
-                </CardContent>
-              </Card>
-            ) : showAddForm || connections.length === 0 ? (
+            {showAddForm || connections.length === 0 ? (
               <AddConnectionForm
                 onCreated={(newId) => {
                   setShowAddForm(false);
@@ -361,7 +258,6 @@ export default function BrokersPage() {
                   if (confirm(`Delete "${selected.display_name}"?`)) deleteMutation.mutate(selected.id);
                 }}
                 isAutoMapping={autoMapMutation.isPending}
-                configurationMutationsEnabled={configurationMutationsEnabled}
                 isListing={listSymbolsMutation.isPending}
                 isTesting={testMutation.isPending}
               />
@@ -425,17 +321,15 @@ export default function BrokersPage() {
             )}
           </DialogContent>
         </Dialog>
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }
 
 // ─── Connection detail panel ─────────────────────────────────────────
-export function ConnectionDetail({
+function ConnectionDetail({
   connection: c, probeDetails, onTest, onCheckStatus, onAutoMap, onListSymbols,
-  onConfigOpen, onDelete, isAutoMapping, configurationMutationsEnabled,
-  isListing, isTesting,
+  onConfigOpen, onDelete, isAutoMapping, isListing, isTesting,
 }: {
   connection: Connection;
   probeDetails?: ProbeDetails;
@@ -446,7 +340,6 @@ export function ConnectionDetail({
   onConfigOpen: () => void;
   onDelete: () => void;
   isAutoMapping: boolean;
-  configurationMutationsEnabled: boolean;
   isListing: boolean;
   isTesting: boolean;
 }) {
@@ -455,12 +348,7 @@ export function ConnectionDetail({
   const [editOverrides, setEditOverrides] = useState<Record<string, string>>(c.symbol_overrides || {});
   const [newSym, setNewSym] = useState("");
   const [newBrokerSym, setNewBrokerSym] = useState("");
-  const [editCommissionMode, setEditCommissionMode] = useState<CommissionMode>(
-    connectionCommissionMode(c),
-  );
-  const [editCommission, setEditCommission] = useState<string>(
-    String(Number(c.commission_per_lot || 0) > 0 ? c.commission_per_lot : 5),
-  );
+  const [editCommission, setEditCommission] = useState<string>(String(c.commission_per_lot || 0));
   const [editCustomCommission, setEditCustomCommission] = useState("");
   const [dirty, setDirty] = useState(false);
   // Probe results for manually-typed broker symbols (keyed by broker symbol string).
@@ -480,10 +368,7 @@ export function ConnectionDetail({
   useMemo(() => {
     setEditSuffix(c.symbol_suffix || "");
     setEditOverrides(c.symbol_overrides || {});
-    setEditCommissionMode(connectionCommissionMode(c));
-    setEditCommission(
-      String(Number(c.commission_per_lot || 0) > 0 ? c.commission_per_lot : 5),
-    );
+    setEditCommission(String(c.commission_per_lot || 0));
     setEditCustomCommission("");
     setManualProbes({});
     setManuallyTouched(new Set());
@@ -495,18 +380,9 @@ export function ConnectionDetail({
   }, [c.id]);
 
   const commissionValue = editCommission === "custom" ? parseFloat(editCustomCommission || "0") : parseFloat(editCommission);
-  const commissionInvalid = editCommissionMode === "manual" && !(commissionValue > 0);
 
   const updateMutation = useMutation({
-    mutationFn: () => brokerApi.update({
-      id: c.id,
-      symbol_suffix: editSuffix,
-      symbol_overrides: editOverrides,
-      commission_mode: editCommissionMode,
-      commission_per_lot: editCommissionMode === "manual"
-        ? commissionValue
-        : Number(c.commission_per_lot || 0),
-    }),
+    mutationFn: () => brokerApi.update({ id: c.id, symbol_suffix: editSuffix, symbol_overrides: editOverrides, commission_per_lot: commissionValue }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
       toast.success("Saved");
@@ -600,7 +476,7 @@ export function ConnectionDetail({
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-bold break-words" title={c.display_name}>{c.display_name}</h2>
+                <h2 className="text-lg font-bold truncate">{c.display_name}</h2>
                 {c.is_live ? (
                   <Badge variant="destructive" className="h-5 text-[10px]">LIVE</Badge>
                 ) : (
@@ -621,7 +497,13 @@ export function ConnectionDetail({
                 <Field icon={Hash} label="Account" value={c.account_id} mono />
                 <Field icon={KeyRound} label="Suffix" value={c.symbol_suffix || "—"} mono />
                 <Field icon={RadioTower} label="Mappings" value={`${overrideCount} symbol${overrideCount !== 1 ? "s" : ""}`} />
-                <Field icon={Zap} label="Commission" value={commissionSummary(c)} />
+                <Field icon={Zap} label="Commission" value={
+                  c.commission_per_lot
+                    ? `$${c.commission_per_lot}/lot (manual)`
+                    : c.detected_commission_per_lot
+                      ? `$${c.detected_commission_per_lot.toFixed(2)}/lot (auto-detected)`
+                      : "$0 (spread-only)"
+                } />
               </div>
             </div>
           </div>
@@ -636,13 +518,7 @@ export function ConnectionDetail({
             </Button>
             {isMetaApi && (
               <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={onAutoMap}
-                  disabled={!configurationMutationsEnabled || isAutoMapping}
-                  title={!configurationMutationsEnabled ? "Current trading state is unavailable" : undefined}
-                >
+                <Button size="sm" variant="outline" onClick={onAutoMap} disabled={isAutoMapping}>
                   <Wand2 className="h-3.5 w-3.5 mr-1.5" />
                   {isAutoMapping ? "Mapping…" : "Auto-map symbols"}
                 </Button>
@@ -750,7 +626,7 @@ export function ConnectionDetail({
                         ) : hasAlternates ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left" title={brokerSym}>
+                              <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left">
                                 <span className="truncate">{brokerSym}</span>
                                 <Badge variant="outline" className="h-4 px-1 text-[9px] shrink-0">
                                   {candidates.length}
@@ -777,7 +653,7 @@ export function ConnectionDetail({
                                   >
                                     <div className="flex items-center gap-1.5 min-w-0">
                                       {isPicked && <CheckCircle2 className="h-3 w-3 text-success shrink-0" />}
-                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`} title={cand.brokerSymbol}>
+                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`}>
                                         {cand.brokerSymbol}
                                       </span>
                                     </div>
@@ -800,7 +676,7 @@ export function ConnectionDetail({
                           </DropdownMenu>
                         ) : (
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="font-mono text-primary truncate" title={brokerSym}>{brokerSym}</span>
+                            <span className="font-mono text-primary truncate">{brokerSym}</span>
                             {(() => {
                               const info = probeBySymbol[brokerSym];
                               if (!info) return null;
@@ -868,17 +744,12 @@ export function ConnectionDetail({
 
           {dirty && (
             <div className="flex gap-2 pt-2 border-t border-border">
-              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending || validating || commissionInvalid}>
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending || validating}>
                 {validating ? "Validating…" : updateMutation.isPending ? "Saving…" : isMetaApi ? "Validate & save" : "Save changes"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => {
                 setEditSuffix(c.symbol_suffix || "");
                 setEditOverrides(c.symbol_overrides || {});
-                setEditCommissionMode(connectionCommissionMode(c));
-                setEditCommission(
-                  String(Number(c.commission_per_lot || 0) > 0 ? c.commission_per_lot : 5),
-                );
-                setEditCustomCommission("");
                 setManuallyTouched(new Set());
                 setDirty(false);
               }}>Discard</Button>
@@ -893,74 +764,44 @@ export function ConnectionDetail({
           <div>
             <h3 className="text-sm font-semibold">Commission Settings</h3>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Choose whether execution uses the broker-detected charge, a manual round-trip amount, or no commission.
-              Spread is a separate broker quote and is not configured here.
-              {Number(c.detected_commission_per_lot || 0) > 0 ? (
-                <span className="block mt-1 text-primary">
-                  Broker detected: ${Number(c.detected_commission_per_lot).toFixed(2)}/lot per side · ${(
-                    Number(c.detected_commission_per_lot) * 2
-                  ).toFixed(2)}/lot round trip
-                </span>
+              Round-trip commission per standard lot. Set to 0 for spread-only accounts.
+              {c.detected_commission_per_lot ? (
+                <span className="block mt-1 text-primary">Auto-detected: ${c.detected_commission_per_lot.toFixed(2)}/lot from last trade</span>
               ) : null}
             </p>
           </div>
           <div>
-            <Label className="text-xs">Commission source</Label>
+            <Label className="text-xs">Commission preset</Label>
             <select
-              value={editCommissionMode}
+              value={["0", "5", "7", "10"].includes(editCommission) ? editCommission : "custom"}
               onChange={(e) => {
-                setEditCommissionMode(e.target.value as CommissionMode);
+                setEditCommission(e.target.value);
+                if (e.target.value !== "custom") setEditCustomCommission("");
                 setDirty(true);
               }}
               className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm"
             >
-              <option value="auto">Automatic — use broker-detected commission</option>
-              <option value="manual">Manual — set round-trip commission</option>
-              <option value="none">No commission — spread-only account</option>
+              <option value="0">Spread-only ($0/lot)</option>
+              <option value="5">ECN Low ($5/lot round-trip)</option>
+              <option value="7">ECN Standard ($7/lot round-trip)</option>
+              <option value="10">ECN High ($10/lot round-trip)</option>
+              <option value="custom">Custom...</option>
             </select>
-            {editCommissionMode === "manual" && (
-              <div className="mt-2 space-y-2">
-                <select
-                  value={["5", "7", "10"].includes(editCommission) ? editCommission : "custom"}
-                  onChange={(e) => {
-                    setEditCommission(e.target.value);
-                    if (e.target.value !== "custom") setEditCustomCommission("");
-                    setDirty(true);
-                  }}
-                  className="w-full bg-secondary border border-border rounded px-3 py-2 text-sm"
-                >
-                  <option value="5">ECN Low ($5/lot round trip)</option>
-                  <option value="7">ECN Standard ($7/lot round trip)</option>
-                  <option value="10">ECN High ($10/lot round trip)</option>
-                  <option value="custom">Custom round-trip amount…</option>
-                </select>
-                {!["5", "7", "10"].includes(editCommission) && (
-                  <Input
-                    type="number"
-                    step="0.5"
-                    min="0.01"
-                    max="50"
-                    value={editCommission === "custom" ? editCustomCommission : editCommission}
-                    onChange={(e) => {
-                      setEditCommission("custom");
-                      setEditCustomCommission(e.target.value);
-                      setDirty(true);
-                    }}
-                    placeholder="e.g. 6.50 round trip"
-                    className="font-mono text-xs"
-                  />
-                )}
-              </div>
-            )}
-            {editCommissionMode === "auto" && !(Number(c.detected_commission_per_lot || 0) > 0) && (
-              <p className="mt-2 text-[10px] text-amber-500">
-                No broker charge has been observed yet. Commission is temporarily treated as $0 until a fill reports it.
-              </p>
-            )}
-            {commissionInvalid && (
-              <p className="mt-2 text-[10px] text-destructive">
-                Enter a manual round-trip commission greater than zero.
-              </p>
+            {!["0", "5", "7", "10"].includes(editCommission) && (
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                max="50"
+                value={editCommission === "custom" ? editCustomCommission : editCommission}
+                onChange={(e) => {
+                  setEditCommission("custom");
+                  setEditCustomCommission(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="e.g. 6.50"
+                className="mt-2 font-mono text-xs"
+              />
             )}
           </div>
         </CardContent>
@@ -981,7 +822,7 @@ export function ConnectionDetail({
             {warnDialog.bad.map((b) => (
               <div key={b.sym} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
                 <div className="min-w-0">
-                  <div className="font-mono font-medium truncate" title={`${b.sym} → ${b.brokerSym}`}>{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
+                  <div className="font-mono font-medium truncate">{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
                   <div className="text-[10px] text-destructive mt-0.5">{b.reason}</div>
                 </div>
               </div>
@@ -1031,7 +872,7 @@ function Field({ icon: Icon, label, value, mono }: { icon: any; label: string; v
     <div className="flex items-center gap-2 min-w-0">
       <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
       <span className="text-muted-foreground">{label}:</span>
-      <span className={`truncate ${mono ? "font-mono" : ""}`} title={value}>{value}</span>
+      <span className={`truncate ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
 }
@@ -1044,13 +885,8 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
   const [apiKey, setApiKey] = useState("");
   const [accountId, setAccountId] = useState("");
   const [isLive, setIsLive] = useState(false);
-  const [commissionMode, setCommissionMode] = useState<CommissionMode>("auto");
-  const [commissionPreset, setCommissionPreset] = useState<string>("5");
+  const [commissionPreset, setCommissionPreset] = useState<string>("0");
   const [customCommission, setCustomCommission] = useState("");
-  const manualCommission = commissionPreset === "custom"
-    ? parseFloat(customCommission || "0")
-    : parseFloat(commissionPreset);
-  const commissionInvalid = commissionMode === "manual" && !(manualCommission > 0);
 
   const createMutation = useMutation({
     mutationFn: () => brokerApi.create({
@@ -1059,8 +895,7 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
       api_key: apiKey,
       account_id: accountId,
       is_live: isLive,
-      commission_mode: commissionMode,
-      commission_per_lot: commissionMode === "manual" ? manualCommission : 0,
+      commission_per_lot: commissionPreset === "custom" ? parseFloat(customCommission || "0") : parseFloat(commissionPreset),
     }),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
@@ -1127,49 +962,35 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
         </div>
 
         <div>
-          <Label className="text-xs">Commission source</Label>
-          <p className="text-[10px] text-muted-foreground mb-1">
-            Automatic stores the broker-reported per-side charge and doubles it for round-trip trading costs.
-          </p>
+          <Label className="text-xs">Commission (round-trip per standard lot)</Label>
+          <p className="text-[10px] text-muted-foreground mb-1">Set to 0 for spread-only accounts. Auto-detected after first trade if left at 0.</p>
           <select
-            value={commissionMode}
-            onChange={(e) => setCommissionMode(e.target.value as CommissionMode)}
+            value={commissionPreset}
+            onChange={(e) => setCommissionPreset(e.target.value)}
             className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm"
           >
-            <option value="auto">Automatic — use broker-detected commission</option>
-            <option value="manual">Manual — set round-trip commission</option>
-            <option value="none">No commission — spread-only account</option>
+            <option value="0">Spread-only ($0/lot)</option>
+            <option value="5">ECN Low ($5/lot round-trip)</option>
+            <option value="7">ECN Standard ($7/lot round-trip)</option>
+            <option value="10">ECN High ($10/lot round-trip)</option>
+            <option value="custom">Custom...</option>
           </select>
-          {commissionMode === "manual" && (
-            <div className="mt-2 space-y-2">
-              <select
-                value={commissionPreset}
-                onChange={(e) => setCommissionPreset(e.target.value)}
-                className="w-full bg-secondary border border-border rounded px-3 py-2 text-sm"
-              >
-                <option value="5">ECN Low ($5/lot round trip)</option>
-                <option value="7">ECN Standard ($7/lot round trip)</option>
-                <option value="10">ECN High ($10/lot round trip)</option>
-                <option value="custom">Custom round-trip amount…</option>
-              </select>
-              {commissionPreset === "custom" && (
-                <Input
-                  type="number"
-                  step="0.5"
-                  min="0.01"
-                  max="50"
-                  value={customCommission}
-                  onChange={(e) => setCustomCommission(e.target.value)}
-                  placeholder="e.g. 6.50 round trip"
-                  className="font-mono text-xs"
-                />
-              )}
-            </div>
+          {commissionPreset === "custom" && (
+            <Input
+              type="number"
+              step="0.5"
+              min="0"
+              max="50"
+              value={customCommission}
+              onChange={(e) => setCustomCommission(e.target.value)}
+              placeholder="e.g. 6.50"
+              className="mt-2 font-mono text-xs"
+            />
           )}
         </div>
 
         <div className="flex gap-2 pt-2">
-          <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId || commissionInvalid || createMutation.isPending}>
+          <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId || createMutation.isPending}>
             {createMutation.isPending ? "Saving & mapping symbols…" : "Save Connection"}
           </Button>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>

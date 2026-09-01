@@ -1,22 +1,25 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
-import { resolveSymbol } from "../_shared/brokerSymbols.ts";
-import { fetchMetaApiProvisioningAccount, metaFetch } from "../_shared/metaApiClient.ts";
-import {
-  type BrokerExecutionConfirmationMode,
-  classifyBrokerMutationHttpResponse,
-  type OandaDependentOrderTransaction,
-} from "../_shared/brokerExecutionLedger.ts";
-import { convertLotsToOandaUnits } from "../_shared/unifiedPositionSizing.ts";
-import { authorizeScopedCaller } from "../_shared/callerAuth.ts";
+
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
 // normalizeKey is now an alias for normalizeSymKey from shared module
 const normalizeKey = normalizeSymKey;
-// resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
-// metaFetch is now imported from ../_shared/metaApiClient.ts (single source of truth)
+
+// Resolve symbol name: check normalized override map first, then apply default suffix.
+// Override value (broker symbol) is returned EXACTLY as the user entered it.
+function resolveSymbol(symbol: string, conn: any): string {
+  const rawOverrides = conn.symbol_overrides || {};
+  const norm = normalizeKey(symbol);
+  // Build a normalized lookup so "EUR/USD", "eurusd", "EURUSD" all hit the same entry
+  for (const [k, v] of Object.entries(rawOverrides)) {
+    if (normalizeKey(k) === norm && v) return String(v);
+  }
+  const base = symbol.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
+  return base + (conn.symbol_suffix || "");
+}
 
 // OANDA uses underscore format (EUR_USD). Honor overrides first.
 function resolveOandaSymbol(symbol: string, conn: any): string {
@@ -30,6 +33,42 @@ function resolveOandaSymbol(symbol: string, conn: any): string {
   if (cleaned.includes("/")) return cleaned.replace("/", "_");
   if (cleaned.length === 6 && !cleaned.includes("_")) return `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
   return cleaned;
+}
+
+// MetaAPI regions — try in order until one returns a non-region-mismatch response. Cached per account.
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+// Try each region until one succeeds (or until the error is clearly not a region mismatch).
+async function metaFetch(accountId: string, authToken: string, pathBuilder: (base: string) => string, init?: RequestInit): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+      const body = await res.text();
+      if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+      lastBody = body; lastStatus = res.status;
+      if (!/region|not connected to broker/i.test(body)) {
+        return { res: new Response(body, { status: res.status }), body };
+      }
+      console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+    } catch (err) {
+      lastBody = `network error: ${(err as Error).message}`;
+      lastStatus = 504;
+      console.warn(`MetaAPI ${region} network error, trying next: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
 
 // H10: OANDA price precision — round SL/TP/entry to correct decimal places
@@ -54,98 +93,57 @@ function roundOandaPrice(symbol: string, price: number): string {
   return price.toFixed(precision);
 }
 
-function respondWithBrokerReadFailure(
-  broker: "oanda" | "metaapi",
-  upstreamStatus: number,
-  error: string,
-  details = "",
-  transportStatus = 200,
-) {
-  return respond({
-    ok: false,
-    state: "unknown",
-    errorOrigin: "broker",
-    broker,
-    brokerStatus: upstreamStatus,
-    error,
-    details: details ? details.slice(0, 1000) : undefined,
-    fallback: upstreamStatus >= 500,
-  }, transportStatus);
+// H9: Retry helper with exponential backoff for broker execution
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  shouldRetry: (err: any) => boolean,
+  maxAttempts = 3,
+  baseDelayMs = 1000,
+): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt >= maxAttempts || !shouldRetry(err)) throw err;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      console.warn(`Broker execute retry ${attempt}/${maxAttempts} after ${delay}ms: ${err?.message || err}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
-function respondWithBrokerMutationOutcome(
-  res: Response,
-  body: string,
-  confirmationMode: BrokerExecutionConfirmationMode,
-  requiredOandaTransactions?: readonly OandaDependentOrderTransaction[],
-) {
-  const outcome = classifyBrokerMutationHttpResponse(
-    res,
-    body,
-    confirmationMode,
-    requiredOandaTransactions,
-  );
-  const parsedBody = outcome.parsedBody;
-  const brokerCode = parsedBody?.stringCode || parsedBody?.errorCode;
-
-  if (outcome.status === "succeeded") {
-    return respond({
-      ...(parsedBody && typeof parsedBody === "object" ? parsedBody : {}),
-      ok: true,
-      brokerExecutionStatus: "succeeded",
-      brokerOrderId: outcome.brokerOrderId,
-    });
-  }
-
-  const reason = brokerCode && outcome.error !== brokerCode
-    ? `${brokerCode}: ${outcome.error}`
-    : outcome.error || "Broker did not confirm the mutation";
-  return respond({
-    ok: false,
-    errorOrigin: "broker",
-    brokerExecutionStatus: outcome.status,
-    brokerCode: brokerCode || undefined,
-    error: reason,
-    details: body ? body.slice(0, 1000) : undefined,
-    fallback: outcome.status === "uncertain",
-  }, 409);
+// Determine if an error is retryable (5xx, connection issues — NOT 4xx)
+function isRetryableError(err: any): boolean {
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (msg.includes("5") && /50[0-9]|5[1-9][0-9]/.test(msg)) return true;
+  if (msg.includes("not connected") || msg.includes("timeout") || msg.includes("econnreset") || msg.includes("network")) return true;
+  return false;
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const body = await req.json();
-    const { action, connectionId, userId: requestedUserId, ...payload } = body;
-    const caller = await authorizeScopedCaller(req, requestedUserId);
-    if (!caller.authorized) {
-      return respond({ error: caller.error, fallback: false }, caller.status);
-    }
-
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ||
-      Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
-    const databaseKey = caller.serviceRole ? serviceRoleKey : anonKey;
-    if (!supabaseUrl || !databaseKey) {
-      return respond({ error: "Broker execution is not configured", fallback: false }, 500);
-    }
-
     const authHeader = req.headers.get("Authorization");
-    const supabase = createClient(
-      supabaseUrl,
-      databaseKey,
-      caller.serviceRole
-        ? { auth: { persistSession: false } }
-        : {
-          auth: { persistSession: false },
-          global: { headers: { Authorization: authHeader! } },
-        },
-    );
+    if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing authorization");
+
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    // Use getClaims() for local JWT verification — prevents 150s hang on expired tokens
+    const token = authHeader.replace("Bearer ", "");
+    const { data: claimsData, error: authError } = await supabase.auth.getClaims(token);
+    if (authError || !claimsData?.claims?.sub) throw new Error("Unauthorized");
+    const user = { id: claimsData.claims.sub as string };
+
+    const { action, connectionId, ...payload } = await req.json();
 
     // Fetch the broker connection
     const { data: conn, error: connErr } = await supabase.from("broker_connections")
-      .select("*").eq("id", connectionId).eq("user_id", caller.userId).single();
+      .select("*").eq("id", connectionId).eq("user_id", user.id).single();
     if (connErr || !conn) throw new Error("Broker connection not found");
 
     // Auto-detect swapped fields for MetaAPI: JWT tokens start with "eyJ", account IDs are UUIDs
@@ -163,27 +161,12 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) {
-          const errText = await res.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA error: ${res.status}`,
-            errText,
-          );
-        }
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) {
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            res.status,
-            `MetaAPI error: ${res.status}`,
-            body,
-          );
-        }
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         return respond(JSON.parse(body));
       }
     }
@@ -194,101 +177,47 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/openTrades`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) {
-          const errText = await res.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA error: ${res.status}`,
-            errText,
-          );
-        }
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/positions`);
-        if (!res.ok) {
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            res.status,
-            `MetaAPI error: ${res.status}`,
-            body,
-          );
-        }
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         return respond(JSON.parse(body));
       }
     }
 
     if (action === "place_order") {
-      const { symbol, direction, size, stopLoss, takeProfit, positionId } = payload;
+      const { symbol, direction, size, stopLoss, takeProfit } = payload;
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const units = direction === "long" ? Math.round(size * 100000) : -Math.round(size * 100000);
         const oandaInstrument = resolveOandaSymbol(symbol, conn);
-        const instrumentRes = await fetch(
-          `${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaInstrument)}`,
-          { headers: { Authorization: `Bearer ${conn.api_key}` } },
-        );
-        if (!instrumentRes.ok) {
-          const details = await instrumentRes.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            instrumentRes.status,
-            `OANDA instrument specification failed: ${instrumentRes.status}`,
-            details,
-            instrumentRes.status >= 500 ? 503 : 424,
-          );
-        }
-        const instrument = (await instrumentRes.json()).instruments?.[0];
-        if (!instrument) {
-          return respond({ error: `OANDA instrument not found: ${oandaInstrument}`, fallback: false }, 400);
-        }
-        const unitConversion = convertLotsToOandaUnits({
-          symbol,
-          lots: Number(size),
-          direction,
-          tradeUnitsPrecision: Number(instrument.tradeUnitsPrecision),
-          minimumTradeSize: Number(instrument.minimumTradeSize),
-          maximumOrderUnits: Number(instrument.maximumOrderUnits),
-        });
-        if (!unitConversion.ok) {
-          return respond({ error: `OANDA size rejected: ${unitConversion.error}`, fallback: false }, 400);
-        }
         // H10: Round prices to correct OANDA precision
         const slPrice = stopLoss ? roundOandaPrice(symbol, stopLoss) : null;
         const tpPrice = takeProfit ? roundOandaPrice(symbol, takeProfit) : null;
         const orderBody: any = {
-          order: { type: "MARKET", instrument: oandaInstrument, units: unitConversion.units, timeInForce: "FOK", positionFill: "DEFAULT" },
+          order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
         };
-        if (positionId) {
-          const clientId = String(positionId).slice(0, 128);
-          const clientComment = `paper:${positionId}`.slice(0, 128);
-          orderBody.order.clientExtensions = {
-            id: clientId,
-            tag: "smc",
-            comment: clientComment,
-          };
-          orderBody.order.tradeClientExtensions = {
-            id: clientId,
-            tag: "smc",
-            comment: clientComment,
-          };
-        }
         if (slPrice) orderBody.order.stopLossOnFill = { price: slPrice, timeInForce: "GTC" };
         if (tpPrice) orderBody.order.takeProfitOnFill = { price: tpPrice };
 
-        // Market orders are never retried automatically. A timeout or lost 5xx
-        // response may still mean OANDA accepted the order.
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
-          method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-          body: JSON.stringify(orderBody),
-        });
-        const body = await res.text();
-        return respondWithBrokerMutationOutcome(
-          res,
-          body,
-          "oanda_trade_open",
-        );
+        // H9: Retry with backoff on 5xx/connection errors
+        const result = await retryWithBackoff(async () => {
+          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
+            method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+            body: JSON.stringify(orderBody),
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            const errMsg = `OANDA order failed: ${JSON.stringify(err)}`;
+            if (res.status >= 500) throw new Error(errMsg); // retryable
+            throw Object.assign(new Error(errMsg), { nonRetryable: true }); // 4xx — don't retry
+          }
+          return await res.json();
+        }, (err) => !err.nonRetryable && isRetryableError(err));
+        return respond(result);
       }
 
       if (conn.broker_type === "metaapi") {
@@ -296,26 +225,24 @@ Deno.serve(async (req) => {
           actionType: direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
           symbol: resolveSymbol(symbol, conn), volume: size,
         };
-        if (positionId) tradeBody.comment = `paper:${positionId}`;
         if (stopLoss) tradeBody.stopLoss = stopLoss;
         if (takeProfit) tradeBody.takeProfit = takeProfit;
 
-        // Do not region-failover a market order. If the first response is
-        // uncertain, the caller's durable ledger must reconcile before retry.
-        const { res, body } = await metaFetch(
-          conn.account_id,
-          conn.api_key,
-          (b) => `${b}/trade`,
-          {
+        // H9: Retry with backoff on 5xx/connection errors
+        const result = await retryWithBackoff(async () => {
+          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
-          },
-          { allowFailover: false },
-        );
-        return respondWithBrokerMutationOutcome(
-          res,
-          body,
-          "metaapi_position_open",
-        );
+          });
+          if (!res.ok) {
+            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
+              throw new Error(`MetaAPI order failed: ${res.status} — ${body.slice(0, 200)}`);
+            }
+            // 4xx — don't retry, return error response
+            return { _noRetry: true, error: `MetaAPI order failed: ${res.status}`, details: body, fallback: false };
+          }
+          return JSON.parse(body);
+        }, isRetryableError);
+        return respond(result);
       }
     }
 
@@ -325,15 +252,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) {
-          const errText = await res.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA error: ${res.status}`,
-            errText,
-          );
-        }
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         const acct = (await res.json()).account;
         return respond({
           balance: parseFloat(acct.balance ?? "0"),
@@ -343,14 +262,7 @@ Deno.serve(async (req) => {
       }
       if (conn.broker_type === "metaapi") {
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
-        if (!res.ok) {
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            res.status,
-            `MetaAPI error: ${res.status}`,
-            body,
-          );
-        }
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         const info: any = JSON.parse(body);
         return respond({
           balance: parseFloat(info.balance ?? "0"),
@@ -376,22 +288,9 @@ Deno.serve(async (req) => {
         const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
           if (action === "validate_symbol") {
-            return respond({
-              ok: false,
-              errorOrigin: "broker",
-              broker: "metaapi",
-              brokerStatus: res.status,
-              brokerSymbol: brokerSym,
-              status: res.status,
-              error: body.slice(0, 300),
-            });
+            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: body.slice(0, 300) });
           }
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            res.status,
-            `MetaAPI symbol_specs error: ${res.status}`,
-            body,
-          );
+          return respond({ error: `MetaAPI symbol_specs error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         }
         const spec: any = JSON.parse(body);
         if (action === "validate_symbol") {
@@ -416,22 +315,9 @@ Deno.serve(async (req) => {
         if (!res.ok) {
           const errText = await res.text();
           if (action === "validate_symbol") {
-            return respond({
-              ok: false,
-              errorOrigin: "broker",
-              broker: "oanda",
-              brokerStatus: res.status,
-              brokerSymbol: oandaSym,
-              status: res.status,
-              error: errText.slice(0, 300),
-            });
+            return respond({ ok: false, brokerSymbol: oandaSym, status: res.status, error: errText.slice(0, 300) });
           }
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA symbol_specs error: ${res.status}`,
-            errText,
-          );
+          throw new Error(`OANDA symbol_specs error: ${res.status}`);
         }
         const data: any = await res.json();
         const inst = data.instruments?.[0];
@@ -460,16 +346,13 @@ Deno.serve(async (req) => {
     if (action === "connection_status") {
       if (conn.broker_type === "metaapi") {
         // Provisioning API — returns account state regardless of broker connection
-        const provisioning = await fetchMetaApiProvisioningAccount(conn.account_id, conn.api_key);
-        if (!provisioning.res.ok || !provisioning.account) {
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            provisioning.res.status,
-            `MetaAPI provisioning ${provisioning.res.status}`,
-            provisioning.body,
-          );
+        const provUrl = `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`;
+        const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
+        const body = await res.text();
+        if (!res.ok) {
+          return respond({ ok: false, error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 200);
         }
-        const info = provisioning.account;
+        const info: any = JSON.parse(body);
         return respond({
           ok: true,
           state: info.state ?? "UNKNOWN",          // DEPLOYED / UNDEPLOYED / DEPLOYING
@@ -486,15 +369,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) {
-          const details = await res.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA ${res.status}`,
-            details,
-          );
-        }
+        if (!res.ok) return respond({ ok: false, error: `OANDA ${res.status}`, fallback: true }, 200);
         const acct = (await res.json()).account;
         return respond({ ok: true, state: "DEPLOYED", connectionStatus: "CONNECTED", ready: true, name: acct.alias, login: acct.id });
       }
@@ -504,29 +379,37 @@ Deno.serve(async (req) => {
     if (action === "close_trade") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
-          method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload.units ? { units: payload.units.toString() } : {}),
-        });
-        const body = await res.text();
-        return respondWithBrokerMutationOutcome(
-          res,
-          body,
-          "oanda_order_fill",
-        );
+        // H9: Retry with backoff
+        const result = await retryWithBackoff(async () => {
+          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
+            method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload.units ? { units: payload.units.toString() } : {}),
+          });
+          if (!res.ok) {
+            const errMsg = `OANDA close failed: ${res.status}`;
+            if (res.status >= 500) throw new Error(errMsg);
+            throw Object.assign(new Error(errMsg), { nonRetryable: true });
+          }
+          return await res.json();
+        }, (err) => !err.nonRetryable && isRetryableError(err));
+        return respond(result);
       }
       if (conn.broker_type === "metaapi") {
-        const { res, body } = await metaFetch(
-          conn.account_id,
-          conn.api_key,
-          (b) => `${b}/trade`,
-          {
+        // H9: Retry with backoff
+        const result = await retryWithBackoff(async () => {
+          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
-          },
-          { allowFailover: false },
-        );
-        return respondWithBrokerMutationOutcome(res, body, "metaapi_trade");
+          });
+          if (!res.ok) {
+            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
+              throw new Error(`MetaAPI close failed: ${res.status} — ${body.slice(0, 200)}`);
+            }
+            return { _noRetry: true, error: `MetaAPI close failed: ${res.status}`, details: body, fallback: false };
+          }
+          return JSON.parse(body);
+        }, isRetryableError);
+        return respond(result);
       }
     }
 
@@ -537,15 +420,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades?state=CLOSED&count=${limit}`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) {
-          const errText = await res.text();
-          return respondWithBrokerReadFailure(
-            "oanda",
-            res.status,
-            `OANDA error: ${res.status}`,
-            errText,
-          );
-        }
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).trades || []);
       }
       if (conn.broker_type === "metaapi") {
@@ -553,14 +428,7 @@ Deno.serve(async (req) => {
         const startTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const endTime = new Date().toISOString();
         const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/history-deals/time/${startTime}/${endTime}`);
-        if (!res.ok) {
-          return respondWithBrokerReadFailure(
-            "metaapi",
-            res.status,
-            `MetaAPI error: ${res.status}`,
-            body,
-          );
-        }
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         const deals: any[] = JSON.parse(body);
         // Group deals by positionId to reconstruct trades
         const posMap = new Map<string, any[]>();
@@ -617,16 +485,11 @@ Deno.serve(async (req) => {
         const modifyBody: any = { actionType: "POSITION_MODIFY", positionId: tradeId };
         if (stopLoss !== undefined) modifyBody.stopLoss = stopLoss;
         if (takeProfit !== undefined) modifyBody.takeProfit = takeProfit;
-        const { res, body } = await metaFetch(
-          conn.account_id,
-          conn.api_key,
-          (b) => `${b}/trade`,
-          {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
-          },
-          { allowFailover: false },
-        );
-        return respondWithBrokerMutationOutcome(res, body, "metaapi_trade");
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+        });
+        if (!res.ok) return respond({ error: `MetaAPI modify failed: ${res.status}`, details: body }, 200);
+        return respond(JSON.parse(body));
       }
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
@@ -637,27 +500,15 @@ Deno.serve(async (req) => {
           method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
           body: JSON.stringify(updates),
         });
-        const body = await res.text();
-        const requiredOandaTransactions: OandaDependentOrderTransaction[] = [];
-        if (stopLoss !== undefined) {
-          requiredOandaTransactions.push("stopLossOrderTransaction");
-        }
-        if (takeProfit !== undefined) {
-          requiredOandaTransactions.push("takeProfitOrderTransaction");
-        }
-        return respondWithBrokerMutationOutcome(
-          res,
-          body,
-          "oanda_trade_orders",
-          requiredOandaTransactions,
-        );
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA modify failed: ${res.status}`, details: errText }, res.status); }
+        return respond(await res.json());
       }
     }
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
     console.error("broker-execute error:", error?.message || error);
-    return new Response(JSON.stringify({ ok: false, state: "unknown", error: error.message, fallback: true }), {
+    return new Response(JSON.stringify({ error: error.message, fallback: true }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

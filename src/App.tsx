@@ -9,7 +9,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Chart from "./pages/Chart";
 import IctAnalysis from "./pages/IctAnalysis";
-import OperationsDashboard from "./pages/OperationsDashboard";
+import BotView from "./pages/BotView";
 import Journal from "./pages/Journal";
 import Backtest from "./pages/Backtest";
 import SettingsPage from "./pages/Settings";
@@ -17,17 +17,13 @@ import BrokersPage from "./pages/Brokers";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
-import AuthCallback from "./pages/AuthCallback";
 import NotFound from "./pages/NotFound";
 import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
 import PropFirm from "./pages/PropFirm";
 import RejectedSetups from "./pages/RejectedSetups";
-import ManualImpulse from "./pages/ManualImpulse";
-import BotConfig from "./pages/BotConfig";
 import ScheduledTasks from "./pages/ScheduledTasks";
-import Optimizer from "./pages/Optimizer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient();
@@ -45,13 +41,12 @@ const App = () => (
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
-                <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                 <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
                 <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
                 <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
                 <Route path="/game-plan" element={<ProtectedRoute><GamePlan /></ProtectedRoute>} />
-                <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><OperationsDashboard /></ErrorBoundary></ProtectedRoute>} />
+                <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><BotView /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
                 <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
@@ -59,10 +54,7 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
                 <Route path="/rejected-setups" element={<ProtectedRoute><RejectedSetups /></ProtectedRoute>} />
-                <Route path="/manual-impulse" element={<ProtectedRoute><ManualImpulse /></ProtectedRoute>} />
-                <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                 <Route path="/scheduled-tasks" element={<ProtectedRoute><ScheduledTasks /></ProtectedRoute>} />
-                <Route path="/optimizer" element={<ProtectedRoute><ErrorBoundary><Optimizer /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </ErrorBoundary>

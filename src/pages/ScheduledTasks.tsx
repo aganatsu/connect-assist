@@ -1,18 +1,15 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { OverflowText } from "@/components/ui/overflow-text";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   Clock, Play, Pause, RotateCw, Zap, BarChart3, Wrench,
   CheckCircle2, XCircle, Minus, ChevronDown, ChevronUp,
-  AlertTriangle, Rocket, ExternalLink, Loader2,
 } from "lucide-react";
 import { invokeFunction } from "@/lib/api";
 
@@ -27,58 +24,9 @@ interface ScheduledTask {
   interval_minutes: number;
   cron_expression: string;
   last_run_at: string | null;
-  last_status: "success" | "error" | "running" | "invoked" | "skipped" | null;
+  last_status: "success" | "error" | null;
   last_error: string | null;
   run_count: number;
-  runtime?: {
-    run_id: string;
-    trigger_source: "cron" | "manual";
-    status: "invoked" | "running" | "completed" | "failed" | "skipped";
-    phase: string;
-    cron_invoked_at: string;
-    scan_started_at: string | null;
-    pair_processing_completed_at: string | null;
-    scan_completed_at: string | null;
-    position_management_completed_at: string | null;
-    heartbeat_at: string;
-    expected_pairs: number | null;
-    processed_pairs: number | null;
-    error_code: string | null;
-    error_message: string | null;
-    metadata: Record<string, unknown> | null;
-  };
-}
-
-interface OperationalAlert {
-  id: string;
-  bot_id: string;
-  alert_type: string;
-  severity: "info" | "warning" | "critical";
-  title: string;
-  message: string;
-  occurrences: number;
-  first_detected_at: string;
-  last_detected_at: string;
-  evidence: Record<string, unknown>;
-}
-
-interface ScheduledTasksPayload {
-  tasks: ScheduledTask[];
-  alerts: OperationalAlert[];
-}
-
-interface DeploymentStatus {
-  authorized: boolean;
-  configured: boolean;
-  run: null | {
-    id: number;
-    status: "queued" | "in_progress" | "completed";
-    conclusion: "success" | "failure" | "cancelled" | null;
-    createdAt: string;
-    updatedAt: string;
-    url: string;
-    commit: string;
-  };
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -124,81 +72,18 @@ function formatInterval(minutes: number): string {
   return `Every ${Math.floor(minutes / 1440)}d`;
 }
 
-function formatPhase(phase?: string): string {
-  if (!phase) return "No runtime evidence";
-  const labels: Record<string, string> = {
-    cron_invoked: "Cron invoked",
-    manual_invoked: "Manual run invoked",
-    scan_started: "Scan started",
-    pair_processing_started: "Pair processing started",
-    pair_processing: "Processing pairs",
-    pair_processing_completed: "Pair processing completed",
-    position_management_started: "Management started",
-    position_management_running: "Managing positions",
-    confirmation_processing_started: "Confirmation scan started",
-    confirmation_processing: "Checking confirmations",
-    completed: "Completed",
-    skipped: "Skipped",
-    failed: "Failed",
-  };
-  return labels[phase] || phase.replace(/_/g, " ");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export default function ScheduledTasks() {
   const queryClient = useQueryClient();
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<ScheduledTasksPayload>({
+  const { data: tasks = [], isLoading } = useQuery<ScheduledTask[]>({
     queryKey: ["scheduled-tasks"],
     queryFn: async () => {
       const res = await invokeFunction("scheduled-tasks", { action: "list" });
-      return {
-        tasks: res?.tasks || [],
-        alerts: res?.alerts || [],
-      };
+      return res?.tasks || [];
     },
     refetchInterval: 30000,
   });
-  const tasks = data?.tasks || [];
-  const alerts = data?.alerts || [];
-
-  const deploymentQuery = useQuery<DeploymentStatus>({
-    queryKey: ["edge-function-deployment"],
-    queryFn: async () => {
-      try {
-        return await invokeFunction("deploy-control", { action: "status" });
-      } catch {
-        return { authorized: false, configured: false, run: null };
-      }
-    },
-    refetchInterval: (query) => {
-      const status = query.state.data?.run?.status;
-      return status === "queued" || status === "in_progress" ? 5000 : 30000;
-    },
-    retry: false,
-  });
-
-  const deployMutation = useMutation({
-    mutationFn: async () => invokeFunction("deploy-control", { action: "deploy" }),
-    onSuccess: () => {
-      toast.success("Edge-function deployment queued");
-      setTimeout(() => deploymentQuery.refetch(), 1500);
-    },
-    onError: (err: unknown) => {
-      toast.error("Deployment could not be started", { description: errorMessage(err) });
-    },
-  });
-
-  const deployment = deploymentQuery.data;
-  const deploymentRunning = deployment?.run?.status === "queued" || deployment?.run?.status === "in_progress";
-  const deployAll = () => {
-    if (!window.confirm("Redeploy every production edge function from main? Active requests may briefly use mixed versions during rollout.")) return;
-    deployMutation.mutate();
-  };
 
   const updateMutation = useMutation({
     mutationFn: async (params: { taskId: string; enabled?: boolean; interval_minutes?: number }) => {
@@ -207,8 +92,8 @@ export default function ScheduledTasks() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scheduled-tasks"] });
     },
-    onError: (err: unknown) => {
-      toast.error("Failed to update task", { description: errorMessage(err) });
+    onError: (err: any) => {
+      toast.error("Failed to update task", { description: err.message });
     },
   });
 
@@ -224,8 +109,8 @@ export default function ScheduledTasks() {
       }
       queryClient.invalidateQueries({ queryKey: ["scheduled-tasks"] });
     },
-    onError: (err: unknown) => {
-      toast.error("Failed to trigger task", { description: errorMessage(err) });
+    onError: (err: any) => {
+      toast.error("Failed to trigger task", { description: err.message });
     },
   });
 
@@ -260,109 +145,22 @@ export default function ScheduledTasks() {
 
   return (
     <AppShell>
-      <WorkspacePage>
-        <WorkspaceHeader
-          icon={Clock}
-          eyebrow="Automation"
-          title="Scheduled Tasks"
-          description="Manage cron jobs, intervals, and manual runs."
-          actions={<Badge variant="outline" className="text-xs">
+      <div className="max-w-4xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold flex items-center gap-2">
+              <Clock className="h-5 w-5 text-primary" />
+              Scheduled Tasks
+            </h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Manage cron jobs — pause, resume, change intervals, or trigger manually
+            </p>
+          </div>
+          <Badge variant="outline" className="text-xs">
             {tasks.filter((t) => t.enabled).length}/{tasks.length} active
-          </Badge>}
-        />
-        <WorkspaceBody>
-          <div className="max-w-4xl mx-auto space-y-6">
-
-        {deployment?.authorized && (
-          <Card className="border-primary/40 bg-primary/5">
-            <CardContent className="p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <Rocket className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold">Production Edge Functions</span>
-                      {deploymentRunning ? (
-                        <Badge variant="outline" className="gap-1 text-[10px]">
-                          <Loader2 className="h-3 w-3 animate-spin" /> Deploying
-                        </Badge>
-                      ) : deployment.run?.conclusion === "success" ? (
-                        <Badge variant="outline" className="border-success/40 text-success text-[10px]">Deployed</Badge>
-                      ) : deployment.run?.conclusion ? (
-                        <Badge variant="destructive" className="text-[10px]">{deployment.run.conclusion}</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[10px]">Ready</Badge>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Redeploys every Supabase edge function from the latest commit on main. Migrations and the frontend are not included.
-                    </p>
-                    {deployment.run && (
-                      <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
-                        <span>Last started {formatTimeAgo(deployment.run.createdAt)}</span>
-                        <a href={deployment.run.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
-                          View logs <ExternalLink className="h-3 w-3" />
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <Button onClick={deployAll} disabled={deploymentRunning || deployMutation.isPending || !deployment.configured} className="shrink-0 gap-2">
-                  {deploymentRunning || deployMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                  {deploymentRunning ? "Deploying" : "Redeploy All"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {alerts.length > 0 && (
-          <Card className="border-destructive/50 bg-destructive/5">
-            <CardContent className="p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-destructive" />
-                <div className="font-semibold text-sm">
-                  Operational alert{alerts.length === 1 ? "" : "s"} ({alerts.length})
-                </div>
-                <Badge variant="destructive" className="ml-auto text-[10px]">
-                  Automatic
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                {alerts.map((alert) => (
-                  <div
-                    key={alert.id}
-                    className="rounded-md border border-border/60 bg-background/60 p-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <Badge
-                        variant={alert.severity === "critical" ? "destructive" : "outline"}
-                        className="mt-0.5 text-[10px] uppercase"
-                      >
-                        {alert.severity}
-                      </Badge>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium">{alert.title}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {alert.message}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground mt-1">
-                          Last detected {formatTimeAgo(alert.last_detected_at)}
-                          {alert.occurrences > 1
-                            ? ` · repeated ${alert.occurrences} times`
-                            : ""}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                These alerts clear automatically after the underlying scanner condition recovers.
-              </p>
-            </CardContent>
-          </Card>
-        )}
+          </Badge>
+        </div>
 
         {isLoading ? (
           <div className="space-y-4">
@@ -412,33 +210,22 @@ export default function ScheduledTasks() {
                             {/* Info */}
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <OverflowText
-                                  text={task.display_name}
-                                  className="block text-sm font-medium"
-                                />
+                                <span className="font-medium text-sm truncate">
+                                  {task.display_name}
+                                </span>
                                 {task.last_status === "success" && (
                                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                                 )}
                                 {task.last_status === "error" && (
                                   <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
                                 )}
-                                {(task.last_status === "running" || task.last_status === "invoked") && (
-                                  <RotateCw className="h-3.5 w-3.5 text-cyan-400 shrink-0 animate-spin" />
-                                )}
-                                {(!task.last_status || task.last_status === "skipped") && (
+                                {!task.last_status && (
                                   <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 )}
                               </div>
-                              <OverflowText
-                                text={task.runtime
-                                  ? `${formatPhase(task.runtime.phase)}${
-                                    task.runtime.expected_pairs !== null
-                                      ? ` · ${task.runtime.processed_pairs ?? 0}/${task.runtime.expected_pairs} pairs`
-                                      : ""
-                                  } · ${task.runtime.trigger_source}`
-                                  : task.description}
-                                className="mt-0.5 hidden text-xs text-muted-foreground md:block"
-                              />
+                              <p className="text-xs text-muted-foreground truncate mt-0.5 hidden md:block">
+                                {task.description}
+                              </p>
                             </div>
 
                             {/* Interval selector */}
@@ -518,30 +305,6 @@ export default function ScheduledTasks() {
                                 <span className="text-xs text-muted-foreground">Last run</span>
                                 <span className="text-xs">{formatTimeAgo(task.last_run_at)}</span>
                               </div>
-                              {task.runtime && (
-                                <>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Exact stop point</span>
-                                    <span className="text-xs">{formatPhase(task.runtime.phase)}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Triggered by</span>
-                                    <span className="text-xs capitalize">{task.runtime.trigger_source}</span>
-                                  </div>
-                                  {task.runtime.expected_pairs !== null && (
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-xs text-muted-foreground">Pair progress</span>
-                                      <span className="text-xs font-mono">
-                                        {task.runtime.processed_pairs ?? 0}/{task.runtime.expected_pairs}
-                                      </span>
-                                    </div>
-                                  )}
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs text-muted-foreground">Last heartbeat</span>
-                                    <span className="text-xs">{formatTimeAgo(task.runtime.heartbeat_at)}</span>
-                                  </div>
-                                </>
-                              )}
                               {task.last_error && (
                                 <div className="text-xs text-destructive bg-destructive/10 p-2 rounded">
                                   {task.last_error}
@@ -567,9 +330,7 @@ export default function ScheduledTasks() {
         <p className="text-xs text-muted-foreground text-center pt-4 border-t border-border/30">
           Tasks run via pg_cron. Changing the Bot Scanner interval also updates your scan interval setting.
         </p>
-          </div>
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }

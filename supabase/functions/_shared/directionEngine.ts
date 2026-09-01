@@ -12,12 +12,6 @@
  */
 
 import { analyzeMarketStructure, detectSwingPoints, calculateATR, type Candle, type StructureBreak, type SwingPoint } from "./smcAnalysis.ts";
-import { STYLE_TIMEFRAME_ROLES } from "./stylePolicy.ts";
-import type { TradingStyleMode } from "./tradingStyleConfig.ts";
-import {
-  formatAnalysisTimeframe,
-  normalizeAnalysisTimeframe,
-} from "./timeframeAuthority.ts";
 
 // ── Confirmed Trend (fib-extension-filtered MSBs for stable macro-trend) ──
 
@@ -209,7 +203,7 @@ export function confirmedTrend(
 export interface DirectionResult {
   direction: "long" | "short" | null;
   bias: "bullish" | "bearish" | null;       // the HTF bias that set the direction
-  biasSource: string | null;                // policy timeframe label that provided the bias
+  biasSource: "daily" | "4h" | null;        // which TF provided the bias
   h4Retrace: boolean;                       // true = 4H is pulling back without CHoCH
   h4ChochAgainst: boolean;                  // true = 4H CHoCH against bias → hard block
   h1Confirmed: boolean;                     // true = 1H BOS in bias direction
@@ -888,24 +882,8 @@ export interface StyleTFMapping {
   confirmTFLabel: string;
 }
 
-function styleTFLabels(style: TradingStyleMode): StyleTFMapping {
-  const roles = STYLE_TIMEFRAME_ROLES[style];
-  return {
-    biasTFLabel: formatAnalysisTimeframe(
-      normalizeAnalysisTimeframe(roles.bias, "1d"),
-    ),
-    structureTFLabel: formatAnalysisTimeframe(
-      normalizeAnalysisTimeframe(roles.structure, "4h"),
-    ),
-    // The direction engine's lowest structural input is the setup role.
-    confirmTFLabel: formatAnalysisTimeframe(
-      normalizeAnalysisTimeframe(roles.setup, "1h"),
-    ),
-  };
-}
-
-export const STYLE_TF_LABELS: Record<TradingStyleMode, StyleTFMapping> = {
-  scalper: styleTFLabels("scalper"),
-  day_trader: styleTFLabels("day_trader"),
-  swing_trader: styleTFLabels("swing_trader"),
+export const STYLE_TF_LABELS: Record<string, StyleTFMapping> = {
+  scalper: { biasTFLabel: "1H", structureTFLabel: "15m", confirmTFLabel: "5m" },
+  day_trader: { biasTFLabel: "Daily", structureTFLabel: "4H", confirmTFLabel: "1H" },
+  swing_trader: { biasTFLabel: "Weekly", structureTFLabel: "Daily", confirmTFLabel: "4H" },
 };

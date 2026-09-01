@@ -17,7 +17,6 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import {
   getResetHourUTC,
   getCESTTradingDay,
@@ -31,10 +30,6 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
-
-  // Gate 0: Only the cron scheduler may invoke this function.
-  const authError = verifyCronCaller(req);
-  if (authError) return authError;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,

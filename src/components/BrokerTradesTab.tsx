@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatPrice } from "@/lib/formatTime";
-import { canUseTradingControls } from "@/lib/executionMode";
 
 // ── Persistence ──
 const STORAGE_KEY = "broker-tab-layout";
@@ -44,10 +43,6 @@ function pnlColor(pnl: number): string {
   if (pnl > 0) return "text-success";
   if (pnl < 0) return "text-destructive";
   return "text-muted-foreground";
-}
-
-function readErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 // getDigits removed — formatPrice from @/lib/formatTime handles digit resolution
@@ -94,10 +89,7 @@ function CollapsibleSection({
           className="flex items-center gap-1.5 flex-1 min-w-0 hover:bg-muted/20 rounded px-1 py-0.5 transition-colors"
         >
           <span className="text-muted-foreground/60">{icon}</span>
-          <h4
-            className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground truncate"
-            title={title}
-          >
+          <h4 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground truncate">
             {title}
           </h4>
           {badge}
@@ -130,23 +122,7 @@ function CollapsibleSection({
 }
 
 // ── Section: Account Summary ──
-function UnavailableRead({
-  message,
-  detail = "Actions that require this data remain unavailable until the read succeeds.",
-}: {
-  message: string;
-  detail?: string;
-}) {
-  return (
-    <div className="p-4 text-center text-warning">
-      <AlertTriangle className="mx-auto mb-2 h-4 w-4" />
-      <p className="text-xs font-medium">{message}</p>
-      <p className="mt-1 text-[10px] text-muted-foreground">{detail}</p>
-    </div>
-  );
-}
-
-function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoading: boolean; error?: string }) {
+function AccountSummaryContent({ data, isLoading }: { data: any; isLoading: boolean }) {
   if (isLoading) {
     return (
       <div className="p-3 animate-pulse">
@@ -156,8 +132,7 @@ function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoadin
       </div>
     );
   }
-  if (error) return <UnavailableRead message={error} />;
-  if (!data) return <UnavailableRead message="Broker account state is unavailable" />;
+  if (!data) return <div className="p-3 text-xs text-muted-foreground text-center">No account data</div>;
 
   const balance = parseFloat(data.balance ?? 0);
   const equity = parseFloat(data.equity ?? data.balance ?? 0);
@@ -207,18 +182,10 @@ function AccountSummaryContent({ data, isLoading, error }: { data: any; isLoadin
 }
 
 // ── Section: Open Positions ──
-export function OpenPositionsContent({
-  positions, paperPositions, connectionId, isLoading, error, modifyEnabled,
-  closeEnabled, mutationUnavailableMessage,
+function OpenPositionsContent({
+  positions, paperPositions, connectionId, isLoading,
 }: {
-  positions: any[];
-  paperPositions: any[];
-  connectionId: string;
-  isLoading: boolean;
-  error?: string;
-  modifyEnabled: boolean;
-  closeEnabled: boolean;
-  mutationUnavailableMessage?: string;
+  positions: any[]; paperPositions: any[]; connectionId: string; isLoading: boolean;
 }) {
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -226,12 +193,7 @@ export function OpenPositionsContent({
   const [editTP, setEditTP] = useState("");
 
   const closeMut = useMutation({
-    mutationFn: (tradeId: string) => {
-      if (!connectionId || !tradeId) {
-        throw new Error("A known broker connection and trade are required to close this position.");
-      }
-      return brokerExecApi.closeTrade(connectionId, tradeId);
-    },
+    mutationFn: (tradeId: string) => brokerExecApi.closeTrade(connectionId, tradeId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
       queryClient.invalidateQueries({ queryKey: ["broker-account"] });
@@ -241,10 +203,8 @@ export function OpenPositionsContent({
   });
 
   const modifyMut = useMutation({
-    mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) => {
-      if (!modifyEnabled) throw new Error("Broker state is unavailable. Refresh before changing live positions.");
-      return brokerExecApi.modifyTrade(connectionId, tradeId, updates);
-    },
+    mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) =>
+      brokerExecApi.modifyTrade(connectionId, tradeId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-open-trades"] });
       setEditingId(null);
@@ -261,8 +221,6 @@ export function OpenPositionsContent({
     );
   }
 
-  if (error) return <UnavailableRead message={error} />;
-
   if (positions.length === 0) {
     return (
       <div className="p-6 text-center">
@@ -273,11 +231,6 @@ export function OpenPositionsContent({
 
   return (
     <>
-    {!modifyEnabled && (
-      <div className="mx-2 mt-2 border border-warning/30 bg-warning/5 px-2 py-1.5 text-[10px] text-warning">
-        {mutationUnavailableMessage || "Broker state is unavailable. SL/TP edits are disabled; known positions can still be closed."}
-      </div>
-    )}
     {/* Mobile: Stacked cards */}
     <div className="md:hidden space-y-1.5 p-2">
       {positions.map((pos: any) => {
@@ -308,22 +261,6 @@ export function OpenPositionsContent({
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
               <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, pos.symbol)}</span>
               <span className="text-success/80">TP: {formatPrice(pos.takeProfit, pos.symbol)}</span>
-            </div>
-            <div className="flex justify-end border-t border-border/30 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`Close ${pos.symbol} ${isLong ? "BUY" : "SELL"} position on broker?`)) {
-                    closeMut.mutate(pos.id);
-                  }
-                }}
-                disabled={!closeEnabled || !pos.id || closeMut.isPending}
-                title={!closeEnabled || !pos.id ? "Current broker positions are unavailable" : "Close position"}
-                aria-label={`Close ${pos.symbol} position`}
-                className="inline-flex items-center gap-1 p-1 text-[10px] text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <XCircle className="h-3 w-3" /> Close
-              </button>
             </div>
           </div>
         );
@@ -430,9 +367,8 @@ export function OpenPositionsContent({
                             updates.symbol = pos.symbol;
                             modifyMut.mutate({ tradeId: pos.id, updates });
                           }}
-                          className="text-success hover:bg-success/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!modifyEnabled || modifyMut.isPending}
-                          title={!modifyEnabled ? "Broker state unavailable" : "Save SL/TP"}
+                          className="text-success hover:bg-success/10 p-0.5 rounded transition-colors"
+                          disabled={modifyMut.isPending}
                         >
                           {modifyMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                         </button>
@@ -448,9 +384,8 @@ export function OpenPositionsContent({
                             setEditSL(pos.stopLoss?.toString() || "");
                             setEditTP(pos.takeProfit?.toString() || "");
                           }}
-                          className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!modifyEnabled}
-                          title={!modifyEnabled ? "Broker state unavailable" : "Edit SL/TP"}
+                          className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors"
+                          title="Edit SL/TP"
                         >
                           <Edit3 className="h-3 w-3" />
                         </button>
@@ -460,9 +395,9 @@ export function OpenPositionsContent({
                               closeMut.mutate(pos.id);
                             }
                           }}
-                          className="text-destructive hover:bg-destructive/10 p-0.5 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!closeEnabled || !pos.id || closeMut.isPending}
-                          title={!closeEnabled || !pos.id ? "Current broker positions are unavailable" : "Close position"}
+                          className="text-destructive hover:bg-destructive/10 p-0.5 rounded transition-colors"
+                          disabled={closeMut.isPending}
+                          title="Close position"
                         >
                           <XCircle className="h-3 w-3" />
                         </button>
@@ -481,10 +416,10 @@ export function OpenPositionsContent({
 }
 
 // ── Section: Sync Status ──
-export function SyncStatusContent({
-  brokerPositions, paperPositions, isLoading, error,
+function SyncStatusContent({
+  brokerPositions, paperPositions, isLoading,
 }: {
-  brokerPositions: any[]; paperPositions: any[]; isLoading: boolean; error?: string;
+  brokerPositions: any[]; paperPositions: any[]; isLoading: boolean;
 }) {
   if (isLoading) {
     return (
@@ -493,8 +428,6 @@ export function SyncStatusContent({
       </div>
     );
   }
-
-  if (error) return <UnavailableRead message={error} />;
 
   const syncResults = paperPositions.map((pp: any) => {
     const tag = `paper:${pp.id || pp.position_id}`;
@@ -559,9 +492,9 @@ export function SyncStatusContent({
 
 // ── Section: Trade History ──
 function TradeHistoryContent({
-  trades, paperHistory, isLoading, error,
+  trades, paperHistory, isLoading,
 }: {
-  trades: any[]; paperHistory: any[]; isLoading: boolean; error?: string;
+  trades: any[]; paperHistory: any[]; isLoading: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
   const displayed = showAll ? trades : trades.slice(0, 15);
@@ -573,8 +506,6 @@ function TradeHistoryContent({
       </div>
     );
   }
-
-  if (error) return <UnavailableRead message={error} />;
 
   const totalPnl = trades.reduce((s, t) => s + (t.netPnl ?? t.pnl ?? parseFloat(t.realizedPL ?? 0)), 0);
   const totalComm = trades.reduce((s, t) => s + (t.commission ?? 0), 0);
@@ -707,7 +638,7 @@ function TradeHistoryContent({
 }
 
 // ── Main Component ──
-export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed: boolean }) {
+export default function BrokerTradesTab() {
   const queryClient = useQueryClient();
   const [layout, setLayout] = useState<LayoutState>(loadLayout);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -799,7 +730,7 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   }), [handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop]);
 
   // Load broker connections
-  const { data: connections, isLoading: connsLoading, isFetching: connsFetching, isError: connsUnavailable, error: connsError } = useQuery({
+  const { data: connections, isLoading: connsLoading } = useQuery({
     queryKey: ["broker-connections"],
     queryFn: () => brokerApi.list(),
     staleTime: 60000,
@@ -813,35 +744,21 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   const connId = selectedConnId || activeConns[0]?.id;
 
   // Load broker data
-  const {
-    data: connectionState,
-    isLoading: connectionStateLoading,
-    isFetching: connectionStateFetching,
-    isSuccess: connectionStateAvailable,
-    isError: connectionStateUnavailable,
-    error: connectionStateError,
-  } = useQuery({
-    queryKey: ["broker-connection-status", connId],
-    queryFn: () => brokerExecApi.connectionStatus(connId),
-    enabled: !!connId,
-    refetchInterval: 30000,
-  });
-
-  const { data: accountData, isLoading: accountLoading, isFetching: accountFetching, isSuccess: accountAvailable, isError: accountUnavailable, error: accountError } = useQuery({
+  const { data: accountData, isLoading: accountLoading } = useQuery({
     queryKey: ["broker-account", connId],
     queryFn: () => brokerExecApi.accountSummary(connId),
     enabled: !!connId,
     refetchInterval: 15000,
   });
 
-  const { data: brokerPositions, isLoading: positionsLoading, isFetching: positionsFetching, isSuccess: positionsAvailable, isError: positionsUnavailable, error: positionsError } = useQuery({
+  const { data: brokerPositions, isLoading: positionsLoading } = useQuery({
     queryKey: ["broker-open-trades", connId],
     queryFn: () => brokerExecApi.openTrades(connId),
     enabled: !!connId,
     refetchInterval: 10000,
   });
 
-  const { data: tradeHistory, isLoading: historyLoading, isError: historyUnavailable, error: historyError } = useQuery({
+  const { data: tradeHistory, isLoading: historyLoading } = useQuery({
     queryKey: ["broker-trade-history", connId],
     queryFn: () => brokerExecApi.tradeHistory(connId),
     enabled: !!connId,
@@ -849,51 +766,16 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
   });
 
   // Load paper positions for sync comparison
-  const { data: paperStatus, isFetching: paperStatusFetching, isError: paperStatusUnavailable, error: paperStatusError } = useQuery({
+  const { data: paperStatus } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 5000,
   });
 
-  const paperPositions = useMemo(
-    () => Array.isArray(paperStatus?.positions) ? paperStatus.positions : [],
-    [paperStatus],
-  );
-  const paperHistory = useMemo(
-    () => Array.isArray(paperStatus?.tradeHistory) ? paperStatus.tradeHistory : [],
-    [paperStatus],
-  );
-  const brokerPos = useMemo(
-    () => Array.isArray(brokerPositions) ? brokerPositions : [],
-    [brokerPositions],
-  );
-  const brokerHist = useMemo(
-    () => Array.isArray(tradeHistory) ? tradeHistory : [],
-    [tradeHistory],
-  );
-  const brokerTruthFetching = connsFetching || connectionStateFetching ||
-    accountFetching || positionsFetching || paperStatusFetching;
-  const brokerMutationsEnabled = !brokerTruthFetching && mutationsAllowed &&
-    canUseTradingControls("live", [
-      connectionStateAvailable && connectionState?.ready === true &&
-      accountAvailable && positionsAvailable,
-    ]);
-  const brokerCloseEnabled = !!connId && positionsAvailable &&
-    Array.isArray(brokerPositions);
-  const syncTruthPending = brokerTruthFetching;
-  const syncTruthUnavailable = connectionStateUnavailable || accountUnavailable ||
-    positionsUnavailable || paperStatusUnavailable;
-  const mutationUnavailableMessage = !mutationsAllowed
-    ? "Account mode or another active broker state is unavailable. Live position controls are disabled."
-    : connectionStateUnavailable
-      ? readErrorMessage(connectionStateError, "Broker connection status is unavailable")
-      : connectionState?.ready === false
-        ? "Broker connection is not ready. Live position controls are disabled."
-        : accountUnavailable
-          ? readErrorMessage(accountError, "Broker account state is unavailable")
-          : positionsUnavailable
-            ? readErrorMessage(positionsError, "Broker position state is unavailable")
-            : "Loading current broker state. Live position controls are disabled.";
+  const paperPositions = paperStatus?.positions || [];
+  const paperHistory = paperStatus?.tradeHistory || [];
+  const brokerPos = Array.isArray(brokerPositions) ? brokerPositions : [];
+  const brokerHist = Array.isArray(tradeHistory) ? tradeHistory : [];
 
   // Sync status badges for the section header
   const syncBadges = useMemo(() => {
@@ -931,10 +813,6 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
     );
   }
 
-  if (connsUnavailable) {
-    return <UnavailableRead message={readErrorMessage(connsError, "Broker connection state is unavailable")} />;
-  }
-
   if (activeConns.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center">
@@ -952,10 +830,10 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
     account: {
       title: "Account Summary",
       icon: <DollarSign className="h-3 w-3" />,
-      content: <AccountSummaryContent data={accountData} isLoading={accountLoading} error={accountUnavailable ? readErrorMessage(accountError, "Broker account state is unavailable") : undefined} />,
+      content: <AccountSummaryContent data={accountData?.error ? null : accountData} isLoading={accountLoading} />,
     },
     positions: {
-      title: positionsUnavailable ? "Open Positions" : `Open Positions (${brokerPos.length})`,
+      title: `Open Positions (${brokerPos.length})`,
       icon: <Activity className="h-3 w-3" />,
       content: (
         <OpenPositionsContent
@@ -963,36 +841,27 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
           paperPositions={paperPositions}
           connectionId={connId}
           isLoading={positionsLoading}
-          error={positionsUnavailable ? readErrorMessage(positionsError, "Broker position state is unavailable") : undefined}
-          modifyEnabled={brokerMutationsEnabled}
-          closeEnabled={brokerCloseEnabled}
-          mutationUnavailableMessage={mutationUnavailableMessage}
         />
       ),
     },
     sync: {
       title: "Sync Status",
-      icon: syncTruthPending || syncTruthUnavailable || syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
+      icon: syncBadges.unsyncedCount > 0 || syncBadges.mismatchCount > 0
         ? <AlertTriangle className="h-3 w-3 text-warning" />
         : <CheckCircle2 className="h-3 w-3 text-success" />,
       badge: (
         <div className="flex items-center gap-1">
-          {syncTruthPending ? (
-            <span className="text-[8px] font-bold text-muted-foreground bg-muted/30 border border-border px-1 py-0.5 rounded">checking</span>
-          ) : syncTruthUnavailable ? (
-            <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">unknown</span>
-          ) : null}
-          {!syncTruthPending && !syncTruthUnavailable && syncBadges.syncedCount > 0 && (
+          {syncBadges.syncedCount > 0 && (
             <span className="text-[8px] font-bold text-success bg-success/10 border border-success/20 px-1 py-0.5 rounded">
               {syncBadges.syncedCount} synced
             </span>
           )}
-          {!syncTruthPending && !syncTruthUnavailable && syncBadges.unsyncedCount > 0 && (
+          {syncBadges.unsyncedCount > 0 && (
             <span className="text-[8px] font-bold text-warning bg-warning/10 border border-warning/20 px-1 py-0.5 rounded">
               {syncBadges.unsyncedCount} unsynced
             </span>
           )}
-          {!syncTruthPending && !syncTruthUnavailable && syncBadges.mismatchCount > 0 && (
+          {syncBadges.mismatchCount > 0 && (
             <span className="text-[8px] font-bold text-destructive bg-destructive/10 border border-destructive/20 px-1 py-0.5 rounded">
               {syncBadges.mismatchCount} SL mismatch
             </span>
@@ -1003,28 +872,18 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
         <SyncStatusContent
           brokerPositions={brokerPos}
           paperPositions={paperPositions}
-          isLoading={syncTruthPending}
-          error={connectionStateUnavailable
-            ? readErrorMessage(connectionStateError, "Broker connection status is unavailable")
-            : accountUnavailable
-              ? readErrorMessage(accountError, "Broker account state is unavailable")
-              : positionsUnavailable
-                ? readErrorMessage(positionsError, "Broker position state is unavailable")
-                : paperStatusUnavailable
-                  ? readErrorMessage(paperStatusError, "Paper position state is unavailable")
-                  : undefined}
+          isLoading={positionsLoading}
         />
       ),
     },
     history: {
-      title: historyUnavailable ? "Trade History" : `Trade History (${brokerHist.length})`,
+      title: `Trade History (${brokerHist.length})`,
       icon: <Clock className="h-3 w-3" />,
       content: (
         <TradeHistoryContent
           trades={brokerHist}
           paperHistory={paperHistory}
           isLoading={historyLoading}
-          error={historyUnavailable ? readErrorMessage(historyError, "Broker trade history is unavailable") : undefined}
         />
       ),
     },
@@ -1062,15 +921,13 @@ export default function BrokerTradesTab({ mutationsAllowed }: { mutationsAllowed
         </button>
       </div>
 
-      {/* Broker truth state */}
-      {!brokerMutationsEnabled && !connectionStateLoading && !accountLoading && !positionsLoading && (
-        <div className="border border-warning/30 bg-warning/5 rounded-lg p-3 flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+      {/* Account error state */}
+      {accountData?.error && (
+        <div className="border border-destructive/30 bg-destructive/5 rounded-lg p-3 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
           <div>
-            <p className="text-xs font-medium text-warning">Live position edits unavailable</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {mutationUnavailableMessage} A known position can still be closed.
-            </p>
+            <p className="text-xs font-medium text-destructive">Broker Connection Error</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{accountData.error}</p>
           </div>
         </div>
       )}

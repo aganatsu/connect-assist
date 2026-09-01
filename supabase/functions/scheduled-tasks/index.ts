@@ -9,11 +9,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import {
-  runTaskKey,
-  taskKey,
-  type ScannerRuntimeRun,
-} from "../_shared/scannerRuntime.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -69,8 +64,8 @@ const DEFAULT_TASKS = [
     category: "analytics",
   },
   {
-    function_name: "advisor",
-    action: "daily",
+    function_name: "bot-daily-review",
+    action: "review",
     display_name: "Daily Review",
     description: "AI analysis of today's trades, generates Telegram summary",
     default_interval_minutes: 1440,
@@ -78,8 +73,8 @@ const DEFAULT_TASKS = [
     category: "analytics",
   },
   {
-    function_name: "advisor",
-    action: "weekly",
+    function_name: "bot-weekly-advisor",
+    action: "advise",
     display_name: "Weekly Advisor",
     description: "Deep strategy analysis — factor weights, regime detection, recommendations",
     default_interval_minutes: 10080,
@@ -105,97 +100,6 @@ const DEFAULT_TASKS = [
     category: "maintenance",
   },
 ];
-
-async function attachRuntimeState(
-  adminClient: any,
-  userId: string,
-  tasks: any[],
-): Promise<any[]> {
-  const { data: runs, error } = await adminClient
-    .from("scanner_operation_runs")
-    .select("*")
-    .eq("user_id", userId)
-    .order("invoked_at", { ascending: false })
-    .limit(100);
-
-  if (error) {
-    // Migration-first deployment keeps this path available. During rollback or
-    // a partial deployment, preserve the legacy task payload instead of hiding it.
-    console.warn(`[scheduled-tasks] Runtime timeline unavailable: ${error.message}`);
-    return tasks;
-  }
-
-  const latestByTask = new Map<string, ScannerRuntimeRun>();
-  for (const run of (runs || []) as ScannerRuntimeRun[]) {
-    const key = runTaskKey(run);
-    if (!latestByTask.has(key)) latestByTask.set(key, run);
-  }
-
-  return tasks.map((task) => {
-    const run = latestByTask.get(taskKey(task.function_name, task.action));
-    if (!run) return task;
-    const lastStatus = run.status === "completed"
-      ? "success"
-      : run.status === "failed"
-      ? "error"
-      : run.status;
-    return {
-      ...task,
-      last_run_at: run.invoked_at,
-      last_status: lastStatus,
-      last_error: run.error_message,
-      runtime: {
-        run_id: run.id,
-        trigger_source: run.trigger_source,
-        status: run.status,
-        phase: run.phase,
-        cron_invoked_at: run.invoked_at,
-        scan_started_at: run.scan_started_at,
-        pair_processing_completed_at: run.pair_processing_completed_at,
-        scan_completed_at: run.scan_completed_at,
-        position_management_completed_at: run.position_management_completed_at,
-        heartbeat_at: run.heartbeat_at,
-        expected_pairs: run.expected_pairs,
-        processed_pairs: run.processed_pairs,
-        error_code: run.error_code,
-        error_message: run.error_message,
-        metadata: run.metadata,
-      },
-    };
-  });
-}
-
-async function loadOperationalAlerts(
-  adminClient: any,
-  userId: string,
-): Promise<any[]> {
-  const { error: evaluationError } = await adminClient.rpc(
-    "evaluate_scanner_operational_health",
-  );
-  if (evaluationError) {
-    console.warn(
-      `[scheduled-tasks] Health evaluation unavailable: ${evaluationError.message}`,
-    );
-  }
-
-  const { data: alerts, error } = await adminClient
-    .from("scanner_operational_alerts")
-    .select(
-      "id, bot_id, alert_type, severity, title, message, occurrences, first_detected_at, last_detected_at, evidence",
-    )
-    .eq("user_id", userId)
-    .eq("status", "active")
-    .order("severity", { ascending: true })
-    .order("last_detected_at", { ascending: false });
-
-  if (error) {
-    console.warn(
-      `[scheduled-tasks] Operational alerts unavailable: ${error.message}`,
-    );
-    return [];
-  }
-  return alerts || [];
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -243,22 +147,10 @@ Deno.serve(async (req) => {
           .select("*")
           .eq("user_id", user.id)
           .order("category", { ascending: true });
-        const [runtimeTasks, alerts] = await Promise.all([
-          attachRuntimeState(
-            adminClient,
-            user.id,
-            freshTasks || [],
-          ),
-          loadOperationalAlerts(adminClient, user.id),
-        ]);
-        return respond({ tasks: runtimeTasks, alerts });
+        return respond({ tasks: freshTasks });
       }
 
-      const [runtimeTasks, alerts] = await Promise.all([
-        attachRuntimeState(adminClient, user.id, tasks),
-        loadOperationalAlerts(adminClient, user.id),
-      ]);
-      return respond({ tasks: runtimeTasks, alerts });
+      return respond({ tasks });
     }
 
     // ── UPDATE: Change interval or enabled state ──
@@ -331,11 +223,6 @@ Deno.serve(async (req) => {
       if (task.function_name === "bot-scanner") {
         functionBody.action = task.action === "manage" ? "manage" : "manual_scan";
       }
-      if (task.function_name === "advisor") {
-        functionBody.mode = task.action === "weekly" ? "weekly" : "daily";
-        functionBody.user_id = user.id;
-      }
-      functionBody.trigger_source = "manual";
 
       try {
         const response = await fetch(`${SUPABASE_URL}/functions/v1/${task.function_name}`, {
@@ -344,7 +231,6 @@ Deno.serve(async (req) => {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
             "apikey": SERVICE_ROLE_KEY,
-            "x-cron-secret": Deno.env.get("CRON_SECRET") || "",
           },
           body: JSON.stringify(functionBody),
         });

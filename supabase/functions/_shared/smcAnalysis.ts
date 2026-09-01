@@ -19,6 +19,7 @@
  *                detectSession, detectOptimalStyle
  *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize, getQuoteToUSDRate
  *   Constants:   SPECS, SUPPORTED_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
+ *                STYLE_OVERRIDES, DEFAULTS
  */
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -227,46 +228,6 @@ export interface SLTPInput {
   fibExtensions?: FibLevel[];
   /** Optional: Draw on Liquidity targets from game plan (Layer 2) */
   dolTargets?: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; description: string }>;
-  /** Position stop already repaired for execution floors. TP must be selected against this stop. */
-  resolvedStopLoss?: number | null;
-  /** Shared style-aware stop policy input. Callers decide observe versus enforce. */
-  stopPolicyShadow?: StopPolicyShadowInput;
-}
-
-export interface StopPolicyShadowInput {
-  observationOnly?: boolean;
-  structuralInvalidation: number;
-  confirmationAtr: number;
-  atrMultiplier: number;
-  executionFloorQuoteDistance: number;
-  executionFloorSource: "spread_proxy" | "broker_snapshot";
-  riskCapAtrMultiplier: number;
-}
-
-export interface StopPolicyShadowResult {
-  contractVersion: "stop-policy-shadow.v1";
-  observationOnly: boolean;
-  valid: boolean;
-  reason: string | null;
-  structuralDistance: number | null;
-  noiseFloorDistance: number | null;
-  executionFloorDistance: number | null;
-  finalStopDistance: number | null;
-  riskCapDistance: number | null;
-  riskCapBreached: boolean | null;
-  executionFloorSource: "spread_proxy" | "broker_snapshot";
-}
-
-export interface StopPolicyEvaluationResult extends StopPolicyShadowResult {
-  stopLoss: number | null;
-}
-
-export interface SLTPResult {
-  stopLoss: number | null;
-  takeProfit: number | null;
-  takeProfitSource: string | null;
-  takeProfitFallbackReason: string | null;
-  stopPolicyShadow?: StopPolicyShadowResult;
 }
 
 export interface OpeningRangeResult {
@@ -323,15 +284,6 @@ export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: st
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000, maxSpread: 5, typicalSpread: 2.0 },
 };
 
-const SPEC_SYMBOL_BY_NORMALIZED_KEY = new Map(
-  Object.keys(SPECS).map((symbol) => [normalizeSymKey(symbol), symbol]),
-);
-
-function resolveSupportedSpecSymbol(symbol: string): string {
-  if (SPECS[symbol]) return symbol;
-  return SPEC_SYMBOL_BY_NORMALIZED_KEY.get(normalizeSymKey(symbol)) || symbol;
-}
-
 // Canonical set of supported trading instruments.
 // Keys are internal symbol names; values are Polygon.io tickers.
 export const SUPPORTED_SYMBOLS: Record<string, string> = {
@@ -379,19 +331,156 @@ export function getAssetProfile(symbol: string) {
   return ASSET_PROFILES[type] || ASSET_PROFILES.forex;
 }
 
-// ─── DST-Aware New York Time (re-exported from sessions.ts — single source of truth) ──
-import {
-  toNYTime as _toNYTime,
-  toNYTimeAt as _toNYTimeAt,
-  detectSession as _detectSession,
-  detectSilverBullet as _detectSilverBullet,
-  detectMacroWindow as _detectMacroWindow,
-} from "./sessions.ts";
-export const toNYTime = _toNYTime;
-export const toNYTimeAt = _toNYTimeAt;
-export const detectSession = _detectSession;
-export const detectSilverBullet = _detectSilverBullet;
-export const detectMacroWindow = _detectMacroWindow;
+export const STYLE_OVERRIDES: Record<string, any> = {
+  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 45 },
+  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 55 },
+  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 65 },
+};
+
+export const DEFAULTS = {
+  entryTimeframe: "15min",
+  htfTimeframe: "1day",
+  htfBiasRequired: true,
+  htfBiasHardVeto: false,
+  minConfluence: 55,
+  onlyBuyInDiscount: true,
+  onlySellInPremium: true,
+  riskPerTrade: 1,
+  maxDailyLoss: 5,
+  maxDrawdown: 15,
+  maxOpenPositions: 5,
+  maxPerSymbol: 2,
+  portfolioHeat: 10,
+  minRiskReward: 1.5,
+  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
+  fixedSLPips: 25,
+  slATRMultiple: 1.5,
+  slATRPeriod: 14,
+  slBufferPips: 2,
+  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
+  fixedTPPips: 50,
+  tpRatio: 2.0,
+  tpATRMultiple: 2.0,
+  breakEvenEnabled: true,
+  breakEvenPips: 20,
+  enabledSessions: ["london", "newyork"],
+  enabledDays: [1, 2, 3, 4, 5],
+  instruments: [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
+    "XAU/USD", "BTC/USD",
+  ],
+  openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+  tradingStyle: { mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" },
+  spreadFilterEnabled: true,
+  maxSpreadPips: 3,
+  newsFilterEnabled: true,
+  newsFilterPauseMinutes: 30,
+  cooldownMinutes: 0,
+  closeOnReverse: false,
+  trailingStopEnabled: false,
+  trailingStopPips: 15,
+  trailingStopActivation: "after_1r",
+  partialTPEnabled: false,
+  partialTPPercent: 50,
+  partialTPLevel: 1.0,
+  maxHoldHours: 0,
+  killZoneOnly: false,
+  maxConsecutiveLosses: 0,
+  protectionMaxDailyLossDollar: 0,
+  // Legacy minFactorCount removed — single percentage threshold (minConfluence) only
+  useSMT: true,
+  useVolumeProfile: true,
+  useTrendDirection: true,
+  useDailyBias: true,
+  useAMD: true,
+  useFOTSI: true,
+  regimeScoringEnabled: true,
+  regimeScoringStrength: 1.0,
+  obLookbackCandles: 50,
+  fvgMinSizePips: 0,
+  fvgOnlyUnfilled: true,
+  structureLookback: 50,
+  liquidityPoolMinTouches: 2,
+  _currentSymbol: "" as string,
+  _smtResult: null as any,
+};
+
+// ─── DST-Aware New York Time Helper ─────────────────────────────────
+export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+  const year = utc.getUTCFullYear();
+  const mar1 = new Date(Date.UTC(year, 2, 1));
+  const marSun2 = 14 - mar1.getUTCDay();
+  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0);
+  const nov1 = new Date(Date.UTC(year, 10, 1));
+  const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
+  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0);
+  const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
+  const offsetH = isEDT ? 4 : 5;
+  const nyMs = utc.getTime() - offsetH * 3600_000;
+  const ny = new Date(nyMs);
+  const h = ny.getUTCHours();
+  const m = ny.getUTCMinutes();
+  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
+}
+
+// ─── Backtest variant: accepts a timestamp instead of using Date.now() ──
+export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+  return toNYTime(new Date(utcMs));
+}
+
+// ─── Session Detection ──────────────────────────────────────────────
+export function detectSession(atMs?: number): { name: string; isKillZone: boolean } {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const t = ny.t;
+  if (t >= 20 || t < 0) return { name: "Asian", isKillZone: false };
+  if (t >= 0 && t < 2) return { name: "Asian", isKillZone: false };
+  if (t >= 2 && t < 5) return { name: "London", isKillZone: true };
+  if (t >= 5 && t < 8.5) return { name: "London", isKillZone: false };
+  if (t >= 8.5 && t < 11) return { name: "New York", isKillZone: true };
+  if (t >= 11 && t < 12) return { name: "New York", isKillZone: true };
+  if (t >= 12 && t < 16) return { name: "New York", isKillZone: false };
+  return { name: "Off-Hours", isKillZone: false };
+}
+
+// ─── Silver Bullet Windows ──────────────────────────────────────────
+export function detectSilverBullet(atMs?: number): SilverBulletResult {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const t = ny.t;
+  const windows = [
+    { name: "London Open SB", start: 3, end: 4 },
+    { name: "AM SB", start: 10, end: 11 },
+    { name: "PM SB", start: 14, end: 15 },
+  ];
+  for (const w of windows) {
+    if (t >= w.start && t < w.end) {
+      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
+// ─── ICT Macro Windows ──────────────────────────────────────────────
+export function detectMacroWindow(atMs?: number): MacroWindowResult {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const tMin = ny.tMin;
+  const windows = [
+    { name: "London Macro 1",    start: 2*60+33, end: 2*60+50 },
+    { name: "London Macro 2",    start: 4*60+3,  end: 4*60+20 },
+    { name: "NY Pre-Open Macro", start: 8*60+50, end: 9*60+10 },
+    { name: "NY AM Macro",       start: 9*60+50, end: 10*60+10 },
+    { name: "London Close Macro",start: 10*60+50,end: 11*60+10 },
+    { name: "NY Lunch Macro",    start: 11*60+50,end: 12*60+10 },
+    { name: "Last Hour Macro",   start: 13*60+10,end: 13*60+40 },
+    { name: "PM Macro",          start: 15*60+15,end: 15*60+45 },
+  ];
+  for (const w of windows) {
+    if (tMin >= w.start && tMin < w.end) {
+      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
 
 // ─── ICT AMD Phase Detection ────────────────────────────────────────
 export function detectAMDPhase(candles: Candle[], atMs?: number): AMDResult {
@@ -1016,24 +1105,9 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     }
   }
 
-  // ── Determine overall trend from the most recent confirmed BOS/CHoCH ──
-  // Priority: external (major structural) breaks over internal (minor) ones.
-  // Fallback: if no external break exists, use the most recent break of any significance.
-  // If no breaks at all, fall back to the legacy 2-swing comparison for backward compat.
+  // ── Determine overall trend from the last 2 swing highs + lows ──
   let trend: "bullish" | "bearish" | "ranging" = "ranging";
-  let trendBasis: "external" | "internal" | "none" = "none";
-  const allBreaksForTrend = [...bos, ...choch];
-  if (allBreaksForTrend.length > 0) {
-    const externalBreaks = allBreaksForTrend.filter(b => b.significance === "external");
-    const lastExternalBreak = externalBreaks.length > 0
-      ? externalBreaks.reduce((latest, b) => b.index > latest.index ? b : latest)
-      : null;
-    const lastAnyBreak = allBreaksForTrend.reduce((latest, b) => b.index > latest.index ? b : latest);
-    const decisiveBreak = lastExternalBreak ?? lastAnyBreak;
-    trend = decisiveBreak.type as "bullish" | "bearish";
-    trendBasis = lastExternalBreak ? "external" : "internal";
-  } else if (highs.length >= 2 && lows.length >= 2) {
-    // Legacy fallback: no BOS/CHoCH detected at all — use 2-swing comparison
+  if (highs.length >= 2 && lows.length >= 2) {
     const rH = highs.slice(-2), rL = lows.slice(-2);
     if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) trend = "bullish";
     else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
@@ -1126,7 +1200,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   }
 
   return {
-    trend, trendBasis, swingPoints: swings, bos, choch, sweeps,
+    trend, swingPoints: swings, bos, choch, sweeps,
     // New fields — all backward compatible (optional consumption)
     structureToFractal,
     structureCounts: { internalBOS, externalBOS, internalCHoCH, externalCHoCH },
@@ -1134,7 +1208,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   };
 }
 
-export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number, obCapOverride?: number): OrderBlock[] {
+export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {
   // Volume pivot detection helper (LuxAlgo-inspired)
   // A volume pivot exists when a candle's volume is the highest within ±pivotLen bars
   const VOLUME_PIVOT_LEN = 5;
@@ -1153,10 +1227,7 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
     return true;
   }
   const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0) ? obLookbackOverride : 50;
-  // Callers that widen the scan window (to evaluate lifecycle against later
-  // price) must also raise the cap, or OBs formed inside their period of
-  // interest can be crowded out of the top-N by later, irrelevant ones.
-  const OB_CAP = (typeof obCapOverride === "number" && obCapOverride > 0) ? obCapOverride : 5;
+  const OB_CAP = 5;
   const BREAK_LOOKAHEAD = 10;
   const recencyStart = Math.max(2, candles.length - OB_RECENCY);
   const candidates: (OrderBlock & { quality: number })[] = [];
@@ -1347,52 +1418,16 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
     }
   }
   candidates.sort((a, b) => b.quality - a.quality || b.index - a.index);
-
-  // Collapse duplicates before capping.
-  //
-  // The scan-back deliberately looks up to OB_SCANBACK bars behind an engulfing
-  // candle for the institutional one. Several consecutive engulfing bars
-  // therefore resolve to the SAME source candle, and each pushed its own
-  // identical entry. Observed live on AUD/NZD: one order block reported three
-  // times — same index, bounds, age and distance — inflating "5 accepted POIs"
-  // to describe two real zones and feeding phantom agreement to any multi-zone
-  // confluence bonus.
-  //
-  // Previously masked by a cap of 5. Raising that cap so a widened lifecycle
-  // window could not crowd out real POIs let every duplicate through, so the
-  // dedup belongs here rather than at the cap.
-  //
-  // Keyed on source candle and bounds: the same institutional candle at the
-  // same price IS the same order block, however many engulfings pointed at it.
-  // Candidates are already sorted best-first, so the survivor is the strongest.
-  const seen = new Set<string>();
-  const unique: typeof candidates = [];
-  for (const ob of candidates) {
-    const key = `${ob.index}:${ob.type}:${ob.high.toFixed(10)}:${ob.low.toFixed(10)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(ob);
-  }
-  return unique.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
+  return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
 }
 
 export function detectFVGs(
   candles: Candle[],
   structureBreaks?: { index: number; type: string }[],
-  /**
-   * How far back to scan for FVG *formation*. Mirrors `obLookbackOverride` on
-   * detectOrderBlocks. Callers that pass a window extending past the formation
-   * period (so lifecycle can be evaluated against later price) must raise this,
-   * or the older bars they added would fall outside the scan and their FVGs
-   * would never be found.
-   */
-  fvgLookbackOverride?: number,
 ): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
   // Only look at recent candles (last 50) to avoid stale FVGs from hours ago
-  const FVG_RECENCY = (typeof fvgLookbackOverride === "number" && fvgLookbackOverride > 0)
-    ? fvgLookbackOverride
-    : 50;
+  const FVG_RECENCY = 50;
   const startIdx = Math.max(2, candles.length - FVG_RECENCY);
 
   // Pre-compute ATR for quality scoring (size relative to ATR)
@@ -1769,16 +1804,11 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
     if (!ob.mitigated) continue;
     const breakerType: "bullish_breaker" | "bearish_breaker" =
       ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
-    // A breaker requires the OB to have been *broken* — a candle must close through
-    // the far side of the zone. `ob.mitigated` is also set at 50% penetration, which
-    // is ordinary retracement into the OB (and is the OB's own entry condition), so
-    // an unbroken OB must never be inverted into a breaker of the opposite polarity.
-    let mitigatedAt = -1;
+    let mitigatedAt = ob.index;
     for (let j = ob.index + 1; j < candles.length; j++) {
       if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
       if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
     }
-    if (mitigatedAt < 0) continue; // mitigated but never broken — not a breaker
     // BB vs MB distinction (PineScript-inspired):
     // "breaker" = the MSB that broke this OB also made a new HH (bearish breaker) or LL (bullish breaker)
     // "mitigation_block" = OB was broken but no new structural extreme was confirmed
@@ -1791,6 +1821,21 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
         b => b.type === wantBreakType && b.index >= ob.index && b.index <= mitigatedAt + 10
       );
       if (hasConfirmingBreak) subtype = "breaker";
+    } else {
+      // Without structure break data, check price action for new extreme
+      if (breakerType === "bearish_breaker") {
+        // Bearish breaker from a failed bullish OB: check if price made new HH after mitigation
+        let prevHigh = ob.high;
+        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
+          if (candles[j].high > prevHigh) { subtype = "breaker"; break; }
+        }
+      } else {
+        // Bullish breaker from a failed bearish OB: check if price made new LL after mitigation
+        let prevLow = ob.low;
+        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
+          if (candles[j].low < prevLow) { subtype = "breaker"; break; }
+        }
+      }
     }
     let isActive = true;
     let breakerState: BreakerBlock["state"] = "active";
@@ -1805,27 +1850,27 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
 
       // Check if price closed through the zone (broken)
       if (breakerType === "bearish_breaker") {
-        if (c.close > ob.high) {
-          isActive = false;
-          breakerState = "broken";
-          brokenAt = j;
-          break;
-        }
-        // Respected = entered resistance and rejected below its midpoint.
-        const mid = (ob.high + ob.low) / 2;
-        if (c.close < mid) {
-          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
-          if (!respectedAt) respectedAt = j;
-        }
-      } else {
         if (c.close < ob.low) {
           isActive = false;
           breakerState = "broken";
           brokenAt = j;
           break;
         }
+        // Respected = entered zone but bounced (closed above zone midpoint)
         const mid = (ob.high + ob.low) / 2;
         if (c.close > mid) {
+          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
+          if (!respectedAt) respectedAt = j;
+        }
+      } else {
+        if (c.close > ob.high) {
+          isActive = false;
+          breakerState = "broken";
+          brokenAt = j;
+          break;
+        }
+        const mid = (ob.high + ob.low) / 2;
+        if (c.close < mid) {
           if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
           if (!respectedAt) respectedAt = j;
         }
@@ -1844,7 +1889,6 @@ export function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairVal
   // Lifecycle-aware: use FVGs that aren't fully filled
   const viableFVGs = fvgs.filter(f => f.state !== "filled");
   for (const breaker of breakerBlocks) {
-    if (breaker.subtype !== "breaker") continue;
     // Include all breakers for detection, but mark invalidated ones
     const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
     for (const fvg of viableFVGs) {
@@ -1904,7 +1948,7 @@ export function detectSMTDivergence(symbol: string, candles: Candle[], correlate
   if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
     return {
       detected: true, type: "bullish", correlatedPair: corrPair,
-      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
+      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held — bullish SMT`,
     };
   }
 
@@ -1916,7 +1960,7 @@ export function detectSMTDivergence(symbol: string, candles: Candle[], correlate
   if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
     return {
       detected: true, type: "bearish", correlatedPair: corrPair,
-      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
+      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held — bearish SMT`,
     };
   }
 
@@ -2160,105 +2204,17 @@ export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number
   return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
-export function evaluateStyleAwareStopPolicy(
-  input: StopPolicyShadowInput & {
-    direction: "long" | "short";
-    entryPrice: number;
-  },
-): StopPolicyEvaluationResult {
-  const entryPrice = Number(input.entryPrice);
-  const structural = Number(input.structuralInvalidation);
-  const confirmationAtr = Number(input.confirmationAtr);
-  const atrMultiplier = Number(input.atrMultiplier);
-  const executionFloorDistance = Number(input.executionFloorQuoteDistance);
-  const riskCapAtrMultiplier = Number(input.riskCapAtrMultiplier);
-  const observationOnly = input.observationOnly !== false;
-  const oriented = Number.isFinite(structural) && Number.isFinite(entryPrice) &&
-    (input.direction === "long" ? structural < entryPrice : structural > entryPrice);
-  const inputsValid = oriented && confirmationAtr > 0 &&
-    Number.isFinite(atrMultiplier) && atrMultiplier > 0 &&
-    Number.isFinite(executionFloorDistance) && executionFloorDistance > 0 &&
-    Number.isFinite(riskCapAtrMultiplier) && riskCapAtrMultiplier > 0;
-
-  if (!inputsValid) {
-    return {
-      contractVersion: "stop-policy-shadow.v1",
-      observationOnly,
-      valid: false,
-      reason: !oriented
-        ? "structural_invalidation_unavailable_or_misoriented"
-        : !(confirmationAtr > 0)
-        ? "confirmation_atr_unavailable"
-        : "execution_policy_input_unavailable",
-      structuralDistance: oriented ? Math.abs(entryPrice - structural) : null,
-      noiseFloorDistance: confirmationAtr > 0 && atrMultiplier > 0
-        ? confirmationAtr * atrMultiplier
-        : null,
-      executionFloorDistance: executionFloorDistance > 0 ? executionFloorDistance : null,
-      finalStopDistance: null,
-      riskCapDistance: confirmationAtr > 0 && riskCapAtrMultiplier > 0
-        ? confirmationAtr * riskCapAtrMultiplier
-        : null,
-      riskCapBreached: null,
-      executionFloorSource: input.executionFloorSource,
-      stopLoss: null,
-    };
-  }
-
-  const structuralDistance = Math.abs(entryPrice - structural);
-  const noiseFloorDistance = confirmationAtr * atrMultiplier;
-  const finalStopDistance = Math.max(
-    structuralDistance,
-    noiseFloorDistance,
-    executionFloorDistance,
-  );
-  const riskCapDistance = confirmationAtr * riskCapAtrMultiplier;
-  const riskCapBreached = finalStopDistance > riskCapDistance;
-  return {
-    contractVersion: "stop-policy-shadow.v1",
-    observationOnly,
-    valid: !riskCapBreached,
-    reason: riskCapBreached ? "style_risk_cap_exceeded" : null,
-    structuralDistance,
-    noiseFloorDistance,
-    executionFloorDistance,
-    finalStopDistance,
-    riskCapDistance,
-    riskCapBreached,
-    executionFloorSource: input.executionFloorSource,
-    stopLoss: input.direction === "long"
-      ? entryPrice - finalStopDistance
-      : entryPrice + finalStopDistance,
-  };
-}
-
 // ─── SL/TP Calculation ──────────────────────────────────────────────
-export function calculateSLTP(input: SLTPInput): SLTPResult {
+export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
   const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
-  if (!direction) {
-    return {
-      stopLoss: null,
-      takeProfit: null,
-      takeProfitSource: null,
-      takeProfitFallbackReason: null,
-    };
-  }
+  if (!direction) return { stopLoss: null, takeProfit: null };
 
   const buffer = (config.slBufferPips || 2) * pipSize;
   let sl: number | null = null;
   let tp: number | null = null;
-  let takeProfitSource: string | null = null;
-  let takeProfitFallbackReason: string | null = null;
-  let stopPolicyShadow: StopPolicyShadowResult | undefined;
 
-  const resolvedStopLoss = Number(input.resolvedStopLoss);
-  const hasResolvedStop = Number.isFinite(resolvedStopLoss) && (direction === "long"
-    ? resolvedStopLoss < lastPrice
-    : resolvedStopLoss > lastPrice);
   const slMethod: string = config.slMethod || "structure";
-  if (hasResolvedStop) {
-    sl = resolvedStopLoss;
-  } else if (slMethod === "fixed_pips") {
+  if (slMethod === "fixed_pips") {
     const dist = (config.fixedSLPips || 25) * pipSize;
     sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
   } else if (slMethod === "atr_based") {
@@ -2297,7 +2253,7 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
 
   // ── ATR-based SL floor: ensure SL is at least 1.5× ATR ──
   // This prevents micro-scalp SLs on structure-based method when swing points are very close.
-  if (!hasResolvedStop && atrValue > 0 && sl !== null) {
+  if (atrValue > 0 && sl !== null) {
     const atrFloorDistance = atrValue * 1.5; // 1.5× ATR
     const currentSlDistance = Math.abs(lastPrice - sl);
     if (currentSlDistance < atrFloorDistance) {
@@ -2305,19 +2261,36 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
     }
   }
 
-  if (input.stopPolicyShadow) {
-    const evaluation = evaluateStyleAwareStopPolicy({
-      ...input.stopPolicyShadow,
-      direction,
-      entryPrice: lastPrice,
-    });
-    stopPolicyShadow = evaluation;
-    if (evaluation.stopLoss !== null) {
-      sl = evaluation.stopLoss;
+  // ── FVG-aware SL tightening ──
+  // If an unfilled, high-quality FVG sits between entry and SL, tighten SL to FVG boundary.
+  // Rationale: an institutional FVG acts as support/resistance — SL just beyond it is safer.
+  const activeFVGs = input.fvgs?.filter(f => !f.mitigated && (f.quality ?? 0) >= 4) || [];
+  if (sl !== null && activeFVGs.length > 0) {
+    if (direction === "long") {
+      // Find bullish FVGs between SL and entry (support zones)
+      const supportFVGs = activeFVGs
+        .filter(f => f.type === "bullish" && f.low > sl! && f.low < lastPrice)
+        .sort((a, b) => b.low - a.low); // closest to entry first
+      if (supportFVGs.length > 0) {
+        const tighterSL = supportFVGs[0].low - buffer;
+        // Only tighten if it reduces SL distance by at least 20% (avoid micro-adjustments)
+        if (tighterSL > sl && (lastPrice - tighterSL) < (lastPrice - sl) * 0.8) {
+          sl = tighterSL;
+        }
+      }
+    } else {
+      // Find bearish FVGs between entry and SL (resistance zones)
+      const resistFVGs = activeFVGs
+        .filter(f => f.type === "bearish" && f.high < sl! && f.high > lastPrice)
+        .sort((a, b) => a.high - b.high); // closest to entry first
+      if (resistFVGs.length > 0) {
+        const tighterSL = resistFVGs[0].high + buffer;
+        if (tighterSL < sl && (tighterSL - lastPrice) < (sl - lastPrice) * 0.8) {
+          sl = tighterSL;
+        }
+      }
     }
   }
-
-  const activeFVGs = input.fvgs?.filter(f => !f.mitigated && (f.quality ?? 0) >= 4) || [];
 
   const tpMethod: string = config.tpMethod || "rr_ratio";
   const slDistance = Math.abs(lastPrice - sl);
@@ -2325,7 +2298,6 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
   if (tpMethod === "fixed_pips") {
     const dist = (config.fixedTPPips || 50) * pipSize;
     tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
-    takeProfitSource = "fixed_pips";
   } else if (tpMethod === "next_level") {
     const targets: number[] = [];
     if (direction === "long") {
@@ -2351,31 +2323,26 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
       : targets[0];
     if (viableTarget !== undefined) {
       tp = viableTarget;
-      takeProfitSource = "next_level";
+    } else if (targets.length > 0) {
+      // All structural targets produce sub-minimum R:R — fall back to rr_ratio method.
+      // This ensures we never take a trade with a target 1 pip away.
+      tp = direction === "long"
+        ? lastPrice + slDistance * (config.tpRatio || 2.0)
+        : lastPrice - slDistance * (config.tpRatio || 2.0);
     } else {
-      takeProfitFallbackReason = targets.length > 0
-        ? "no_structural_target_meets_minimum_rr"
-        : "no_structural_target_available";
-      if (config.nextLevelFallback === "rr_ratio") {
-        tp = direction === "long"
-          ? lastPrice + slDistance * (config.tpRatio || 2.0)
-          : lastPrice - slDistance * (config.tpRatio || 2.0);
-        takeProfitSource = "next_level_rr_fallback";
-      }
+      // No structural targets at all — use fixed pips fallback
+      const dist = (config.fixedTPPips || 50) * pipSize;
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
     }
   } else if (tpMethod === "atr_multiple") {
     if (atrValue > 0) {
       const dist = atrValue * (config.tpATRMultiple || 2.0);
       tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
-      takeProfitSource = "atr_multiple";
     } else {
       tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
-      takeProfitSource = "atr_multiple_rr_fallback";
-      takeProfitFallbackReason = "atr_unavailable";
     }
   } else {
     tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
-    takeProfitSource = "rr_ratio";
   }
 
   // ── FVG-aware TP extension ──
@@ -2473,13 +2440,7 @@ export function calculateSLTP(input: SLTPInput): SLTPResult {
     }
   }
 
-  return {
-    stopLoss: sl,
-    takeProfit: tp,
-    takeProfitSource,
-    takeProfitFallbackReason,
-    ...(stopPolicyShadow ? { stopPolicyShadow } : {}),
-  };
+  return { stopLoss: sl, takeProfit: tp };
 }
 
 // ─── Quote-to-USD Conversion ────────────────────────────────────────
@@ -2499,12 +2460,11 @@ export const FALLBACK_RATES: Record<string, number> = {
 };
 
 export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
-  const resolvedSymbol = resolveSupportedSpecSymbol(symbol);
   // Non-forex: already USD-denominated
-  const spec = SPECS[resolvedSymbol] || SPECS["EUR/USD"];
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
   if (spec.type !== "forex") return 1.0;
 
-  const parts = resolvedSymbol.split("/");
+  const parts = symbol.split("/");
   if (parts.length !== 2) return 1.0;
   const quote = parts[1]; // e.g. "JPY" in EUR/JPY, "USD" in EUR/USD
 
@@ -2555,19 +2515,6 @@ export const MIN_SL_PIPS: Record<string, number> = {
 export const ATR_SL_FLOOR_MULTIPLIER = 1.5;
 
 // ─── Position Sizing ────────────────────────────────────────────────
-/** Floor a risk-limited lot quantity to the executable step. */
-export function floorLotSize(value: number, step = 0.01): number {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  if (!Number.isFinite(step) || step <= 0) return 0;
-  const scaled = value / step;
-  const tolerance = Math.max(
-    1e-9,
-    Number.EPSILON * Math.max(1, Math.abs(scaled)) * 8,
-  );
-  const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
-  return Number((Math.floor(scaled + tolerance) * step).toFixed(decimals));
-}
-
 // rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
 // used to convert pip value to USD for cross-pair lot sizing.
 // fallbackMaxLot: optional override for the hardcoded max lot cap.
@@ -2602,68 +2549,35 @@ export function calculatePositionSize(
     const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
     const atrDistance = config.atrValue * atrMultiplier; // Configurable ATR multiplier for volatility sizing
     if (atrDistance === 0) return 0.01;
-    const riskPerLot = atrDistance * spec.lotUnits * quoteToUSD;
-    const lots = riskAmount / (riskPerLot + commRT);
-    return Math.max(0.01, Math.min(maxLot, floorLotSize(lots)));
+    // Iterative solve: lots = (riskAmount - lots*commission) / (distance*lotUnits*quoteToUSD)
+    let lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
+    if (commRT > 0) {
+      const adjustedRisk = riskAmount - (lots * commRT);
+      if (adjustedRisk > 0) lots = adjustedRisk / (atrDistance * spec.lotUnits * quoteToUSD);
+    }
+    return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
   }
 
   // Default: percent_risk (risk-based)
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const riskPerLot = slDistance * spec.lotUnits * quoteToUSD;
-  const lots = riskAmount / (riskPerLot + commRT);
-  return Math.max(0.01, Math.min(maxLot, floorLotSize(lots)));
+  // Iterative solve: lots = (riskAmount - lots*commission) / (slDistance*lotUnits*quoteToUSD)
+  let lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
+  if (commRT > 0) {
+    const adjustedRisk = riskAmount - (lots * commRT);
+    if (adjustedRisk > 0) lots = adjustedRisk / (slDistance * spec.lotUnits * quoteToUSD);
+  }
+  return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
 // ─── PnL Calculation ────────────────────────────────────────────────
 // rateMap: optional map for cross-pair PnL conversion to USD
-export type PnlCalculationResult =
-  | { valid: true; pnl: number; pnlPips: number }
-  | {
-    valid: false;
-    pnl: 0;
-    pnlPips: 0;
-    reason: "invalid_inputs" | "invalid_direction" | "unsupported_symbol";
-  };
-
-export function calcPnl(
-  dir: string,
-  entry: number,
-  current: number,
-  size: number,
-  symbol: string,
-  rateMap?: Record<string, number>,
-): PnlCalculationResult {
-  if (dir !== "long" && dir !== "short") {
-    console.warn(`[calcPnl] Invalid direction ${dir} for ${symbol}. Returning an invalid result.`);
-    return { valid: false, pnl: 0, pnlPips: 0, reason: "invalid_direction" };
-  }
-  if (
-    !Number.isFinite(entry) ||
-    !Number.isFinite(current) ||
-    !Number.isFinite(size) ||
-    entry <= 0 ||
-    current <= 0 ||
-    size <= 0
-  ) {
-    console.warn(`[calcPnl] Invalid inputs — entry=${entry}, current=${current}, size=${size}, symbol=${symbol}. Returning an invalid result.`);
-    return { valid: false, pnl: 0, pnlPips: 0, reason: "invalid_inputs" };
-  }
-  const resolvedSymbol = resolveSupportedSpecSymbol(symbol);
-  const spec = SPECS[resolvedSymbol];
-  if (!spec) {
-    console.warn(`[calcPnl] Unsupported symbol ${symbol}. Returning an invalid result.`);
-    return { valid: false, pnl: 0, pnlPips: 0, reason: "unsupported_symbol" };
-  }
+export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
-  const quoteToUSD = getQuoteToUSDRate(resolvedSymbol, rateMap);
-  const pnl = diff * spec.lotUnits * size * quoteToUSD;
-  const pnlPips = diff / spec.pipSize;
-  if (Math.abs(pnl) > 50000) {
-    console.warn(`[PnL SANITY] Suspicious PnL $${pnl.toFixed(2)} on ${symbol} (${size} lots, diff=${diff.toFixed(5)}, quoteToUSD=${quoteToUSD.toFixed(6)}). Check rate conversion.`);
-  }
-  return { valid: true, pnl, pnlPips };
+  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+  return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
 }
 
 // ─── Regime Transition Detection ──────────────────────────────────────────────

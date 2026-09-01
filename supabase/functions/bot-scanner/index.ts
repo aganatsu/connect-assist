@@ -1,81 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { finalizePaperPositionClose } from "../_shared/finalizePaperPositionClose.ts";
-import {
-  applyPairOverrides,
-} from "../_shared/configMapper.ts";
-import {
-  buildFrozenRuntimeConfigSnapshot,
-  loadEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigStore.ts";
-import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
-import { resolveZoneStopPolicyMode } from "../_shared/stopPolicyMode.ts";
-import {
-  observePreArmReachability,
-  resolveFrozenNestedPoiMarketRoute,
-  resolveNestedPoiMarketActivation,
-  shouldCreatePendingZoneOrder,
-  shouldSupersedePendingOrder,
-} from "../_shared/botConfigBehavior.ts";
-import {
-  resolveImpulseLifecycleEnforcement,
-} from "../_shared/impulseLifecycleEnforcement.ts";
-import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
-import {
-  evaluateFinalTradeAuthorization,
-} from "../_shared/finalTradeAuthorization.ts";
-import {
-  attachDecisionContext,
-  buildTradeDecisionContext,
-  evaluateDecisionHierarchy,
-  TRADE_DECISION_CONTRACT_VERSION,
-  type DirectionVerdictDecision,
-  type EntryConfirmationDecision,
-} from "../_shared/decisionContract.ts";
-import {
-  directionVerdictMatchesGamePlan,
-  loadActiveDirectionVerdicts,
-  persistActiveDirectionVerdict,
-} from "../_shared/directionVerdictStore.ts";
-import {
-  buildFinalRuntimeGateStates,
-} from "../_shared/finalRuntimeGates.ts";
-import {
-  averageRoundTripCommission,
-  resolveRoundTripCommission,
-} from "../_shared/tradingCosts.ts";
-import {
-  evaluateGamePlanShadowAudit,
-  finalizeShadowCurrentDecision,
-} from "../_shared/gamePlanShadowAudit.ts";
-import {
-  buildGoldenReplaySnapshot,
-  finalizeGoldenReplaySnapshot,
-  type GoldenReplayFinalization,
-} from "../_shared/goldenReplay.ts";
-import {
-  buildGoldenReplayRuntimeInputFingerprint,
-} from "../_shared/goldenReplayReport.ts";
-import {
-  buildStreamlinedTradeDecisionObservation,
-} from "../_shared/streamlinedTradeDecisionObservation.ts";
-import { lifecycleProjection } from "../_shared/streamlinedDecisionLifecycle.ts";
-import {
-  evaluateSingleOwnershipDecision,
-  operationalSafetyChecks,
-} from "../_shared/singleOwnershipDecision.ts";
-import { evaluateSingleOwnershipEnforcement } from "../_shared/singleOwnershipEnforcement.ts";
-import { projectCanonicalScannerState } from "../_shared/canonicalScannerState.ts";
-import { evaluateCanonicalScannerEnforcement } from "../_shared/canonicalScannerEnforcement.ts";
-import { buildTradeDecisionPresentation } from "../_shared/tradeDecisionPresentation.ts";
-import { buildCanonicalStructureAuthority } from "../_shared/canonicalStructureAuthority.ts";
-import { buildCanonicalLiquiditySequences } from "../_shared/canonicalLiquiditySequence.ts";
-import { buildLiquidityConfirmationId, observeLiquidityConfirmation } from "../_shared/liquidityConfirmationContract.ts";
-import { evaluateCanonicalStructureDecision, evaluateCanonicalStructureEnforcement } from "../_shared/canonicalStructureDecision.ts";
-import { resolveDirectionAvailability } from "../_shared/directionAvailabilityPolicy.ts";
-import { resolveSingleOwnershipScanOutcome } from "../_shared/singleOwnershipScanOutcome.ts";
-import { applyAuthorityOwnershipToGateResults, evaluateAuthorityGateDisposition } from "../_shared/authorityGateOwnership.ts";
-import { fetchCandlesWithFallback, fetchLivePrice, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
+import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,
@@ -84,22 +10,10 @@ import {
 import { getFOTSIWithCache, setCachedFOTSI } from "../_shared/fotsiCache.ts";
 import { batchGetCachedCandles, batchSetCachedCandles } from "../_shared/candleCache.ts";
 import {
-  classifyRotationOutcome,
-  loadRotatingImpulseState,
-  measureLifecycleZoneProximity,
-  saveRotatingImpulseState,
-  selectRotatingImpulseUniverse,
-  updateRotatingImpulseState,
-  SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT,
-  type RotationSelection,
-  type SessionRotationObservation,
-} from "../_shared/rotatingImpulseUniverse.ts";
-import {
   classifyInstrumentRegime,
   // Types
   type Candle, type SwingPoint, type OrderBlock,
   type LiquidityPool, type BreakerBlock, type UnicornSetup,
-  type StopPolicyShadowInput,
   type SMTResult, type AMDResult, type SilverBulletResult, type MacroWindowResult,
   type ReasoningFactor, type GateResult,
   // Constants
@@ -108,7 +22,6 @@ import {
   // Analysis functions
   calculateATR, calculateAnchoredVWAP,
   detectSwingPoints, analyzeMarketStructure,
-  detectSMTDivergence, calculatePremiumDiscount,
   detectOrderBlocks, detectFVGs, detectLiquidityPools,
   detectDisplacement, tagDisplacementQuality,
   detectBreakerBlocks, detectUnicornSetups,
@@ -116,7 +29,7 @@ import {
   calculatePDLevels,
   computeOpeningRange, calculateSLTP,
   // Position sizing & rate conversion
-  calculatePositionSize, calcPnl, getQuoteToUSDRate,
+  calculatePositionSize, getQuoteToUSDRate,
   // Confluence stacking, sweep reclaim, pullback decay
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
   type ConfluenceStack, type SweepReclaim, type PullbackDecay,
@@ -130,102 +43,17 @@ import {
   normalizeSymKey,
 } from "../_shared/smcAnalysis.ts";
 import {
-  getCurrentSession,
-  type SessionGamePlan, type InstrumentGamePlan,
+  generateInstrumentGamePlan, buildSessionGamePlan, filterTradeByGamePlan,
+  getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews,
+  type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
-import {
-  gamePlanSymbolsMatchScope,
-  isInstrumentMarketOpen,
-  resolveGamePlanMarketScope,
-} from "../_shared/gamePlanMarketScope.ts";
-import {
-  evaluateGamePlanReuse,
-  loadActiveGamePlan,
-} from "../_shared/gamePlanStore.ts";
 import {
   classifySetupType, manageOpenPositions,
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
-import { resolveSymbol } from "../_shared/brokerSymbols.ts";
-import { metaFetch } from "../_shared/metaApiClient.ts";
 import {
-  reconcileBrokerState, reconcileFullBrokerClose, reconcilePartialClose,
-  type ReconcilePosition, type BrokerConnection,
-} from "../_shared/reconcileBrokerState.ts";
-import {
-  executeBrokerOrderWithLedger,
-} from "../_shared/brokerExecutionLedger.ts";
-import {
-  buildFrozenSetupStrategyContext,
-  buildSetupLifecycleEvidence,
-  readFrozenCrossTimeframeAuthority,
-  readFrozenSetupStrategyContext,
-  resolvePendingConfirmationMethod,
-  resolvePendingDealingRangeMode,
-  resolvePendingIndicatorMinimum,
-  resolvePendingNestedPoiEntryPlanState,
-  resolvePendingStylePolicy,
-  THESIS_VALIDATION_VERSION,
-  transitionStagedSetup,
-  validateFrozenSetupIdentity,
-  type FrozenNestedPoiEntryPlan,
-  type SetupLifecycleEvidence,
-  resolveLifecycleCandidateId,
-} from "../_shared/setupLifecycle.ts";
-import {
-  deriveWatchlistInvalidation,
-  isWatchlistInvalidated,
-  type WatchlistDirection, invalidationForLifecycle, invalidationBreached, freezeStructuralInvalidation } from "../_shared/watchlistInvalidation.ts";
-import {
-  closedCandleTouchesNestedPoiOuterZone,
-  cursorAfterLatestTouchCandle,
-  findEarliestPendingZoneTouch,
-} from "../_shared/pendingZoneTouch.ts";
-import {
-  buildPendingOrderPlan,
-  buildPreArmedPositionPlan,
-  resolvePreArmedPositionStop,
-  type PendingEntryZone,
-} from "../_shared/pendingOrderPlan.ts";
-import {
-  buildWatchlistLifecycleEvidence,
-  deriveWatchlistLifecyclePhase,
-} from "../_shared/watchlistLifecycleEvidence.ts";
-import {
-  resolveStoredImpulseEntryLifecycle,
-} from "../_shared/impulseEntryLifecycleStore.ts";
-import {
-  persistStopPolicyEvidence,
-  type StopPolicyPlanObservation,
-} from "../_shared/stopPolicyEvidence.ts";
-import {
-  buildFrozenCrossTimeframeContext,
-  loadCurrentEvidenceCertificateReferences,
-  validateImpulseLifecycleExecutableZone,
-  type EvidenceCertificateReference,
-} from "../_shared/frozenCrossTimeframeContext.ts";
-import {
-  beginScannerOperation,
-  claimScannerLock,
-  completeScannerOperation,
-  failScannerOperation,
-  heartbeatScannerLock,
-  markScannerOperation,
-  publishCandleSourceAlerts,
-  recordScannerAuthorizationFailure,
-  releaseScannerLock,
-  resolveScannerAlert,
-  skipScannerOperation,
-  upsertScannerAlert,
-  type ScannerTriggerSource,
-} from "../_shared/scannerRuntime.ts";
-import {
-  classifyUnifiedWatch,
-  isPreZoneObservation,
-  requiresFreshCandidateHandoff,
-} from "../_shared/preZoneObservation.ts";
-import {
-  checkNewsAlignment,
+  analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
+  type NewsEvent, type NewsImpactResult,
 } from "../_shared/newsImpact.ts";
 import {
   runConfluenceAnalysis,
@@ -237,84 +65,14 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import {
-  buildNestedPoiEntryPlan,
-  type HTFConfluenceData,
-  type TFSlotLabels,
-} from "../_shared/impulseZoneEngine.ts";
+import { type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
-import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
-import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
-import { persistICTEntryZoneObservation } from "../_shared/ictEntryZoneObservationStore.ts";
-import { evaluateBreakerFillLifecycle } from "../_shared/breakerSemantics.ts";
-import { normalizeBreakerCandidate } from "../_shared/breakerCandidateAuthority.ts";
-import { resolveManualImpulse, type ManualImpulseSpec } from "../_shared/manualImpulse.ts";
-import { evaluateExit, priceAsBar } from "../_shared/exitEvaluation.ts";
-import {
-  annotateEvidenceLifecycle,
-  buildScanEvidenceRow,
-  persistZoneTimeframeEvidence,
-  type EvidenceRow,
-} from "../_shared/zoneTimeframeEvidence.ts";
-import {
-  compareDealingRangeDecisions,
-  evaluateCanonicalDealingRange,
-  normalizeDealingRangeMode,
-  resolveCanonicalDealingRange,
-} from "../_shared/canonicalDealingRange.ts";
-import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
-import {
-  evaluateZoneLocalEnforcement,
-} from "../_shared/zoneLocalEnforcement.ts";
-import {
-  loadCrossTimeframeActivation,
-} from "../_shared/crossTimeframeActivationStore.ts";
-import {
-  resolveCrossTimeframeAuthority,
-} from "../_shared/crossTimeframeAuthority.ts";
-import {
-  evaluateCrossTimeframeEntryAuthority,
-} from "../_shared/crossTimeframeEntryAuthority.ts";
-import {
-  evaluateCrossTimeframeShadowCandidate,
-} from "../_shared/crossTimeframeShadowValidation.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { buildRoutedConfirmationObservation } from "../_shared/confirmationAuthority.ts";
-import { type DirectionResult } from "../_shared/directionEngine.ts";
-import {
-  bindTimeframeCandles,
-  buildTimeframeCandleMap,
-  resolveTimeframeAuthority,
-  timeframeFetchRange,
-  zoneTimeframeLabels,
-} from "../_shared/timeframeAuthority.ts";
-import {
-  buildStyleDecisionEvidence,
-  type StyleDecisionEvidence,
-} from "../_shared/styleDecisionEvidence.ts";
+import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
-import {
-  confirmationEvidenceLines,
-  confirmationMethodLabel,
-  crossTimeframeAuthorityLine,
-  diagnosticScoreLine,
-  directionVerdictLines,
-  durationLabel,
-  parseSignalReason,
-  rMultiple,
-  styleLadderLines,
-  tgLine,
-  tradeAuthorityLines,
-  watchlistOriginLines,
-  zoneEvidenceLines,
-} from "../_shared/telegramDetail.ts";
-import {
-  buildDirectionVerdictThesisOptions,
-  validatePendingOrderThesis,
-  type ThesisValidationResult,
-} from "../_shared/thesisValidator.ts";
-import { logRejectedSetup, normalizeRejectedGate, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
+import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
 import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
@@ -322,62 +80,260 @@ import { validateFVGBatch, type BatchFVGValidationResult, type FVGInvalidationCo
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { updateConviction, buildConvictionKey, saveConvictionState, loadConvictionState, type ConvictionInput, type ThesisConvictionState, type ConvictionResult, type ConvictionConfig, DEFAULT_CONVICTION_CONFIG } from "../_shared/thesisConviction.ts";
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
-import {
-  applyFinalCandidateSizeAdjustments,
-  computePositionSize,
-  calculatePositionRisk,
-  normalizeBrokerVolumeDown,
-  resolveCorrelationSizeMultiplier,
-  resolveSizingVolatilityContext,
-  type PropFirmContext,
-} from "../_shared/unifiedPositionSizing.ts";
+import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
-import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
-import { checkCorrelationExposure } from "../_shared/gateCorrelation.ts";
+import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
-import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
-import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
-import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
-import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
-import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
-import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
-import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
-import { checkCooldown } from "../_shared/gateCooldown.ts";
-import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
-import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
-import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
-import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
-import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import {
   detectSession as sharedDetectSession,
-  detectSilverBullet as sharedDetectSilverBullet,
-  detectMacroWindow as sharedDetectMacroWindow,
   toNYTime as sharedToNYTime,
+  normalizeSessionFilter,
   isSessionEnabled,
   type SessionResult,
 } from "../_shared/sessions.ts";
-
-import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-
-setCreditCallerContext("bot-scanner");
 
 declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
-
-function canonicalEvidenceSnapshot(detail: Record<string, any>) {
-  return {
-    canonicalScannerState: detail.canonicalScannerState || null,
-    canonicalStructureAuthority: detail.canonicalStructureAuthority || null,
-    canonicalLiquiditySequence: detail.canonicalLiquiditySequence || null,
-    canonicalStructureDecision: detail.canonicalStructureDecision || null,
-    canonicalStructureEnforcement: detail.canonicalStructureEnforcement || null,
-  };
+// ─── Default Config (overridden by bot_configs) ─────────────────────
+const DEFAULTS = {
+  minConfluence: 55,  // Percentage (0-100) — must match normalizedScoring: true
+  htfBiasRequired: true,
+  htfBiasHardVeto: false,
+  onlyBuyInDiscount: false,
+  onlySellInPremium: false,
+  maxDrawdown: 20,
+  maxDailyLoss: 5,
+  riskPerTrade: 1,
+  maxOpenPositions: 3,
+  maxPerSymbol: 2,
+  allowSameDirectionStacking: false,
+  portfolioHeat: 10,
+  minRiskReward: 1.5,
+  // ── SL/TP Method Defaults ──
+  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
+  fixedSLPips: 25,
+  slATRMultiple: 1.5,
+  slATRPeriod: 14,
+  slBufferPips: 2,
+  // Per-instrument SL buffer overrides (pips). When set, the override is final — no asset-class multiplier applied.
+  instrumentBuffers: {} as Record<string, { slBufferPips?: number }>,
+  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
+  fixedTPPips: 50,
+  tpRatio: 2.0,
+  tpATRMultiple: 2.0,
+  breakEvenEnabled: true,
+  breakEvenPips: 20,
+  // Offset above/below entry when SL is moved to breakeven (pips). Default 3
+  // covers typical spread + commission so BE exits net ~flat instead of slightly
+  // negative on live brokers.
+  breakEvenOffsetPips: 3,
+  enabledSessions: ["london", "newyork"],
+  enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
+  instruments: [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
+    "XAU/USD", "BTC/USD",
+  ],
+  openingRange: {
+    enabled: false,
+    candleCount: 24,
+    useBias: true,
+    useJudasSwing: true,
+    useKeyLevels: true,
+    usePremiumDiscount: false,
+    waitForCompletion: true,
+  },
+  tradingStyle: {
+    mode: "day_trader" as "scalper" | "day_trader" | "swing_trader",
+  },
+  // ── Spread Filter ──
+  spreadFilterEnabled: true,
+  maxSpreadPips: 0, // 0 = use per-instrument defaults from SPECS.maxSpread
+  // ── ATR Volatility Filter (H2) ──
+  atrFilterEnabled: false,
+  atrFilterMin: 0,   // min ATR in pips (0 = no min)
+  atrFilterMax: 0,   // max ATR in pips (0 = no max)
+  // ── News Event Filter ──
+  newsFilterEnabled: true,
+  newsFilterPauseMinutes: 30,
+  // ── Entry behaviour ──
+  scanIntervalMinutes: 15, // how often to scan (cron runs every 5m, but skips if interval not elapsed)
+  cooldownMinutes: 0,
+  closeOnReverse: false,
+  // ── Exit toggles ──
+  structureInvalidationEnabled: false, // CHoCH-against SL tightening (disabled: fires too often on retracements)
+  trailingStopEnabled: false,
+  trailingStopPips: 15,
+  trailingStopActivation: "after_1r",
+  partialTPEnabled: true,
+  partialTPPercent: 50,
+  partialTPLevel: 1.0,
+  maxHoldEnabled: false,
+  maxHoldHours: 0,
+  // ── Sessions ──
+  killZoneOnly: false,
+  // ── Protection ──
+  maxConsecutiveLosses: 0,
+  protectionMaxDailyLossDollar: 0,
+  // ── Strategy gates ── (collapsed to single percentage threshold: minConfluence)
+  // ── Normalized Scoring (opt-in) ──
+  // When true, raw score is normalized to percentage of enabled factors' max possible score,
+  // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
+  // minConfluence threshold always means "X% of enabled factors aligned".
+  normalizedScoring: true,  // Percentage-based scoring is now the default
+  useSMT: true,
+  smtOppositeVeto: true,  // When true, block trades where SMT divergence opposes signal direction
+  useFOTSI: true,
+  // ── Impulse Zone Scoring ──
+  impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
+  impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
+  impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
+  impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
+  minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
+  impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
+  originOBRetest: false,        // When true, allow entries at the OB that CAUSED the impulse (fib 1.0 re-test)
+  fibMaxRetracement: 0.786,     // Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify
+  // ── Simple Direction Engine ──
+  useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
+  simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
+  simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
+  useConfirmedTrend: true,             // Use fib-extension-filtered MSBs for stable macro-trend (vs legacy swing-pair flip)
+  confirmedTrendFibFactor: 0.25,       // Min extension as fraction of swing range to count as confirmed MSB (0.25 = 25%)
+  confirmedTrendSwingLookback: 5,      // Swing detection lookback for confirmedTrend (coarser than entry-level lookback=3)
+  // ── Structural Conviction Gate (Gate 3) ──
+  // S2F (Structure-to-Fractal) thresholds: block trade when directionRate=0% AND S2F < threshold.
+  // Asymmetric defaults: longs strict (35%), shorts loose (20%) per weekly advisor recommendation.
+  structuralConvictionS2FLong: 0.35,
+  structuralConvictionS2FShort: 0.20,
+  // Opposite-fractal soft-block thresholds (used when directionRate=0% but S2F passes).
+  structuralConvictionOppositeLong: 0.30,
+  structuralConvictionOppositeShort: 0.45,
+  // ── Regime-Adaptive Exit Engine ──
+  regimeAdaptiveTPEnabled: false,  // When true, adjust TP based on market regime (trending → extend, ranging → tighten)
+  trendingRRMultiplier: 1.5,      // R:R multiplier in trending regimes
+  rangingRRMultiplier: 0.75,      // R:R multiplier in ranging regimes
+  adaptiveTrailingEnabled: false, // When true, use momentum-fade trailing instead of fixed-pip trailing
+  baseTrailATRMultiple: 1.5,      // Base trailing distance as ATR multiple
+  momentumFadeThreshold: 0.4,     // Body/range ratio below this = fading momentum
+  trailTightenFactor: 0.6,        // Multiply trail distance by this when momentum fading
+  trailWidenFactor: 1.3,          // Multiply trail distance by this when momentum strong
+  // ── Setup Staging / Watchlist ──
+  stagingEnabled: true,
+  watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
+  stagingTTLMinutes: 240,      // Time-to-live for staged setups (4h default)
+  minStagingCycles: 1,         // Minimum scan cycles before promotion allowed
+  // ── Limit Orders ──
+  limitOrderEnabled: false,     // When true, place limit orders at zone edges instead of market orders
+  limitOrderExpiryMinutes: 60,  // How long a pending limit order stays active before expiring
+  limitOrderMaxDistancePips: 30, // Max distance from current price to limit price (skip if too far)
+  limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
+  limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
+  marketFillAtZone: true,        // When true + izGateMode="hard" + price IS at zone → market fill immediately (no CHoCH wait)
+  marketFillStrictATRMult: 0.3,   // ATR multiplier for strict zone proximity (market fill). Range: 0.1-1.0
+  // ── Per-pair scratch (set during scan) ──
+  _currentSymbol: "" as string,
+  _smtResult: null as any,
+  // ── Factor Weights (config-driven, AI-tunable) ──
+  factorWeights: {} as Record<string, number>,
+  // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+  ictHTFEnabled: true,             // Enable ICT HTF analysis (weekly bias + daily impulse + containment)
+  ictHTFGateMode: "off" as "hard" | "soft" | "off",  // "off" = log only (no trade impact); "soft" = score adjust; "hard" = block
+  ictHTFAlignedBonus: 2.0,         // Score bonus when weekly + daily + containment all align
+  ictHTFMisalignedPenalty: 3.0,    // Score penalty when weekly bias opposes trade direction
+  ictHTFMinContainment: 50,        // Min % overlap between LTF zone and Daily OB for containment pass
+  ictWeeklyBiasRequired: true,     // Require weekly bias alignment (when gate != off)
+  ictDailyContainmentRequired: true, // Require LTF zone to be inside Daily OB (when gate != off)
+  // ── ICT Displacement MSS Validation ──
+  ictDisplacementMSSEnabled: true,
+  ictDisplacementMSSGateMode: "off" as "hard" | "soft" | "off",
+  ictDisplacementMSSMinBodyRatio: 0.6,
+  ictDisplacementMSSMinRangeATR: 1.2,
+  ictDisplacementMSSLookback: 3,
+  ictDisplacementMSSPenalty: 2.0,
+  // ── ICT Judas Swing (Liquidity Sweep before MSS) ──
+  ictJudasSwingEnabled: true,
+  ictJudasSwingGateMode: "off" as "hard" | "soft" | "off",
+  ictJudasSwingLookback: 10,
+  ictJudasSwingMinDepthATR: 0.1,
+  ictJudasSwingRequireCloseBack: true,
+  ictJudasSwingPenalty: 1.5,
+  // ── ICT FVG Invalidation ──
+  ictFVGInvalidationEnabled: true,
+  ictFVGInvalidationGateMode: "off" as "hard" | "soft" | "off",
+  ictFVGBodyCloseOnly: true,
+  ictFVGRuleOfTwo: true,
+  ictFVGExhaustedPenalty: 1.5,
+  ictFVGInvalidatedPenalty: 3.0,
+  // ── ICT Kill Zone Time Filter ──
+  ictKillZoneEnabled: true,
+  ictKillZoneGateMode: "off" as "hard" | "soft" | "off",
+  ictKillZoneSilverBullet: true,
+  ictKillZonePMSession: true,
+  ictKillZoneOutsidePenalty: 1.0,
+  ictKillZonePrimeBonus: 1.5,
+  // ── ICT Risk Management ──
+  ictRiskEnabled: true,
+  ictRiskBasePercent: 0.01,
+  ictRiskDrawdownHalving: true,
+  ictRiskMaxConsecLosses: 3,
+  ictRiskDailyLimit: 0.01,
+  ictRiskWeeklyLimit: 0.025,
+  ictRiskMaxTradesPerDay: 3,
+  ictRiskFVGRuleOfTwoExit: true,
+  // ── Entry/HTF timeframes (set by style) ──
+  entryTimeframe: "15min",
+  htfTimeframe: "1day",
+  // ── Thesis Conviction Tracker ──
+  thesisConvictionEnabled: true,       // Enable thesis conviction tracking
+  thesisConvictionMode: "shadow" as "shadow" | "active", // "shadow" = log only; "active" = modulate impulse credit
+  thesisConvictionDecayPerCycle: 8,    // Points lost per cycle when evidence opposes thesis
+  thesisConvictionRecoveryPerCycle: 5, // Points gained per cycle when evidence supports thesis
+  thesisConvictionRevokeThreshold: 50, // Below this → impulse credit revoked (in active mode)
+  thesisConvictionKillThreshold: 30,   // Below this → thesis killed entirely (in active mode)
+};
+// ─── Resolve symbol name with per-symbol overrides or default suffix ──
+// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
+function resolveSymbol(pair: string, conn: any): string {
+  const overrides = conn.symbol_overrides || {};
+  const norm = normalizeSymKey(pair);
+  for (const [k, v] of Object.entries(overrides)) {
+    if (normalizeSymKey(k) === norm && v) return String(v);
+  }
+  const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
+  return base + (conn.symbol_suffix || "");
 }
-// resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
-// MetaAPI requests delegate to the provisioning-aware shared client.
+// ─── MetaAPI Region Failover ────────────────────────────────────────
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+async function metaFetch(
+  accountId: string,
+  authToken: string,
+  pathBuilder: (base: string) => string,
+  init?: RequestInit,
+): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const res = await fetch(url, { ...init, headers });
+    const body = await res.text();
+    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+    lastBody = body; lastStatus = res.status;
+    if (!/region|not connected to broker/i.test(body)) {
+      return { res: new Response(body, { status: res.status }), body };
+    }
+    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+}
 
 // ─── Unified Broker Spread Check ────────────────────────────────────
 // Single function for both OANDA and MetaApi spread checks.
@@ -457,117 +413,78 @@ function adjustSLTPForSpread(
   }
 }
 
-// Format a price for display using the instrument's pip size (avoids
-// noisy floats like 217.90583499999997 in Telegram messages).
-function fmtPx(v: number | string | null | undefined, sym: string): string {
-  if (v === null || v === undefined || v === "") return "—";
-  const n = typeof v === "number" ? v : parseFloat(String(v));
-  if (!isFinite(n)) return String(v);
-  const ps = SPECS[sym]?.pipSize ?? 0.0001;
-  const decimals = Math.max(2, Math.round(-Math.log10(ps)) + 1);
-  return n.toFixed(decimals);
-}
-
-function buildConfiguredPreArmedPlan(input: {
-  direction: "long" | "short";
-  zone: PendingEntryZone;
-  structuralInvalidation: number;
-  preferredPositionStop?: number | null;
-  symbol: string;
-  atrValue?: number | null;
-  config: any;
-  analysis: any;
-  stopPolicy?: StopPolicyShadowInput;
-  lifecycleDecision?: { valid: boolean; reason: string };
-}) {
-  if (input.lifecycleDecision && !input.lifecycleDecision.valid) {
-    return { valid: false as const, reason: input.lifecycleDecision.reason };
-  }
-  const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
-  const stop = resolvePreArmedPositionStop({
-    direction: input.direction,
-    zone: input.zone,
-    structuralInvalidation: input.structuralInvalidation,
-    preferredPositionStop: input.preferredPositionStop,
-    pipSize: spec.pipSize,
-    minimumStopPips: MIN_SL_PIPS[input.symbol] ?? 15,
-    atrValue: input.atrValue,
-    atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-  });
-  if (!stop.valid) return stop;
-
-  const gamePlanContext = input.config?._gamePlanContext;
-  const dolTargets = input.config?.dolTPExtensionEnabled !== false && gamePlanContext?.dol
-    ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
-    : undefined;
-  const target = calculateSLTP({
-    direction: input.direction,
-    lastPrice: input.zone.price,
-    pipSize: spec.pipSize,
-    config: input.config,
-    swings: input.analysis.structure?.swingPoints || [],
-    orderBlocks: input.analysis.orderBlocks || [],
-    liquidityPools: input.analysis.liquidityPools || [],
-    pdLevels: input.analysis.pdLevels || null,
-    atrValue: Number(input.atrValue) || 0,
-    fvgs: input.analysis.fvgs || [],
-    fibExtensions: input.analysis.fibLevels?.extensions,
-    dolTargets,
-    resolvedStopLoss: stop.stopLoss,
-    stopPolicyShadow: input.stopPolicy,
-  });
-  if (!Number.isFinite(Number(target.takeProfit))) {
-    return {
-      valid: false as const,
-      reason: "No viable take-profit target: " +
-        (target.takeProfitFallbackReason || "configured TP method returned no target"),
-    };
-  }
-  if (
-    input.stopPolicy &&
-    (!target.stopPolicyShadow?.valid || !Number.isFinite(Number(target.stopLoss)))
-  ) {
-    return {
-      valid: false as const,
-      reason: `Style-aware stop policy unavailable: ${target.stopPolicyShadow?.reason || "stop_unavailable"}`,
-    };
-  }
-
-  const selectedStop = input.stopPolicy ? Number(target.stopLoss) : stop.stopLoss;
-
-
-  const plan = buildPreArmedPositionPlan({
-    direction: input.direction,
-    zone: input.zone,
-    structuralInvalidation: input.structuralInvalidation,
-    preferredPositionStop: selectedStop,
-    finalPositionStop: input.stopPolicy ? selectedStop : undefined,
-    pipSize: spec.pipSize,
-    minimumStopPips: input.stopPolicy ? 0 : MIN_SL_PIPS[input.symbol] ?? 15,
-    atrValue: input.stopPolicy ? null : input.atrValue,
-    atrFloorMultiplier: ATR_SL_FLOOR_MULTIPLIER,
-    frozenTakeProfit: Number(target.takeProfit),
-  });
-  return plan.valid
-    ? {
-      ...plan,
-      takeProfitSource: target.takeProfitSource,
-      takeProfitFallbackReason: target.takeProfitFallbackReason,
-      stopPolicy: target.stopPolicyShadow,
-    }
-    : plan;
-}
-
-function rejectedPreArmDecision(reason: string, candidateId: string | null | undefined) {
-  return {
-    outcome: "not_armed",
-    reasonCode: reason.startsWith("No viable take-profit target")
-      ? "no_viable_take_profit"
-      : "invalid_pre_arm_geometry",
-    reason,
-    candidateId: candidateId ?? null,
-  };
-}
+// ─── Trading Style Execution Profiles ───────────────────────────────────────────────────────
+// Each style has fundamentally different execution characteristics.
+// Key principle: BE and trailing are now R-based (see scannerManagement.ts),
+// so breakEvenPips here acts as a fallback — the actual trigger is max(1R, breakEvenPips/riskPips).
+// trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips).
+const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
+  scalper: {
+    scanIntervalMinutes: 5,
+    entryTimeframe: "5m",
+    htfTimeframe: "1h",
+    tpRatio: 2.0,                   // Validated: 2:1 R:R (ATR floor gives ~20p SL → 40p TP)
+    slBufferPips: 1,
+    minConfluence: 40,              // Percentage — scalpers use lower threshold
+    riskPerTrade: 0.5,              // Lower risk per trade (high frequency)
+    impulseSlCapMultiplier: 1.5,    // Tight SL cap for scalper (validated)
+    // Scalper management: NO BE, NO trailing — let trades run to TP or SL.
+    // Backtest validated: 44% WR × 2:1 R:R = profitable. BE/trailing hurt performance
+    // by cutting winners short on 5m noise.
+    trailingStopEnabled: false,
+    trailingStopPips: 8,
+    trailingStopActivation: "after_1r",
+    breakEvenEnabled: false,        // Validated: disabling BE improves scalper P&L
+    breakEvenPips: 8,
+    partialTPEnabled: false,
+    maxHoldEnabled: true,
+    maxHoldHours: 4,
+  },
+  day_trader: {
+    scanIntervalMinutes: 15,
+    entryTimeframe: "15min",
+    htfTimeframe: "1day",
+    tpRatio: 2.0,
+    slBufferPips: 2,
+    minConfluence: 55,  // Percentage — day traders use moderate threshold
+    // Day trader management: partial TP at 1R, then trailing kicks in, BE at 1R
+    // On 15m chart with ~20-30 pip SL, BE at ~20-30 pips, trail at ~10-15 pips
+    trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
+    trailingStopPips: 15,           // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_1.5r", // Activates after partial TP at 1R + buffer
+    breakEvenEnabled: true,
+    breakEvenPips: 20,              // fallback; R-based trigger (min 1R) takes precedence
+    partialTPEnabled: true,
+    partialTPPercent: 50,
+    partialTPLevel: 1.0,            // partial at 1R
+    maxHoldEnabled: true,
+    maxHoldHours: 24,
+  },
+  swing_trader: {
+    scanIntervalMinutes: 60,
+    entryTimeframe: "1h",
+    htfTimeframe: "1w",
+    tpRatio: 3.0,                   // Validated: 3:1 R:R (cascade SL gives proper structure-based risk)
+    slBufferPips: 5,
+    minConfluence: 40,              // Validated: lower threshold — cascade zone selectivity is the real filter
+    riskPerTrade: 1.5,              // Higher risk per trade (fewer trades, higher conviction)
+    impulseSlCapMultiplier: 6,      // Wider SL cap for swing (larger impulses on Daily/4H)
+    // Swing management: NO BE, NO trailing, NO partial — let trades run to TP or SL.
+    // Backtest validated: 75% WR × 3:1 R:R = PF 8.88. BE was cutting XAU/USD winners
+    // at breakeven (10/10 trades hit BE instead of TP). Cascade zone quality is high
+    // enough that we trust the setup to reach TP without protective management.
+    trailingStopEnabled: false,
+    trailingStopPips: 25,
+    trailingStopActivation: "after_2r",
+    breakEvenEnabled: false,        // Validated: disabling BE dramatically improves swing P&L
+    breakEvenPips: 40,
+    partialTPEnabled: false,        // Validated: no partial TP — let full position reach 3R
+    partialTPPercent: 33,
+    partialTPLevel: 1.0,
+    maxHoldEnabled: false,
+    maxHoldHours: 0,                // no time limit for swings
+  },
+};
 
 function getEntryInterval(entryTf: string): string {
   const map: Record<string, string> = {
@@ -592,14 +509,163 @@ function getEntryRange(entryTf: string): string {
 function toNYTime(utc: Date) { return sharedToNYTime(utc); }
 function detectSession(_config?: any): SessionResult { return sharedDetectSession(); }
 
-// Local aliases — delegate to _shared/sessions.ts (single source of truth)
-function detectSilverBullet(): SilverBulletResult { return sharedDetectSilverBullet(); }
-function detectMacroWindow(): MacroWindowResult { return sharedDetectMacroWindow(); }
+// ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
+function detectSilverBullet(): SilverBulletResult {
+  const ny = toNYTime(new Date());
+  const t = ny.t;
+  const windows: { name: string; start: number; end: number }[] = [
+    { name: "London Open SB", start: 3,  end: 4  },
+    { name: "AM SB",          start: 10, end: 11 },
+    { name: "PM SB",          start: 14, end: 15 },
+  ];
+  for (const w of windows) {
+    if (t >= w.start && t < w.end) {
+      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
+// ─── ICT Macro Windows (DST-aware, NY local time, ~20min each) ────
+function detectMacroWindow(): MacroWindowResult {
+  const ny = toNYTime(new Date());
+  const tMin = ny.tMin;
+  const windows: { name: string; start: number; end: number }[] = [
+    { name: "London Macro 1",    start:  2 * 60 + 33, end:  2 * 60 + 50 },
+    { name: "London Macro 2",    start:  4 * 60 +  3, end:  4 * 60 + 20 },
+    { name: "NY Pre-Open Macro", start:  8 * 60 + 50, end:  9 * 60 + 10 },
+    { name: "NY AM Macro",       start:  9 * 60 + 50, end: 10 * 60 + 10 },
+    { name: "London Close Macro",start: 10 * 60 + 50, end: 11 * 60 + 10 },
+    { name: "NY Lunch Macro",    start: 11 * 60 + 50, end: 12 * 60 + 10 },
+    { name: "Last Hour Macro",   start: 13 * 60 + 10, end: 13 * 60 + 40 },
+    { name: "PM Macro",          start: 15 * 60 + 15, end: 15 * 60 + 45 },
+  ];
+  for (const w of windows) {
+    if (tMin >= w.start && tMin < w.end) {
+      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
+// ─── ICT AMD Phase Detection (DST-aware, NY local time) ───────────
+function detectAMDPhase(candles: Candle[]): AMDResult {
+  if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
+  const nyHourOf = (c: Candle): number => {
+    const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
+    return toNYTime(utc).h;
+  };
+  const recent = candles.slice(-200);
+  const asian  = recent.filter(c => { const h = nyHourOf(c); return h >= 20 || h < 2; });
+  const london = recent.filter(c => { const h = nyHourOf(c); return h >= 2 && h < 9; });
+  const nyCandles = recent.filter(c => { const h = nyHourOf(c); return h >= 9 && h < 16; });
+  const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
+  const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
+  let sweptSide: "high" | "low" | null = null;
+  let bias: "bullish" | "bearish" | null = null;
+  if (asianHigh != null && asianLow != null && london.length > 0) {
+    const lHigh = Math.max(...london.map(c => c.high));
+    const lLow  = Math.min(...london.map(c => c.low));
+    const lClose = london[london.length - 1].close;
+    const tookHigh = lHigh > asianHigh;
+    const tookLow  = lLow  < asianLow;
+    if (tookHigh && !tookLow && lClose < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+    else if (tookLow && !tookHigh && lClose > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    else if (tookHigh && tookLow) {
+      const tail = london.slice(-Math.max(1, Math.floor(london.length / 3)));
+      const tailHigh = Math.max(...tail.map(c => c.high));
+      const tailLow  = Math.min(...tail.map(c => c.low));
+      if (tailHigh > asianHigh && tail[tail.length - 1].close < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+      else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    }
+  }
+  const nowNY = toNYTime(new Date());
+  const h = nowNY.h;
+  let phase: AMDResult["phase"] = "unknown";
+  if (h >= 20 || h < 2) phase = "accumulation";
+  else if (h >= 2 && h < 9) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
+  else if (h >= 9 && h < 16) {
+    if (sweptSide && nyCandles.length > 0 && asianHigh != null && asianLow != null) {
+      const nHigh = Math.max(...nyCandles.map(c => c.high));
+      const nLow  = Math.min(...nyCandles.map(c => c.low));
+      const expandedDown = sweptSide === "high" && nLow < asianLow;
+      const expandedUp   = sweptSide === "low"  && nHigh > asianHigh;
+      phase = (expandedDown || expandedUp) ? "distribution" : "manipulation";
+    } else {
+      phase = "distribution";
+    }
+  } else if (h >= 16 && h < 20) {
+    phase = "distribution";
+  }
+  const detail = sweptSide
+    ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
+    : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
+  return { phase, bias, asianHigh, asianLow, sweptSide, detail };
+}
+
+// ─── SMT Divergence (scanner-specific, uses local detectSwingPoints) ──
+function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
+  const corrPair = SMT_PAIRS[symbol] || null;
+  if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
+  if (candles.length < 30 || correlatedCandles.length < 30) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
+  }
+  const thisSwings = detectSwingPoints(candles, 3);
+  const corrSwings = detectSwingPoints(correlatedCandles, 3);
+  const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
+  const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
+  const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
+  const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
+  if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
+  }
+  const thisLatestLow = thisLows[thisLows.length - 1].price;
+  const thisPriorLow  = thisLows[thisLows.length - 2].price;
+  const corrLatestLow = corrLows[corrLows.length - 1].price;
+  const corrPriorLow  = corrLows[corrLows.length - 2].price;
+  if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
+    return {
+      detected: true, type: "bullish", correlatedPair: corrPair,
+      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
+    };
+  }
+  const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
+  const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
+  const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
+  const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
+  if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
+    return {
+      detected: true, type: "bearish", correlatedPair: corrPair,
+      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
+    };
+  }
+  return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
+}
+
+// ─── Premium/Discount Zone Calculation ──────────────────────────────
+function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
+  if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const swings = detectSwingPoints(candles);
+  const recentHighs = swings.filter(s => s.type === "high").slice(-5);
+  const recentLows = swings.filter(s => s.type === "low").slice(-5);
+  if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const swingHigh = Math.max(...recentHighs.map(s => s.price));
+  const swingLow = Math.min(...recentLows.map(s => s.price));
+  const range = swingHigh - swingLow;
+  if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const lastPrice = candles[candles.length - 1].close;
+  const zonePercent = ((lastPrice - swingLow) / range) * 100;
+  let currentZone = "equilibrium";
+  if (zonePercent > 55) currentZone = "premium";
+  else if (zonePercent < 45) currentZone = "discount";
+  const oteZone = zonePercent >= 62 && zonePercent <= 79;
+  return { currentZone, zonePercent, oteZone };
+}
+
 // ─── Fetch candles via shared multi-source helper ────────────────────
 // Tries: MetaAPI (broker feed) → Twelve Data → Polygon.io
 // Module-scoped reference set per-scan so the loop below can stay terse.
 let _scanBrokerConn: BrokerConn | null = null;
-const _scanCandleSources = new Map<string, string>();
 async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Promise<Candle[]> {
   const result = await fetchCandlesWithFallback({
     symbol,
@@ -608,7 +674,6 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
     brokerConn: _scanBrokerConn,
     skipBroker: true,
   });
-  _scanCandleSources.set(`|`, result.source);
   return result.candles;
 }
 
@@ -617,30 +682,350 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 
 // ─── Load user config ───────────────────────────────────────────────
 async function loadConfig(supabase: any, userId: string, connectionId?: string) {
-  return await loadEffectiveRuntimeConfig(supabase, {
-    userId,
-    connectionId,
-  });
+  let data: any = null;
+  // Try connection-specific config first
+  if (connectionId) {
+    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
+    data = res.data;
+  }
+  // Fall back to global config
+  if (!data) {
+    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
+    data = res.data;
+  }
+  // Delegate to shared mapper (single source of truth for field resolution)
+  return mapNestedToFlat(data?.config_json || null);
+}
+
+// ─── LEGACY loadConfig body preserved as reference (DO NOT USE) ──────
+// The mapping logic below has been extracted to _shared/configMapper.ts.
+// Keeping as dead code for one release cycle to aid debugging if needed.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _legacyLoadConfigMapping(_raw: any) {
+  const raw = _raw;
+  const strategy = raw.strategy || {};
+  const risk = raw.risk || {};
+  const entry = raw.entry || {};
+  const exit = raw.exit || {};
+  const instruments = raw.instruments || {};
+  const sessions = raw.sessions || {};
+  const protection = raw.protection || {};
+
+  const enabledInstrumentMap = instruments.allowedInstruments && typeof instruments.allowedInstruments === "object"
+    ? instruments.allowedInstruments
+    : null;
+  const enabledInstrumentList = enabledInstrumentMap
+    ? Object.entries(enabledInstrumentMap)
+        .filter(([, enabled]) => Boolean(enabled))
+        .map(([symbol]) => symbol)
+    : null;
+
+  const merged = {
+    ...DEFAULTS,
+    // ── Strategy mappings ──
+    // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
+    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
+    minConfluence: (() => {
+      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence;
+      // If value is in legacy 0-10 range and normalizedScoring is on, scale to percentage
+      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw.normalizedScoring ?? true)) {
+        return raw_mc * 10;
+      }
+      return raw_mc;
+    })(),
+    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
+    // UI writes: requireHTFBias; legacy DB: htfBiasRequired
+    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
+    // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
+    htfBiasHardVeto: strategy.htfBiasHardVeto ?? raw.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
+    // UI writes: useOrderBlocks; legacy DB: enableOB
+    enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
+    // UI writes: useFVG; legacy DB: enableFVG
+    enableFVG: strategy.useFVG ?? strategy.enableFVG ?? true,
+    // UI writes: useLiquiditySweep; legacy DB: enableLiquiditySweep
+    enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
+    // UI writes: useStructureBreak; legacy DB: enableBOS + enableCHoCH
+    enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
+    // Displacement scoring (defaults true)
+    useDisplacement: strategy.useDisplacement ?? true,
+    // Breaker Blocks + Unicorn Model (defaults true)
+    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
+    useUnicornModel: strategy.useUnicornModel ?? true,
+    // Silver Bullet macro windows (defaults true)
+    useSilverBullet: strategy.useSilverBullet ?? true,
+    // ICT Macro Windows (defaults true)
+    useMacroWindows: strategy.useMacroWindows ?? true,
+    // SMT Divergence (defaults true)
+    useSMT: strategy.useSMT ?? true,
+    // SMT Opposite Veto (defaults true — block trades where SMT opposes signal)
+    smtOppositeVeto: strategy.smtOppositeVeto ?? raw.smtOppositeVeto ?? true,
+    // VWAP confluence (defaults true)
+    useVWAP: strategy.useVWAP ?? true,
+    vwapProximityPips: strategy.vwapProximityPips ?? 15,
+    // AMD Phase (defaults true)
+    useAMD: strategy.useAMD ?? true,
+    // FOTSI Currency Strength (defaults true)
+    useFOTSI: strategy.useFOTSI ?? true,
+    // Impulse Zone Scoring (defaults true)
+    impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
+    impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
+    impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
+    impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
+    minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
+    impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
+    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
+    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? DEFAULTS.fibMaxRetracement,
+    // Simple Direction Engine
+    useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
+    simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
+    simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
+    useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? true,
+    confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? 0.25,
+    confirmedTrendSwingLookback: strategy.confirmedTrendSwingLookback ?? raw.confirmedTrendSwingLookback ?? 5,
+    // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
+    structuralConvictionEnabled: strategy.structuralConvictionEnabled !== false,
+    structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
+    structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? DEFAULTS.structuralConvictionS2FShort,
+    structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? DEFAULTS.structuralConvictionOppositeLong,
+    structuralConvictionOppositeShort: strategy.structuralConvictionOppositeShort ?? raw.structuralConvictionOppositeShort ?? DEFAULTS.structuralConvictionOppositeShort,
+    // ── Regime-Adaptive Exit Engine ──
+    regimeAdaptiveTPEnabled: strategy.regimeAdaptiveTPEnabled ?? raw.regimeAdaptiveTPEnabled ?? false,
+    trendingRRMultiplier: strategy.trendingRRMultiplier ?? raw.trendingRRMultiplier ?? 1.5,
+    rangingRRMultiplier: strategy.rangingRRMultiplier ?? raw.rangingRRMultiplier ?? 0.75,
+    adaptiveTrailingEnabled: strategy.adaptiveTrailingEnabled ?? raw.adaptiveTrailingEnabled ?? false,
+    baseTrailATRMultiple: strategy.baseTrailATRMultiple ?? raw.baseTrailATRMultiple ?? 1.5,
+    momentumFadeThreshold: strategy.momentumFadeThreshold ?? raw.momentumFadeThreshold ?? 0.4,
+    trailTightenFactor: strategy.trailTightenFactor ?? raw.trailTightenFactor ?? 0.6,
+    trailWidenFactor: strategy.trailWidenFactor ?? raw.trailWidenFactor ?? 1.3,
+    // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
+    useVolumeProfile: strategy.useVolumeProfile ?? true,
+    useTrendDirection: strategy.useTrendDirection ?? true,
+    useDailyBias: strategy.useDailyBias ?? true,
+    // Regime scoring (UI writes under strategy.*; scanner reads at top level)
+    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
+    regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
+    // Normalized scoring (percentage-based scoring that auto-adjusts when factors are toggled)
+    // Default: true — aligns with DEFAULTS object, UI default, and confluenceScoring output (always percentage)
+    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? true,
+    // ── P1 tuning fields (now wired to scanner) ──
+    obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
+    fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
+    fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw.fvgOnlyUnfilled ?? true,
+    structureLookback: strategy.structureLookback ?? raw.structureLookback ?? 50,
+    liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? 2,
+    // Liquidity detection sensitivity (1-5 scale → ATR multiplier)
+    // 1=tight (0.10×ATR), 2=moderate (0.15×ATR), 3=balanced (0.20×ATR), 4=loose (0.25×ATR), 5=wide (0.30×ATR)
+    equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? 3,
+    // Premium/Discount filters (legacy DB keys)
+    onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
+    onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
+
+    // ── Risk mappings ──
+    riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
+    positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? "percent_risk",
+    fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? 0.1,
+    // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
+    maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
+    // UI writes: maxConcurrentTrades; legacy DB: maxOpenPositions
+    maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
+    // UI writes: minRR; legacy DB: minRiskReward
+    minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
+    // maxDrawdown is set later (combined with circuitBreakerPct)
+    // tpRatio is set later (in SL/TP method block)
+    // Legacy DB keys
+    maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
+    allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
+    portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
+    // Conflict counter thresholds (bidirectional scoring)
+    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? 4,
+    conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? 6,
+
+    // ── Entry mappings ──
+    scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes,
+    cooldownMinutes: entry.cooldownMinutes ?? 0,
+    closeOnReverse: entry.closeOnReverse ?? false,
+    slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? DEFAULTS.slBufferPips,
+
+    // ── SL/TP Method mappings ──
+    slMethod: exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? DEFAULTS.slMethod,
+    fixedSLPips: exit.fixedSLPips ?? raw.fixedSLPips ?? DEFAULTS.fixedSLPips,
+    slATRMultiple: exit.slATRMultiple ?? raw.slATRMultiple ?? DEFAULTS.slATRMultiple,
+    slATRPeriod: exit.slATRPeriod ?? raw.slATRPeriod ?? DEFAULTS.slATRPeriod,
+    tpMethod: exit.takeProfitMethod ?? exit.tpMethod ?? raw.tpMethod ?? DEFAULTS.tpMethod,
+    fixedTPPips: exit.fixedTPPips ?? raw.fixedTPPips ?? DEFAULTS.fixedTPPips,
+    tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+    tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? DEFAULTS.tpATRMultiple,
+
+    // ── Exit mappings ──
+    trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
+    trailingStopPips: exit.trailingStopPips ?? raw.trailingStopPips ?? 15,
+    trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
+    breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
+    breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
+    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? DEFAULTS.breakEvenOffsetPips,
+    partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
+    partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
+    partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
+    maxHoldEnabled: exit.maxHoldEnabled ?? raw.maxHoldEnabled ?? DEFAULTS.maxHoldEnabled,
+    maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
+
+    // ── Instruments ──
+    // Priority: 1) instruments.enabled array (current UI, including explicit empty array), 2) allowedInstruments map (legacy), 3) defaults
+    instruments: Array.isArray(instruments.enabled)
+      ? instruments.enabled
+      : enabledInstrumentList
+        ? enabledInstrumentList
+        : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
+
+    // ── Sessions ──
+    // Session filter: use shared normalizeSessionFilter for consistent parsing.
+    // Handles filter arrays, legacy boolean configs, and "sydney" → "offhours" migration.
+    enabledSessions: (
+      Array.isArray(sessions.filter)
+        ? normalizeSessionFilter(sessions.filter)
+        : sessions.asianEnabled !== undefined
+          ? normalizeSessionFilter([
+              ...(sessions.asianEnabled ? ["asian"] : []),
+              ...(sessions.londonEnabled ? ["london"] : []),
+              ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
+              ...(sessions.sydneyEnabled ? ["sydney"] : []),  // migrated to "offhours" by normalizeSessionFilter
+            ])
+          : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : DEFAULTS.enabledSessions)
+    ),
+    killZoneOnly: sessions.killZoneOnly ?? false,
+    // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
+    // The UI only toggles sessions on/off via the filter array.
+
+    // ── Active Days (convert {mon:true,...} to day-of-week numbers) ──
+    enabledDays: sessions.activeDays
+      ? [
+          ...(sessions.activeDays.sun ? [0] : []),
+          ...(sessions.activeDays.mon ? [1] : []),
+          ...(sessions.activeDays.tue ? [2] : []),
+          ...(sessions.activeDays.wed ? [3] : []),
+          ...(sessions.activeDays.thu ? [4] : []),
+          ...(sessions.activeDays.fri ? [5] : []),
+          ...(sessions.activeDays.sat ? [6] : []),
+        ]
+      : (Array.isArray(raw.enabledDays) ? raw.enabledDays : DEFAULTS.enabledDays),
+
+    // ── Protection ──
+    maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
+    // UI writes: maxDailyLoss (dollar); legacy DB: dailyLossLimit
+    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? protection.dailyLossLimit ?? 0,
+    // UI writes: circuitBreakerPct; legacy DB may not exist
+    maxDrawdown: Math.min(
+      risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
+      protection.circuitBreakerPct ?? 100,
+    ),
+
+    // ── Opening Range & Trading Style (already nested, keep as-is) ──
+    openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
+    tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
+
+    // ── Factor Weights (config-driven, AI-tunable) ──
+    factorWeights: raw.factorWeights || {},
+    // ── Per-Instrument SL Buffer Overrides ──
+    instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {},
+
+    // ── Spread Filter ──
+    spreadFilterEnabled: instruments.spreadFilterEnabled ?? raw.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
+    maxSpreadPips: instruments.maxSpreadPips ?? raw.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
+
+    // ── Correlation Filter (Gate 22) ──
+    correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? false,
+    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? 0.8,
+    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? 1,
+
+    // ── News Event Filter ──
+    newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
+    newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? DEFAULTS.newsFilterPauseMinutes,
+
+    // ── ATR Volatility Filter (H2) ──
+    atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? DEFAULTS.atrFilterEnabled,
+    atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? DEFAULTS.atrFilterMin,
+    atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? DEFAULTS.atrFilterMax,
+
+    // ── Setup Staging / Watchlist ──
+    stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? DEFAULTS.stagingEnabled,
+    watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
+    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
+    minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
+
+    // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+    ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? DEFAULTS.ictHTFEnabled,
+    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
+    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? DEFAULTS.ictHTFAlignedBonus,
+    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? DEFAULTS.ictHTFMisalignedPenalty,
+    ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? DEFAULTS.ictHTFMinContainment,
+    ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? DEFAULTS.ictWeeklyBiasRequired,
+        ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? DEFAULTS.ictDailyContainmentRequired,
+    // ── ICT Displacement MSS Validation ──
+    ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? DEFAULTS.ictDisplacementMSSEnabled,
+    ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
+    ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? DEFAULTS.ictDisplacementMSSMinBodyRatio,
+    ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? DEFAULTS.ictDisplacementMSSMinRangeATR,
+    ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? DEFAULTS.ictDisplacementMSSLookback,
+    ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? DEFAULTS.ictDisplacementMSSPenalty,
+    // ── ICT Judas Swing ──
+    ictJudasSwingEnabled: strategy.ictJudasSwingEnabled ?? raw.ictJudasSwingEnabled ?? DEFAULTS.ictJudasSwingEnabled,
+    ictJudasSwingGateMode: (strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? DEFAULTS.ictJudasSwingGateMode) as "hard" | "soft" | "off",
+    ictJudasSwingLookback: strategy.ictJudasSwingLookback ?? raw.ictJudasSwingLookback ?? DEFAULTS.ictJudasSwingLookback,
+    ictJudasSwingMinDepthATR: strategy.ictJudasSwingMinDepthATR ?? raw.ictJudasSwingMinDepthATR ?? DEFAULTS.ictJudasSwingMinDepthATR,
+    ictJudasSwingRequireCloseBack: strategy.ictJudasSwingRequireCloseBack ?? raw.ictJudasSwingRequireCloseBack ?? DEFAULTS.ictJudasSwingRequireCloseBack,
+    ictJudasSwingPenalty: strategy.ictJudasSwingPenalty ?? raw.ictJudasSwingPenalty ?? DEFAULTS.ictJudasSwingPenalty,
+    // ── ICT FVG Invalidation ──
+    ictFVGInvalidationEnabled: strategy.ictFVGInvalidationEnabled ?? raw.ictFVGInvalidationEnabled ?? DEFAULTS.ictFVGInvalidationEnabled,
+    ictFVGInvalidationGateMode: (strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? DEFAULTS.ictFVGInvalidationGateMode) as "hard" | "soft" | "off",
+    ictFVGBodyCloseOnly: strategy.ictFVGBodyCloseOnly ?? raw.ictFVGBodyCloseOnly ?? DEFAULTS.ictFVGBodyCloseOnly,
+    ictFVGRuleOfTwo: strategy.ictFVGRuleOfTwo ?? raw.ictFVGRuleOfTwo ?? DEFAULTS.ictFVGRuleOfTwo,
+    ictFVGExhaustedPenalty: strategy.ictFVGExhaustedPenalty ?? raw.ictFVGExhaustedPenalty ?? DEFAULTS.ictFVGExhaustedPenalty,
+    ictFVGInvalidatedPenalty: strategy.ictFVGInvalidatedPenalty ?? raw.ictFVGInvalidatedPenalty ?? DEFAULTS.ictFVGInvalidatedPenalty,
+    // ── ICT Kill Zone ──
+    ictKillZoneEnabled: strategy.ictKillZoneEnabled ?? raw.ictKillZoneEnabled ?? DEFAULTS.ictKillZoneEnabled,
+    ictKillZoneGateMode: (strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? DEFAULTS.ictKillZoneGateMode) as "hard" | "soft" | "off",
+    ictKillZoneSilverBullet: strategy.ictKillZoneSilverBullet ?? raw.ictKillZoneSilverBullet ?? DEFAULTS.ictKillZoneSilverBullet,
+    ictKillZonePMSession: strategy.ictKillZonePMSession ?? raw.ictKillZonePMSession ?? DEFAULTS.ictKillZonePMSession,
+    ictKillZoneOutsidePenalty: strategy.ictKillZoneOutsidePenalty ?? raw.ictKillZoneOutsidePenalty ?? DEFAULTS.ictKillZoneOutsidePenalty,
+    ictKillZonePrimeBonus: strategy.ictKillZonePrimeBonus ?? raw.ictKillZonePrimeBonus ?? DEFAULTS.ictKillZonePrimeBonus,
+    // ── ICT Risk Management ──
+    ictRiskEnabled: strategy.ictRiskEnabled ?? raw.ictRiskEnabled ?? DEFAULTS.ictRiskEnabled,
+    ictRiskBasePercent: strategy.ictRiskBasePercent ?? raw.ictRiskBasePercent ?? DEFAULTS.ictRiskBasePercent,
+    ictRiskDrawdownHalving: strategy.ictRiskDrawdownHalving ?? raw.ictRiskDrawdownHalving ?? DEFAULTS.ictRiskDrawdownHalving,
+    ictRiskMaxConsecLosses: strategy.ictRiskMaxConsecLosses ?? raw.ictRiskMaxConsecLosses ?? DEFAULTS.ictRiskMaxConsecLosses,
+    ictRiskDailyLimit: strategy.ictRiskDailyLimit ?? raw.ictRiskDailyLimit ?? DEFAULTS.ictRiskDailyLimit,
+    ictRiskWeeklyLimit: strategy.ictRiskWeeklyLimit ?? raw.ictRiskWeeklyLimit ?? DEFAULTS.ictRiskWeeklyLimit,
+    ictRiskMaxTradesPerDay: strategy.ictRiskMaxTradesPerDay ?? raw.ictRiskMaxTradesPerDay ?? DEFAULTS.ictRiskMaxTradesPerDay,
+    ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? DEFAULTS.ictRiskFVGRuleOfTwoExit,
+    // ── Limit Orders ──
+    limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
+    limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? DEFAULTS.limitOrderExpiryMinutes,
+    limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
+    limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
+    limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
+        marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
+    marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? DEFAULTS.marketFillStrictATRMult,
+    // ── Thesis Conviction Tracker ──
+    thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? DEFAULTS.thesisConvictionEnabled,
+    thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? DEFAULTS.thesisConvictionMode) as "shadow" | "active",
+    thesisConvictionDecayPerCycle: strategy.thesisConvictionDecayPerCycle ?? raw.thesisConvictionDecayPerCycle ?? DEFAULTS.thesisConvictionDecayPerCycle,
+    thesisConvictionRecoveryPerCycle: strategy.thesisConvictionRecoveryPerCycle ?? raw.thesisConvictionRecoveryPerCycle ?? DEFAULTS.thesisConvictionRecoveryPerCycle,
+    thesisConvictionRevokeThreshold: strategy.thesisConvictionRevokeThreshold ?? raw.thesisConvictionRevokeThreshold ?? DEFAULTS.thesisConvictionRevokeThreshold,
+    thesisConvictionKillThreshold: strategy.thesisConvictionKillThreshold ?? raw.thesisConvictionKillThreshold ?? DEFAULTS.thesisConvictionKillThreshold,
+  };
+  return merged;
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
 
 async function runSafetyGates(
-  supabase: any, userId: string, symbol: string, direction: "long" | "short",
+  supabase: any, userId: string, symbol: string, direction: string,
   analysis: any, config: any, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
-  convictionTimeframeLabel = "entry",
   directionVerdict?: DirectionVerdictResult | null,
   propFirmActive?: boolean,
-  /**
-   * The score and threshold the eligibility check at the call site used —
-   * effectiveScore and conflictAdjustedMinConfluence. Gate 9 must compare the
-   * same two numbers, or it re-decides the threshold on stale operands.
-   */
-  effectiveScore?: number,
-  effectiveMinConfluence?: number,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
@@ -688,14 +1073,23 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: "HTF check skipped" });
   }
 
-  // Gate 2: Premium/Discount — the frozen canonical impulse range is the
-  // sole location authority. Rolling entry-timeframe swings are diagnostic.
+  // Gate 2: Premium/Discount zone filter
   {
-    const canonical = analysis._canonicalDealingRangeEvaluation;
-    if (!canonical || canonical.available !== true) {
-      gates.push({ passed: true, reason: "P/D check unavailable: no frozen canonical impulse range" });
+    const pdZone = analysis.pd.currentZone;
+    const pdPct = analysis.pd.zonePercent ?? 50;
+    const curPrice = analysis.lastPrice;
+    const fmtP = (p: number) => p > 10 ? p.toFixed(3) : p.toFixed(5);
+    // Back-calculate swing high/low from zonePercent:
+    // zonePercent = ((price - swingLow) / range) * 100
+    // range = price / (pdPct/100) when pdPct > 0 (price - swingLow = range * pdPct/100 → range = (price - swingLow)/(pdPct/100))
+    // swingLow = price - range*(pdPct/100), swingHigh = swingLow + range
+
+    if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
+      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (premium > 55%, need discount < 45% to buy)` });
+    } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
+      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (discount < 45%, need premium > 55% to sell)` });
     } else {
-      gates.push({ passed: canonical.allowed, reason: canonical.explanation });
+      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%)` });
     }
   }
 
@@ -708,10 +1102,13 @@ async function runSafetyGates(
   } else {
     // Use conviction-TF candles if provided, otherwise fall back to entry-TF analysis
     let s2f: { overallRate: number; bullishRate: number; bearishRate: number } | undefined;
-    let convictionTFLabel = convictionTimeframeLabel;
+    let convictionTFLabel = "entry";
     if (convictionCandles && convictionCandles.length >= 20) {
       const convictionStructure = analyzeMarketStructure(convictionCandles);
       s2f = convictionStructure.structureToFractal;
+      // Determine label based on style for logging
+      const style = config.tradingStyle?.mode || "day_trader";
+      convictionTFLabel = style === "scalper" ? "15m" : style === "swing_trader" ? "4H" : "1H";
     } else {
       // Fallback: use entry-TF structure (original behavior)
       s2f = analysis.structure?.structureToFractal;
@@ -776,22 +1173,21 @@ async function runSafetyGates(
   }
 
   // Gate 4: Max open positions
-  gates.push(checkMaxPositions({ openPositionCount: openPositions.length, maxOpenPositions: config.maxOpenPositions }));
+  if (openPositions.length >= config.maxOpenPositions) {
+    gates.push({ passed: false, reason: `Max positions (${config.maxOpenPositions}) reached` });
+  } else {
+    gates.push({ passed: true, reason: `${openPositions.length}/${config.maxOpenPositions} positions` });
+  }
 
-  // Gate 5: Same-direction duplicate + max per symbol
+  // Gate 5: Max per symbol + same-direction duplicate check
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
-  const dupResult = checkDuplicateDirection({ sameDirectionExists, allowSameDirectionStacking: config.allowSameDirectionStacking, direction, symbol });
-  if (!dupResult.passed) {
-    gates.push(dupResult);
+  if (sameDirectionExists && !config.allowSameDirectionStacking) {
+    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
+  } else if (symbolPositions >= config.maxPerSymbol) {
+    gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
   } else {
-    const perSymResult = checkMaxPerSymbol({ symbolPositionCount: symbolPositions, maxPerSymbol: config.maxPerSymbol, symbol });
-    // Append stacking note to pass reason when stacking is active
-    if (perSymResult.passed && sameDirectionExists) {
-      gates.push({ passed: true, reason: `${perSymResult.reason} (stacking allowed)` });
-    } else {
-      gates.push(perSymResult);
-    }
+    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
   }
 
   // Gate 6: Portfolio heat (actual risk per position)
@@ -830,7 +1226,11 @@ async function runSafetyGates(
     const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
     const dailyLoss = actualBase - balance;
     const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
-    gates.push(checkDailyLossLimit({ dailyLossPercent, maxDailyLoss: config.maxDailyLoss }));
+    if (dailyLossPercent >= config.maxDailyLoss) {
+      gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+    }
   }
 
   // Gate 8: Max drawdown
@@ -840,39 +1240,19 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
   } else {
     const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
-    gates.push(checkMaxDrawdown({ balance, peakBalance, maxDrawdown: config.maxDrawdown }));
+    const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
+    if (drawdownPercent >= config.maxDrawdown) {
+      gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+    }
   }
 
-  // Gate 9: Min confluence.
-  //
-  // Must compare the SAME two numbers the eligibility check used —
-  // effectiveScore vs conflictAdjustedMinConfluence. It previously tested the
-  // raw `analysis.score` against the base `config.minConfluence`, both of which
-  // are the wrong operands:
-  //
-  //   effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal
-  //                  + zoneLocalScoreAdj + crossTimeframeScoreAdj
-  //                  + ictTotalAdj + verdictScoreAdj
-  //
-  // Several of those adjustments are positive, so a setup could clear
-  // eligibility on its credited score and then be rejected here on the
-  // uncredited one. Measured against live data on 2026-08-10: 10 of 10 sampled
-  // Gate 9 rejections had already cleared the threshold, with credits of +1.79
-  // to +2.20 (avg +1.97). backtest-engine has no equivalent gate, so this also
-  // broke live/backtest parity — the strategy was tuned without it.
-  //
-  // Falls back to the legacy operands only when the caller does not supply the
-  // effective pair (no live caller omits them).
-  {
-    const scoreForGate = typeof effectiveScore === "number" ? effectiveScore : analysis.score;
-    const thresholdForGate = typeof effectiveMinConfluence === "number"
-      ? effectiveMinConfluence
-      : config.minConfluence;
-    if (scoreForGate < thresholdForGate) {
-      gates.push({ passed: false, reason: `Score ${scoreForGate.toFixed(1)} < ${thresholdForGate} threshold` });
-    } else {
-      gates.push({ passed: true, reason: `Score ${scoreForGate.toFixed(1)} meets threshold ${thresholdForGate}` });
-    }
+  // Gate 9: Min confluence (redundant but per spec)
+  if (analysis.score < config.minConfluence) {
+    gates.push({ passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
+  } else {
+    gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
   // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
@@ -885,12 +1265,31 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 10: R:R is route-specific. The executable entry, stop and target do
-  // not exist until the market or pending-order geometry is frozen below.
-  gates.push({
-    passed: true,
-    reason: "Risk/reward deferred until executable geometry is frozen",
-  });
+  // Gate 10: Min R:R (spread + commission adjusted)
+  // Subtract typical spread cost AND estimated commission cost from reward to get effective R:R.
+  if (analysis.stopLoss && analysis.takeProfit) {
+    const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
+    const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
+    const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
+    const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
+    // Estimate commission cost in price terms: commissionPerLot / (lotUnits * quoteToUSD)
+    // This converts the dollar commission into price-movement equivalent
+    const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+    const avgCommPerLot = (config as any)._avgCommissionPerLot ?? 0;
+    const commCostInPrice = avgCommPerLot > 0 ? avgCommPerLot / (pairSpec.lotUnits * quoteToUSD) : 0;
+    const totalCostInPrice = spreadCostInPrice + commCostInPrice;
+    const effectiveReward = Math.max(0, rawReward - totalCostInPrice);
+    const rawRR = risk > 0 ? rawReward / risk : 0;
+    const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
+    const costDetail = avgCommPerLot > 0 ? `spread ${pairSpec.typicalSpread}p + comm $${avgCommPerLot.toFixed(1)}/lot` : `spread ${pairSpec.typicalSpread}p`;
+    if (effectiveRR < config.minRiskReward) {
+      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${config.minRiskReward} min` });
+    } else {
+      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})` });
+    }
+  } else {
+    gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
+  }
 
   // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
@@ -934,14 +1333,17 @@ async function runSafetyGates(
   if (config.cooldownMinutes > 0) {
     const { data: recentTrades } = await supabase.from("paper_trade_history").select("closed_at")
       .eq("user_id", userId).eq("symbol", symbol).order("closed_at", { ascending: false }).limit(1);
-    const elapsedMinutes = (recentTrades && recentTrades.length > 0)
-      ? (Date.now() - new Date(recentTrades[0].closed_at).getTime()) / 60000
-      : null;
-    gates.push(checkCooldown({
-      elapsedMinutes,
-      cooldownMinutes: config.cooldownMinutes,
-      symbol,
-    }));
+    if (recentTrades && recentTrades.length > 0) {
+      const lastClose = new Date(recentTrades[0].closed_at).getTime();
+      const elapsed = (Date.now() - lastClose) / 60000;
+      if (elapsed < config.cooldownMinutes) {
+        gates.push({ passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
+      } else {
+        gates.push({ passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
+      }
+    } else {
+      gates.push({ passed: true, reason: "No recent trades — cooldown OK" });
+    }
   }
 
   // Gate 14: Max Consecutive Losses (with 4-hour auto-reset cooldown)
@@ -954,14 +1356,20 @@ async function runSafetyGates(
         if (parseFloat(t.pnl) < 0) consecutiveLosses++;
         else break;
       }
-      const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
-      const hoursSinceLastLoss = (Date.now() - lastLossTime) / (1000 * 60 * 60);
-      gates.push(checkConsecutiveLosses({
-        consecutiveLosses,
-        maxConsecutiveLosses: config.maxConsecutiveLosses,
-        hoursSinceLastLoss,
-        autoResetHours: 4,
-      }));
+      if (consecutiveLosses >= config.maxConsecutiveLosses) {
+        // Check if enough time has passed since the last loss to auto-reset (4 hours)
+        const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
+        const hoursSinceLast = (Date.now() - lastLossTime) / (1000 * 60 * 60);
+        const resetHours = 4;
+        if (hoursSinceLast >= resetHours) {
+          gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
+        } else {
+          const remaining = Math.ceil((resetHours - hoursSinceLast) * 60);
+          gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit — auto-resets in ${remaining}min` });
+        }
+      } else {
+        gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
+      }
     } else {
       gates.push({ passed: true, reason: "No trade history for consecutive loss check" });
     }
@@ -1004,23 +1412,8 @@ async function runSafetyGates(
         if (newsRes.ok) {
           const newsData: any = await newsRes.json();
           if (newsData.hasHighImpact) {
-            const nearestEvent = [...(newsData.events || [])].sort((a: any, b: any) =>
-              Math.abs(new Date(a.scheduledTime).getTime() - Date.now()) -
-              Math.abs(new Date(b.scheduledTime).getTime() - Date.now())
-            )[0];
-            const eventName = nearestEvent?.name || nearestEvent?.title || "event";
-            const scheduledTime = nearestEvent?.scheduledTime
-              ? new Date(nearestEvent.scheduledTime).toISOString()
-              : null;
-            const scheduleDetail = scheduledTime
-              ? ` (scheduled ${scheduledTime})`
-              : "";
-            gates.push({
-              passed: false,
-              reason:
-                `News filter: high-impact event within ${config.newsFilterPauseMinutes}min` +
-                `${scheduleDetail} — ${eventName}`,
-            });
+            const eventNames = (newsData.events || []).map((e: any) => e.name || e.title || "event").join(", ");
+            gates.push({ passed: false, reason: `News filter: high-impact event within ${config.newsFilterPauseMinutes}min — ${eventNames}` });
           } else {
             gates.push({ passed: true, reason: `No high-impact news within ${config.newsFilterPauseMinutes}min for ${symbol}` });
           }
@@ -1075,7 +1468,13 @@ async function runSafetyGates(
     const atrPips = atrValue / spec.pipSize;
     const minPips = typeof config.atrFilterMin === "number" ? config.atrFilterMin : 0;
     const maxPips = typeof config.atrFilterMax === "number" ? config.atrFilterMax : 0;
-    gates.push(checkATRVolatility({ atrPips, minPips, maxPips }));
+    if (minPips > 0 && atrPips < minPips) {
+      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips below minimum ${minPips}` });
+    } else if (maxPips > 0 && atrPips > maxPips) {
+      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips above maximum ${maxPips}` });
+    } else {
+      gates.push({ passed: true, reason: `ATR ${atrPips.toFixed(1)} pips within range` });
+    }
   }
 
   // Gate 22: Correlation Filter — block self-cancelling hedges; cap same-direction stacking
@@ -1089,25 +1488,117 @@ async function runSafetyGates(
   // Currency decomposition + SMT_PAIRS retained as belt-and-suspenders for pairs
   // that are absent from the matrix.
   // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
-  gates.push(checkCorrelationExposure({
-    enabled: !!(config as any).correlationFilterEnabled,
-    symbol,
-    direction: direction as "long" | "short",
-    openPositions,
-    maxCorrelation: Number((config as any).maxCorrelation) || 0.8,
-    maxCorrelatedPositions:
-      Number((config as any).maxCorrelatedPositions) || 1,
-  }));
+  if ((config as any).correlationFilterEnabled) {
+    const maxCorrelatedPos = Number((config as any).maxCorrelatedPositions) || 1;
+    const threshold = Number((config as any).maxCorrelation) || 0.8;
+    const newPairCurrencies = parsePairCurrencies(symbol);
+    const smtPair = SMT_PAIRS[symbol];
+
+    type Hit = { detail: string; kind: "doubling" | "hedge"; effCorr: number };
+    const hits: Hit[] = [];
+
+    for (const pos of openPositions) {
+      if (pos.symbol === symbol) continue; // same-symbol handled by Gate 5
+      const posDir = pos.direction;
+
+      // Numeric correlation from static matrix (returns 0 if pair unknown)
+      const rawCorr = getCorrelation(symbol, pos.symbol);
+      const effCorr = getDirectionalCorrelation(
+        { symbol, direction },
+        { symbol: pos.symbol, direction: posDir },
+      );
+
+      let matched = false;
+      if (Math.abs(rawCorr) >= threshold) {
+        if (effCorr >= threshold) {
+          hits.push({
+            kind: "doubling",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — doubling`,
+          });
+          matched = true;
+        } else if (effCorr <= -threshold) {
+          hits.push({
+            kind: "hedge",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — hedge conflict`,
+          });
+          matched = true;
+        }
+      }
+
+      // Fallback 1: SMT pair (positive-correlation proxy for pairs the matrix may miss)
+      if (!matched && smtPair && pos.symbol === smtPair) {
+        hits.push({
+          kind: posDir === direction ? "doubling" : "hedge",
+          effCorr: posDir === direction ? 0.85 : -0.85,
+          detail: `${pos.symbol} ${posDir} — SMT pair ${posDir === direction ? "doubling" : "hedge"}`,
+        });
+        matched = true;
+      }
+
+      // Fallback 2: currency decomposition — full opposite exposure on same two currencies
+      if (!matched && newPairCurrencies) {
+        const posCurrencies = parsePairCurrencies(pos.symbol);
+        if (posCurrencies) {
+          const [nb, nq] = newPairCurrencies;
+          const [pb, pq] = posCurrencies;
+          const newBuying = direction === "long" ? nb : nq;
+          const newSelling = direction === "long" ? nq : nb;
+          const posBuying = posDir === "long" ? pb : pq;
+          const posSelling = posDir === "long" ? pq : pb;
+          if (newBuying === posSelling && newSelling === posBuying) {
+            hits.push({
+              kind: "hedge",
+              effCorr: -1,
+              detail: `${pos.symbol} ${posDir} — perfect currency hedge on ${newBuying}/${newSelling}`,
+            });
+          } else if (newBuying === posBuying && newSelling === posSelling) {
+            hits.push({
+              kind: "doubling",
+              effCorr: 1,
+              detail: `${pos.symbol} ${posDir} — identical currency exposure`,
+            });
+          }
+        }
+      }
+    }
+
+    const hedgeHits = hits.filter(h => h.kind === "hedge");
+    const doublingHits = hits.filter(h => h.kind === "doubling");
+
+    if (hedgeHits.length > 0) {
+      // Hedges bet against yourself on correlated pairs — always block, regardless of cap.
+      gates.push({
+        passed: false,
+        reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
+      });
+    } else if (doublingHits.length >= maxCorrelatedPos) {
+      // Same-direction correlated exposure exceeds the concentration cap.
+      gates.push({
+        passed: false,
+        reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
+      });
+    } else if (doublingHits.length > 0) {
+      gates.push({
+        passed: true,
+        reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
+      });
+    } else {
+      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
+    }
+  }
 
   // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
-    gates.push(checkTier1Minimum({
-      tier1GateEnabled: config.tier1GateEnabled !== false,
-      tier1GatePassed: !!ts.tier1GatePassed,
-      tier1GateReason: ts.tier1GateReason,
-      tier1Count: ts.tier1Count ?? 0,
-    }));
+    if (config.tier1GateEnabled === false) {
+      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
+    } else if (!ts.tier1GatePassed) {
+      gates.push({ passed: false, reason: ts.tier1GateReason });
+    } else {
+      gates.push({ passed: true, reason: ts.tier1GateReason });
+    }
   }
 
   // Gate 20: Regime Alignment — subsumed by Direction Verdict (Gate 1) when active.
@@ -1131,68 +1622,12 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
   }
 
-  return applyAuthorityOwnershipToGateResults({
-    gates,
-    requestedMode: config.singleOwnershipMode,
-    runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-    canonicalRangeAvailable: analysis._canonicalDealingRangeAvailable === true,
-    normalizeCode: normalizeRejectedGate,
-  });
+  return gates;
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
-async function hydratePendingLifecycleRows(client: any, rows: any[]): Promise<any[]> {
-  const ids = rows
-    .map((row) => row.impulse_entry_lifecycle_id)
-    .filter((id): id is string => typeof id === "string");
-  if (ids.length === 0) return rows;
-  const { data, error } = await client.from("impulse_entry_lifecycles")
-    .select("id,lifecycle").in("id", ids);
-  if (error) {
-    console.warn(`[pending] lifecycle hydration failed: ${error.message}`);
-    return rows;
-  }
-  const current = new Map((data || []).map((row: any) => [row.id, row.lifecycle]));
-  return rows.map((row) => ({
-    ...row,
-    impulse_entry_lifecycle: current.get(row.impulse_entry_lifecycle_id) ||
-      row.impulse_entry_lifecycle || null,
-  }));
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-
-  // ─── Caller verification: reject requests without valid cron secret OR user JWT ───
-  const authError = await verifyCronOrUserCaller(req);
-  if (authError) {
-    const authHeader = req.headers.get("authorization") || "";
-    const likelySchedulerRequest = req.headers.has("x-cron-secret") ||
-      authHeader === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""}`;
-    if (likelySchedulerRequest) {
-      try {
-        const failureClient = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-        );
-        const failureBody = await authError.clone().json().catch(() => ({}));
-        await recordScannerAuthorizationFailure(
-          failureClient,
-          "bot-scanner",
-          failureBody?.reason || "Rejected scheduler request",
-          {
-            has_cron_header: req.headers.has("x-cron-secret"),
-            has_authorization: authHeader.startsWith("Bearer "),
-          },
-        );
-      } catch (recordError: any) {
-        console.warn(
-          `[bot-scanner] Could not record auth failure: ${recordError?.message}`,
-        );
-      }
-    }
-    return authError;
-  }
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -1228,34 +1663,11 @@ Deno.serve(async (req) => {
 
     if (action === "manual_scan") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const scanCycleId = crypto.randomUUID();
-      const operation = await beginScannerOperation(adminClient, {
-        userId,
-        botId: BOT_ID,
-        functionName: "bot-scanner",
-        operation: "scan",
-        triggerSource: "manual",
-        scanCycleId,
-      });
       EdgeRuntime.waitUntil(
-        runScanForUser(adminClient, userId, {
-          isManualScan: true,
-          operationRunId: operation.persisted ? operation.runId : undefined,
-          scanCycleId,
-        }).catch(async (e: any) => {
-          console.error("[manual_scan] background error", e);
-          await failScannerOperation(
-            adminClient,
-            operation.persisted ? operation.runId : undefined,
-            e,
-          );
-        })
+        runScanForUser(adminClient, userId, { isManualScan: true })
+          .catch((e: any) => console.error("[manual_scan] background error", e))
       );
-      return respond({
-        started: true,
-        run_id: operation.persisted ? operation.runId : null,
-        message: "Scan started",
-      });
+      return respond({ started: true, message: "Scan started" });
     }
 
     // ── Setup Staging: Fetch active staged setups for the UI ──
@@ -1272,34 +1684,12 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const setupId = body.setupId;
       if (!setupId) return respond({ error: "Missing setupId" }, 400);
-      const dismissedAt = new Date().toISOString();
-      const reason = "Manually dismissed by user";
-      const { data: dismissed, error: updateErr } = await adminClient.from("staged_setups").update({
+      const { error: updateErr } = await adminClient.from("staged_setups").update({
         status: "invalidated",
-        invalidation_reason: reason,
-        lifecycle_reason: reason,
-        lifecycle_reason_code: "manual_dismissal",
-        lifecycle_evidence: buildWatchlistLifecycleEvidence({
-          reasonCode: "manual_dismissal",
-          observedAt: dismissedAt,
-          detail: { actor: "user" },
-        }),
-        resolved_at: dismissedAt,
-      }).eq("id", setupId).eq("user_id", userId)
-        .select("impulse_entry_lifecycle_id").maybeSingle();
+        invalidation_reason: "Manually dismissed by user",
+        resolved_at: new Date().toISOString(),
+      }).eq("id", setupId).eq("user_id", userId);
       if (updateErr) return respond({ error: updateErr.message }, 500);
-      if (dismissed?.impulse_entry_lifecycle_id) {
-        await resolveStoredImpulseEntryLifecycle(
-          adminClient,
-          dismissed.impulse_entry_lifecycle_id,
-          {
-            status: "invalidated",
-            reason,
-            resolvedAt: dismissedAt,
-            source: "staged_setup",
-          },
-        );
-      }
       return respond({ success: true });
     }
 
@@ -1307,64 +1697,22 @@ Deno.serve(async (req) => {
     if (action === "pending_orders") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const statusFilter = body.status || "all";
-
-      if (statusFilter === "snapshot") {
-        const activeStatuses = [
-          "pending",
-          "awaiting_confirmation",
-          "reconciliation_required",
-        ];
-        const terminalStatuses = [
-          "filled",
-          "broker_rejected",
-          "invalidated",
-          "expired",
-          "cancelled",
-        ];
-        // Read active rows first, then terminal rows. If a row resolves between
-        // the queries it can briefly appear in both sections, but it cannot vanish
-        // from both sections during the state transition.
-        const activeResult = await adminClient.from("pending_orders").select("*")
-          .eq("user_id", userId).eq("bot_id", BOT_ID)
-          .in("status", activeStatuses)
-          .order("placed_at", { ascending: false });
-        if (activeResult.error) {
-          return respond({ error: activeResult.error.message }, 500);
-        }
-        const historyResult = await adminClient.from("pending_orders").select("*")
-          .eq("user_id", userId).eq("bot_id", BOT_ID)
-          .in("status", terminalStatuses)
-          .order("resolved_at", { ascending: false, nullsFirst: false })
-          .limit(100);
-        if (historyResult.error) {
-          return respond({ error: historyResult.error.message }, 500);
-        }
-        const [active, history] = await Promise.all([
-          hydratePendingLifecycleRows(adminClient, activeResult.data || []),
-          hydratePendingLifecycleRows(adminClient, historyResult.data || []),
-        ]);
-        return respond({ active, history, fetchedAt: new Date().toISOString() });
-      }
-
       let query = adminClient.from("pending_orders").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID);
       if (statusFilter !== "all") {
         query = query.eq("status", statusFilter);
       }
-      const { data, error } = await query.order("placed_at", { ascending: false }).limit(100);
-      if (error) return respond({ error: error.message }, 500);
-      return respond(await hydratePendingLifecycleRows(adminClient, data || []));
+      const { data } = await query.order("placed_at", { ascending: false }).limit(100);
+      return respond(data || []);
     }
 
     // ── Pending Orders: Get only active pending orders ──
     if (action === "active_pending") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const { data, error } = await adminClient.from("pending_orders").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID)
-        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
+      const { data } = await adminClient.from("pending_orders").select("*")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
         .order("placed_at", { ascending: false });
-      if (error) return respond({ error: error.message }, 500);
-      return respond(await hydratePendingLifecycleRows(adminClient, data || []));
+      return respond(data || []);
     }
 
     // ── Pending Orders: Cancel a pending order ──
@@ -1372,28 +1720,12 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const orderId = body.orderId;
       if (!orderId) return respond({ error: "Missing orderId" }, 400);
-      const resolvedAt = new Date().toISOString();
-      const reason = "Manually cancelled by user";
-      const { data: cancelled, error: updateErr } = await adminClient.from("pending_orders").update({
+      const { error: updateErr } = await adminClient.from("pending_orders").update({
         status: "cancelled",
-        cancel_reason: reason,
-        resolved_at: resolvedAt,
-      }).eq("order_id", orderId).eq("user_id", userId)
-        .in("status", ["pending", "awaiting_confirmation", "reconciliation_required"])
-        .select("impulse_entry_lifecycle_id").maybeSingle();
+        cancel_reason: "Manually cancelled by user",
+        resolved_at: new Date().toISOString(),
+      }).eq("order_id", orderId).eq("user_id", userId).eq("status", "pending");
       if (updateErr) return respond({ error: updateErr.message }, 500);
-      if (cancelled?.impulse_entry_lifecycle_id) {
-        await resolveStoredImpulseEntryLifecycle(
-          adminClient,
-          cancelled.impulse_entry_lifecycle_id,
-          {
-            status: "cancelled",
-            reason,
-            resolvedAt,
-            source: "pending_order",
-          },
-        );
-      }
       return respond({ success: true });
     }
 
@@ -1401,139 +1733,29 @@ Deno.serve(async (req) => {
     if (action === "active_staged") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const { data } = await adminClient.from("staged_setups").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID)
-        .in("status", ["watching", "qualified"])
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "watching")
         .order("current_score", { ascending: false });
       return respond(data || []);
     }
 
-    // ── Management-Only Cron (1-minute cycle with internal sub-minute loop) ──
+    // ── Management-Only Cron (1-minute cycle) ──
     // Refreshes prices, runs trailing/BE/partial TP, checks pending order fills/expiry.
     // Does NOT run the full scan or place new trades. Designed for pg_cron every 1 min.
-    //
-    // INTERNAL LOOP: Runs management repeatedly every ~8 seconds for ~50 seconds of
-    // the execution window, then exits cleanly before the next cron invocation.
-    // This gives sub-minute SL ratcheting without needing sub-minute cron (not supported by pg_cron).
-    // Single decision authority, single broker-writer — same code path invoked multiple times.
     if (action === "manage") {
       const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
         .eq("is_running", true).eq("kill_switch_active", false);
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", managed: 0 });
-      const triggerSource: ScannerTriggerSource = body.trigger_source === "manual"
-        ? "manual"
-        : "cron";
-      const operationRuns = new Map<string, string>();
+      const results = [];
       for (const account of accounts) {
-        const operation = await beginScannerOperation(adminClient, {
-          userId: account.user_id,
-          botId: BOT_ID,
-          functionName: "bot-scanner",
-          operation: "manage",
-          triggerSource,
-        });
-        if (operation.persisted) operationRuns.set(account.user_id, operation.runId);
-      }
-
-      // Return HTTP response immediately, run the loop in the background via waitUntil
-      // to avoid pg_cron's request timeout (~150s) killing us mid-loop.
-      EdgeRuntime.waitUntil((async () => {
-        const LOOP_BUDGET_MS = 50_000; // 50 seconds — exit before next cron at 60s
-        // 20s, not 8s. Each iteration is a full runScanForUser in
-        // management-only mode, and management-only does not return early until
-        // well past the price refresh and the SL/TP breach check — both of which
-        // fetch candles per open symbol through a cache that is rebuilt every
-        // iteration. At 8s that is ~6 passes a minute; with three open positions
-        // roughly 27 TwelveData credits a minute, against a 55/min plan shared
-        // with the scanner and every other function.
-        //
-        // Measured 2026-08-11: 75 credits/min average, 371 peak, 100% of quota,
-        // requests 429ing. Downstream that reads as "Insufficient candles
-        // (0, need 20)" and the pair is skipped — 44% of scans.
-        //
-        // Caching candles ACROSS iterations was the other option, but the loop
-        // exists to notice price moving. Serving every iteration the same bars
-        // would make passes 2-6 re-evaluate identical data, so fewer real passes
-        // beats more fake ones.
-        //
-        // Trailing stops and break-even now react within ~20s instead of ~8s.
-        // Acceptable: in live mode the broker holds the real SL/TP, and since
-        // #282 bot-scanner re-checks every position against closed bars and is
-        // the authoritative closer.
-        const LOOP_INTERVAL_MS = 20_000;
-        const loopStart = Date.now();
-        let iteration = 0;
-        const failedUsers = new Set<string>();
-
-        await Promise.all(accounts.map((account: any) =>
-          markScannerOperation(
-            adminClient,
-            operationRuns.get(account.user_id),
-            "position_management_started",
-            { status: "running" },
-          )
-        ));
-
-        while (Date.now() - loopStart < LOOP_BUDGET_MS) {
-          iteration++;
-          const iterStart = Date.now();
-          console.log(`[manage-loop] iteration ${iteration} starting (elapsed ${Math.round((iterStart - loopStart) / 1000)}s)`);
-
-          for (const account of accounts) {
-            try {
-              await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
-            } catch (e: any) {
-              failedUsers.add(account.user_id);
-              console.error(`[manage-loop] error for ${account.user_id} iter ${iteration}:`, e?.message || e);
-            }
-            await markScannerOperation(
-              adminClient,
-              operationRuns.get(account.user_id),
-              "position_management_running",
-              { status: "running", metadata: { iteration } },
-            );
-          }
-
-          // Check if we have budget for another iteration
-          const elapsed = Date.now() - loopStart;
-          const remaining = LOOP_BUDGET_MS - elapsed;
-          if (remaining < LOOP_INTERVAL_MS) {
-            console.log(`[manage-loop] exiting after ${iteration} iterations (${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining < ${LOOP_INTERVAL_MS / 1000}s interval)`);
-            break;
-          }
-
-          // Sleep until next iteration
-          const iterDuration = Date.now() - iterStart;
-          const sleepMs = Math.max(0, LOOP_INTERVAL_MS - iterDuration);
-          if (sleepMs > 0) {
-            await new Promise(r => setTimeout(r, sleepMs));
-          }
+        try {
+          const result = await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
+          results.push({ userId: account.user_id, ...result });
+        } catch (e: any) {
+          results.push({ userId: account.user_id, error: e.message });
         }
-        console.log(`[manage-loop] complete: ${iteration} iterations in ${Math.round((Date.now() - loopStart) / 1000)}s`);
-        await Promise.all(accounts.map(async (account: any) => {
-          const runId = operationRuns.get(account.user_id);
-          if (failedUsers.has(account.user_id)) {
-            await failScannerOperation(
-              adminClient,
-              runId,
-              "One or more management iterations failed",
-              "management_iteration_failed",
-            );
-            return;
-          }
-          await completeScannerOperation(adminClient, runId, "manage", {
-            iterations: iteration,
-            elapsed_ms: Date.now() - loopStart,
-          });
-        }));
-      })());
-
-      return respond({
-        started: true,
-        accounts: accounts.length,
-        observable_runs: operationRuns.size,
-        message: "Management loop started in background (~50s, ~20s intervals)",
-      });
+      }
+      return respond({ managed: results.length, results });
     }
 
      if (action === "scan" || action === "cron") {
@@ -1542,47 +1764,19 @@ Deno.serve(async (req) => {
       // Filter to SMC bot accounts only (or legacy accounts without bot_id)
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", scanned: 0 });
-      const operationRuns = new Map<string, { runId: string; scanCycleId: string }>();
-      for (const account of accounts) {
-        const scanCycleId = crypto.randomUUID();
-        const operation = await beginScannerOperation(adminClient, {
-          userId: account.user_id,
-          botId: BOT_ID,
-          functionName: "bot-scanner",
-          operation: "scan",
-          triggerSource: "cron",
-          scanCycleId,
-        });
-        if (operation.persisted) {
-          operationRuns.set(account.user_id, {
-            runId: operation.runId,
-            scanCycleId,
-          });
-        }
-      }
       // Run scans in the background via waitUntil so the HTTP request can return
       // immediately. Without this, the cron caller's request timeout (~150s) was
       // killing the function mid-scan, leaving no scan_logs row written.
       EdgeRuntime.waitUntil((async () => {
         for (const account of accounts) {
-          const operation = operationRuns.get(account.user_id);
           try {
-            await runScanForUser(adminClient, account.user_id, {
-              operationRunId: operation?.runId,
-              scanCycleId: operation?.scanCycleId,
-            });
+            await runScanForUser(adminClient, account.user_id);
           } catch (e: any) {
             console.error(`[scan] background error for ${account.user_id}:`, e?.message || e);
-            await failScannerOperation(adminClient, operation?.runId, e);
           }
         }
       })());
-      return respond({
-        started: true,
-        accounts: accounts.length,
-        observable_runs: operationRuns.size,
-        message: "Scan started in background",
-      });
+      return respond({ started: true, accounts: accounts.length, message: "Scan started in background" });
     }
 
     console.warn("[bot-scanner] Unknown action received:", JSON.stringify(body));
@@ -1594,71 +1788,51 @@ Deno.serve(async (req) => {
   }
 });
 
-async function runScanForUser(
-  supabase: any,
-  userId: string,
-  opts?: {
-    isManualScan?: boolean;
-    isManagementOnly?: boolean;
-    operationRunId?: string;
-    scanCycleId?: string;
-  },
-) {
+async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
-  const scanCycleId = opts?.scanCycleId ?? crypto.randomUUID();
-  const scanStartedAt = new Date().toISOString();
-  _scanCandleSources.clear();
+  const scanCycleId = crypto.randomUUID();
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
   const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
 
-  // ── Scan overlap lock (scoped lease) ──
+  // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
   // Management-only runs skip the lock entirely — they're lightweight and shouldn't block scans.
   //
-  // Manual scans use the same atomic claim as cron scans. They never clear a valid
-  // lease owned by another run. Expired leases can be reclaimed automatically.
-  let scanLockToken: string | null = null;
+  // For manual scans: force-clear any stale lock first. The user explicitly clicked
+  // "Scan Now" — they should never be blocked by a lock left behind by a crashed cron scan.
   if (!opts?.isManagementOnly) {
-    const lock = await claimScannerLock(supabase, {
-      userId,
-      botId: BOT_ID,
-      runId: opts?.operationRunId ?? scanCycleId,
-    });
-    if (!lock.acquired) {
-      console.log(`[scan-lock] skipped — overlap detected for user ${userId}, bot ${BOT_ID}`);
-      await skipScannerOperation(supabase, opts?.operationRunId, "overlap");
-      return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
-    }
-    scanLockToken = lock.token;
-    await markScannerOperation(supabase, opts?.operationRunId, "scan_started", {
-      status: "running",
-      scan_started_at: new Date().toISOString(),
-    });
+  if (opts?.isManualScan) {
+    await supabase
+      .from("paper_accounts")
+      .update({ scan_lock_until: null })
+      .eq("user_id", userId);
+    console.log(`[scan-lock] manual scan — cleared any existing lock for ${userId}`);
+  }
+
+  const lockHorizon = new Date(Date.now() + 90_000).toISOString();
+  const nowIso = new Date().toISOString();
+  const { data: lockRows, error: lockErr } = await supabase
+    .from("paper_accounts")
+    .update({ scan_lock_until: lockHorizon })
+    .eq("user_id", userId)
+    .or(`scan_lock_until.is.null,scan_lock_until.lt.${nowIso}`)
+    .select("user_id");
+  if (lockErr) console.warn(`[scan-lock] update error for ${userId}: ${lockErr.message}`);
+  if (!lockRows || lockRows.length === 0) {
+    console.log(`[scan-lock] skipped — overlap detected for user ${userId}`);
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
+  }
   } // end scan-lock block (skipped for management-only)
 
   let account: any = null;
   try {
-  const styleResolution = await loadConfig(supabase, userId);
-  const config = styleResolution.config;
-  const gamePlanEnabled = (config as any).gamePlanEnabled !== false;
-  const gpEnforcementMode = ((config as any).gpEnforcementMode ?? "hard") as
-    | "off"
-    | "soft"
-    | "hard";
-  const gamePlanAffectsExecution =
-    gamePlanEnabled && gpEnforcementMode !== "off";
-  const impulseLifecycleEnforcement = resolveImpulseLifecycleEnforcement(
-    (config as any).impulseEntryLifecycleMode,
-    null,
-  );
-  const resolvedStyle = styleResolution.style;
-  const runtimeConfigProvenance = styleResolution.provenance;
+  const config = await loadConfig(supabase, userId);
 
   // ── Scan Interval Gate ──
   // Skip this scan if not enough time has elapsed since the last scan.
@@ -1678,39 +1852,72 @@ async function runScanForUser(
       const elapsedMin = elapsedMs / 60_000;
       if (elapsedMin < intervalMinutes) {
         console.log(`[scan-interval] Skipping — only ${elapsedMin.toFixed(1)}min since last scan (interval: ${intervalMinutes}min)`);
-        await skipScannerOperation(supabase, opts?.operationRunId, "scan_interval");
+        // Release the scan lock before returning
+        await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
         return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `interval (${Math.ceil(intervalMinutes - elapsedMin)}min remaining)`, scanCycleId };
       }
     }
   }
 
-  // ── Report the canonical Trading Style resolution ──
-  if (styleResolution.applied.length > 0) {
-    console.log(`[config] Style "${resolvedStyle}" applied: ${styleResolution.applied.join(", ")}`);
-  }
-  if (styleResolution.preserved.length > 0) {
-    console.log(`[config] User-protected overrides kept: ${styleResolution.preserved.join(", ")}`);
-  }
-  const scanStylePolicy = await buildResolvedStylePolicy({
-    resolution: styleResolution,
-    config,
-  });
-  const timeframeAuthority = resolveTimeframeAuthority(scanStylePolicy);
+  // ── Resolve Trading Style ──
+  const resolvedStyle = config.tradingStyle?.mode || "day_trader";
 
-  // Freeze one market-schedule decision for the entire cycle. This is the
-  // shared owner used by discovery and Gameplan; crypto remains eligible when
-  // the non-crypto market is closed or the configured trading day is disabled.
+  // Apply style overrides as DEFAULTS — user-explicit values always win.
+  // The management fields (trailing, BE, partial, maxHold) may have been
+  // explicitly set by the user to accommodate broker-specific conditions.
+  // We only fill in style defaults for fields the user hasn't touched.
+  if (STYLE_OVERRIDES[resolvedStyle]) {
+    const styleDefaults = STYLE_OVERRIDES[resolvedStyle];
+    // These fields should NEVER be overwritten by style if the user set them:
+    const userProtectedFields = new Set([
+      "minConfluence",
+      // I2 Fix: tpRatio is user-tunable — don't silently overwrite with style default
+      "tpRatio",
+      // Management fields the user can tune per-broker:
+      "trailingStopEnabled", "trailingStopPips", "trailingStopActivation",
+      "breakEvenEnabled", "breakEvenPips", "breakEvenOffsetPips",
+      "partialTPEnabled", "partialTPPercent", "partialTPLevel",
+      "maxHoldHours",
+    ]);
+    // I1 Fix: Track provenance of each config field for debugging and transparency.
+    const styleApplied: string[] = [];
+    const userKept: string[] = [];
+    for (const [key, val] of Object.entries(styleDefaults)) {
+      if (userProtectedFields.has(key)) {
+        // Only apply style default if user didn't explicitly set this field
+        // (i.e., the value is still the global DEFAULTS fallback)
+        if ((config as any)[key] === (DEFAULTS as any)[key]) {
+          (config as any)[key] = val;
+          styleApplied.push(`${key}=${val}`);
+        } else {
+          // User explicitly set a different value — keep it
+          userKept.push(`${key}=${(config as any)[key]} (style wanted ${val})`);
+        }
+      } else {
+        // Non-protected fields (entryTimeframe, htfTimeframe, tpRatio, slBufferPips)
+        // always come from the style
+        (config as any)[key] = val;
+        styleApplied.push(`${key}=${val}`);
+      }
+    }
+    if (styleApplied.length > 0) console.log(`[config] Style "${resolvedStyle}" applied: ${styleApplied.join(", ")}`);
+    if (userKept.length > 0) console.log(`[config] User-protected overrides kept: ${userKept.join(", ")}`);
+  }
+
+  // Day-of-week check — skip for crypto-only instrument lists.
+  // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
   const now = new Date();
-  const fullInstrumentUniverse = [...config.instruments];
-  const marketScheduleScope = resolveGamePlanMarketScope(
-    fullInstrumentUniverse,
-    now,
-    config.enabledDays,
-  );
-  const marketScheduleEligibleSet = new Set(
-    marketScheduleScope.eligibleSymbols,
-  );
-  const fxMarketClosed = marketScheduleScope.nonCryptoMarketsClosed;
+  const nyNow = toNYTime(now);
+  const nyHour = nyNow.t;
+  const nyDay = nyNow.nyDay; // 0=Sun … 6=Sat — NY local day, NOT UTC day
+  const isFxOpenSundayEvening = nyDay === 0 && nyHour >= 17;
+  const isFxClosedFridayEvening = nyDay === 5 && nyHour >= 17;
+  const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
+  const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
+  const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
+  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
+  }
 
   // S3 Fix: Capture session ONCE per scan cycle. detectSession() is time-based,
   // so calling it multiple times during a long scan could return different results
@@ -1719,17 +1926,6 @@ async function runScanForUser(
   const normalizedSession = session.filterKey;
   // Freeze the session snapshot for this entire scan cycle
   const cachedSession = { ...session };
-  // Preserve the existing 24/5 compatibility rule once per scan cycle. This
-  // same frozen state is used by both the live gate and rotation observation.
-  const coreSessionsEnabled = ["asian", "london", "newyork"].every((key) =>
-    config.enabledSessions.includes(key)
-  );
-  const offHoursImplicitlyAllowed = normalizedSession === "offhours" &&
-    coreSessionsEnabled;
-  const restrictedAssetSessionGateOpen = isSessionEnabled(
-    cachedSession,
-    config.enabledSessions,
-  ) || offHoursImplicitlyAllowed;
   // Session gate is now checked per-instrument inside the loop, not globally
   // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
   {
@@ -1741,38 +1937,7 @@ async function runScanForUser(
       account = legacyAccount;
     }
   }
-  if (!account) {
-    await skipScannerOperation(supabase, opts?.operationRunId, "paper_account_missing");
-    return { error: "No paper account" };
-  }
-  const zoneLocalActivation = await loadZoneLocalActivation(supabase, {
-    userId,
-    botId: BOT_ID,
-  });
-  const crossTimeframeActivation = await loadCrossTimeframeActivation(
-    supabase,
-    {
-      userId,
-      botId: BOT_ID,
-    },
-  );
-  const crossTimeframeAuthority = resolveCrossTimeframeAuthority({
-    rawConfig: config as unknown as Record<string, unknown>,
-    runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-    activation: crossTimeframeActivation,
-  });
-  console.log(
-    `[scan ${scanCycleId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
-      + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
-      + ` runtimeEnforced=${zoneLocalActivation?.runtimeEnforced === true}`,
-  );
-  console.log(
-    `[scan ${scanCycleId}] Cross-TF authority`
-      + ` requested=${crossTimeframeAuthority.requestedMode}`
-      + ` certified=${crossTimeframeAuthority.certifiedMaximum}`
-      + ` effective=${crossTimeframeAuthority.effectiveMode}`
-      + ` reason=${crossTimeframeAuthority.reason}`,
-  );
+  if (!account) return { error: "No paper account" };
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
   const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
@@ -1797,14 +1962,19 @@ async function runScanForUser(
   let avgCommissionPerLot = 0;
   if (account.execution_mode === "live") {
     const { data: commConns } = await supabase.from("broker_connections")
-      .select("commission_mode, commission_per_lot, detected_commission_per_lot")
+      .select("commission_per_lot, detected_commission_per_lot")
       .eq("user_id", userId).eq("is_active", true);
     if (commConns && commConns.length > 0) {
-      avgCommissionPerLot = averageRoundTripCommission(commConns);
-      const costedConnections = commConns.filter((connection: any) =>
-        resolveRoundTripCommission(connection).roundTripPerLot > 0
-      ).length;
-      if (avgCommissionPerLot > 0) console.log(`[scan ${scanCycleId}] Avg commission: $${avgCommissionPerLot.toFixed(2)}/lot round-trip (from ${costedConnections} broker(s))`);
+      let totalComm = 0;
+      let count = 0;
+      for (const c of commConns) {
+        const userComm = parseFloat(c.commission_per_lot ?? "0");
+        const detectedComm = parseFloat(c.detected_commission_per_lot ?? "0") * 2; // detected is per-side, double for round-trip
+        const effective = userComm > 0 ? userComm : detectedComm;
+        if (effective > 0) { totalComm += effective; count++; }
+      }
+      avgCommissionPerLot = count > 0 ? totalComm / count : 0;
+      if (avgCommissionPerLot > 0) console.log(`[scan ${scanCycleId}] Avg commission: $${avgCommissionPerLot.toFixed(2)}/lot round-trip (from ${count} broker(s))`);
     }
   }
   (config as any)._avgCommissionPerLot = avgCommissionPerLot;
@@ -1836,18 +2006,16 @@ async function runScanForUser(
   // Without this, management reads stale entry-time prices and can't fire trailing/BE/TP logic.
   // Uses the same fetchCandles chain (MetaAPI→TwelveData→Polygon) as the rest of the scanner.
   if (openPosArr.length > 0) {
-    const posSymbols: string[] = Array.from(
-      new Set(
-        openPosArr
-          .map((p: any) => p.symbol as string)
-          .filter((sym: string) => isInstrumentMarketOpen(sym, now)),
-      ),
-    );
+    const posSymbols: string[] = Array.from(new Set(openPosArr.map((p: any) => p.symbol as string)));
     const livePriceMap: Record<string, number> = {};
-    // Trade management uses live quotes. Closed candles remain exclusive to detection.
+    // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
-      const price = await fetchLivePrice(sym);
-      if (price !== null) livePriceMap[sym] = price;
+      try {
+        const candles = await cachedFetch(sym, "15m", "5d");
+        if (candles.length > 0) {
+          livePriceMap[sym] = candles[candles.length - 1].close;
+        }
+      } catch {}
     }));
     let priceUpdates = 0;
     for (const pos of openPosArr) {
@@ -1864,9 +2032,9 @@ async function runScanForUser(
   }
 
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
-  // Shared weekend guard: skip management for non-crypto positions while
-  // their market is closed. Configured no-trade weekdays do not suspend risk
-  // management for positions that are already open.
+  // Weekend guard: skip management for non-crypto positions when FX market is closed
+  // FX closed: Saturday all day, Sunday before 17:00 ET, Friday after 17:00 ET
+  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
   const fxPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type !== "crypto");
   const cryptoPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type === "crypto");
   // Only manage crypto positions during FX closed hours; manage all when FX is open
@@ -1879,94 +2047,265 @@ async function runScanForUser(
     try {
       managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, cachedFetch, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
-      // ── BROKER RECONCILIATION: runs UNCONDITIONALLY every manage cycle ──
-      // Must check all live, broker-mirrored positions regardless of whether
-      // a management action fired this cycle — that unconditional check is the
-      // entire point of the reconciliation design.
-      if (account.execution_mode === "live") {
-        const { data: liveConns } = await supabase.from("broker_connections")
-          .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
-        if (liveConns && liveConns.length > 0) {
-          // Build reconcile positions from open positions that have mirrored connections
-          const reconcilePositions: ReconcilePosition[] = openPosArr
-            .filter((p: any) => Array.isArray(p.mirrored_connection_ids) && p.mirrored_connection_ids.length > 0)
-            .map((p: any) => ({
-              id: p.id,
-              position_id: p.position_id,
-              symbol: p.symbol,
-              direction: p.direction as "long" | "short",
-              stop_loss: p.stop_loss != null ? parseFloat(String(p.stop_loss)) : null,
-              take_profit: p.take_profit != null ? parseFloat(String(p.take_profit)) : null,
-              mirrored_connection_ids: p.mirrored_connection_ids,
-            }));
-          // Run SL reconciliation
-          if (reconcilePositions.length > 0) {
-            await reconcileBrokerState({
-              supabase,
-              userId,
-              positions: reconcilePositions,
-              connections: liveConns as BrokerConnection[],
-              telegramChatIds,
-              shouldNotify,
-              scanCycleId,
-            });
-          }
-          // Run partial close for any partial_tp_executed actions (depends on activeActions)
-          if (activeActions.length > 0) {
-            const partialActions = activeActions.filter((a) => a.action === "partial_tp_executed");
-            if (partialActions.length > 0) {
-              const partialCloseActions = partialActions.map(a => {
-                const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
-                const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
-                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
-                return {
-                  positionId: a.positionId,
-                  symbol: a.symbol,
-                  closeFraction,
-                  direction: (pos?.direction || "long") as "long" | "short",
-                };
-              });
-              const partialResults = await reconcilePartialClose({
-                supabase,
-                positions: reconcilePositions,
-                connections: liveConns as BrokerConnection[],
-                partialActions: partialCloseActions,
-              });
-              const partialFailures = partialResults.filter((result) => !result.ok);
-              if (partialFailures.length > 0) {
-                const failureDetail = partialFailures.map((result) =>
-                  `${result.positionId}/${result.connectionId}: ${result.error || "unknown error"}`
-                ).join("; ");
-                console.error(
-                  `[scan ${scanCycleId}] BROKER PARTIAL CLOSE RECONCILIATION REQUIRED: ${failureDetail}`,
-                );
-                if (telegramChatIds.length > 0) {
-                  const message = `⚠️ <b>Broker Reconciliation Required</b>\n\n` +
-                    tgLine("Action", "Partial take profit") +
-                    tgLine("Status", "App reduced the position, but one or more broker closes failed") +
-                    tgLine("Detail", failureDetail);
-                  await Promise.all(telegramChatIds.map((chatId) =>
-                    fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-                      },
-                      body: JSON.stringify({ chat_id: chatId, message }),
-                    }).catch(() => undefined)
-                  ));
-                }
-              }
-            }
-          }
-        }
-      }
-      // ── Management action logging + Telegram alerts (only when actions fired) ──
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
         for (const a of activeActions) {
           console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
         }
+        // ── BROKER SYNC: Mirror SL changes to MetaAPI immediately ──
+        // Without this, the Telegram fires but the broker SL stays stale until paper-trading cron picks it up.
+        if (account.execution_mode === "live") {
+          const slActions = activeActions.filter(a => a.newSL != null);
+          if (slActions.length > 0) {
+            const { data: liveConns } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+            if (liveConns && liveConns.length > 0) {
+              for (const a of slActions) {
+                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
+                if (!pos) continue;
+                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+                // B2 Fix: Skip SL modify when no mirrored_connection_ids instead of trying all connections.
+                // Legacy positions without mirrored IDs should be managed conservatively to avoid
+                // modifying SL on broker positions that were not opened by this scanner.
+                if (mirroredIds.length === 0) {
+                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping SL modify (B2 safety)`);
+                  continue;
+                }
+                const connsToModify = liveConns.filter((c: any) => mirroredIds.includes(c.id));
+                const tp = parseFloat(pos.take_profit || "0") || undefined;
+                // Apply safety buffer (1 pip) to avoid premature stops from spread
+                const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
+                const safetyBuffer = spec.pipSize;
+                const adjustedSL = pos.direction === "long" ? a.newSL! - safetyBuffer : a.newSL! + safetyBuffer;
+                for (const conn of connsToModify) {
+                  try {
+                    // ── OANDA: route through broker-execute modify_trade ──
+                    if (conn.broker_type === "oanda") {
+                      // First fetch open trades to find the matching OANDA trade ID
+                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
+                      });
+                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
+                      const oandaTrades: any[] = await tradesRes.json();
+                      // Match by instrument (EUR_USD format) + direction
+                      const oandaInstrument = a.symbol.replace("/", "_");
+                      const oandaTrade = oandaTrades.find((t: any) => {
+                        const instMatch = t.instrument === oandaInstrument ||
+                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
+                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
+                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
+                        return instMatch && dirMatch;
+                      });
+                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} SL modify`); continue; }
+                      // Route SL modification through broker-execute
+                      const modRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({
+                          action: "modify_trade",
+                          connectionId: conn.id,
+                          tradeId: oandaTrade.id,
+                          stopLoss: adjustedSL,
+                          ...(tp && tp > 0 ? { takeProfit: tp } : {}),
+                          symbol: a.symbol,
+                        }),
+                      });
+                      const modBody = await modRes.text();
+                      if (modRes.ok && !modBody.includes('"error"')) {
+                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA SL modified to ${adjustedSL} for ${a.symbol} (${a.action})`);
+                      } else {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA SL modify failed: ${modBody.slice(0, 300)}`);
+                      }
+                      continue;
+                    }
+                    // ── MetaAPI: direct API call ──
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    // Find broker position by comment tag
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${a.positionId}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    let brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    // B1 Fix: Removed symbol+direction fallback — it could match the wrong position
+                    // when multiple positions exist for the same symbol+direction.
+                    // Now only matches by comment tag. If comment was truncated by broker, skip.
+                    if (!brokerPos) {
+                      console.warn(`[mgmt-broker] ${conn.display_name}: No comment-tag match for paper:${a.positionId} on ${a.symbol} — skipping SL modify (B1 safety)`);
+                      continue;
+                    }
+                    // ── Freeze-level guard: query broker's current price and validate SL distance ──
+                    const brokerSymbol = resolveSymbol(a.symbol, conn);
+                    let brokerBid = 0, brokerAsk = 0;
+                    try {
+                      const { res: prRes, body: prBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`);
+                      if (prRes.ok) {
+                        const prData: any = JSON.parse(prBody);
+                        brokerBid = prData.bid ?? 0;
+                        brokerAsk = prData.ask ?? 0;
+                      }
+                    } catch {}
+                    // Determine minimum SL distance (freeze level). MT5 default freeze = 0-3 pips.
+                    // Use 3× pipSize as conservative minimum distance when we can't get the spec.
+                    const slSpec = SPECS[a.symbol] || SPECS["EUR/USD"];
+                    const minSLDistance = slSpec.pipSize * 3; // 3 pips minimum distance from price
+                    let finalSL = adjustedSL;
+                    if (brokerBid > 0 && brokerAsk > 0) {
+                      const relevantPrice = pos.direction === "long" ? brokerBid : brokerAsk;
+                      const slDistance = pos.direction === "long"
+                        ? relevantPrice - adjustedSL
+                        : adjustedSL - relevantPrice;
+                      if (slDistance < minSLDistance) {
+                        // SL is too close to broker price — widen it to minimum safe distance
+                        finalSL = pos.direction === "long"
+                          ? relevantPrice - minSLDistance
+                          : relevantPrice + minSLDistance;
+                        // Round to instrument precision
+                        const precision = slSpec.pipSize < 0.01 ? 5 : slSpec.pipSize < 1 ? 3 : 1;
+                        finalSL = parseFloat(finalSL.toFixed(precision));
+                        console.log(`[mgmt-broker] ${conn.display_name}: SL ${adjustedSL} too close to broker price ${relevantPrice} (dist=${slDistance.toFixed(5)}, min=${minSLDistance.toFixed(5)}) — widened to ${finalSL}`);
+                      }
+                    }
+                    const modifyBody: any = {
+                      actionType: "POSITION_MODIFY",
+                      positionId: brokerPos.id,
+                      stopLoss: finalSL,
+                    };
+                    if (tp && tp > 0) modifyBody.takeProfit = tp;
+                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+                    });
+                    if (res.ok) {
+                      // MetaAPI returns 200 even on broker rejection — must check stringCode
+                      let modParsed: any = null;
+                      try { modParsed = JSON.parse(resBody); } catch {}
+                      if (modParsed?.stringCode && modParsed.stringCode !== "TRADE_RETCODE_DONE" && modParsed.stringCode !== "ERR_NO_ERROR") {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: SL modify REJECTED by broker — ${modParsed.stringCode}: ${modParsed.message || ""} | ${a.symbol} SL→${finalSL} (${a.action})`);
+                      } else {
+                        console.log(`[mgmt-broker] ${conn.display_name}: SL modified to ${finalSL} for ${a.symbol} (${a.action})`);
+                      }
+                    } else {
+                      console.warn(`[mgmt-broker] ${conn.display_name}: SL modify failed [${res.status}]: ${resBody.slice(0, 300)}`);
+                    }
+                  } catch (e: any) {
+                    console.warn(`[mgmt-broker] ${conn.display_name}: error modifying SL for ${a.symbol}: ${e?.message}`);
+                  }
+                }
+              }
+            }
+          }
+          // ── Partial TP broker sync ──
+          const partialActions = activeActions.filter(a => a.action === "partial_enabled");
+          if (partialActions.length > 0) {
+            const { data: liveConnsP } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+            if (liveConnsP && liveConnsP.length > 0) {
+              for (const a of partialActions) {
+                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
+                if (!pos) continue;
+                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+                // B2 Fix: Skip partial TP when no mirrored_connection_ids (same safety as SL modify)
+                if (mirroredIds.length === 0) {
+                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping partial TP (B2 safety)`);
+                  continue;
+                }
+                const connsToClose = liveConnsP.filter((c: any) => mirroredIds.includes(c.id));
+                // Parse partial TP percent from the action's attribution
+                const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
+                const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
+                for (const conn of connsToClose) {
+                  try {
+                    // ── OANDA: route partial close through broker-execute ──
+                    if (conn.broker_type === "oanda") {
+                      // Fetch open trades to find the matching OANDA trade ID + current units
+                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
+                      });
+                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
+                      const oandaTrades: any[] = await tradesRes.json();
+                      const oandaInstrument = a.symbol.replace("/", "_");
+                      const oandaTrade = oandaTrades.find((t: any) => {
+                        const instMatch = t.instrument === oandaInstrument ||
+                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
+                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
+                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
+                        return instMatch && dirMatch;
+                      });
+                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} partial close`); continue; }
+                      // Calculate partial close units (OANDA uses units, not lots)
+                      const currentUnits = Math.abs(parseFloat(oandaTrade.currentUnits || oandaTrade.initialUnits || "0"));
+                      const closeUnits = Math.round(currentUnits * closeFraction);
+                      if (closeUnits <= 0) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA closeUnits=0 for ${a.symbol}`); continue; }
+                      // Route partial close through broker-execute close_trade with units param
+                      const closeRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "close_trade", connectionId: conn.id, tradeId: oandaTrade.id, units: closeUnits }),
+                      });
+                      const closeBody = await closeRes.text();
+                      if (closeRes.ok && !closeBody.includes('"error"')) {
+                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA partial close ${closeUnits} units for ${a.symbol}`);
+                      } else {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA partial close failed: ${closeBody.slice(0, 300)}`);
+                      }
+                      continue;
+                    }
+                    // ── MetaAPI: direct API call ──
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) continue;
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${a.positionId}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    let brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      const brokerSymbol = resolveSymbol(a.symbol, conn);
+                      brokerPos = brokerPositions.find((p: any) =>
+                        (p.symbol === brokerSymbol || p.symbol === a.symbol.replace("/", "") ||
+                         p.symbol?.replace(/[._\-]/g, "").toUpperCase() === a.symbol.replace("/", "").toUpperCase()) &&
+                        ((p.type === "POSITION_TYPE_BUY" && pos.direction === "long") ||
+                         (p.type === "POSITION_TYPE_SELL" && pos.direction === "short"))
+                      );
+                    }
+                    if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} partial close`); continue; }
+                    const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
+                    const closeVolume = Math.max(0.01, Math.round(brokerVolume * closeFraction * 100) / 100);
+                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id, volume: closeVolume }),
+                    });
+                    if (res.ok) {
+                      console.log(`[mgmt-broker] ${conn.display_name}: partial close ${closeVolume} lots for ${a.symbol}`);
+                    } else {
+                      console.warn(`[mgmt-broker] ${conn.display_name}: partial close failed [${res.status}]: ${resBody.slice(0, 300)}`);
+                    }
+                  } catch (e: any) {
+                    console.warn(`[mgmt-broker] ${conn.display_name}: error partial closing ${a.symbol}: ${e?.message}`);
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Send Telegram alerts for significant management actions
         if (telegramChatIds.length > 0 && shouldNotify("trade_management")) {
           for (const a of activeActions) {
@@ -1980,39 +2319,18 @@ async function runScanForUser(
               : a.action === "trailing_enabled" ? "TRAILING ENABLED"
               : a.action === "partial_enabled" ? "PARTIAL TP ENABLED"
               : a.action.toUpperCase().replace("_", " ");
-            const mgmtPos: any = positionsToManage.find((p: any) => p.position_id === a.positionId);
-            const mgmtEntry = mgmtPos ? parseFloat(mgmtPos.entry_price) : NaN;
-            const mgmtPrice = mgmtPos ? parseFloat(mgmtPos.current_price ?? mgmtPos.entry_price) : NaN;
-            const mgmtSR = parseSignalReason(mgmtPos?.signal_reason);
-            const mgmtR = mgmtPos
-              ? rMultiple(mgmtEntry, mgmtSR.originalSL ?? mgmtPos.stop_loss, mgmtPrice, mgmtPos.direction)
-              : null;
             const msg = `${emoji} <b>Trade Management</b>\n\n` +
-              tgLine("Symbol", `${a.symbol}${mgmtPos ? ` (${String(mgmtPos.direction).toUpperCase()})` : ""}`) +
-              tgLine("Action", actionLabel) +
-              (mgmtPos ? tgLine("Entry", fmtPx(mgmtEntry, a.symbol)) : "") +
-              (Number.isFinite(mgmtPrice) ? tgLine("Current", fmtPx(mgmtPrice, a.symbol)) : "") +
-              (a.newSL ? tgLine("New SL", fmtPx(a.newSL, a.symbol)) : "") +
-              (a.newTP ? tgLine("New TP", fmtPx(a.newTP, a.symbol)) : "") +
-              (mgmtR !== null ? tgLine("Open R", `${mgmtR >= 0 ? "+" : ""}${mgmtR.toFixed(2)}R`) : "") +
-              (mgmtPos ? tgLine("Open For", durationLabel(mgmtPos.open_time)) : "") +
-              zoneEvidenceLines(mgmtSR) +
-              tgLine("Reason", a.reason) +
-              (a.attribution
-                ? tgLine("Trigger", `${String(a.attribution.trigger).replace(/_/g, " ")}${a.attribution.marketContext?.session ? ` · ${a.attribution.marketContext.session}` : ""}`)
-                : "");
+              `<b>Symbol:</b> ${a.symbol}\n` +
+              `<b>Action:</b> ${actionLabel}\n` +
+              (a.newSL ? `<b>New SL:</b> ${a.newSL}\n` : "") +
+              (a.newTP ? `<b>New TP:</b> ${a.newTP}\n` : "") +
+              `<b>Reason:</b> ${a.reason}`;
             await Promise.all(telegramChatIds.map(async (chatId) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                  body: JSON.stringify({
-                    chat_id: chatId,
-                    message: msg,
-                    dedupe_key: `trade-management:${a.positionId}:${a.action}`,
-                    cooldown_seconds: a.action === "sl_tightened" ? 900 : 3600,
-                    drop_if_rate_limited: true,
-                  }),
+                  body: JSON.stringify({ chat_id: chatId, message: msg }),
                 });
               } catch (e: any) {
                 console.warn(`Telegram mgmt notify failed [${chatId}]:`, e?.message);
@@ -2053,7 +2371,7 @@ async function runScanForUser(
   let stagedExpired = 0;
   let stagedInvalidated = 0;
   let stagedNew = 0;
-  if (stagingEnabled && !opts?.isManagementOnly) {
+  if (stagingEnabled) {
     try {
       const { data: staged } = await supabase
         .from("staged_setups")
@@ -2069,24 +2387,10 @@ async function runScanForUser(
         const stagedAtMs = new Date(s.staged_at).getTime();
         const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
         if (nowMs - stagedAtMs > ttl) {
-          const expiredAt = new Date().toISOString();
-          const ttlMinutes = s.ttl_minutes || stagingTTLMinutes;
           await supabase.from("staged_setups").update({
             status: "expired",
-            invalidation_reason: `Watchlist time window expired (${ttlMinutes}min)`,
-            lifecycle_reason: `Watchlist time window expired (${ttlMinutes}min)`,
-            lifecycle_reason_code: "ttl_expired",
-            lifecycle_evidence: buildWatchlistLifecycleEvidence({
-              reasonCode: "ttl_expired",
-              observedAt: expiredAt,
-              frozenDirection: s.direction,
-              detail: {
-                stagedAt: s.staged_at,
-                ttlMinutes,
-                elapsedMinutes: (nowMs - stagedAtMs) / 60_000,
-              },
-            }),
-            resolved_at: expiredAt,
+            invalidation_reason: `TTL expired (${s.ttl_minutes || stagingTTLMinutes}min)`,
+            resolved_at: new Date().toISOString(),
           }).eq("id", s.id);
           stagedExpired++;
           console.log(`[staging] Expired ${s.symbol} ${s.direction} — TTL ${s.ttl_minutes || stagingTTLMinutes}min exceeded`);
@@ -2104,92 +2408,8 @@ async function runScanForUser(
   }
   // Map for quick lookup: "SYMBOL:DIRECTION" → staged setup row
   const stagedMap = new Map<string, any>();
-  const stagedByPair = new Map<string, any[]>();
   for (const s of activeStagedSetups) {
     stagedMap.set(`${s.symbol}:${s.direction}`, s);
-    const pairRows = stagedByPair.get(s.symbol) || [];
-    pairRows.push(s);
-    stagedByPair.set(s.symbol, pairRows);
-  }
-
-  // Watchlist is a lifecycle lane, not discovery. Frozen executable zones get
-  // a bounded price/invalidation refresh; only near-zone setups re-enter the
-  // deeper confirmation pipeline for this cycle.
-  const lifecycleDeepScanSymbols = new Set<string>();
-  const WATCHLIST_MONITOR_LIMIT = 6;
-  const executableWatchlist = activeStagedSetups
-    .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
-    .filter((setup) => marketScheduleEligibleSet.has(setup.symbol))
-    .sort((left: any, right: any) => String(left.last_eval_at || "").localeCompare(String(right.last_eval_at || "")))
-    .slice(0, WATCHLIST_MONITOR_LIMIT);
-  for (const setup of executableWatchlist) {
-    try {
-      const zone = setup.originating_zone || {};
-      const low = Number(zone.low);
-      const high = Number(zone.high);
-      if (!Number.isFinite(low) || !Number.isFinite(high)) continue;
-      const candles = await cachedFetch(
-        setup.symbol,
-        getEntryInterval(config.entryTimeframe),
-        getEntryRange(config.entryTimeframe),
-      );
-      if (candles.length === 0) continue;
-      const currentPrice = candles[candles.length - 1].close;
-      const invalidation = deriveWatchlistInvalidation({
-        direction: setup.direction as WatchlistDirection,
-        proposedLevel: setup.sl_level,
-      });
-      if (isWatchlistInvalidated(setup.direction as WatchlistDirection, currentPrice, invalidation.level)) {
-        const observedAt = new Date().toISOString();
-        await supabase.from("staged_setups").update({
-          status: "invalidated",
-          invalidation_reason: `Price ${currentPrice} breached frozen Watchlist boundary ${invalidation.level}`,
-          lifecycle_reason: "Frozen Watchlist boundary breached during lifecycle monitoring",
-          lifecycle_reason_code: "structural_boundary_breached",
-          lifecycle_phase: setup.lifecycle_phase || "zone_discovered",
-          lifecycle_evidence: buildWatchlistLifecycleEvidence({
-            reasonCode: "structural_boundary_breached",
-            phase: setup.lifecycle_phase || "zone_discovered",
-            observedAt,
-            observedPrice: currentPrice,
-            frozenDirection: setup.direction,
-            invalidation,
-          }),
-          last_eval_at: observedAt,
-          resolved_at: observedAt,
-        }).eq("id", setup.id).eq("user_id", userId);
-        stagedInvalidated++;
-        continue;
-      }
-      const pipSize = (SPECS[setup.symbol] || SPECS["EUR/USD"]).pipSize;
-      const proximity = measureLifecycleZoneProximity({
-        currentPrice,
-        zoneLow: low,
-        zoneHigh: high,
-        pipSize,
-      });
-      if (!proximity) continue;
-      const { distance, nearBuffer, nearZone } = proximity;
-      const phase = distance === 0 ? "at_zone" : nearZone ? "approaching_zone" : "zone_discovered";
-      const observedAt = new Date().toISOString();
-      await supabase.from("staged_setups").update({
-        lifecycle_phase: phase,
-        lifecycle_evidence: buildWatchlistLifecycleEvidence({
-          reasonCode: nearZone ? "waiting_for_zone_confirmation" : "qualified",
-          phase,
-          observedAt,
-          observedPrice: currentPrice,
-          frozenDirection: setup.direction,
-          invalidation,
-          detail: { distance, nearBuffer, monitorLane: "lightweight" },
-        }),
-        last_eval_at: observedAt,
-        scan_cycles: nearZone ? (setup.scan_cycles || 0) : (setup.scan_cycles || 0) + 1,
-      }).eq("id", setup.id).eq("user_id", userId);
-      if (nearZone) lifecycleDeepScanSymbols.add(setup.symbol);
-    } catch (error: any) {
-      console.warn(`[watchlist-monitor] ${setup.symbol}: ${error?.message}`);
-    }
   }
   // ── Thesis Conviction Tracker: in-memory state per pair+direction ──
   // Persisted to kv_cache at end of scan cycle. Loaded from kv_cache at start.
@@ -2221,43 +2441,11 @@ async function runScanForUser(
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
   // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  const rateMap: Record<string, number> = { ...FALLBACK_RATES };
-  if (fxMarketClosed) {
-    console.log(`[scan ${scanCycleId}] FX conversion-rate refresh skipped while non-crypto markets are closed — using fallbacks`);
-  } else try {
-    // Pre-warm from the persistent kv_cache before touching the API.
-    //
-    // These are DAILY candles for six fixed majors — they change once a day.
-    // The in-memory candle cache would cover that (5 min TTL), except
-    // manage-positions-1min gets a fresh isolate every minute, so the cache is
-    // empty on arrival and all six are re-fetched. Measured at 6 credits/min
-    // against a 50/min budget, purely to re-read yesterday's closes.
-    //
-    // The scan path already solves this at the batchGetCachedCandles call
-    // further down, but that sits AFTER the management-only return, so the
-    // manage loop — the thing that runs every minute — never reached it.
-    try {
-      const warm = await batchGetCachedCandles(
-        supabase,
-        RATE_PAIRS.map((p) => ({ symbol: p, interval: "1d" })),
-      );
-      for (const [mapKey, candles] of warm.entries()) {
-        const [sym, interval] = mapKey.split(":");
-        if (sym && interval && candles.length >= 30) scanCache.seed(sym, interval, candles, "kv_cache");
-      }
-    } catch { /* pre-warm is an optimisation — fall through to fetching */ }
-
+  const rateMap: Record<string, number> = {};
+  try {
     const rateFetches = await Promise.all(
       RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
     );
-
-    // Persist whatever had to be fetched, so the next invocation starts warm.
-    try {
-      await batchSetCachedCandles(
-        supabase,
-        RATE_PAIRS.map((p, i) => ({ symbol: p, interval: "1d", candles: rateFetches[i] })),
-      );
-    } catch { /* fire and forget */ }
     for (let i = 0; i < RATE_PAIRS.length; i++) {
       const candles = rateFetches[i];
       if (candles.length > 0) {
@@ -2266,7 +2454,7 @@ async function runScanForUser(
     }
     console.log(`[scan ${scanCycleId}] rateMap built: ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`); 
   } catch (e: any) {
-    console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — using fallback rates`);
+    console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
   }
 
   // ── SL/TP Breach Check: close paper positions where price has crossed SL or TP ──
@@ -2275,7 +2463,6 @@ async function runScanForUser(
   // Runs AFTER price refresh (current_price is fresh) and AFTER rateMap build (PnL conversion available).
   try {
     const breachCandidates = openPosArr.filter((p: any) =>
-      isInstrumentMarketOpen(p.symbol, now) &&
       (p.stop_loss || p.take_profit) && p.current_price
     );
     const breachedIds: string[] = []; // track IDs to splice from openPosArr after loop
@@ -2287,103 +2474,62 @@ async function runScanForUser(
       const isLong = pos.direction === "long";
       if (!currentPrice || isNaN(currentPrice)) continue;
 
-      // ── Build a real bar covering the position's life, not just a point ──
-      // paper-trading polls a last price every 5s and cannot see a wick that
-      // spikes through SL and recovers between polls. This path runs every ~5 min
-      // and CAN, because it reads closed candles. Aggregating every bar since
-      // open_time makes the check idempotent and catches anything the poll missed:
-      // if price ever traded through the stop, the trade is over — that is exactly
-      // what a broker-side SL would have done in live.
-      //
-      // Candles come from the per-scan cache, so the pair loop below reuses them
-      // and this costs ~nothing.
-      let exitBar = priceAsBar(currentPrice);
-      try {
-        const posCandles: Candle[] = await cachedFetch(
-          pos.symbol,
-          getEntryInterval(config.entryTimeframe),
-          getEntryRange(config.entryTimeframe),
-        );
-        const openedAt = pos.open_time ? new Date(pos.open_time).getTime() : NaN;
-        const sinceOpen = Number.isFinite(openedAt)
-          ? posCandles.filter((c) => new Date(c.datetime).getTime() >= openedAt)
-          : [];
-        if (sinceOpen.length > 0) {
-          exitBar = {
-            open: sinceOpen[0].open,
-            high: Math.max(currentPrice, ...sinceOpen.map((c) => c.high)),
-            low: Math.min(currentPrice, ...sinceOpen.map((c) => c.low)),
-            close: currentPrice,
-          };
-        }
-      } catch (barErr: any) {
-        // Fall back to the point check rather than leaving the position unmanaged.
-        console.warn(`[breach-check] ${pos.symbol}: bar fetch failed (${barErr?.message}) — using last price only`);
-      }
+      let hitPrice: number | null = null;
+      let closeReason: string | null = null;
 
-      const breachDecision = evaluateExit(exitBar, {
-        direction: isLong ? "long" : "short",
-        stopLoss: sl > 0 ? sl : null,
-        takeProfit: tp > 0 ? tp : null,
-        pipSize: spec.pipSize,
-        slState: (pos.close_reason || "").toString(),
-      });
-      const hitPrice = breachDecision.exitPrice;
-      const closeReason = breachDecision.reason;
-      if (breachDecision.hit && breachDecision.ambiguousBar) {
-        console.log(`[breach-check] ${pos.symbol}: bar touched both SL and TP — resolved to ${closeReason}`);
+      // SL breach: long price <= SL, short price >= SL
+      if (sl > 0 && ((isLong && currentPrice <= sl) || (!isLong && currentPrice >= sl))) {
+        hitPrice = sl;
+        closeReason = "sl_hit";
+      }
+      // TP breach: long price >= TP, short price <= TP
+      // SL takes priority if both are breached simultaneously (shouldn't happen, but defensive)
+      if (!hitPrice && tp > 0 && ((isLong && currentPrice >= tp) || (!isLong && currentPrice <= tp))) {
+        hitPrice = tp;
+        closeReason = "tp_hit";
       }
 
       if (hitPrice && closeReason) {
         const entry = parseFloat(pos.entry_price);
         const size = parseFloat(pos.size);
-        const pnlResult = calcPnl(
-          pos.direction,
-          entry,
-          hitPrice,
-          size,
-          pos.symbol,
-          rateMap,
-        );
-        if (!pnlResult.valid) {
-          console.error(
-            `[breach-check] ${pos.symbol}: refusing to settle invalid P&L (${pnlResult.reason})`,
-          );
-          continue;
-        }
-        const { pnl, pnlPips } = pnlResult;
+        const diff = isLong ? hitPrice - entry : entry - hitPrice;
+        const quoteToUSD = getQuoteToUSDRate(pos.symbol, rateMap);
+        const pnl = diff * spec.lotUnits * size * quoteToUSD;
+        const pnlPips = diff / spec.pipSize;
         const nowClose = new Date().toISOString();
 
-        const brokerClose = await reconcileFullBrokerClose({
-          supabase,
-          userId,
-          botId: pos.bot_id || BOT_ID,
-          position: pos,
-          route: "scanner_breach",
-          closeReason,
+        // 1. Delete from paper_positions
+        await supabase.from("paper_positions").delete()
+          .eq("position_id", pos.position_id).eq("user_id", userId);
+
+        // 2. Insert into paper_trade_history (matches close-on-reverse field set)
+        await supabase.from("paper_trade_history").insert({
+          user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
+          symbol: pos.symbol, direction: pos.direction, size: pos.size,
+          entry_price: pos.entry_price, exit_price: hitPrice.toString(),
+          open_time: pos.open_time || nowClose, closed_at: nowClose,
+          close_reason: closeReason,
+          pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+          signal_score: pos.signal_score || "0",
+          signal_reason: pos.signal_reason || "",
+          bot_id: BOT_ID,
+          stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
         });
-        if (!brokerClose.readyToFinalize) {
-          console.warn(
-            `[breach-check] ${pos.position_id}: broker close deferred (${brokerClose.reason || brokerClose.state}); internal position remains open`,
-          );
-          continue;
-        }
-        const finalization = await finalizePaperPositionClose(supabase, {
-          positionRowId: pos.id,
-          userId,
-          botId: pos.bot_id || BOT_ID,
-          exitPrice: hitPrice,
-          pnl,
-          pnlPips,
-          closeReason,
-          closedAt: nowClose,
-        });
-        if (!finalization.closed) {
-          console.log(`[breach-check] ${pos.position_id}: close skipped (${finalization.code})`);
-          continue;
-        }
-        if (finalization.balance !== undefined) account.balance = finalization.balance.toString();
-        if (finalization.peak_balance !== undefined) account.peak_balance = finalization.peak_balance.toString();
+
+        // 3. Update paper_accounts balance + peak_balance (scoped to bot)
+        const balQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", userId);
+        if (account.bot_id) balQ.eq("bot_id", BOT_ID);
+        const curBal = parseFloat((await balQ.single()).data?.balance || "10000");
+        const newBal = curBal + pnl;
+        const newPeak = Math.max(newBal, parseFloat(account.peak_balance || "10000"));
+        const balUpd = supabase.from("paper_accounts").update({
+          balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
+        }).eq("user_id", userId);
+        if (account.bot_id) balUpd.eq("bot_id", BOT_ID);
+        await balUpd;
+        // Keep in-memory account in sync for subsequent position sizing
+        account.balance = newBal.toFixed(2);
+        account.peak_balance = newPeak.toFixed(2);
 
         // 4. Audit log
         const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
@@ -2405,31 +2551,57 @@ async function runScanForUser(
           console.warn(`[close] audit insert failed for ${closeReason} ${pos.position_id}: ${auditErr?.message}`);
         }
 
+        // 5. Mirror close to broker if live mode + mirrored connections exist
+        if (account.execution_mode === "live" && mirroredIds.length > 0) {
+          const { data: closeConns } = await supabase.from("broker_connections")
+            .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
+            .eq("is_active", true).in("id", mirroredIds);
+          if (closeConns && closeConns.length > 0) {
+            for (const conn of closeConns) {
+              try {
+                let authToken = conn.api_key;
+                let metaAccountId = conn.account_id;
+                if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                  authToken = conn.account_id;
+                  metaAccountId = conn.api_key;
+                }
+                const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                if (!posRes.ok) { console.warn(`SL/TP close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
+                const brokerPositions: any[] = JSON.parse(posBody);
+                const commentTag = `paper:${pos.position_id}`;
+                const shortTag = commentTag.slice(0, 28);
+                const brokerPos = brokerPositions.find((bp: any) =>
+                  bp.comment && (bp.comment.includes(commentTag) || bp.comment.startsWith(shortTag))
+                );
+                if (!brokerPos) {
+                  console.log(`SL/TP close [${conn.display_name}]: no matching comment-tagged position for paper:${pos.position_id} — skipping`);
+                  continue;
+                }
+                const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
+                });
+                console.log(`SL/TP close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${pos.position_id}`);
+              } catch (brokerErr: any) {
+                console.warn(`SL/TP close [${conn.display_name}] error: ${brokerErr?.message}`);
+              }
+            }
+          }
+        } else if (account.execution_mode === "live" && mirroredIds.length === 0) {
+          console.log(`SL/TP close: paper:${pos.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
+        }
+
         // 6. Telegram notification
         if (telegramChatIds.length > 0 && shouldNotify("trade_closed")) {
           const emoji = closeReason === "tp_hit" ? "🎯" : "🛑";
           const label = closeReason === "tp_hit" ? "TAKE PROFIT HIT" : "STOP LOSS HIT";
           const pnlEmoji = pnl >= 0 ? "✅" : "❌";
-          const closeSR = parseSignalReason(pos.signal_reason);
-          const closeOrigSL = closeSR.originalSL ?? pos.stop_loss;
-          const closeR = rMultiple(pos.entry_price, closeOrigSL, hitPrice, pos.direction);
           const msg = `${emoji} <b>${label}</b>\n\n` +
-            tgLine("Symbol", `${pos.symbol} (${String(pos.direction).toUpperCase()})`) +
-            tgLine("Entry", fmtPx(pos.entry_price, pos.symbol)) +
-            tgLine("Exit", fmtPx(hitPrice, pos.symbol)) +
-            tgLine("SL at close", fmtPx(pos.stop_loss, pos.symbol)) +
-            (String(closeOrigSL) !== String(pos.stop_loss) ? tgLine("Original SL", fmtPx(closeOrigSL, pos.symbol)) : "") +
-            tgLine("TP", fmtPx(pos.take_profit, pos.symbol)) +
-            tgLine("P&L", `${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)`) +
-            (closeR !== null ? tgLine("R Multiple", `${closeR >= 0 ? "+" : ""}${closeR.toFixed(2)}R`) : "") +
-            tgLine("Size", `${pos.size} lots`) +
-            tgLine("Held", durationLabel(pos.open_time)) +
-            "\n" +
-            zoneEvidenceLines(closeSR) +
-            directionVerdictLines(closeSR.directionVerdict) +
-            styleLadderLines(closeSR) +
-            watchlistOriginLines(closeSR) +
-            tgLine("Setup", closeSR.setupType ? String(closeSR.setupType).toUpperCase() : null);
+            `<b>Symbol:</b> ${pos.symbol} (${pos.direction.toUpperCase()})\n` +
+            `<b>Entry:</b> ${pos.entry_price}\n` +
+            `<b>Exit:</b> ${hitPrice}\n` +
+            `<b>P&L:</b> ${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)\n` +
+            `<b>Size:</b> ${pos.size} lots`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -2463,13 +2635,8 @@ async function runScanForUser(
 
   // ── FOTSI: Fetch 28 pairs and compute currency strengths (with 4h cache) ──
   let _fotsiResult: FOTSIResult | null = null;
-  const hasEligibleForexInstrument = marketScheduleScope.eligibleSymbols.some(
-    (symbol) => SPECS[symbol]?.type === "forex",
-  );
   if (config.useFOTSI === false) {
     console.log(`[scan ${scanCycleId}] FOTSI disabled by config — skipping 28-pair fetch (saves ~28 API calls)`);
-  } else if (!hasEligibleForexInstrument) {
-    console.log(`[scan ${scanCycleId}] FOTSI skipped — no eligible forex instruments in the current market schedule (saves ~28 API calls)`);
   } else try {
     // Try cache first — avoids 28 API calls if result is fresh
     const { result: cachedFotsi, fromCache } = await getFOTSIWithCache(supabase);
@@ -2517,13 +2684,7 @@ async function runScanForUser(
   // ── Limit Orders: Helper to compute optimal entry price from OB/FVG zones ──
   function computeLimitEntryPrice(
     analysis: any, pair: string, direction: string
-  ): {
-    price: number;
-    zoneType: string;
-    lifecycleCandidateType: string;
-    zoneLow: number;
-    zoneHigh: number;
-  } | null {
+  ): { price: number; zoneType: string; zoneLow: number; zoneHigh: number } | null {
     if (!config.limitOrderEnabled) return null;
     const lastPrice = analysis.lastPrice;
     const spec = SPECS[pair] || SPECS["EUR/USD"];
@@ -2580,57 +2741,38 @@ async function runScanForUser(
     // Pick the closest candidate to current price (best fill probability)
     candidates.sort((a, b) => a.distance - b.distance);
     const best = candidates[0];
-    return {
-      price: best.price,
-      zoneType: best.zoneType,
-      lifecycleCandidateType: best.zoneType,
-      zoneLow: best.low,
-      zoneHigh: best.high,
-    };
+    return { price: best.price, zoneType: best.zoneType, zoneLow: best.low, zoneHigh: best.high };
   }
 
-  // ── Thesis Validation: Load the dedicated active Gameplan version ──
-  // Every later consumer reuses this exact dedicated version. The trading
-  // scanner never generates or persists Game Plans.
+  // ── Thesis Validation: Load last game plan for pending order checks ──
+  // This runs BEFORE the game plan generation section (which is after management-only return).
+  // One lightweight DB query to get the most recent game plan for thesis validation.
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
-  let _activeDirectionVerdicts = new Map<
-    string,
-    DirectionVerdictDecision
-  >();
-  let _evidenceCertificateReferences: EvidenceCertificateReference[] = [];
-  if (gamePlanEnabled) {
+  if ((config as any).thesisValidationEnabled !== false) {
     try {
-      _lastGamePlanForValidation = await loadActiveGamePlan(
-        supabase,
-        userId,
-        BOT_ID,
-      );
+      const { data: recentGPLogs } = await supabase
+        .from("scan_logs")
+        .select("details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      const gpLog = (recentGPLogs || []).find((log: any) => log.details_json?.type === "game_plan");
+      if (gpLog?.details_json) {
+        const cached = gpLog.details_json;
+        _lastGamePlanForValidation = {
+          session: cached.session,
+          generatedAt: cached.generated_at,
+          plans: cached.plans || [],
+          focusPairs: cached.focus_pairs || [],
+          newsEvents: cached.newsEvents || [],
+          summary: cached.summary || "",
+        } as SessionGamePlan;
+      }
     } catch (gpErr: any) {
-      // Final authorization fails closed in hard Game Plan mode if this remains unavailable.
+      // Fail-open: if game plan load fails, thesis validation still runs (just without GP check)
       console.warn(`[scan ${scanCycleId}] Thesis validation: failed to load game plan: ${gpErr?.message}`);
     }
-  }
-  try {
-    _activeDirectionVerdicts = await loadActiveDirectionVerdicts(
-      supabase,
-      userId,
-      BOT_ID,
-    );
-  } catch (directionLoadErr: any) {
-    console.warn(
-      `[scan ${scanCycleId}] Fill authorization: failed to load active Direction Verdicts: ${directionLoadErr?.message}`,
-    );
-  }
-  try {
-    _evidenceCertificateReferences = await loadCurrentEvidenceCertificateReferences(
-      supabase,
-      userId,
-      BOT_ID,
-    );
-  } catch (certificateLoadErr: any) {
-    console.warn(
-      `[scan ${scanCycleId}] Frozen context: current evidence certificates unavailable: ${certificateLoadErr?.message}`,
-    );
   }
 
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
@@ -2647,57 +2789,6 @@ async function runScanForUser(
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
     for (const pending of activePendingOrders) {
       try {
-        // The one-minute zone-confirmation-scanner exclusively owns every
-        // post-touch state, including CHoCH and frozen retracement waits.
-        // Keeping the row in this collection still protects discovery and
-        // rotation from duplicating it, but the five-minute scanner must not
-        // reset or fill the same lifecycle using its original entry zone.
-        if (pending.status !== "pending") {
-          pendingConfirmationHunting++;
-          if (isInstrumentMarketOpen(pending.symbol, now) && marketScheduleEligibleSet.has(pending.symbol)) {
-            lifecycleDeepScanSymbols.add(pending.symbol);
-          } else {
-            console.log(`[pending] ${pending.symbol} confirmation remains armed outside its active market schedule — no candle fetch scheduled`);
-          }
-          continue;
-        }
-        const pendingPolicyResolution = resolvePendingStylePolicy(
-          pending,
-          scanStylePolicy,
-        );
-        const parsedPendingEvidence = parseSignalReason(pending.signal_reason);
-        const pendingTimeframeAuthority = resolveTimeframeAuthority(
-          pendingPolicyResolution.policy,
-        );
-        const pendingDealingRangeMode = resolvePendingDealingRangeMode(
-          pending,
-          (config as any).dealingRangeMode,
-        );
-        const frozenIdentity = validateFrozenSetupIdentity(
-          pending,
-          pendingPolicyResolution.frozenContext,
-        );
-        if (!frozenIdentity.valid) {
-          await supabase.from("pending_orders").update({
-            status: "invalidated",
-            cancel_reason: frozenIdentity.reason,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", pending.id).eq("user_id", userId);
-          pendingCancelled++;
-          console.warn(
-            `[pending] ${pending.symbol} invalidated: ${frozenIdentity.reason}`,
-          );
-          continue;
-        }
-        const pendingConfirmationMethod = resolvePendingConfirmationMethod(
-          pending,
-          config,
-        );
-        const pendingConfirmationLabel = confirmationMethodLabel(
-          pendingConfirmationMethod,
-          (pending as any).indicator_min_count || (config as any).indicatorMinCount || 3,
-        );
-
         // Check expiry first
         if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
           await supabase.from("pending_orders").update({
@@ -2710,19 +2801,11 @@ async function runScanForUser(
           continue;
         }
 
-        if (!isInstrumentMarketOpen(pending.symbol, now) || !marketScheduleEligibleSet.has(pending.symbol)) {
-          console.log(`[pending] ${pending.symbol} remains pending outside its active market schedule — expiry checked, market data skipped`);
-          continue;
-        }
-
         // Fetch current price to check if limit order should fill
-        const pendingCandles = await cachedFetch(
-          pending.symbol,
-          pendingTimeframeAuthority.runtimeEntry,
-          timeframeFetchRange(pendingTimeframeAuthority.runtimeEntry),
-        );
+        const pendingCandles = await cachedFetch(pending.symbol, config.entryTimeframe || "15min", "5d");
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
+        const lastCandle = pendingCandles[pendingCandles.length - 1];
 
         // Update current price on the pending order
         await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2730,35 +2813,25 @@ async function runScanForUser(
         const entryPrice = parseFloat(pending.entry_price);
         const slLevel = parseFloat(pending.stop_loss);
 
-        // Which boundary applies is a LIFECYCLE question, not a field-choice.
-        //
-        // Nothing in pending_orders has entered. Through both 'pending' and
-        // 'awaiting_confirmation' there is no position, so the position stop —
-        // sized as entry minus risk, floored by MIN_SL_PIPS and spread — has
-        // nothing to govern. The pre-entry question is whether the ZONE or
-        // IMPULSE that produced the setup has broken.
-        //
-        // Direction of the change, which is easy to get backwards: on the
-        // observed GBP/CHF setup structural sits ~2 pips below the zone floor
-        // and the position stop ~23 pips lower. Structural is TIGHTER, so this
-        // invalidates EARLIER than before. That is intended — a setup whose zone
-        // has broken is dead regardless of how much room a position would have had.
-        const invalidation = invalidationForLifecycle({
-          direction: pending.direction as "long" | "short",
-          status: pending.status,
-          structuralInvalidation: pending.structural_invalidation != null
-            ? Number(pending.structural_invalidation)
-            : null,
-          stopLoss: slLevel,
-        });
-        if (invalidationBreached(pending.direction as "long" | "short", currentPrice, invalidation.level)) {
+        // Check SL invalidation: if price has blown past the SL, cancel the order
+        if (pending.direction === "long" && currentPrice < slLevel) {
           await supabase.from("pending_orders").update({
-            status: "invalidated",
-            cancel_reason: `Price ${currentPrice} breached ${invalidation.source} ${invalidation.level} (${invalidation.lifecycle})`,
+            status: "cancelled",
+            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pendingCancelled++;
-          console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — ${invalidation.reason} (price ${currentPrice} vs ${invalidation.level})`);
+          console.log(`[pending] Cancelled ${pending.symbol} long — price ${currentPrice} below SL ${slLevel}`);
+          continue;
+        }
+        if (pending.direction === "short" && currentPrice > slLevel) {
+          await supabase.from("pending_orders").update({
+            status: "cancelled",
+            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pendingCancelled++;
+          console.log(`[pending] Cancelled ${pending.symbol} short — price ${currentPrice} above SL ${slLevel}`);
           continue;
         }
 
@@ -2766,43 +2839,16 @@ async function runScanForUser(
         // ── THESIS VALIDATION: Re-check structural conditions ──
         // Runs on every cycle (including management-only). Cancels pending
         // orders whose original trade thesis has been invalidated.
-        // Errors do not cancel while the order is merely waiting, but the
-        // final fill authority fails closed unless a fresh result exists.
+        // Fail-open: errors/missing data never cause cancellation.
         // ═══════════════════════════════════════════════════════════════════
-        let pendingThesisResult: ThesisValidationResult | null = null;
-        {
+        if ((config as any).thesisValidationEnabled !== false) {
           try {
-            let currentPendingDirectionVerdict =
-              _activeDirectionVerdicts.get(pending.symbol) || null;
-            const frozenPendingConfig =
-              pendingPolicyResolution.frozenContext?.runtimeConfig
-                ?.effectiveConfig || null;
-            const pendingGamePlanExpected = frozenPendingConfig
-              ? frozenPendingConfig.gamePlanEnabled !== false &&
-                frozenPendingConfig.gpEnforcementMode !== "off"
-              : gamePlanAffectsExecution;
-            if (
-              currentPendingDirectionVerdict && pendingGamePlanExpected &&
-              !directionVerdictMatchesGamePlan(
-                currentPendingDirectionVerdict,
-                _lastGamePlanForValidation,
-                pending.symbol,
-              )
-            ) {
-              currentPendingDirectionVerdict = null;
-            }
-            const directionVerdictThesisOptions =
-              buildDirectionVerdictThesisOptions({
-                frozenDirectionVerdict:
-                  pendingPolicyResolution.frozenContext?.directionVerdict ||
-                  null,
-                currentDirectionVerdict: currentPendingDirectionVerdict,
-                expectedDecisionEvidence: {
-                  style: pendingTimeframeAuthority.style,
-                  roles: pendingTimeframeAuthority.roles,
-                },
-                frozenEffectiveConfig: frozenPendingConfig,
-              });
+            // Fetch D1/4H/1H candles for direction check (cached if full scan)
+            const [tvDaily, tvH4, tvH1] = await Promise.all([
+              cachedFetch(pending.symbol, "1d", "1y"),
+              cachedFetch(pending.symbol, "4h", "1mo"),
+              cachedFetch(pending.symbol, "1h", "5d"),
+            ]);
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -2814,18 +2860,14 @@ async function runScanForUser(
               {
                 fotsiResult: _fotsiResult,
                 lastGamePlan: _lastGamePlanForValidation,
-                dailyCandles: null,
-                h4Candles: null,
-                h1Candles: null,
-                decisionEvidence:
-                  currentPendingDirectionVerdict?.decisionEvidence || null,
-                ...directionVerdictThesisOptions,
+                dailyCandles: tvDaily.length >= 20 ? tvDaily : null,
+                h4Candles: tvH4.length >= 20 ? tvH4 : null,
+                h1Candles: tvH1.length >= 20 ? tvH1 : null,
               },
             );
-            pendingThesisResult = thesisResult;
             if (!thesisResult.valid) {
               await supabase.from("pending_orders").update({
-                status: "invalidated",
+                status: "cancelled",
                 cancel_reason: thesisResult.reason,
                 thesis_cancel_reason: thesisResult.cancelReason,
                 resolved_at: new Date().toISOString(),
@@ -2834,19 +2876,11 @@ async function runScanForUser(
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
               if (telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
-                const invalidSR = parseSignalReason(pending.signal_reason);
                 const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
-                  tgLine("Symbol", pending.symbol) +
-                  tgLine("Direction", String(pending.direction).toUpperCase()) +
-                  tgLine("Check", thesisResult.checkType) +
-                  tgLine("Reason", thesisResult.reason) +
-                  tgLine("Cancel Code", thesisResult.cancelReason) +
-                  tgLine("Zone Trigger", fmtPx(pending.entry_price, pending.symbol)) +
-                  tgLine("Waited", durationLabel(pending.created_at)) +
-                  "\n" +
-                  zoneEvidenceLines(invalidSR) +
-                  directionVerdictLines(invalidSR.directionVerdict) +
-                  watchlistOriginLines(invalidSR);
+                  `<b>Symbol:</b> ${pending.symbol}\n` +
+                  `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+                  `<b>Check:</b> ${thesisResult.checkType}\n` +
+                  `<b>Reason:</b> ${thesisResult.reason}`;
                 await Promise.all(telegramChatIds.map(async (chatId: string) => {
                   try {
                     await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -2865,23 +2899,12 @@ async function runScanForUser(
           }
         }
 
-        const pendingProximity = measureLifecycleZoneProximity({
-          currentPrice,
-          zoneLow: Number(pending.entry_zone_low),
-          zoneHigh: Number(pending.entry_zone_high),
-          pipSize: (SPECS[pending.symbol] || SPECS["EUR/USD"]).pipSize,
-        });
-        if (pendingProximity?.nearZone) {
-          lifecycleDeepScanSymbols.add(pending.symbol);
-        }
-
         // ═══════════════════════════════════════════════════════════════════
         // ── ZONE CONFIRMATION ENTRY STATE MACHINE ──
-        // States: "pending" → "awaiting_confirmation" →
-        // "filled"/"invalidated"/"expired"/"cancelled"
+        // States: "pending" → "awaiting_confirmation" → "filled"/"cancelled"
         // When price touches the zone, instead of immediately filling, we
         // transition to "awaiting_confirmation" and wait for a 5m CHoCH
-        // applying the setup's frozen confirmation contract before entry.
+        // confirming reversal before entering at live price.
         // ═══════════════════════════════════════════════════════════════════
 
         // Parse impulse data from signal_reason for invalidation check
@@ -2895,129 +2918,30 @@ async function runScanForUser(
 
         // ── Branch A: Order is in "pending" status — check if price touched zone ──
         if (pending.status === "pending") {
-          const pendingNestedPlanState =
-            resolvePendingNestedPoiEntryPlanState(pending);
-          if (!pendingNestedPlanState.valid) {
-            const reason = pendingNestedPlanState.reason;
-            const { data: invalidatedPending } = await supabase
-              .from("pending_orders")
-              .update({
-                status: "invalidated",
-                cancel_reason: reason,
-                resolved_at: new Date().toISOString(),
-              })
-              .eq("id", pending.id)
-              .eq("user_id", userId)
-              .eq("status", "pending")
-              .select("id")
-              .maybeSingle();
-            if (!invalidatedPending) continue;
-            pendingCancelled++;
-            console.warn(
-              "[pending] " + pending.symbol + " invalidated: " + reason,
-            );
-            continue;
-          }
-          const pendingNestedPoiEntry = pendingNestedPlanState.plan;
-          const pendingNestedActivation = pendingNestedPoiEntry
-            ? resolveFrozenNestedPoiMarketRoute({
-              mode: pendingNestedPoiEntry.mode,
-              route: pendingNestedPoiEntry.route,
-              runtimeTarget: account.execution_mode === "live"
-                ? "live"
-                : "paper",
-            })
-            : null;
-          if (pendingNestedActivation?.runtimeTargetMismatch === true) {
-            const reason =
-              "nested_poi_runtime_target_mismatch: paper-only setup cannot execute live";
-            const { data: cancelledPending } = await supabase
-              .from("pending_orders")
-              .update({
-                status: "cancelled",
-                cancel_reason: reason,
-                resolved_at: new Date().toISOString(),
-              })
-              .eq("id", pending.id)
-              .eq("user_id", userId)
-              .eq("status", "pending")
-              .select("id")
-              .maybeSingle();
-            if (!cancelledPending) continue;
-            pendingCancelled++;
-            console.warn(
-              "[pending] " + pending.symbol + " cancelled: " + reason,
-            );
-            continue;
-          }
-          const nestedPoiEnforced =
-            pendingNestedActivation?.enforced === true;
-          const touch = findEarliestPendingZoneTouch({
-            candles: pendingCandles,
-            direction: pending.direction as "long" | "short",
-            entryPrice,
-            zoneLow: nestedPoiEnforced
-              ? pendingNestedPoiEntry!.outerZone.low
-              : undefined,
-            zoneHigh: nestedPoiEnforced
-              ? pendingNestedPoiEntry!.outerZone.high
-              : undefined,
-            observedAfter: pending.last_touch_checked_at || pending.placed_at || pending.created_at,
-            interval: pendingTimeframeAuthority.runtimeEntry,
-          });
+          const filled = pending.direction === "long"
+            ? lastCandle.low <= entryPrice
+            : lastCandle.high >= entryPrice;
 
-          if (touch.touchTime) {
-            // Preserve the first matching candle; this timestamp anchors CHoCH.
-            const { data: transitionedTouch } = await supabase.from("pending_orders").update({
+          if (filled) {
+            // Price touched the zone! Transition to confirmation hunting mode.
+            const nowStr = new Date().toISOString();
+            await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
-              zone_touch_time: touch.touchTime,
-              last_touch_checked_at: touch.checkedAt,
+              zone_touch_time: nowStr,
               confirmation_attempts: 0,
-            }).eq("order_id", pending.order_id).eq("user_id", userId).eq(
-              "status",
-              "pending",
-            ).select("id").maybeSingle();
-            if (!transitionedTouch) continue;
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingConfirmationHunting++;
-            lifecycleDeepScanSymbols.add(pending.symbol);
-            console.log(
-              "[pending] " + pending.symbol + " " + pending.direction +
-                " — OUTER ZONE TOUCHED on " + touch.touchTime +
-                (nestedPoiEnforced
-                  ? "; waiting for frozen nested " +
-                    pendingNestedPoiEntry!.selected!.type + " trigger"
-                  : ", entering confirmation hunt mode (" +
-                    pendingConfirmationLabel + ")"),
-            );
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
+
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
-              const touchSR = parseSignalReason(pending.signal_reason);
               const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
-                tgLine("Symbol", pending.symbol) +
-                tgLine("Direction", String(pending.direction).toUpperCase()) +
-                tgLine("Zone Range", `${pending.entry_zone_type} [${fmtPx(pending.entry_zone_low || "0", pending.symbol)} – ${fmtPx(pending.entry_zone_high || "0", pending.symbol)}]`) +
-                tgLine("Entry Level", fmtPx(entryPrice, pending.symbol)) +
-                tgLine("Planned SL", fmtPx(pending.stop_loss, pending.symbol)) +
-                tgLine("Planned TP", fmtPx(pending.take_profit, pending.symbol)) +
-                tgLine("Size", pending.size ? `${pending.size} lots` : null) +
-                tgLine(
-                  "Waiting for",
-                  nestedPoiEnforced
-                    ? "Frozen nested " +
-                      pendingNestedPoiEntry!.selected!.type.toUpperCase() +
-                      " touch"
-                    : (pending.direction === "short" ? "Bearish " : "Bullish ") +
-                      pendingConfirmationLabel,
-                ) +
-                tgLine("Waited in Zone Setup", durationLabel(pending.created_at)) +
-                "\n" +
-                tradeAuthorityLines(touchSR) +
-                zoneEvidenceLines(touchSR) +
-                directionVerdictLines(touchSR.directionVerdict) +
-                styleLadderLines(touchSR) +
-                watchlistOriginLines(touchSR) +
-                diagnosticScoreLine(pending.signal_score);
+                `<b>Symbol:</b> ${pending.symbol}\n` +
+                `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+                `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]\n` +
+                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} CHoCH on 5m\n` +
+                `<b>Entry Level:</b> ${entryPrice}`;
               await Promise.all(telegramChatIds.map(async (chatId: string) => {
                 try {
                   await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -3030,16 +2954,298 @@ async function runScanForUser(
             }
             continue;
           }
-          // Advance the durable cursor only after every overlapping candle was checked.
-          await supabase.from("pending_orders").update({
-            last_touch_checked_at: touch.checkedAt,
-          }).eq("order_id", pending.order_id).eq("user_id", userId).eq(
-            "status",
-            "pending",
-          );
+          // Price hasn't touched zone yet — nothing to do, keep waiting
           continue;
         }
 
+        // ── Branch B: Order is in "awaiting_confirmation" — check for CHoCH ──
+        if (pending.status === "awaiting_confirmation") {
+          pendingConfirmationHunting++;
+
+          // Check if impulse is broken (zone invalidation)
+          if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Impulse broken — price ${currentPrice} exceeded origin (high: ${impulseData.high}, low: ${impulseData.low})`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
+            continue;
+          }
+
+          // Check if price left the zone (use refined zone bounds when available)
+          const rawRefLow = parseFloat(pending.refined_zone_low || "0");
+          const rawRefHigh = parseFloat(pending.refined_zone_high || "0");
+          const hasRefZone = rawRefLow > 0 && rawRefHigh > 0;
+          const zoneLow = hasRefZone ? rawRefLow : parseFloat(pending.entry_zone_low || "0");
+          const zoneHigh = hasRefZone ? rawRefHigh : parseFloat(pending.entry_zone_high || "0");
+          if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+            // Price left zone without confirming — reset to pending, wait for next approach
+            const attempts = (pending.confirmation_attempts || 0) + 1;
+            await supabase.from("pending_orders").update({
+              status: "pending",
+              zone_touch_time: null,
+              confirmation_attempts: attempts,
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingConfirmationHunting--;
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
+            continue;
+          }
+
+          // Fetch 5m candles for CHoCH detection
+          const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
+          if (confirm5mCandles.length < 10) {
+            console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
+            continue;
+          }
+
+          // Determine the candle index when zone was touched (approximate from zone_touch_time)
+          let zoneTouchIdx: number | undefined;
+          if (pending.zone_touch_time) {
+            const touchTime = new Date(pending.zone_touch_time).getTime();
+            for (let i = confirm5mCandles.length - 1; i >= 0; i--) {
+              const candleTime = new Date(confirm5mCandles[i].datetime).getTime();
+              if (candleTime <= touchTime) { zoneTouchIdx = i; break; }
+            }
+          }
+
+          // Run zone confirmation detection (delegates to confirmationHierarchy first, falls back to legacy tiers)
+          const confirmationSignal = detectZoneConfirmation(
+            confirm5mCandles,
+            pending.direction as "long" | "short",
+            DEFAULT_ZONE_CONFIRMATION_CONFIG,
+            zoneTouchIdx,
+            pending.symbol,
+            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
+          );
+
+          if (!confirmationSignal) {
+            // No confirmation yet — keep hunting (all 3 tiers checked)
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no tier passed)`);
+            continue;
+          }
+
+          // ── Tier gate: require Tier 1 when no refined zone is available ──
+          // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
+          // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
+          // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
+          // enough evidence that the level is holding.
+          if (!hasRefZone && confirmationSignal.tier !== 1) {
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
+            continue;
+          }
+
+          // ═══════════════════════════════════════════════════════════════
+          // CHoCH CONFIRMED! Enter the trade at live price.
+          // ═══════════════════════════════════════════════════════════════
+          console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
+          console.log(`[pending] Confirmation tier: ${confirmationSignal.tier}, type: ${confirmationSignal.type}`);
+
+          // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
+          const currentOpenCount = openPosArr.length;
+          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
+          if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at confirmation time`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            continue;
+          }
+          if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at confirmation time`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            continue;
+          }
+
+          // Confirmation is go/no-go — fill at current market price (already inside refined zone)
+          const actualFillPrice = currentPrice;
+          console.log(`[pending] CONFIRMED FILL ${pending.symbol} ${pending.direction} — confirmed @ refined zone, fill at ${actualFillPrice} (zone entry was ${entryPrice})`);
+
+
+          const positionId = pending.order_id;
+          const orderId = crypto.randomUUID().slice(0, 8);
+          const nowStr = new Date().toISOString();
+          const exitFlags = pending.exit_flags || {};
+
+          // Build signal_reason with limit order provenance + confirmation data
+          let parsedSignalReason: any = {};
+          try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+          const signalReason = {
+            ...parsedSignalReason,
+            filledFromLimitOrder: true,
+            confirmationEntry: true,
+            confirmation: {
+              type: confirmationSignal.type,
+              tier: confirmationSignal.tier,
+              price: confirmationSignal.price,
+              displacement: confirmationSignal.displacement,
+              significance: confirmationSignal.significance,
+              closeBased: confirmationSignal.closeBased,
+              supportingSignals: confirmationSignal.supportingSignals,
+              zoneTouchTime: pending.zone_touch_time,
+              confirmationAttempts: pending.confirmation_attempts || 0,
+            },
+            limitOrderOrigin: {
+              orderType: pending.order_type,
+              entryPrice,
+              placedAt: pending.placed_at,
+              filledAt: nowStr,
+              zoneType: pending.entry_zone_type,
+              zoneLow: parseFloat(pending.entry_zone_low || "0"),
+              zoneHigh: parseFloat(pending.entry_zone_high || "0"),
+              fromWatchlist: pending.from_watchlist,
+              stagedCycles: pending.staged_cycles,
+            },
+          };
+
+          await supabase.from("paper_positions").insert({
+            user_id: userId,
+            position_id: positionId,
+            symbol: pending.symbol,
+            direction: pending.direction,
+            size: pending.size.toString(),
+            entry_price: actualFillPrice.toString(),  // L1: use actual fill price, not limit price
+            current_price: currentPrice.toString(),
+            stop_loss: pending.stop_loss.toString(),
+            take_profit: pending.take_profit.toString(),
+            open_time: nowStr,
+            signal_reason: JSON.stringify(signalReason),
+            signal_score: pending.signal_score?.toString() || "0",
+            order_id: orderId,
+            position_status: "open",
+            bot_id: BOT_ID,
+            order_type: "limit",
+            trigger_price: entryPrice.toString(),
+          });
+
+          await supabase.from("trade_reasonings").insert({
+            user_id: userId,
+            position_id: positionId,
+            symbol: pending.symbol,
+            direction: pending.direction,
+            confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
+            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+            bias: pending.direction === "long" ? "bullish" : "bearish",
+            session: "confirmation_fill",
+            timeframe: "5m",
+          });
+
+          await supabase.from("pending_orders").update({
+            status: "filled",
+            fill_reason: `Confirmed ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
+            filled_at: nowStr,
+            resolved_at: nowStr,
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+
+          pendingFilled++;
+          tradesPlaced++;
+
+          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+
+          // Send Telegram notification for confirmed entry
+          if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
+            const emoji = pending.direction === "long" ? "🟢" : "🔴";
+            const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            const confTierLabel = confirmationSignal.tier ? ` T${confirmationSignal.tier}` : "";
+            const confSupporting = Array.isArray(confirmationSignal.supportingSignals) && confirmationSignal.supportingSignals.length > 0
+              ? `\n<b>Supporting:</b> ${confirmationSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
+              : "";
+            const confAttempts = (pending.confirmation_attempts || 0) > 0
+              ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
+              : "";
+            const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
+              `<b>Symbol:</b> ${pending.symbol}\n` +
+              `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+              `<b>Size:</b> ${pending.size} lots\n` +
+              `<b>Entry:</b> ${actualFillPrice.toFixed(5)}\n` +
+              `<b>SL:</b> ${pending.stop_loss}\n` +
+              `<b>TP:</b> ${pending.take_profit}\n` +
+              `<b>Score:</b> ${pending.signal_score}\n\n` +
+              `🎯 <b>Confirmation</b>\n` +
+              `<b>Signal:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)}×${confirmationSignal.significance ? ", " + confirmationSignal.significance : ""})${confAttempts}` +
+              confSupporting + `\n` +
+              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+              (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
+            await Promise.all(telegramChatIds.map(async (chatId: string) => {
+              try {
+                await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                  body: JSON.stringify({ chat_id: chatId, message: msg }),
+                });
+              } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+            }));
+          }
+
+          // Mirror to brokers for limit order fills
+          if (account.execution_mode === "live") {
+            const { data: connections } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+            if (connections && connections.length > 0) {
+              const mirroredConnIds: string[] = [];
+              for (const conn of connections) {
+                try {
+                  // B4 Fix: Add spread check before mirroring limit fills to brokers.
+                  // Market order path checks spread; limit fills should too.
+                  let metaAccountIdForSpread: string | undefined;
+                  let authTokenForSpread: string | undefined;
+                  if (conn.broker_type === "metaapi") {
+                    metaAccountIdForSpread = conn.account_id;
+                    authTokenForSpread = conn.api_key;
+                    if (metaAccountIdForSpread?.startsWith("eyJ") && authTokenForSpread && /^[0-9a-f-]{36}$/.test(authTokenForSpread)) {
+                      authTokenForSpread = conn.account_id;
+                      metaAccountIdForSpread = conn.api_key;
+                    }
+                  }
+                  const spreadResult = await fetchBrokerSpread(conn, pending.symbol, config, metaAccountIdForSpread, authTokenForSpread);
+                  if (spreadResult && !spreadResult.passed) {
+                    console.warn(`[limit-fill-mirror] ${conn.display_name}: spread too wide (${spreadResult.spreadPips.toFixed(2)}p > ${spreadResult.effectiveMax}p) — skipping broker mirror for ${pending.symbol} (B4 safety)`);
+                    continue;
+                  }
+
+                  if (conn.broker_type !== "metaapi") {
+                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                      body: JSON.stringify({ action: "place_order", connectionId: conn.id, symbol: pending.symbol, direction: pending.direction, size: parseFloat(pending.size), stopLoss: parseFloat(pending.stop_loss), takeProfit: parseFloat(pending.take_profit), userId }),
+                    });
+                    if (exRes.ok) { mirroredConnIds.push(conn.id); }
+                    continue;
+                  }
+                  let authToken = conn.api_key;
+                  let metaAccountId = conn.account_id;
+                  if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                    authToken = conn.account_id;
+                    metaAccountId = conn.api_key;
+                  }
+                  const brokerSymbol = resolveSymbol(pending.symbol, conn);
+                  const mt5Body: any = {
+                    actionType: pending.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                    symbol: brokerSymbol,
+                    volume: parseFloat(pending.size),
+                    comment: `paper:${positionId}`,
+                  };
+                  if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
+                  if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
+                  const { res: mt5Res } = await metaFetch(metaAccountId, authToken, (base: string) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
+                  if (mt5Res.ok) { mirroredConnIds.push(conn.id); }
+                } catch (e: any) { console.warn(`Limit fill broker mirror [${conn.display_name}] error: ${e?.message}`); }
+              }
+              if (mirroredConnIds.length > 0) {
+                await supabase.from("paper_positions").update({ mirrored_connection_ids: mirroredConnIds }).eq("position_id", positionId).eq("user_id", userId);
+              }
+            }
+          }
+        }
       } catch (e: any) {
         console.warn(`[pending] Error monitoring ${pending.symbol}: ${e?.message}`);
       }
@@ -3076,88 +3282,31 @@ async function runScanForUser(
   let propFirmGateResult: PropFirmGateResult | null = null;
   let propFirmSizeMultiplier = 1.0;
   try {
-    // In live mode, use MetaAPI equity for prop-firm compliance. In paper mode,
-    // keep the compliance calculation tied to the paper account taking trades.
+    // Determine broker equity — fetch from MetaAPI whenever a broker connection exists
+    // (even in paper mode) so prop firm compliance tracks the real MT5 account
     let brokerEquity: number | undefined;
-    const isLiveMode = account.execution_mode === "live";
-    // Only fetch broker equity in LIVE mode. In paper mode the prop firm gate
-    // should track the paper balance — the MT5 account isn't the one taking trades.
-    if (_scanBrokerConn && isLiveMode) {
+    if (_scanBrokerConn) {
       try {
         const metaAccountId = _scanBrokerConn.account_id;
         const authToken = _scanBrokerConn.api_key;
-        // Use the provisioning-aware shared client. The legacy non-regional
-        // endpoint is not a valid source of broker state.
-        const { res: eqRes, body: eqBody } = await metaFetch(
-          metaAccountId,
-          authToken,
-          (base) => `${base}/account-information`,
-        );
+        const metaBase = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+        const eqRes = await fetch(`${metaBase}/account-information`, {
+          headers: { "auth-token": authToken },
+        });
         if (eqRes.ok) {
-          const eqData = JSON.parse(eqBody);
+          const eqData = await eqRes.json();
           brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
           console.log(`[prop-firm-gate] Broker equity fetched: $${brokerEquity.toFixed(2)}`);
-          await Promise.all([
-            resolveScannerAlert(supabase, {
-              userId,
-              botId: BOT_ID,
-              alertType: "metaapi_certificate_failure",
-              dedupeKey: "metaapi",
-            }),
-            resolveScannerAlert(supabase, {
-              userId,
-              botId: BOT_ID,
-              alertType: "metaapi_connection_failure",
-              dedupeKey: "metaapi",
-            }),
-          ]);
         } else {
           console.warn(`[prop-firm-gate] Broker equity fetch returned ${eqRes.status}`);
-          await upsertScannerAlert(supabase, {
-            userId,
-            botId: BOT_ID,
-            alertType: "metaapi_connection_failure",
-            dedupeKey: "metaapi",
-            severity: "warning",
-            title: "MetaAPI connection failure",
-            message: `MetaAPI returned HTTP ${eqRes.status} while checking broker equity.`,
-            runId: opts?.operationRunId,
-            evidence: {
-              source: "prop_firm_equity",
-              http_status: eqRes.status,
-            },
-          });
         }
       } catch (e: any) {
-        const brokerError = String(e?.message ?? e);
-        const certificateFailure =
-          /certificate|x509|expired|invalid peer/i.test(brokerError);
-        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${brokerError}`);
-        await upsertScannerAlert(supabase, {
-          userId,
-          botId: BOT_ID,
-          alertType: certificateFailure
-            ? "metaapi_certificate_failure"
-            : "metaapi_connection_failure",
-          dedupeKey: "metaapi",
-          severity: certificateFailure ? "critical" : "warning",
-          title: certificateFailure
-            ? "MetaAPI certificate failure"
-            : "MetaAPI connection failure",
-          message: certificateFailure
-            ? "MetaAPI certificate validation failed while checking broker equity."
-            : "MetaAPI could not provide broker equity; the prop-firm gate used its safe fallback.",
-          runId: opts?.operationRunId,
-          evidence: {
-            source: "prop_firm_equity",
-            error: brokerError.slice(0, 500),
-          },
-        });
+        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${e?.message}`);
       }
     }
     propFirmGateResult = await runPropFirmGate(
       supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
-      { brokerEquity, isLiveAccount: isLiveMode, hasBrokerConnection: isLiveMode && !!_scanBrokerConn, fxMarketClosed, rateMap },
+      { brokerEquity, isLiveAccount: account.execution_mode === "live", hasBrokerConnection: !!_scanBrokerConn, fxMarketClosed },
     );
 
     if (propFirmGateResult.enabled) {
@@ -3166,26 +3315,13 @@ async function runScanForUser(
       // Emergency close-all
       if (propFirmGateResult.shouldCloseAll && openPosArr.length > 0) {
         console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
-        const emergencyClose = await propFirmEmergencyClose(
+        const closedCount = await propFirmEmergencyClose(
           supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
-          { fxMarketClosed, rateMap },
+          { fxMarketClosed },
         );
         // Notify via Telegram
         if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
-          const pf: any = propFirmGateResult;
-          const msg = `🚨 <b>PROP FIRM EMERGENCY</b>\n\n` +
-            tgLine("Reason", pf.reason) +
-            tgLine("Positions Closed", `${emergencyClose.closedCount}/${emergencyClose.attemptedCount}`) +
-            tgLine("Account Mode", isLiveMode ? "LIVE" : "PAPER") +
-            tgLine("Equity Used", brokerEquity != null ? `$${Number(brokerEquity).toFixed(2)} (broker)` : `$${Number(balance).toFixed(2)} (paper)`) +
-            tgLine("Daily P&L", pf.dailyPnl != null ? `$${Number(pf.dailyPnl).toFixed(2)}` : null) +
-            tgLine("Daily Loss Limit", pf.dailyLossLimit != null ? `$${Number(pf.dailyLossLimit).toFixed(2)}` : null) +
-            tgLine("Total Drawdown", pf.totalDrawdown != null ? `$${Number(pf.totalDrawdown).toFixed(2)}` : null) +
-            tgLine("Max Drawdown", pf.maxDrawdownLimit != null ? `$${Number(pf.maxDrawdownLimit).toFixed(2)}` : null) +
-            tgLine("Size Multiplier", pf.maxPositionSizeMultiplier) +
-            (emergencyClose.complete
-              ? `\nAll managed exposure was confirmed closed.`
-              : `\n${emergencyClose.unresolved.length} position(s) remain open pending exact broker-close proof.`);
+          const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -3202,21 +3338,10 @@ async function runScanForUser(
           scanned_at: new Date().toISOString(),
           mode: "prop_firm_emergency",
           reason: propFirmGateResult.reason,
-          positions_closed: emergencyClose.closedCount,
-          positions_unresolved: emergencyClose.unresolved,
-          complete: emergencyClose.complete,
+          positions_closed: closedCount,
         };
         await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
-        return new Response(JSON.stringify({
-          ok: emergencyClose.complete,
-          mode: "prop_firm_emergency",
-          reason: propFirmGateResult.reason,
-          positions_closed: emergencyClose.closedCount,
-          positions_unresolved: emergencyClose.unresolved,
-        }), {
-          status: emergencyClose.complete ? 200 : 409,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(JSON.stringify({ ok: true, mode: "prop_firm_emergency", reason: propFirmGateResult.reason, positions_closed: closedCount }), { headers: { "Content-Type": "application/json" } });
       }
 
       // Block new entries (soft lock / profit target reached)
@@ -3276,175 +3401,232 @@ async function runScanForUser(
   const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
   const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
 
-  // Select eight discovery pairs before Gameplan and candle fetching.
-  // Lifecycle-owned pairs are monitored separately and do not consume slots.
-  const scannableInstrumentUniverse = [...marketScheduleScope.eligibleSymbols];
-  if (marketScheduleScope.excludedSymbols.length > 0) {
-    const continuation = scannableInstrumentUniverse.length > 0
-      ? "continuing with crypto only"
-      : "recording an idle scan";
-    const scheduleReason = marketScheduleScope.nonCryptoMarketsClosed
-      ? "No eligible FX, commodity, or index instruments are open"
-      : `Non-crypto discovery is disabled for trading day ${marketScheduleScope.effectiveTradingDay}`;
-    console.log(`[scan ${scanCycleId}] ${scheduleReason}; ${continuation}. Excluded: [${marketScheduleScope.excludedSymbols.join(", ")}]`);
-  }
-  const rotatingImpulseSlotCount = Math.max(1, Math.min(12, Number((config as any).rotatingImpulseSlotCount) || 8));
-  const rotatingImpulseScanEnabled = (config as any).rotatingImpulseScanEnabled !== false && scannableInstrumentUniverse.length > rotatingImpulseSlotCount;
-  let rotationSelection: RotationSelection | null = null;
-  let sessionRotationObservation: SessionRotationObservation | null = null;
-  let discoveryScanUniverse = scannableInstrumentUniverse;
-  let scanUniverse = scannableInstrumentUniverse;
-  const lifecycleOwnedSymbols = new Set<string>([
-    ...activeStagedSetups
-      .filter((setup: any) => setup.execution_eligible !== false && setup.originating_zone)
-      .map((setup: any) => setup.symbol),
-    ...(activePendingOrders || []).map((order: any) => order.symbol),
-    ...openPosArr.map((position: any) => position.symbol),
-  ]);
-  if (rotatingImpulseScanEnabled) {
-    const rotationState = await loadRotatingImpulseState(supabase, userId, BOT_ID);
-    rotationSelection = selectRotatingImpulseUniverse(
-      scannableInstrumentUniverse,
-      rotatingImpulseSlotCount,
-      rotationState,
-      new Date().toISOString(),
-      lifecycleOwnedSymbols,
-    );
-    discoveryScanUniverse = rotationSelection.selected;
-    scanUniverse = Array.from(new Set([
-      ...discoveryScanUniverse,
-      ...Array.from(lifecycleDeepScanSymbols),
-    ])).filter((symbol) => scannableInstrumentUniverse.includes(symbol));
-    console.log(
-      `[scan ${scanCycleId}] Two-lane Impulse scan: discovery=${discoveryScanUniverse.length}/${fullInstrumentUniverse.length}, lifecycle=${scanUniverse.length - discoveryScanUniverse.length}; discovery=[${discoveryScanUniverse.join(", ")}], near-zone=[${Array.from(lifecycleDeepScanSymbols).join(", ")}]`,
-    );
-  }
-
-  // ── GAME PLAN: consume the dedicated active version ──
-  // game-plan-refresh is the only live generator and persistence owner. A
-  // missing, stale, or wrong-scope plan must never delay the trading scan.
+  // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
+  // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
+  // Config: gamePlanEnabled (bool), gamePlanNotify (bool), gamePlanRefreshHours (number)
+  // ═══════════════════════════════════════════════════════════════════════════
   let activeGamePlan: SessionGamePlan | null = null;
-  if (gamePlanEnabled) {
-    try {
-      const currentSessionName = getCurrentSession();
-      const lastGP = _lastGamePlanForValidation;
-      const reuseDecision = evaluateGamePlanReuse(lastGP, {
-        session: currentSessionName,
-        style: scanStylePolicy.style,
-      });
-      const lastPlanMatchesMarketScope = lastGP
-        ? gamePlanSymbolsMatchScope(
-          lastGP.plans.map((plan) => plan.symbol),
-          marketScheduleScope,
-        )
-        : false;
-
-      if (reuseDecision.reusable && lastGP && lastPlanMatchesMarketScope) {
-        activeGamePlan = lastGP;
-        console.log(
-          `[scan ${scanCycleId}] Game Plan: consuming active version ${lastGP.planVersion}`,
-        );
+  try {
+    const currentSessionName = getCurrentSession();
+    const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
+    const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
+    const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
+    const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
+    const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
+    if (gamePlanEnabled) {
+      // ── Session dedup: check if a game plan already exists for this session ──
+      // Primary approach: use contains filter on JSONB
+      let lastGP: any = null;
+      const { data: existingGP, error: gpQueryError } = await supabase
+        .from("scan_logs")
+        .select("id, created_at, details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .contains("details_json", { type: "game_plan" })
+        .order("created_at", { ascending: false })
+        .limit(1);
+      
+      if (gpQueryError || !existingGP || existingGP.length === 0) {
+        // Fallback: if contains filter fails or returns nothing, fetch recent scan_logs and filter in JS
+        if (gpQueryError) {
+          console.warn(`[scan ${scanCycleId}] Game Plan dedup: contains query failed (${gpQueryError.message}), using fallback`);
+        }
+        const { data: recentLogs } = await supabase
+          .from("scan_logs")
+          .select("id, created_at, details_json")
+          .eq("user_id", userId)
+          .eq("bot_id", BOT_ID)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        // Find the most recent game_plan entry by checking in JS
+        lastGP = (recentLogs || []).find((log: any) => log.details_json?.type === "game_plan") || null;
+        console.log(`[scan ${scanCycleId}] Game Plan dedup fallback: searched ${recentLogs?.length || 0} recent logs, found game_plan: ${!!lastGP}`);
       } else {
-        const unavailableReason = !lastGP
-          ? "missing_active_plan"
-          : !lastPlanMatchesMarketScope
-          ? "market_scope_changed"
-          : reuseDecision.reason;
-        console.warn(
-          `[scan ${scanCycleId}] Game Plan unavailable for consumption (${unavailableReason}); pair scanning continues and game-plan-refresh remains the sole live generator`,
-        );
+        lastGP = existingGP[0];
+        console.log(`[scan ${scanCycleId}] Game Plan dedup: found existing plan from ${lastGP?.created_at}`);
       }
-    } catch (error: any) {
-      activeGamePlan = null;
-      console.warn(
-        `[scan ${scanCycleId}] Game Plan consumer validation failed (${error?.message}); pair scanning continues`,
-      );
-    }
-  }
 
-  // ── Session-aware discovery priority observation ──
-  // Compare the existing least-recently-scanned universe with a proposal that
-  // reuses the canonical session, session-affinity, style, Gameplan, and
-  // lifecycle ownership. It is deliberately calculated after Gameplan loads,
-  // but it cannot replace discoveryScanUniverse/scanUniverse/scanOrder and it
-  // performs no candle or live-price fetches.
-  if (rotationSelection) {
-    const observationBase = {
-      contract: SESSION_AWARE_ROTATION_OBSERVATION_CONTRACT,
-      mode: "observe" as const,
-      affectsExecution: false as const,
-      additionalMarketDataCalls: 0 as const,
-      capturedAt: now.toISOString(),
-      style: scanStylePolicy.style,
-      session: cachedSession,
-      enabledSessionKeys: [...config.enabledSessions],
-      restrictedAssetSessionGateOpen,
-      offHoursImplicitlyAllowed,
-      actual: [...discoveryScanUniverse],
-      lifecycleExcludedSymbols: Array.from(lifecycleOwnedSymbols),
-    };
-    try {
-      const gamePlanFocusSymbols = gamePlanAffectsExecution
-        ? activeGamePlan?.focusPairs || []
-        : [];
-      const proposedRotationSelection = selectRotatingImpulseUniverse(
-        scannableInstrumentUniverse,
-        rotatingImpulseSlotCount,
-        rotationSelection.state,
-        now.toISOString(),
-        lifecycleOwnedSymbols,
-        {
-          style: scanStylePolicy.style,
-          session: cachedSession,
-          atMs: now.getTime(),
-          focusSymbols: gamePlanFocusSymbols,
-        },
-      );
-      const actualSet = new Set(discoveryScanUniverse);
-      const proposedSet = new Set(proposedRotationSelection.selected);
-      const overlap = discoveryScanUniverse.filter((symbol) => proposedSet.has(symbol));
-      sessionRotationObservation = {
-        ...observationBase,
-        status: "ready",
-        gamePlanFocusApplied: gamePlanAffectsExecution,
-        gamePlanFocusSymbols,
-        proposed: [...proposedRotationSelection.selected],
-        overlap,
-        overlapCount: overlap.length,
-        overlapPercent: discoveryScanUniverse.length > 0
-          ? Math.round((overlap.length / discoveryScanUniverse.length) * 1000) / 10
-          : 100,
-        wouldPromote: proposedRotationSelection.selected.filter((symbol) =>
-          !actualSet.has(symbol)
-        ),
-        wouldDefer: discoveryScanUniverse.filter((symbol) => !proposedSet.has(symbol)),
-        preferredCapacity: proposedRotationSelection.priority?.preferredCapacity || 0,
-        preferredSelected: proposedRotationSelection.priority?.preferredSelected || 0,
-        fairnessSelected: proposedRotationSelection.priority?.fairnessSelected || 0,
-        selection: proposedRotationSelection.priority?.selected || [],
-      };
-      console.log(
-        `[scan ${scanCycleId}] Session-aware rotation observation: ${overlap.length}/${discoveryScanUniverse.length} actual slots matched; proposed=[${proposedRotationSelection.selected.join(", ")}], actual=[${discoveryScanUniverse.join(", ")}]`,
-      );
-    } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      sessionRotationObservation = {
-        ...observationBase,
-        status: "unavailable",
-        unavailableReason: reason,
-      };
-      console.warn(
-        `[scan ${scanCycleId}] Session-aware rotation observation unavailable (non-fatal): ${reason}`,
-      );
+      const lastGPSession = lastGP?.details_json?.session;
+      const lastGPType = lastGP?.details_json?.type;
+      const lastGPTime = lastGP?.created_at ? new Date(lastGP.created_at).getTime() : 0;
+      const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
+      const isSameSession = lastGPType === "game_plan" && lastGPSession === currentSessionName;
+      const isStillFresh = hoursSinceLastGP < gamePlanRefreshHours;
+
+      console.log(`[scan ${scanCycleId}] Game Plan dedup check: session=${currentSessionName}, lastSession=${lastGPSession}, sameSession=${isSameSession}, hoursSince=${hoursSinceLastGP.toFixed(2)}, fresh=${isStillFresh}, refreshHours=${gamePlanRefreshHours}`);
+
+      if (isSameSession && isStillFresh) {
+        // Reuse existing game plan for trade filtering — don't regenerate or notify
+        try {
+          const cached = lastGP.details_json;
+          activeGamePlan = {
+            session: cached.session,
+            generatedAt: cached.generated_at,
+            plans: cached.plans || [],
+            focusPairs: cached.focus_pairs || [],
+            newsEvents: cached.newsEvents || [],
+            summary: cached.summary || "",
+          } as SessionGamePlan;
+          console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING ${currentSessionName} plan (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h) — NO notification sent`);
+        } catch (e: any) {
+          console.warn(`[scan ${scanCycleId}] Game Plan: failed to parse cached plan, will regenerate: ${e?.message}`);
+        }
+      } else {
+        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${!lastGP ? 'no existing plan found' : !isSameSession ? `session changed (${lastGPSession} → ${currentSessionName})` : `plan expired (${hoursSinceLastGP.toFixed(1)}h > ${gamePlanRefreshHours}h)`}`);
+      }
+
+      if (!activeGamePlan) {
+      console.log(`[scan ${scanCycleId}] Game Plan: generating NEW plan for ${currentSessionName} session...`);
+      const instrumentPlans: InstrumentGamePlan[] = [];
+      // Fetch HTF data for each enabled instrument (batched to respect rate limits)
+      const GP_BATCH_SIZE = 3;
+      const GP_BATCH_DELAY = 1200;
+      for (let i = 0; i < config.instruments.length; i += GP_BATCH_SIZE) {
+        const batch = config.instruments.slice(i, i + GP_BATCH_SIZE);
+        const batchPlans = await Promise.all(batch.map(async (sym: string) => {
+          try {
+            // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
+            const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
+              cachedFetch(sym, "1d", "1y"),
+              cachedFetch(sym, "4h", "1mo"),
+              cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
+              cachedFetch(sym, "1h", "5d"),
+            ]);
+            if (gpDaily.length < 10 || gpEntry.length < 10) return null;
+            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled, equalHighsLowsSensitivity: config.equalHighsLowsSensitivity, liquidityPoolMinTouches: config.liquidityPoolMinTouches });
+          } catch (e: any) {
+            console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
+            return null;
+          }
+        }));
+        for (const plan of batchPlans) {
+          if (plan) instrumentPlans.push(plan);
+        }
+        if (i + GP_BATCH_SIZE < config.instruments.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
+      }
+      if (instrumentPlans.length > 0) {
+        activeGamePlan = buildSessionGamePlan(currentSessionName, instrumentPlans);
+        console.log(`[scan ${scanCycleId}] Game Plan: ${currentSessionName} — ${activeGamePlan.focusPairs.length} focus pairs: [${activeGamePlan.focusPairs.join(", ")}]`);
+        for (const plan of instrumentPlans) {
+          const emoji = plan.bias === "bullish" ? "🟢" : plan.bias === "bearish" ? "🔴" : "⚪";
+          console.log(`[scan ${scanCycleId}] Game Plan ${emoji} ${plan.symbol}: ${plan.bias} (${plan.biasConfidence}%) | DOL: ${plan.dol?.description || "none"} | Regime: ${plan.regime} | Trade: ${plan.tradeable}`);
+        }
+        // Fetch economic calendar events and enrich game plan with news awareness
+        try {
+          const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+          const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+          const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
+          if (newsEvents.length > 0) {
+            activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
+            console.log(`[scan ${scanCycleId}] Game Plan: ${newsEvents.length} news events found (${newsEvents.filter(e => e.impact === "high").length} high-impact)`);
+            // ── News Impact Analysis: understand WHAT the news means ──
+            try {
+              const newsImpacts = analyzeNewsImpact(newsEvents as any);
+              const impactSummaries: string[] = [];
+              for (const impact of newsImpacts) {
+                if (impact.directionalImpact !== "unknown" && impact.directionalImpact !== "neutral") {
+                  impactSummaries.push(impact.reasoning);
+                }
+              }
+              // Enrich each instrument plan with news directional bias
+              for (const plan of activeGamePlan.plans) {
+                const pairBias = getNewsPairBias(plan.symbol, newsImpacts);
+                (plan as any).newsBias = {
+                  pairBias: pairBias.pairBias,
+                  strength: pairBias.netStrength,
+                  summary: pairBias.summary,
+                  baseBias: pairBias.baseBias.bias,
+                  quoteBias: pairBias.quoteBias.bias,
+                };
+                // If news strongly supports or opposes the technical bias, note it
+                if (pairBias.netStrength >= 40) {
+                  const aligned = (plan.bias === "bullish" && pairBias.pairBias === "bullish") ||
+                                  (plan.bias === "bearish" && pairBias.pairBias === "bearish");
+                  if (aligned) {
+                    (plan as any).newsConfirmation = `NEWS CONFIRMS: ${pairBias.summary}`;
+                  } else if (plan.bias !== "neutral" && pairBias.pairBias !== "neutral") {
+                    (plan as any).newsConflict = `⚠ NEWS CONFLICTS: ${pairBias.summary}`;
+                  }
+                }
+              }
+              if (impactSummaries.length > 0) {
+                activeGamePlan.summary += `\n\n📊 News Impact Analysis:\n` + impactSummaries.join("\n");
+              }
+              // Store impacts for the trade filter to use
+              (activeGamePlan as any).newsImpacts = newsImpacts.map(i => ({
+                name: i.event.name, currency: i.event.currency, impact: i.event.impact,
+                directionalImpact: i.directionalImpact, confidence: i.confidence,
+                reasoning: i.reasoning, category: i.category,
+                actual: i.event.actual, forecast: i.event.forecast, previous: i.event.previous,
+              }));
+              console.log(`[scan ${scanCycleId}] News Impact: ${newsImpacts.length} events analyzed, ${impactSummaries.length} with directional signal`);
+            } catch (nie: any) {
+              console.warn(`[scan ${scanCycleId}] News Impact analysis error (non-fatal): ${nie?.message}`);
+            }
+          } else {
+            console.log(`[scan ${scanCycleId}] Game Plan: no relevant news events today`);
+          }
+        } catch (e: any) {
+          console.warn(`[scan ${scanCycleId}] Game Plan: news fetch error (non-fatal): ${e?.message}`);
+        }
+        // Store game plan in scan_logs for dashboard retrieval
+        await supabase.from("scan_logs").insert({
+          user_id: userId,
+          bot_id: BOT_ID,
+          pairs_scanned: 0,
+          signals_found: 0,
+          trades_placed: 0,
+          details_json: {
+            type: "game_plan",
+            session: currentSessionName,
+            generated_at: activeGamePlan.generatedAt,
+            focus_pairs: activeGamePlan.focusPairs,
+            plans: activeGamePlan.plans.map(p => ({
+              symbol: p.symbol, bias: p.bias, biasConfidence: p.biasConfidence,
+              biasReasoning: p.biasReasoning, dol: p.dol, regime: p.regime,
+              amdPhase: p.amdPhase, zone: p.zone, htfTrend: p.htfTrend,
+              h4Trend: p.h4Trend, tradeable: p.tradeable, skipReason: p.skipReason,
+              scenarios: p.scenarios, keyLevels: p.keyLevels.slice(0, 10),
+              newsBias: (p as any).newsBias || null,
+              newsConfirmation: (p as any).newsConfirmation || null,
+              newsConflict: (p as any).newsConflict || null,
+            })),
+            newsEvents: activeGamePlan.newsEvents || [],
+            newsImpacts: (activeGamePlan as any).newsImpacts || [],
+            summary: activeGamePlan.summary,
+          },
+        });
+        // Send Telegram notification with game plan summary (only for NEW plans, respects gamePlanNotify toggle)
+        if (gamePlanNotify && telegramChatIds.length > 0 && shouldNotify("game_plan") && activeGamePlan.summary) {
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: activeGamePlan!.summary }),
+              });
+            } catch (e: any) {
+              console.warn(`[game-plan] Telegram send error [${chatId}]: ${e?.message}`);
+            }
+          }));
+        } else if (!gamePlanNotify) {
+          console.log(`[scan ${scanCycleId}] Game Plan: Telegram notifications disabled by config`);
+        }
+      } else {
+        console.warn(`[scan ${scanCycleId}] Game Plan: no valid plans generated (insufficient data)`);
+      }
+      } // close if (!activeGamePlan) — new plan generation block
     }
+  } catch (e: any) {
+    console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
   }
 
   // ── Phase 6: Focus Pair Priority ──
   // Reorder instruments so game-plan focus pairs are scanned first.
   // When max positions are limited, this gives focus pairs first shot at available slots.
   // Non-focus pairs are still scanned if capacity remains.
-  let scanOrder = [...scanUniverse];
-  if (gamePlanAffectsExecution && activeGamePlan?.focusPairs?.length) {
+  let scanOrder = [...config.instruments];
+  if (activeGamePlan && activeGamePlan.focusPairs && activeGamePlan.focusPairs.length > 0) {
     const focusSet = new Set(activeGamePlan.focusPairs);
     const focusPairs = scanOrder.filter(p => focusSet.has(p));
     const nonFocusPairs = scanOrder.filter(p => !focusSet.has(p));
@@ -3456,10 +3638,6 @@ async function runScanForUser(
   // Daily candles change once/day, weekly once/week. Loading from DB saves
   // ~34 TwelveData API calls per cycle, keeping us within the 50/min limit.
   const cacheableRequests: Array<{ symbol: string; interval: string }> = [];
-  // Observation-only Phase 1 per-timeframe evidence for this scan cycle.
-  // Collected per pair, written in bounded awaited chunks after the loop.
-  const zoneEvidenceRows: EvidenceRow[] = [];
-  const candleSnapshotRows: any[] = [];
   for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) continue;
     cacheableRequests.push({ symbol: pair, interval: "1d" });
@@ -3483,70 +3661,7 @@ async function runScanForUser(
   // Track which daily/weekly candles were freshly fetched (to persist after scan)
   const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
 
-  // ── Hand-marked impulses ──
-  // An active marking OVERRIDES automatic impulse detection for its symbol. It
-  // bypasses nothing else: every gate still runs, and the Direction Verdict may
-  // still veto. Loaded once per cycle rather than per pair.
-  const manualImpulseBySymbol = new Map<string, any>();
-  const manualImpulseRetirements: Promise<void>[] = [];
-  try {
-    const { data: markings } = await supabase.from("manual_impulses")
-      .select("id,symbol,direction,high,low,timeframe,expires_at,high_time,low_time")
-      .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "active")
-      .gt("expires_at", new Date().toISOString());
-    for (const row of markings || []) manualImpulseBySymbol.set(row.symbol, row);
-    if (manualImpulseBySymbol.size > 0) {
-      console.log(`[scan ${scanCycleId}] manual impulses active: ${[...manualImpulseBySymbol.keys()].join(", ")}`);
-    }
-  } catch (e: any) {
-    console.warn(`[scan ${scanCycleId}] manual impulse load failed (non-fatal): ${e?.message}`);
-  }
-
-  /** Retire a marking the market has moved past, so the UI can say why. */
-  const retireManualImpulse = async (id: string, reason: string, detail: string): Promise<void> => {
-    try {
-      await supabase.from("manual_impulses").update({
-        status: reason === "origin_already_broken" ? "invalidated" : "cancelled",
-        resolution_reason: reason,
-        last_resolution_detail: detail,
-        last_resolved_at: new Date().toISOString(),
-      }).eq("id", id);
-    } catch (e: any) {
-      console.warn(`[scan ${scanCycleId}] could not retire manual impulse ${id}: ${e?.message}`);
-    }
-  };
-
-  await markScannerOperation(
-    supabase,
-    opts?.operationRunId,
-    "pair_processing_started",
-    {
-      status: "running",
-      expected_pairs: scanOrder.length,
-      processed_pairs: 0,
-    },
-  );
-
-  for (let pairIndex = 0; pairIndex < scanOrder.length; pairIndex++) {
-    const pair = scanOrder[pairIndex];
-    await markScannerOperation(
-      supabase,
-      opts?.operationRunId,
-      "pair_processing",
-      {
-        status: "running",
-        expected_pairs: scanOrder.length,
-        processed_pairs: pairIndex,
-        metadata: { current_pair: pair },
-      },
-    );
-    if (scanLockToken) {
-      await heartbeatScannerLock(supabase, {
-        userId,
-        botId: BOT_ID,
-        token: scanLockToken,
-      });
-    }
+  for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
@@ -3559,8 +3674,19 @@ async function runScanForUser(
     const pairAssetProfile = getAssetProfile(pair);
     // Session gate: empty enabledSessions = NOTHING enabled (bot pauses).
     // Off-hours is implicitly allowed when all 3 core sessions are enabled (user wants 24/5).
-    if (!pairAssetProfile.skipSessionGate && !restrictedAssetSessionGateOpen) {
+    const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
+    const offHoursImplicitlyAllowed = normalizedSession === "offhours" && coreSessionsEnabled;
+    if (!pairAssetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions) && !offHoursImplicitlyAllowed) {
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
+      continue;
+    }
+
+    // Skip non-crypto instruments on weekends (Fri 17:00 ET → Sun 17:00 ET).
+    // BUG FIX: use nyDay (NY local day) instead of utcDay to avoid UTC/NY day mismatch
+    // e.g. Thursday 9PM NY = Friday 01:00 UTC → utcDay was 5 (Fri), triggering false weekend close
+    const fxIsClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
+    if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
+      scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
     }
 
@@ -3574,92 +3700,45 @@ async function runScanForUser(
     let pairConfig = { ...config };
     // Apply per-pair gate overrides (if configured for this symbol)
     applyPairOverrides(pairConfig, pair);
-    const singleOwnershipEnforcementRequested =
-      ["enforce", "enforce_live"].includes((pairConfig as any).singleOwnershipMode);
-    const pairRuntimeConfigSnapshot = await buildFrozenRuntimeConfigSnapshot(
-      styleResolution,
-      pairConfig,
-    );
 
     // Determine entry TF based on style
     const entryInterval = getEntryInterval(pairConfig.entryTimeframe);
     const entryRange = getEntryRange(pairConfig.entryTimeframe);
 
-    // Fetch the exact policy-authoritative structural timeframes plus the
-    // legacy datasets still consumed by non-style-aware modules.
+    // Fetch entry TF, daily, 4H (for multi-TF regime), optionally 1h, and SMT correlated pair candles in parallel
+    const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
     const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
     const smtFlag = smtPair && SUPPORTED_SYMBOLS[smtPair] ? 1 : 0;
     const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
-    const needsWeekly = timeframeAuthority.requiredStructuralTimeframes.includes("1w") ||
-      pairConfig.ictHTFEnabled !== false;
-    const needsMonthly = !!config.smcEnhancements?.enableMonthlyContainment;
-    const requiredIntervals = new Map<string, string>();
-    const requireInterval = (interval: string, range: string) => {
-      if (!requiredIntervals.has(interval)) requiredIntervals.set(interval, range);
-    };
-    requireInterval(entryInterval, entryRange);
-    requireInterval(
-      timeframeAuthority.roles.confirmation,
-      timeframeFetchRange(timeframeAuthority.roles.confirmation),
-    );
-    requireInterval(
-      timeframeAuthority.roles.refinement,
-      timeframeFetchRange(timeframeAuthority.roles.refinement),
-    );
-    requireInterval("1d", "1y");
-    requireInterval("1h", "5d");
-    if (
-      multiTFRegimeEnabled ||
-      timeframeAuthority.requiredStructuralTimeframes.includes("4h")
-    ) {
-      requireInterval("4h", "1mo");
-    }
-    for (const timeframe of timeframeAuthority.requiredStructuralTimeframes) {
-      requireInterval(timeframe, timeframeFetchRange(timeframe));
-    }
-    if (needsWeekly) requireInterval("1w", "1y");
-    if (needsMonthly) requireInterval("1M", "5y");
-
-    const requestEntries = Array.from(requiredIntervals.entries());
-    const smtPromise = smtFlag
-      ? cachedFetch(smtPair!, entryInterval, entryRange)
-      : Promise.resolve([] as Candle[]);
-    const fetched = await Promise.all([
-      ...requestEntries.map(([interval, range]) =>
-        cachedFetch(pair, interval, range)
-      ),
-      smtPromise,
-    ]);
-    const fetchedByInterval = new Map<string, Candle[]>();
-    requestEntries.forEach(([interval], index) => {
-      fetchedByInterval.set(interval, fetched[index] || []);
-    });
-
-    for (const [timeframe, timeframeCandles] of fetchedByInterval.entries()) {
-      const bounded = timeframeCandles.slice(-500);
-      if (bounded.length === 0) continue;
-      candleSnapshotRows.push({
-        user_id: userId, bot_id: BOT_ID, scan_cycle_id: scanCycleId, symbol: pair, timeframe,
-        provider: _scanCandleSources.get(`|`) || (persistentCache.has(`:`) ? "kv_cache" : "scan_cache"),
-        observed_at: scanStartedAt,
-        completed_candle_cutoff: bounded[bounded.length - 1]?.datetime || null,
-        candle_count: bounded.length,
-        candles: bounded.map((c: Candle) => ({ datetime: c.datetime, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? null })),
-      });
-    }
-
-    const candles = fetchedByInterval.get(entryInterval) || [];
-    const dailyCandles = fetchedByInterval.get("1d") || [];
-    const h4Candles = fetchedByInterval.get("4h") || [];
-    const hourlyCandles = fetchedByInterval.get("1h") || [];
-    const m15Candles = fetchedByInterval.get("15m") || [];
-    const smtCandles = smtFlag ? fetched[requestEntries.length] : null;
-    const weeklyCandles = needsWeekly
-      ? fetchedByInterval.get("1w") || null
-      : null;
-    const monthlyCandles = needsMonthly
-      ? fetchedByInterval.get("1M") || null
-      : null;
+    // Style-aware: scalper needs 15m for structure TF, swing needs weekly for bias TF
+    const needsM15 = resolvedStyle === "scalper" && entryInterval !== "15m";
+    const needsWeekly = resolvedStyle === "swing_trader" || pairConfig.ictHTFEnabled !== false;
+    const fetchPromises: Promise<Candle[]>[] = [
+      cachedFetch(pair, entryInterval, entryRange),
+      cachedFetch(pair, "1d", "1y"),
+    ];
+    // Always fetch 4H for multi-TF regime + HTF POI detection
+    if (multiTFRegimeEnabled) fetchPromises.push(cachedFetch(pair, "4h", "1mo"));
+    // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
+    fetchPromises.push(cachedFetch(pair, "1h", "5d"));
+    // Scalper structure TF: fetch 15m candles (separate from 5m entry)
+    if (needsM15) fetchPromises.push(cachedFetch(pair, "15m", "5d"));
+    if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
+    // Fetch weekly candles for ICT HTF framework OR swing_trader bias (cached — same data reused across pairs)
+    if (needsWeekly) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
+    const fetched = await Promise.all(fetchPromises);
+    const candles = fetched[0];
+    const dailyCandles = fetched[1];
+    const h4Candles: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
+    const h4Offset = multiTFRegimeEnabled ? 1 : 0;
+    // 1H candles always fetched (index = 2 + h4Offset)
+    const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
+    // 15m candles for scalper structure TF (only fetched when needsM15)
+    const m15Offset = needsM15 ? 1 : 0;
+    const m15Candles: Candle[] = needsM15 ? (fetched[3 + h4Offset] || []) : [];
+    const smtCandles = smtFlag ? fetched[3 + h4Offset + m15Offset] : null;
+    // Weekly candles (last in fetch array when needed)
+    const weeklyCandles: Candle[] | null = needsWeekly ? (fetched[fetched.length - 1] || null) : null;
     // Legacy alias for ICT HTF active check (used downstream)
     const ictHTFActive = pairConfig.ictHTFEnabled !== false;
 
@@ -3685,51 +3764,6 @@ async function runScanForUser(
       ? symbolBufferOverride
       : pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
     const adjustedMinConfluence = Math.max(1, pairConfig.minConfluence + pairAssetProfileInner.minConfluenceAdj);
-    const pairStylePolicy = await buildResolvedStylePolicy({
-      resolution: styleResolution,
-      config: {
-        ...pairConfig,
-        slBufferPips: adjustedSlBuffer,
-      },
-      baseConfig: config,
-      symbol: pair,
-      effectiveMinConfluence: adjustedMinConfluence,
-    });
-    const roleCandles = bindTimeframeCandles(
-      timeframeAuthority,
-      buildTimeframeCandleMap<Candle>([
-        ...requestEntries.map(([timeframe]) => ({
-          timeframe,
-          candles: fetchedByInterval.get(timeframe) || [],
-        })),
-        { timeframe: entryInterval, candles },
-        { timeframe: "15m", candles: m15Candles },
-        { timeframe: "1h", candles: hourlyCandles },
-        { timeframe: "4h", candles: h4Candles },
-        { timeframe: "1d", candles: dailyCandles },
-        { timeframe: "1w", candles: weeklyCandles },
-      ]),
-    );
-    const pairDecisionEvidence: StyleDecisionEvidence =
-      buildStyleDecisionEvidence(timeframeAuthority, roleCandles, {
-        h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback,
-        h1BosLookback: pairConfig.simpleDirectionH1BosLookback,
-        confirmedTrendFibFactor: pairConfig.confirmedTrendFibFactor,
-        confirmedTrendSwingLookback:
-          pairConfig.confirmedTrendSwingLookback,
-        useConfirmedTrend: pairConfig.useConfirmedTrend,
-      });
-    const canonicalStructureAuthority = buildCanonicalStructureAuthority(
-      roleCandles.structure,
-      { symbol: pair, timeframe: timeframeAuthority.roles.structure },
-    );
-    const canonicalConfirmationStructure = buildCanonicalStructureAuthority(
-      roleCandles.confirmation,
-      { symbol: pair, timeframe: timeframeAuthority.roles.confirmation },
-    );
-    const canonicalLiquiditySequence = buildCanonicalLiquiditySequences(
-      canonicalConfirmationStructure,
-    );
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
@@ -3883,17 +3917,71 @@ async function runScanForUser(
     (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
-    // Uses the same immutable evidence snapshot as GP, DV and thesis.
+    // Style-aware: scalper uses 1H/15m/5m, swing uses Weekly/Daily/4H, day_trader uses Daily/4H/1H (original)
     let simpleDirectionResult: DirectionResult | null = null;
+    let styleDirectionResult: StyleDirectionResult | null = null;
     if (pairConfig.useSimpleDirection) {
       try {
-        const evidenceDirection = pairDecisionEvidence.simpleDirection;
-        simpleDirectionResult = evidenceDirection;
+        const dirConfig = {
+          h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
+          h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
+          useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
+          fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
+          trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
+        };
 
-        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${evidenceDirection.direction ?? "null"} | bias=${evidenceDirection.bias}(${evidenceDirection.biasSource}) | struct-retrace=${evidenceDirection.h4Retrace} | struct-choch-against=${evidenceDirection.h4ChochAgainst} | confirm-bos=${evidenceDirection.h1Confirmed} | ${evidenceDirection.reason}`);
+        if (resolvedStyle === "scalper") {
+          // Scalper: bias=1H, structure=15m, confirm=5m (entry candles)
+          const tfLabels = STYLE_TF_LABELS.scalper;
+          styleDirectionResult = determineDirectionStyleAware(
+            hourlyCandles.length >= 20 ? hourlyCandles : null,
+            m15Candles.length >= 20 ? m15Candles : null,
+            candles.length >= 20 ? candles : null,
+            { ...dirConfig, ...tfLabels },
+          );
+          // Map StyleDirectionResult to DirectionResult for downstream compatibility
+          simpleDirectionResult = {
+            direction: styleDirectionResult.direction,
+            bias: styleDirectionResult.bias,
+            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            h4Retrace: styleDirectionResult.structureRetrace,
+            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
+            h1Confirmed: styleDirectionResult.confirmBOS,
+            reason: `[scalper] ${styleDirectionResult.reason}`,
+          };
+        } else if (resolvedStyle === "swing_trader") {
+          // Swing: bias=Weekly, structure=Daily, confirm=4H
+          const tfLabels = STYLE_TF_LABELS.swing_trader;
+          styleDirectionResult = determineDirectionStyleAware(
+            weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : null,
+            dailyCandles.length >= 20 ? dailyCandles : null,
+            h4Candles.length >= 20 ? h4Candles : null,
+            { ...dirConfig, ...tfLabels },
+          );
+          // Map StyleDirectionResult to DirectionResult for downstream compatibility
+          simpleDirectionResult = {
+            direction: styleDirectionResult.direction,
+            bias: styleDirectionResult.bias,
+            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            h4Retrace: styleDirectionResult.structureRetrace,
+            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
+            h1Confirmed: styleDirectionResult.confirmBOS,
+            reason: `[swing] ${styleDirectionResult.reason}`,
+          };
+        } else {
+          // Day trader (default): bias=Daily, structure=4H, confirm=1H — original function
+          simpleDirectionResult = determineDirection(
+            dailyCandles.length >= 20 ? dailyCandles : null,
+            h4Candles.length >= 20 ? h4Candles : null,
+            hourlyCandles.length >= 20 ? hourlyCandles : null,
+            dirConfig,
+          );
+        }
+
+        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | struct-retrace=${simpleDirectionResult.h4Retrace} | struct-choch-against=${simpleDirectionResult.h4ChochAgainst} | confirm-bos=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
         // Pass override direction to confluenceScoring
-        if (evidenceDirection.direction !== null) {
-          (pairConfig as any)._overrideDirection = evidenceDirection.direction;
+        if (simpleDirectionResult.direction !== null) {
+          (pairConfig as any)._overrideDirection = simpleDirectionResult.direction;
         } else {
           // No direction = skip this pair (direction engine says no trade)
           (pairConfig as any)._overrideDirection = null; // explicit null = force no-direction
@@ -3908,7 +3996,7 @@ async function runScanForUser(
     // Pass the per-instrument game plan data into the confluence engine so it can
     // use bias, DOL, key levels, and focus-pair status for scoring and TP placement.
     // The game plan is generated once per session (Layer 2) and consumed here (Layer 3).
-    if (activeGamePlan && gamePlanAffectsExecution) {
+    if (activeGamePlan) {
       const pairPlan = activeGamePlan.plans.find((p: InstrumentGamePlan) => p.symbol === pair) || null;
       (pairConfig as any)._gamePlanContext = pairPlan ? {
         bias: pairPlan.bias,
@@ -3927,12 +4015,7 @@ async function runScanForUser(
      }
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
-    const analysis: ReturnType<typeof runConfluenceAnalysis> & {
-      _canonicalDealingRangeAvailable?: boolean;
-      _canonicalDealingRangeEvaluation?: ReturnType<
-        typeof evaluateCanonicalDealingRange
-      >;
-    } = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
+    const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
 
@@ -3941,10 +4024,6 @@ async function runScanForUser(
 
     const detail: any = {
       pair,
-      canonicalStructureAuthority,
-      canonicalConfirmationStructure,
-      canonicalLiquiditySequence,
-      crossTimeframeAuthority,
       score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
@@ -4021,7 +4100,6 @@ async function runScanForUser(
       },
       status: "analyzed",
       tradingStyle: resolvedStyle,
-      stylePolicy: pairStylePolicy,
       // FIX #10: detectOptimalStyle — suggests the best style based on current market conditions
       suggestedStyle: (() => {
         try {
@@ -4188,220 +4266,15 @@ async function runScanForUser(
       },
     };
 
-    const legacyGateDiagnostics: any[] = [];
-    const legacyGateBlocks = (code: string, passed: boolean, reason: string) => {
-      const disposition = evaluateAuthorityGateDisposition({
-        code, passed, requestedMode: (pairConfig as any).singleOwnershipMode,
-        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-      });
-      legacyGateDiagnostics.push({ ...disposition, reason });
-      detail.legacyGateDiagnostics = legacyGateDiagnostics;
-      return disposition.blocksAuthorization;
-    };
-
-    // ── DIRECTION VERDICT (single source of truth for direction) ──
-    // Moved BEFORE zone engine so the impulse search direction aligns with HTF consensus.
-    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
-    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
-    let directionVerdict: DirectionVerdictResult | null = null;
-    let activeDirectionVerdict: DirectionVerdictDecision | null = null;
-    let earlyWeeklyBias: { bias: string; confidence: number } | null = null;
-    try {
-      const gpCtx = (pairConfig as any)._gamePlanContext;
-      const ctResult = (pairConfig as any).useConfirmedTrend !== false
-        ? pairDecisionEvidence.confirmedTrend
-        : null;
-      // Weekly context belongs to the decision only when Weekly is the
-      // active style's bias role (Swing). Scalper/Day Trader no longer receive
-      // an unrelated weekly vote.
-      const _earlyWeeklyBiasResult =
-        timeframeAuthority.roles.bias === "1w" &&
-          weeklyCandles && weeklyCandles.length >= 12
-        ? analyzeWeeklyBiasAndDOL(weeklyCandles, analysis.lastPrice)
-        : null;
-      if (_earlyWeeklyBiasResult) {
-        earlyWeeklyBias = { bias: _earlyWeeklyBiasResult.bias, confidence: _earlyWeeklyBiasResult.confidence };
-      }
-      directionVerdict = computeDirectionVerdict({
-        decisionEvidence: pairDecisionEvidence,
-        confirmedTrend: ctResult,
-        simpleDirection: simpleDirectionResult ? {
-          direction: simpleDirectionResult.direction,
-          bias: simpleDirectionResult.bias,
-          biasSource: simpleDirectionResult.biasSource,
-          h4Retrace: simpleDirectionResult.h4Retrace,
-          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
-          h1Confirmed: simpleDirectionResult.h1Confirmed,
-          reason: simpleDirectionResult.reason,
-        } : null,
-        regime: pairDecisionEvidence.biasRegime ? {
-          regime: pairDecisionEvidence.biasRegime.regime,
-          confidence: pairDecisionEvidence.biasRegime.confidence,
-          directionalBias:
-            pairDecisionEvidence.biasRegime.directionalBias,
-        } : null,
-        weeklyBias: earlyWeeklyBias ? {
-          bias: earlyWeeklyBias.bias as "bullish" | "bearish" | "neutral",
-          confidence: earlyWeeklyBias.confidence,
-        } : null,
-        gamePlanBias: pairConfig.gpEnforcementMode !== "off" && gpCtx ? {
-          bias: gpCtx.bias,
-          confidence: gpCtx.biasConfidence ?? 50,
-        } : null,
-      });
-      activeDirectionVerdict = await persistActiveDirectionVerdict(
-        supabase,
-        {
-          userId,
-          botId: BOT_ID,
-          symbol: pair,
-          verdict: directionVerdict,
-          gamePlan: activeGamePlan,
-          sourceCandleTimestamp:
-            candles[candles.length - 1]?.datetime || null,
-          scanCycleId,
-          stylePolicy: pairStylePolicy,
-        },
-      );
-      _activeDirectionVerdicts.set(pair, activeDirectionVerdict);
-      (detail as any).directionVerdict = {
-        id: activeDirectionVerdict.id,
-        verdictVersion: activeDirectionVerdict.verdictVersion,
-        gamePlanId: activeDirectionVerdict.gamePlanId,
-        gamePlanVersion: activeDirectionVerdict.gamePlanVersion,
-        verdict: directionVerdict.verdict,
-        confidence: directionVerdict.confidence,
-        agreement: directionVerdict.agreement,
-        shouldBlock: directionVerdict.shouldBlock,
-        blockReason: directionVerdict.blockReason,
-        scoreAdjustment: directionVerdict.scoreAdjustment,
-        summary: directionVerdict.summary,
-        evaluatedAt: activeDirectionVerdict.evaluatedAt,
-        expiresAt: activeDirectionVerdict.expiresAt,
-        sourceCandleTimestamp:
-          activeDirectionVerdict.sourceCandleTimestamp,
-      };
-      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict (pre-zone): ${directionVerdict.summary}`);
-    } catch (dvErr: any) {
-      activeDirectionVerdict = null;
-      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict authority unavailable: ${dvErr?.message}`);
-      (detail as any).directionVerdict = { error: dvErr?.message };
-    }
-
-    // ── Effective direction for zone engine ──
-    // ── DIRECTION AUTHORITY: Verdict is the single source of truth ──
-    // If verdict blocks or is neutral → no trade (no 15m fallback).
-    // If verdict has a direction → that IS the direction, period.
-    // If verdict contradicts 15m scoring → flag conflict but use verdict.
-    let effectiveDirection: "long" | "short" | null = null;
-    let directionSource: "verdict" | "15m_fallback" | "blocked" = "blocked";
-    let directionConflict = false;
-
-    if (directionVerdict && directionVerdict.shouldBlock) {
-      // Verdict explicitly blocks — no trade
-      effectiveDirection = null;
-      directionSource = "blocked";
-      console.log(`[scan ${scanCycleId}] ${pair} Direction BLOCKED: ${directionVerdict.blockReason}`);
-    } else if (directionVerdict && directionVerdict.verdict !== "neutral") {
-      // Verdict has a clear direction — use it unconditionally
-      effectiveDirection = directionVerdict.verdict as "long" | "short";
-      directionSource = "verdict";
-      // Check for conflict with 15m scoring (informational, does not change direction)
-      if (analysis.direction && analysis.direction !== effectiveDirection) {
-        directionConflict = true;
-        console.log(`[scan ${scanCycleId}] ${pair} Direction CONFLICT: verdict=${effectiveDirection}, 15m=${analysis.direction} — using verdict`);
-      }
-    } else if (directionVerdict && directionVerdict.verdict === "neutral") {
-      // Verdict is neutral (below confidence or agreement threshold) — block
-      effectiveDirection = null;
-      directionSource = "blocked";
-      console.log(`[scan ${scanCycleId}] ${pair} Direction NEUTRAL (blocked): ${directionVerdict.summary}`);
-    } else {
-      // Preserve the current fallback while recording the fail-closed comparison.
-      const directionAvailability = resolveDirectionAvailability({
-        mode: (pairConfig as any).canonicalScannerMode === "enforce"
-          ? "fail_closed" : (pairConfig as any).directionUnavailableMode,
-        verdictDirection: null,
-        legacyDirection: analysis.direction,
-      });
-      (detail as any).directionAvailabilityPolicy = directionAvailability;
-      effectiveDirection = directionAvailability.selectedDirection;
-      directionSource = effectiveDirection ? "15m_fallback" : "blocked";
-      console.log(`[scan ${scanCycleId}] ${pair} Direction authority unavailable: current=${effectiveDirection || "wait"}, fail-closed wouldWait=${directionAvailability.wouldWait}`);
-    }
-    if (directionVerdict?.verdict === "long" || directionVerdict?.verdict === "short") {
-      (detail as any).directionAvailabilityPolicy = resolveDirectionAvailability({
-        mode: (pairConfig as any).directionUnavailableMode,
-        verdictDirection: directionVerdict.verdict,
-        legacyDirection: analysis.direction,
-      });
-    }
-
-    // ── DIRECTION SYNC: overwrite analysis.direction with verdict direction ──
-    // This ensures ALL downstream code (SL/TP, pending orders, trade execution, broker)
-    // uses the authoritative verdict direction, not the 15m confluenceScoring direction.
-    if (effectiveDirection && effectiveDirection !== analysis.direction) {
-      console.log(`[scan ${scanCycleId}] ${pair} Direction SYNC: analysis.direction ${analysis.direction} → ${effectiveDirection} (source: ${directionSource})`);
-      analysis.direction = effectiveDirection;
-    }
-    // `detail` is created before Direction Verdict runs. Keep the persisted
-    // scan row aligned with the direction that downstream zone, risk, and
-    // execution logic actually uses instead of leaving the pre-verdict value.
-    detail.direction = effectiveDirection ?? "neutral";
-    detail.directionSource = directionSource;
-
-    // ── SL/TP Recalculation: when verdict provides direction but original SL/TP are null ──
-    // Root cause: calculateSLTP() inside runConfluenceAnalysis() returns null when direction is null.
-    // If the Direction Verdict later assigns a valid direction, we must recalculate SL/TP
-    // so the R:R gate (Gate 10) can evaluate the trade instead of auto-failing.
-    if (effectiveDirection && (!analysis.stopLoss || !analysis.takeProfit)) {
-      const _spec = SPECS[pair] || SPECS["EUR/USD"];
-      const _atrVal = (analysis as any).atrValue ?? calculateATR(candles, pairConfig.slATRPeriod || 14);
-      const _gpCtx = (pairConfig as any)._gamePlanContext;
-      const _dolEnabled = (pairConfig as any).dolTPExtensionEnabled !== false;
-      const _dolTargets = _dolEnabled && _gpCtx?.dol
-        ? (Array.isArray(_gpCtx.dol) ? _gpCtx.dol : [_gpCtx.dol])
-        : undefined;
-      const { stopLoss: recalcSL, takeProfit: recalcTP } = calculateSLTP({
-        direction: effectiveDirection,
-        lastPrice: analysis.lastPrice,
-        pipSize: _spec.pipSize,
-        config: pairConfig,
-        swings: analysis.structure?.swingPoints || [],
-        orderBlocks: analysis.orderBlocks || [],
-        liquidityPools: analysis.liquidityPools || [],
-        pdLevels: analysis.pdLevels || null,
-        atrValue: _atrVal,
-        fvgs: analysis.fvgs || [],
-        fibExtensions: analysis.fibLevels?.extensions,
-        dolTargets: _dolTargets,
-      });
-      if (recalcSL && recalcTP) {
-        analysis.stopLoss = recalcSL;
-        analysis.takeProfit = recalcTP;
-        console.log(`[scan ${scanCycleId}] ${pair} SL/TP RECALC (verdict direction=${effectiveDirection}): SL=${recalcSL.toFixed(_spec.pipSize < 0.01 ? 3 : 5)} TP=${recalcTP.toFixed(_spec.pipSize < 0.01 ? 3 : 5)}`);
-      } else {
-        console.log(`[scan ${scanCycleId}] ${pair} SL/TP RECALC failed — calculateSLTP returned null even with direction=${effectiveDirection}`);
-      }
-    }
-
-    // Attach source and conflict info to detail so frontend can show which system drove zone selection
-    (detail as any).directionSource = directionSource;
-    (detail as any).directionConflict = directionConflict;
-    if ((detail as any).directionVerdict && typeof (detail as any).directionVerdict === "object") {
-      (detail as any).directionVerdict.directionSource = directionSource;
-      (detail as any).directionVerdict.effectiveDirection = effectiveDirection;
-      (detail as any).directionVerdict.directionConflict = directionConflict;
-    }
     // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
-    const htfConfluenceData: HTFConfluenceData | null = effectiveDirection ? {
+    const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
       h4OBs: h4OBs ?? [],
       h4FVGs: h4FVGs ?? [],
       h4Breakers: h4Breakers ?? [],
       htfFibLevels: htfFibLevels4H ?? null,
       dailyFibLevels: htfFibLevelsD ?? null,
       htfPD: htfPD4H ?? null,
-      direction: (effectiveDirection === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
+      direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
     } : null;
 
     // ── Consolidated Zone Engine (story-driven waterfall with liquidity + confirmation) ──
@@ -4411,16 +4284,14 @@ async function runScanForUser(
     //   Day Trader:  h1=1H, h4=4H, entry=15m, daily=Daily, confirm=4H/1H, ltfConfirm=1H/15m
     //   Swing:       h1=4H, h4=Daily, entry=1H, daily=Weekly, confirm=Daily, ltfConfirm=4H
     // The slot names (h1, h4, daily) are just positional — the engine is TF-agnostic.
-    const hasMinZoneCandles = roleCandles.setup.length >= 20;
-    const nestedPoiActivation = resolveNestedPoiMarketActivation({
-      marketFillAtZone: pairConfig.marketFillAtZone === true,
-      mode: (pairConfig as any).nestedPoiMarketMode,
-      runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-    });
-
-    if (effectiveDirection && hasMinZoneCandles) {
+    const hasMinZoneCandles = resolvedStyle === "scalper"
+      ? candles.length >= 20
+      : resolvedStyle === "swing_trader"
+        ? h4Candles.length >= 20
+        : hourlyCandles.length >= 20;
+    if (analysis.direction && hasMinZoneCandles) {
       try {
-        const unifiedDir = effectiveDirection === "long" ? "bullish" : "bearish";
+        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
         // Combine liquidity pools from the relevant timeframes
         const combinedLiqPools = [
           ...htfLiquidityPoolsD,
@@ -4428,77 +4299,40 @@ async function runScanForUser(
           ...htfLiquidityPools1H,
         ];
 
-        // The engine's legacy slot names are positional. Bind them from the
-        // policy ladder instead of reconstructing a style switch:
-        //   daily=top/bias, h4=mid/structure, h1=low/setup.
-        const zoneH1Candles = roleCandles.setup;
-        const zoneH4Candles = roleCandles.structure;
-        const zoneEntryCandles = candles;
-        const topMinCandles = timeframeAuthority.zone.top === "1d" ? 30 : 20;
-        const zoneDailyCandles = roleCandles.bias.length >= topMinCandles
-          ? roleCandles.bias
-          : undefined;
-        const zoneConfirmCandles = roleCandles.structure.length >= 15
-          ? roleCandles.structure
-          : roleCandles.setup;
-        const zoneLtfConfirmCandles = roleCandles.setup;
-        const zoneTFLabels: TFSlotLabels = zoneTimeframeLabels(
-          timeframeAuthority,
-        );
+        // Style-aware candle slot mapping
+        let zoneH1Candles: Candle[];
+        let zoneH4Candles: Candle[];
+        let zoneEntryCandles: Candle[];
+        let zoneDailyCandles: Candle[] | undefined;
+        let zoneConfirmCandles: Candle[];
+        let zoneLtfConfirmCandles: Candle[];
 
-        // Resolve any hand-marked impulse for this pair against candles from the
-        // timeframe it was marked on. A marking must either drive the scan or
-        // explain why it cannot — never fail silently.
-        const manualMarking = manualImpulseBySymbol.get(pair);
-        let manualImpulseLeg = null as ReturnType<typeof resolveManualImpulse>["leg"];
-        if (manualMarking) {
-          const byTf: Record<string, Candle[]> = {
-            D: dailyCandles, "4H": h4Candles, "1H": hourlyCandles,
-          };
-          const spec: ManualImpulseSpec = {
-            symbol: pair,
-            direction: manualMarking.direction,
-            high: Number(manualMarking.high),
-            low: Number(manualMarking.low),
-            timeframe: manualMarking.timeframe,
-            highTime: manualMarking.high_time ?? null,
-            lowTime: manualMarking.low_time ?? null,
-          };
-          const resolvedManual = resolveManualImpulse(
-            byTf[manualMarking.timeframe] || hourlyCandles,
-            spec,
-          );
-          manualImpulseLeg = resolvedManual.leg;
-          (detail as any).manualImpulse = {
-            id: manualMarking.id,
-            direction: manualMarking.direction,
-            high: Number(manualMarking.high),
-            low: Number(manualMarking.low),
-            timeframe: manualMarking.timeframe,
-            accepted: resolvedManual.leg != null,
-            rejection: resolvedManual.rejection,
-            detail: resolvedManual.detail,
-            matchErrorPips: resolvedManual.matchErrorPips ?? null,
-          };
-          if (resolvedManual.leg) {
-            console.log(`[scan ${scanCycleId}] ${pair}: MANUAL IMPULSE override — ${resolvedManual.detail}`);
-          } else {
-            console.log(`[scan ${scanCycleId}] ${pair}: manual impulse rejected — ${resolvedManual.detail}`);
-            // Retire only a permanently dead marking. A transient miss (candles
-            // not loaded yet) must not discard the user's work.
-            if (
-              resolvedManual.rejection === "origin_already_broken" ||
-              resolvedManual.rejection === "direction_mismatch" ||
-              resolvedManual.rejection === "invalid_bounds" ||
-              resolvedManual.rejection === "too_small_for_stop"
-            ) {
-              manualImpulseRetirements.push(
-                retireManualImpulse(manualMarking.id, resolvedManual.rejection, resolvedManual.detail),
-              );
-              manualImpulseBySymbol.delete(pair);
-            }
-          }
+        if (resolvedStyle === "scalper") {
+          // Scalper waterfall: 1H → 15m → 5m (entry)
+          zoneH1Candles = candles;              // 5m = lowest structural TF slot
+          zoneH4Candles = m15Candles;           // 15m = mid structural TF slot
+          zoneEntryCandles = candles;           // 5m entry
+          zoneDailyCandles = hourlyCandles.length >= 20 ? hourlyCandles : undefined; // 1H = highest TF slot
+          zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
+          zoneLtfConfirmCandles = candles;
+        } else if (resolvedStyle === "swing_trader") {
+          // Swing waterfall: Weekly → Daily → 4H (entry=1H)
+          zoneH1Candles = h4Candles;            // 4H = lowest structural TF slot
+          zoneH4Candles = dailyCandles;         // Daily = mid structural TF slot
+          zoneEntryCandles = candles;           // 1H entry
+          zoneDailyCandles = weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : undefined; // Weekly = highest TF slot
+          zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
+          zoneLtfConfirmCandles = h4Candles;
+        } else {
+          // Day trader (default): Daily → 4H → 1H (entry=15m)
+          zoneH1Candles = hourlyCandles;
+          zoneH4Candles = h4Candles;
+          zoneEntryCandles = candles;           // 15m entry
+          zoneDailyCandles = dailyCandles.length >= 30 ? dailyCandles : undefined;
+          zoneConfirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
+          zoneLtfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
         }
+
         const unifiedResult: UnifiedZoneResult = findUnifiedZone(
           zoneH1Candles,
           zoneH4Candles,
@@ -4508,47 +4342,14 @@ async function runScanForUser(
           combinedLiqPools,
           htfConfluenceData ?? undefined,
           {
-            manualImpulse: manualImpulseLeg,
-            collectEvidence: true,
-            collectNestedPoiEvidence: nestedPoiActivation.enabled,
-            structureAuthorityMode: pairConfig.canonicalStructureMode === "enforce" &&
-                pairConfig.singleOwnershipMode === "enforce"
-              ? "enforce"
-              : "observe",
             strictATRMult: pairConfig.marketFillStrictATRMult,
-            minQualityScore: pairConfig.zoneQualityThreshold,
-            maxAgeBars: pairConfig.zoneMaxAgeBars,
-            minBodyRatio: pairConfig.zoneMinBodyRatio,
-            minDisplacementATR: pairConfig.zoneMinDisplacementATR,
             pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
             fibMaxRetracement: pairConfig.fibMaxRetracement,
             originOBRetest: pairConfig.originOBRetest,
-            evidenceContext: {
-              symbol: pair,
-              timeframe: zoneTFLabels.low,
-              observedAt: candles[candles.length - 1]?.datetime,
-            },
-            entryTimeframe: timeframeAuthority.runtimeEntry,
           },
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
-          {
-            requireLiquiditySweep: pairConfig.requireLiquiditySweep,
-            sweptAbsorbedPenalty: pairConfig.sweptAbsorbedPenalty ?? 2.0,
-            // Same floor the scanner applies to its own SL below: the larger of
-            // the per-instrument static minimum and the ATR floor. Without it the
-            // unified entry stop is half the zone height, which on a narrow zone
-            // is smaller than the spread and inflates R:R past every gate.
-            minStopPips: Math.max(
-              MIN_SL_PIPS[pair] ?? 15,
-              ((analysis as any).atrValue ?? 0) > 0
-                ? ((analysis as any).atrValue * ATR_SL_FLOOR_MULTIPLIER) /
-                  (SPECS[pair] || SPECS["EUR/USD"]).pipSize
-                : 0,
-            ),
-          },
-          zoneTFLabels,
         );
 
         // Store the full unified story for the frontend narrative panel
@@ -4558,24 +4359,13 @@ async function runScanForUser(
           selectedTF: unifiedResult.selectedTF,
           unifiedScore: unifiedResult.unifiedScore,
           scoreBreakdown: unifiedResult.scoreBreakdown,
-          candidateAuthorityObservation:
-            unifiedResult.candidateAuthorityObservation ?? null,
-          structurePoiObservation:
-            unifiedResult.structurePoiObservation ?? null,
           impulse: unifiedResult.impulse,
           zone: unifiedResult.zone,
-          entryZoneQualification:
-            unifiedResult.entryZoneQualification ?? null,
           price: unifiedResult.price,
           liquidity: unifiedResult.liquidity ? {
             liquidityScore: unifiedResult.liquidity.liquidityScore,
             summary: unifiedResult.liquidity.summary,
             nearbyPools: unifiedResult.liquidity.nearbyPools.length,
-            entryTriggerState: unifiedResult.liquidity.entryTriggerState,
-            hasUnsweptEntryTrigger:
-              unifiedResult.liquidity.hasUnsweptEntryTrigger,
-            entryTrigger: unifiedResult.liquidity.entryTrigger,
-            gateReason: unifiedResult.liquidity.gateReason,
             sweepEvent: unifiedResult.liquidity.sweepEvent ? {
               level: unifiedResult.liquidity.sweepEvent.level,
               type: unifiedResult.liquidity.sweepEvent.type,
@@ -4592,42 +4382,25 @@ async function runScanForUser(
           entry: unifiedResult.entry,
           storySummary: unifiedResult.storySummary,
           reason: unifiedResult.reason,
-          entryTriggerState: unifiedResult.liquidity?.entryTriggerState || null,
-          hasUnsweptEntryTrigger:
-            unifiedResult.liquidity?.hasUnsweptEntryTrigger === true,
-          gatePolicy: {
-            requireLiquiditySweep:
-              pairConfig.requireLiquiditySweep === true,
-          },
         };
 
         // Derive izData (detail.impulseZone) from the unified result's multiTFResult
         // for backward compatibility with the 58 downstream references to izData.*
         const multiTF = unifiedResult.multiTFResult;
-        const nestedPoiEntry =
-          nestedPoiActivation.enabled && multiTF.bestZone
-            ? buildNestedPoiEntryPlan(multiTF.bestZone.zone)
-            : null;
         (detail as any).impulseZone = {
           hasZone: !!multiTF.bestZone,
           selectedTF: multiTF.selectedTF,
-          impulseQualification: unifiedResult.impulse?.qualification ?? null,
-          entryZoneQualification:
-            unifiedResult.entryZoneQualification ?? null,
           reason: multiTF.reason,
           impulse: multiTF.bestZone?.impulse ? {
             high: multiTF.bestZone.impulse.high,
             low: multiTF.bestZone.impulse.low,
             direction: multiTF.bestZone.impulse.direction,
-            endDate: multiTF.bestZone.impulse.endDate || null,
-            spanBars: multiTF.bestZone.impulse.spanBars ?? null,
           } : null,
           bestZone: multiTF.bestZone ? {
             type: multiTF.bestZone.zone.poi.type,
             high: multiTF.bestZone.zone.poi.high,
             low: multiTF.bestZone.zone.poi.low,
             fibLevel: multiTF.bestZone.zone.fibLevel,
-            fibPrice: multiTF.bestZone.zone.fibPrice ?? null,
             fibDepth: multiTF.bestZone.zone.fibDepth,
             totalScore: multiTF.bestZone.zone.totalScore,
             srConfirmed: multiTF.bestZone.zone.srConfirmed,
@@ -4637,19 +4410,6 @@ async function runScanForUser(
             refinedSL: multiTF.bestZone.zone.refinedSL || null,
             htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
             htfLayers: multiTF.bestZone.zone.htfLayers,
-            evidence: multiTF.bestZone.zone.poi.evidence ?? null,
-            localConfluence:
-              multiTF.bestZone.zone.localConfluence ?? null,
-            shadowRanking:
-              multiTF.bestZone.zone.shadowRanking ?? null,
-            candidateLifecycle:
-              multiTF.bestZone.zone.candidateLifecycle ?? null,
-            candidateModel:
-              multiTF.bestZone.zone.candidateModel ?? null,
-            timeframeLineage:
-              multiTF.bestZone.zone.timeframeLineage ?? null,
-            canonicalImpulseMetrics:
-              multiTF.bestZone.zone.canonicalImpulseMetrics ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4658,309 +4418,11 @@ async function runScanForUser(
             distancePips: multiTF.bestZone.distancePips,
           } : null,
           allZonesCount: multiTF.allZones.length,
-          zoneCandidates: multiTF.allZones.map((candidate: any) => ({
-            type: candidate.poi.type,
-            high: candidate.poi.high,
-            low: candidate.poi.low,
-            fibLevel: candidate.fibLevel,
-            fibPrice: candidate.fibPrice ?? null,
-            fibDepth: candidate.fibDepth,
-            totalScore: candidate.totalScore,
-            evidence: candidate.poi.evidence ?? null,
-            localConfluence: candidate.localConfluence ?? null,
-            shadowRanking: candidate.shadowRanking ?? null,
-            candidateLifecycle: candidate.candidateLifecycle ?? null,
-            candidateModel: candidate.candidateModel ?? null,
-            timeframeLineage: candidate.timeframeLineage ?? null,
-            canonicalImpulseMetrics:
-              candidate.canonicalImpulseMetrics ?? null,
-          })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
-          candidateAuthorityObservation:
-            unifiedResult.candidateAuthorityObservation ?? null,
-          structurePoiObservation:
-            unifiedResult.structurePoiObservation ?? null,
-          nestedPoiEntry,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
-
-        try {
-          const persisted = await persistZoneShadowObservations(supabase, {
-            userId,
-            botId: BOT_ID,
-            scanCycleId,
-            symbol: pair,
-            tradingStyle: resolvedStyle,
-            stylePolicyVersion: pairStylePolicy.contractVersion,
-            styleBasePolicyHash: pairStylePolicy.basePolicyHash,
-            stylePolicyHash: pairStylePolicy.policyHash,
-            observedAt: candles[candles.length - 1]?.datetime ||
-              new Date().toISOString(),
-            candidates: multiTF.allZones,
-            crossTimeframePolicy: crossTimeframeAuthority.policy,
-          });
-          if (persisted > 0) {
-            console.log(
-              `[scan ${scanCycleId}] ${pair} stored ${persisted}`
-              + ` observe-only zone candidate model rows`,
-            );
-          }
-          await persistICTEntryZoneObservation(supabase, {
-            userId,
-            botId: BOT_ID,
-            scanCycleId,
-            symbol: pair,
-            tradingStyle: resolvedStyle,
-            observedAt: candles[candles.length - 1]?.datetime ||
-              new Date().toISOString(),
-            legacyBestZone: multiTF.bestZone,
-            authority: unifiedResult.candidateAuthorityObservation!,
-          });
-        } catch (shadowStoreErr: any) {
-          console.warn(
-            `[scan ${scanCycleId}] ${pair} zone shadow evidence unavailable`
-            + ` (non-fatal): ${shadowStoreErr?.message}`,
-          );
-        }
-
-        // ── Phase 1: per-timeframe evidence (observation only) ──
-        // Records what the engine saw on every slot. Never feeds scoring,
-        // ranking, gating, configuration or execution.
-        try {
-          const timeframeEvidenceRow = buildScanEvidenceRow(
-            multiTF,
-            {
-              top: { timeframe: zoneTFLabels.top, candles: zoneDailyCandles ?? [] },
-              mid: { timeframe: zoneTFLabels.mid, candles: zoneH4Candles ?? [] },
-              low: { timeframe: zoneTFLabels.low, candles: zoneH1Candles ?? [] },
-            },
-            {
-              userId,
-              botId: BOT_ID,
-              scanCycleId,
-              symbol: pair,
-              direction: unifiedDir as "bullish" | "bearish",
-              observedAt: candles[candles.length - 1]?.datetime ||
-                new Date().toISOString(),
-              evaluatedAt: new Date().toISOString(),
-              tradingStyle: resolvedStyle,
-              stylePolicyVersion: pairStylePolicy.contractVersion,
-              styleBasePolicyHash: pairStylePolicy.basePolicyHash,
-              stylePolicyHash: pairStylePolicy.policyHash,
-              stylePolicySnapshot: {
-                style: pairStylePolicy.style,
-                timeframes: pairStylePolicy.timeframes,
-              },
-              evidenceSource: "live_scan",
-            },
-            {
-              strictATRMult: pairConfig.marketFillStrictATRMult,
-              minQualityScore: pairConfig.zoneQualityThreshold,
-              maxAgeBars: pairConfig.zoneMaxAgeBars,
-              minBodyRatio: pairConfig.zoneMinBodyRatio,
-              minDisplacementATR: pairConfig.zoneMinDisplacementATR,
-              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-              fibMaxRetracement: pairConfig.fibMaxRetracement,
-              originOBRetest: pairConfig.originOBRetest,
-              evidenceContext: {
-                symbol: pair,
-                timeframe: zoneTFLabels.low,
-                observedAt: candles[candles.length - 1]?.datetime,
-              },
-            },
-          );
-          zoneEvidenceRows.push(timeframeEvidenceRow);
-          // Freeze the exact evidence identity into every downstream setup,
-          // order and history record. Historical UI must never fall back to
-          // "latest evidence for this symbol", which can describe a different
-          // market state.
-          (detail as any).timeframeEvidenceId = timeframeEvidenceRow.id;
-          (detail as any).timeframeEvidenceScanCycleId = scanCycleId;
-
-          const canonicalRangeSelection = resolveCanonicalDealingRange({
-            slots: timeframeEvidenceRow.slots,
-            parentTimeframe:
-              multiTF.bestZone?.zone.timeframeLineage?.parentTimeframe || null,
-            childTimeframe: multiTF.selectedTF || "",
-            frozenAt: timeframeEvidenceRow.observed_at,
-          });
-          const canonicalMode = normalizeDealingRangeMode(
-            (pairConfig as any).dealingRangeMode,
-            {
-              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
-              onlySellInPremium: pairConfig.onlySellInPremium,
-            },
-          );
-          const canonicalEvaluation = evaluateCanonicalDealingRange({
-            range: canonicalRangeSelection.range,
-            direction: analysis.direction as "long" | "short",
-            price: analysis.lastPrice,
-            mode: canonicalMode,
-          });
-          analysis._canonicalDealingRangeAvailable = canonicalRangeSelection.available;
-          analysis._canonicalDealingRangeEvaluation = canonicalEvaluation;
-          const rollingBlocked =
-            (pairConfig.onlyBuyInDiscount &&
-              analysis.direction === "long" &&
-              analysis.pd.currentZone === "premium") ||
-            (pairConfig.onlySellInPremium &&
-              analysis.direction === "short" &&
-              analysis.pd.currentZone === "discount");
-          (detail as any).canonicalDealingRangeObservation = {
-            selectionReason: canonicalRangeSelection.reason,
-            ...compareDealingRangeDecisions({
-              canonical: canonicalEvaluation,
-              rollingAllowed: !rollingBlocked,
-              rollingPercent: analysis.pd.zonePercent,
-            }),
-          };
-
-          // Forward research only: when the impulse path has no executable
-          // zone but the existing type-neutral selector found a structure POI,
-          // freeze a comparable counterfactual through the same stop, target,
-          // cost and outcome owners used elsewhere. This row is never read by
-          // setup admission, staging, pending orders, sizing, or execution.
-          const structurePoiAuthority = unifiedResult.structurePoiObservation;
-          const structurePoiCandidate = structurePoiAuthority?.selected;
-          if (!multiTF.bestZone && structurePoiAuthority && structurePoiCandidate) {
-            try {
-              const structurePoiDirection = structurePoiCandidate.direction === "bullish"
-                ? "long"
-                : "short";
-              const structurePoiSpec = SPECS[pair] || SPECS["EUR/USD"];
-              const structurePoiZone: PendingEntryZone = {
-                price: structurePoiCandidate.entryPrice,
-                zoneType: structurePoiCandidate.type,
-                zoneLow: structurePoiCandidate.low,
-                zoneHigh: structurePoiCandidate.high,
-              };
-              const structurePoiInvalidation = deriveWatchlistInvalidation({
-                direction: structurePoiDirection,
-                zone: structurePoiZone,
-                proposedLevel: structurePoiCandidate.structuralInvalidation,
-                bufferPrice: adjustedSlBuffer * structurePoiSpec.pipSize,
-              });
-              const structurePoiStructuralLevel = Number(structurePoiInvalidation.level);
-              const structurePoiForwardPlan = Number.isFinite(structurePoiStructuralLevel) && structurePoiStructuralLevel > 0
-                ? buildConfiguredPreArmedPlan({
-                  direction: structurePoiDirection,
-                  zone: structurePoiZone,
-                  structuralInvalidation: structurePoiStructuralLevel,
-                  preferredPositionStop: null,
-                  symbol: pair,
-                  atrValue: (analysis as any).atrValue,
-                  config: pairConfig,
-                  analysis,
-                })
-                : { valid: false as const, reason: "Structural invalidation unavailable" };
-              const structurePoiTrade = structurePoiForwardPlan.valid
-                ? {
-                  entryPrice: structurePoiForwardPlan.plan.entryPrice,
-                  stopLoss: structurePoiForwardPlan.plan.stopLoss,
-                  takeProfit: structurePoiForwardPlan.plan.takeProfit,
-                }
-                : null;
-              const structurePoiLocation = evaluateCanonicalDealingRange({
-                range: canonicalRangeSelection.range,
-                direction: structurePoiDirection,
-                price: structurePoiCandidate.entryPrice,
-                mode: canonicalMode,
-              });
-              const structurePoiThesis = validatePendingOrderThesis({
-                order_id: `observe:structure_poi:${scanCycleId}:${pair}`,
-                symbol: pair,
-                direction: structurePoiDirection,
-                entry_price: structurePoiCandidate.entryPrice,
-                signal_reason: {
-                  directionVerdict: (detail as any).directionVerdict || null,
-                },
-              }, {
-                fotsiResult: _fotsiResult,
-                lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
-                dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
-                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-                h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
-                decisionEvidence: pairDecisionEvidence,
-              });
-              const structurePoiStructureDecision = evaluateCanonicalStructureDecision({
-                direction: structurePoiDirection,
-                structure: canonicalStructureAuthority,
-                liquidity: canonicalLiquiditySequence,
-                requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
-              });
-              const snapshotTimeframes = [...new Set(Object.values(structurePoiAuthority.timeframes))];
-              await persistICTEntryZoneObservation(supabase, {
-                setupFamily: "structure_poi",
-                userId,
-                botId: BOT_ID,
-                scanCycleId,
-                symbol: pair,
-                tradingStyle: resolvedStyle,
-                observedAt: timeframeEvidenceRow.observed_at,
-                stylePolicyVersion: pairStylePolicy.contractVersion,
-                styleBasePolicyHash: pairStylePolicy.basePolicyHash,
-                stylePolicyHash: pairStylePolicy.policyHash,
-                authority: structurePoiAuthority,
-                validationTrade: structurePoiTrade,
-                geometryFailureReason: structurePoiForwardPlan.valid
-                  ? null
-                  : structurePoiForwardPlan.reason,
-                minimumRiskReward: Number(pairConfig.minRiskReward ?? 1),
-                spreadPips: Number(structurePoiSpec.typicalSpread || 0),
-                spreadSource: "instrument_typical",
-                commissionPerLot: avgCommissionPerLot,
-                rateMap,
-                currentImpulseDecision: {
-                  hasExecutableZone: false,
-                  state: unifiedResult.state,
-                  selectedTimeframe: multiTF.selectedTF,
-                  reason: unifiedResult.reason,
-                  impulseQualification: unifiedResult.impulse?.qualification ?? null,
-                  entryZoneQualification: unifiedResult.entryZoneQualification ?? null,
-                },
-                decisionObservations: {
-                  contractVersion: "structure-poi-forward-observation.v1",
-                  observationOnly: true,
-                  affectsAuthorization: false,
-                  direction: (detail as any).directionVerdict || null,
-                  structure: structurePoiStructureDecision,
-                  location: structurePoiLocation,
-                  liquidity: {
-                    evaluated: true,
-                    candidateSequencingEvaluated: false,
-                    reason: "Candidate is not activated; sequence is preserved without inferring post-touch order",
-                    authority: canonicalLiquiditySequence,
-                  },
-                  confirmation: {
-                    evaluated: false,
-                    method: pairConfig.confirmationMethod || "choch",
-                    reason: "zone_touch_pending",
-                  },
-                  thesis: structurePoiThesis,
-                  safety: {
-                    evaluated: false,
-                    reason: "Observation-only candidate has not reached final authorization",
-                  },
-                },
-                timeframeEvidenceId: timeframeEvidenceRow.id,
-                candleSnapshotRefs: snapshotTimeframes.map((timeframe) => ({
-                  scanCycleId,
-                  symbol: pair,
-                  timeframe,
-                })),
-              });
-            } catch (structurePoiEvidenceError: any) {
-              console.warn(`[scan ${scanCycleId}] ${pair} structure POI forward evidence unavailable (non-fatal): ${structurePoiEvidenceError?.message}`);
-            }
-          }
-        } catch (tfEvidenceErr: any) {
-          console.warn(
-            `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`
-            + ` (non-fatal): ${tfEvidenceErr?.message}`,
-          );
-        }
 
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
       } catch (zoneErr: any) {
@@ -4969,9 +4431,9 @@ async function runScanForUser(
         (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
       }
     } else {
-      const dirReason = !effectiveDirection && simpleDirectionResult?.reason
+      const dirReason = !analysis.direction && simpleDirectionResult?.reason
         ? `No direction: ${simpleDirectionResult.reason}`
-        : effectiveDirection ? "Insufficient candles for zone detection" : "No direction determined";
+        : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
       (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: dirReason };
       (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
         directionDetail: simpleDirectionResult ? {
@@ -4989,9 +4451,9 @@ async function runScanForUser(
     // compared to the unified zone engine. Backtest validated: 75% WR, PF 8.88, Sharpe 12.78.
     // When cascade reaches "triggered" state, it overrides the unified zone gate.
     let cascadeResult: CascadeResult | null = null;
-    if (resolvedStyle === "swing_trader" && effectiveDirection && dailyCandles.length >= 30 && h4Candles.length >= 20) {
+    if (resolvedStyle === "swing_trader" && analysis.direction && dailyCandles.length >= 30 && h4Candles.length >= 20) {
       try {
-        const cascadeDir = effectiveDirection === "long" ? "bullish" : "bearish";
+        const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
         cascadeResult = findCascadeZone(
           dailyCandles,
           h4Candles,
@@ -5044,18 +4506,19 @@ async function runScanForUser(
     // ── ICT HTF Framework: Weekly Bias + Daily Impulse + Containment (log-only in "off" mode) ──
     let ictHTFResult: ICTHTFResult | null = null;
     const shouldRunICTHTF = resolvedStyle === "swing_trader" || ictHTFActive;
-    if (shouldRunICTHTF && effectiveDirection) {
+    if (shouldRunICTHTF && analysis.direction) {
       try {
         // Build LTF zone from impulse zone engine result (if available)
         const izData = (detail as any).impulseZone;
         const ltfZone: { high: number; low: number } | null = izData?.bestZone
           ? { high: izData.bestZone.high, low: izData.bestZone.low }
           : null;
+
         ictHTFResult = runICTHTFAnalysis(
           weeklyCandles,
           dailyCandles,
           analysis.lastPrice,
-          effectiveDirection as "long" | "short",
+          analysis.direction as "long" | "short",
           ltfZone,
           {
             ictHTFEnabled: pairConfig.ictHTFEnabled,
@@ -5114,20 +4577,16 @@ async function runScanForUser(
         const mssConfig: DisplacementMSSConfig = {
           ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
           minBodyRatio: pairConfig.ictDisplacementMSSMinBodyRatio,
-          minRangeATRMult: pairConfig.ictDisplacementMSSMinRangeATR,
-          lookbackCandles: pairConfig.ictDisplacementMSSLookback,
+          minRangeATR: pairConfig.ictDisplacementMSSMinRangeATR,
+          lookback: pairConfig.ictDisplacementMSSLookback,
         };
-        // Build structure breaks from analysis for MSS validation
-        const mssBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])]
-          .map((b: any) => ({ index: b.index as number, type: b.type as "bullish" | "bearish" }));
-        const mssDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        ictMSSResult = validateRecentMSS(candles, mssBreaks, mssDirection, mssConfig);
+        ictMSSResult = validateRecentMSS(candles, mssConfig);
         const modeTag = pairConfig.ictDisplacementMSSGateMode.toUpperCase();
-        const statusTag = ictMSSResult.isValid ? "VALID" : "INVALID";
+        const statusTag = ictMSSResult.valid ? "VALID" : "INVALID";
         console.log(`[scan ${scanCycleId}] ${pair} ICT MSS [${modeTag}]: ${statusTag} — ${ictMSSResult.reason}`);
         (detail as any).ictMSS = {
           gateMode: pairConfig.ictDisplacementMSSGateMode,
-          valid: ictMSSResult.isValid,
+          valid: ictMSSResult.valid,
           reason: ictMSSResult.reason,
           displacementStrength: ictMSSResult.displacementStrength,
         };
@@ -5143,27 +4602,21 @@ async function runScanForUser(
       try {
         const judasConfig: JudasSwingConfig = {
           ...DEFAULT_JUDAS_SWING_CONFIG,
-          sweepLookback: pairConfig.ictJudasSwingLookback,
-          minSweepDepthATR: pairConfig.ictJudasSwingMinDepthATR,
+          lookback: pairConfig.ictJudasSwingLookback,
+          minDepthATR: pairConfig.ictJudasSwingMinDepthATR,
           requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        // Find the most recent structure break index for Judas sweep lookback
-        const allBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])];
-        const alignedBreaks = allBreaks.filter((b: any) => b.type === judasDirection);
-        const mssIndex = alignedBreaks.length > 0
-          ? Math.max(...alignedBreaks.map((b: any) => b.index as number))
-          : candles.length - 1;
-        ictJudasResult = detectICTJudasSwing(candles, mssIndex, judasDirection, judasConfig);
+        ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
-        const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
+        const statusTag = ictJudasResult.detected ? "DETECTED" : "NOT_FOUND";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
         (detail as any).ictJudas = {
           gateMode: pairConfig.ictJudasSwingGateMode,
-          detected: ictJudasResult.found,
+          detected: ictJudasResult.detected,
           reason: ictJudasResult.reason,
-          sweepLevel: ictJudasResult.sweep?.sweptLevel ?? null,
-          sweepDepthATR: ictJudasResult.sweep?.wickDepthATR ?? null,
+          sweepLevel: ictJudasResult.sweepLevel,
+          sweepDepthATR: ictJudasResult.sweepDepthATR,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Judas error (non-fatal): ${e?.message}`);
@@ -5172,7 +4625,7 @@ async function runScanForUser(
     }
 
     // ── ICT FVG Invalidation (log-only in "off" mode) ──
-    let ictFVGResult: (BatchFVGValidationResult & { validCount: number; invalidatedCount: number; exhaustedCount: number; totalCount: number }) | null = null;
+    let ictFVGResult: BatchFVGValidationResult | null = null;
     if (pairConfig.ictFVGInvalidationEnabled && analysis.fvgs && analysis.fvgs.length > 0) {
       try {
         const fvgConfig: FVGInvalidationConfig = {
@@ -5180,18 +4633,7 @@ async function runScanForUser(
           bodyCloseOnly: pairConfig.ictFVGBodyCloseOnly,
           ruleOfTwo: pairConfig.ictFVGRuleOfTwo,
         };
-        const fvgDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        const fvgsForValidation = analysis.fvgs.map((f: any) => ({
-          index: f.index, high: f.high, low: f.low, type: f.type,
-          midpoint: (f.high + f.low) / 2,
-        }));
-        const rawFVGResult = validateFVGBatch(fvgsForValidation, candles, fvgDirection, fvgConfig);
-        // Derive count fields from results array (not on interface but needed downstream)
-        const totalCount = rawFVGResult.results.length;
-        const validCount = rawFVGResult.results.filter((r: any) => r.status === "fresh" || r.status === "first_touch").length;
-        const invalidatedCount = rawFVGResult.results.filter((r: any) => r.status === "invalidated").length;
-        const exhaustedCount = rawFVGResult.results.filter((r: any) => r.status === "exhausted").length;
-        ictFVGResult = { ...rawFVGResult, validCount, invalidatedCount, exhaustedCount, totalCount };
+        ictFVGResult = validateFVGBatch(analysis.fvgs, candles, fvgConfig);
         const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
         console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${ictFVGResult.validCount}/${ictFVGResult.totalCount} valid, ${ictFVGResult.invalidatedCount} invalidated, ${ictFVGResult.exhaustedCount} exhausted`);
         (detail as any).ictFVG = {
@@ -5213,17 +4655,17 @@ async function runScanForUser(
       try {
         const kzConfig: ICTKillZoneConfig = {
           ...DEFAULT_ICT_KILLZONE_CONFIG,
-          enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
-          enablePMSession: pairConfig.ictKillZonePMSession,
+          silverBullet: pairConfig.ictKillZoneSilverBullet,
+          pmSession: pairConfig.ictKillZonePMSession,
         };
         ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
-        const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.windowLabel})` : `OUT (${ictKZResult.reason})`;
+        const statusTag = ictKZResult.inKillZone ? `IN (${ictKZResult.activeZone})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
         (detail as any).ictKillZone = {
           gateMode: pairConfig.ictKillZoneGateMode,
-          inKillZone: ictKZResult.isKillZone,
-          activeZone: ictKZResult.windowLabel,
+          inKillZone: ictKZResult.inKillZone,
+          activeZone: ictKZResult.activeZone,
           isPrime: ictKZResult.isPrime,
           reason: ictKZResult.reason,
         };
@@ -5241,7 +4683,7 @@ async function runScanForUser(
           ...DEFAULT_ICT_RISK_CONFIG,
           baseRiskPercent: pairConfig.ictRiskBasePercent,
           drawdownHalving: pairConfig.ictRiskDrawdownHalving,
-          maxConsecutiveLossesBeforeStop: pairConfig.ictRiskMaxConsecLosses,
+          maxConsecutiveLosses: pairConfig.ictRiskMaxConsecLosses,
           dailyLossLimit: pairConfig.ictRiskDailyLimit,
           weeklyLossLimit: pairConfig.ictRiskWeeklyLimit,
           maxTradesPerDay: pairConfig.ictRiskMaxTradesPerDay,
@@ -5250,38 +4692,21 @@ async function runScanForUser(
         const { data: recentTrades } = await supabase
           .from("trade_history")
           .select("pnl_percent, closed_at")
-          .eq("user_id", userId)
+          .eq("bot_config_id", configId)
           .order("closed_at", { ascending: false })
           .limit(20);
+        const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
         const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
-        // Count consecutive losses from most recent trades
-        let consecutiveLosses = 0;
-        for (const pnl of tradePnLs) {
-          if (pnl < 0) consecutiveLosses++;
-          else break;
-        }
-        // Count trades today and compute daily/weekly PnL
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-        weekStart.setHours(0, 0, 0, 0);
-        const todayTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= todayStart);
-        const weekTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= weekStart);
-        const dailyPnLPercent = todayTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
-        const weeklyPnLPercent = weekTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
-        ictRiskResult = assessRisk({
-          consecutiveLosses,
-          tradesToday: todayTrades.length,
-          dailyPnLPercent,
-          weeklyPnLPercent,
-          config: riskConfig,
-        });
+        ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
         const modeTag = "OFF"; // Risk is always informational for now
-        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.effectiveRiskPercent * 100).toFixed(2)}%, reasons=${ictRiskResult.reasons.join("; ")}`);
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.adjustedRiskPercent * 100).toFixed(2)}%, reason=${ictRiskResult.reason}`);
         (detail as any).ictRisk = {
           canTrade: ictRiskResult.canTrade,
-          effectiveRiskPercent: ictRiskResult.effectiveRiskPercent,
-          reasons: ictRiskResult.reasons,
-          riskMultiplier: ictRiskResult.riskMultiplier,
+          adjustedRiskPercent: ictRiskResult.adjustedRiskPercent,
+          reason: ictRiskResult.reason,
+          consecutiveLosses: ictRiskResult.consecutiveLosses,
+          dailyLossPercent: ictRiskResult.dailyLossPercent,
+          weeklyLossPercent: ictRiskResult.weeklyLossPercent,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Risk error (non-fatal): ${e?.message}`);
@@ -5290,523 +4715,54 @@ async function runScanForUser(
     }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
-    const selectedZoneConceptEvidence = () => {
-      const bestZone = (detail as any).impulseZone?.bestZone;
-      const evidence = [
-        bestZone?.evidence,
-        ...(bestZone?.localConfluence?.items || []).map(
-          (item: any) => item?.evidence,
-        ),
-      ].filter(Boolean);
-      return Array.from(
-        new Map(evidence.map((item: any) => [item.evidenceId, item])).values(),
-      );
-    };
-    const entryZoneCandidateIdFor = (zone: any): string | null =>
-      zone?.candidateModel?.candidateId ||
-      zone?.localConfluence?.candidateId ||
-      zone?.evidence?.entityId ||
-      zone?.poi?.evidence?.entityId ||
-      null;
-    const entryZoneEvidenceIdsFor = (zone: any): string[] =>
-      Array.from(new Set([
-        zone?.evidence?.evidenceId,
-        zone?.poi?.evidence?.evidenceId,
-        ...(zone?.localConfluence?.items || []).map(
-          (item: any) => item?.evidence?.evidenceId,
-        ),
-      ].filter((value): value is string =>
-        typeof value === "string" && value.length > 0
-      ))).sort();
-    const entryZoneTimeframeFor = (zone: any): string | null =>
-      zone?.timeframeLineage?.candidateTimeframe ||
-      zone?.evidence?.timeframe ||
-      zone?.poi?.evidence?.timeframe ||
-      null;
-    const entryZoneLifecycleFor = (zone: any): string | null =>
-      zone?.candidateLifecycle?.state || null;
-    const selectedZoneLocalConfluence = () =>
-      (detail as any).impulseZone?.bestZone?.localConfluence ?? null;
-    const selectedZoneShadowRanking = () =>
-      (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
-    const selectedZoneLocalEnforcement = () =>
-      (detail as any).zoneLocalEnforcement ?? null;
-    const nestedPoiSelection =
-      (detail as any).impulseZone?.nestedPoiEntry || null;
-    const frozenNestedPoiEntry: FrozenNestedPoiEntryPlan | null =
-      nestedPoiActivation.enabled && nestedPoiSelection?.selected
-        ? {
-          ...nestedPoiSelection,
-          mode: nestedPoiActivation.mode,
-          route: nestedPoiActivation.enforced
-            ? "nested_poi_market"
-            : "observe",
-          monitoringTimeframe: timeframeAuthority.runtimeEntry,
-          direction: analysis.direction as "long" | "short",
-          frozenAt: new Date().toISOString(),
-        }
-        : null;
-    const nestedPoiExecutableZone = frozenNestedPoiEntry?.selected
-      ? {
-        candidateId: frozenNestedPoiEntry.selected.id,
-        type: frozenNestedPoiEntry.selected.type,
-        displayType:
-          "NESTED-" + frozenNestedPoiEntry.selected.type.toUpperCase(),
-        low: frozenNestedPoiEntry.selected.low,
-        high: frozenNestedPoiEntry.selected.high,
-        entry: frozenNestedPoiEntry.selected.entryPrice,
-        timeframe: frozenNestedPoiEntry.selected.timeframe,
-        triggerKind: frozenNestedPoiEntry.selected.geometry,
-        parentZone: frozenNestedPoiEntry.outerZone,
-      }
-      : null;
-    (detail as any).nestedPoiMarket = {
-      ...nestedPoiActivation,
-      plan: frozenNestedPoiEntry,
-      reason: nestedPoiSelection?.reason || "zone_unavailable",
-    };
-    const watchlistInvalidationFor = (
-      direction: WatchlistDirection,
-      originatingZone: unknown,
-      proposedLevel: unknown,
-      impulse?: unknown,
-    ) =>
-      deriveWatchlistInvalidation({
-        direction,
-        zone: originatingZone,
-        impulse,
-        proposedLevel,
-        bufferPrice: adjustedSlBuffer *
-          (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-      });
-    const selectedCrossTimeframeContext = (
-      executableZone?: Record<string, unknown> | null,
-      impulseEntryMode: "confirmation" | "nested_poi_market" = "confirmation",
-    ) =>
-      buildFrozenCrossTimeframeContext({
-        timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
-        symbol: pair,
-        gamePlan: activeGamePlan,
-        directionVerdict: activeDirectionVerdict,
-        stylePolicy: pairStylePolicy,
-        zoneStory: (detail as any).impulseZone || null,
-        executableZone,
-        evidenceCertificates: _evidenceCertificateReferences,
-        crossTimeframeAuthority,
-        timeframeEvidence: zoneEvidenceRows.find((row) =>
-          row.id === (detail as any).timeframeEvidenceId
-        ) || null,
-        impulseEntryLifecycleMode: impulseLifecycleEnforcement.effectiveMode,
-        impulseEntryMode,
-        nestedPoiMonitoringTimeframe: impulseEntryMode === "nested_poi_market"
-          ? timeframeAuthority.runtimeEntry
-          : pairStylePolicy.timeframes.roles.confirmation,
-        confirmationMethod: pairConfig.confirmationMethod || "choch",
-      });
-    const validatePendingLifecycle = (
-      frozenStrategyContext: any,
-      executableZone: unknown,
-    ) => {
-      const frozenContext = frozenStrategyContext?.crossTimeframeContext || null;
-      const frozenLifecycleMode = frozenContext?.impulseEntryLifecycle?.mode ||
-        frozenContext?.impulseEntryLifecycleAvailability?.mode ||
-        "observe";
-      return validateImpulseLifecycleExecutableZone({
-        mode: frozenLifecycleMode,
-        context: frozenContext,
-        executableZone,
-      });
-    };
-    const currentWatchlistLifecycle = (executionEligible: boolean) => {
-      const lifecycleZoneData = (detail as any).unifiedZone;
-      const lifecycleReasonCode =
-        !executionEligible
-          ? "monitoring_pre_zone"
-          : lifecycleZoneData?.state === "waiting_for_sweep"
-          ? "waiting_for_local_sweep"
-          : lifecycleZoneData?.state === "waiting_for_reconfirmation"
-          ? "waiting_for_reconfirmation"
-          : "waiting_for_zone_confirmation";
-      const phase = deriveWatchlistLifecyclePhase({
-        executionEligible,
-        hasZone: lifecycleZoneData?.hasZone === true ||
-          !!(detail as any).impulseZone?.bestZone,
-        unifiedState: lifecycleZoneData?.state || null,
-        priceAtZone: lifecycleZoneData?.price?.atZone === true ||
-          (detail as any).impulseZone?.bestZone?.priceAtZone === true,
-        entryTriggerState:
-          lifecycleZoneData?.liquidity?.entryTriggerState || null,
-        confirmationReady:
-          lifecycleZoneData?.confirmation?.entryReady === true,
-      });
-      const lifecycleEvidence = buildWatchlistLifecycleEvidence({
-        reasonCode: lifecycleReasonCode,
-        phase: phase.phase,
-        milestones: phase.milestones,
-        observedPrice: analysis.lastPrice,
-        frozenDirection: analysis.direction as WatchlistDirection,
-        sweep: (detail as any).unifiedZone?.liquidity || null,
-        detail: {
-          unifiedState: lifecycleZoneData?.state || null,
-          selectedTimeframe: lifecycleZoneData?.selectedTF || null,
-        },
-      });
-      return {
-        lifecycleReasonCode,
-        lifecycleEvidence,
-        lifecyclePhase: phase.phase,
-      };
-    };
-    const stagedDecisionFields = (
-      originatingZone: Record<string, unknown> | null,
-      executionEligible = true,
-      frozenEntryZone: Record<string, unknown> | null = originatingZone,
-    ) => {
-      const setupId = crypto.randomUUID();
-      const candidateId = crypto.randomUUID();
-      const pairPlan = activeGamePlan?.plans?.find(
-        (plan: InstrumentGamePlan) => plan.symbol === pair,
-      );
-      const frozenStrategyContext = buildFrozenSetupStrategyContext({
-        identity: { setupId, candidateId },
-        timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
-        symbol: pair,
-        direction: analysis.direction as "long" | "short",
-        stylePolicy: pairStylePolicy,
-        runtimeConfig: pairRuntimeConfigSnapshot,
-        decisionContext: (detail as any).decisionContext || null,
-        gamePlan: activeGamePlan,
-        directionVerdict: activeDirectionVerdict,
-        conceptEvidence: selectedZoneConceptEvidence(),
-        zoneLocalConfluence: selectedZoneLocalConfluence(),
-        zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-        zoneLocalEnforcement: selectedZoneLocalEnforcement(),
-        crossTimeframeContext: selectedCrossTimeframeContext(
-          nestedPoiActivation.enforced && nestedPoiExecutableZone
-            ? nestedPoiExecutableZone
-            : originatingZone,
-          nestedPoiActivation.enforced && nestedPoiExecutableZone
-            ? "nested_poi_market"
-            : "confirmation",
-        ),
-        nestedPoiEntry: frozenNestedPoiEntry,
-        entryZone: frozenEntryZone,
-        confirmationMethod: pairConfig.confirmationMethod || "choch",
-        indicatorMinCount: pairConfig.indicatorMinCount || 3,
-        liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
-        displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
-        reversalPatternRole: "supporting",
-        afterChochEntryMode: pairConfig.afterChochMode,
-      });
-      const frozenLiquidityState = (detail as any).unifiedZone?.liquidity?.entryTriggerState || "none";
-      const watchCanonicalState = projectCanonicalScannerState({
-        evaluatedAt: new Date().toISOString(),
-        identity: { candidateId, symbol: pair, direction: analysis.direction as "long" | "short" },
-        direction: {
-          available: !!activeDirectionVerdict?.verdict,
-          allowed: activeDirectionVerdict?.shouldBlock == null ? null :
-            !activeDirectionVerdict.shouldBlock && activeDirectionVerdict.verdict === analysis.direction,
-          evidenceId: activeDirectionVerdict?.id || null,
-        },
-        zone: {
-          available: (detail as any).unifiedZone?.hasZone === true || (detail as any).impulseZone?.hasZone === true,
-          valid: true,
-          atPoi: (detail as any).unifiedZone?.price?.atZone === true || (detail as any).impulseZone?.bestZone?.priceAtZone === true,
-          evidenceId: candidateId,
-        },
-        location: {
-          required: (pairConfig.dealingRangeMode || "avoid_wrong_side") !== "off",
-          available: (detail as any).canonicalDealingRangeObservation?.canonical?.available === true,
-          allowed: (detail as any).canonicalDealingRangeObservation?.canonical?.allowed ?? null,
-          evidenceId: (detail as any).canonicalDealingRangeObservation?.canonical?.range?.impulseId || null,
-        },
-        liquidity: {
-          policy: frozenStrategyContext.liquidityActivation.role,
-          state: ["unswept", "swept_rejected", "swept_absorbed"].includes(frozenLiquidityState) ? frozenLiquidityState : "none",
-        },
-        confirmation: { required: true, passed: (detail as any).unifiedZone?.confirmation?.entryReady === true },
-        thesis: { required: false, valid: true },
-        safety: { complete: false, passed: null },
-        execution: { authorized: false },
-      });
-      const {
-        lifecycleReasonCode,
-        lifecycleEvidence,
-        lifecyclePhase,
-      } = currentWatchlistLifecycle(executionEligible);
-      (detail as any).linkedSetupId = setupId;
-      return {
-        id: setupId,
-        candidate_id: candidateId,
-        game_plan_id: pairPlan?.gamePlanId ||
-          activeDirectionVerdict?.gamePlanId ||
-          null,
-        game_plan_version: pairPlan?.planVersion ||
-          activeDirectionVerdict?.gamePlanVersion ||
-          activeGamePlan?.planVersion ||
-          null,
-        direction_verdict_id: activeDirectionVerdict?.id || null,
-        direction_verdict: (detail as any).directionVerdict || null,
-        thesis_version: THESIS_VALIDATION_VERSION,
-        originating_zone: originatingZone,
-        confirmation_method: pairConfig.confirmationMethod || "choch",
-        confirmation_config: {
-          indicatorMinCount: pairConfig.indicatorMinCount || 3,
-          afterChochMode: pairConfig.afterChochMode || "confirmation_close",
-          afterChochExpiryMinutes: pairConfig.afterChochExpiryMinutes || 30,
-          maxConfirmationAttempts:
-            pairStylePolicy.lifecycle.maxConfirmationAttempts,
-        },
-        frozen_strategy_context: frozenStrategyContext,
-        authorization_result: {
-          contractVersion: TRADE_DECISION_CONTRACT_VERSION,
-          stage: "watching",
-          authorized: false,
-          reason: "Setup is observational until qualification",
-          stylePolicy: pairStylePolicy,
-          frozenStrategyContext,
-          canonicalScannerState: watchCanonicalState,
-          tradeDecisionPresentation: buildTradeDecisionPresentation({ state: watchCanonicalState }),
-        },
-        style_policy_version: pairStylePolicy.contractVersion,
-        style_base_policy_hash: pairStylePolicy.basePolicyHash,
-        style_policy_hash: pairStylePolicy.policyHash,
-        style_policy: pairStylePolicy,
-        lifecycle_phase: lifecyclePhase,
-        lifecycle_reason_code: lifecycleReasonCode,
-        lifecycle_reason: lifecycleReasonCode === "monitoring_pre_zone"
-          ? "Monitoring directional candidate; no executable zone is frozen"
-          : lifecycleEvidence.sweep
-          ? String(
-            (lifecycleEvidence.sweep as Record<string, unknown>).gateReason ||
-              "Frozen zone retained; waiting for price and confirmation",
-          )
-          : "Frozen zone retained; waiting for price and confirmation",
-        lifecycle_evidence: lifecycleEvidence,
-      };
-    };
-    const currentPendingCandidate = (activePendingOrders || []).find((pending: any) =>
-      pending.symbol === pair && pending.direction === analysis.direction &&
-      ["pending", "awaiting_confirmation"].includes(pending.status)
-    );
-    const currentNestedPendingCandidate = (activePendingOrders || []).find(
-      (pending: any) =>
-        pending.symbol === pair &&
-        ["pending", "awaiting_confirmation"].includes(pending.status) &&
-        resolvePendingNestedPoiEntryPlanState(pending).declared,
-    );
-    const currentPendingNestedPoiPlanState = currentNestedPendingCandidate
-      ? resolvePendingNestedPoiEntryPlanState(currentNestedPendingCandidate)
-      : null;
-    const currentPendingOwnsNestedPoiRoute =
-      currentPendingNestedPoiPlanState?.declared === true;
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
-    if (currentPendingCandidate || existingStaged) {
-      // Presentation linkage only: expose the already-persisted identities so
-      // scan, staged, pending, and lifecycle views can join the same setup.
-      // This does not participate in qualification or authorization.
-      detail.setupIdentity = {
-        orderId: currentPendingCandidate?.order_id || null,
-        stagedSetupId:
-          currentPendingCandidate?.staged_setup_id || existingStaged?.id || null,
-        candidateId:
-          currentPendingCandidate?.candidate_id ||
-          existingStaged?.candidate_id ||
-          null,
-        impulseEntryLifecycleId:
-          currentPendingCandidate?.impulse_entry_lifecycle_id ||
-          existingStaged?.impulse_entry_lifecycle_id ||
-          null,
-      };
-    }
-    const stagedNestedPoiPlanState = existingStaged
-      ? resolvePendingNestedPoiEntryPlanState(existingStaged)
-      : null;
-    const stagedFrozenNestedPoiEntry = stagedNestedPoiPlanState?.valid
-      ? stagedNestedPoiPlanState.plan
-      : null;
-    const stagedNestedPoiActivation = stagedFrozenNestedPoiEntry
-      ? resolveFrozenNestedPoiMarketRoute({
-        mode: stagedFrozenNestedPoiEntry.mode,
-        route: stagedFrozenNestedPoiEntry.route,
-        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-      })
-      : resolveFrozenNestedPoiMarketRoute({
-        mode: "off",
-        route: null,
-        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-      });
-    // Existing setup identity owns its rollout mode. Runtime settings only
-    // select the mode for a setup created by this scan.
-    const effectiveNestedPoiActivation = existingStaged
-      ? stagedNestedPoiActivation
-      : nestedPoiActivation;
-    const effectiveFrozenNestedPoiEntry = existingStaged
-      ? stagedFrozenNestedPoiEntry
-      : frozenNestedPoiEntry;
-    const effectiveNestedPoiExecutableZone =
-      effectiveFrozenNestedPoiEntry?.selected
-        ? {
-          candidateId: effectiveFrozenNestedPoiEntry.selected.id,
-          type: effectiveFrozenNestedPoiEntry.selected.type,
-          displayType: "NESTED-" +
-            effectiveFrozenNestedPoiEntry.selected.type.toUpperCase(),
-          low: effectiveFrozenNestedPoiEntry.selected.low,
-          high: effectiveFrozenNestedPoiEntry.selected.high,
-          entry: effectiveFrozenNestedPoiEntry.selected.entryPrice,
-          timeframe: effectiveFrozenNestedPoiEntry.selected.timeframe,
-          triggerKind: effectiveFrozenNestedPoiEntry.selected.geometry,
-          parentZone: effectiveFrozenNestedPoiEntry.outerZone,
-        }
-        : null;
-    const stagedNestedPoiRuntimeMismatch = existingStaged &&
-      stagedNestedPoiActivation?.runtimeTargetMismatch === true;
-    if (stagedNestedPoiPlanState && !stagedNestedPoiPlanState.valid) {
-      detail.status = "skipped_nested_poi_frozen_plan_unavailable";
-      detail.skipReason = stagedNestedPoiPlanState.reason;
-      scanDetails.push(detail);
-      continue;
-    }
-    if (stagedNestedPoiRuntimeMismatch) {
-      detail.status = "skipped_nested_poi_runtime_target_mismatch";
-      detail.skipReason =
-        "Frozen nested POI setup is paper-only and cannot be converted to live execution";
-      scanDetails.push(detail);
-      continue;
-    }
-    const stagedCandidatesForPair = stagedByPair.get(pair) || [];
-
-    // A fresh direction disagreement is evidence for the next scan, not proof
-    // that a frozen Watchlist thesis has failed. Preserve the candidate until
-    // its own structural boundary, TTL, or an explicit lifecycle rule resolves
-    // it. This is especially important during an expected lower-TF retracement.
+    // Also check for staged setups in the opposite direction that should be invalidated
     if (analysis.direction && stagingEnabled) {
       const oppositeDir = analysis.direction === "long" ? "short" : "long";
       const oppositeStaged = stagedMap.get(`${pair}:${oppositeDir}`);
       if (oppositeStaged) {
-        const continuityEvidence = buildWatchlistLifecycleEvidence({
-          reasonCode: "fresh_direction_disagreement_retained",
-          observedPrice: analysis.lastPrice,
-          frozenDirection: oppositeDir,
-          freshDirection: analysis.direction,
-          detail: {
-            candidateId:
-              oppositeStaged.candidate_id || oppositeStaged.id,
-            action: "retained",
-          },
-        });
-        (detail as any).frozenCandidateContinuity = {
-          candidateId: oppositeStaged.candidate_id || oppositeStaged.id,
-          frozenDirection: oppositeDir,
-          freshDirection: analysis.direction,
-          action: "retained",
-          reason:
-            "Fresh direction disagreement does not invalidate frozen zone structure",
-        };
+        // Direction flipped — invalidate the opposite staged setup
         try {
           await supabase.from("staged_setups").update({
-            lifecycle_reason:
-              `Frozen ${oppositeDir} candidate retained during fresh ${analysis.direction} scan`,
-            lifecycle_reason_code:
-              "fresh_direction_disagreement_retained",
-            lifecycle_evidence: continuityEvidence,
-            last_eval_at: continuityEvidence.observedAt,
-          }).eq("id", oppositeStaged.id).eq("user_id", userId);
+            status: "invalidated",
+            invalidation_reason: `Direction reversed to ${analysis.direction} (score ${analysis.score.toFixed(1)}%)`,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", oppositeStaged.id);
+          stagedInvalidated++;
+          stagedMap.delete(`${pair}:${oppositeDir}`);
+          console.log(`[staging] Invalidated ${pair} ${oppositeDir} — direction reversed to ${analysis.direction}`);
         } catch (e: any) {
-          console.warn(
-            `[staging] Failed to record direction-disagreement continuity for ${pair}: ${e?.message}`,
-          );
+          console.warn(`[staging] Failed to invalidate opposite staged ${pair} ${oppositeDir}: ${e?.message}`);
         }
-        console.log(
-          `[staging] Retained frozen ${pair} ${oppositeDir} candidate during fresh ${analysis.direction} scan — awaiting structural resolution`,
-        );
       }
     }
 
-    // Evaluate every frozen candidate for the pair, even when the fresh scan is
-    // neutral or points the other way. Candidate lookup must not depend on a
-    // newly computed direction.
-    let matchingCandidateInvalidated = false;
-    for (const stagedCandidate of stagedCandidatesForPair) {
-      if (
-        stagedCandidate.execution_eligible === false ||
-        !stagedCandidate.sl_level ||
-        !stagingEnabled
-      ) continue;
-      const storedLevel = parseFloat(stagedCandidate.sl_level);
-      // sl_level was derived once from the parent zone when this setup was
-      // staged. The originating zone may instead be an exact nested trigger
-      // (for example a zero-width Fib level), so feeding it back through the
-      // derivation owner silently replaces the parent boundary with
-      // trigger +/- buffer. Preserve the persisted level exactly.
-      const invalidation = deriveWatchlistInvalidation({
-        direction: stagedCandidate.direction as WatchlistDirection,
-        proposedLevel: storedLevel,
-      });
-      const boundaryLevel = invalidation.level;
-      const boundaryBreached = boundaryLevel !== null &&
-        isWatchlistInvalidated(
-          stagedCandidate.direction as WatchlistDirection,
-          analysis.lastPrice,
-          boundaryLevel,
-        );
-      if (boundaryBreached) {
+    // SL invalidation check for existing staged setups
+    if (existingStaged && existingStaged.sl_level && stagingEnabled) {
+      const slLevel = parseFloat(existingStaged.sl_level);
+      const slBreached = existingStaged.direction === "long"
+        ? analysis.lastPrice < slLevel
+        : analysis.lastPrice > slLevel;
+      if (slBreached) {
         try {
-          const invalidatedAt = new Date().toISOString();
-          const lifecycleEvidence = buildWatchlistLifecycleEvidence({
-            reasonCode: "structural_boundary_breached",
-            observedAt: invalidatedAt,
-            observedPrice: analysis.lastPrice,
-            frozenDirection:
-              stagedCandidate.direction as WatchlistDirection,
-            freshDirection:
-              analysis.direction as WatchlistDirection | null,
-            invalidation,
-            detail: {
-              candidateId:
-                stagedCandidate.candidate_id || stagedCandidate.id,
-            },
-          });
-          const lifecycleReason =
-            `Structural invalidation breached before entry (price ${analysis.lastPrice.toFixed(5)} vs boundary ${boundaryLevel.toFixed(5)}; source ${invalidation.source})`;
           await supabase.from("staged_setups").update({
             status: "invalidated",
-            invalidation_reason: lifecycleReason,
-            lifecycle_reason: lifecycleReason,
-            lifecycle_reason_code: "structural_boundary_breached",
-            lifecycle_evidence: lifecycleEvidence,
-            resolved_at: invalidatedAt,
-          }).eq("id", stagedCandidate.id).eq("user_id", userId);
+            invalidation_reason: `SL level breached (price ${analysis.lastPrice.toFixed(5)} vs SL ${slLevel.toFixed(5)})`,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", existingStaged.id);
           stagedInvalidated++;
-          stagedMap.delete(`${pair}:${stagedCandidate.direction}`);
-          if (stagedCandidate.id === existingStaged?.id) {
-            matchingCandidateInvalidated = true;
-          }
-          console.log(
-            `[staging] Invalidated ${pair} ${stagedCandidate.direction} — structural boundary breached (${analysis.lastPrice.toFixed(5)} vs ${boundaryLevel.toFixed(5)}, ${invalidation.source})`,
-          );
+          stagedMap.delete(stagedKey!);
+          console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — SL breached (${analysis.lastPrice.toFixed(5)} vs ${slLevel.toFixed(5)})`);
         } catch (e: any) {
-          console.warn(
-            `[staging] Failed to invalidate structurally breached ${pair}: ${e?.message}`,
-          );
+          console.warn(`[staging] Failed to invalidate SL-breached ${pair}: ${e?.message}`);
         }
-        if (stagedCandidate.id === existingStaged?.id) {
-          detail.status = "staged_invalidated";
-          detail.reason =
-            `Staged setup invalidated — structural boundary breached before entry`;
-          detail.staging = {
-            action: "invalidated",
-            reason: "structural_invalidation_breached",
-            boundary: boundaryLevel,
-            source: invalidation.source,
-          };
-        }
+        detail.status = "staged_invalidated";
+        detail.reason = `Staged setup invalidated — SL breached`;
+        detail.staging = { action: "invalidated", reason: "sl_breached" };
+        scanDetails.push(detail);
+        continue;
       }
-    }
-    if (matchingCandidateInvalidated) {
-      scanDetails.push(detail);
-      continue;
     }
 
     // Apply FOTSI penalty (softened from hard veto to score reduction)
@@ -5826,7 +4782,53 @@ async function runScanForUser(
         }
       }
     }
-    // (Direction Verdict moved earlier — before zone engine — see line ~4336)
+    // ── DIRECTION VERDICT (single source of truth for direction) ──
+    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
+    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
+    let directionVerdict: DirectionVerdictResult | null = null;
+    try {
+      const gpCtx = (pairConfig as any)._gamePlanContext;
+      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
+        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+        : null;
+      directionVerdict = computeDirectionVerdict({
+        confirmedTrend: ctResult,
+        simpleDirection: simpleDirectionResult ? {
+          direction: simpleDirectionResult.direction,
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+          reason: simpleDirectionResult.reason,
+        } : null,
+        regime: analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.regime,
+          confidence: analysis.regimeInfo.confidence,
+          directionalBias: analysis.regimeInfo.bias,
+        } : null,
+        weeklyBias: ictHTFResult?.weeklyBias ? {
+          bias: ictHTFResult.weeklyBias.bias,
+          confidence: ictHTFResult.weeklyBias.confidence,
+        } : null,
+        gamePlanBias: gpCtx ? {
+          bias: gpCtx.bias,
+          confidence: gpCtx.biasConfidence ?? 50,
+        } : null,
+      });
+      (detail as any).directionVerdict = {
+        verdict: directionVerdict.verdict,
+        confidence: directionVerdict.confidence,
+        agreement: directionVerdict.agreement,
+        shouldBlock: directionVerdict.shouldBlock,
+        scoreAdjustment: directionVerdict.scoreAdjustment,
+        summary: directionVerdict.summary,
+      };
+      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict: ${directionVerdict.summary}`);
+    } catch (dvErr: any) {
+      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
+      (detail as any).directionVerdict = { error: dvErr?.message };
+    }
     // ── UNIFIED ZONE GATE (primary signal source) ──
     // The unified engine composes impulse zone + liquidity + confirmation into one story.
     // When its state is 'triggered' or 'confirmed' AND entryReady=true, it becomes the
@@ -5858,685 +4860,15 @@ async function runScanForUser(
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
-    const zoneLocalDecision = evaluateZoneLocalEnforcement({
-      requestedMode: pairConfig.zoneLocalEnforcementMode,
-      runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-      activation: zoneLocalActivation,
-      ranking: izData?.bestZone?.shadowRanking ?? null,
-      softPenalty: pairConfig.zoneLocalSoftPenalty,
-      minimumLocalScore: pairConfig.zoneLocalMinimumScore,
-    });
-    const crossTimeframeEntryDecision =
-      evaluateCrossTimeframeEntryAuthority({
-        authorityResolution: crossTimeframeAuthority,
-        evaluation: izData?.bestZone
-          ? evaluateCrossTimeframeShadowCandidate(
-            izData.bestZone,
-            crossTimeframeAuthority.policy,
-          )
-          : null,
-        candidateId:
-          izData?.bestZone?.candidateModel?.candidateId ||
-          izData?.bestZone?.localConfluence?.candidateId ||
-          null,
-      });
-    (detail as any).crossTimeframeEntryAuthority =
-      crossTimeframeEntryDecision;
-    (detail as any).zoneLocalEnforcement = zoneLocalDecision;
-    // ── Gameplan hierarchy shadow audit ─────────────────────────────────────
-    // Observability only: this result is persisted for later outcome analysis,
-    // but it is never read by scoring, gates, sizing, or execution.
-    const shadowPairPlan = activeGamePlan?.plans?.find(
-      (plan: InstrumentGamePlan) => plan.symbol === pair,
-    ) || null;
-    (detail as any).gamePlanShadowAudit = evaluateGamePlanShadowAudit({
-      plan: shadowPairPlan ? {
-        bias: shadowPairPlan.bias,
-        legacyConfidence: shadowPairPlan.biasConfidence,
-        state: shadowPairPlan.state,
-        stateReason: shadowPairPlan.stateReason,
-        tradeable: shadowPairPlan.tradeable,
-        conviction: shadowPairPlan.conviction,
-      } : null,
-      direction: analysis.direction === "long" || analysis.direction === "short"
-        ? analysis.direction
-        : null,
-      directionVerdict: directionVerdict ? {
-        verdict: directionVerdict.verdict,
-        confidence: directionVerdict.confidence,
-        shouldBlock: directionVerdict.shouldBlock,
-      } : null,
-      impulseZone: {
-        hasZone: !!izData?.hasZone,
-        entryReady: unifiedGatePassed
-          || izData?.bestZone?.priceAtZoneStrict === true,
-        score: unifiedZoneData?.unifiedScore ?? izData?.bestZone?.totalScore ?? null,
-        fibDepth: izData?.bestZone?.fibDepth ?? null,
-        selectedTimeframe: unifiedZoneData?.selectedTF ?? izData?.selectedTF ?? null,
-        // The current Impulse Zone engine does not expose a computed freshness
-        // verdict. Preserve its source timing so freshness can be calibrated
-        // from real outcomes instead of inventing a boolean.
-        isFresh: null,
-        impulseEndDate: izData?.impulse?.endDate ?? null,
-        impulseSpanBars: izData?.impulse?.spanBars ?? null,
-      },
-    });
-
-    const zoneStopPolicyResolution = resolveZoneStopPolicyMode(
-      (pairConfig as any).zoneSetupStopPolicyMode,
-      account.execution_mode === "live" ? "live" : "paper",
-    );
-    const zoneStopPolicySpec = SPECS[pair] || SPECS["EUR/USD"];
-    const zoneStopPolicyConfirmationAtr = calculateATR(
-      roleCandles.confirmation,
-      pairConfig.slATRPeriod || 14,
-    );
-    const enforcedZoneStopPolicyFor = (
-      structuralInvalidation: number,
-    ): StopPolicyShadowInput | undefined => zoneStopPolicyResolution.enforced
-      ? {
-        observationOnly: false,
-        structuralInvalidation,
-        confirmationAtr: zoneStopPolicyConfirmationAtr,
-        atrMultiplier: 1.5,
-        executionFloorQuoteDistance:
-          Number(zoneStopPolicySpec.typicalSpread || 0) * zoneStopPolicySpec.pipSize * 1.5,
-        executionFloorSource: "spread_proxy",
-        riskCapAtrMultiplier: resolvedStyle === "swing_trader" ? 6 : 4,
-      }
-      : undefined;
-
-    // Observation only: capture the first evaluation of each deterministic
-    // zone candidate before any watch/reject branch can remove it.
-    if (analysis.direction && izData?.bestZone) {
-      try {
-        const candidateId = izData.bestZone.candidateModel?.candidateId ||
-          izData.bestZone.localConfluence?.candidateId || null;
-        if (candidateId) {
-          const spec = SPECS[pair] || SPECS["EUR/USD"];
-          const zone = {
-            price: Number(izData.bestZone.refinedEntry ??
-              ((izData.bestZone.high + izData.bestZone.low) / 2)),
-            zoneType: String(izData.bestZone.type || "impulse_zone"),
-            zoneLow: Number(izData.bestZone.low),
-            zoneHigh: Number(izData.bestZone.high),
-          };
-          const structural = watchlistInvalidationFor(
-            analysis.direction as WatchlistDirection,
-            { type: zone.zoneType, low: zone.zoneLow, high: zone.zoneHigh, entry: zone.price },
-            analysis.direction === "long" ? izData.impulse?.low : izData.impulse?.high,
-            izData.impulse,
-          );
-          const structuralLevel = Number(structural.level);
-          if (!Number.isFinite(structuralLevel) || structuralLevel <= 0) {
-            throw new Error("structural invalidation unavailable");
-          }
-          const currentPlanResult = buildConfiguredPreArmedPlan({
-            direction: analysis.direction as "long" | "short",
-            zone,
-            structuralInvalidation: structuralLevel,
-            preferredPositionStop: analysis.stopLoss,
-            symbol: pair,
-            atrValue: (analysis as any).atrValue,
-            config: pairConfig,
-            analysis,
-          });
-          const confirmationAtr = calculateATR(
-            roleCandles.confirmation,
-            pairConfig.slATRPeriod || 14,
-          );
-          const spreadPips = Number(spec.typicalSpread || 0);
-          const spreadSafetyMultiplier = 1.5;
-          const executionFloorQuoteDistance = spreadPips * spec.pipSize * spreadSafetyMultiplier;
-          const riskCapAtrMultiplier = resolvedStyle === "swing_trader" ? 6 : 4;
-          const gamePlanContext = (pairConfig as any)._gamePlanContext;
-          const dolTargets = (pairConfig as any).dolTPExtensionEnabled !== false && gamePlanContext?.dol
-            ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
-            : undefined;
-          const shadowResult = calculateSLTP({
-            direction: analysis.direction as "long" | "short",
-            lastPrice: zone.price,
-            pipSize: spec.pipSize,
-            config: pairConfig,
-            swings: analysis.structure?.swingPoints || [],
-            orderBlocks: analysis.orderBlocks || [],
-            liquidityPools: analysis.liquidityPools || [],
-            pdLevels: analysis.pdLevels || null,
-            atrValue: confirmationAtr,
-            fvgs: analysis.fvgs || [],
-            fibExtensions: analysis.fibLevels?.extensions,
-            dolTargets,
-            stopPolicyShadow: {
-              structuralInvalidation: structuralLevel,
-              confirmationAtr,
-              atrMultiplier: 1.5,
-              executionFloorQuoteDistance,
-              executionFloorSource: "spread_proxy",
-              riskCapAtrMultiplier,
-            },
-          });
-
-          const toPlanObservation = (
-            result: any,
-            shadowValid?: boolean,
-            shadowReason?: string | null,
-          ): StopPolicyPlanObservation => {
-            if (!result?.valid || shadowValid === false) {
-              return {
-                valid: false,
-                stopLoss: Number.isFinite(Number(result?.plan?.stopLoss))
-                  ? Number(result.plan.stopLoss) : null,
-                takeProfit: Number.isFinite(Number(result?.plan?.takeProfit))
-                  ? Number(result.plan.takeProfit) : null,
-                riskReward: Number.isFinite(Number(result?.plan?.riskReward))
-                  ? Number(result.plan.riskReward) : null,
-                takeProfitSource: result?.takeProfitSource || null,
-                takeProfitFallbackReason: result?.takeProfitFallbackReason || null,
-                reason: shadowReason || result?.reason || "plan_unavailable",
-              };
-            }
-            return {
-              valid: true,
-              stopLoss: Number(result.plan.stopLoss),
-              takeProfit: Number(result.plan.takeProfit),
-              riskReward: Number(result.plan.riskReward),
-              takeProfitSource: result.takeProfitSource || null,
-              takeProfitFallbackReason: result.takeProfitFallbackReason || null,
-              reason: null,
-            };
-          };
-          const shadowStop = Number(shadowResult.stopLoss);
-          const shadowTarget = Number(shadowResult.takeProfit);
-          const shadowRisk = Math.abs(zone.price - shadowStop);
-          const shadowPlanResult = {
-            valid: Number.isFinite(shadowStop) && Number.isFinite(shadowTarget) && shadowRisk > 0,
-            plan: {
-              stopLoss: shadowStop,
-              takeProfit: shadowTarget,
-              riskReward: shadowRisk > 0
-                ? Math.abs(shadowTarget - zone.price) / shadowRisk
-                : Number.NaN,
-            },
-            takeProfitSource: shadowResult.takeProfitSource,
-            takeProfitFallbackReason: shadowResult.takeProfitFallbackReason,
-          };
-          const shadow = shadowResult.stopPolicyShadow;
-          if (shadow) {
-            await persistStopPolicyEvidence(supabase, {
-              userId,
-              botId: BOT_ID,
-              scanCycleId,
-              candidateId,
-              symbol: pair,
-              direction: analysis.direction as "long" | "short",
-              tradingStyle: resolvedStyle,
-              setupSource: String((detail as any).signalSource || "standalone"),
-              confirmationTimeframe: timeframeAuthority.roles.confirmation,
-              observedAt: new Date().toISOString(),
-              entryPrice: zone.price,
-              structuralInvalidation: structuralLevel,
-              confirmationAtr,
-              pipSize: spec.pipSize,
-              spreadPips,
-              spreadSource: "spec_proxy",
-              spreadSafetyMultiplier,
-              executionFloorQuoteDistance,
-              executionFloorSource: "spread_proxy",
-              currentPlan: toPlanObservation(currentPlanResult),
-              shadowPlan: toPlanObservation(shadowPlanResult, shadow.valid, shadow.reason),
-              shadow,
-            });
-          }
-        }
-      } catch (stopPolicyEvidenceError: any) {
-        console.warn(`[stop-policy-evidence] ${pair}: ${stopPolicyEvidenceError?.message}`);
-      }
-    }
-
-    // An armed nested route owns its frozen candidate until its lifecycle
-    // reaches a terminal state. Current settings or a newly ranked zone may
-    // refresh diagnostics, but must not stage, claim, or supersede that order.
-    if (currentPendingOwnsNestedPoiRoute) {
-      detail.status = currentNestedPendingCandidate?.status ===
-          "awaiting_confirmation"
-        ? "hunting_confirmation"
-        : "watching_zone";
-      detail.skipReason = currentPendingNestedPoiPlanState?.valid
-        ? "Existing frozen Nested POI pending order retained; current settings and geometry cannot replace it"
-        : "Existing Nested POI route failed closed earlier this scan; legacy entry fallback is disabled";
-      scanDetails.push(detail);
-      continue;
-    }
-
-    const stageUnifiedWatch = async (
-      executionEligible: boolean,
-    ): Promise<"created" | "updated" | "handoff" | "failed"> => {
-      if (!stagingEnabled || isPaused || !analysis.direction) return "failed";
-      const isCascade = (detail as any).signalSource === "cascade";
-      const unifiedZone = unifiedZoneData?.zone;
-      const cascadeZone = cascadeResult?.entryZone?.poi;
-      const selectedEntryZoneEvidence = isCascade
-        ? cascadeResult?.entryZone
-        : izData?.bestZone;
-      const unifiedEntry = unifiedZoneData?.entry;
-      const entryPrice = isCascade
-        ? cascadeResult?.entry ?? analysis.lastPrice
-        : unifiedEntry?.entryPrice ??
-          (unifiedZone
-            ? (unifiedZone.high + unifiedZone.low) / 2
-            : analysis.lastPrice);
-      const stopLoss = isCascade
-        ? cascadeResult?.sl ?? analysis.stopLoss
-        : unifiedEntry?.slPrice ??
-          (unifiedZoneData?.impulse
-            ? analysis.direction === "long"
-              ? unifiedZoneData.impulse.low
-              : unifiedZoneData.impulse.high
-            : analysis.stopLoss);
-      const takeProfit = isCascade
-        ? analysis.takeProfit
-        : unifiedEntry?.tpPrice ?? analysis.takeProfit;
-      const originatingZone = executionEligible
-        ? {
-          setupFamily: isCascade ? "cascade" : "impulse",
-          candidateId: entryZoneCandidateIdFor(selectedEntryZoneEvidence),
-          sourceEvidenceIds: entryZoneEvidenceIdsFor(
-            selectedEntryZoneEvidence,
-          ),
-          sourceImpulseId:
-            (detail as any).canonicalDealingRangeObservation?.canonical?.range
-              ?.impulseId || null,
-          type: isCascade
-            ? cascadeZone?.type || "cascade_zone"
-            : unifiedZone?.type || "unified_zone",
-          low: isCascade ? cascadeZone?.low ?? null : unifiedZone?.low ?? null,
-          high: isCascade
-            ? cascadeZone?.high ?? null
-            : unifiedZone?.high ?? null,
-          entry: entryPrice,
-          stopLoss,
-          takeProfit,
-          timeframe: entryZoneTimeframeFor(selectedEntryZoneEvidence) ||
-            (isCascade ? null : unifiedZoneData?.selectedTF || null),
-          lifecycle: entryZoneLifecycleFor(selectedEntryZoneEvidence),
-          selectedTimeframe: isCascade
-            ? "cascade"
-            : unifiedZoneData?.selectedTF || null,
-          unifiedState: isCascade
-            ? cascadeResult?.state || null
-            : unifiedZoneData?.state || null,
-          signalSource: isCascade ? "cascade" : "unified",
-          executionEligible: true,
-        }
-        : {
-          type: "pre_zone_observation",
-          low: null,
-          high: null,
-          entry: analysis.lastPrice,
-          unifiedState: unifiedZoneData?.state || "no_zone",
-          reason: unifiedZoneData?.reason || "No valid unified zone",
-          selectedTimeframe: unifiedZoneData?.selectedTF || null,
-          unifiedScore: unifiedZoneData?.unifiedScore ?? 0,
-          signalSource: "unified",
-          executionEligible: false,
-        };
-      const setupType = executionEligible
-        ? unifiedZoneData?.state === "waiting_for_sweep" ||
-            unifiedZoneData?.state === "waiting_for_reconfirmation"
-          ? "sweep_watch"
-          : isCascade
-          ? "cascade_zone_watch"
-          : "unified_zone_watch"
-        : "waiting_for_unified_zone";
-      const observationReason = executionEligible
-        ? null
-        : "Directional candidate is visible for observation only; no valid unified zone exists";
-      const watchlistInvalidation = executionEligible
-        ? watchlistInvalidationFor(
-          analysis.direction as WatchlistDirection,
-          originatingZone,
-          stopLoss,
-          isCascade ? null : unifiedZoneData?.impulse,
-        )
-        : null;
-      const frozenEntryZone = executionEligible
-        ? {
-          ...originatingZone,
-          structuralInvalidation: watchlistInvalidation?.level ?? null,
-        }
-        : null;
-      const needsHandoff = requiresFreshCandidateHandoff(
-        existingStaged,
-        executionEligible,
-      );
-      const handoffParentId = needsHandoff ? existingStaged?.id || null : null;
-
-      if (needsHandoff && existingStaged) {
-        try {
-          await transitionStagedSetup(supabase, {
-            setupId: existingStaged.id,
-            userId,
-            status: "invalidated",
-            reason:
-              "Pre-zone observation resolved; complete zone requires a fresh execution candidate",
-            reasonCode: "pre_zone_handoff",
-            lifecycleEvidence: buildWatchlistLifecycleEvidence({
-              reasonCode: "pre_zone_handoff",
-              observedPrice: analysis.lastPrice,
-              frozenDirection:
-                existingStaged.direction as WatchlistDirection,
-              freshDirection:
-                analysis.direction as WatchlistDirection | null,
-              detail: {
-                fromExecutionEligible:
-                  !isPreZoneObservation(existingStaged),
-                toExecutionEligible: executionEligible,
-              },
-            }),
-            evidence: {
-              lifecycleVersion: "phase4.v1",
-              setupId: existingStaged.id,
-              candidateId:
-                existingStaged.candidate_id || existingStaged.id,
-              handoff: {
-                fromExecutionEligible:
-                  !isPreZoneObservation(existingStaged),
-                toExecutionEligible: executionEligible,
-              },
-            },
-          });
-          stagedInvalidated++;
-          stagedMap.delete(stagedKey!);
-        } catch (error: any) {
-          console.warn(
-            `[staging] Failed to resolve ${pair} observation handoff: ${error?.message}`,
-          );
-          return "failed";
-        }
-      } else if (existingStaged) {
-        try {
-          const lifecycle = currentWatchlistLifecycle(executionEligible);
-          const { error: updateError } = await supabase.from(
-            "staged_setups",
-          ).update({
-            current_score: analysis.score,
-            current_factors: analysis.factors
-              .filter((factor: any) => factor.present)
-              .map((factor: any) => ({
-                name: factor.name,
-                weight: factor.weight,
-                tier: factor.tier,
-              })),
-            missing_factors: analysis.factors
-              .filter((factor: any) => !factor.present && factor.weight > 0)
-              .map((factor: any) => ({
-                name: factor.name,
-                weight: factor.weight,
-                tier: factor.tier,
-              })),
-            scan_cycles: existingStaged.scan_cycles + 1,
-            last_eval_at: new Date().toISOString(),
-            lifecycle_phase: lifecycle.lifecyclePhase,
-            lifecycle_reason_code: lifecycle.lifecycleReasonCode,
-            lifecycle_reason: !executionEligible
-              ? "Monitoring directional candidate; no executable zone is frozen"
-              : lifecycle.lifecycleEvidence.sweep
-              ? String(
-                (lifecycle.lifecycleEvidence.sweep as Record<string, unknown>)
-                  .gateReason ||
-                  "Frozen zone retained; waiting for price and confirmation",
-              )
-              : "Frozen zone retained; waiting for price and confirmation",
-            lifecycle_evidence: lifecycle.lifecycleEvidence,
-            analysis_snapshot: {
-              ...(existingStaged.analysis_snapshot || {}),
-              latestObservation: {
-                score: analysis.score,
-                unifiedState: unifiedZoneData?.state || null,
-                unifiedScore: unifiedZoneData?.unifiedScore ?? 0,
-                reason: unifiedZoneData?.reason || null,
-                observedAt: new Date().toISOString(),
-              },
-            },
-          }).eq("id", existingStaged.id).eq("user_id", userId);
-          if (updateError) throw new Error(updateError.message);
-          detail.staging = {
-            action: executionEligible
-              ? "execution_watch"
-              : "pre_zone_observation",
-            executionEligible,
-            cycles: existingStaged.scan_cycles + 1,
-          };
-          return "updated";
-        } catch (error: any) {
-          console.warn(
-            `[staging] Failed to update ${pair} unified watch: ${error?.message}`,
-          );
-          detail.error = error?.message || "Watchlist update failed";
-          detail.skipReason = "Watchlist persistence failed: " + detail.error;
-          return "failed";
-        }
-      }
-
-      const presentFactors = analysis.factors
-        .filter((factor: any) => factor.present)
-        .map((factor: any) => ({
-          name: factor.name,
-          weight: factor.weight,
-          tier: factor.tier,
-        }));
-      const missingFactors = analysis.factors
-        .filter((factor: any) => !factor.present && factor.weight > 0)
-        .map((factor: any) => ({
-          name: factor.name,
-          weight: factor.weight,
-          tier: factor.tier,
-        }));
-      const tiered = analysis.tieredScoring;
-      const styleTTL = stagingTTLMinutes;
-      const decisionFields = stagedDecisionFields(
-        originatingZone,
-        executionEligible,
-        frozenEntryZone,
-      );
-      const { error } = await supabase.from("staged_setups").insert({
-        user_id: userId,
-        bot_id: BOT_ID,
-        symbol: pair,
-        direction: analysis.direction,
-        initial_score: analysis.score,
-        current_score: analysis.score,
-        watch_threshold: watchThreshold,
-        initial_factors: presentFactors,
-        current_factors: presentFactors,
-        missing_factors: missingFactors,
-        entry_price: entryPrice,
-        // A pre-zone row has no executable price structure yet. Keep projected
-        // protection levels empty so the ordinary SL-breach lifecycle cannot
-        // treat an observation as though it were an armed setup.
-        sl_level: executionEligible ? watchlistInvalidation?.level : null,
-        tp_level: executionEligible ? takeProfit : null,
-        ...decisionFields,
-        authorization_result: {
-          ...decisionFields.authorization_result,
-          executionEligible,
-          observationParentId: handoffParentId,
-          observationReason,
-        },
-        scan_cycles: 1,
-        min_cycles: executionEligible ? 1 : minStagingCycles,
-        ttl_minutes: styleTTL,
-        setup_type: setupType,
-        execution_eligible: executionEligible,
-        observation_parent_id: handoffParentId,
-        observation_reason: observationReason,
-        tier1_count: tiered?.tier1Count ?? 0,
-        tier2_count: tiered?.tier2Count ?? 0,
-        tier3_count: tiered?.tier3Count ?? 0,
-        analysis_snapshot: {
-          score: analysis.score,
-          direction: analysis.direction,
-          executionEligible,
-          observationOnly: !executionEligible,
-          unifiedZone: {
-            state: unifiedZoneData?.state || null,
-            score: unifiedZoneData?.unifiedScore ?? 0,
-            selectedTF: unifiedZoneData?.selectedTF || null,
-            reason: unifiedZoneData?.reason || null,
-          },
-          originatingZone,
-          observationParentId: handoffParentId,
-        },
-      });
-      if (error) {
-        console.warn(
-          `[staging] Failed to create ${setupType} for ${pair}: ${error.message}`,
-        );
-        detail.error = error.message;
-        detail.skipReason = "Watchlist persistence failed: " + error.message;
-        return "failed";
-      }
-      stagedNew++;
-      detail.staging = {
-        action: executionEligible
-          ? "execution_watch"
-          : "pre_zone_observation",
-        executionEligible,
-        setupId: decisionFields.id,
-        candidateId: decisionFields.candidate_id,
-        observationParentId: handoffParentId,
-      };
-      console.log(
-        `[staging] NEW ${executionEligible ? "EXECUTION" : "PRE-ZONE"} WATCH ${pair} ${analysis.direction} — ${unifiedZoneData?.state || "no_zone"}, score ${analysis.score.toFixed(1)}%`,
-      );
-      return needsHandoff ? "handoff" : "created";
-    };
-
-    let preparedZoneWatch: any = existingStaged || null;
-
-    const unifiedWatchDisposition = classifyUnifiedWatch({
-      requireUnifiedZone: !!pairConfig.requireUnifiedZone,
-      unifiedGatePassed,
-      unifiedState: unifiedZoneData?.state,
-      hasZone: unifiedZoneData?.hasZone === true,
-      stagingEnabled,
-      hasDirection: !!analysis.direction,
-      isPaused,
-      score: analysis.score,
-      watchThreshold,
-      tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
-      singleOwnershipEnforced: singleOwnershipEnforcementRequested,
-    });
-
     if (unifiedGatePassed) {
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
-      if (
-        stagingEnabled &&
-        !isPaused &&
-        isPreZoneObservation(existingStaged)
-      ) {
-        const handoff = await stageUnifiedWatch(true);
-        detail.status = handoff === "failed"
-          ? "pre_zone_handoff_failed"
-          : "unified_zone_candidate_created";
-        detail.skipReason = handoff === "failed"
-          ? "Complete zone appeared, but the safe candidate handoff failed"
-          : "Complete zone appeared; created a fresh frozen execution candidate for the next scan";
-        scanDetails.push(detail);
-        continue;
-      }
-    } else if (unifiedWatchDisposition === "execution_watch") {
-      const watchResult = await stageUnifiedWatch(true);
-      detail.status = unifiedZoneData?.state === "waiting_for_sweep"
-        ? "waiting_for_sweep"
-        : unifiedZoneData?.state === "waiting_for_reconfirmation"
-        ? "waiting_for_reconfirmation"
-        : "waiting_for_unified_confirmation";
-      detail.skipReason = unifiedZoneData?.state === "waiting_for_sweep"
-        ? "Unified zone is complete but its qualified local/internal liquidity trigger remains unswept"
-        : unifiedZoneData?.state === "waiting_for_reconfirmation"
-        ? "Unified zone remains valid, but the local sweep did not reject; a fresh trigger and confirmation are required"
-        : "Unified zone is complete but its entry trigger is not ready";
-      if (watchResult === "failed") {
-        detail.status = "unified_watch_persist_failed";
-        detail.skipReason = detail.skipReason || "Watchlist persistence failed";
-      }
-      scanDetails.push(detail);
-      continue;
     } else if (pairConfig.requireUnifiedZone) {
-      const watchResult = unifiedWatchDisposition === "pre_zone_observation"
-        ? await stageUnifiedWatch(false)
-        : null;
-      if (
-        !watchResult &&
-        existingStaged &&
-        isPreZoneObservation(existingStaged) &&
-        (
-          unifiedZoneData?.state === "no_zone" ||
-          unifiedZoneData?.state === "no_impulse"
-        )
-      ) {
-        try {
-          await transitionStagedSetup(supabase, {
-            setupId: existingStaged.id,
-            userId,
-            status: "invalidated",
-            reason:
-              "Candidate no longer meets the pre-zone Watchlist quality floor",
-            reasonCode: "pre_zone_quality_lost",
-            lifecycleEvidence: buildWatchlistLifecycleEvidence({
-              reasonCode: "pre_zone_quality_lost",
-              observedPrice: analysis.lastPrice,
-              frozenDirection:
-                existingStaged.direction as WatchlistDirection,
-              freshDirection:
-                analysis.direction as WatchlistDirection | null,
-              score: analysis.score,
-              threshold: watchThreshold,
-              detail: {
-                unifiedState: unifiedZoneData?.state,
-                tier1Count:
-                  analysis.tieredScoring?.tier1Count ?? 0,
-              },
-            }),
-            evidence: {
-              lifecycleVersion: "phase4.v1",
-              setupId: existingStaged.id,
-              candidateId:
-                existingStaged.candidate_id || existingStaged.id,
-              executionEligible:
-                existingStaged.execution_eligible !== false,
-              unifiedState: unifiedZoneData?.state,
-              score: analysis.score,
-              watchThreshold,
-              tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
-            },
-          });
-          stagedInvalidated++;
-          stagedMap.delete(stagedKey!);
-        } catch (error: any) {
-          console.warn(
-            `[staging] Failed to invalidate stale ${pair} unified watch: ${error?.message}`,
-          );
-        }
-      }
-      detail.status = watchResult === "failed"
-        ? "pre_zone_observation_failed"
-        : watchResult
-        ? "waiting_for_unified_zone"
-        : "skipped_require_unified";
-      detail.skipReason = watchResult
-        ? "Observe only: directional candidate is waiting for a valid unified zone and cannot execute"
-        : "Require Unified Zone: unified zone engine did not reach triggered/confirmed state — no standalone fallback allowed";
-      console.log(
-        `[scan ${scanCycleId}] ${watchResult ? "👁️" : "⛔"} ${pair}: REQUIRE UNIFIED ZONE — ${
-          watchResult
-            ? "candidate recorded as observe-only"
-            : "candidate below observation floor"
-        }.`,
-      );
+      // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm
+      detail.status = "skipped_require_unified";
+      detail.skipReason = "Require Unified Zone: unified zone engine did not reach triggered/confirmed state \u2014 no standalone fallback allowed";
+      console.log(`[scan ${scanCycleId}] \u26d4 ${pair}: REQUIRE UNIFIED ZONE \u2014 unified gate not passed, standalone fallback disabled. Skipping.`);
       scanDetails.push(detail);
       continue;
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
@@ -6549,25 +4881,10 @@ async function runScanForUser(
         scanDetails.push(detail);
         continue;
       }
-      if (effectiveNestedPoiActivation.enforced &&
-        !effectiveFrozenNestedPoiEntry?.selected) {
-        detail.status = "skipped_nested_poi_unavailable";
-        detail.skipReason =
-          "Nested POI Market Trigger: no strictly-contained OB, FVG, active breaker, S/R, or Fib trigger is available; midpoint fallback is disabled";
-        scanDetails.push(detail);
-        continue;
-      }
-      const shouldPreArmZoneSetup = effectiveNestedPoiActivation.enforced ||
-        (pairConfig.preArmZoneSetups === true &&
-          config.limitOrderEnabled && !config.marketFillAtZone);
-      if (!izData.bestZone?.priceAtZone || shouldPreArmZoneSetup) {
+      if (!izData.bestZone?.priceAtZone) {
         // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
-        let zoneWatchPersisted = false;
-        let zoneWatchPersistenceError: string | null = null;
-        let preArmPlanRejectionReason: string | null = null;
-        // Set when this scan successfully armed a pending order for the setup.
-        let preArmedThisScan = false;
-        let frozenZoneWatch: any = existingStaged || null;
+        detail.status = "watching_zone";
+        detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Watchlisted.`;
         console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
         // Stage this pair so it's ready when price arrives at the zone
         if (stagingEnabled && analysis.direction && !isPaused) {
@@ -6577,44 +4894,10 @@ async function runScanForUser(
               const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const ts = analysis.tieredScoring;
-              const styleTTL = stagingTTLMinutes;
-              const outerZoneWatchOrigin = {
-                type: izData.bestZone.type || "impulse_zone",
-                low: izData.bestZone.low,
-                high: izData.bestZone.high,
-                entry: izData.bestZone.refinedEntry ??
-                  ((izData.bestZone.high + izData.bestZone.low) / 2),
-                fibDepth: izData.bestZone.fibDepth || null,
-                selectedTimeframe: izData.selectedTF || null,
-              };
-              const zoneWatchOrigin = effectiveNestedPoiActivation.enforced &&
-                  effectiveNestedPoiExecutableZone
-                ? {
-                  ...effectiveNestedPoiExecutableZone,
-                  fibDepth: izData.bestZone.fibDepth || null,
-                  selectedTimeframe: izData.selectedTF || null,
-                }
-                : outerZoneWatchOrigin;
-              const zoneWatchInvalidation = watchlistInvalidationFor(
-                analysis.direction as WatchlistDirection,
-                outerZoneWatchOrigin,
-                analysis.direction === "long"
-                  ? izData.impulse.low
-                  : izData.impulse.high,
-                izData.impulse,
-              );
-              const zoneWatchFrozenEntryZone = {
-                ...zoneWatchOrigin,
-                structuralInvalidation: zoneWatchInvalidation.level,
-                positionStop: analysis.stopLoss ?? null,
-                target: analysis.takeProfit ?? null,
-              };
-              const zoneWatchDecision = stagedDecisionFields(
-                zoneWatchOrigin,
-                true,
-                zoneWatchFrozenEntryZone,
-              );
-              const zoneWatchRow = {
+              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes;
+              await supabase.from("staged_setups").insert({
                 user_id: userId,
                 bot_id: BOT_ID,
                 symbol: pair,
@@ -6625,253 +4908,46 @@ async function runScanForUser(
                 initial_factors: presentFactors,
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
-                entry_price: effectiveNestedPoiActivation.enforced &&
-                    effectiveFrozenNestedPoiEntry?.selected
-                  ? effectiveFrozenNestedPoiEntry.selected.entryPrice
-                  : izData.bestZone.refinedEntry ??
-                    ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: zoneWatchInvalidation.level,
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
+                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
                 tp_level: analysis.takeProfit,
-                ...zoneWatchDecision,
                 scan_cycles: 1,
                 min_cycles: 1,
                 ttl_minutes: styleTTL,
                 setup_type: "impulse_zone_watch",
-                staged_at: new Date().toISOString(),
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
                 analysis_snapshot: {
                   score: analysis.score,
                   direction: analysis.direction,
-                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse, nestedPoiEntry: effectiveFrozenNestedPoiEntry },
+                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
                 },
-              };
-              frozenZoneWatch = zoneWatchRow;
-              preparedZoneWatch = zoneWatchRow;
-              if (!izData.bestZone?.priceAtZone) {
-                const { error: zoneWatchInsertError } = await supabase.from("staged_setups").insert(zoneWatchRow);
-                if (zoneWatchInsertError) throw zoneWatchInsertError;
-                zoneWatchPersisted = true;
-                stagedNew++;
-              }
+              });
+              stagedNew++;
               console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
             } else {
-              // Update observation fields without rewriting frozen executable geometry.
-              const existingNestedPoiEntry =
-                readFrozenSetupStrategyContext(existingStagedForZone)?.nestedPoiEntry || null;
-              const stagedEntryPrice = effectiveNestedPoiActivation.enforced
-                ? existingNestedPoiEntry?.selected?.entryPrice ??
-                  existingStagedForZone.entry_price
-                : izData.bestZone.refinedEntry ??
-                  ((izData.bestZone.high + izData.bestZone.low) / 2);
-              const { error: zoneWatchUpdateError } = await supabase.from("staged_setups").update({
+              // Update existing staged with latest zone data
+              await supabase.from("staged_setups").update({
                 current_score: analysis.score,
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
-                entry_price: stagedEntryPrice,
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
+                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
               }).eq("id", existingStagedForZone.id);
-              if (zoneWatchUpdateError) throw zoneWatchUpdateError;
-              frozenZoneWatch = { ...existingStagedForZone, entry_price: stagedEntryPrice };
-              preparedZoneWatch = frozenZoneWatch;
-              zoneWatchPersisted = true;
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
             }
           } catch (e: any) {
             if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
-              zoneWatchPersisted = true;
               console.log(`[staging] ${pair} ${analysis.direction} already staged for zone watch`);
             } else {
-              zoneWatchPersistenceError = e?.message || "Unknown database error";
               console.warn(`[staging] Failed to stage zone watch ${pair}: ${e?.message}`);
             }
           }
           detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
         }
-        if (
-          !izData.bestZone?.priceAtZone && zoneWatchPersisted && frozenZoneWatch &&
-          shouldPreArmZoneSetup
-        ) {
-          const frozenWatchContext =
-            readFrozenSetupStrategyContext(frozenZoneWatch);
-          const preArmNestedPlan = frozenWatchContext?.nestedPoiEntry || null;
-          const routedPreArmNestedPlan = effectiveNestedPoiActivation.enforced
-            ? preArmNestedPlan
-            : null;
-          if (effectiveNestedPoiActivation.enforced && !preArmNestedPlan?.selected) {
-            preArmPlanRejectionReason =
-              "nested_poi_unavailable: staged setup has no frozen nested trigger";
-          } else {
-          const zone = frozenZoneWatch.originating_zone;
-          const entryPrice = Number(frozenZoneWatch.entry_price ?? zone?.entry);
-          const structuralStop = Number(frozenZoneWatch.sl_level);
-          const plan = buildConfiguredPreArmedPlan({
-            direction: analysis.direction as "long" | "short",
-            zone: {
-              price: entryPrice,
-              zoneType: String(zone?.type || "impulse_zone"),
-              zoneLow: Number(zone?.low),
-              zoneHigh: Number(zone?.high),
-            },
-            structuralInvalidation: structuralStop,
-            preferredPositionStop: analysis.stopLoss,
-            symbol: pair,
-            atrValue: (analysis as any).atrValue,
-            config: pairConfig,
-            analysis,
-            stopPolicy: enforcedZoneStopPolicyFor(structuralStop),
-            lifecycleDecision: validatePendingLifecycle(
-              readFrozenSetupStrategyContext(frozenZoneWatch),
-              zone,
-            ),
-          });
-          if (plan.valid) {
-            const currentCanonicalLocation = (detail as any).canonicalDealingRangeObservation?.canonical || null;
-            const frozenEntryLocation = evaluateCanonicalDealingRange({
-              range: currentCanonicalLocation?.range || null,
-              direction: analysis.direction as "long" | "short",
-              price: plan.plan.entryPrice,
-              mode: normalizeDealingRangeMode((pairConfig as any).dealingRangeMode, {
-                onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
-                onlySellInPremium: pairConfig.onlySellInPremium,
-              }),
-            });
-            (detail as any).frozenExecutablePlan = {
-              contractVersion: "frozen-executable-plan.v1",
-              candidateId: frozenZoneWatch.candidate_id,
-              entryPrice: plan.plan.entryPrice,
-              stopLoss: plan.plan.stopLoss,
-              takeProfit: plan.plan.takeProfit,
-              takeProfitSource: plan.takeProfitSource,
-              takeProfitFallbackReason: plan.takeProfitFallbackReason,
-              zone: plan.plan.zone,
-              location: frozenEntryLocation,
-            };
-            if ((detail as any).canonicalDealingRangeObservation) {
-              (detail as any).canonicalDealingRangeObservation = {
-                ...(detail as any).canonicalDealingRangeObservation,
-                marketPriceObservation: currentCanonicalLocation,
-                canonical: frozenEntryLocation,
-                evaluatedPriceOwner: "frozen_executable_entry",
-              };
-            }
-            const stagedAt = Date.parse(
-              frozenZoneWatch.staged_at || frozenZoneWatch.created_at || new Date().toISOString(),
-            );
-            const ttlMinutes = Number(frozenZoneWatch.ttl_minutes || stagingTTLMinutes);
-            const placedAt = new Date().toISOString();
-            const preArmReachability = observePreArmReachability({
-              currentPrice: Number(analysis.lastPrice),
-              entryPrice: plan.plan.entryPrice,
-              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-              // `analysis` carries no atrValue — that field belongs to SLTPInput,
-              // not the analysis result, and the `as any` cast hid it. Every
-              // pre-armed row since the observation was added recorded
-              // distanceAtr: null, so the only instrument-normalised distance
-              // signal has never existed. Reuse the per-pair ATR the stop policy
-              // already computed rather than adding a fifth calculateATR call.
-              atrValue: zoneStopPolicyConfirmationAtr > 0
-                ? zoneStopPolicyConfirmationAtr
-                : null,
-              ttlMinutes,
-              referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
-              armedAt: placedAt,
-            });
-            const absoluteExpiry = new Date(
-              stagedAt + ttlMinutes * 60_000,
-            ).toISOString();
-            const { error: preArmError } = await supabase.from("pending_orders").insert({
-              user_id: userId,
-              bot_id: BOT_ID,
-              order_id: crypto.randomUUID().slice(0, 8),
-              symbol: pair,
-              direction: analysis.direction,
-              order_type: "limit",
-              entry_price: plan.plan.entryPrice,
-              current_price: analysis.lastPrice,
-              stop_loss: plan.plan.stopLoss,
-              take_profit: plan.plan.takeProfit,
-              size: null,
-              entry_zone_type: routedPreArmNestedPlan
-                ? "PARENT-" + String(izData.bestZone.type || "ZONE").toUpperCase()
-                : plan.plan.zone.zoneType,
-              entry_zone_low: routedPreArmNestedPlan?.outerZone.low ??
-                plan.plan.zone.zoneLow,
-              entry_zone_high: routedPreArmNestedPlan?.outerZone.high ??
-                plan.plan.zone.zoneHigh,
-              status: "pending",
-              expiry_minutes: ttlMinutes,
-              expires_at: absoluteExpiry,
-              signal_reason: {
-                preArmed: true,
-                candidateId: frozenZoneWatch.candidate_id,
-                preArmReachability,
-                takeProfitSource: plan.takeProfitSource,
-                takeProfitFallbackReason: plan.takeProfitFallbackReason,
-                zoneSetupStopPolicyMode: zoneStopPolicyResolution.requestedMode,
-                zoneSetupStopPolicyAppliedAtArm: zoneStopPolicyResolution.enforced,
-                zoneSetupStopPolicyBufferQuoteDistance:
-                  adjustedSlBuffer * zoneStopPolicySpec.pipSize,
-                zoneSetupStopPolicy: plan.stopPolicy || null,
-                nestedPoiEntry: preArmNestedPlan,
-              },
-              signal_score: analysis.score,
-              from_watchlist: true,
-              staged_setup_id: frozenZoneWatch.id,
-              candidate_id: frozenZoneWatch.candidate_id,
-              structural_invalidation: structuralStop,
-              structural_invalidation_source: "staged_inherited",
-              originating_zone: zone,
-              frozen_strategy_context: frozenZoneWatch.frozen_strategy_context,
-              confirmation_method: frozenZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
-              confirmation_config: {
-                ...(frozenZoneWatch.confirmation_config || {}),
-                entryMode: routedPreArmNestedPlan
-                  ? "nested_poi_market"
-                  : "confirmation",
-              },
-              placed_at: placedAt,
-            });
-            if (preArmError && !/duplicate key/i.test(preArmError.message)) {
-              zoneWatchPersistenceError = `Pre-arm failed: ${preArmError.message}`;
-            } else {
-              // The setup is ARMED, not merely watched. Without this the scan
-              // reports "watching_zone" while the staged row has already moved
-              // to 'pending', so the Watchlist tab (which queries watching and
-              // qualified) shows nothing and the card says WATCHING. Three
-              // surfaces, three different truths.
-              preArmedThisScan = true;
-            }
-          } else {
-            preArmPlanRejectionReason = plan.reason;
-          }
-          }
-        }
-        if (!izData.bestZone?.priceAtZone) {
-        if (zoneWatchPersisted) {
-            detail.status = preArmedThisScan ? "zone_setup_active" : "watching_zone";
-            detail.skipReason = preArmedThisScan
-              ? `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Pre-armed — awaiting zone touch. Visible under Zone Setups, not Watchlist.`
-              : preArmPlanRejectionReason
-              ? `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist; pre-arm plan not armed: ${preArmPlanRejectionReason}.`
-              : `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Persisted to Watchlist.`;
-            if (preArmPlanRejectionReason) {
-              detail.preArmDecision = rejectedPreArmDecision(
-                preArmPlanRejectionReason,
-                frozenZoneWatch?.candidate_id,
-              );
-            }
-          } else if (zoneWatchPersistenceError) {
-            detail.status = "watchlist_persistence_failed";
-            detail.skipReason = `Watchlist insert failed: ${zoneWatchPersistenceError}`;
-            detail.staging = { action: "persistence_failed", error: zoneWatchPersistenceError, zoneDistance: izData.bestZone?.distanceToZone };
-          } else {
-            detail.status = "waiting_zone_untracked";
-            detail.skipReason = "Price is not at the Impulse Zone, but Watchlist staging is disabled.";
-          }
         scanDetails.push(detail);
         continue;
-        }
       }
       // Price IS at zone — apply bonus and proceed
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
@@ -6879,115 +4955,12 @@ async function runScanForUser(
 
       // ── Zone Score Gate: reject weak zones below minimum quality threshold ──
       const minZoneScore = pairConfig.minZoneScore ?? 4;
-      const zoneScoreReason = "Zone Score Gate: zone score " + izData.bestZone.totalScore.toFixed(1) + "/9 < minimum " + minZoneScore;
-      if (legacyGateBlocks("impulse_zone_score",
-          izData.bestZone.totalScore >= minZoneScore, zoneScoreReason)) {
+      if (izData.bestZone.totalScore < minZoneScore) {
         detail.status = "skipped_weak_zone";
         detail.skipReason = `Zone Score Gate: zone score ${izData.bestZone.totalScore.toFixed(1)}/9 < minimum ${minZoneScore} — low-conviction zone rejected`;
         console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE SCORE GATE — score ${izData.bestZone.totalScore.toFixed(1)}/9 < ${minZoneScore}. Skipping.`);
         scanDetails.push(detail);
         continue;
-      }
-
-      // ── Standalone Sweep Gate: obey the canonical local sweep state ─────
-      // When requireLiquiditySweep is ON and this is a standalone entry (unified
-      // gate did NOT pass), check whether the unified zone engine detected nearby
-      // qualified local/internal liquidity trigger is not ready. Broad nearby
-      // pools are context only and cannot block an entry.
-      if (pairConfig.requireLiquiditySweep && !unifiedGatePassed && unifiedZoneData?.liquidity) {
-        const liq = unifiedZoneData.liquidity;
-        const sweepGate = evaluateStandaloneSweepGate({
-          requireLiquiditySweep: pairConfig.requireLiquiditySweep,
-          unifiedGatePassed,
-          liquidity: liq,
-        });
-        if (sweepGate.blocked) {
-          detail.status = sweepGate.status;
-          detail.skipReason = sweepGate.reason;
-          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${sweepGate.reason}. Watchlisted.`);
-          // Stage as sweep_watch until the local sweep authority permits entry.
-          if (stagingEnabled && analysis.direction && !isPaused) {
-            try {
-              if (!existingStaged) {
-                const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-                const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-                const ts = analysis.tieredScoring;
-                const styleTTL = stagingTTLMinutes;
-                const sweepWatchOrigin = {
-                  type: "standalone_sweep_watch",
-                  low: izData.bestZone?.low ?? null,
-                  high: izData.bestZone?.high ?? null,
-                  entry: izData.bestZone?.entry ?? analysis.lastPrice,
-                  nearbyPools: liq.nearbyPools,
-                  liquiditySummary: liq.summary || null,
-                  entryTriggerState: liq.entryTriggerState || null,
-                  entryTrigger: liq.entryTrigger || null,
-                };
-                const sweepWatchInvalidation = watchlistInvalidationFor(
-                  analysis.direction as WatchlistDirection,
-                  sweepWatchOrigin,
-                  izData.bestZone?.sl ?? analysis.stopLoss,
-                  izData.impulse,
-                );
-                await supabase.from("staged_setups").insert({
-                  user_id: userId,
-                  bot_id: BOT_ID,
-                  symbol: pair,
-                  direction: analysis.direction,
-                  initial_score: analysis.score,
-                  current_score: analysis.score,
-                  watch_threshold: watchThreshold,
-                  initial_factors: presentFactors,
-                  current_factors: presentFactors,
-                  missing_factors: missingFactors,
-                  entry_price: izData.bestZone?.entry ?? analysis.lastPrice,
-                  sl_level: sweepWatchInvalidation.level,
-                  tp_level: analysis.takeProfit,
-                  ...stagedDecisionFields(sweepWatchOrigin),
-                  scan_cycles: 1,
-                  min_cycles: 1,
-                  ttl_minutes: styleTTL,
-                  setup_type: "sweep_watch",
-                  tier1_count: ts?.tier1Count ?? 0,
-                  tier2_count: ts?.tier2Count ?? 0,
-                  tier3_count: ts?.tier3Count ?? 0,
-                  analysis_snapshot: {
-                    score: analysis.score,
-                    direction: analysis.direction,
-                    source: "standalone_local_sweep_gate",
-                    unifiedZone: unifiedZoneData ? { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF } : null,
-                    liquidity: {
-                      nearbyPools: liq.nearbyPools,
-                      summary: liq.summary,
-                      gateReason: liq.gateReason,
-                      entryTriggerState: liq.entryTriggerState,
-                      entryTrigger: liq.entryTrigger,
-                      sweepEvent: liq.sweepEvent,
-                    },
-                  },
-                });
-                stagedNew++;
-                console.log(`[staging] NEW STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — unswept inducement, score ${analysis.score.toFixed(1)}%`);
-              } else {
-                await supabase.from("staged_setups").update({
-                  current_score: analysis.score,
-                  scan_cycles: existingStaged.scan_cycles + 1,
-                  last_eval_at: new Date().toISOString(),
-                }).eq("id", existingStaged.id);
-                console.log(`[staging] Updated STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — cycle ${existingStaged.scan_cycles + 1}`);
-              }
-            } catch (e: any) {
-              if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
-                console.log(`[staging] ${pair} ${analysis.direction} already staged for standalone sweep watch`);
-              } else {
-                console.warn(`[staging] Failed to stage standalone sweep watch ${pair}: ${e?.message}`);
-              }
-            }
-            detail.staging = { action: "sweep_watch", source: "standalone" };
-          }
-          scanDetails.push(detail);
-          continue;
-        }
       }
 
       // ── Impulse Zone → Tier 1 Credit ──────────────────────────────────
@@ -7199,55 +5172,23 @@ async function runScanForUser(
       }
     }
     // "off" mode: no adjustment at all
-    if (!zoneLocalDecision.allowed) {
-      detail.status = "skipped_zone_local_confluence";
-      detail.skipReason =
-        `Zone-Local Confluence (${zoneLocalDecision.mode.effectiveMode}): `
-        + zoneLocalDecision.reason;
-      console.log(
-        `[scan ${scanCycleId}] ⛔ ${pair}: ZONE-LOCAL HARD BLOCK — `
-          + `${zoneLocalDecision.reason}, shadowRank=`
-          + `${zoneLocalDecision.shadowRank ?? "missing"}, localScore=`
-          + `${zoneLocalDecision.shadowLocalScore ?? "missing"}.`,
-      );
-      scanDetails.push(detail);
-      continue;
-    }
-    if (!crossTimeframeEntryDecision.allowed) {
-      detail.status = "skipped_cross_timeframe_authority";
-      detail.skipReason =
-        `Cross-Timeframe Authority (${crossTimeframeEntryDecision.effectiveMode}): `
-        + crossTimeframeEntryDecision.reasonCodes.join(", ");
-      console.log(
-        `[scan ${scanCycleId}] ⛔ ${pair}: CROSS-TF HARD BLOCK — `
-          + crossTimeframeEntryDecision.reasonCodes.join(", "),
-      );
-      scanDetails.push(detail);
-      continue;
-    }
-    const zoneLocalScoreAdj = zoneLocalDecision.scoreAdjustment;
-    const crossTimeframeScoreAdj =
-      crossTimeframeEntryDecision.scoreAdjustment;
     // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
     // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
     const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
-    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
+    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
-    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
+    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.detected)
       ? -pairConfig.ictJudasSwingPenalty : 0;
     const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
       ? -(ictFVGResult.invalidatedCount * pairConfig.ictFVGInvalidatedPenalty + ictFVGResult.exhaustedCount * pairConfig.ictFVGExhaustedPenalty) / Math.max(ictFVGResult.totalCount, 1)
       : 0;
     const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
-      ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
+      ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
-    const effectiveScore = analysis.score + fotsiPenalty +
-      impulseZonePenaltyVal + zoneLocalScoreAdj +
-      crossTimeframeScoreAdj + ictTotalAdj +
-      verdictScoreAdj;
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
     }
@@ -7259,21 +5200,6 @@ async function runScanForUser(
     }
     if (verdictScoreAdj !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
-    }
-    if (zoneLocalScoreAdj !== 0) {
-      console.log(
-        `[scan ${scanCycleId}] ${pair} Zone-local soft adjustment: `
-          + `${zoneLocalScoreAdj.toFixed(1)}% (${zoneLocalDecision.reason}, `
-          + `effective ${effectiveScore.toFixed(1)}%)`,
-      );
-    }
-    if (crossTimeframeScoreAdj !== 0) {
-      console.log(
-        `[scan ${scanCycleId}] ${pair} Cross-TF soft adjustment: `
-          + `${crossTimeframeScoreAdj.toFixed(1)}% (`
-          + `${crossTimeframeEntryDecision.reason}, effective `
-          + `${effectiveScore.toFixed(1)}%)`,
-      );
     }
     // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──
     const opposingFactorCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -7292,23 +5218,12 @@ async function runScanForUser(
             bias: analysis.regime4HInfo.bias,
             confidence: analysis.regime4HInfo.confidence,
           } : null,
-          structureContext: pairDecisionEvidence.structureRegime
-            ? {
-              regime: pairDecisionEvidence.structureRegime.regime,
-              bias:
-                pairDecisionEvidence.structureRegime.directionalBias,
-              confidence:
-                pairDecisionEvidence.structureRegime.confidence,
-              timeframeLabel:
-                pairDecisionEvidence.structureRegime.label,
-            }
-            : null,
           fotsiAlignment: analysis.fotsiAlignment ? {
             label: analysis.fotsiAlignment.label,
             score: analysis.fotsiAlignment.score,
           } : null,
           opposingFactorCount: opposingFactorCount,
-          gamePlanBias: pairConfig.gpEnforcementMode !== "off" && gpCtx ? {
+          gamePlanBias: gpCtx ? {
             bias: gpCtx.bias,
             confidence: gpCtx.biasConfidence ?? 50,
           } : null,
@@ -7341,65 +5256,6 @@ async function runScanForUser(
         console.warn(`[conviction] ${pair} error (non-fatal): ${tcErr?.message}`);
       }
     }
-    // Record the four-layer decision context for every directional candidate,
-    // including candidates that are later rejected by operational gates.
-    if (analysis.direction) {
-      const candidateThesis = validatePendingOrderThesis(
-        {
-          order_id: `candidate:${scanCycleId}:${pair}`,
-          symbol: pair,
-          direction: analysis.direction as "long" | "short",
-          entry_price: analysis.lastPrice,
-          signal_reason: {
-            directionVerdict: (detail as any).directionVerdict || null,
-          },
-        },
-        {
-          fotsiResult: _fotsiResult,
-          lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
-          dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
-          h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-          h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
-          decisionEvidence: pairDecisionEvidence,
-        },
-      );
-      const candidateConfirmation: EntryConfirmationDecision = {
-        required: false,
-        passed: false,
-        method: pairConfig.confirmationMethod || "choch",
-        reason: "Candidate discovered; entry timing has not been authorized",
-        evidence: null,
-        evaluatedAt: new Date().toISOString(),
-      };
-      const candidateHierarchy = evaluateDecisionHierarchy({
-        symbol: pair,
-        direction: analysis.direction as "long" | "short",
-        gamePlan: activeGamePlan,
-        gamePlanEnabled,
-        gamePlanMode: gpEnforcementMode,
-        gamePlanMinimumConfidence:
-          (pairConfig as any).gpHardBlockThreshold ?? 75,
-        directionVerdict: activeDirectionVerdict,
-        requireDirectionVerdict: true,
-        thesisResult: candidateThesis,
-        requireThesisValidation: true,
-        entryConfirmation: candidateConfirmation,
-      });
-      (detail as any).decisionContext = buildTradeDecisionContext({
-        stage: "candidate",
-        symbol: pair,
-        direction: analysis.direction as "long" | "short",
-        gamePlan: activeGamePlan,
-        directionVerdict: activeDirectionVerdict,
-        thesisResult: candidateThesis,
-        requireThesisValidation: true,
-        thesisConviction: (detail as any).thesisConviction || null,
-        entryConfirmation: candidateConfirmation,
-        hierarchy: candidateHierarchy,
-        stylePolicy: pairStylePolicy,
-        evaluatedAt: candidateConfirmation.evaluatedAt,
-      });
-    }
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
     // When many factors actively oppose the trade, raise the bar or block entirely.
     const opposingCount = opposingFactorCount;
@@ -7412,43 +5268,33 @@ async function runScanForUser(
       console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
     }
 
-    // Determine whether this staged setup has reached score/cycle eligibility.
-    // The durable "qualified" transition happens only after the remaining
-    // candidate gates have passed and exact decision evidence is available.
+    // Determine if this is a staged setup being promoted
     let isPromotedFromStaging = false;
-    if (
-      existingStaged &&
-      existingStaged.execution_eligible !== false &&
-      (singleOwnershipEnforcementRequested ||
-        effectiveScore >= conflictAdjustedMinConfluence) &&
-      analysis.direction &&
-      !isPaused &&
-      stagingEnabled
-    ) {
-      const cyclesMet = singleOwnershipEnforcementRequested ||
-        existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
+    if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
+      const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
-        // Eligibility is not a lifecycle transition. Keep the Watchlist row
-        // watching until the remaining candidate gates pass.
+        // Update the staged setup to promoted
         try {
           const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
           const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
           await supabase.from("staged_setups").update({
+            status: "promoted",
             current_score: analysis.score,
             current_factors: presentFactors,
             missing_factors: missingFactors,
-            promotion_reason: singleOwnershipEnforcementRequested
-            ? "Trade Decision authorized Watchlist promotion"
-            : `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
+            promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
+            resolved_at: new Date().toISOString(),
             last_eval_at: new Date().toISOString(),
             scan_cycles: existingStaged.scan_cycles + 1,
           }).eq("id", existingStaged.id);
-          console.log(`[staging] ELIGIBLE ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}%; evaluating remaining gates`);
+          stagedPromoted++;
+          stagedMap.delete(stagedKey!);
+          console.log(`[staging] PROMOTED ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% after ${existingStaged.scan_cycles + 1} cycles`);
         } catch (e: any) {
-          console.warn(`[staging] Failed to update qualified ${pair}: ${e?.message}`);
+          console.warn(`[staging] Failed to promote ${pair}: ${e?.message}`);
         }
-        detail.staging = { action: "eligible", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+        detail.staging = { action: "promoted", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
       } else {
         // Score is above gate but hasn't been staged long enough — update and wait
         try {
@@ -7460,6 +5306,9 @@ async function runScanForUser(
             missing_factors: missingFactors,
             scan_cycles: existingStaged.scan_cycles + 1,
             last_eval_at: new Date().toISOString(),
+            entry_price: analysis.lastPrice,
+            sl_level: analysis.stopLoss,
+            tp_level: analysis.takeProfit,
           }).eq("id", existingStaged.id);
           console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
         } catch (e: any) {
@@ -7473,174 +5322,8 @@ async function runScanForUser(
       }
     }
 
-    const buildPromotedLifecycleEvidence = (
-      originatingZone: Record<string, unknown> | null,
-      authorizationResult?: Record<string, unknown> | null,
-    ): (SetupLifecycleEvidence & {
-      directionVerdict: unknown;
-      confirmationConfig: {
-        indicatorMinCount: number;
-        maxConfirmationAttempts: number;
-      };
-      authorizationResult: Record<string, unknown> | null;
-    }) | null => {
-      if (
-        !isPromotedFromStaging ||
-        !existingStaged?.id ||
-        existingStaged.execution_eligible === false
-      ) return null;
-      const identity = {
-        setupId: existingStaged.id,
-        candidateId: existingStaged.candidate_id || existingStaged.id,
-      };
-      const savedPolicy = resolvePendingStylePolicy(
-        existingStaged,
-        pairStylePolicy,
-      ).policy;
-      const frozenStrategyContext =
-        readFrozenSetupStrategyContext(existingStaged) ||
-        buildFrozenSetupStrategyContext({
-          identity,
-          timeframeEvidenceId:
-            readFrozenSetupStrategyContext(existingStaged)
-              ?.timeframeEvidenceId ||
-            (detail as any).timeframeEvidenceId ||
-            null,
-          symbol: pair,
-          direction: analysis.direction as "long" | "short",
-          stylePolicy: savedPolicy,
-          runtimeConfig: pairRuntimeConfigSnapshot,
-          decisionContext:
-            existingStaged.authorization_result?.decisionContext ||
-            null,
-          gamePlan: activeGamePlan,
-          directionVerdict: activeDirectionVerdict,
-          conceptEvidence: selectedZoneConceptEvidence(),
-          zoneLocalConfluence: selectedZoneLocalConfluence(),
-          zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-          crossTimeframeContext: selectedCrossTimeframeContext(existingStaged.originating_zone || originatingZone),
-          entryZone:
-            existingStaged.originating_zone || originatingZone,
-          confirmationMethod:
-            existingStaged.confirmation_method ||
-            pairConfig.confirmationMethod ||
-            "choch",
-          indicatorMinCount:
-            existingStaged.confirmation_config?.indicatorMinCount ||
-            pairConfig.indicatorMinCount ||
-            3,
-        });
-      return {
-        ...buildSetupLifecycleEvidence({
-          identity,
-          symbol: pair,
-          gamePlan: activeGamePlan,
-          directionVerdict: activeDirectionVerdict,
-          confirmationMethod: frozenStrategyContext.confirmation.method,
-          entryZone: frozenStrategyContext.entryZone,
-          frozenStrategyContext,
-        }),
-        directionVerdict:
-          frozenStrategyContext.directionVerdict ||
-          (detail as any).directionVerdict ||
-          null,
-        confirmationConfig: {
-          indicatorMinCount:
-            frozenStrategyContext.confirmation.indicatorMinCount,
-          maxConfirmationAttempts:
-            frozenStrategyContext.confirmation.maxAttempts,
-        },
-        authorizationResult: {
-          ...(authorizationResult || {}),
-          frozenStrategyContext,
-        },
-      };
-    };
-
-    const qualifyPromotedSetup = async (
-      evidence: ReturnType<typeof buildPromotedLifecycleEvidence>,
-      reason: string,
-    ) => {
-      if (!evidence || !existingStaged) return;
-      const phase = deriveWatchlistLifecyclePhase({
-        executionEligible: true,
-        hasZone: true,
-        unifiedState: (detail as any).unifiedZone?.state || "confirmed",
-        priceAtZone: true,
-        entryTriggerState:
-          (detail as any).unifiedZone?.liquidity?.entryTriggerState || null,
-        confirmationReady: true,
-      });
-      await transitionStagedSetup(supabase, {
-        setupId: existingStaged.id,
-        userId,
-        status: "qualified",
-        reason,
-        reasonCode: "qualified",
-        lifecycleEvidence: buildWatchlistLifecycleEvidence({
-          reasonCode: "qualified",
-          phase: phase.phase,
-          milestones: phase.milestones,
-          observedPrice: analysis.lastPrice,
-          frozenDirection:
-            existingStaged.direction as WatchlistDirection,
-          freshDirection:
-            analysis.direction as WatchlistDirection | null,
-          score: analysis.score,
-          threshold: adjustedMinConfluence,
-          detail: { reason },
-        }),
-        evidence,
-      });
-    };
-
-    const blockQualifiedSetup = async (
-      evidence: ReturnType<typeof buildPromotedLifecycleEvidence>,
-      reason: string,
-    ) => {
-      if (!evidence || !existingStaged) return;
-      try {
-        const phase = deriveWatchlistLifecyclePhase({
-          executionEligible: true,
-          hasZone: true,
-          unifiedState: (detail as any).unifiedZone?.state || "confirmed",
-          priceAtZone: true,
-          entryTriggerState:
-            (detail as any).unifiedZone?.liquidity?.entryTriggerState || null,
-          confirmationReady: true,
-        });
-        await transitionStagedSetup(supabase, {
-          setupId: existingStaged.id,
-          userId,
-          status: "blocked_after_qualification",
-          reason,
-          reasonCode: "blocked_after_qualification",
-          lifecycleEvidence: buildWatchlistLifecycleEvidence({
-            reasonCode: "blocked_after_qualification",
-            phase: phase.phase,
-            milestones: phase.milestones,
-            observedPrice: analysis.lastPrice,
-            frozenDirection:
-              existingStaged.direction as WatchlistDirection,
-            freshDirection:
-              analysis.direction as WatchlistDirection | null,
-            score: analysis.score,
-            threshold: adjustedMinConfluence,
-            detail: { reason },
-          }),
-          evidence,
-        });
-        stagedMap.delete(stagedKey!);
-      } catch (error: any) {
-        console.warn(
-          `[staging] Failed to record post-qualification block for ${pair}: ${error?.message}`,
-        );
-      }
-    };
-
     // Apply the conflict hard-block decision computed above
-    if (legacyGateBlocks("conflict_count", !conflictHardBlock,
-        "Conflict counter: " + opposingCount + " opposing factors")) {
+    if (conflictHardBlock) {
       // N+ opposing factors = hard block — too much disagreement to trade
       detail.status = "rejected";
       detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
@@ -7651,8 +5334,7 @@ async function runScanForUser(
     }
 
     // ICT HTF hard gate: block trade if weekly bias or containment requirement fails (only in "hard" mode)
-    if (ictHTFResult && legacyGateBlocks("htf_alignment",
-        ictHTFResult.passed, "ICT HTF: " + ictHTFResult.reason)) {
+    if (ictHTFResult && !ictHTFResult.passed) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT HTF BLOCKED: ${ictHTFResult.reason}`];
       detail.reason = ictHTFResult.reason;
@@ -7661,8 +5343,7 @@ async function runScanForUser(
       continue;
     }
     // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
-    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult &&
-        legacyGateBlocks("ict_mss", ictMSSResult.isValid, "ICT MSS: " + ictMSSResult.reason)) {
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.valid) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
       detail.reason = ictMSSResult.reason;
@@ -7671,8 +5352,7 @@ async function runScanForUser(
       continue;
     }
     // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
-    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult &&
-        legacyGateBlocks("ict_judas", ictJudasResult.found, "ICT Judas: " + ictJudasResult.reason)) {
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.detected) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
       detail.reason = ictJudasResult.reason;
@@ -7681,8 +5361,7 @@ async function runScanForUser(
       continue;
     }
     // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
-    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.totalCount > 0 &&
-        legacyGateBlocks("ict_fvg_invalidation", ictFVGResult.validCount > 0, "ICT FVG invalidation")) {
+    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.validCount === 0 && ictFVGResult.totalCount > 0) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT FVG BLOCKED: All ${ictFVGResult.totalCount} FVGs invalidated/exhausted`];
       detail.reason = `All FVGs invalidated (${ictFVGResult.invalidatedCount} closed, ${ictFVGResult.exhaustedCount} exhausted)`;
@@ -7691,8 +5370,7 @@ async function runScanForUser(
       continue;
     }
     // ICT Kill Zone hard gate: block trade if outside all kill zones
-    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult &&
-        legacyGateBlocks("ict_kill_zone", ictKZResult.isKillZone, "ICT Kill Zone: " + ictKZResult.reason)) {
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.inKillZone) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
       detail.reason = ictKZResult.reason;
@@ -7701,54 +5379,49 @@ async function runScanForUser(
       continue;
     }
     // ICT Risk hard gate: block trade if risk limits exceeded
-    if (pairConfig.ictRiskEnabled && ictRiskResult &&
-        legacyGateBlocks("ict_risk", ictRiskResult.canTrade,
-          "ICT Risk: " + ictRiskResult.reasons.join("; "))) {
+    if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
       detail.status = "rejected";
-      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reasons.join("; ")}`];
-      detail.reason = ictRiskResult.reasons.join("; ");
+      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reason}`];
+      detail.reason = ictRiskResult.reason;
       rejectedCount++;
       scanDetails.push(detail);
       continue;
     }
 
-    // Paper enforcement can evaluate owned authorities without first passing the legacy score.
-    const legacyScannerEligible = effectiveScore >= conflictAdjustedMinConfluence;
-    if ((legacyScannerEligible || singleOwnershipEnforcementRequested) &&
-        analysis.direction && !isPaused) {
+    // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
+    if (effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
-      // Structural conviction uses the exact policy structure role:
-      // Scalper=15m, Day Trader=4H, Swing=Daily.
-      const convictionCandles = roleCandles.structure.length >= 20
-        ? roleCandles.structure
-        : null;
+      // Conviction-TF candles: one timeframe above entry for structural conviction gate.
+      // scalper (entry 5m) → conviction 15m (entry candles are 5m, but we use hourly as closest available above)
+      // day_trader (entry 15m) → conviction 1H (hourlyCandles)
+      // swing_trader (entry 1H) → conviction 4H (h4Candles)
+      const convictionCandles = resolvedStyle === "swing_trader"
+        ? (h4Candles.length >= 20 ? h4Candles : null)
+        : (hourlyCandles.length >= 20 ? hourlyCandles : null);
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
-        rateMap, convictionCandles, pairDecisionEvidence.labels.structure,
-        directionVerdict,
+        rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
-        effectiveScore,
-        conflictAdjustedMinConfluence,
       );
-      // ── Game Plan + Direction Verdict Alignment Gate ──
-      // analysis.direction has already been synchronized to the authoritative
-      // Direction Verdict above. Record the early Game Plan result for diagnostics;
-      // the final hierarchy is the sole owner of Game Plan authorization.
-      if (gamePlanEnabled) {
-        const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
-        const gpGate = evaluateGamePlanGate(activeGamePlan, pair, analysis.direction, gpEnforcementMode, gpThreshold);
-        const ownedGpGate = {
-          passed: true,
-          reason: `[diagnostic:gameplan_alignment] ${gpGate.reason}; final decision hierarchy owns authorization`,
-        };
-        gates.push(ownedGpGate);
-        console.log(
-          `[scan ${scanCycleId}] ℹ️ ${pair}: GP gate deferred to final hierarchy`
-          + ` — mode=${gpEnforcementMode}, biasConf=${gpGate.biasConfidence}%, threshold=${gpThreshold}%, direction=${analysis.direction}`,
-        );
+      // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
+      // Previously a binary veto that blocked trades opposing the game plan bias.
+      // Now converted to info-only: the scoring impact is handled by the GP Bias
+      // Confidence factor (Phase 5) which applies a continuous penalty/bonus.
+      // The gate always passes but logs what the legacy behavior would have done.
+      const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
+      if (activeGamePlan) {
+        if (!gpFilter.allowed) {
+          const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+          const biasConf = pairPlan?.biasConfidence ?? 0;
+          // Info-only: log what the old gate would have done
+          gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (legacy gate would have blocked at ${biasConf}% conf)`);
+        } else {
+          gates.push({ passed: true, reason: gpFilter.reason });
+        }
       }
       // ── News Impact Alignment Gate ──
       // If we have analyzed news impacts, check if the trade direction aligns with news bias.
@@ -7757,18 +5430,10 @@ async function runScanForUser(
       if (newsImpacts && newsImpacts.length > 0 && (config as any).newsFilterEnabled !== false) {
         try {
           const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
-          const newsConflictEnforced =
-            gamePlanAffectsExecution && newsAlignment.conflicting;
           if (newsAlignment.conflicting) {
-            gates.push({
-              passed: !newsConflictEnforced,
-              reason: gamePlanAffectsExecution
-                ? `News conflict: ${newsAlignment.advisory}`
-                : `[diagnostic:gameplan_news] News conflict observed: ${newsAlignment.advisory}; Game Plan mode is off`,
-            });
-            console.log(
-              `[scan ${scanCycleId}] ${newsConflictEnforced ? "❌" : "ℹ️"} ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`,
-            );
+            // Strong news conflict — block the trade
+            gates.push({ passed: false, reason: `News conflict: ${newsAlignment.advisory}` });
+            console.log(`[scan ${scanCycleId}] ❌ ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
           } else if (!newsAlignment.aligned && newsAlignment.strength >= 25) {
             // Moderate conflict — log warning but allow
             gates.push({ passed: true, reason: `News caution: ${newsAlignment.advisory}` });
@@ -7782,670 +5447,35 @@ async function runScanForUser(
           console.warn(`[scan ${scanCycleId}] News alignment check error (non-fatal): ${naErr?.message}`);
         }
       }
-      // ── SMC Video Enhancements (opt-in) ──────────────────────────────────────
-      // Runs additional analysis modules when config.smcEnhancements is non-null.
-      // Results are APPENDED to existing gates/factors — never replacing.
-      let smcEnhResult: SMCEnhancementsResult | null = null;
-      if (config.smcEnhancements) {
-        try {
-          const zoneHigh = (analysis as any).impulseZone?.high ?? (analysis.pd as any)?.premiumStart ?? null;
-          const zoneLow = (analysis as any).impulseZone?.low ?? (analysis.pd as any)?.discountEnd ?? null;
-          smcEnhResult = runSMCEnhancements(
-            candles,
-            dailyCandles.length >= 10 ? dailyCandles : null,
-            analysis.orderBlocks || [],
-            analysis.direction as "long" | "short" | null,
-            zoneHigh,
-            zoneLow,
-            analysis.lastPrice ?? null,
-            config.smcEnhancements,
-            monthlyCandles,
-          );
-          // Append supplementary gates
-          if (smcEnhResult.additionalGates.length > 0) {
-            gates.push(...smcEnhResult.additionalGates);
-          }
-          // Attach enhancement factors to analysis for dashboard visibility
-          if (smcEnhResult.additionalFactors.length > 0) {
-            (analysis as any).smcEnhancementFactors = smcEnhResult.additionalFactors;
-          }
-          // Attach full result for downstream use (TP override, breaker entries)
-          (analysis as any).smcEnhancements = smcEnhResult;
-        } catch (enhErr: any) {
-          console.warn(`[scan ${scanCycleId}] SMC enhancements error (non-fatal): ${enhErr?.message}`);
-        }
-      }
-
-      let allPassed = gates.every(g => g.passed);
-      (detail as any).gamePlanShadowAudit = finalizeShadowCurrentDecision(
-        (detail as any).gamePlanShadowAudit,
-        allPassed && !!analysis.stopLoss && !!analysis.takeProfit ? "allow" : "block",
-        allPassed
-          ? (!analysis.stopLoss || !analysis.takeProfit ? "No valid SL/TP" : null)
-          : gates.filter(g => !g.passed).map(g => g.reason).join("; "),
-      );
+      const allPassed = gates.every(g => g.passed);
       // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
       // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,
       // but detail.tieredScoring still references the pre-credit snapshot. Sync it here.
       detail.tieredScoring = analysis.tieredScoring;
       detail.score = analysis.score;
       detail.gates = gates;
-      detail.gamePlan = shadowPairPlan ? {
-        bias: shadowPairPlan.bias,
-        biasConfidence: shadowPairPlan.biasConfidence,
-        state: shadowPairPlan.state,
-        stateReason: shadowPairPlan.stateReason,
-      } : null;
-      const streamlinedDecisionContext = (detail as any).decisionContext;
-      const streamlinedDirectionVerdict =
-        streamlinedDecisionContext?.directionVerdict ||
-        activeDirectionVerdict ||
-        null;
-      const streamlinedConviction =
-        streamlinedDecisionContext?.thesisConviction?.evidence;
-      const marketLocationObservation =
-        (detail as any).canonicalDealingRangeObservation?.canonical || null;
-      const frozenEntryPrice = Number(currentPendingCandidate?.entry_price ??
-        (pairConfig.preArmZoneSetups === true ? preparedZoneWatch?.entry_price : Number.NaN));
-      const canonicalLocationObservation = Number.isFinite(frozenEntryPrice)
-        ? evaluateCanonicalDealingRange({
-          range: marketLocationObservation?.range || null,
-          direction: analysis.direction as "long" | "short",
-          price: frozenEntryPrice,
-          mode: normalizeDealingRangeMode((pairConfig as any).dealingRangeMode, {
-            onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
-            onlySellInPremium: pairConfig.onlySellInPremium,
-          }),
-        })
-        : marketLocationObservation;
-      if (Number.isFinite(frozenEntryPrice)) {
-        const frozenStop = Number(currentPendingCandidate?.stop_loss ?? preparedZoneWatch?.sl_level);
-        const frozenTarget = Number(currentPendingCandidate?.take_profit ?? preparedZoneWatch?.tp_level);
-        (detail as any).frozenExecutablePlan = {
-          contractVersion: "frozen-executable-plan.v1",
-          candidateId: currentPendingCandidate?.candidate_id || preparedZoneWatch?.candidate_id || null,
-          entryPrice: frozenEntryPrice,
-          stopLoss: Number.isFinite(frozenStop) ? frozenStop : null,
-          takeProfit: Number.isFinite(frozenTarget) ? frozenTarget : null,
-          location: canonicalLocationObservation,
-        };
-        (detail as any).canonicalDealingRangeObservation = {
-          ...((detail as any).canonicalDealingRangeObservation || {}),
-          marketPriceObservation: marketLocationObservation,
-          canonical: canonicalLocationObservation,
-          evaluatedPriceOwner: "frozen_executable_entry",
-        };
-      }
-      const singleOwnershipCandidateId =
-        izData?.bestZone?.candidateModel?.candidateId ||
-        izData?.bestZone?.localConfluence?.candidateId ||
-        (detail as any).crossTimeframeCandidateId ||
-        "candidate:" + scanCycleId + ":" + pair;
-      const candidateConfirmationMethod = pairConfig.confirmationMethod || "choch";
-      const candidateSweep = (detail as any).sweepReclaim?.bestReclaim ||
-        (detail as any).sweepReclaim?.sweeps?.[0] || null;
-      const candidateSweepEvent = candidateSweep?.sweptLevel
-        ? { level: candidateSweep.sweptLevel, type: candidateSweep.type || "buy-side" }
-        : null;
-      const candidateConfirmationSignal = candidateConfirmationMethod === "indicators"
-        ? null
-        : detectZoneConfirmation(
-          roleCandles.confirmation,
-          analysis.direction as "long" | "short",
-          DEFAULT_ZONE_CONFIRMATION_CONFIG,
-          undefined,
-          pair,
-          izData?.bestZone
-            ? { zoneLow: izData.bestZone.low, zoneHigh: izData.bestZone.high }
-            : undefined,
-          roleCandles.refinement.length >= 15 ? roleCandles.refinement : undefined,
-          candidateSweepEvent,
-          (detail as any).signalSource === "cascade" ? "cascade"
-            : (detail as any).signalSource === "unified" ? "unified" : "standalone",
-        );
-      const candidateIndicatorConfirmation = candidateConfirmationMethod === "choch"
-        ? null
-        : checkIndicatorConfirmation(
-          roleCandles.confirmation,
-          analysis.direction as "long" | "short",
-          { minIndicators: pairConfig.indicatorMinCount || 3 },
-        );
-      const candidateEntryConfirmationPassed = candidateConfirmationMethod === "choch"
-        ? !!candidateConfirmationSignal
-        : candidateConfirmationMethod === "indicators"
-        ? candidateIndicatorConfirmation?.confirmed === true
-        : !!candidateConfirmationSignal && candidateIndicatorConfirmation?.confirmed === true;
-      const canonicalStructureDecision = evaluateCanonicalStructureDecision({
-        direction: analysis.direction as "long" | "short" | null,
-        structure: canonicalStructureAuthority,
-        liquidity: canonicalLiquiditySequence,
-        requireLiquiditySweep: pairConfig.requireLiquiditySweep === true,
-      });
-      const sequenceDirection = analysis.direction === "long" ? "bullish" : "bearish";
-      const observedLiquiditySequence = [...canonicalLiquiditySequence.sequences]
-        .reverse()
-        .find((sequence) => sequence.direction === sequenceDirection && sequence.sweep) || null;
-      const confirmationTime = candidateConfirmationSignal?.authority?.candleTime || null;
-      const confirmationId = candidateConfirmationSignal && confirmationTime
-        ? buildLiquidityConfirmationId({
-          symbol: pair,
-          timeframe: timeframeAuthority.roles.confirmation,
-          direction: analysis.direction as "long" | "short",
-          candleTime: confirmationTime,
-          price: candidateConfirmationSignal.price,
-          type: candidateConfirmationSignal.type,
-        })
-        : null;
-      const liquidityConfirmationObservation = observeLiquidityConfirmation({
-        candidateId: currentPendingCandidate?.candidate_id ||
-          existingStaged?.candidate_id || singleOwnershipCandidateId,
-        stagedAt: existingStaged?.staged_at || null,
-        zoneTouchTime: currentPendingCandidate?.zone_touch_time || null,
-        sequence: observedLiquiditySequence,
-        confirmationId,
-        confirmationTime,
-      });
-      (detail as any).liquidityConfirmationObservation = liquidityConfirmationObservation;
-      if (currentPendingCandidate?.order_id) {
-        await supabase.from("pending_orders").update({
-          liquidity_confirmation_observation: liquidityConfirmationObservation,
-        }).eq("order_id", currentPendingCandidate.order_id).eq("user_id", userId)
-          .in("status", ["pending", "awaiting_confirmation"]);
-      }
-      if (existingStaged?.id) {
-        await supabase.from("staged_setups").update({
-          liquidity_confirmation_observation: liquidityConfirmationObservation,
-        }).eq("id", existingStaged.id).eq("user_id", userId);
-      }
-      (detail as any).canonicalStructureDecision = canonicalStructureDecision;
-      (detail as any).entryConfirmationCandidate = {
-        method: candidateConfirmationMethod,
-        passed: candidateEntryConfirmationPassed,
-        signal: candidateConfirmationSignal,
-        indicators: candidateIndicatorConfirmation,
-      };
-      const entryZoneAvailable = cascadeResult?.state === "triggered" ||
-        unifiedZoneData?.hasZone === true || izData?.hasZone === true;
-      const entryZoneReady = cascadeResult?.state === "triggered"
-        ? true
-        : unifiedZoneData?.hasZone
-        ? unifiedGatePassed
-        : izData?.hasZone
-        ? izData?.bestZone?.priceAtZoneStrict === true &&
-          candidateEntryConfirmationPassed
-        : null;
-      (detail as any).singleOwnershipDecision =
-        evaluateSingleOwnershipDecision({
-          evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
-            new Date().toISOString(),
-          identity: {
-            candidateId: singleOwnershipCandidateId, symbol: pair,
-            direction: analysis.direction as "long" | "short" | null,
-          },
-          direction: {
-            verdict: streamlinedDirectionVerdict?.verdict || null,
-            shouldBlock: streamlinedDirectionVerdict?.shouldBlock ?? null,
-            evidenceId: streamlinedDirectionVerdict?.id || null,
-          },
-          entryZone: {
-            available: entryZoneAvailable, valid: entryZoneAvailable ? true : null,
-            entryReady: entryZoneReady,
-            source: (detail as any).signalSource || null,
-            candidateId: singleOwnershipCandidateId,
-            setupFamily: (detail as any).signalSource === "cascade"
-              ? "cascade"
-              : "impulse",
-            sourceEvidenceIds: selectedZoneConceptEvidence().map((item: any) =>
-              String(item.evidenceId)
-            ),
-            impulseId: canonicalLocationObservation?.range?.impulseId || null,
-            poiType: izData?.bestZone?.type || null,
-            reasonCodes: entryZoneAvailable
-              ? ["entry_zone_available"]
-              : ["entry_zone_unavailable"],
-          },
-          canonicalLocation: {
-            required: ((pairConfig as any).dealingRangeMode || "avoid_wrong_side") !== "off",
-            available: canonicalLocationObservation?.available === true,
-            allowed: canonicalLocationObservation?.available === true
-              ? canonicalLocationObservation.allowed === true
-              : null,
-            rangeId: canonicalLocationObservation?.range?.impulseId || null,
-            reasonCode: canonicalLocationObservation?.code || null,
-          },
-          confirmation: {
-            required: entryZoneAvailable, passed: entryZoneReady,
-            authorityVersion: "confirmation-authority.v1",
-            reasonCodes: entryZoneReady ? ["zone_confirmation_ready"] : ["zone_confirmation_waiting"],
-          },
-          thesis: {
-            required: streamlinedDecisionContext?.thesisValidity?.required === true,
-            valid: streamlinedDecisionContext?.thesisValidity?.valid ?? null,
-            reasonCodes: [streamlinedDecisionContext?.thesisValidity?.checkType || "thesis_validation"],
-          },
-          safety: {
-            complete: true,
-            checks: operationalSafetyChecks(gates.map((gate) => ({
-              code: normalizeRejectedGate(gate.reason), passed: gate.passed,
-            }))),
-          },
-          legacyDiagnostics: {
-            rawScore: analysis.score, effectiveScore,
-            threshold: conflictAdjustedMinConfluence,
-            tier1Count: analysis.tieredScoring?.tier1Count ?? null,
-            tier2Count: analysis.tieredScoring?.tier2Count ?? null,
-            tier3Count: analysis.tieredScoring?.tier3Count ?? null,
-            tier1GatePassed: analysis.tieredScoring?.tier1GatePassed ?? null,
-          },
-        });
-      const singleOwnershipEnforcement = evaluateSingleOwnershipEnforcement({
-        requestedMode: (pairConfig as any).singleOwnershipMode,
-        runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-        decision: (detail as any).singleOwnershipDecision,
-      });
-      const canonicalStructureEnforcement = evaluateCanonicalStructureEnforcement({
-        requestedMode: (pairConfig as any).canonicalStructureMode,
-        singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
-        decision: canonicalStructureDecision,
-      });
-      (detail as any).canonicalStructureEnforcement = canonicalStructureEnforcement;
-      (detail as any).singleOwnershipEnforcement = singleOwnershipEnforcement;
-      const singleOwnershipScanOutcome = resolveSingleOwnershipScanOutcome({
-        enforcement: singleOwnershipEnforcement,
-        decision: (detail as any).singleOwnershipDecision,
-      });
-      if (singleOwnershipEnforcement.effectiveMode === "enforce") {
-        // In ownership enforcement, named authorities replace all legacy market-quality
-        // scores and gates. Operational safety is already owned by the decision.
-        allPassed = singleOwnershipEnforcement.authorized;
-      }
-      if (canonicalStructureEnforcement.effectiveMode === "enforce") {
-        allPassed = allPassed && canonicalStructureEnforcement.authorized;
-      }
-
-      const ownedDecision = (detail as any).singleOwnershipDecision;
-      const scannerLiquidityState = unifiedZoneData?.liquidity?.entryTriggerState || "none";
-      (detail as any).canonicalScannerState = projectCanonicalScannerState({
-        evaluatedAt: ownedDecision.evaluatedAt,
-        identity: ownedDecision.identity,
-        direction: {
-          available: !!ownedDecision.authorities.direction.verdict,
-          allowed: ownedDecision.authorities.direction.shouldBlock === null
-            ? null
-            : !ownedDecision.authorities.direction.shouldBlock &&
-              ownedDecision.authorities.direction.verdict === ownedDecision.identity.direction,
-          evidenceId: ownedDecision.authorities.direction.evidenceId || null,
-        },
-        structure: {
-          required: canonicalStructureEnforcement.effectiveMode === "enforce",
-          decision: canonicalStructureDecision.decision,
-          source: "canonical_structure_sequence",
-          evidenceId: canonicalStructureDecision.sequenceId,
-          reasonCode: canonicalStructureDecision.reasonCode,
-        },
-        zone: {
-          available: ownedDecision.authorities.entryZone.available,
-          valid: ownedDecision.authorities.entryZone.valid,
-          atPoi: ownedDecision.authorities.entryZone.available &&
-            (unifiedZoneData?.price?.atZone === true ||
-              izData?.bestZone?.priceAtZone === true),
-          evidenceId: ownedDecision.authorities.entryZone.candidateId || null,
-          reasonCode: ownedDecision.authorities.entryZone.reasonCodes[0] || null,
-        },
-        location: ownedDecision.authorities.canonicalLocation,
-        liquidity: {
-          policy: pairConfig.requireLiquiditySweep === true
-            ? "required" : scannerLiquidityState === "none"
-            ? "not_required" : "supporting",
-          state: ["unswept", "swept_rejected", "swept_absorbed"].includes(scannerLiquidityState)
-            ? scannerLiquidityState : "none",
-          source: "zone_liquidity",
-        },
-        confirmation: {
-          required: ownedDecision.authorities.confirmation.required,
-          passed: ownedDecision.authorities.confirmation.passed,
-          awaitingRetracement:
-            (detail as any).postChochRetracement?.status === "waiting",
-          evidenceId: confirmationId,
-          reasonCode: ownedDecision.authorities.confirmation.reasonCodes[0] || null,
-        },
-        thesis: ownedDecision.authorities.thesis,
-        safety: {
-          complete: ownedDecision.authorities.safety.complete,
-          passed: ownedDecision.authorities.safety.checks.every((check: any) => check.passed),
-          reasonCode: ownedDecision.authorities.safety.checks.find((check: any) => !check.passed)?.code || null,
-        },
-        execution: {
-          authorized: singleOwnershipEnforcement.effectiveMode === "enforce"
-            ? singleOwnershipEnforcement.authorized : allPassed,
-          source: "final_trade_authorization",
-        },
-      });
-
-      const canonicalScannerEnforcement = evaluateCanonicalScannerEnforcement({
-        requestedMode: (pairConfig as any).canonicalScannerMode,
-        singleOwnershipEffectiveMode: singleOwnershipEnforcement.effectiveMode,
-        state: (detail as any).canonicalScannerState,
-      });
-      (detail as any).canonicalScannerEnforcement = canonicalScannerEnforcement;
-      if (canonicalScannerEnforcement.effectiveMode === "enforce") {
-        allPassed = canonicalScannerEnforcement.authorized;
-      }
-
-      (detail as any).tradeDecisionPresentation = buildTradeDecisionPresentation({
-        state: (detail as any).canonicalScannerState,
-        legacyDiagnostics: (detail as any).legacyGateDiagnostics || [],
-      });
-
-      (detail as any).streamlinedTradeDecision =
-        buildStreamlinedTradeDecisionObservation({
-          evaluatedAt: streamlinedDecisionContext?.evaluatedAt ||
-            new Date().toISOString(),
-          candidateId: "candidate:" + scanCycleId + ":" + pair,
-          symbol: pair,
-          direction: analysis.direction as "long" | "short" | null,
-          authority: {
-            stylePolicyVersion: pairStylePolicy.contractVersion,
-            stylePolicyHash: pairStylePolicy.policyHash,
-            styleBasePolicyHash: pairStylePolicy.basePolicyHash,
-            timeframeEvidenceId:
-              (detail as any).timeframeEvidenceId || null,
-            gamePlanId:
-              streamlinedDecisionContext?.gamePlan?.id || null,
-            gamePlanVersion:
-              streamlinedDecisionContext?.gamePlan?.version || null,
-            directionVerdictVersion:
-              streamlinedDirectionVerdict?.verdictVersion || null,
-          },
-          directionVerdict: streamlinedDirectionVerdict,
-          directionReasonCode:
-            streamlinedDecisionContext?.hierarchy?.code ||
-            "direction_evidence_unavailable",
-          legacyScoring: {
-            rawScore: analysis.score,
-            effectiveScore,
-            threshold: conflictAdjustedMinConfluence,
-          },
-          thesis: {
-            validationRequired:
-              streamlinedDecisionContext?.thesisValidity?.required === true,
-            valid:
-              streamlinedDecisionContext?.thesisValidity?.valid ?? null,
-            conviction:
-              typeof streamlinedConviction?.conviction === "number"
-                ? streamlinedConviction.conviction
-                : null,
-            degrading:
-              typeof streamlinedConviction?.thesisDegrading === "boolean"
-                ? streamlinedConviction.thesisDegrading
-                : null,
-            reasonCode:
-              streamlinedDecisionContext?.thesisValidity?.checkType ||
-              "thesis_validation",
-            version: THESIS_VALIDATION_VERSION,
-            evaluatedAt:
-              streamlinedDecisionContext?.thesisValidity?.evaluatedAt || null,
-          },
-          confirmation: {
-            required:
-              streamlinedDecisionContext?.entryConfirmation?.required === true,
-            passed:
-              streamlinedDecisionContext?.entryConfirmation?.passed ?? null,
-            reasonCode:
-              streamlinedDecisionContext?.entryConfirmation?.method ||
-              "confirmation_not_required",
-            evaluatedAt:
-              streamlinedDecisionContext?.entryConfirmation?.evaluatedAt ||
-              null,
-          },
-          gates,
-          safetyComplete: true,
-          factors: analysis.factors,
-          locationEvidence: {
-            source: "zone_story_and_market_location",
-            id: (detail as any).crossTimeframeCandidateId || null,
-            observedAt: streamlinedDecisionContext?.evaluatedAt || null,
-          },
-        });
-      const streamlinedLifecycle = lifecycleProjection(
-        (detail as any).streamlinedTradeDecision,
-        "candidate",
-        analysis.lastPrice,
-      );
-      Object.assign(detail as any, streamlinedLifecycle);
-      // Historical Streamlined Decision remains observable. It has no runtime
-      // enforcement object because Single Ownership exclusively controls allPassed.
-      const streamlinedStagedId = existingStaged?.id ||
-        (detail as any).staging?.setupId || null;
-      if (streamlinedStagedId) {
-        const { error: streamlinedStageError } = await supabase
-          .from("staged_setups")
-          .update({
-            streamlined_decision_origin:
-              streamlinedLifecycle.streamlinedDecisionOrigin,
-            streamlined_decision_latest:
-              streamlinedLifecycle.streamlinedDecisionLatest,
-          })
-          .eq("id", streamlinedStagedId)
-          .eq("user_id", userId)
-          .is("streamlined_decision_origin", null);
-        if (streamlinedStageError) {
-          console.warn(
-            "[streamlined] Watchlist persistence failed for " + pair + ": " +
-              streamlinedStageError.message,
-          );
-        }
-      }
-      if (streamlinedStagedId) {
-        await supabase.from("staged_setups").update({
-          streamlined_decision_latest:
-            streamlinedLifecycle.streamlinedDecisionLatest,
-        }).eq("id", streamlinedStagedId).eq("user_id", userId);
-      }
-      const replayZone = unifiedZoneData?.hasZone
-        ? {
-          source: (detail as any).signalSource || "unified",
-          state: unifiedZoneData.state || null,
-          hasZone: true,
-          entryReady: unifiedZoneData.confirmation?.entryReady === true,
-          score: unifiedZoneData.unifiedScore ?? null,
-          timeframe: unifiedZoneData.selectedTF ??
-            unifiedZoneData.multiTFResult?.selectedTF ??
-            null,
-          low: unifiedZoneData.zone?.low ?? null,
-          high: unifiedZoneData.zone?.high ?? null,
-          entry: unifiedZoneData.entry?.entryPrice ?? null,
-        }
-        : {
-          source: (detail as any).signalSource || "standalone",
-          state: izData?.hasZone
-            ? (izData.bestZone?.priceAtZone ? "triggered" : "waiting_for_price")
-            : "no_zone",
-          hasZone: izData?.hasZone === true,
-          entryReady: izData?.bestZone?.priceAtZone === true,
-          score: izData?.bestZone?.totalScore ?? null,
-          timeframe: izData?.selectedTF ?? null,
-          low: izData?.bestZone?.low ?? null,
-          high: izData?.bestZone?.high ?? null,
-          entry: izData?.bestZone?.refinedEntry ?? null,
-        };
-      const replayEvaluatedAt = candles[candles.length - 1]?.datetime || null;
-      const replayInputFingerprint = replayEvaluatedAt
-        ? await buildGoldenReplayRuntimeInputFingerprint({
-          symbol: pair,
-          evaluatedAt: replayEvaluatedAt,
-          stylePolicy: pairStylePolicy,
-          roleCandles,
-          runtimeConfig: pairConfig,
-        })
-        : null;
-      (detail as any).goldenReplaySnapshot = await buildGoldenReplaySnapshot({
-        surface: "live",
-        symbol: pair,
-        evaluatedAt: replayEvaluatedAt || new Date().toISOString(),
-        provenance: {
-          inputFingerprint: replayInputFingerprint,
-        },
-        stylePolicy: pairStylePolicy,
-        direction: analysis.direction,
-        directionVerdict: {
-          verdict: directionVerdict?.verdict || null,
-          confidence: directionVerdict?.confidence ?? null,
-          shouldBlock: directionVerdict?.shouldBlock ?? null,
-          version: activeDirectionVerdict?.verdictVersion || null,
-          gamePlanVersion:
-            activeDirectionVerdict?.gamePlanVersion || null,
-        },
-        gamePlan: shadowPairPlan
-          ? {
-            id: shadowPairPlan.gamePlanId || null,
-            version: shadowPairPlan.planVersion ||
-              activeGamePlan?.planVersion ||
-              null,
-            state: shadowPairPlan.state || null,
-            bias: shadowPairPlan.bias || null,
-            confidence: shadowPairPlan.biasConfidence ?? null,
-          }
-          : null,
-        zone: replayZone,
-        scenario: {
-          enforcement: "observe_only",
-          selectedScenarioIndex: null,
-          candidates: (shadowPairPlan?.scenarios || []).map(
-            (scenario: any, index: number) => ({
-              index,
-              direction: scenario.direction || null,
-              condition: scenario.condition || null,
-              action: scenario.action || null,
-              target: scenario.targetLevel ?? null,
-              invalidation: scenario.invalidation || null,
-            }),
-          ),
-        },
-        scoring: {
-          raw: analysis.score,
-          effective: effectiveScore,
-          threshold: conflictAdjustedMinConfluence,
-          passed: effectiveScore >= conflictAdjustedMinConfluence,
-        },
-        gates,
-        execution: {
-          eligible: allPassed &&
-            !!analysis.stopLoss &&
-            !!analysis.takeProfit,
-          entryPrice: analysis.lastPrice,
-          stopLoss: analysis.stopLoss,
-          takeProfit: analysis.takeProfit,
-          riskReward: analysis.stopLoss && analysis.takeProfit
-            ? Math.abs(analysis.takeProfit - analysis.lastPrice) /
-              Math.abs(analysis.lastPrice - analysis.stopLoss)
-            : null,
-          positionSize: null,
-          orderType: null,
-        },
-        managementContractVersion: "management-policy.v1",
-      });
-      const finalizeDetailGoldenReplay = async (
-        finalization: GoldenReplayFinalization,
-      ) => {
-        (detail as any).goldenReplaySnapshot =
-          await finalizeGoldenReplaySnapshot(
-            (detail as any).goldenReplaySnapshot,
-            finalization,
-          );
-        return (detail as any).goldenReplaySnapshot;
-      };
-
-      if (singleOwnershipScanOutcome.disposition === "wait") {
-        detail.status = singleOwnershipScanOutcome.status;
-        detail.reason = singleOwnershipScanOutcome.reasons.join("; ");
-        detail.waitingReasons = singleOwnershipScanOutcome.reasons;
-        scanDetails.push(detail);
-        continue;
-      }
+      detail.gamePlan = gpFilter; // attach game plan filter result to scan detail
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs
         const spec = SPECS[pair] || SPECS["EUR/USD"];
         let sl = analysis.stopLoss;
         let tp = analysis.takeProfit;
-        // next_level delegates to calculateSLTP so every route shares target selection and fallback policy.
-        const computeTP = (entry: number, newSl: number, direction: string): number => {
-          const risk = Math.abs(entry - newSl);
-          if (pairConfig.tpMethod === "next_level") {
-            const gamePlanContext = (pairConfig as any)._gamePlanContext;
-            const dolTargets = (pairConfig as any).dolTPExtensionEnabled !== false && gamePlanContext?.dol
-              ? (Array.isArray(gamePlanContext.dol) ? gamePlanContext.dol : [gamePlanContext.dol])
-              : undefined;
-            const target = calculateSLTP({
-              direction: direction as "long" | "short",
-              lastPrice: entry,
-              pipSize: spec.pipSize,
-              config: pairConfig,
-              swings: analysis.structure?.swingPoints || [],
-              orderBlocks: analysis.orderBlocks || [],
-              liquidityPools: analysis.liquidityPools || [],
-              pdLevels: analysis.pdLevels || null,
-              atrValue: Number((analysis as any).atrValue) || 0,
-              fvgs: analysis.fvgs || [],
-              fibExtensions: analysis.fibLevels?.extensions,
-              dolTargets,
-              resolvedStopLoss: newSl,
-            });
-            return target.takeProfit ?? Number.NaN;
-          }
-          // ── Fib 3-Point Extension TP (SMC Enhancement) ──
-          // Measures extensions from the ENTRY point (Point C), not from the swing origin.
-          // Uses the first extension level that satisfies minRiskReward.
-          if ((pairConfig.tpMethod as string) === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
-            const ext = smcEnhResult.fibExtension;
-            // Try each extension level (ordered from nearest to farthest)
-            for (const level of ext.levels) {
-              const tpCandidate = level.price;
-              const tpOnCorrectSide = direction === "long"
-                ? tpCandidate > entry
-                : tpCandidate < entry;
-              if (!tpOnCorrectSide) continue;
-              const extensionRR = Math.abs(tpCandidate - entry) / risk;
-              if (extensionRR >= (pairConfig.minRiskReward ?? 1.0)) {
-                return tpCandidate;
-              }
-            }
-            // Fallback: no extension level satisfies R:R, use default ratio
-          }
-          return direction === "long" ? entry + risk * pairConfig.tpRatio : entry - risk * pairConfig.tpRatio;
-        };
 
-        // calculateSLTP owns the configured SL method. Only recalculate from
-        // structure when Direction Verdict actually flipped the direction,
-        // because the original SL is then on the wrong side of the entry.
-        const originalSlSide = analysis.stopLoss != null
-          ? (analysis.stopLoss < analysis.lastPrice ? "long" : "short")
-          : null;
-        const directionFlipped = originalSlSide !== null && originalSlSide !== analysis.direction;
-        if (directionFlipped && analysis.direction === "long") {
+        // Recalculate SL with correct pip size
+        if (analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
             sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
-            tp = computeTP(analysis.lastPrice, sl, "long");
-          } else {
-            // No swings available AND direction was flipped — fall back to ATR/static floor
-            // instead of leaving the inverted analysis.stopLoss in place.
-            const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
-            sl = analysis.lastPrice - fallbackPips * spec.pipSize;
-            tp = computeTP(analysis.lastPrice, sl, "long");
-            console.log(`[${pair}] Direction flipped to LONG with no swing lows — using fallback SL ${fallbackPips}p`);
+            const risk = analysis.lastPrice - sl;
+            tp = analysis.lastPrice + risk * config.tpRatio;
           }
-        } else if (directionFlipped) {
+        } else {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
             sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
-            tp = computeTP(analysis.lastPrice, sl, "short");
-          } else {
-            const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
-            sl = analysis.lastPrice + fallbackPips * spec.pipSize;
-            tp = computeTP(analysis.lastPrice, sl, "short");
-            console.log(`[${pair}] Direction flipped to SHORT with no swing highs — using fallback SL ${fallbackPips}p`);
+            const risk = sl - analysis.lastPrice;
+            tp = analysis.lastPrice - risk * config.tpRatio;
           }
         }
 
@@ -8468,7 +5498,10 @@ async function runScanForUser(
             sl = analysis.lastPrice + minSlDistance;
           }
           // Recalculate TP based on widened SL
-          tp = computeTP(analysis.lastPrice, sl, analysis.direction);
+          const newRisk = Math.abs(analysis.lastPrice - sl);
+          tp = analysis.direction === "long"
+            ? analysis.lastPrice + newRisk * config.tpRatio
+            : analysis.lastPrice - newRisk * config.tpRatio;
         }
         // ── Impulse Zone SL Override (hard gate mode) ──
         // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
@@ -8481,25 +5514,27 @@ async function runScanForUser(
               ? impulseData.low - (adjustedSlBuffer * spec.pipSize)
               : impulseData.high + (adjustedSlBuffer * spec.pipSize);
             const impulseSlDistance = Math.abs(analysis.lastPrice - impulseSL);
-            const currentSlDistance = Math.abs(analysis.lastPrice - sl);
             // Only override if impulse SL is wider than current SL (more protective)
             // and within reasonable bounds (not absurdly wide)
             const maxImpulseSlPips = (staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4)); // Configurable cap (default 4x)
             const impulseSlPips = impulseSlDistance / spec.pipSize;
-            if (impulseSlDistance > currentSlDistance && impulseSlPips <= maxImpulseSlPips) {
+            if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
               sl = impulseSL;
               // Recalculate TP based on impulse SL for proper R:R
-              tp = computeTP(analysis.lastPrice, sl, analysis.direction);
+              const impulseRisk = Math.abs(analysis.lastPrice - sl);
+              tp = analysis.direction === "long"
+                ? analysis.lastPrice + impulseRisk * config.tpRatio
+                : analysis.lastPrice - impulseRisk * config.tpRatio;
               detail.impulseZoneSLOverride = {
-                originalSL: currentSlDistance / spec.pipSize,
+                originalSL: actualSlDistance / spec.pipSize,
                 impulseSL: impulseSlPips,
                 impulseOrigin: analysis.direction === "long" ? impulseData.low : impulseData.high,
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
-              console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping configured SL.`);
-            } else if (impulseSlDistance <= currentSlDistance) {
-              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than configured stop (${impulseSlPips.toFixed(1)}p < ${(currentSlDistance / spec.pipSize).toFixed(1)}p). Keeping configured SL.`);
+              console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
+            } else if (impulseSlDistance <= actualSlDistance) {
+              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(actualSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
             }
           }
         }
@@ -8511,18 +5546,17 @@ async function runScanForUser(
           const unifiedSL = unifiedZoneData.entry.slPrice;
           const unifiedSlDistance = Math.abs(analysis.lastPrice - unifiedSL);
           const unifiedSlPips = unifiedSlDistance / spec.pipSize;
-          const currentSlDistance = Math.abs(analysis.lastPrice - sl);
           const maxUnifiedSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
-          const unifiedOnCorrectSide = analysis.direction === "long"
-            ? unifiedSL < analysis.lastPrice
-            : unifiedSL > analysis.lastPrice;
-          if (unifiedOnCorrectSide && unifiedSlDistance > currentSlDistance && unifiedSlPips <= maxUnifiedSlPips) {
+          if (unifiedSlPips >= effectiveMinSlPips && unifiedSlPips <= maxUnifiedSlPips) {
             console.log(`[${pair}] Unified Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${unifiedSlPips.toFixed(1)}p (unified story [${unifiedZoneData.selectedTF}])`);
             sl = unifiedSL;
             // Recalculate TP based on unified SL for proper R:R
-            tp = computeTP(analysis.lastPrice, sl, analysis.direction);
+            const unifiedRisk = Math.abs(analysis.lastPrice - sl);
+            tp = analysis.direction === "long"
+              ? analysis.lastPrice + unifiedRisk * config.tpRatio
+              : analysis.lastPrice - unifiedRisk * config.tpRatio;
             (detail as any).unifiedZoneSLOverride = {
-              originalSLPips: currentSlDistance / spec.pipSize,
+              originalSLPips: actualSlDistance / spec.pipSize,
               unifiedSLPips: unifiedSlPips,
               source: `unified_${unifiedZoneData.selectedTF}_story`,
             };
@@ -8538,18 +5572,17 @@ async function runScanForUser(
           const cascadeSL = cascadeResult.sl;
           const cascadeSlDistance = Math.abs(analysis.lastPrice - cascadeSL);
           const cascadeSlPips = cascadeSlDistance / spec.pipSize;
-          const currentSlDistance = Math.abs(analysis.lastPrice - sl);
           const maxCascadeSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 6);
-          const cascadeOnCorrectSide = analysis.direction === "long"
-            ? cascadeSL < analysis.lastPrice
-            : cascadeSL > analysis.lastPrice;
-          if (cascadeOnCorrectSide && cascadeSlDistance > currentSlDistance && cascadeSlPips <= maxCascadeSlPips) {
+          if (cascadeSlPips >= effectiveMinSlPips && cascadeSlPips <= maxCascadeSlPips) {
             console.log(`[${pair}] Cascade Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${cascadeSlPips.toFixed(1)}p (cascade Daily\u21924H\u21921H)`);
             sl = cascadeSL;
             // Recalculate TP based on cascade SL for proper R:R
-            tp = computeTP(analysis.lastPrice, sl, analysis.direction);
+            const cascadeRisk = Math.abs(analysis.lastPrice - sl);
+            tp = analysis.direction === "long"
+              ? analysis.lastPrice + cascadeRisk * config.tpRatio
+              : analysis.lastPrice - cascadeRisk * config.tpRatio;
             (detail as any).cascadeZoneSLOverride = {
-              originalSLPips: currentSlDistance / spec.pipSize,
+              originalSLPips: actualSlDistance / spec.pipSize,
               cascadeSLPips: cascadeSlPips,
               source: "cascade_daily_h4_h1",
             };
@@ -8605,24 +5638,6 @@ async function runScanForUser(
           console.log(`[${pair}] TP too small: ${actualTpPips.toFixed(1)} pips < min ${minTpPips} pips. Trade not worth the spread cost. SKIPPING.`);
           detail.status = "skipped_tp_too_small";
           detail.skipReason = `TP ${actualTpPips.toFixed(1)}p < min ${minTpPips}p`;
-          await finalizeDetailGoldenReplay({
-            execution: {
-              eligible: false,
-              entryPrice: analysis.lastPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              riskReward: Math.abs(tp - analysis.lastPrice) /
-                Math.abs(analysis.lastPrice - sl),
-              positionSize: null,
-              orderType: null,
-            },
-            lifecycle: {
-              route: "candidate",
-              stage: "protection",
-              outcome: "blocked",
-              reason: detail.skipReason,
-            },
-          });
           scanDetails.push(detail);
           continue;
         }
@@ -8639,15 +5654,14 @@ async function runScanForUser(
             })),
             { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
           );
-          correlationSizeMultiplier = resolveCorrelationSizeMultiplier(
-            portfolioCheck.concentrationScore,
-          );
-          if (correlationSizeMultiplier < 1.0) {
+          if (portfolioCheck.concentrationScore > 0.5) {
+            // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
+            correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
             console.log(`[${pair}] ⚠️ Portfolio correlation advisory: concentration=${(portfolioCheck.concentrationScore * 100).toFixed(0)}%, size multiplier=${correlationSizeMultiplier.toFixed(2)}. Conflicts: ${portfolioCheck.conflicts.map(c => c.detail).join("; ") || "none"}`);
             detail.correlationAdvisory = {
               concentrationScore: portfolioCheck.concentrationScore,
               sizeMultiplier: correlationSizeMultiplier,
-              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictsWith?.[0] ?? "unknown", correlation: c.severity, detail: c.detail })),
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
               currencyExposure: portfolioCheck.currencyExposure,
             };
           }
@@ -8657,7 +5671,12 @@ async function runScanForUser(
 
         // ── Unified Position Sizing (volatility scaling + prop firm compliance) ──
         // Portfolio heat and correlation checks are handled by Gates 6 & 22 above.
-        const volCtx = resolveSizingVolatilityContext(analysis.regimeInfo);
+        const volCtx: VolatilityContext | undefined = analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.atrTrend === "expanding" ? "high" :
+                  analysis.regimeInfo.regime === "choppy_range" ? "high" :
+                  analysis.regimeInfo.atrTrend === "contracting" ? "low" : "normal",
+          atrPercentile: undefined,
+        } : undefined;
         const propFirmCtx: PropFirmContext | undefined = (propFirmGateResult?.enabled) ? {
           enabled: true,
           sizeMultiplier: propFirmSizeMultiplier,
@@ -8682,26 +5701,25 @@ async function runScanForUser(
           volCtx,
           propFirmCtx,
         );
-        const finalSizing = applyFinalCandidateSizeAdjustments({
-          sizingResult,
-          correlationMultiplier: correlationSizeMultiplier,
-          signalSource: (detail as any).signalSource,
-          standaloneMultiplier: (pairConfig as any).standaloneMultiplier,
-        });
-        const size = finalSizing.lots;
+        let size = sizingResult.lots;
         if (correlationSizeMultiplier < 1.0) {
-          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${finalSizing.afterCorrelationLots} (×${correlationSizeMultiplier.toFixed(2)})`);
+          size = Math.round(size * correlationSizeMultiplier * 100) / 100;
+          if (size < 0.01) size = 0.01; // Floor at minimum lot
+          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
         }
         if (sizingResult.adjustments.length > 0) {
           console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
         // ── Signal Source Size Multiplier ──
-        // Unified signal = full conviction (1.0x). Standalone fallback = configurable (default 0.5x).
+        // Unified signal = full conviction (1.0x). Standalone fallback = half size (0.5x).
         // This reflects the higher confidence when the full story (impulse + liquidity +
         // confirmation) aligns vs just the impulse zone engine alone.
         if ((detail as any).signalSource !== "unified") {
-          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, (pairConfig as any).standaloneMultiplier ?? 0.5));
-          console.log(`[${pair}] Signal source: standalone \u2014 size reduced ${finalSizing.afterCorrelationLots} \u2192 ${size} (\u00d7${standaloneMultiplier})`);
+          const standaloneMultiplier = 0.5;
+          const prevSize = size;
+          size = Math.round(size * standaloneMultiplier * 100) / 100;
+          if (size < 0.01) size = 0.01; // Floor at minimum lot
+          console.log(`[${pair}] Signal source: standalone \u2014 size reduced ${prevSize} \u2192 ${size} (\u00d7${standaloneMultiplier})`);
         } else {
           console.log(`[${pair}] Signal source: unified \u2014 full size ${size} (\u00d71.0)`);
         }
@@ -8728,7 +5746,7 @@ async function runScanForUser(
           // Break-even
           breakEvenEnabled: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
-          breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
+          breakEvenOffsetPips: pairConfig.breakEvenOffsetPips,
           breakEvenActivated: false,
           // Partial TP
           partialTPEnabled: pairConfig.partialTPEnabled,
@@ -8746,9 +5764,7 @@ async function runScanForUser(
         // Priority: unified > impulse > legacy. Only compute legacy if no zone engine fired.
         const zoneEngineWillOverride = (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice)
           || (izGateMode === "hard" && izData?.bestZone);
-        let limitEntry: any = zoneEngineWillOverride
-          ? null
-          : computeLimitEntryPrice(analysis, pair, analysis.direction);
+        let limitEntry = zoneEngineWillOverride ? null : computeLimitEntryPrice(analysis, pair, analysis.direction);
         // ── Impulse Zone Entry Override ──
         // When hard gate is active and zone has a refined entry, use the zone's entry level
         // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
@@ -8758,13 +5774,7 @@ async function runScanForUser(
           const zoneLow = izData.bestZone.low;
           const zoneHigh = izData.bestZone.high;
           const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
-          limitEntry = {
-            price: zoneEntry,
-            zoneType: `IZ-${zoneType}`,
-            lifecycleCandidateType: izData.bestZone.type,
-            zoneLow,
-            zoneHigh,
-          };
+          limitEntry = { price: zoneEntry, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry override: limit at ${zoneEntry.toFixed(5)} (${zoneType} zone)`);
         } else if (izGateMode === "hard" && izData?.bestZone && !limitEntry) {
           // Fallback: use zone midpoint if no refined entry available
@@ -8772,13 +5782,7 @@ async function runScanForUser(
           const zoneLow = izData.bestZone.low;
           const zoneHigh = izData.bestZone.high;
           const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
-          limitEntry = {
-            price: zoneMid,
-            zoneType: `IZ-${zoneType}`,
-            lifecycleCandidateType: izData.bestZone.type,
-            zoneLow,
-            zoneHigh,
-          };
+          limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
         // ── Unified Zone Entry Override ──
@@ -8790,47 +5794,8 @@ async function runScanForUser(
           const zoneLow = zonePOI?.low ?? unifiedEntry;
           const zoneHigh = zonePOI?.high ?? unifiedEntry;
           const zoneType = `UNIFIED-${(unifiedZoneData.selectedTF || "1H").toUpperCase()}`;
-          limitEntry = {
-            price: unifiedEntry,
-            zoneType,
-            lifecycleCandidateType: zonePOI?.type ?? "",
-            zoneLow,
-            zoneHigh,
-          };
+          limitEntry = { price: unifiedEntry, zoneType, zoneLow, zoneHigh };
           console.log(`[${pair}] Unified Zone entry override: limit at ${unifiedEntry.toFixed(5)} (${unifiedZoneData.selectedTF} story, score ${unifiedZoneData.unifiedScore}/14)`);
-        }
-
-        const observedNestedPoiEntry = effectiveFrozenNestedPoiEntry;
-        const routedNestedPoiEntry = effectiveNestedPoiActivation.enforced
-          ? observedNestedPoiEntry
-          : null;
-        if (effectiveNestedPoiActivation.enforced &&
-          !routedNestedPoiEntry?.selected) {
-          detail.status = "skipped_nested_poi_unavailable";
-          detail.skipReason = existingStaged
-            ? "Nested POI Market Trigger: existing setup has no frozen nested trigger; waiting for a new setup"
-            : "Nested POI Market Trigger: no strictly-contained trigger is available; midpoint fallback is disabled";
-          scanDetails.push(detail);
-          continue;
-        }
-        if (effectiveNestedPoiActivation.enforced &&
-          routedNestedPoiEntry?.selected) {
-          const trigger = routedNestedPoiEntry.selected;
-          limitEntry = {
-            price: trigger.entryPrice,
-            zoneType: "NESTED-" + trigger.type.toUpperCase(),
-            lifecycleCandidateType: trigger.type,
-            candidateId: trigger.id,
-            zoneLow: trigger.low,
-            zoneHigh: trigger.high,
-            timeframe: trigger.timeframe,
-            triggerKind: trigger.geometry,
-          };
-          console.log(
-            "[nested-poi] " + pair + " armed " + trigger.type +
-              " " + trigger.low + "-" + trigger.high +
-              "; outer zone only arms",
-          );
         }
 
         // ── Market Fill at Zone (Option C) ──────────────────────────────────
@@ -8877,173 +5842,25 @@ async function runScanForUser(
         if (izGateMode === "hard" && izData?.bestZone?.priceAtZone && !strictZone) {
           console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: priceAtZone(loose)=true but priceAtZoneStrict=false — routing to pending/CHoCH path. Distance: ${izData.bestZone.distancePips?.toFixed(1) ?? "?"}p, sideOk=${sideOk}`);
         }
-        // Standalone trades MUST go through CHoCH confirmation — market fill only for unified/cascade
-        const isStandaloneSignal = (detail as any).signalSource === "standalone";
-        let useMarketFillAtZone = !effectiveNestedPoiActivation.enforced &&
-          priceIsAtValidatedZone && config.marketFillAtZone &&
-          priceOnCorrectSide && !isStandaloneSignal;
-        // A user can enable Market Fill after a setup was pre-armed. Claim the
-        // market route by conditionally cancelling that candidate's active
-        // pending representation. If another scanner already moved it, market
-        // entry is blocked instead of risking two entries for one candidate.
-        if (useMarketFillAtZone && existingStaged?.candidate_id) {
-          const { data: armedRows } = await supabase.from("pending_orders")
-            .select("id,status")
-            .eq("user_id", userId).eq("bot_id", BOT_ID)
-            .eq("candidate_id", existingStaged.candidate_id)
-            .in("status", ["pending", "awaiting_confirmation"]);
-          if ((armedRows || []).length > 0) {
-            const { data: claimedRows } = await supabase.from("pending_orders")
-              .update({
-                status: "cancelled",
-                cancel_reason: "Candidate claimed by Market Fill route",
-                resolved_at: new Date().toISOString(),
-              })
-              .eq("user_id", userId).eq("bot_id", BOT_ID)
-              .eq("candidate_id", existingStaged.candidate_id)
-              .in("status", ["pending", "awaiting_confirmation"])
-              .select("id");
-            if ((claimedRows || []).length !== armedRows!.length) {
-              useMarketFillAtZone = false;
-              detail.skipReason = "Market Fill blocked: linked pending setup changed during route claim";
-            }
-          }
-        }
-        if (isStandaloneSignal && priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide) {
-          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE at zone — routing to CHoCH confirmation path (market fill reserved for unified/cascade).`);
-        }
+        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide;
 
-        // Pending Zone Orders is the sole authority for creating a limit order.
-        // A hard impulse-zone gate must not silently override the visible Bot Config toggle.
-        const effectiveLimitEnabled = shouldCreatePendingZoneOrder({
-          pendingZoneOrdersEnabled:
-            config.limitOrderEnabled || effectiveNestedPoiActivation.enforced,
-          useMarketFillAtZone,
-          hasLimitEntry: !!limitEntry,
-        });
+        // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
+        // or when marketFillAtZone is explicitly disabled.
+        const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
         if (effectiveLimitEnabled && limitEntry) {
-          // ── Anti-Cycling Fix Part 2 (RELAXED): Log standalone signals but allow pending orders ──
-          // Previously this blocked standalone signals with confirmation.type="none" from
-          // placing pending orders. However, the ENTIRE PURPOSE of a pending order is to wait
-          // for price to reach the zone and THEN hunt for confirmation (CHoCH/displacement/etc).
-          // Blocking placement because no pre-existing confirmation exists defeats the purpose.
-          // The confirmation requirement at FILL TIME (Branch B) is the real gate.
-          const uzConfirmationType = unifiedZoneData?.confirmation?.type;
-          if (isStandaloneSignal && uzConfirmationType === "none") {
-            console.log(`[scan ${scanCycleId}] 📋 ${pair}: Standalone signal (confirmation.type=none) — placing pending order to await zone confirmation at fill time.`);
-          }
-
-          // ── Anti-Cycling Fix Part 1: Post-expiry cooldown ──
-          // If the same symbol+direction had a pending order expire recently (within TTL),
-          // don't re-place — the setup already failed once and conditions haven't changed enough.
-          const cooldownMinutes = config.pendingOrderCooldownMinutes > 0
-            ? config.pendingOrderCooldownMinutes
-            : (config.limitOrderExpiryMinutes || 60);
-          const cooldownCutoff = new Date(Date.now() - cooldownMinutes * 60 * 1000).toISOString();
-          const { data: recentExpired } = await supabase.from("pending_orders")
-            .select("order_id, resolved_at, entry_price")
-            .eq("user_id", userId).eq("bot_id", BOT_ID)
-            .eq("symbol", pair).eq("direction", analysis.direction)
-            .eq("status", "expired")
-            .gte("resolved_at", cooldownCutoff)
-            .limit(1);
-          if (recentExpired && recentExpired.length > 0) {
-            detail.status = "skipped_expiry_cooldown";
-            detail.skipReason = `Post-expiry cooldown: same setup expired at ${recentExpired[0].resolved_at} (within ${cooldownMinutes}min cooldown)`;
-            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: PENDING ORDER COOLDOWN — same ${analysis.direction} setup expired recently (${recentExpired[0].order_id} @ ${recentExpired[0].entry_price}). Waiting ${cooldownMinutes}min before re-placing.`);
-            await finalizeDetailGoldenReplay({
-              execution: {
-                eligible: false,
-                entryPrice: limitEntry.price,
-                stopLoss: sl,
-                takeProfit: computeTP(
-                  limitEntry.price,
-                  sl,
-                  analysis.direction,
-                ),
-                positionSize: null,
-                orderType: "limit",
-              },
-              lifecycle: {
-                route: "limit",
-                stage: "cooldown",
-                outcome: "blocked",
-                reason: detail.skipReason,
-              },
-            });
-            scanDetails.push(detail);
-            continue;
-          }
-
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
           const expiryMinutes = config.limitOrderExpiryMinutes || 60;
           const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
 
-          const pendingPlanResult = buildPendingOrderPlan({
-            direction: analysis.direction as "long" | "short",
-            zone: limitEntry,
-            stopLoss: sl,
-            takeProfitFor: (entry, stop, direction) => computeTP(entry, stop, direction),
-          });
-          if (!pendingPlanResult.valid) {
-            detail.status = "zone_setup_rejected_orientation";
-            detail.skipReason = pendingPlanResult.reason;
-            scanDetails.push(detail);
-            continue;
-          }
-          const pendingPlan = pendingPlanResult.plan;
-          const limitSL = pendingPlan.stopLoss;
-          const limitTP = pendingPlan.takeProfit;
-          const pendingOriginatingZone = {
-            setupFamily: (detail as any).signalSource === "cascade"
-              ? "cascade"
-              : "impulse",
-            candidateId: limitEntry.candidateId,
-            sourceEvidenceIds: routedNestedPoiEntry?.selected
-              ?.supportingEvidenceIds ||
-              entryZoneEvidenceIdsFor(izData?.bestZone),
-            sourceImpulseId:
-              (detail as any).canonicalDealingRangeObservation?.canonical?.range
-                ?.impulseId || null,
-            type: limitEntry.lifecycleCandidateType,
-            displayType: limitEntry.zoneType,
-            low: limitEntry.zoneLow,
-            high: limitEntry.zoneHigh,
-            entry: limitEntry.price,
-            timeframe: limitEntry.timeframe,
-            lifecycle: routedNestedPoiEntry?.selected?.lifecycle ||
-              entryZoneLifecycleFor(izData?.bestZone),
-            triggerKind: limitEntry.triggerKind,
-            stopLoss: limitSL,
-            takeProfit: limitTP,
-            refinedLow: izData?.bestZone?.ltfRefined
-                ? Math.min(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
-                : null,
-            refinedHigh: izData?.bestZone?.ltfRefined
-                ? Math.max(Number(izData.bestZone.refinedEntry), Number(izData.bestZone.refinedSL))
-                : null,
-            signalSource: (detail as any).signalSource || null,
-          };
-          const pendingFrozenCrossTimeframeContext =
-            readFrozenSetupStrategyContext(existingStaged)?.crossTimeframeContext ||
-            selectedCrossTimeframeContext(
-              pendingOriginatingZone,
-              effectiveNestedPoiActivation.enforced
-                ? "nested_poi_market"
-                : "confirmation",
-            );
-          const prospectiveLifecycleValidation =
-            validateImpulseLifecycleExecutableZone({
-              mode: impulseLifecycleEnforcement.effectiveMode,
-              context: pendingFrozenCrossTimeframeContext,
-              executableZone: pendingOriginatingZone,
-            });
-          if (!prospectiveLifecycleValidation.valid) {
-            detail.status = "zone_setup_rejected_lifecycle_identity";
-            detail.skipReason = prospectiveLifecycleValidation.reason;
-            scanDetails.push(detail);
-            continue;
+          // Recalculate SL/TP relative to the limit entry price for better R:R
+          let limitSL = sl;
+          let limitTP = tp;
+          const riskFromLimit = Math.abs(limitEntry.price - sl);
+          if (analysis.direction === "long") {
+            limitTP = limitEntry.price + riskFromLimit * config.tpRatio;
+          } else {
+            limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
           }
 
           // Recalculate position size based on limit entry price (unified sizing)
@@ -9065,332 +5882,30 @@ async function runScanForUser(
             volCtx,
             propFirmCtx,
           );
-          const finalLimitSizing = applyFinalCandidateSizeAdjustments({
-            sizingResult: limitSizingResult,
-            signalSource: (detail as any).signalSource,
-          });
-          if (finalLimitSizing.rejected) {
-            detail.status = "position_sizing_rejected";
-            detail.skipReason = finalLimitSizing.rejectionReason ||
-              "Pending-order sizing produced no executable size";
-            console.warn(`[${pair}] ${detail.skipReason}`);
-            scanDetails.push(detail);
-            continue;
+          let limitSize = limitSizingResult.lots;
+          // Apply signal source size multiplier to limit orders too
+          if ((detail as any).signalSource !== "unified") {
+            limitSize = Math.round(limitSize * 0.5 * 100) / 100;
+            if (limitSize < 0.01) limitSize = 0.01;
           }
-          const limitSize = finalLimitSizing.lots;
-
-          // Set when a material change replaces one lifecycle candidate with
-          // another. An unchanged setup is not a handoff — #318 leaves it alone.
-          let supersededCandidateId: string | null = null;
-          let handoffReason: string | null = null;
 
           // ── Replace stale pending: expire any existing pending order for same symbol+direction ──
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
           // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
           const { data: stalePending } = await supabase.from("pending_orders")
-            .select("order_id, entry_price, signal_score, stop_loss, take_profit, zone_touch_time, confirmation_attempts, candidate_id")
+            .select("order_id, entry_price, signal_score")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
-            .in("status", ["pending", "awaiting_confirmation"]);
+            .eq("status", "pending");
           if (stalePending && stalePending.length > 0) {
-            // Only replace when the setup actually moved. Re-detecting the same
-            // setup each cycle used to cancel and reinsert it, which resets
-            // zone_touch_time and confirmation_attempts — the state
-            // zone-confirmation-scanner needs to anchor its CHoCH search. That
-            // churn is why no pending order has filled since 2026-05-15.
-            const existing = stalePending[0];
-            const supersedeDecision = shouldSupersedePendingOrder({
-              newEntry: Number(limitEntry.price),
-              newStopLoss: Number(limitSL),
-              newTakeProfit: Number(limitTP),
-              newScore: analysis.score,
-              existingEntry: Number(existing.entry_price),
-              existingStopLoss: Number(existing.stop_loss),
-              existingTakeProfit: Number(existing.take_profit),
-              existingScore: existing.signal_score != null ? Number(existing.signal_score) : null,
-              zoneWidth: Math.abs((limitEntry.zoneHigh ?? 0) - (limitEntry.zoneLow ?? 0)),
-            });
-            if (!supersedeDecision.supersede) {
-              console.log(`[pending] ${pair} ${analysis.direction}: ${supersedeDecision.reason} (entry ${existing.entry_price}, touched=${existing.zone_touch_time ?? "no"}, attempts=${existing.confirmation_attempts ?? 0}) — leaving order in place.`);
-              detail.status = "watching_zone";
-              detail.skipReason = `Existing pending order retained — ${supersedeDecision.reason}. Cancelling it would reset zone-touch and confirmation progress.`;
-              scanDetails.push(detail);
-              continue;
-            }
-            // Material change: this is a NEW opportunity, not the old one edited.
-            // Record the predecessor so the chain stays walkable — otherwise the
-            // old candidate just vanishes and its successor looks unrelated.
-            supersededCandidateId = existing.candidate_id ?? null;
-            handoffReason = supersedeDecision.reason;
             const staleIds = stalePending.map((s: any) => s.order_id);
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Superseded by new setup — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)} vs old ${existing.signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${existing.entry_price})`,
+              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${stalePending[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${stalePending[0].entry_price})`,
             }).in("order_id", staleIds).eq("user_id", userId);
-            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — ${supersedeDecision.reason} (score ${analysis.score.toFixed(1)})`);
+            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
           }
 
-          const pendingThesisAtCreation = validatePendingOrderThesis(
-            {
-              order_id: pendingOrderId,
-              symbol: pair,
-              direction: analysis.direction as "long" | "short",
-              entry_price: limitEntry.price,
-              signal_reason: {
-                directionVerdict: (detail as any).directionVerdict || null,
-              },
-            },
-            {
-              fotsiResult: _fotsiResult,
-              lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
-              dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
-              h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-              h1Candles: hourlyCandles.length >= 20
-                ? hourlyCandles
-                : null,
-              decisionEvidence: pairDecisionEvidence,
-            },
-          );
-          const pendingConfirmation: EntryConfirmationDecision = {
-            required: false,
-            passed: false,
-            method: pairConfig.confirmationMethod || "choch",
-            reason:
-              "Zone setup is waiting; entry confirmation becomes mandatory at fill time",
-            evidence: null,
-            evaluatedAt: nowStr,
-          };
-          const pendingHierarchy = evaluateDecisionHierarchy({
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            gamePlan: activeGamePlan,
-            gamePlanEnabled,
-            gamePlanMode: gpEnforcementMode,
-            gamePlanMinimumConfidence:
-              (pairConfig as any).gpHardBlockThreshold ?? 75,
-            directionVerdict: activeDirectionVerdict,
-            requireDirectionVerdict: true,
-            thesisResult: pendingThesisAtCreation,
-            requireThesisValidation: true,
-            entryConfirmation: pendingConfirmation,
-          });
-          const pendingDecisionContext = buildTradeDecisionContext({
-            stage: "pending",
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            gamePlan: activeGamePlan,
-            directionVerdict: activeDirectionVerdict,
-            thesisResult: pendingThesisAtCreation,
-            requireThesisValidation: true,
-            thesisConviction: (detail as any).thesisConviction || null,
-            entryConfirmation: pendingConfirmation,
-            hierarchy: pendingHierarchy,
-            stylePolicy: pairStylePolicy,
-            evaluatedAt: nowStr,
-          });
-          const pendingLifecycleEvidence = buildPromotedLifecycleEvidence(
-            pendingOriginatingZone,
-            pendingHierarchy as unknown as Record<string, unknown>,
-          );
-          // A fresh UUID is the BIRTH of a lifecycle and is fine. Minting one
-          // while a watchlist row exists forks the identity, and the halves can
-          // never be reconciled — see docs/PENDING_ORDER_PREARMING_PLAN.md #3.
-          //
-          // A material change is the exception: inheriting there would give the
-          // successor the SAME id as the candidate it replaced, making
-          // superseded_candidate_id self-referential and the chain meaningless.
-          // A changed setup is a new opportunity, so it gets a new identity.
-          // Promotion COPIES the level the watchlist froze. Recomputing it from
-          // this scan's bestZone would hand the same lifecycle candidate a
-          // different boundary than it was staged under — the detected zone
-          // drifts slightly between scans, so the numbers would quietly
-          // disagree and the candidate would be judged against a level it was
-          // never staged with. Direct creation derives it once, here, and that
-          // value is persisted rather than recomputed later.
-          const pendingStructuralInvalidation = freezeStructuralInvalidation(
-            { stagedLevel: existingStaged?.sl_level != null ? Number(existingStaged.sl_level) : null },
-            () =>
-              watchlistInvalidationFor(
-                analysis.direction as WatchlistDirection,
-                (detail as any).impulseZone?.bestZone ?? existingStaged?.originating_zone,
-                limitSL,
-                existingStaged?.analysis_snapshot?.impulseZone?.impulse,
-              ),
-          );
-
-          const pendingIdentity = supersededCandidateId
-            ? { candidateId: crypto.randomUUID(), source: "handoff" as const, inherited: false }
-            : resolveLifecycleCandidateId({
-              inheritedCandidateId: pendingLifecycleEvidence?.candidateId,
-              stagedCandidateId: existingStaged?.candidate_id,
-              stagedRowId: existingStaged?.id,
-            }, () => crypto.randomUUID());
-          const pendingCandidateId = pendingIdentity.candidateId;
-          if (supersededCandidateId) {
-            // Carry the watchlist row onto the new identity. Leaving it on the
-            // old one would fork staged from pending — the exact break #322
-            // exists to prevent, reintroduced through the handoff path.
-            if (existingStaged?.id) {
-              try {
-                await supabase.from("staged_setups")
-                  .update({ candidate_id: pendingCandidateId })
-                  .eq("id", existingStaged.id).eq("user_id", userId);
-              } catch (e: any) {
-                console.warn(`[handoff] ${pair}: could not move watchlist row to new candidate: ${e?.message}`);
-              }
-            }
-            console.log(`[handoff] ${pair}: ${supersededCandidateId} → ${pendingCandidateId} (${handoffReason})`);
-          }
-          if (pendingIdentity.inherited) {
-            console.log(`[pending] ${pair}: lifecycle identity inherited from ${pendingIdentity.source} (${pendingCandidateId})`);
-          }
-          const pendingFrozenStrategyContext =
-            pendingLifecycleEvidence?.frozenStrategyContext ||
-            buildFrozenSetupStrategyContext({
-              identity: {
-                setupId: pendingLifecycleEvidence?.setupId ||
-                  crypto.randomUUID(),
-                candidateId: pendingCandidateId,
-              },
-              timeframeEvidenceId:
-                pendingLifecycleEvidence?.frozenStrategyContext
-                  ?.timeframeEvidenceId ||
-                (detail as any).timeframeEvidenceId ||
-                null,
-              symbol: pair,
-              direction: analysis.direction as "long" | "short",
-              stylePolicy: pairStylePolicy,
-              runtimeConfig: pairRuntimeConfigSnapshot,
-              decisionContext: pendingDecisionContext,
-              gamePlan: activeGamePlan,
-              directionVerdict: activeDirectionVerdict,
-              conceptEvidence: selectedZoneConceptEvidence(),
-              zoneLocalConfluence: selectedZoneLocalConfluence(),
-              zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-              crossTimeframeContext: pendingFrozenCrossTimeframeContext,
-              nestedPoiEntry: observedNestedPoiEntry,
-              entryZone: {
-                ...pendingOriginatingZone,
-                structuralInvalidation:
-                  pendingStructuralInvalidation?.level ?? null,
-              },
-              confirmationMethod:
-                pairConfig.confirmationMethod || "choch",
-              indicatorMinCount: pairConfig.indicatorMinCount || 3,
-              liquiditySweepRole: pairConfig.requireLiquiditySweep ? "required" : "supporting",
-              displacementRole: pairConfig.ictDisplacementMSSGateMode === "hard" ? "required" : "supporting",
-              reversalPatternRole: "supporting",
-              afterChochEntryMode: pairConfig.afterChochMode,
-            });
-          (detail as any).linkedSetupId =
-            pendingFrozenStrategyContext.setupId;
-          const pendingLifecycleValidation = validatePendingLifecycle(
-            pendingFrozenStrategyContext,
-            pendingOriginatingZone,
-          );
-          if (!pendingLifecycleValidation.valid) {
-            detail.status = "zone_setup_rejected_lifecycle_identity";
-            detail.skipReason = pendingLifecycleValidation.reason;
-            await blockQualifiedSetup(
-              pendingLifecycleEvidence,
-              pendingLifecycleValidation.reason,
-            );
-            scanDetails.push(detail);
-            continue;
-          }
-          if (pendingLifecycleEvidence) {
-            try {
-              await qualifyPromotedSetup(
-                pendingLifecycleEvidence,
-                `Qualified for ${pendingLifecycleEvidence.confirmationMethod} zone setup`,
-              );
-            } catch (lifecycleError: any) {
-              detail.status = "zone_setup_lifecycle_claim_failed";
-              detail.skipReason = lifecycleError?.message ||
-                "Watchlist lifecycle qualification failed";
-              scanDetails.push(detail);
-              continue;
-            }
-          }
-          if (!pendingHierarchy.passed) {
-            detail.status = "zone_setup_blocked_decision_contract";
-            detail.skipReason =
-              `[decision-contract:${pendingHierarchy.code}] ${pendingHierarchy.reason}`;
-            detail.decisionContext = pendingDecisionContext;
-            await finalizeDetailGoldenReplay({
-              execution: {
-                eligible: false,
-                entryPrice: limitEntry.price,
-                stopLoss: limitSL,
-                takeProfit: limitTP,
-                positionSize: limitSize,
-                orderType: "limit",
-              },
-              lifecycle: {
-                route: "limit",
-                stage: "authorization",
-                outcome: "blocked",
-                reason: detail.skipReason,
-              },
-              provenance: {
-                candidateId: pendingCandidateId,
-                orderId: pendingOrderId,
-              },
-            });
-            await blockQualifiedSetup(
-              pendingLifecycleEvidence,
-              detail.skipReason,
-            );
-            scanDetails.push(detail);
-            continue;
-          }
-
-          const pendingReplaySnapshot =
-            await finalizeDetailGoldenReplay({
-              execution: {
-                eligible: true,
-                entryPrice: limitEntry.price,
-                stopLoss: limitSL,
-                takeProfit: limitTP,
-                riskReward: Math.abs(limitTP - limitEntry.price) /
-                  Math.abs(limitEntry.price - limitSL),
-                positionSize: limitSize,
-                orderType: "limit",
-              },
-              lifecycle: {
-                route: "limit",
-                stage: "pending",
-                outcome: "requested",
-                reason: "Pending zone order passed creation checks",
-              },
-              provenance: {
-                candidateId: pendingCandidateId,
-                orderId: pendingOrderId,
-              },
-            });
-          const placedAt = new Date().toISOString();
-          const latestClosedEntryCandle =
-            (fetchedByInterval.get(timeframeAuthority.runtimeEntry) || candles).at(-1) || null;
-          const nestedOuterZoneTouchedAtCreation = !!(
-            routedNestedPoiEntry &&
-            latestClosedEntryCandle &&
-            closedCandleTouchesNestedPoiOuterZone(
-              latestClosedEntryCandle,
-              routedNestedPoiEntry.outerZone,
-            )
-          );
-          const nestedOuterZoneTouchTime = nestedOuterZoneTouchedAtCreation
-            ? latestClosedEntryCandle!.datetime
-            : null;
-          // A staged setup froze its trigger before this candle existed, so the
-          // touch bar is eligible for replay. A setup first discovered on this
-          // bar must begin monitoring only after it was frozen.
-          const nestedConfirmationCursor = existingStaged && nestedOuterZoneTouchTime
-            ? nestedOuterZoneTouchTime
-            : placedAt;
-          const initialPendingStatus = nestedOuterZoneTouchedAtCreation
-            ? "awaiting_confirmation"
-            : "pending";
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
@@ -9403,76 +5918,25 @@ async function runScanForUser(
             stop_loss: limitSL,
             take_profit: limitTP,
             size: limitSize,
-            entry_zone_type: routedNestedPoiEntry
-              ? "PARENT-" + String(izData?.bestZone?.type || "ZONE").toUpperCase()
-              : limitEntry.zoneType,
-            entry_zone_low: routedNestedPoiEntry?.outerZone.low ??
-              limitEntry.zoneLow,
-            entry_zone_high: routedNestedPoiEntry?.outerZone.high ??
-              limitEntry.zoneHigh,
-            refined_zone_low: routedNestedPoiEntry
-              ? null
-              : izData?.bestZone?.ltfRefined &&
-                  izData.bestZone.refinedEntry != null &&
-                  izData.bestZone.refinedSL != null
-              ? Math.min(izData.bestZone.refinedEntry, izData.bestZone.refinedSL)
-              : null,
-            refined_zone_high: routedNestedPoiEntry
-              ? null
-              : izData?.bestZone?.ltfRefined &&
-                  izData.bestZone.refinedEntry != null &&
-                  izData.bestZone.refinedSL != null
-              ? Math.max(izData.bestZone.refinedEntry, izData.bestZone.refinedSL)
-              : null,
-            status: initialPendingStatus,
-            ...(nestedOuterZoneTouchedAtCreation
-              ? {
-                zone_touch_time: nestedOuterZoneTouchTime,
-                last_touch_checked_at: placedAt,
-                last_confirmation_checked_at: nestedConfirmationCursor,
-                confirmation_attempts: 0,
-              }
-              : {}),
+            entry_zone_type: limitEntry.zoneType,
+            entry_zone_low: limitEntry.zoneLow,
+            entry_zone_high: limitEntry.zoneHigh,
+            refined_zone_low: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
+              ? Math.min(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
+            refined_zone_high: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
+              ? Math.max(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
+            status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, canonicalDealingRangeObservation: (detail as any).canonicalDealingRangeObservation || null, ...canonicalEvidenceSnapshot(detail), setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [], signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, nestedPoiEntry: observedNestedPoiEntry, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
             from_watchlist: isPromotedFromStaging || false,
-            staged_setup_id: pendingLifecycleEvidence?.setupId || null,
-            candidate_id: pendingCandidateId,
-            // Pre-touch boundary: where the ZONE/IMPULSE breaks, not where a
-            // position would stop out. Separate field on purpose — see
-            // migration 20260812070000.
-            structural_invalidation: pendingStructuralInvalidation?.level ?? null,
-            structural_invalidation_source: pendingStructuralInvalidation?.source ?? null,
-            superseded_candidate_id: supersededCandidateId,
-            handoff_reason: handoffReason,
-            originating_zone: pendingOriginatingZone,
-            thesis_version: THESIS_VALIDATION_VERSION,
-            confirmation_method: pendingLifecycleEvidence
-              ?.confirmationMethod ||
-              pairConfig.confirmationMethod ||
-              "choch",
-            confirmation_config: {
-              indicatorMinCount:
-                pendingFrozenStrategyContext.confirmation.indicatorMinCount,
-              afterChochMode:
-                pairConfig.afterChochMode || "confirmation_close",
-              afterChochExpiryMinutes:
-                pairConfig.afterChochExpiryMinutes || 30,
-              maxConfirmationAttempts:
-                pendingFrozenStrategyContext.confirmation.maxAttempts,
-              entryMode: effectiveNestedPoiActivation.enforced
-                ? "nested_poi_market"
-                : "confirmation",
-            },
-            frozen_strategy_context: pendingFrozenStrategyContext,
             staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
             staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
-            placed_at: placedAt,
+            placed_at: new Date().toISOString(),
           });
 
           if (pendingInsertErr) {
@@ -9482,32 +5946,11 @@ async function runScanForUser(
             detail.skipReason = /duplicate key/i.test(pendingInsertErr.message)
               ? "Zone setup already active (see Zone Setups panel)"
               : `Zone setup insert failed: ${pendingInsertErr.message}`;
-            await finalizeDetailGoldenReplay({
-              execution: pendingReplaySnapshot.decision.execution,
-              lifecycle: {
-                route: "limit",
-                stage: "pending",
-                outcome: "failed",
-                reason: detail.skipReason,
-              },
-              provenance: {
-                candidateId: pendingCandidateId,
-                orderId: pendingOrderId,
-              },
-            });
-            await blockQualifiedSetup(
-              pendingLifecycleEvidence,
-              detail.skipReason,
-            );
             scanDetails.push(detail);
             continue;
           }
 
           pendingPlaced++;
-          if (pendingLifecycleEvidence) {
-            stagedPromoted++;
-            stagedMap.delete(stagedKey!);
-          }
           detail.status = isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
           detail.limitOrder = {
             orderId: pendingOrderId,
@@ -9519,78 +5962,40 @@ async function runScanForUser(
             currentPrice: analysis.lastPrice,
             distancePips: (Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1),
           };
-          detail.setupIdentity = {
-            orderId: pendingOrderId,
-            stagedSetupId: pendingLifecycleEvidence?.setupId || null,
-            candidateId: pendingCandidateId,
-            impulseEntryLifecycleId:
-              existingStaged?.impulse_entry_lifecycle_id || null,
-          };
-          detail.decisionContext = pendingDecisionContext;
           if (isPromotedFromStaging && existingStaged) {
-            detail.staging = {
-              action: "pending_created",
-              candidateId: pendingLifecycleEvidence?.candidateId,
-              cycles: existingStaged.scan_cycles + 1,
-              initialScore: parseFloat(existingStaged.initial_score),
-            };
+            detail.staging = { action: "promoted_to_limit", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
           }
           detail.size = limitSize;
           detail.entryPrice = limitEntry.price;
           detail.stopLoss = limitSL;
           detail.takeProfit = limitTP;
-          await finalizeDetailGoldenReplay({
-            execution: pendingReplaySnapshot.decision.execution,
-            lifecycle: {
-              route: "limit",
-              stage: "pending",
-              outcome: "created",
-              reason: "Pending zone order was created",
-            },
-            provenance: {
-              candidateId: pendingCandidateId,
-              orderId: pendingOrderId,
-            },
-          });
 
           // Telegram notification for zone setup activation
           if (telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
             const emoji = analysis.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            // Confirmation method label for zone setup notification
-            const zoneConfMethod = pairConfig.confirmationMethod || "choch";
-            const zoneConfLabel = confirmationMethodLabel(zoneConfMethod, pairConfig.indicatorMinCount || 3);
-            // TP method label
-            const zoneTpMethod = pairConfig.tpMethod || "rr_ratio";
-            const zoneTpLabel = zoneTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : zoneTpMethod === "next_level" ? "Next Structure Level" : zoneTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR \u00d7${pairConfig.tpATRMultiple || 2.0}`;
-            const zoneSR = detail as any;
-            const zoneRR = (() => {
-              const risk = Math.abs(limitEntry.price - limitSL);
-              return risk > 0 ? (Math.abs(limitTP - limitEntry.price) / risk).toFixed(2) : null;
-            })();
-            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>\n\n` +
-              tgLine("Symbol", pair) +
-              tgLine("Direction", analysis.direction.toUpperCase()) +
-              tgLine("Zone Trigger", `${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)`) +
-              tgLine("Zone Range", `${fmtPx(limitEntry.zoneLow, pair)} – ${fmtPx(limitEntry.zoneHigh, pair)}`) +
-              tgLine("Current Price", fmtPx(analysis.lastPrice, pair)) +
-              tgLine("Distance", `${(Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1)} pips`) +
-              tgLine("Size", `${limitSize} lots`) +
-              tgLine("SL", fmtPx(limitSL, pair)) +
-              tgLine("TP", `${fmtPx(limitTP, pair)} (${zoneTpLabel})`) +
-              (zoneRR ? tgLine("Planned R:R", `${zoneRR}:1`) : "") +
-              tgLine("Session", analysis.session?.name) +
-              "\n" +
-              tradeAuthorityLines(zoneSR) +
-              zoneEvidenceLines(zoneSR) +
-              directionVerdictLines((detail as any).directionVerdict) +
-              styleLadderLines({}, timeframeAuthority?.roles) +
-              crossTimeframeAuthorityLine(crossTimeframeAuthority) +
-              "\n" +
-              tgLine("Confirm Mode", zoneConfLabel) +
-              tgLine("Confirmation", unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone") +
-              tgLine("Expires", expiryMinutes + "min") +
-              diagnosticScoreLine(analysis.score) +
+            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
+
+` +
+              `<b>Symbol:</b> ${pair}
+` +
+              `<b>Direction:</b> ${analysis.direction.toUpperCase()}
+` +
+              `<b>Zone Trigger:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
+` +
+              `<b>Current Price:</b> ${analysis.lastPrice}
+` +
+              `<b>Size:</b> ${limitSize} lots
+` +
+              `<b>SL:</b> ${limitSL}
+` +
+              `<b>TP:</b> ${limitTP}
+` +
+              `<b>Score:</b> ${analysis.score.toFixed(1)}
+` +
+              `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for 5m CHoCH at zone"}
+` +
+              `<b>Expires:</b> ${expiryMinutes}min` +
               (isPromotedFromStaging && existingStaged ? `
 
 📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
@@ -9611,32 +6016,6 @@ async function runScanForUser(
 
         // Place position (market order)
         // Two scenarios reach here:
-        if (finalSizing.rejected) {
-          detail.status = "position_sizing_rejected";
-          detail.skipReason = finalSizing.rejectionReason ||
-            "Market-entry sizing produced no executable size";
-          await finalizeDetailGoldenReplay({
-            execution: {
-              eligible: false,
-              entryPrice: analysis.lastPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              positionSize: 0,
-              orderType: "market",
-            },
-            lifecycle: {
-              route: "market",
-              stage: "sizing",
-              outcome: "blocked",
-              reason: detail.skipReason,
-            },
-            provenance: { orderId, positionId },
-          });
-          console.warn(`[${pair}] ${detail.skipReason}`);
-          scanDetails.push(detail);
-          continue;
-        }
-
         // 1. marketFillAtZone=true + price IS at validated impulse zone (primary path)
         // 2. Limit orders disabled and no zone entry found (legacy fallback)
         // Market orders ALWAYS fill at current price (analysis.lastPrice).
@@ -9653,472 +6032,47 @@ async function runScanForUser(
           detail.status = "skipped_sl_sanity";
           detail.skipReason = `Market entry ${marketEntryPrice} already past SL ${sl} for ${analysis.direction} — trade would be instant loss`;
           console.log(`[scan ${scanCycleId}] ⛔ ${pair}: SL SANITY FAILED — entry ${marketEntryPrice} vs SL ${sl} (${analysis.direction}). Skipping.`);
-          await finalizeDetailGoldenReplay({
-            execution: {
-              eligible: false,
-              entryPrice: marketEntryPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              positionSize: size,
-              orderType: "market",
-            },
-            lifecycle: {
-              route: "market",
-              stage: "protection",
-              outcome: "blocked",
-              reason: detail.skipReason,
-            },
-            provenance: {
-              orderId,
-              positionId,
-            },
-          });
           scanDetails.push(detail);
           continue;
         }
-
-        // Immediate market entries are execution events, not merely candidate
-        // discovery. Rebuild every time-sensitive gate immediately before the
-        // atomic database claim so this route cannot bypass the same authority
-        // used by both confirmation scanners.
-        const directAuthorizationPositions = pairConfig.closeOnReverse
-          ? openPosArr.filter((position: any) =>
-            !(
-              position.symbol === pair &&
-              position.direction !== analysis.direction
-            )
-          )
-          : openPosArr;
-        const directThesisResult = validatePendingOrderThesis(
-          {
-            order_id: `market:${scanCycleId}:${pair}`,
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            entry_price: marketEntryPrice,
-            signal_reason: {
-              directionVerdict: (detail as any).directionVerdict || null,
-            },
-          },
-          {
-            fotsiResult: _fotsiResult,
-            lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
-            dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
-            h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-            h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
-            decisionEvidence: pairDecisionEvidence,
-          },
-        );
-        const { data: directConnections } =
-          account.execution_mode === "live"
-            ? await supabase.from("broker_connections")
-              .select("*")
-              .eq("user_id", userId)
-              .in("broker_type", ["metaapi", "oanda"])
-              .eq("is_active", true)
-            : { data: [] as any[] };
-        const directSpreadResults: Array<{
-          result: Awaited<ReturnType<typeof fetchBrokerSpread>>;
-        }> = [];
-        if (
-          account.execution_mode === "live"
-        ) {
-          for (const connection of directConnections || []) {
-            let metaAccountId: string | undefined;
-            let authToken: string | undefined;
-            if (connection.broker_type === "metaapi") {
-              metaAccountId = connection.account_id;
-              authToken = connection.api_key;
-              if (
-                metaAccountId?.startsWith("eyJ") &&
-                authToken &&
-                /^[0-9a-f-]{36}$/.test(authToken)
-              ) {
-                authToken = connection.account_id;
-                metaAccountId = connection.api_key;
-              }
-            }
-            directSpreadResults.push({
-              result: await fetchBrokerSpread(
-                connection,
-                pair,
-                pairConfig,
-                metaAccountId,
-                authToken,
-              ),
-            });
-          }
-        }
-        const directAvailableSpreads = directSpreadResults.filter((item) =>
-          !!item.result
-        );
-        const directPassingSpreads = directSpreadResults.filter((item) =>
-          item.result?.passed
-        );
-        const directBestSpread = directAvailableSpreads
-          .map((item) => item.result!)
-          .sort((a, b) => a.spreadPips - b.spreadPips)[0];
-        const directRuntimeGates = await buildFinalRuntimeGateStates({
-          supabase,
-          userId,
-          accountExecutionMode: account.execution_mode,
-          brokerExecutionConnectionCount: (directConnections || []).length,
-          symbol: pair,
-          direction: analysis.direction as "long" | "short",
-          currentPrice: marketEntryPrice,
-          candles,
-          interval: entryInterval,
-          openPositions: directAuthorizationPositions,
-          accountBalance: account.balance,
-          config: {
-            portfolioHeat: pairConfig.portfolioHeat,
-            riskPerTrade: pairConfig.riskPerTrade,
-            correlationFilterEnabled: pairConfig.correlationFilterEnabled,
-            maxCorrelation: pairConfig.maxCorrelation,
-            maxCorrelatedPositions: pairConfig.maxCorrelatedPositions,
-            cooldownMinutes: pairConfig.cooldownMinutes,
-            newsFilterEnabled: pairConfig.newsFilterEnabled,
-            newsFilterPauseMinutes: pairConfig.newsFilterPauseMinutes,
-            enabledSessions: pairConfig.enabledSessions,
-            enabledDays: pairConfig.enabledDays,
-            killZoneOnly: pairConfig.killZoneOnly,
-          },
-          rateMap,
-        });
-        const directEntryConfirmation: EntryConfirmationDecision = {
-          required: true,
-          passed: candidateEntryConfirmationPassed || unifiedGatePassed,
-          method: candidateConfirmationMethod,
-          reason: candidateConfirmationSignal
-            ? "Entry timing confirmed by " + candidateConfirmationSignal.type
-            : unifiedGatePassed
-            ? "Entry timing confirmed by the ICT Setup Model"
-            : "Configured Entry Confirmation is not ready",
-          evidence: {
-            signalSource: (detail as any).signalSource || null,
-            structural: candidateConfirmationSignal,
-            indicators: candidateIndicatorConfirmation,
-            unifiedConfirmation: unifiedZoneData?.confirmation || null,
-            confirmationTimeframe: timeframeAuthority.roles.confirmation,
-            sourceCandleTimestamp:
-              roleCandles.confirmation[roleCandles.confirmation.length - 1]?.datetime || null,
-          },
-          evaluatedAt: nowStr,
-        };
-        const directCrossTimeframeContext =
-          selectedCrossTimeframeContext();
-        const directCanonicalDealingRange = evaluateCanonicalDealingRange({
-          range: directCrossTimeframeContext.canonicalDealingRange.available
-            ? directCrossTimeframeContext.canonicalDealingRange.range
-            : null,
-          direction: analysis.direction as "long" | "short",
-          price: marketEntryPrice,
-          mode: normalizeDealingRangeMode(
-            (pairConfig as any).dealingRangeMode,
-            {
-              onlyBuyInDiscount: pairConfig.onlyBuyInDiscount,
-              onlySellInPremium: pairConfig.onlySellInPremium,
-            },
-          ),
-        });
-        const rawDirectAuthorization = {
-          ...evaluateFinalTradeAuthorization({
-          account,
-          candidate: {
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            entryPrice: marketEntryPrice,
-            stopLoss: Number(sl),
-            takeProfit: Number(tp),
-          },
-          openPositions: directAuthorizationPositions,
-          maxOpenPositions: pairConfig.maxOpenPositions,
-          maxPerSymbol: pairConfig.maxPerSymbol,
-          allowSameDirectionStacking:
-            pairConfig.allowSameDirectionStacking,
-          maxDailyLoss: pairConfig.maxDailyLoss,
-          maxDrawdown: pairConfig.maxDrawdown,
-          minimumRiskReward: pairConfig.minRiskReward,
-          commissionPerLot: avgCommissionPerLot,
-          rateMap,
-          directionVerdict: activeDirectionVerdict,
-          requireDirectionVerdict: true,
-          gamePlan: activeGamePlan,
-          gamePlanEnabled,
-          gamePlanMode: gpEnforcementMode,
-          gamePlanMinimumConfidence:
-            (pairConfig as any).gpHardBlockThreshold ?? 75,
-          thesisResult: directThesisResult,
-          requireThesisValidation: true,
-          entryConfirmation: directEntryConfirmation,
-          propFirm: propFirmGateResult
-            ? {
-              enabled: propFirmGateResult.enabled,
-              allowed: propFirmGateResult.allowed,
-              reason: propFirmGateResult.reason,
-            }
-            : null,
-          requirePropFirmResult: true,
-          spread: {
-            required:
-              account.execution_mode === "live" &&
-              pairConfig.spreadFilterEnabled,
-            available:
-              account.execution_mode !== "live" ||
-              !pairConfig.spreadFilterEnabled ||
-              directAvailableSpreads.length > 0,
-            passed:
-              account.execution_mode !== "live" ||
-              !pairConfig.spreadFilterEnabled ||
-              directPassingSpreads.length > 0,
-            spreadPips: directBestSpread?.spreadPips,
-            maximumPips: directBestSpread?.effectiveMax,
-          },
-          runtimeGates: directRuntimeGates,
-          crossTimeframeAuthority: directCrossTimeframeContext.authority,
-          requireCrossTimeframeAuthority: true,
-        }),
-          canonicalDealingRange: directCanonicalDealingRange,
-        };
-        const directHierarchy = rawDirectAuthorization.decisionHierarchy ||
-          evaluateDecisionHierarchy({
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            gamePlan: activeGamePlan,
-            gamePlanEnabled,
-            gamePlanMode: gpEnforcementMode,
-            gamePlanMinimumConfidence:
-              (pairConfig as any).gpHardBlockThreshold ?? 75,
-            directionVerdict: activeDirectionVerdict,
-            requireDirectionVerdict: true,
-            thesisResult: directThesisResult,
-            requireThesisValidation: true,
-            entryConfirmation: directEntryConfirmation,
-          });
-        const directAuthorization = attachDecisionContext(
-          rawDirectAuthorization,
-          buildTradeDecisionContext({
-            stage: "fill",
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            gamePlan: activeGamePlan,
-            directionVerdict: activeDirectionVerdict,
-            thesisResult: directThesisResult,
-            requireThesisValidation: true,
-            thesisConviction: (detail as any).thesisConviction || null,
-            entryConfirmation: directEntryConfirmation,
-            hierarchy: directHierarchy,
-            stylePolicy: pairStylePolicy,
-            evaluatedAt: nowStr,
-          }),
-        );
-        const directEntryZoneEvidence =
-          (detail as any).signalSource === "cascade"
-            ? cascadeResult?.entryZone
-            : izData?.bestZone;
-        const directOriginatingZone = {
-          setupFamily: (detail as any).signalSource === "cascade"
-            ? "cascade"
-            : "impulse",
-          candidateId: entryZoneCandidateIdFor(directEntryZoneEvidence),
-          sourceEvidenceIds: entryZoneEvidenceIdsFor(
-            directEntryZoneEvidence,
-          ),
-          sourceImpulseId:
-            (detail as any).canonicalDealingRangeObservation?.canonical?.range
-              ?.impulseId || null,
-          type: izData?.bestZone?.type ||
-            (detail as any).unifiedZone?.zoneType ||
-            (detail as any).signalSource ||
-            "market_signal",
-          low: izData?.bestZone?.low ||
-            (detail as any).unifiedZone?.zoneLow ||
-            null,
-          high: izData?.bestZone?.high ||
-            (detail as any).unifiedZone?.zoneHigh ||
-            null,
-          entry: marketEntryPrice,
-          timeframe: entryZoneTimeframeFor(directEntryZoneEvidence) ||
-            (detail as any).unifiedZone?.selectedTF || null,
-          lifecycle: entryZoneLifecycleFor(directEntryZoneEvidence),
-          structuralInvalidation: null,
-          stopLoss: sl,
-          takeProfit: tp,
-          signalSource: (detail as any).signalSource || null,
-          marketFillAtZone: useMarketFillAtZone,
-        };
-        const directLifecycleEvidence = buildPromotedLifecycleEvidence(
-          directOriginatingZone,
-          directAuthorization as unknown as Record<string, unknown>,
-        );
-        const directCandidateId =
-          directLifecycleEvidence?.candidateId || crypto.randomUUID();
-        const directFrozenStrategyContext =
-          directLifecycleEvidence?.frozenStrategyContext ||
-          buildFrozenSetupStrategyContext({
-            identity: {
-              setupId: directLifecycleEvidence?.setupId ||
-                crypto.randomUUID(),
-              candidateId: directCandidateId,
-            },
-            timeframeEvidenceId:
-              directLifecycleEvidence?.frozenStrategyContext
-                ?.timeframeEvidenceId ||
-              (detail as any).timeframeEvidenceId ||
-              null,
-            symbol: pair,
-            direction: analysis.direction as "long" | "short",
-            stylePolicy: pairStylePolicy,
-            runtimeConfig: pairRuntimeConfigSnapshot,
-            decisionContext: directAuthorization.decisionContext,
-            gamePlan: activeGamePlan,
-            directionVerdict: activeDirectionVerdict,
-            conceptEvidence: selectedZoneConceptEvidence(),
-            zoneLocalConfluence: selectedZoneLocalConfluence(),
-            zoneCandidateShadowRanking: selectedZoneShadowRanking(),
-            crossTimeframeContext: selectedCrossTimeframeContext(directOriginatingZone),
-            entryZone: directOriginatingZone,
-            confirmationMethod:
-              pairConfig.confirmationMethod || "choch",
-            indicatorMinCount: pairConfig.indicatorMinCount || 3,
-          });
-        (detail as any).linkedSetupId = directFrozenStrategyContext.setupId;
-        if (directLifecycleEvidence) {
-          try {
-            await qualifyPromotedSetup(
-              directLifecycleEvidence,
-              "Qualified for immediate market-entry authorization",
-            );
-          } catch (lifecycleError: any) {
-            detail.status = "market_entry_lifecycle_claim_failed";
-            detail.skipReason = lifecycleError?.message ||
-              "Watchlist lifecycle qualification failed";
-            await finalizeDetailGoldenReplay({
-              execution: {
-                eligible: false,
-                entryPrice: marketEntryPrice,
-                stopLoss: sl,
-                takeProfit: tp,
-                positionSize: size,
-                orderType: "market",
-              },
-              lifecycle: {
-                route: "market",
-                stage: "qualification",
-                outcome: "failed",
-                reason: detail.skipReason,
-              },
-              provenance: {
-                candidateId: directCandidateId,
-                orderId,
-                positionId,
-              },
-            });
-            scanDetails.push(detail);
-            continue;
-          }
-        }
-        if (!directAuthorization.authorized) {
-          detail.status = "blocked_final_authorization";
-          detail.skipReason =
-            `[final-auth:${directAuthorization.code}] `
-            + directAuthorization.reason;
-          detail.finalAuthorization = directAuthorization;
-          console.warn(
-            `[market] ${pair} ${analysis.direction}: FINAL AUTH BLOCKED `
-            + `${directAuthorization.code} — ${directAuthorization.reason}`,
-          );
-          await finalizeDetailGoldenReplay({
-            execution: {
-              eligible: false,
-              entryPrice: marketEntryPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              positionSize: size,
-              orderType: "market",
-            },
-            lifecycle: {
-              route: "market",
-              stage: "authorization",
-              outcome: "blocked",
-              reason: detail.skipReason,
-            },
-            provenance: {
-              candidateId: directCandidateId,
-              orderId,
-              positionId,
-            },
-          });
-          await blockQualifiedSetup(
-            directLifecycleEvidence,
-            detail.skipReason,
-          );
-          scanDetails.push(detail);
-          continue;
-        }
-
         // Close on Reverse: close existing opposite-direction positions for this symbol.
         // MOVED here (from before the pending-order branch) so this only fires when the
         // new signal is actually about to open a live market position — never on signals
         // that get queued as pending limit orders which may never trigger.
-        const closeOppositePositionsAfterEntry = async () => {
-          if (!pairConfig.closeOnReverse) return;
+        if (pairConfig.closeOnReverse) {
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
-          const closedOppositeIds: string[] = [];
           for (const opp of oppositePositions) {
             const oppEntry = parseFloat(opp.entry_price);
             const oppSize = parseFloat(opp.size);
-            const oppPnlResult = calcPnl(
-              opp.direction,
-              oppEntry,
-              analysis.lastPrice,
-              oppSize,
-              opp.symbol,
-              rateMap,
-            );
-            if (!oppPnlResult.valid) {
-              console.error(
-                `[close] ${opp.symbol}: refusing reverse settlement with invalid P&L (${oppPnlResult.reason})`,
-              );
-              continue;
-            }
-            const { pnl: oppPnl, pnlPips: oppPnlPips } = oppPnlResult;
-            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
+            const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
+            const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
+            const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
+            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
+            const oppPnlPips = oppDiff / oppSpec.pipSize;
 
-            const brokerClose = await reconcileFullBrokerClose({
-              supabase,
-              userId,
-              botId: opp.bot_id || BOT_ID,
-              position: opp,
-              route: "reverse_signal",
-              closeReason: "reverse_signal",
+            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
+            await supabase.from("paper_trade_history").insert({
+              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
+              symbol: pair, direction: opp.direction, size: opp.size,
+              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
+              open_time: opp.open_time || nowStr, closed_at: nowStr,
+              close_reason: "reverse_signal",
+              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
+              signal_score: opp.signal_score || "0",
+              bot_id: BOT_ID,
             });
-            if (!brokerClose.readyToFinalize) {
-              console.warn(
-                `[close] reverse ${opp.position_id}: ${brokerClose.reason || brokerClose.state}; internal position remains open`,
-              );
-              continue;
-            }
-
-            const finalization = await finalizePaperPositionClose(supabase, {
-              positionRowId: opp.id,
-              userId,
-              botId: opp.bot_id || BOT_ID,
-              exitPrice: analysis.lastPrice,
-              pnl: oppPnl,
-              pnlPips: oppPnlPips,
-              closeReason: "reverse_signal",
-              closedAt: nowStr,
-            });
-            if (!finalization.closed) {
-              console.log(`[close] reverse ${opp.position_id} skipped: ${finalization.code}`);
-              continue;
-            }
-            closedOppositeIds.push(opp.position_id);
-            if (finalization.balance !== undefined) account.balance = finalization.balance.toString();
-            if (finalization.peak_balance !== undefined) account.peak_balance = finalization.peak_balance.toString();
+            // Update balance with actual PnL — scope to this bot's account
+            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
+            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
+            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
+            const newBal = curBal + oppPnl;
+            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
+            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
+            await balUpdate;;
 
             // Audit log entry for the reverse-signal close
+            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
             console.log("[close]", JSON.stringify({
               position_id: opp.position_id, symbol: pair, direction: opp.direction,
               broker_connection_ids: oppMirroredIds, pnl: oppPnl, exit_price: analysis.lastPrice,
@@ -10137,288 +6091,65 @@ async function runScanForUser(
               console.warn(`[close] audit insert failed for reverse ${opp.position_id}: ${e?.message}`);
             }
 
+            // Mirror close ONLY to the broker connections this position was actually mirrored to.
+            if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
+              const { data: closeConns } = await supabase.from("broker_connections")
+                .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
+                .eq("is_active", true).in("id", oppMirroredIds);
+              if (closeConns && closeConns.length > 0) {
+                for (const conn of closeConns) {
+                  try {
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${opp.position_id}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    const brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
+                      continue;
+                    }
+                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                    console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                  } catch (e: any) {
+                    console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
+                  }
+                }
+              }
+            } else if (account.execution_mode === "live") {
+              console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
+            }
           }
           // Remove closed opposite positions from the in-memory array so subsequent
           // gate checks in this scan cycle don't over-count.
-          const closedIds = new Set(closedOppositeIds);
+          const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
           openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
-        };
-        // GUARD: reject trades whose SL/TP orientation doesn't match direction.
-        // For long: SL must be below entry, TP above. For short: SL above, TP below.
-        // This catches direction-vs-zone contradictions (e.g. LONG verdict with SHORT zone SL/TP)
-        // before they get booked and later show up as "tp_hit" on a losing trade.
-        {
-          const entryRef = marketEntryPrice;
-          const slNum = Number(sl);
-          const tpNum = Number(tp);
-          const orientationOk = analysis.direction === "long"
-            ? (slNum < entryRef && tpNum > entryRef)
-            : (slNum > entryRef && tpNum < entryRef);
-          if (!orientationOk) {
-            console.error(`[GUARD] ${pair} ${analysis.direction} REJECTED — SL/TP orientation mismatch. entry=${entryRef} sl=${slNum} tp=${tpNum}`);
-            detail.status = "market_entry_rejected_orientation";
-            detail.skipReason =
-              `SL/TP orientation mismatch for ${analysis.direction} `
-              + `(entry=${entryRef} sl=${slNum} tp=${tpNum})`;
-            await finalizeDetailGoldenReplay({
-              execution: {
-                eligible: false,
-                entryPrice: entryRef,
-                stopLoss: slNum,
-                takeProfit: tpNum,
-                positionSize: size,
-                orderType: "market",
-              },
-              lifecycle: {
-                route: "market",
-                stage: "protection",
-                outcome: "blocked",
-                reason: detail.skipReason,
-              },
-              provenance: {
-                candidateId: directCandidateId,
-                orderId,
-                positionId,
-              },
-            });
-            await blockQualifiedSetup(
-              directLifecycleEvidence,
-              detail.skipReason,
-            );
-            scanDetails.push(detail);
-            continue;
-          }
         }
-        // Preserve the exact Game Plan that authorized this entry. This snapshot is
-        // immutable trade evidence; closed-trade analysis must not use a later plan.
-        const entryGamePlan = activeGamePlan?.plans?.find((plan: InstrumentGamePlan) => plan.symbol === pair) || null;
-        const entryGamePlanGate = Array.isArray(detail.gates)
-          ? detail.gates.find((gate: any) =>
-            typeof gate?.reason === "string"
-            && (gate.reason.startsWith("GP filter") || gate.reason.startsWith("GP alignment"))
-          )
-          : null;
-        const gamePlanSnapshot = entryGamePlan ? {
-          session: activeGamePlan?.session,
-          generatedAt: activeGamePlan?.generatedAt,
-          expiresAt: entryGamePlan.expiresAt || null,
-          symbol: entryGamePlan.symbol,
-          bias: entryGamePlan.bias,
-          legacyConfidence: entryGamePlan.biasConfidence,
-          state: entryGamePlan.state || (entryGamePlan.tradeable ? "tradeable" : "skip"),
-          stateReason: entryGamePlan.stateReason || entryGamePlan.skipReason || null,
-          conviction: entryGamePlan.conviction || null,
-          evidence: entryGamePlan.evidence || [],
-          supportingEvidence: entryGamePlan.supportingEvidence || [],
-          conflictingEvidence: entryGamePlan.conflictingEvidence || [],
-          dol: entryGamePlan.dol,
-          zone: entryGamePlan.zone,
-          regime: entryGamePlan.regime,
-          htfTrend: entryGamePlan.htfTrend,
-          h4Trend: entryGamePlan.h4Trend,
-          scenarios: entryGamePlan.scenarios || [],
-          candidateDirection: analysis.direction,
-          enforcementMode: gpEnforcementMode,
-          hardBlockThreshold: (config as any).gpHardBlockThreshold ?? 75,
-          gateDecision: entryGamePlanGate || null,
-          shadowAudit: (detail as any).gamePlanShadowAudit || null,
-          capturedAt: nowStr,
-        } : null;
-        const authorizedMarketReplaySnapshot =
-          await finalizeDetailGoldenReplay({
-            execution: {
-              eligible: true,
-              entryPrice: marketEntryPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              riskReward: Math.abs(tp - marketEntryPrice) /
-                Math.abs(marketEntryPrice - sl),
-              positionSize: size,
-              orderType: "market",
-            },
-            lifecycle: {
-              route: "market",
-              stage: "authorization",
-              outcome: "authorized",
-              reason: "Final market-entry authorization passed",
-            },
-            provenance: {
-              candidateId: directCandidateId,
-              orderId,
-              positionId,
-            },
-          });
-        const directSignalReason = {
-          bot: BOT_ID,
-          candidateId: directCandidateId,
-          summary: analysis.summary,
-          setupType: setupClassification.setupType,
-          setupConfidence: setupClassification.confidence,
-          setupRationale: setupClassification.rationale,
-          entryTimeframe: pairConfig.entryTimeframe,
-          originalSL: sl,
-          originalTP: tp,
-          exitFlags,
-          spreadFilter: {
-            enabled: pairConfig.spreadFilterEnabled,
-            maxPips: pairConfig.maxSpreadPips,
-          },
-          newsFilter: {
-            enabled: pairConfig.newsFilterEnabled,
-            pauseMinutes: pairConfig.newsFilterPauseMinutes,
-          },
-          fotsi: analysis.fotsiAlignment
-            ? {
-              base: analysis.fotsiAlignment.baseTSI,
-              quote: analysis.fotsiAlignment.quoteTSI,
-              spread: analysis.fotsiAlignment.spread,
-              score: analysis.fotsiAlignment.score,
-              label: analysis.fotsiAlignment.label,
-            }
-            : null,
-          factorScores: analysis.factors,
-          tieredScoring: analysis.tieredScoring || null,
-          regimeData: detail.regimeData || null,
-          confluenceStacking: detail.confluenceStacking || null,
-          sweepReclaim: detail.sweepReclaim || null,
-          pullbackHealth: detail.pullbackHealth || null,
-          structureIntel: detail.structureIntel || null,
-          entityLifecycles:
-            detail.analysis_snapshot?.entityLifecycles || null,
-          gates: detail.gates || null,
-          setupClassification: detail.setupClassification || null,
-          fibLevels: detail.fibLevels || null,
-          impulseZone: (detail as any).impulseZone || null,
-          directionVerdict: (detail as any).directionVerdict || null,
-          gamePlanShadowAudit:
-            (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
-          signalSource: (detail as any).signalSource || null,
-          timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
-          unifiedZone: (detail as any).unifiedZone || null,
-          originatingZone: directOriginatingZone,
-          gamePlanSnapshot,
-          finalAuthorization: directAuthorization,
-          canonicalDealingRangeObservation:
-            (detail as any).canonicalDealingRangeObservation || null,
-              ...canonicalEvidenceSnapshot(detail),
-          decisionContext: directAuthorization.decisionContext,
-          frozenStrategyContext: directFrozenStrategyContext,
-          goldenReplaySnapshot: authorizedMarketReplaySnapshot,
-          confirmationMethod:
-            directFrozenStrategyContext.confirmation.method,
-          indicatorMinCount:
-            directFrozenStrategyContext.confirmation.indicatorMinCount,
-          thesisVersion: THESIS_VALIDATION_VERSION,
-          ...(directLifecycleEvidence
-            ? { watchlistLifecycle: directLifecycleEvidence }
-            : {}),
-          tpMethod: pairConfig.tpMethod || "rr_ratio",
-          ...(isPromotedFromStaging && existingStaged
-            ? {
-              promotedFromWatchlist: true,
-              watchlistOrigin: {
-                initialScore: parseFloat(existingStaged.initial_score),
-                cyclesWatched: existingStaged.scan_cycles + 1,
-                stagedAt: existingStaged.staged_at,
-                promotionReason: singleOwnershipEnforcementRequested
-                  ? "Trade Decision authorized Watchlist promotion"
-                  : `Score reached ${analysis.score.toFixed(1)}% `
-                    + `(gate: ${adjustedMinConfluence}%) after `
-                    + `${existingStaged.scan_cycles + 1} cycles`,
-              },
-            }
-            : {}),
-        };
-        const sourceCandleTime =
-          candles[candles.length - 1]?.datetime || nowStr;
-        const directCandidateKey = [
-          "direct",
-          pair,
-          analysis.direction,
-          sourceCandleTime,
-          (detail as any).signalSource || "unknown",
-        ].join(":");
-        const { data: directFill, error: directFillError } =
-          await supabase.rpc("finalize_market_entry", {
-            p_user_id: userId,
-            p_bot_id: BOT_ID,
-            p_source_candidate_key: directCandidateKey,
-            p_position: {
-              position_id: positionId,
-              symbol: pair,
-              direction: analysis.direction,
-              size: size.toString(),
-              entry_price: marketEntryPrice.toString(),
-              current_price: analysis.lastPrice.toString(),
-              stop_loss: sl.toString(),
-              take_profit: tp.toString(),
-              open_time: nowStr,
-              signal_reason: directSignalReason,
-              signal_score: analysis.score.toString(),
-              order_id: orderId,
-            },
-            p_authorization: directAuthorization,
-            p_max_open_positions: pairConfig.maxOpenPositions,
-            p_max_per_symbol: pairConfig.maxPerSymbol,
-            p_allow_same_direction:
-              pairConfig.allowSameDirectionStacking,
-            p_close_on_reverse: pairConfig.closeOnReverse,
-          });
-        if (directFillError || !directFill?.filled) {
-          detail.status = "market_entry_claim_failed";
-          detail.skipReason = directFillError?.message ||
-            directFill?.reason ||
-            "Atomic market entry was not claimed";
-          console.warn(
-            `[market] ${pair} ${analysis.direction}: atomic entry rejected — `
-            + `${directFillError?.message || directFill?.code || "unknown"}`,
-          );
-          await finalizeDetailGoldenReplay({
-            execution: authorizedMarketReplaySnapshot.decision.execution,
-            lifecycle: {
-              route: "market",
-              stage: "position",
-              outcome: "failed",
-              reason: detail.skipReason,
-            },
-            provenance: {
-              candidateId: directCandidateId,
-              orderId,
-              positionId,
-            },
-          });
-          await blockQualifiedSetup(
-            directLifecycleEvidence,
-            detail.skipReason,
-          );
-          scanDetails.push(detail);
-          continue;
-        }
-
-        await finalizeDetailGoldenReplay({
-          execution: authorizedMarketReplaySnapshot.decision.execution,
-          lifecycle: {
-            route: "market",
-            stage: "position",
-            outcome: "opened",
-            reason: "Atomic market-entry claim succeeded",
-          },
-          provenance: {
-            candidateId: directCandidateId,
-            orderId,
-            positionId,
-          },
+        await supabase.from("paper_positions").insert({
+          user_id: userId,
+          position_id: positionId,
+          symbol: pair,
+          direction: analysis.direction,
+          size: size.toString(),
+          entry_price: marketEntryPrice.toString(),
+          current_price: analysis.lastPrice.toString(),
+          stop_loss: sl.toString(),
+          take_profit: tp.toString(),
+          open_time: nowStr,
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_score: analysis.score.toString(),
+          order_id: orderId,
+          position_status: "open",
+          bot_id: BOT_ID,
         });
-        if (directLifecycleEvidence) {
-          stagedPromoted++;
-          stagedMap.delete(stagedKey!);
-        }
-
-        // Only the scanner that won the atomic market-entry claim may replace
-        // the opposite position, notify, or send an order to a broker.
-        if (account.execution_mode !== "live") {
-          await closeOppositePositionsAfterEntry();
-        }
 
         // Store trade reasoning
         await supabase.from("trade_reasonings").insert({
@@ -10438,7 +6169,7 @@ async function runScanForUser(
         detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : (useMarketFillAtZone ? "trade_placed_at_zone" : "trade_placed");
         if (useMarketFillAtZone) {
           detail.entryMethod = "market_fill_at_zone";
-          detail.zoneConfirmation = "configured_entry_confirmation";
+          detail.zoneConfirmation = "zone_touch_is_confirmation";
           detail.impulseZoneEntry = { zoneLow: izData?.bestZone?.low, zoneHigh: izData?.bestZone?.high, zoneType: izData?.bestZone?.type, refinedEntry: izData?.bestZone?.refinedEntry };
         }
         if (isPromotedFromStaging && existingStaged) {
@@ -10453,39 +6184,21 @@ async function runScanForUser(
         // Send Telegram notification to all configured chat IDs
         if (telegramChatIds.length > 0 && shouldNotify("trade_opened")) {
           const emoji = analysis.direction === "long" ? "🟢" : "🔴";
-          const mode = account.execution_mode === "live" ? "LIVE ORDER SUBMITTED" : "PAPER";
-          // TP method label for notification
-          const openTpMethod = pairConfig.tpMethod || "rr_ratio";
-          const openTpLabel = openTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : openTpMethod === "next_level" ? "Next Structure Level" : openTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR ×${pairConfig.tpATRMultiple || 2.0}`;
-          const openRR = (() => {
-            const risk = Math.abs(marketEntryPrice - sl);
-            return risk > 0 ? (Math.abs(tp - marketEntryPrice) / risk).toFixed(2) : null;
-          })();
-          const openSR = detail as any;
+          const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
-            tgLine("Symbol", pair) +
-            tgLine("Direction", analysis.direction.toUpperCase()) +
-            tgLine("Size", `${size} lots`) +
-            tgLine("Entry", fmtPx(marketEntryPrice, pair)) +
-            tgLine("SL", fmtPx(sl, pair)) +
-            tgLine("TP", `${fmtPx(tp, pair)} (${openTpLabel})`) +
-            (openRR ? tgLine("Planned R:R", `${openRR}:1`) : "") +
-            tgLine("Session", analysis.session.name) +
-            tgLine("Setup", setupClassification.setupType.toUpperCase()) +
-            "\n" +
-            tradeAuthorityLines(openSR) +
-            zoneEvidenceLines(openSR) +
-            directionVerdictLines((detail as any).directionVerdict) +
-            styleLadderLines({}, timeframeAuthority?.roles) +
-            crossTimeframeAuthorityLine(crossTimeframeAuthority) +
-            "\n" +
-            tgLine("Summary", analysis.summary || "—") +
-            diagnosticScoreLine(analysis.score) +
+            `<b>Symbol:</b> ${pair}\n` +
+            `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
+            `<b>Size:</b> ${size} lots\n` +
+            `<b>Entry:</b> ${analysis.lastPrice}\n` +
+            `<b>SL:</b> ${sl}\n` +
+            `<b>TP:</b> ${tp}\n` +
+            `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
+            `<b>Session:</b> ${analysis.session.name}\n` +
+            `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
+            `<b>Summary:</b> ${analysis.summary || "—"}` +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "") +
-            (unifiedZoneData?.confirmation
-              ? "\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> " + unifiedZoneData.confirmation.type.replace(/_/g, " ") + (unifiedZoneData.confirmation.entryReady ? " ✓" : "") + "\n<b>Detail:</b> " + unifiedZoneData.confirmation.detail
-              : "");
+            (unifiedZoneData?.confirmation ? `\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> ${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " ✓" : ""}\n<b>Detail:</b> ${unifiedZoneData.confirmation.detail}${unifiedZoneData.confirmation.score > 0 ? `\n<b>Score:</b> +${unifiedZoneData.confirmation.score.toFixed(1)}` : ""}` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -10506,8 +6219,9 @@ async function runScanForUser(
         console.log(`Mirror check for ${pair}: execution_mode=${account.execution_mode}, positionId=${positionId}`);
         try {
           if (account.execution_mode === "live") {
-            const connections = directConnections || [];
-            if (connections.length > 0) {
+            const { data: connections } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+            if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               let brokerFillPrice: number | null = null; // Actual fill price from first successful broker execution
@@ -10535,57 +6249,28 @@ async function runScanForUser(
                       oandaTP = adj.brokerTP;
                       console.log(`OANDA SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${oandaSL}, TP ${tp} → ${oandaTP}`);
                     }
-                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the
-                    // broker-execute function after a durable execution claim.
-                    const ledgerExecution = await executeBrokerOrderWithLedger(
-                      supabase,
-                      {
+                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
+                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                      },
+                      body: JSON.stringify({
+                        action: "place_order",
+                        connectionId: conn.id,
+                        symbol: pair,
+                        direction: analysis.direction,
+                        size,
+                        stopLoss: oandaSL,
+                        takeProfit: oandaTP,
                         userId,
-                        botId: BOT_ID,
-                        positionId,
-                        brokerConnectionId: conn.id,
-                        route: "direct_market",
-                        requestPayload: {
-                          symbol: pair,
-                          direction: analysis.direction,
-                          size,
-                          stopLoss: oandaSL,
-                          takeProfit: oandaTP,
-                        },
-                      },
-                      async () => {
-                        const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-                          },
-                          body: JSON.stringify({
-                            action: "place_order",
-                            connectionId: conn.id,
-                            symbol: pair,
-                            direction: analysis.direction,
-                            size,
-                            stopLoss: oandaSL,
-                            takeProfit: oandaTP,
-                            positionId,
-                            userId,
-                          }),
-                        });
-                        const rawBody = await exRes.text();
-                        let parsedBody: any = null;
-                        try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
-                        return {
-                          ok: exRes.ok,
-                          httpStatus: exRes.status,
-                          parsedBody,
-                          rawBody,
-                        };
-                      },
-                    );
-                    const exBody = ledgerExecution.rawBody || "";
-                    const parsedEx = ledgerExecution.parsedBody;
-                    if (ledgerExecution.status === "succeeded") {
+                      }),
+                    });
+                    const exBody = await exRes.text();
+                    let parsedEx: any = null;
+                    try { parsedEx = JSON.parse(exBody); } catch {}
+                    if (exRes.ok && !(parsedEx?.error)) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                       mirroredConnIds.push(conn.id);
@@ -10618,17 +6303,11 @@ async function runScanForUser(
                         console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
                       }
                     } else {
-                      const reason = ledgerExecution.error
-                        || parsedEx?.error
-                        || exBody.slice(0, 200)
-                        || "reconciliation required";
-                      console.warn(
-                        `Broker mirror [${conn.display_name}] (${conn.broker_type})`
-                        + ` ${ledgerExecution.status}: ${reason}`,
-                      );
-                      mirrorResults.push(`${conn.display_name}: ${ledgerExecution.status} — ${reason}`);
+                      const reason = parsedEx?.error || exBody.slice(0, 200);
+                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
+                      mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
                       // Circuit breaker: record failure (transient if HTTP error, permanent if auth)
-                      const isTransient = ledgerExecution.status === "uncertain";
+                      const isTransient = !reason.includes("auth") && !reason.includes("invalid");
                       brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: reason, isTransient });
                     }
                     continue;
@@ -10667,8 +6346,10 @@ async function runScanForUser(
                        continue;
                      }
                      const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
-                     // Resolve the connection's explicit auto/manual/none commission mode.
-                     const connCommRT = resolveRoundTripCommission(conn).roundTripPerLot;
+                     // Get per-connection commission: user-set takes priority, then auto-detected (per-side × 2 for round-trip)
+                     const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
+                     const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;
+                     const connCommRT = connUserComm > 0 ? connUserComm : connDetectedComm;
                      // Unified sizing for broker mirror (volatility scaling applies)
                      const brokerSizingResult = computePositionSize(
                        {
@@ -10688,14 +6369,6 @@ async function runScanForUser(
                        volCtx,
                        undefined, // No prop firm context for broker (broker has own limits)
                      );
-                     if (brokerSizingResult.rejected || brokerSizingResult.lots <= 0) {
-                       const reason = brokerSizingResult.rejectionReason || "no executable broker size";
-                       console.warn(`Broker sizing rejected [${conn.display_name}]: ${reason}`);
-                       mirrorResults.push(
-                         `${conn.display_name}: skipped (sizing rejected: ${reason})`,
-                       );
-                       continue;
-                     }
                      brokerVolume = brokerSizingResult.lots;
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})${brokerSizingResult.adjustments.length > 0 ? ` [${brokerSizingResult.adjustments.map(a => a.type).join(",")}]` : ""}`);
                    } catch (balErr: any) {
@@ -10722,27 +6395,13 @@ async function runScanForUser(
                      }
                    }
                    const brokerSpec = specCache[specCacheKey];
-                   if (!brokerSpec) {
-                     const reason = "broker symbol specification unavailable";
-                     console.warn(`Broker sizing rejected [${conn.display_name}]: ${reason}`);
-                     mirrorResults.push(`${conn.display_name}: skipped (${reason})`);
-                     continue;
+                   if (brokerSpec) {
+                     const preClamp = brokerVolume;
+                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, brokerVolume));
+                     brokerVolume = Math.round(brokerVolume / brokerSpec.volumeStep) * brokerSpec.volumeStep;
+                     brokerVolume = parseFloat(brokerVolume.toFixed(6)); // avoid floating-point artifacts
+                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
                    }
-                   const normalizedVolume = normalizeBrokerVolumeDown({
-                     lots: brokerVolume,
-                     minVolume: brokerSpec.minVolume,
-                     maxVolume: brokerSpec.maxVolume,
-                     volumeStep: brokerSpec.volumeStep,
-                   });
-                   if (!normalizedVolume.ok) {
-                     console.warn(`Broker sizing rejected [${conn.display_name}]: ${normalizedVolume.error}`);
-                     mirrorResults.push(
-                       `${conn.display_name}: skipped (sizing rejected: ${normalizedVolume.error})`,
-                     );
-                     continue;
-                   }
-                   brokerVolume = normalizedVolume.volume;
-                   console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → normalized down to ${brokerVolume}`);
 
                    // ── Unified spread check for MetaApi ──
                    const metaSpread = await fetchBrokerSpread(conn, pair, pairConfig, metaAccountId, authToken);
@@ -10770,121 +6429,71 @@ async function runScanForUser(
                    if (brokerSL) mt5Body.stopLoss = brokerSL;
                    if (brokerTP) mt5Body.takeProfit = brokerTP;
                    console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${metaSpread?.spreadPips?.toFixed(2) ?? "?"} pips`);
-                   const ledgerExecution = await executeBrokerOrderWithLedger(
-                     supabase,
-                     {
-                       userId,
-                       botId: BOT_ID,
-                       positionId,
-                       brokerConnectionId: conn.id,
-                       route: "direct_market",
-                       requestPayload: {
-                         symbol: pair,
-                         brokerSymbol,
-                         direction: analysis.direction,
-                         volume: brokerVolume,
-                         stopLoss: brokerSL,
-                         takeProfit: brokerTP,
-                       },
-                     },
-                     async () => {
-                       const { res: mt5Res, body: rawBody } = await metaFetch(
-                         metaAccountId,
-                         authToken,
-                         (base) => `${base}/trade`,
-                         {
-                           method: "POST",
-                           headers: { "Content-Type": "application/json" },
-                           body: JSON.stringify(mt5Body),
-                         },
-                         { allowFailover: false },
-                       );
-                       let parsedBody: any = null;
-                       try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
-                       return {
-                         ok: mt5Res.ok,
-                         httpStatus: mt5Res.status,
-                         parsedBody,
-                         rawBody,
-                         confirmationMode: "metaapi_position_open",
-                       };
-                     },
-                   );
-                   const resBody = ledgerExecution.rawBody || "";
-                   const parsed = ledgerExecution.parsedBody || {};
-                   if (ledgerExecution.status === "succeeded") {
-                     console.log(`Broker mirror [${conn.display_name}]: SUCCESS — ${resBody.slice(0, 500)}`);
-                     mirrorResults.push(`${conn.display_name}: success`);
-                     mirroredConnIds.push(conn.id);
-                     brokerHealthMap[conn.id] = updateHealth(connHealth, {
-                       connectionId: conn.id,
-                       success: true,
-                       latencyMs: 0,
-                       isTransient: false,
-                     });
-                     // Auto-detect commission from MetaApi trade response
+                   const { res: mt5Res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
+                   if (mt5Res.ok) {
+                     console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
                      try {
-                       const brokerOrderId = ledgerExecution.brokerOrderId
-                         || parsed.orderId
-                         || parsed.positionId;
-                       if (brokerOrderId) {
-                         // Fetch the deal associated with this order to get commission + fill price
-                         const { res: dealRes, body: dealBody } = await metaFetch(
-                           metaAccountId,
-                           authToken,
-                           (base) => `${base}/history-deals/position/${brokerOrderId}`,
-                         );
-                         if (dealRes.ok) {
-                           const deals = JSON.parse(dealBody);
-                           const dealArr = Array.isArray(deals) ? deals : [];
-                           for (const deal of dealArr) {
-                             if (!brokerFillPrice && deal.price != null) {
-                               const metaFillPrice = parseFloat(deal.price);
-                               if (metaFillPrice > 0) {
-                                 brokerFillPrice = metaFillPrice;
-                                 console.log(`[broker-fill-price] MetaApi [${conn.display_name}]: fill price ${metaFillPrice}`);
-                               }
-                             }
-                             if (deal.commission !== undefined && deal.volume > 0) {
-                               const dealComm = Math.abs(parseFloat(deal.commission || "0"));
-                               const dealVol = parseFloat(deal.volume || "0");
-                               if (dealComm > 0 && dealVol > 0) {
-                                 const commPerLot = dealComm / dealVol;
-                                 console.log(`[commission auto-detect] MetaApi [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from deal (comm=$${dealComm}, vol=${dealVol})`);
-                                 await supabase.from("broker_connections")
-                                   .update({ detected_commission_per_lot: commPerLot })
-                                   .eq("id", conn.id);
-                                 break;
-                               }
-                             }
-                           }
-                         }
-                       }
-                     } catch (commErr: any) {
-                       console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
-                     }
+                       const parsed = JSON.parse(resBody);
+                         if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
+                           console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
+                           mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                           // Circuit breaker: broker rejection is NOT transient (won't open circuit)
+                           brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: parsed.stringCode, isTransient: false });
+                        } else {
+                          mirrorResults.push(`${conn.display_name}: success`);
+                          mirroredConnIds.push(conn.id);
+                          // Circuit breaker: record success
+                          brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
+                          // Auto-detect commission from MetaApi trade response
+                          try {
+                            const orderId = parsed.orderId || parsed.positionId;
+                            if (orderId) {
+                              // Fetch the deal associated with this order to get commission + fill price
+                              const { res: dealRes, body: dealBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/history-deals/position/${orderId}`);
+                              if (dealRes.ok) {
+                                const deals = JSON.parse(dealBody);
+                                const dealArr = Array.isArray(deals) ? deals : [];
+                                for (const deal of dealArr) {
+                                  // Extract actual fill price from deal (first deal with price is the entry)
+                                  if (!brokerFillPrice && deal.price != null) {
+                                    const metaFillPrice = parseFloat(deal.price);
+                                    if (metaFillPrice > 0) {
+                                      brokerFillPrice = metaFillPrice;
+                                      console.log(`[broker-fill-price] MetaApi [${conn.display_name}]: fill price ${metaFillPrice}`);
+                                    }
+                                  }
+                                  if (deal.commission !== undefined && deal.volume > 0) {
+                                    const dealComm = Math.abs(parseFloat(deal.commission || "0"));
+                                    const dealVol = parseFloat(deal.volume || "0");
+                                    if (dealComm > 0 && dealVol > 0) {
+                                      const commPerLot = dealComm / dealVol; // per-side per lot
+                                      console.log(`[commission auto-detect] MetaApi [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from deal (comm=$${dealComm}, vol=${dealVol})`);
+                                      await supabase.from("broker_connections")
+                                        .update({ detected_commission_per_lot: commPerLot })
+                                        .eq("id", conn.id);
+                                      break;
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          } catch (commErr: any) {
+                            console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
+                          }
+                        }
+                      } catch { mirrorResults.push(`${conn.display_name}: success`); mirroredConnIds.push(conn.id); }
                    } else {
-                     const reason = ledgerExecution.error || "reconciliation required";
-                     console.warn(
-                       `Broker mirror [${conn.display_name}] ${ledgerExecution.status}: ${reason}`,
-                     );
-                     mirrorResults.push(`${conn.display_name}: ${ledgerExecution.status} — ${reason}`);
-                     brokerHealthMap[conn.id] = updateHealth(
-                       brokerHealthMap[conn.id] || createInitialHealth(conn.id),
-                       {
-                         connectionId: conn.id,
-                         success: false,
-                         latencyMs: 0,
-                         error: reason,
-                         isTransient: ledgerExecution.status === "uncertain",
-                       },
-                     );
+                     console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
+                     mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
+                     // Circuit breaker: record failure
+                     const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
+                     brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
                   // Circuit breaker: record transient failure
-                  brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), {
+                  brokerHealthMap[conn.id] = updateHealth(connHealth, {
                     connectionId: conn.id, success: false, latencyMs: 0,
                     error: connErr?.message || "unknown", isTransient: true,
                   });
@@ -10922,192 +6531,14 @@ async function runScanForUser(
           console.warn(`MT5 mirror error: ${e?.message || e}`);
           detail.mt5Mirror = "error";
         }
-        if (account.execution_mode === "live") {
-          const { data: brokerLifecycle } = await supabase.rpc("finalize_live_broker_position", {
-            p_user_id: userId, p_bot_id: BOT_ID, p_position_id: positionId,
-          });
-          detail.brokerExecutionState = brokerLifecycle?.state || "unknown";
-          if (brokerLifecycle?.open === true) {
-            await closeOppositePositionsAfterEntry();
-          } else {
-            detail.status = brokerLifecycle?.state === "reconciliation_required"
-              ? "broker_reconciliation_required" : "broker_entry_rejected";
-            detail.skipReason = brokerLifecycle?.reason || "No broker confirmed the live order";
-            tradesPlaced = Math.max(0, tradesPlaced - 1);
-          }
-        }
 
-        // Only paper positions or broker-confirmed live positions participate in later gates.
-        if (account.execution_mode !== "live" || detail.brokerExecutionState === "confirmed") {
-          openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
-        }
-      } else if (
-        (detail as any).canonicalScannerEnforcement?.effectiveMode === "enforce" &&
-        (detail as any).canonicalScannerEnforcement?.disposition === "wait"
-      ) {
-        let waitPersistenceError: string | null = null;
-        let waitPlanRejectionReason: string | null = null;
-        if (!currentPendingCandidate && preparedZoneWatch &&
-            pairConfig.preArmZoneSetups === true && config.limitOrderEnabled &&
-            !config.marketFillAtZone) {
-          let stagedReady = !!existingStaged;
-          if (!stagedReady) {
-            const { error: stagedError } = await supabase.from("staged_setups").insert(preparedZoneWatch);
-            if (stagedError) {
-              waitPersistenceError = `Watchlist persistence failed: ${stagedError.message}`;
-            } else {
-              stagedReady = true;
-              stagedNew++;
-            }
-          }
-          if (stagedReady) {
-          const frozenZone = preparedZoneWatch.originating_zone;
-          const frozenEntry = Number(preparedZoneWatch.entry_price ?? frozenZone?.entry);
-          const frozenStop = Number(preparedZoneWatch.sl_level);
-          const waitPlan = buildConfiguredPreArmedPlan({
-            direction: analysis.direction as "long" | "short",
-            zone: {
-              price: frozenEntry,
-              zoneType: String(frozenZone?.type || "impulse_zone"),
-              zoneLow: Number(frozenZone?.low),
-              zoneHigh: Number(frozenZone?.high),
-            },
-            structuralInvalidation: frozenStop,
-            preferredPositionStop: analysis.stopLoss,
-            symbol: pair,
-            atrValue: (analysis as any).atrValue,
-            config: pairConfig,
-            analysis,
-            stopPolicy: enforcedZoneStopPolicyFor(frozenStop),
-            lifecycleDecision: validatePendingLifecycle(
-              readFrozenSetupStrategyContext(preparedZoneWatch),
-              frozenZone,
-            ),
-          });
-          if (waitPlan.valid) {
-            const stagedAt = Date.parse(preparedZoneWatch.staged_at || preparedZoneWatch.created_at);
-            const ttlMinutes = Number(preparedZoneWatch.ttl_minutes || stagingTTLMinutes);
-            const placedAt = new Date().toISOString();
-            const preArmReachability = observePreArmReachability({
-              currentPrice: Number(analysis.lastPrice),
-              entryPrice: waitPlan.plan.entryPrice,
-              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-              // Same fix as the frozen-zone route above: `analysis.atrValue`
-              // does not exist, so this recorded null on every pre-armed row.
-              atrValue: zoneStopPolicyConfirmationAtr > 0
-                ? zoneStopPolicyConfirmationAtr
-                : null,
-              ttlMinutes,
-              referenceMaxDistancePips: Number(config.limitOrderMaxDistancePips ?? 30),
-              armedAt: placedAt,
-            });
-            const expiresAt = new Date(stagedAt + ttlMinutes * 60_000).toISOString();
-            const { error } = await supabase.from("pending_orders").insert({
-              user_id: userId, bot_id: BOT_ID, order_id: crypto.randomUUID().slice(0, 8),
-              symbol: pair, direction: analysis.direction, order_type: "limit",
-              entry_price: waitPlan.plan.entryPrice, current_price: analysis.lastPrice,
-              stop_loss: waitPlan.plan.stopLoss, take_profit: waitPlan.plan.takeProfit, size: null,
-              entry_zone_type: waitPlan.plan.zone.zoneType, entry_zone_low: waitPlan.plan.zone.zoneLow,
-              entry_zone_high: waitPlan.plan.zone.zoneHigh, status: "pending",
-              expiry_minutes: ttlMinutes, expires_at: expiresAt,
-              signal_reason: {
-                preArmed: true,
-                candidateId: preparedZoneWatch.candidate_id,
-                preArmReachability,
-                takeProfitSource: waitPlan.takeProfitSource,
-                takeProfitFallbackReason: waitPlan.takeProfitFallbackReason,
-                zoneSetupStopPolicyMode: zoneStopPolicyResolution.requestedMode,
-                zoneSetupStopPolicyAppliedAtArm: zoneStopPolicyResolution.enforced,
-                zoneSetupStopPolicyBufferQuoteDistance:
-                  adjustedSlBuffer * zoneStopPolicySpec.pipSize,
-                zoneSetupStopPolicy: waitPlan.stopPolicy || null,
-              },
-              signal_score: analysis.score, from_watchlist: true, staged_setup_id: preparedZoneWatch.id,
-              candidate_id: preparedZoneWatch.candidate_id, structural_invalidation: frozenStop,
-              structural_invalidation_source: "staged_inherited", originating_zone: frozenZone,
-              frozen_strategy_context: preparedZoneWatch.frozen_strategy_context,
-              confirmation_method: preparedZoneWatch.confirmation_method || pairConfig.confirmationMethod || "choch",
-              confirmation_config: preparedZoneWatch.confirmation_config, placed_at: placedAt,
-              liquidity_confirmation_observation: (detail as any).liquidityConfirmationObservation || null,
-            });
-            if (error && !/duplicate key/i.test(error.message)) waitPersistenceError = error.message;
-            (detail as any).frozenExecutablePlan = {
-              ...((detail as any).frozenExecutablePlan || {}),
-              entryPrice: waitPlan.plan.entryPrice, stopLoss: waitPlan.plan.stopLoss,
-              takeProfit: waitPlan.plan.takeProfit,
-              takeProfitSource: waitPlan.takeProfitSource,
-              takeProfitFallbackReason: waitPlan.takeProfitFallbackReason,
-              zone: waitPlan.plan.zone,
-            };
-          } else {
-            waitPlanRejectionReason = waitPlan.reason;
-          }
-          }
-        }
-        const waitingStage = (detail as any).canonicalScannerState?.stage || "watching";
-        detail.status = waitingStage === "awaiting_liquidity"
-          ? "waiting_for_sweep"
-          : waitingStage === "awaiting_confirmation"
-          ? "waiting_for_reconfirmation"
-          : waitingStage;
-        detail.skipReason = (detail as any).canonicalScannerState?.explanation ||
-          "Canonical setup remains active and is waiting for more evidence";
-        if (waitPersistenceError) detail.skipReason += `; pending persistence failed: ${waitPersistenceError}`;
-        if (waitPlanRejectionReason) {
-          detail.skipReason += `; pre-arm plan not armed: ${waitPlanRejectionReason}`;
-          detail.preArmDecision = rejectedPreArmDecision(
-            waitPlanRejectionReason,
-            preparedZoneWatch?.candidate_id,
-          );
-        }
-        detail.rejectionReasons = [];
-        scanDetails.push(detail);
-        continue;
+        // Add to virtual open positions for subsequent gates
+        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
       } else {
         rejectedCount++;
         detail.status = "rejected";
         const failedGates = gates.filter(g => !g.passed);
-        const enforcingOwnedAuthorities = singleOwnershipScanOutcome.disposition !== "legacy";
-        const blockingGateReasons: string[] = [];
-        for (const gate of failedGates) {
-          const code = normalizeRejectedGate(gate.reason);
-          const disposition = evaluateAuthorityGateDisposition({
-            code, passed: false,
-            requestedMode: (pairConfig as any).singleOwnershipMode,
-            runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
-          });
-          const duplicatedRollingLocationGate = enforcingOwnedAuthorities && code === "premium_discount";
-          if ((!enforcingOwnedAuthorities || disposition.blocksAuthorization) && !duplicatedRollingLocationGate) {
-            blockingGateReasons.push(gate.reason);
-          } else {
-            legacyGateDiagnostics.push({ ...disposition, reason: gate.reason });
-          }
-        }
-        detail.legacyGateDiagnostics = legacyGateDiagnostics;
-        const authorityReasons = singleOwnershipScanOutcome.disposition === "reject"
-          ? [...singleOwnershipScanOutcome.reasons]
-          : [];
-        const canonicalRejection = (detail as any).canonicalDealingRangeObservation?.canonical;
-        const hasDetailedRiskRewardReason = blockingGateReasons.some((reason) =>
-          normalizeRejectedGate(reason) === "minimum_risk_reward"
-        );
-        const consolidatedAuthorityReasons = authorityReasons.filter((reason) =>
-          !reason.startsWith("Premium/Discount rule blocked entry:") &&
-          !(hasDetailedRiskRewardReason && reason.includes("expected reward is too small"))
-        );
-        if (canonicalRejection?.allowed === false && canonicalRejection?.explanation) {
-          consolidatedAuthorityReasons.push(canonicalRejection.explanation);
-        }
-        if (!analysis.stopLoss || !analysis.takeProfit) {
-          consolidatedAuthorityReasons.push("Valid stop loss and take profit are required");
-        }
-        detail.rejectionReasons = [...new Set([
-          ...blockingGateReasons,
-          ...consolidatedAuthorityReasons,
-        ])];
-        if (detail.rejectionReasons.length === 0) {
-          detail.rejectionReasons = ["Trade entry was not authorized; no blocking reason was recorded"];
-        }
+        detail.rejectionReasons = failedGates.map(g => g.reason);
         // ── Rejected Setup Logging: gate-blocked setup ──
         try {
           const _rsCurrencies = parsePairCurrencies(pair);
@@ -11118,13 +6549,13 @@ async function runScanForUser(
             symbol: pair,
             direction: analysis.direction as "long" | "short",
             rejectionType: "gate_blocked",
-            failedGates: detail.rejectionReasons,
+            failedGates: failedGates.map(g => g.reason),
             confluenceScore: effectiveScore,
             tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
             tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
             entryPrice: analysis.lastPrice,
-            stopLoss: analysis.stopLoss ?? undefined,
-            takeProfit: analysis.takeProfit ?? undefined,
+            stopLoss: analysis.stopLoss,
+            takeProfit: analysis.takeProfit,
             rrRatio: analysis.stopLoss && analysis.takeProfit
               ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
               : undefined,
@@ -11135,419 +6566,14 @@ async function runScanForUser(
             fotsiBaseTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[0]] : undefined,
             fotsiQuoteTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[1]] : undefined,
             priceAtRejection: analysis.lastPrice,
-            rawDetail: {
-              scanCycleId,
-              singleOwnershipEnforcement:
-                (detail as any).singleOwnershipEnforcement || null,
-              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
-              thesisConviction: (detail as any).thesisConviction || null,
-              directionVerdict: (detail as any).directionVerdict || null,
-              impulseZone: (detail as any).impulseZone || null,
-              decisionContext: (detail as any).decisionContext || null,
-              stylePolicy: pairStylePolicy,
-              canonicalDealingRangeObservation:
-                (detail as any).canonicalDealingRangeObservation || null,
-              ...canonicalEvidenceSnapshot(detail),
-              shadowEvaluation: {
-                baseScore: analysis.score,
-                effectiveScore,
-                threshold: conflictAdjustedMinConfluence,
-              },
-            },
           });
         } catch (rsErr: any) {
           // Non-fatal: logging failure must never block the scanner
           console.warn(`[rejected-setup] Logging error for ${pair}: ${rsErr?.message}`);
         }
-
-        // ── Breaker Block Entry Signal (SMC Enhancement) ──
-        // Breakers remain an independent setup model, but they are not an
-        // independent execution authority. Direction, Game Plan, account,
-        // exposure, drawdown and prop-firm checks must authorize the candidate.
-        if (smcEnhResult?.breakerBlocks && smcEnhResult.breakerBlocks.length > 0 && config.smcEnhancements?.enableBreakerBlocks) {
-          for (const breaker of smcEnhResult.breakerBlocks) {
-            if (!breaker.retestComplete || !breaker.retestIsCurrent) continue;
-            if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
-
-            const breakerDir = breaker.direction === "bullish" ? "long" : "short";
-            const breakerCanonicalRange =
-              (detail as any).canonicalDealingRangeObservation?.canonical?.range || null;
-            const breakerCandidateObservation = normalizeBreakerCandidate({
-              semantic: "sweep_displacement_retest_breaker_setup",
-              symbol: pair,
-              direction: breakerDir,
-              low: breaker.entryZone.low,
-              high: breaker.entryZone.high,
-              timeframe: timeframeAuthority.roles.setup,
-              structureBreakIndex: breaker.structureBreakIndex,
-              retestComplete: breaker.retestComplete,
-              impulse: breakerCanonicalRange ? {
-                id: breakerCanonicalRange.impulseId,
-                low: Number(breakerCanonicalRange.low),
-                high: Number(breakerCanonicalRange.high),
-                direction: breakerCanonicalRange.direction === "bullish" ? "long" : "short",
-              } : null,
-            });
-            ((detail as any).breakerCandidateComparisons ||= []).push(
-              breakerCandidateObservation,
-            );
-            if ((detail as any).canonicalScannerEnforcement?.effectiveMode === "enforce" &&
-              !breakerCandidateObservation.eligibleForUnifiedQueue) {
-              console.log(`[breaker] ${pair}: canonical scanner rejected supplemental route outside frozen impulse ownership`);
-              continue;
-            }
-            const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
-            // Entry at the 50% of the breaker zone (OTE within the zone)
-            const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
-            // SL beyond the far boundary of the breaker zone
-            const breakerSL = breakerDir === "long"
-              ? breaker.entryZone.low - (adjustedSlBuffer * breakerSpec.pipSize)
-              : breaker.entryZone.high + (adjustedSlBuffer * breakerSpec.pipSize);
-            const breakerRisk = Math.abs(breakerEntry - breakerSL);
-            const breakerTP = breakerDir === "long"
-              ? breakerEntry + breakerRisk * config.tpRatio
-              : breakerEntry - breakerRisk * config.tpRatio;
-
-            // Orientation check
-            const breakerOrientationOk = breakerDir === "long"
-              ? (breakerSL < breakerEntry && breakerTP > breakerEntry)
-              : (breakerSL > breakerEntry && breakerTP < breakerEntry);
-            if (!breakerOrientationOk) continue;
-
-            // Size calculation (default remains the historical half-risk behavior).
-            const breakerSizeMultiplier = Math.max(
-              0.1,
-              Math.min(1, Number((pairConfig as any).smcEnhancements?.breakerSizeMultiplier ?? 0.5)),
-            );
-            const breakerSizing = computePositionSize(
-              { balance, riskPercent: pairConfig.riskPerTrade * breakerSizeMultiplier, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
-              undefined, undefined, { enabled: true, sizeMultiplier: propFirmSizeMultiplier },
-            );
-            const finalBreakerSizing = applyFinalCandidateSizeAdjustments({
-              sizingResult: breakerSizing,
-              signalSource: "unified",
-            });
-            if (finalBreakerSizing.rejected) {
-              detail.status = "position_sizing_rejected";
-              detail.skipReason = finalBreakerSizing.rejectionReason ||
-                "Breaker sizing produced no executable size";
-              scanDetails.push(detail);
-              continue;
-            }
-            const breakerSize = finalBreakerSizing.lots;
-
-            const breakerThesisResult = validatePendingOrderThesis(
-              {
-                order_id: `breaker:${scanCycleId}:${pair}`,
-                symbol: pair,
-                direction: breakerDir,
-                entry_price: breakerEntry,
-                signal_reason: {
-                  directionVerdict: (detail as any).directionVerdict || null,
-                },
-              },
-              {
-                fotsiResult: _fotsiResult,
-                lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
-                dailyCandles: dailyCandles.length >= 20
-                  ? dailyCandles
-                  : null,
-                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-                h1Candles: hourlyCandles.length >= 20
-                  ? hourlyCandles
-                  : null,
-                decisionEvidence: pairDecisionEvidence,
-              },
-            );
-            const breakerRuntimeGates = await buildFinalRuntimeGateStates({
-              supabase,
-              userId,
-              accountExecutionMode: account.execution_mode,
-              brokerExecutionConnectionCount: null,
-              symbol: pair,
-              direction: breakerDir,
-              currentPrice: analysis.lastPrice,
-              candles,
-              interval: entryInterval,
-              openPositions: openPosArr,
-              accountBalance: account.balance,
-              config: {
-                portfolioHeat: pairConfig.portfolioHeat,
-                riskPerTrade: pairConfig.riskPerTrade,
-                correlationFilterEnabled:
-                  pairConfig.correlationFilterEnabled,
-                maxCorrelation: pairConfig.maxCorrelation,
-                maxCorrelatedPositions:
-                  pairConfig.maxCorrelatedPositions,
-                cooldownMinutes: pairConfig.cooldownMinutes,
-                newsFilterEnabled: pairConfig.newsFilterEnabled,
-                newsFilterPauseMinutes:
-                  pairConfig.newsFilterPauseMinutes,
-                enabledSessions: pairConfig.enabledSessions,
-                enabledDays: pairConfig.enabledDays,
-                killZoneOnly: pairConfig.killZoneOnly,
-              },
-              rateMap,
-            });
-            const breakerEvaluatedAt = new Date().toISOString();
-            const breakerConfirmation: EntryConfirmationDecision = {
-              required: false,
-              passed: false,
-              method: pairConfig.confirmationMethod || "choch",
-              reason:
-                "Breaker setup is waiting; entry confirmation becomes mandatory at fill time",
-              evidence: {
-                breakerConfidence: breaker.confidence,
-                retestComplete: breaker.retestComplete,
-              },
-              evaluatedAt: breakerEvaluatedAt,
-            };
-            const rawBreakerAuthorization = evaluateFinalTradeAuthorization({
-              account,
-              candidate: {
-                symbol: pair,
-                direction: breakerDir,
-                entryPrice: breakerEntry,
-                stopLoss: breakerSL,
-                takeProfit: breakerTP,
-              },
-              openPositions: openPosArr,
-              maxOpenPositions: pairConfig.maxOpenPositions,
-              maxPerSymbol: pairConfig.maxPerSymbol,
-              allowSameDirectionStacking: pairConfig.allowSameDirectionStacking,
-              maxDailyLoss: pairConfig.maxDailyLoss,
-              maxDrawdown: pairConfig.maxDrawdown,
-              minimumRiskReward: pairConfig.minRiskReward,
-              commissionPerLot: avgCommissionPerLot,
-              rateMap,
-              directionVerdict: activeDirectionVerdict,
-              requireDirectionVerdict: true,
-              gamePlan: activeGamePlan,
-              gamePlanEnabled,
-              gamePlanMode: gpEnforcementMode,
-              gamePlanMinimumConfidence: (config as any).gpHardBlockThreshold ?? 75,
-              thesisResult: breakerThesisResult,
-              requireThesisValidation: true,
-              entryConfirmation: breakerConfirmation,
-              propFirm: propFirmGateResult
-                ? {
-                  enabled: propFirmGateResult.enabled,
-                  allowed: propFirmGateResult.allowed,
-                  reason: propFirmGateResult.reason,
-                }
-                : null,
-              requirePropFirmResult: true,
-              // Spread and fresh thesis are rechecked when the pending order
-              // reaches confirmation. Placement itself does not execute.
-              spread: { required: false, available: true, passed: true },
-              runtimeGates: breakerRuntimeGates,
-              crossTimeframeAuthority:
-                selectedCrossTimeframeContext().authority,
-              requireCrossTimeframeAuthority: true,
-            });
-            const breakerHierarchy =
-              rawBreakerAuthorization.decisionHierarchy ||
-              evaluateDecisionHierarchy({
-                symbol: pair,
-                direction: breakerDir,
-                gamePlan: activeGamePlan,
-                gamePlanEnabled,
-                gamePlanMode: gpEnforcementMode,
-                gamePlanMinimumConfidence:
-                  (config as any).gpHardBlockThreshold ?? 75,
-                directionVerdict: activeDirectionVerdict,
-                requireDirectionVerdict: true,
-                thesisResult: breakerThesisResult,
-                requireThesisValidation: true,
-                entryConfirmation: breakerConfirmation,
-              });
-            const breakerAuthorization = attachDecisionContext(
-              rawBreakerAuthorization,
-              buildTradeDecisionContext({
-                stage: "pending",
-                symbol: pair,
-                direction: breakerDir,
-                gamePlan: activeGamePlan,
-                directionVerdict: activeDirectionVerdict,
-                thesisResult: breakerThesisResult,
-                requireThesisValidation: true,
-                thesisConviction: (detail as any).thesisConviction || null,
-                entryConfirmation: breakerConfirmation,
-                hierarchy: breakerHierarchy,
-                stylePolicy: pairStylePolicy,
-                evaluatedAt: breakerEvaluatedAt,
-              }),
-            );
-            if (!breakerAuthorization.authorized) {
-              console.warn(
-                `[breaker] ${pair} ${breakerDir}: FINAL AUTH BLOCKED`
-                + ` ${breakerAuthorization.code} — ${breakerAuthorization.reason}`,
-              );
-              continue;
-            }
-
-            const breakerOrderId = `brk-${crypto.randomUUID().slice(0, 6)}`;
-            // Previously randomised unconditionally, even when a watchlist row
-            // for this symbol/direction already owned the lifecycle.
-            const breakerIdentity = resolveLifecycleCandidateId({
-              stagedCandidateId: existingStaged?.candidate_id,
-              stagedRowId: existingStaged?.id,
-            }, () => crypto.randomUUID());
-            const breakerCandidateId = breakerIdentity.candidateId;
-            if (breakerIdentity.inherited) {
-              console.log(`[breaker] ${pair}: lifecycle identity inherited from ${breakerIdentity.source} (${breakerCandidateId})`);
-            }
-            const breakerExpiry = config.limitOrderExpiryMinutes || 60;
-            const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
-            const breakerOriginatingZone = {
-              setupFamily: "impulse",
-              candidateId: breakerCandidateObservation.candidateId,
-              sourceEvidenceIds: [],
-              sourceImpulseId: breakerCandidateObservation.impulseId,
-              type: "breaker_block",
-              low: breaker.entryZone.low,
-              high: breaker.entryZone.high,
-              entry: breakerEntry,
-              timeframe: breakerCandidateObservation.timeframe,
-              lifecycle: breaker.retestComplete ? "retested" : "fresh",
-              structuralInvalidation: breakerDir === "long"
-                ? breaker.entryZone.low
-                : breaker.entryZone.high,
-              stopLoss: breakerSL,
-              takeProfit: breakerTP,
-            };
-            const breakerFrozenStrategyContext =
-              buildFrozenSetupStrategyContext({
-                identity: {
-                  setupId: crypto.randomUUID(),
-                  candidateId: breakerCandidateId,
-                },
-                timeframeEvidenceId:
-                  (detail as any).timeframeEvidenceId || null,
-                symbol: pair,
-                direction: breakerDir,
-                stylePolicy: pairStylePolicy,
-                runtimeConfig: pairRuntimeConfigSnapshot,
-                decisionContext: breakerAuthorization.decisionContext,
-                gamePlan: activeGamePlan,
-                directionVerdict: activeDirectionVerdict,
-                crossTimeframeContext: selectedCrossTimeframeContext(breakerOriginatingZone),
-                entryZone: breakerOriginatingZone,
-                confirmationMethod:
-                  pairConfig.confirmationMethod || "choch",
-                indicatorMinCount: pairConfig.indicatorMinCount || 3,
-              });
-            (detail as any).linkedSetupId =
-              breakerFrozenStrategyContext.setupId;
-            const breakerLifecycleValidation = validatePendingLifecycle(
-              breakerFrozenStrategyContext,
-              breakerOriginatingZone,
-            );
-            if (!breakerLifecycleValidation.valid) {
-              detail.status = "breaker_rejected_lifecycle_identity";
-              detail.skipReason = breakerLifecycleValidation.reason;
-              scanDetails.push(detail);
-              continue;
-            }
-
-            const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
-              user_id: userId,
-              bot_id: BOT_ID,
-              candidate_id: breakerCandidateId,
-              order_id: breakerOrderId,
-              symbol: pair,
-              direction: breakerDir,
-              order_type: "limit",
-              entry_price: breakerEntry,
-              current_price: analysis.lastPrice,
-              stop_loss: breakerSL,
-              take_profit: breakerTP,
-              size: breakerSize,
-              entry_zone_type: "breaker_block",
-              entry_zone_low: breaker.entryZone.low,
-              entry_zone_high: breaker.entryZone.high,
-              originating_zone: breakerOriginatingZone,
-              thesis_version: THESIS_VALIDATION_VERSION,
-              confirmation_method:
-                pairConfig.confirmationMethod || "choch",
-              confirmation_config: {
-                indicatorMinCount: pairConfig.indicatorMinCount || 3,
-                afterChochMode:
-                  pairConfig.afterChochMode || "confirmation_close",
-                afterChochExpiryMinutes:
-                  pairConfig.afterChochExpiryMinutes || 30,
-                maxConfirmationAttempts:
-                  breakerFrozenStrategyContext.confirmation.maxAttempts,
-              },
-              frozen_strategy_context: breakerFrozenStrategyContext,
-              status: "pending",
-              expiry_minutes: breakerExpiry,
-              expires_at: breakerExpiresAt,
-              signal_reason: JSON.stringify({
-                bot: BOT_ID,
-                candidateId: breakerCandidateId,
-                ...canonicalEvidenceSnapshot(detail),
-                signalSource: "breaker",
-                summary: breaker.detail,
-                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, structureBreakIndex: breaker.structureBreakIndex, retestIndex: breaker.retestIndex, sizeMultiplier: breakerSizeMultiplier },
-                entryTimeframe: pairConfig.entryTimeframe,
-                originalSL: breakerSL,
-                originalTP: breakerTP,
-                confirmationMethod:
-                  pairConfig.confirmationMethod || "choch",
-                indicatorMinCount: pairConfig.indicatorMinCount || 3,
-                thesisVersion: THESIS_VALIDATION_VERSION,
-                tpMethod: config.tpMethod || "rr_ratio",
-                timeframeEvidenceId:
-                  (detail as any).timeframeEvidenceId || null,
-                directionVerdict: (detail as any).directionVerdict || null,
-                gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
-                candidateAuthorization: breakerAuthorization,
-                decisionContext: breakerAuthorization.decisionContext,
-                frozenStrategyContext: breakerFrozenStrategyContext,
-              }),
-              signal_score: breaker.confidence * 100,
-              setup_type: "breaker_retest",
-              setup_confidence: breaker.confidence,
-              exit_flags: {
-                trailingStopEnabled: pairConfig.trailingStopEnabled,
-                trailingStopPips: pairConfig.trailingStopPips,
-                trailingStopActivation: pairConfig.trailingStopActivation,
-                trailingStopActivated: false,
-                trailingStopLevel: null,
-                breakEvenEnabled: pairConfig.breakEvenEnabled,
-                breakEvenPips: pairConfig.breakEvenPips,
-                breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
-                breakEvenActivated: false,
-                partialTPEnabled: pairConfig.partialTPEnabled,
-                partialTPPercent: pairConfig.partialTPPercent,
-                partialTPLevel: pairConfig.partialTPLevel,
-                partialTPActivated: false,
-                maxHoldEnabled: pairConfig.maxHoldEnabled,
-                maxHoldHours: pairConfig.maxHoldHours,
-                tpRatio: pairConfig.tpRatio,
-              },
-              placed_at: new Date().toISOString(),
-            });
-
-            if (!breakerInsertErr) {
-              pendingPlaced++;
-              console.log(`[breaker] ${pair} ${breakerDir}: Pending order placed at ${breakerEntry.toFixed(5)} (conf=${(breaker.confidence * 100).toFixed(0)}%, disp=${breaker.displacementStrength.toFixed(2)}x ATR)`);
-              (detail as any).breakerEntry = { orderId: breakerOrderId, direction: breakerDir, entry: breakerEntry, sl: breakerSL, tp: breakerTP, confidence: breaker.confidence };
-            } else {
-              console.warn(`[breaker] ${pair}: Insert failed — ${breakerInsertErr.message}`);
-            }
-            break; // Only place one breaker order per pair per cycle
-          }
-        }
       }
     } else {
       if (analysis.score < adjustedMinConfluence) {
-        (detail as any).gamePlanShadowAudit = finalizeShadowCurrentDecision(
-          (detail as any).gamePlanShadowAudit,
-          "block",
-          `Confluence ${effectiveScore.toFixed(1)}% is below ${conflictAdjustedMinConfluence}%`,
-        );
         // ── Rejected Setup Logging: below-threshold with strong T1 ──
         if (analysis.direction && shouldLogBelowThreshold(analysis.tieredScoring?.tier1Count ?? 0)) {
           try {
@@ -11564,8 +6590,8 @@ async function runScanForUser(
               tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
               tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
               entryPrice: analysis.lastPrice,
-              stopLoss: analysis.stopLoss ?? undefined,
-              takeProfit: analysis.takeProfit ?? undefined,
+              stopLoss: analysis.stopLoss,
+              takeProfit: analysis.takeProfit,
               rrRatio: analysis.stopLoss && analysis.takeProfit
                 ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
                 : undefined,
@@ -11576,23 +6602,6 @@ async function runScanForUser(
               fotsiBaseTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[0]] : undefined,
               fotsiQuoteTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[1]] : undefined,
               priceAtRejection: analysis.lastPrice,
-              rawDetail: {
-                scanCycleId,
-                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, streamlinedDecisionOrigin: (detail as any).streamlinedDecisionOrigin || null, streamlinedDecisionLatest: (detail as any).streamlinedDecisionLatest || null, singleOwnershipDecision: (detail as any).singleOwnershipDecision || null, singleOwnershipEnforcement: (detail as any).singleOwnershipEnforcement || null, legacyGateDiagnostics: (detail as any).legacyGateDiagnostics || [],
-                thesisConviction: (detail as any).thesisConviction || null,
-                directionVerdict: (detail as any).directionVerdict || null,
-                impulseZone: (detail as any).impulseZone || null,
-                decisionContext: (detail as any).decisionContext || null,
-                stylePolicy: pairStylePolicy,
-                canonicalDealingRangeObservation:
-                  (detail as any).canonicalDealingRangeObservation || null,
-              ...canonicalEvidenceSnapshot(detail),
-                shadowEvaluation: {
-                  baseScore: analysis.score,
-                  effectiveScore,
-                  threshold: conflictAdjustedMinConfluence,
-                },
-              },
             });
           } catch (rsErr: any) {
             console.warn(`[rejected-setup] Below-threshold logging error for ${pair}: ${rsErr?.message}`);
@@ -11615,6 +6624,9 @@ async function runScanForUser(
                 missing_factors: missingFactors,
                 scan_cycles: existingStaged.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
+                entry_price: analysis.lastPrice,
+                sl_level: analysis.stopLoss,
+                tp_level: analysis.takeProfit,
                 tier1_count: ts?.tier1Count ?? 0,
                 tier2_count: ts?.tier2Count ?? 0,
                 tier3_count: ts?.tier3Count ?? 0,
@@ -11639,15 +6651,9 @@ async function runScanForUser(
               const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
               const ts = analysis.tieredScoring;
               // Style-aware TTL: scalpers get shorter TTL, swing traders get longer
-              const styleTTL = stagingTTLMinutes;
-              const confluenceWatchOrigin = {
-                type: setupClassification.setupType ||
-                  "confluence_watch",
-                entry: analysis.lastPrice,
-                stopLoss: analysis.stopLoss,
-                takeProfit: analysis.takeProfit,
-                signalSource: (detail as any).signalSource || null,
-              };
+              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes;
               await supabase.from("staged_setups").insert({
                 user_id: userId,
                 bot_id: BOT_ID,
@@ -11660,13 +6666,8 @@ async function runScanForUser(
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
                 entry_price: analysis.lastPrice,
-                sl_level: watchlistInvalidationFor(
-                  analysis.direction as WatchlistDirection,
-                  confluenceWatchOrigin,
-                  analysis.stopLoss,
-                ).level,
+                sl_level: analysis.stopLoss,
                 tp_level: analysis.takeProfit,
-                ...stagedDecisionFields(confluenceWatchOrigin),
                 scan_cycles: 1,
                 min_cycles: minStagingCycles,
                 ttl_minutes: styleTTL,
@@ -11701,7 +6702,9 @@ async function runScanForUser(
             detail.staging = {
               action: "new",
               watchThreshold,
-              ttlMinutes: stagingTTLMinutes,
+              ttlMinutes: resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes,
             };
           }
         } else {
@@ -11709,56 +6712,21 @@ async function runScanForUser(
           const ts = analysis.tieredScoring;
           const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
           detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
-          // A score drop is fresh-scan evidence, not structural invalidation of
-          // the frozen zone thesis. Keep the candidate watching until its
-          // boundary or TTL resolves it.
+          // If score dropped below watch threshold, invalidate any existing staged setup
           if (existingStaged && analysis.score < watchThreshold && stagingEnabled) {
             try {
               await supabase.from("staged_setups").update({
-                current_score: analysis.score,
-                current_factors: analysis.factors
-                  .filter((factor: any) => factor.present)
-                  .map((factor: any) => ({
-                    name: factor.name,
-                    weight: factor.weight,
-                    tier: factor.tier,
-                  })),
-                scan_cycles: existingStaged.scan_cycles + 1,
-                last_eval_at: new Date().toISOString(),
-                lifecycle_reason:
-                  `Frozen candidate retained: current scan ${analysis.score.toFixed(1)}% is below watch threshold ${watchThreshold}%`,
-                lifecycle_reason_code:
-                  "fresh_score_below_watch_threshold_retained",
-                lifecycle_evidence: buildWatchlistLifecycleEvidence({
-                  reasonCode:
-                    "fresh_score_below_watch_threshold_retained",
-                  observedPrice: analysis.lastPrice,
-                  frozenDirection:
-                    existingStaged.direction as WatchlistDirection,
-                  freshDirection:
-                    analysis.direction as WatchlistDirection | null,
-                  score: analysis.score,
-                  threshold: watchThreshold,
-                  detail: {
-                    candidateId:
-                      existingStaged.candidate_id || existingStaged.id,
-                  },
-                }),
-              }).eq("id", existingStaged.id).eq("user_id", userId);
-              console.log(
-                `[staging] Retained frozen ${pair} ${existingStaged.direction} candidate despite score drop to ${analysis.score.toFixed(1)}%`,
-              );
+                status: "invalidated",
+                invalidation_reason: `Score dropped to ${analysis.score.toFixed(1)}% (below watch threshold ${watchThreshold}%)`,
+                resolved_at: new Date().toISOString(),
+              }).eq("id", existingStaged.id);
+              stagedInvalidated++;
+              stagedMap.delete(stagedKey!);
+              console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — score dropped below watch threshold`);
             } catch (e: any) {
-              console.warn(
-                `[staging] Failed to record score drop for frozen ${pair}: ${e?.message}`,
-              );
+              console.warn(`[staging] Failed to invalidate ${pair}: ${e?.message}`);
             }
-            detail.staging = {
-              action: "retained",
-              reason: "fresh_score_below_watch_threshold",
-              frozenCandidateId:
-                existingStaged.candidate_id || existingStaged.id,
-            };
+            detail.staging = { action: "invalidated", reason: "score_dropped" };
           }
         }
       } else {
@@ -11776,38 +6744,6 @@ async function runScanForUser(
     scanDetails.push(detail);
   }
 
-  if (rotationSelection) {
-    const latestDetailByPair = new Map<string, any>();
-    for (const detail of scanDetails) {
-      if (detail?.pair && scanUniverse.includes(detail.pair)) latestDetailByPair.set(detail.pair, detail);
-    }
-    const rotationResults = discoveryScanUniverse.map((symbol) => ({
-      symbol,
-      outcome: classifyRotationOutcome(latestDetailByPair.get(symbol)),
-    }));
-    const updatedRotationState = updateRotatingImpulseState(
-      rotationSelection.state,
-      rotationResults,
-    );
-    try {
-      await saveRotatingImpulseState(supabase, userId, BOT_ID, updatedRotationState);
-    } catch (error: any) {
-      console.warn(`[scan ${scanCycleId}] Impulse rotation state save failed (non-fatal): ${error?.message}`);
-    }
-  }
-
-  await markScannerOperation(
-    supabase,
-    opts?.operationRunId,
-    "pair_processing_completed",
-    {
-      status: "running",
-      processed_pairs: scanOrder.length,
-      pair_processing_completed_at: new Date().toISOString(),
-      metadata: { processed_pairs: scanOrder.length },
-    },
-  );
-
   // Update counters — scope to this bot's account
   const counterUpdate = supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
@@ -11820,13 +6756,6 @@ async function runScanForUser(
   // End source tally and prepend a __meta entry so the UI can display
   // which feed served this scan cycle.
   const sourceTally = endScanSourceTally();
-  await publishCandleSourceAlerts(supabase, {
-    userId,
-    botId: BOT_ID,
-    runId: opts?.operationRunId,
-    issues: sourceTally.issues,
-    metaapiAttempted: sourceTally.metaapiAttempted,
-  });
   const throttleStats = resetThrottleStats();
   const cacheStats = scanCache.stats();
   console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors, ${cacheStats.seeded} seeded (${scanCache.size()} unique keys)`);
@@ -11838,37 +6767,6 @@ async function runScanForUser(
   }
 
   scanCache.clear();
-  _scanCandleSources.clear();
-  // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──
-  if (zoneEvidenceRows.length > 0) {
-    // Retention annotations are derived only after the pair has completed. They
-    // never feed the pair decision. Event-linked evidence (watchlist, pending
-    // or filled trade) receives the longer raw-retention window.
-    const detailsByEvidenceId = new Map(
-      scanDetails
-        .filter((item: any) => item?.timeframeEvidenceId)
-        .map((item: any) => [item.timeframeEvidenceId, item]),
-    );
-    for (const evidenceRow of zoneEvidenceRows) {
-      const linkedDetail: any = detailsByEvidenceId.get(evidenceRow.id);
-      annotateEvidenceLifecycle(evidenceRow, linkedDetail);
-    }
-    const evidenceResult = await persistZoneTimeframeEvidence(
-      supabase,
-      zoneEvidenceRows,
-      {
-        onError: (err: any, chunkSize: number) =>
-          console.warn(
-            `[scan ${scanCycleId}] timeframe evidence chunk of ${chunkSize} failed`
-            + ` (non-fatal): ${err?.message}`,
-          ),
-      },
-    );
-    console.log(
-      `[scan ${scanCycleId}] timeframe evidence: wrote ${evidenceResult.written}`
-      + ` rows, ${evidenceResult.failedChunks} failed chunks`,
-    );
-  }
   // ── Persist thesis conviction states to kv_cache ──
   if ((config as any).thesisConvictionEnabled && convictionStates.size > 0) {
     try {
@@ -11949,11 +6847,9 @@ async function runScanForUser(
   const detailsWithMeta = [
     {
       __meta: true,
-      scanCycleId,
-      candleSource: sourceTally.primary,
+      candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "polygon" | "none"
       sourceBreakdown: {
         metaapi: sourceTally.metaapi,
-        oanda: sourceTally.oanda,
         twelvedata: sourceTally.twelvedata,
         polygon: sourceTally.polygon,
         none: sourceTally.none,
@@ -11961,94 +6857,41 @@ async function runScanForUser(
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
-      // Non-zero unenforced means the shared credit budget failed open and we
-      // are back to per-isolate limiting — the exact condition that produced
-      // 371 credits/min while every isolate reported 0 throttles.
-      creditBudget: {
-        unenforced: throttleStats.unenforcedCount,
-        rpcFailures: throttleStats.budgetRpcFailures,
-        refused: throttleStats.budgetRefused,
-      },
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
-      marketSchedule: {
-        reason: marketScheduleScope.reason,
-        eligibleSymbols: marketScheduleScope.eligibleSymbols,
-        excludedSymbols: marketScheduleScope.excludedSymbols,
-        nonCryptoMarketsClosed: marketScheduleScope.nonCryptoMarketsClosed,
-        nonCryptoTradingDayEnabled: marketScheduleScope.nonCryptoTradingDayEnabled,
-        effectiveTradingDay: marketScheduleScope.effectiveTradingDay,
-        capturedAt: now.toISOString(),
-      },
-      impulseRotation: rotationSelection ? {
-        enabled: true,
-        slotCount: rotatingImpulseSlotCount,
-        universeSize: fullInstrumentUniverse.length,
-        selected: scanUniverse,
-        discovery: discoveryScanUniverse,
-        lifecycleDeepScan: Array.from(lifecycleDeepScanSymbols),
-        lifecycleLightweightMonitored: executableWatchlist.length,
-        sessionObservation: sessionRotationObservation,
-      } : { enabled: false, universeSize: fullInstrumentUniverse.length },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
-      pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
+      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
-      stylePolicy: scanStylePolicy,
-      runtimeConfigProvenance,
-      criticalRuntimeSettings: runtimeConfigProvenance.criticalSettings,
     },
     ...scanDetails,
   ];
-  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount}, budgetRefused=${throttleStats.budgetRefused}, budgetUnenforced=${throttleStats.unenforcedCount})`);
+  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount})`);
 
   // Log the scan
-  // Retirements are fire-and-forget during the loop so a DB write never stalls a
-  // pair; settle them before the cycle ends so the UI never shows a marking the
-  // scanner has already discarded.
-  if (manualImpulseRetirements.length > 0) {
-    await Promise.allSettled(manualImpulseRetirements);
-  }
-
   await supabase.from("scan_logs").insert({
     user_id: userId,
     bot_id: BOT_ID,
-    pairs_scanned: scanOrder.length,
+    pairs_scanned: config.instruments.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
     details_json: detailsWithMeta,
   });
 
-  // Publish exact candle inputs only after the completed scan log exists.
-  if (candleSnapshotRows.length > 0) {
-    for (let i = 0; i < candleSnapshotRows.length; i += 20) {
-      const { error } = await supabase.from("scan_candle_snapshots").upsert(candleSnapshotRows.slice(i, i + 20), { onConflict: "user_id,bot_id,scan_cycle_id,symbol,timeframe", ignoreDuplicates: true });
-      if (error) console.warn(`[scan ] candle snapshot chunk failed (non-fatal): `);
-    }
-  }
-
-  await completeScannerOperation(supabase, opts?.operationRunId, "scan", {
-    scan_cycle_id: scanCycleId,
-    pairs_scanned: scanOrder.length,
-    signals_found: signalsFound,
-    trades_placed: tradesPlaced,
-    rejected: rejectedCount,
-    candle_source: sourceTally.primary,
-  });
-
-  return { pairsScanned: scanOrder.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
     try { scanCache.clear(); } catch { /* ignore */ }
-    // Release only the lease owned by this run. A stale/manual invocation cannot
-    // clear another scan's healthy lock.
-    if (scanLockToken) {
-      await releaseScannerLock(supabase, {
-        userId,
-        botId: BOT_ID,
-        token: scanLockToken,
-      });
+    // Only release lock if we acquired one (management-only skips locking)
+    if (!opts?.isManagementOnly) {
+      try {
+        const lockRelease = supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+        if (account?.bot_id) lockRelease.eq("bot_id", BOT_ID);
+        await lockRelease;
+      } catch (e: any) {
+        console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
+      }
     }
   }
 }

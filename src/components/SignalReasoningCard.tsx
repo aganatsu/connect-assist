@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import type { TieredScoringMeta } from "./TierFactorBreakdown";
-import { LegacyDiagnosticsPanel } from "./LegacyDiagnosticsPanel";
-import { OverflowText } from "@/components/ui/overflow-text";
+import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -100,10 +98,9 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
   if (!s.direction && !s.factorCount && !s.score) {
     if (compact) {
       return (
-        <OverflowText
-          text={signalReason}
-          className="inline-block text-[10px] text-muted-foreground font-mono"
-        />
+        <span className="text-[10px] text-muted-foreground font-mono truncate inline-block max-w-full">
+          {signalReason}
+        </span>
       );
     }
     return (
@@ -139,10 +136,6 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
 
   // Extract tieredScoring metadata if available
   const tieredScoring: TieredScoringMeta | null = parsed?.tieredScoring ?? null;
-  const diagnosticFactors: FactorScore[] = [
-    ...(factorScores || []),
-    ...(Array.isArray(parsed?.smcEnhancementFactors) ? parsed.smcEnhancementFactors : []),
-  ];
 
   const setupType: string | null = parsed?.setupType ?? null;
   const setupConfidence: number | null = parsed?.setupConfidence ?? null;
@@ -213,18 +206,38 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
             {s.direction}
           </span>
         )}
+        {s.score !== null && (
+          <span className={`font-mono font-bold text-[11px] ${dirColor}`}>{s.score > 10 ? `${s.score.toFixed(1)}%` : `${s.score}/10`}</span>
+        )}
+        {s.factorCount !== null && s.total !== null && (
+          <span className="text-[9px] text-muted-foreground font-mono">
+            {s.factorCount} factors aligned{s.total ? ` (of ${s.total})` : ""}
+          </span>
+        )}
+        {tieredScoring && <TierScoreSummary tieredScoring={tieredScoring} />}
       </div>
 
-      <LegacyDiagnosticsPanel
-        score={s.score}
-        factorCount={s.factorCount}
-        factorTotal={s.total}
-        factors={diagnosticFactors}
-        legacyFactorNames={s.alignedFactors}
-        tieredScoring={tieredScoring}
-        gates={parsed?.gates ?? null}
-        ownershipDiagnostics={parsed?.legacyGateDiagnostics ?? null}
-      />
+      {/* ── Tier-Grouped Factor Breakdown ── */}
+      {factorScores && factorScores.length > 0 ? (
+        <TierFactorBreakdown factors={factorScores} tieredScoring={tieredScoring} />
+      ) : (
+        /* ── LEGACY: Aligned factor chips from summary text ── */
+        s.alignedFactors.length > 0 && (
+          <div>
+            <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Aligned Factors</p>
+            <div className="flex flex-wrap gap-1">
+              {s.alignedFactors.map((f, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-secondary/60 border border-border px-1.5 py-0.5 text-[9px] text-foreground"
+                >
+                  {f}
+                </span>
+              ))}
+            </div>
+          </div>
+        )
+      )}
 
       {/* Extra context */}
       {s.extraContext.length > 0 && (
@@ -239,31 +252,6 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
                 {c}
               </span>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Breaker Block Entry (from smcEnhancements module) */}
-      {parsed?.breakerData && (
-        <div>
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Breaker Block</p>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
-              <span className="text-muted-foreground text-[9px]">Direction</span>
-              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.direction}</span>
-            </div>
-            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
-              <span className="text-muted-foreground text-[9px]">Confidence</span>
-              <span className="font-mono text-[9px] text-foreground">{(parsed.breakerData.confidence * 100).toFixed(0)}%</span>
-            </div>
-            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
-              <span className="text-muted-foreground text-[9px]">Displacement</span>
-              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.displacementStrength?.toFixed(2)}x ATR</span>
-            </div>
-            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
-              <span className="text-muted-foreground text-[9px]">Sweep</span>
-              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.hadLiquiditySweep ? "Yes" : "No"}</span>
-            </div>
           </div>
         </div>
       )}

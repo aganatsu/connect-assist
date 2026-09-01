@@ -22,29 +22,47 @@ import {
   getCESTTradingDay,
   type PropFirmConfig,
 } from "../_shared/propFirmRisk.ts";
-import { metaFetch } from "../_shared/metaApiClient.ts";
+
+// ─── MetaAPI Region-Aware Fetch ─────────────────────────────────────────────
+// Mirrors the pattern in bot-scanner and paper-trading for reliable connectivity.
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
 
 async function fetchBrokerEquity(
   accountId: string,
   authToken: string,
 ): Promise<number | undefined> {
-  const { res, body, region } = await metaFetch(
-    accountId,
-    authToken,
-    (base) => `${base}/account-information`,
-  );
-  if (!res.ok) {
-    console.warn(`[prop-firm-status] MetaAPI ${region || "provisioning"} returned ${res.status}: ${body.slice(0, 200)}`);
-    return undefined;
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  for (const region of order) {
+    try {
+      const url = `${metaBaseUrl(region, accountId)}/account-information`;
+      const res = await fetch(url, { headers: { "auth-token": authToken } });
+      const body = await res.text();
+      if (res.ok) {
+        const data = JSON.parse(body);
+        const equity = parseFloat(data.equity ?? data.balance ?? "0");
+        if (Number.isFinite(equity) && equity > 0) {
+          regionCache.set(accountId, region);
+          console.log(`[prop-firm-status] Broker equity fetched from ${region}: $${equity.toFixed(2)}`);
+          return equity;
+        }
+        // res.ok but equity invalid — likely data issue, not region mismatch
+        console.warn(`[prop-firm-status] MetaAPI ${region} returned ok but equity invalid: ${body.slice(0, 200)}`);
+        break;
+      }
+      // Non-ok: check if it's a region mismatch (retry next region) or a real error (stop)
+      if (!/region|not connected to broker/i.test(body)) break;
+      console.warn(`[prop-firm-status] MetaAPI ${region} returned ${res.status}, trying next...`);
+    } catch (e: any) {
+      console.warn(`[prop-firm-status] MetaAPI ${region} fetch error: ${e?.message}`);
+    }
   }
-  const data = JSON.parse(body);
-  const equity = parseFloat(data.equity ?? data.balance ?? "0");
-  if (!Number.isFinite(equity) || equity <= 0) {
-    console.warn(`[prop-firm-status] MetaAPI ${region} returned invalid equity: ${body.slice(0, 200)}`);
-    return undefined;
-  }
-  console.log(`[prop-firm-status] Broker equity fetched from ${region}: $${equity.toFixed(2)}`);
-  return equity;
+  return undefined;
 }
 
 Deno.serve(async (req: Request) => {
@@ -233,55 +251,6 @@ Deno.serve(async (req: Request) => {
           .eq("bot_id", botId);
 
         return json({ success: true });
-      }
-
-      case "config.setActive": {
-        const active = body.active === true;
-        const { data, error } = await supabase
-          .from("prop_firm_config")
-          .update({ is_active: active })
-          .eq("user_id", userId)
-          .eq("bot_id", botId)
-          .select()
-          .maybeSingle();
-        if (error) return json({ error: error.message }, 500);
-        if (!data) return json({ error: "No prop firm config found for this bot" }, 404);
-        return json({ success: true, config: data });
-      }
-
-      case "daily.unlock": {
-        const { data: config } = await supabase
-          .from("prop_firm_config")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("bot_id", botId)
-          .maybeSingle();
-        if (!config) return json({ error: "No prop firm config found" }, 404);
-
-        const now = new Date();
-        const resetHour = getResetHourUTC(now);
-        const tradingDay = getCESTTradingDay(now, resetHour);
-
-        const { data: state, error } = await supabase
-          .from("prop_firm_daily_state")
-          .update({ is_locked: false, lock_reason: null, locked_at: null })
-          .eq("config_id", config.id)
-          .eq("trading_day", tradingDay)
-          .select()
-          .maybeSingle();
-        if (error) return json({ error: error.message }, 500);
-
-        // Log a manual unlock event (best-effort)
-        try {
-          await supabase.from("prop_firm_events").insert({
-            config_id: config.id,
-            event_type: "manual_unlock",
-            severity: "info",
-            message: `Manual unlock for ${tradingDay}`,
-          });
-        } catch (_) { /* ignore */ }
-
-        return json({ success: true, dailyState: state });
       }
 
       case "events": {

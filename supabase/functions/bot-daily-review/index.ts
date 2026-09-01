@@ -7,17 +7,11 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  resolveAuthenticatedUserId,
-  resolveCallerScopedUserId,
-} from "../_shared/callerAuth.ts";
-import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
-import {
   computeGatePerformance,
   formatGatePerformancePrompt,
   type ResolvedRejection,
   type ClosedTrade,
 } from "../_shared/gatePerformanceEngine.ts";
-import { isStopOut, normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,6 +19,45 @@ const corsHeaders = {
 };
 
 // ─── Types ───────────────────────────────────────────────────
+
+interface TradeRecord {
+  id: string;
+  user_id: string;
+  symbol: string;
+  direction: string;
+  entry_price: number;
+  exit_price: number;
+  sl: number;
+  tp: number;
+  pnl: number;
+  pnl_percent: number;
+  close_reason: string;
+  opened_at: string;
+  closed_at: string;
+  lot_size: number;
+  signal_reason?: unknown;
+  bot_id?: string;
+}
+
+interface TradeReasoning {
+  id: string;
+  user_id: string;
+  symbol: string;
+  direction: string;
+  confluence_score: number;
+  summary: string;
+  factors_json: Array<{
+    name: string;
+    present: boolean;
+    weight: number;
+    detail: string;
+    group?: string;
+  }>;
+  session?: string;
+  timeframe?: string;
+  created_at: string;
+  bot_id?: string;
+}
 
 interface BotConfig {
   slMethod: string;
@@ -114,7 +147,31 @@ interface LLMDiagnosis {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
+function toSafeNumber(value: unknown, fallback = 0): number {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
 
+function normalizeTradeRecord(raw: any): TradeRecord {
+  return {
+    id: String(raw.id ?? raw.position_id ?? ""),
+    user_id: String(raw.user_id ?? ""),
+    symbol: String(raw.symbol ?? ""),
+    direction: String(raw.direction ?? ""),
+    entry_price: toSafeNumber(raw.entry_price),
+    exit_price: toSafeNumber(raw.exit_price),
+    sl: toSafeNumber(raw.stop_loss ?? raw.sl),
+    tp: toSafeNumber(raw.take_profit ?? raw.tp),
+    pnl: toSafeNumber(raw.pnl ?? raw.pnl_amount),
+    pnl_percent: toSafeNumber(raw.pnl_percent),
+    close_reason: String(raw.close_reason ?? "unknown"),
+    opened_at: String(raw.open_time ?? raw.opened_at ?? raw.created_at ?? ""),
+    closed_at: String(raw.closed_at ?? raw.exit_time ?? raw.created_at ?? ""),
+    lot_size: toSafeNumber(raw.size ?? raw.lot_size),
+    signal_reason: raw.signal_reason,
+    bot_id: raw.bot_id ? String(raw.bot_id) : undefined,
+  };
+}
 
 function computePerformanceMetrics(trades: TradeRecord[]): PerformanceMetrics {
   if (trades.length === 0) {
@@ -297,7 +354,7 @@ function computeDimensionalBreakdowns(trades: TradeRecord[]): {
 }
 
 function computeSLAnalysis(trades: TradeRecord[]): SLAnalysis {
-  const slHits = trades.filter(isStopOut);
+  const slHits = trades.filter(t => t.close_reason === "sl_hit" || t.close_reason === "stop_loss");
   const slHitRate = trades.length > 0 ? (slHits.length / trades.length) * 100 : 0;
 
   // Average SL distance in price terms
@@ -523,7 +580,8 @@ VALID CONFIG KEYS BY CATEGORY:
   htfBiasHardVeto (bool, block trades against HTF bias entirely)
   requireHTFBias (bool)
   normalizedScoring (bool)
-  dealingRangeMode (off | avoid_wrong_side | strict_value; canonical impulse range policy)
+  onlyBuyInDiscount (bool, only long below 50% fib)
+  onlySellInPremium (bool, only short above 50% fib)
   useOrderBlocks (bool)
   useFVG (bool)
   useBreakerBlocks (bool)
@@ -734,9 +792,49 @@ async function sendTelegramNotification(
     }
     message += "\n";
   }
+
   message += `_Open dashboard to review and approve recommendations._`;
-  // Use shared Telegram delivery from advisorCore (single source of truth)
-  await sendTelegramShared(supabase, userId, "daily_review", message);
+
+  // Fetch Telegram chat IDs from user_settings (same source as bot-scanner)
+  const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
+  const prefs = (userSettings?.preferences_json as any) || {};
+  const telegramChatIds: string[] = (() => {
+    const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
+    const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
+    if (ids.length > 0) return ids;
+    return prefs.telegramChatId ? [String(prefs.telegramChatId)] : [];
+  })();
+
+  if (telegramChatIds.length === 0) {
+    console.log(`[daily-review] No Telegram chat IDs configured for user ${userId}, skipping notification`);
+    return;
+  }
+
+  // Check notification category toggle
+  const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+  if (notifyCategories["daily_review"] === false) {
+    console.log(`[daily-review] daily_review notifications disabled for user ${userId}, skipping`);
+    return;
+  }
+
+  // Send via telegram-notify Edge Function to each configured chat ID
+  for (const chatId of telegramChatIds) {
+    try {
+      const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+        body: JSON.stringify({ chat_id: chatId, message }),
+      });
+      if (!notifyResp.ok) {
+        const errBody = await notifyResp.text();
+        console.warn(`[daily-review] Telegram notify failed for chat ${chatId}: ${notifyResp.status} ${errBody.slice(0, 200)}`);
+      } else {
+        console.log(`[daily-review] Telegram notify sent OK to chat ${chatId}`);
+      }
+    } catch (e: any) {
+      console.error(`[daily-review] Telegram notify error for chat ${chatId}:`, e?.message);
+    }
+  }
 }
 
 // ─── Main Handler ────────────────────────────────────────────
@@ -745,11 +843,6 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
-
-  // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
-  const authError = await verifyCronOrUserCaller(req);
-  if (authError) return authError;
-  const authenticatedUserId = await resolveAuthenticatedUserId(req);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -765,23 +858,9 @@ Deno.serve(async (req) => {
       const body = await req.json();
       reviewType = body.review_type || "daily";
       targetBotId = body.bot_id || null;
-      const callerScope = resolveCallerScopedUserId(
-        authenticatedUserId,
-        body.user_id,
-      );
-      if (callerScope.forbidden) {
-        return new Response(
-          JSON.stringify({ error: "Cannot review another user's account" }),
-          {
-            status: 403,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          },
-        );
-      }
-      targetUserId = callerScope.userId;
+      targetUserId = body.user_id || null;
     } catch {
       // No body — use defaults (daily review for all bots)
-      targetUserId = authenticatedUserId;
     }
 
     console.log(`[Bot Review] Starting ${reviewType} review...`);

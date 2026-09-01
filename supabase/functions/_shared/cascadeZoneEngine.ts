@@ -23,7 +23,7 @@ import {
   calculateATR, detectDisplacement, detectZigZagPivots, computeFibLevels,
 } from "./smcAnalysis.ts";
 import {
-  findStructuralLeg, mapImpulsePOIs, qualifyImpulseLeg, overlayFibOnPOIs, checkHistoricalSR,
+  findImpulseLeg, mapImpulsePOIs, overlayFibOnPOIs, checkHistoricalSR,
   refineLowerTF, rankAndSelectBestZone, findBestEntryZoneMultiTF,
 } from "./impulseZoneEngine.ts";
 import type { ImpulseLeg, ImpulsePOI, RankedPOI, BestZone, HTFConfluenceData, ZoneEngineOptions, MultiTFZoneResult } from "./impulseZoneEngine.ts";
@@ -130,23 +130,15 @@ export function findDailyZone(
   }
 
   // Step 1: Find Daily impulse leg
-  const impulse = findStructuralLeg(dailyCandles, direction);
+  const impulse = findImpulseLeg(dailyCandles, direction);
   if (!impulse) {
     return { zone: null, reason: `No valid ${direction} Daily impulse (no BOS or origin broken)` };
   }
 
   // Step 2: Map POIs within the Daily impulse
   const pois = mapImpulsePOIs(dailyCandles, impulse);
-  const impulseQualification = qualifyImpulseLeg(
-    dailyCandles,
-    impulse,
-    options?.zoneEngineOpts,
-  );
-  if (!impulseQualification.qualified) {
-    return { zone: null, reason: `Daily ${impulseQualification.state} structural leg: ${impulseQualification.reasons.join("; ")}` };
-  }
   if (pois.length === 0) {
-    return { zone: null, reason: "Daily impulse found but no FVG or Order Block entry-zone candidate was mapped" };
+    return { zone: null, reason: "Daily impulse found but no POIs (OBs/FVGs) within it" };
   }
 
   // Step 3: Overlay Fib and rank by depth
@@ -366,30 +358,21 @@ export function findEntryZoneWithinDailyZone(
   h1Candles: Candle[],
   dailyZone: DailyZone,
   direction: "bullish" | "bearish",
-  zoneEngineOpts?: ZoneEngineOptions,
 ): { zone: RankedPOI | null; allZones: RankedPOI[]; reason: string } {
   if (h1Candles.length < 20) {
     return { zone: null, allZones: [], reason: "Insufficient 1H candles" };
   }
 
   // Step 1: Find 1H impulse leg
-  const impulse = findStructuralLeg(h1Candles, direction);
+  const impulse = findImpulseLeg(h1Candles, direction);
   if (!impulse) {
     return { zone: null, allZones: [], reason: "No valid 1H impulse found" };
   }
 
   // Step 2: Map POIs within the 1H impulse
   const pois = mapImpulsePOIs(h1Candles, impulse);
-  const impulseQualification = qualifyImpulseLeg(
-    h1Candles,
-    impulse,
-    zoneEngineOpts,
-  );
-  if (!impulseQualification.qualified) {
-    return { zone: null, allZones: [], reason: `1H ${impulseQualification.state} structural leg: ${impulseQualification.reasons.join("; ")}` };
-  }
   if (pois.length === 0) {
-    return { zone: null, allZones: [], reason: "1H impulse found but no FVG or Order Block entry-zone candidate was mapped" };
+    return { zone: null, allZones: [], reason: "1H impulse found but no POIs within it" };
   }
 
   // Step 3: Overlay Fib

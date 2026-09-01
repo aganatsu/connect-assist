@@ -2,11 +2,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 
-import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-
-setCreditCallerContext("market-data");
-
-// market-data: connected broker (OANDA or MetaAPI) → Twelve Data → Polygon.io failover.
+// market-data: unified candle/quote endpoint with MetaAPI → Twelve Data → Polygon.io failover.
+// If the caller is authenticated and has an active MetaAPI broker connection, we prefer it.
 // Otherwise we fall back to Twelve Data, then Polygon.io.
 
 async function loadBrokerConn(req: Request): Promise<BrokerConn | null> {
@@ -23,9 +20,8 @@ async function loadBrokerConn(req: Request): Promise<BrokerConn | null> {
     if (error || !claimsData?.claims?.sub) return null;
     const userId = claimsData.claims.sub as string;
     const { data } = await supabase.from("broker_connections")
-      .select("id, broker_type, display_name, api_key, account_id, is_live, symbol_suffix, symbol_overrides")
-      .eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true)
-      .order("created_at", { ascending: false }).limit(1);
+      .select("id, api_key, account_id, symbol_suffix, symbol_overrides")
+      .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).limit(1);
     return (data && data[0]) ? ({ ...data[0], user_id: userId } as BrokerConn) : null;
   } catch (e: any) {
     console.warn(`[market-data] broker conn load failed: ${e?.message}`);
@@ -46,25 +42,6 @@ Deno.serve(async (req) => {
         JSON.stringify(action === "candles" ? [] : { error: "NO_DATA", fallback: true }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
-    }
-
-    if (action === "bot_evidence_candles") {
-      const authHeader = req.headers.get("Authorization")!;
-      const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authHeader } } });
-      const token = authHeader.replace("Bearer ", "");
-      const { data: claims } = await client.auth.getClaims(token);
-      const userId = claims?.claims?.sub as string | undefined;
-      if (!userId) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      const snapshotTimeframe = ({ "5min": "5m", "15min": "15m", "30min": "30m", "1day": "1d", "1week": "1w" } as Record<string, string>)[interval] || interval;
-      const { data, error } = await client.from("scan_candle_snapshots")
-        .select("scan_cycle_id,symbol,timeframe,provider,observed_at,completed_candle_cutoff,candle_count,candles")
-        .eq("user_id", userId).eq("symbol", symbol).eq("timeframe", snapshotTimeframe)
-        .order("observed_at", { ascending: false }).limit(1).maybeSingle();
-      if (error) throw error;
-      const snapshot = data ? { ...data, candles: (Array.isArray(data.candles) ? data.candles : []).map((c: any) => ({ ...c, datetime: typeof c.datetime === "string" ? c.datetime.replace("T", " ").substring(0, 19) : c.datetime })) } : { error: "NO_SNAPSHOT", fallback: true };
-      return new Response(JSON.stringify(snapshot), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json", "x-data-source": data?.provider || "none" },
-      });
     }
 
     const brokerConn = await loadBrokerConn(req);

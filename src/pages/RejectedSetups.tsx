@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,85 +10,29 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
-import { botConfigApi, scannerApi } from "@/lib/api";
 import { formatPipDisplay, rawPipsToDisplay, getPipLabel } from "@/lib/pipDisplay";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  PieChart, Pie, Cell, Area, AreaChart,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend, LineChart, Line, Area, AreaChart,
 } from "recharts";
 import {
-  RefreshCw, Filter, ArrowUpDown, Sparkles, Download, ShieldX,
+  ShieldX, ShieldCheck, TrendingUp, TrendingDown, Target, AlertTriangle,
+  RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
 } from "lucide-react";
-import { toast } from "sonner";
-import { Link } from "react-router-dom";
-import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
+import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
-import { AuthorityOutcomeResearchCard } from "@/components/AuthorityOutcomeResearchCard";
-import { StructureAuthorityEvidenceCard } from "@/components/StructureAuthorityEvidenceCard";
-import { PendingLifecycleEvidenceCard } from "@/components/PendingLifecycleEvidenceCard";
-import { StopPolicyEvidenceCard } from "@/components/StopPolicyEvidenceCard";
-import { OverflowText } from "@/components/ui/overflow-text";
-import {
-  buildPendingLifecycleEvidence,
-  type PendingLifecycleOutcome,
-  type PendingLifecycleRow,
-} from "@/lib/pendingLifecycleEvidence";
-import {
-  buildStopPolicyEvidenceReport,
-  type StopPolicyObservation,
-} from "@/lib/stopPolicyEvidence";
-import {
-  buildRejectedOutcomeDistribution,
-  collapseRejectedOpportunities,
-  normalizeRejectedGate,
-  normalizedGateLabel,
-  rejectedOutcomeLabel,
-} from "@/lib/rejectedSetupAnalytics";
-import {
-  buildShadowEvidenceReport,
-  type ClosedTradeShadowEvidenceRecord,
-  type ShadowEvidenceBreakdown,
-  type ShadowFeatureEvidenceSummary,
-} from "@/lib/shadowEvidenceAnalytics";
-import {
-  getStrategyActivationDisplay,
-  type StrategyActivationRecord,
-} from "@/lib/strategyActivation";
-import {
-  shortCertificateHash,
-  reviewStrategyEvidence,
-  STRATEGY_EVIDENCE_STATUS,
-  type StrategyEvidenceCertificateRecord,
-} from "@/lib/strategyEvidenceCertificate";
 
 // ── Types ──
-interface ShadowAudit {
-  decision?: string;
-  riskBand?: string;
-  reasons?: string[];
-  currentSystem?: {
-    decision?: string;
-    reason?: string | null;
-  };
-}
-
 interface RejectedSetup {
   id: string;
   symbol: string;
   direction: string;
   rejection_type: string;
   failed_gates: string[] | null;
-  normalized_gates?: string[] | null;
-  opportunity_key?: string | null;
-  shadow_decision?: ShadowAudit | null;
-  raw_detail?: {
-    gamePlanShadowAudit?: ShadowAudit | null;
-    [key: string]: unknown;
-  } | null;
   confluence_score: number;
   tier1_count: number;
   tier1_factors: string[] | null;
@@ -105,8 +48,6 @@ interface RejectedSetup {
   fotsi_quote_tsi: number | null;
   price_at_rejection: number | null;
   outcome_status: string;
-  outcome_reason?: string | null;
-  outcome_window_hours?: number | null;
   outcome_checked_at: string | null;
   mfe_pips: number | null;
   mae_pips: number | null;
@@ -117,107 +58,14 @@ interface RejectedSetup {
   rejected_at: string;
 }
 
-interface ICTEntryZoneAuthoritySummary {
-  user_id: string;
-  bot_id: string;
-  trading_style: string;
-  symbol: string;
-  setup_family: "impulse" | "structure_poi";
-  observed_scans: number;
-  comparable_scans: number;
-  geometry_unavailable_scans: number;
-  disagreement_scans: number;
-  resolved_authority_setups: number;
-  authority_winners: number;
-  authority_losers: number;
-  winners_retained: number;
-  losers_avoided: number;
-  missed_opportunities: number;
-  false_positives: number;
-  authority_avg_mfe_pips: number | null;
-  authority_avg_mae_pips: number | null;
-  minimum_sample_ready: boolean;
-  enforcement: "observe_only";
-  evidence_source: "forward_observation" | "retrospective_replay";
-  activation_eligible: boolean;
-  replay_runs: number;
-}
-
-interface ImpulseLifecycleReplaySummary {
-  evidence_source: string; replay_count: number; entries: number;
-  no_entries: number; never_touched: number; touched_trigger_not_locked: number;
-  trigger_locked_not_confirmed: number; inconclusive: number;
-  resolved_outcomes: number; invalidated: number; expired: number; exhausted: number;
-  deeper_entries: number; rescued_winners: number; added_losses: number;
-  winners_retained: number;
-  winners: number; losers: number; avg_mfe: number | null; avg_mae: number | null;
-  minimum_sample_ready: boolean;
-}
-
-interface ImpulseLifecycleEnforcementCertificate {
-  evidence_hash: string; status: "collecting" | "eligible" | "rejected";
-  reviewed: boolean; reviewed_at: string | null; replay_count: number;
-  resolved_count: number; rescued_winners: number; added_losses: number;
-  minimum_sample_ready: boolean;
-}
-
-interface ImpulseEntryLifecycleEvidence {
-  lifecycleCount: number;
-  activeCount: number;
-  enteredCount: number;
-  exhaustedCount: number;
-  cancelledCount: number;
-  transitionCount: number;
-  zoneTouches: number;
-  candidateFailures: number;
-  deeperAdvances: number;
-  impulseInvalidations: number;
-  confirmations: number;
-  recent: Array<{
-    id: string;
-    event_type: string;
-    reason: string;
-    from_candidate_id: string | null;
-    to_candidate_id: string | null;
-    created_at: string;
-  }>;
-}
-
-interface ZoneLocalValidationSummary {
-  user_id: string;
-  bot_id: string;
-  trading_style: string;
-  symbol: string;
-  observed_scans: number;
-  disagreement_scans: number;
-  resolved_candidates: number;
-  legacy_disagreement_samples: number;
-  shadow_disagreement_samples: number;
-  legacy_disagreement_win_rate: number | null;
-  shadow_disagreement_win_rate: number | null;
-  shadow_winner_avg_mfe_pips: number | null;
-  shadow_winner_avg_mae_pips: number | null;
-  minimum_sample_ready: boolean;
-  enforcement: "observe_only";
-  evidence_source: "forward_observation" | "retrospective_replay";
-  activation_eligible: boolean;
-  replay_runs: number;
-  cross_tf_disagreement_scans: number;
-  cross_tf_resolved_legacy_trades: number;
-  winners_retained: number;
-  losers_avoided: number;
-  missed_opportunities: number;
-  false_positives: number;
-  legacy_expectancy_r: number | null;
-  cross_tf_expectancy_r: number | null;
-  cross_tf_expectancy_delta_r: number | null;
-  cross_tf_avg_mfe_pips: number | null;
-  cross_tf_avg_mae_pips: number | null;
-  cross_tf_minimum_sample_ready: boolean;
-  cross_tf_enforcement: "observe_only";
-}
-
 // ── Constants ──
+const OUTCOME_COLORS: Record<string, string> = {
+  would_have_won: "#22c55e",
+  would_have_lost: "#ef4444",
+  inconclusive: "#6b7280",
+  pending: "#f59e0b",
+};
+
 const REJECTION_TYPE_LABELS: Record<string, string> = {
   gate_blocked: "Gate Blocked",
   below_threshold_strong_t1: "Below Threshold (Strong T1)",
@@ -254,257 +102,18 @@ function toCSV(rows: Record<string, any>[]): string {
 
 const tsStamp = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 
-function getShadowAudit(setup: RejectedSetup): ShadowAudit | null {
-  return setup.shadow_decision || setup.raw_detail?.gamePlanShadowAudit || null;
-}
-
-function getDisplayGates(setup: RejectedSetup): string[] {
-  const codes = setup.normalized_gates?.length
-    ? setup.normalized_gates
-    : (setup.failed_gates || []).map(normalizeRejectedGate);
-  return [...new Set(codes)].map(normalizedGateLabel);
-}
-
 // ── Data Fetching ──
 async function fetchRejectedSetups(userId: string, days: number): Promise<RejectedSetup[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const pageSize = 1000;
-  const rows: RejectedSetup[] = [];
-
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await (supabase as any)
-      .from("rejected_setups")
-      .select("*")
-      .eq("user_id", userId)
-      .gte("rejected_at", since)
-      .order("rejected_at", { ascending: false })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
-    rows.push(...(data || []));
-    if (!data || data.length < pageSize) break;
-  }
-
-  return rows;
-}
-
-async function fetchClosedTradeEvidence(
-  userId: string,
-  days: number,
-): Promise<ClosedTradeShadowEvidenceRecord[]> {
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const pageSize = 1000;
-  const rows: ClosedTradeShadowEvidenceRecord[] = [];
-
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from("paper_trade_history")
-      .select("id, position_id, symbol, pnl, signal_score, signal_reason, close_reason, closed_at")
-      .eq("user_id", userId)
-      .gte("closed_at", since)
-      .order("closed_at", { ascending: false })
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
-    rows.push(...(data || []));
-    if (!data || data.length < pageSize) break;
-  }
-
-  return rows;
-}
-
-async function fetchStrategyActivations(
-  userId: string,
-): Promise<StrategyActivationRecord[]> {
-  const { data, error } = await supabase
-    .from("strategy_activation_registry")
-    .select(
-      "feature_key, variant_key, authority_stage, runtime_scope, runtime_enforced, revision, transition_reason, evidence_hash, updated_at",
-    )
-    .eq("user_id", userId)
-    .eq("bot_id", "smc");
-  if (error) throw new Error(error.message);
-  return (data || []) as unknown as StrategyActivationRecord[];
-}
-
-async function fetchStrategyEvidenceCertificates(
-  userId: string,
-): Promise<StrategyEvidenceCertificateRecord[]> {
-  const { data, error } = await supabase
-    .from("strategy_evidence_certificates")
-    .select(
-      "feature_key, variant_key, status, certificate_hash, resolved_count, changed_count, coverage_percent, beneficial_rate_percent, expectancy_delta_r, max_drawdown_delta_percent, good_trade_retention_percent, out_of_sample_passed, walk_forward_consistent, source_window_start, source_window_end, generated_at, is_current",
-    )
-    .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .eq("is_current", true);
-  if (error) throw new Error(error.message);
-  return (data || []) as unknown as StrategyEvidenceCertificateRecord[];
-}
-
-async function fetchICTEntryZoneAuthorityValidation(
-  userId: string,
-): Promise<ICTEntryZoneAuthoritySummary[]> {
   const { data, error } = await (supabase as any)
-    .from("ict_entry_zone_authority_validation_summary")
+    .from("rejected_setups")
     .select("*")
     .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .order("resolved_authority_setups", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data || []) as ICTEntryZoneAuthoritySummary[];
-}
-
-
-async function fetchImpulseEntryLifecycleEvidence(
-  userId: string,
-  days: number,
-): Promise<ImpulseEntryLifecycleEvidence> {
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  const [lifecycleResult, transitionResult] = await Promise.all([
-    (supabase as any)
-      .from("impulse_entry_lifecycles")
-      .select("id,status")
-      .eq("user_id", userId)
-      .eq("bot_id", "smc")
-      .gte("created_at", since),
-    (supabase as any)
-      .from("impulse_entry_lifecycle_transitions")
-      .select("id,event_type,reason,from_candidate_id,to_candidate_id,created_at")
-      .eq("user_id", userId)
-      .gte("created_at", since)
-      .order("created_at", { ascending: false })
-      .limit(500),
-  ]);
-  if (lifecycleResult.error) throw new Error(lifecycleResult.error.message);
-  if (transitionResult.error) throw new Error(transitionResult.error.message);
-  const lifecycles = lifecycleResult.data || [];
-  const transitions = transitionResult.data || [];
-  const count = (type: string) => transitions.filter(
-    (row: any) => row.event_type === type,
-  ).length;
-  return {
-    lifecycleCount: lifecycles.length,
-    activeCount: lifecycles.filter((row: any) => row.status === "active").length,
-    enteredCount: lifecycles.filter((row: any) => row.status === "entered").length,
-    exhaustedCount: lifecycles.filter((row: any) => row.status === "exhausted").length,
-    cancelledCount: lifecycles.filter((row: any) => row.status === "cancelled").length,
-    transitionCount: transitions.length,
-    zoneTouches: count("zone_touched"),
-    candidateFailures: count("candidate_failed"),
-    deeperAdvances: transitions.filter((row: any) =>
-      row.event_type === "candidate_failed" &&
-      !!row.from_candidate_id && !!row.to_candidate_id &&
-      row.from_candidate_id !== row.to_candidate_id
-    ).length,
-    impulseInvalidations: count("impulse_invalidated"),
-    confirmations: count("confirmation_passed"),
-    recent: transitions.slice(0, 10),
-  };
-}
-
-async function fetchPendingLifecycleEvidence(userId: string, days: number) {
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  const { data: orders, error: ordersError } = await (supabase as any)
-    .from("pending_orders")
-    .select("id,order_id,candidate_id,symbol,direction,status,entry_price,current_price,entry_zone_type,entry_zone_low,entry_zone_high,placed_at,expires_at,zone_touch_time,resolved_at,liquidity_confirmation_observation,pending_authorization_observation,signal_reason,final_authorization")
-    .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .gte("created_at", since)
-    .order("created_at", { ascending: false })
-    .limit(500);
-  if (ordersError) throw new Error(ordersError.message);
-
-  const pendingIds = (orders || []).map((row: any) => row.id);
-  if (pendingIds.length === 0) return buildPendingLifecycleEvidence([], []);
-  const positions: any[] = [];
-  for (let offset = 0; offset < pendingIds.length; offset += 100) {
-    const { data, error } = await (supabase as any)
-      .from("paper_positions")
-      .select("source_pending_order_id,position_id,position_status,close_reason")
-      .eq("user_id", userId)
-      .in("source_pending_order_id", pendingIds.slice(offset, offset + 100));
-    if (error) throw new Error(error.message);
-    positions.push(...(data || []));
-  }
-
-  let history: any[] = [];
-  for (let offset = 0; offset < pendingIds.length; offset += 100) {
-    const { data, error } = await (supabase as any)
-      .from("paper_trade_history")
-      .select("source_pending_order_id,position_id,close_reason,pnl,pnl_pips,closed_at")
-      .eq("user_id", userId)
-      .in("source_pending_order_id", pendingIds.slice(offset, offset + 100))
-      .order("closed_at", { ascending: true });
-    if (error) throw new Error(error.message);
-    history.push(...(data || []));
-  }
-  const historyByOrder = new Map(
-    history.map((row) => [row.source_pending_order_id, {
-      ...row,
-      position_status: "closed",
-    }]),
-  );
-  const activeByOrder = new Map(
-    positions.map((row) => [row.source_pending_order_id, row]),
-  );
-  const outcomes: PendingLifecycleOutcome[] = pendingIds.flatMap((pendingId: string) => {
-    const outcome = historyByOrder.get(pendingId) || activeByOrder.get(pendingId);
-    return outcome ? [outcome] : [];
-  });
-  return buildPendingLifecycleEvidence(
-    (orders || []) as PendingLifecycleRow[],
-    outcomes,
-  );
-}
-async function fetchStopPolicyEvidence(userId: string, days: number) {
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  const { data, error } = await (supabase as any)
-    .from("stop_policy_observations")
-    .select("id,candidate_id,observed_at,symbol,direction,trading_style,confirmation_timeframe,entry_price,current_plan_valid,current_stop_loss,current_take_profit,current_risk_reward,current_take_profit_source,current_plan_reason,shadow_plan_valid,shadow_stop_loss,shadow_take_profit,shadow_risk_reward,shadow_take_profit_source,shadow_plan_reason,execution_floor_source,broker_stops_level,broker_digits,tick_size,shadow_measurements")
-    .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .gte("observed_at", since)
-    .order("observed_at", { ascending: false })
+    .gte("rejected_at", since)
+    .order("rejected_at", { ascending: false })
     .limit(500);
   if (error) throw new Error(error.message);
-  return buildStopPolicyEvidenceReport((data || []) as StopPolicyObservation[]);
-}
-
-async function fetchImpulseLifecycleReplaySummary(
-  userId: string,
-): Promise<ImpulseLifecycleReplaySummary | null> {
-  const { data, error } = await (supabase as any)
-    .from("impulse_entry_lifecycle_replay_summary")
-    .select("*").eq("user_id", userId).eq("bot_id", "smc")
-    .eq("evidence_source", "retrospective_replay").maybeSingle();
-  if (error) throw new Error(error.message);
-  return data || null;
-}
-
-async function fetchImpulseLifecycleCertificate(
-  userId: string,
-): Promise<ImpulseLifecycleEnforcementCertificate | null> {
-  const { data, error } = await (supabase as any)
-    .from("impulse_lifecycle_enforcement_certificates").select("*")
-    .eq("user_id", userId).eq("bot_id", "smc").eq("is_current", true).maybeSingle();
-  if (error) throw new Error(error.message);
-  return data || null;
-}
-
-async function fetchZoneLocalValidation(
-  userId: string,
-): Promise<ZoneLocalValidationSummary[]> {
-  // Generated Supabase types intentionally lag additive migrations.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any)
-    .from("zone_candidate_shadow_validation_summary")
-    .select(
-      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement, evidence_source, activation_eligible, replay_runs, cross_tf_disagreement_scans, cross_tf_resolved_legacy_trades, winners_retained, losers_avoided, missed_opportunities, false_positives, legacy_expectancy_r, cross_tf_expectancy_r, cross_tf_expectancy_delta_r, cross_tf_avg_mfe_pips, cross_tf_avg_mae_pips, cross_tf_minimum_sample_ready, cross_tf_enforcement",
-    )
-    .eq("user_id", userId)
-    .eq("bot_id", "smc")
-    .order("resolved_candidates", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data || []) as ZoneLocalValidationSummary[];
+  return data || [];
 }
 
 // ── Summary Stats ──
@@ -527,27 +136,17 @@ function computeStats(setups: RejectedSetup[]) {
 function computeGateBreakdown(setups: RejectedSetup[]) {
   const gateMap = new Map<string, { total: number; wouldWon: number; wouldLost: number }>();
   for (const s of setups) {
-    const gates = s.normalized_gates?.length
-      ? s.normalized_gates
-      : (s.failed_gates || []).map(normalizeRejectedGate);
-    for (const gateCode of new Set(gates)) {
-      const entry = gateMap.get(gateCode) || { total: 0, wouldWon: 0, wouldLost: 0 };
+    if (!s.failed_gates) continue;
+    for (const gate of s.failed_gates) {
+      const entry = gateMap.get(gate) || { total: 0, wouldWon: 0, wouldLost: 0 };
       entry.total++;
       if (s.outcome_status === "would_have_won") entry.wouldWon++;
       if (s.outcome_status === "would_have_lost") entry.wouldLost++;
-      gateMap.set(gateCode, entry);
+      gateMap.set(gate, entry);
     }
   }
   return Array.from(gateMap.entries())
-    .map(([gateCode, stats]) => {
-      const resolved = stats.wouldWon + stats.wouldLost;
-      return {
-        gateCode,
-        gate: normalizedGateLabel(gateCode),
-        ...stats,
-        winRate: resolved > 0 ? (stats.wouldWon / resolved) * 100 : 0,
-      };
-    })
+    .map(([gate, stats]) => ({ gate, ...stats, winRate: stats.total > 0 ? (stats.wouldWon / stats.total) * 100 : 0 }))
     .sort((a, b) => b.total - a.total);
 }
 
@@ -588,9 +187,6 @@ export default function RejectedSetups() {
   const [symbolFilter, setSymbolFilter] = useState<string>("all");
   const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
-  const [isGeneratingCertificate, setIsGeneratingCertificate] = useState(false);
-  const [isReplayingImpulseLifecycle, setIsReplayingImpulseLifecycle] = useState(false);
-  const [isReviewingImpulseLifecycle, setIsReviewingImpulseLifecycle] = useState(false);
 
   const { data: rawSetups = [], isLoading, refetch } = useQuery({
     queryKey: ["rejected-setups", user?.id, days],
@@ -598,297 +194,16 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
-  const { data: ictScannerComparison, isLoading: isLoadingICTScannerComparison } = useQuery({
-    queryKey: ["ict-scanner-workflow-comparison"],
-    queryFn: () => botConfigApi.getICTScannerComparison(),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const { data: authorityOutcomeComparison, isLoading: isLoadingAuthorityOutcomes } = useQuery({
-    queryKey: ["authority-outcome-comparison"],
-    queryFn: () => botConfigApi.getAuthorityOutcomeComparison(),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const { data: singleOwnershipComparison, isLoading: isLoadingSingleOwnership } = useQuery({
-    queryKey: ["single-ownership-comparison"],
-    queryFn: () => botConfigApi.getSingleOwnershipComparison(),
-    staleTime: 60_000, retry: false,
-  });
-  const {
-    data: streamlinedDecisionComparison,
-    isLoading: isLoadingStreamlinedDecisionComparison,
-  } = useQuery({
-    queryKey: ["streamlined-decision-comparison"],
-    queryFn: () => botConfigApi.getStreamlinedDecisionComparison(),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const {
-    data: planScenarios = [],
-    isLoading: isLoadingPlanScenarios,
-    refetch: refetchPlanScenarios,
-  } = useQuery({
-    queryKey: ["active-plan-scenarios"],
-    queryFn: () => scannerApi.activePlanScenarios(),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const {
-    data: dealingRangeComparison,
-    isLoading: isLoadingDealingRangeComparison,
-    refetch: refetchDealingRangeComparison,
-  } = useQuery({
-    queryKey: ["canonical-dealing-range-comparison"],
-    queryFn: () => botConfigApi.getDealingRangeComparison(),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const {
-    data: closedTradeEvidence = [],
-    isLoading: isLoadingClosedTrades,
-    refetch: refetchClosedTrades,
-  } = useQuery({
-    queryKey: ["shadow-evidence-closed-trades", user?.id, days],
-    queryFn: () => fetchClosedTradeEvidence(user!.id, days),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-  });
-  const {
-    data: strategyActivations = [],
-    isLoading: isLoadingStrategyActivations,
-  } = useQuery({
-    queryKey: ["strategy-activation-registry", user?.id],
-    queryFn: () => fetchStrategyActivations(user!.id),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-  });
-  const {
-    data: strategyEvidenceCertificates = [],
-    isLoading: isLoadingStrategyEvidenceCertificates,
-    refetch: refetchStrategyEvidenceCertificates,
-  } = useQuery({
-    queryKey: ["strategy-evidence-certificates", user?.id],
-    queryFn: () => fetchStrategyEvidenceCertificates(user!.id),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-  });
-  const {
-    data: ictEntryZoneAuthorityValidation = [],
-    isLoading: isLoadingICTEntryZoneAuthorityValidation,
-  } = useQuery({
-    queryKey: ["ict-entry-zone-authority-validation", user?.id],
-    queryFn: () => fetchICTEntryZoneAuthorityValidation(user!.id),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-    retry: false,
-  });
-  const {
-    data: impulseEntryLifecycleEvidence,
-    isLoading: isLoadingImpulseEntryLifecycleEvidence,
-  } = useQuery({
-    queryKey: ["impulse-entry-lifecycle-evidence", user?.id, days],
-    queryFn: () => fetchImpulseEntryLifecycleEvidence(user!.id, days),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-    retry: false,
-  });
-  const {
-    data: pendingLifecycleEvidence,
-    isLoading: isLoadingPendingLifecycleEvidence,
-  } = useQuery({
-    queryKey: ["pending-lifecycle-evidence", user?.id, days],
-    queryFn: () => fetchPendingLifecycleEvidence(user!.id, days),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-    retry: false,
-  });
-  const {
-    data: stopPolicyEvidence,
-    isLoading: isLoadingStopPolicyEvidence,
-  } = useQuery({
-    queryKey: ["stop-policy-evidence", user?.id, days],
-    queryFn: () => fetchStopPolicyEvidence(user!.id, days),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-    retry: false,
-  });
-  const {
-    data: impulseLifecycleReplaySummary,
-    refetch: refetchImpulseLifecycleReplaySummary,
-  } = useQuery({
-    queryKey: ["impulse-lifecycle-replay-summary", user?.id],
-    queryFn: () => fetchImpulseLifecycleReplaySummary(user!.id),
-    enabled: !!user?.id, refetchInterval: 60_000, retry: false,
-  });
-  const {
-    data: impulseLifecycleCertificate,
-    refetch: refetchImpulseLifecycleCertificate,
-  } = useQuery({
-    queryKey: ["impulse-lifecycle-enforcement-certificate", user?.id],
-    queryFn: () => fetchImpulseLifecycleCertificate(user!.id),
-    enabled: !!user?.id, refetchInterval: 60_000, retry: false,
-  });
-  const {
-    data: zoneLocalValidation = [],
-    isLoading: isLoadingZoneLocalValidation,
-  } = useQuery({
-    queryKey: ["zone-local-validation", user?.id],
-    queryFn: () => fetchZoneLocalValidation(user!.id),
-    enabled: !!user?.id,
-    refetchInterval: 60_000,
-  });
 
-  // Collapse repeated scanner observations before applying outcome filters so
-  // analytics measure distinct market opportunities instead of scan frequency.
-  const filteredRawSetups = useMemo(
-    () => symbolFilter === "all"
-      ? rawSetups
-      : rawSetups.filter((setup) => setup.symbol === symbolFilter),
-    [rawSetups, symbolFilter],
-  );
-  const opportunities = useMemo(
-    () => collapseRejectedOpportunities(filteredRawSetups),
-    [filteredRawSetups],
-  );
-  const setups = useMemo(
-    () => outcomeFilter === "all"
-      ? opportunities
-      : opportunities.filter((setup) => setup.outcome_status === outcomeFilter),
-    [opportunities, outcomeFilter],
-  );
-  const displayedScanCount = useMemo(
-    () => setups.reduce((total, setup) => total + setup.occurrence_count, 0),
-    [setups],
-  );
-  const filteredClosedTradeEvidence = useMemo(
-    () => symbolFilter === "all"
-      ? closedTradeEvidence
-      : closedTradeEvidence.filter((trade) => trade.symbol === symbolFilter),
-    [closedTradeEvidence, symbolFilter],
-  );
-  const shadowEvidenceReport = useMemo(
-    () => buildShadowEvidenceReport(opportunities, filteredClosedTradeEvidence),
-    [opportunities, filteredClosedTradeEvidence],
-  );
-  const activationByFeature = useMemo(
-    () => new Map(
-      strategyActivations.map((record) => [record.feature_key, record]),
-    ),
-    [strategyActivations],
-  );
-  const certificateByFeature = useMemo(
-    () => new Map(
-      strategyEvidenceCertificates.map((record) => [
-        record.feature_key,
-        record,
-      ]),
-    ),
-    [strategyEvidenceCertificates],
-  );
-  const shadowEvidenceReviews = useMemo(() => [
-    { summary: shadowEvidenceReport.gameplanHierarchy, certificate: certificateByFeature.get("gameplan_hierarchy") },
-    { summary: shadowEvidenceReport.thesisConviction, certificate: certificateByFeature.get("thesis_conviction") },
-  ].map((item) => ({ ...item, review: reviewStrategyEvidence(item.certificate) })), [certificateByFeature, shadowEvidenceReport]);
-  const filteredZoneLocalValidation = useMemo(
-    () => symbolFilter === "all"
-      ? zoneLocalValidation
-      : zoneLocalValidation.filter((row) => row.symbol === symbolFilter),
-    [symbolFilter, zoneLocalValidation],
-  );
+  // Filters
+  const setups = useMemo(() => {
+    let filtered = rawSetups;
+    if (symbolFilter !== "all") filtered = filtered.filter(s => s.symbol === symbolFilter);
+    if (outcomeFilter !== "all") filtered = filtered.filter(s => s.outcome_status === outcomeFilter);
+    return filtered;
+  }, [rawSetups, symbolFilter, outcomeFilter]);
 
-  const generateStrategyEvidenceCertificate = async () => {
-    setIsGeneratingCertificate(true);
-    try {
-      const { data, error } = await supabase.functions.invoke(
-        "strategy-evidence-certifier",
-        { body: { bot_id: "smc", days } },
-      );
-      if (error) throw error;
-      if (!data?.success) {
-        throw new Error(data?.error || "Certificate generation failed");
-      }
-      await refetchStrategyEvidenceCertificates();
-      toast.success(
-        `Trusted ${days}-day evidence certificates generated. Runtime remains unchanged.`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Evidence certificate failed: ${message}`);
-    } finally {
-      setIsGeneratingCertificate(false);
-    }
-  };
-
-  const runImpulseLifecycleReplay = async () => {
-    setIsReplayingImpulseLifecycle(true);
-    try {
-      const { data, error } = await supabase.functions.invoke(
-        "impulse-lifecycle-replay",
-        { body: { action: "replay", limit: 100 } },
-      );
-      if (error) throw error;
-      await refetchImpulseLifecycleReplaySummary();
-      await refetchImpulseLifecycleCertificate();
-      const unavailable = Number(data?.unavailable || 0);
-      const unavailableDetail = unavailable > 0
-        ? ` (${Number(data?.missingInitialLifecycle || 0)} missing initial lifecycle, ${Number(data?.missingCandleSnapshot || 0)} missing candle snapshot, ${Number(data?.insufficientPostActivationCandles || 0)} insufficient post-activation candles)`
-        : "";
-      toast.success(
-        `Lifecycle replay completed: ${data?.replayed || 0} replayed, ${unavailable} unavailable${unavailableDetail}.`,
-      );
-    } catch (error) {
-      toast.error(
-        `Lifecycle replay failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setIsReplayingImpulseLifecycle(false);
-    }
-  };
-
-  const reviewImpulseLifecycleCertificate = async () => {
-    if (!impulseLifecycleCertificate?.evidence_hash) return;
-    setIsReviewingImpulseLifecycle(true);
-    try {
-      const { error } = await (supabase as any).rpc(
-        "review_impulse_lifecycle_certificate",
-        { p_evidence_hash: impulseLifecycleCertificate.evidence_hash },
-      );
-      if (error) throw error;
-      await refetchImpulseLifecycleCertificate();
-      toast.success("Impulse lifecycle evidence marked reviewed. Runtime enforcement is selected separately in Bot Config.");
-    } catch (error) {
-      toast.error(`Evidence review failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setIsReviewingImpulseLifecycle(false);
-    }
-  };
-
-  const symbols = useMemo(
-    () => [...new Set([
-      ...rawSetups.map((setup) => setup.symbol),
-      ...closedTradeEvidence.map((trade) => trade.symbol),
-      ...zoneLocalValidation.map((row) => row.symbol),
-      ...(pendingLifecycleEvidence?.rows || []).map((row) => row.symbol),
-      ...(stopPolicyEvidence?.rows || []).map((row) => row.symbol),
-    ])].sort(),
-    [rawSetups, closedTradeEvidence, zoneLocalValidation, pendingLifecycleEvidence, stopPolicyEvidence],
-  );
-  const filteredPendingLifecycleEvidence = useMemo(() => {
-    if (!pendingLifecycleEvidence || symbolFilter === "all") return pendingLifecycleEvidence;
-    return buildPendingLifecycleEvidence(
-      pendingLifecycleEvidence.rows.filter((row) => row.symbol === symbolFilter),
-      pendingLifecycleEvidence.rows
-        .map((row) => row.linkedPosition)
-        .filter((row): row is PendingLifecycleOutcome => row != null),
-    );
-  }, [pendingLifecycleEvidence, symbolFilter]);
-  const filteredStopPolicyEvidence = useMemo(() => {
-    if (!stopPolicyEvidence || symbolFilter === "all") return stopPolicyEvidence;
-    return buildStopPolicyEvidenceReport(
-      stopPolicyEvidence.rows.filter((row) => row.symbol === symbolFilter),
-    );
-  }, [stopPolicyEvidence, symbolFilter]);
+  const symbols = useMemo(() => [...new Set(rawSetups.map(s => s.symbol))].sort(), [rawSetups]);
   const stats = useMemo(() => computeStats(setups), [setups]);
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
   const dailyTrend = useMemo(() => computeDailyTrend(setups), [setups]);
@@ -899,9 +214,7 @@ export default function RejectedSetups() {
       { metric: "Range (days)", value: days },
       { metric: "Symbol Filter", value: symbolFilter },
       { metric: "Outcome Filter", value: outcomeFilter },
-      { metric: "Distinct Opportunities", value: stats.total },
-      { metric: "Scanner Observations", value: displayedScanCount },
-      { metric: "Repeated Observations Collapsed", value: displayedScanCount - setups.length },
+      { metric: "Total Rejected", value: stats.total },
       { metric: "Resolved", value: stats.resolved },
       { metric: "Would Have Won", value: stats.winners },
       { metric: "Would Have Lost", value: stats.losers },
@@ -939,12 +252,11 @@ export default function RejectedSetups() {
 
   const downloadGates = () => {
     const rows = gateBreakdown.map((g) => ({
-      gate_code: g.gateCode,
       gate: g.gate,
       total_blocked: g.total,
       would_won: g.wouldWon,
       would_lost: g.wouldLost,
-      winner_block_rate_pct: g.winRate.toFixed(2),
+      win_rate_pct: g.winRate.toFixed(2),
     }));
     downloadFile(`rejected-gates-${tsStamp()}.csv`, toCSV(rows), "text/csv");
   };
@@ -952,9 +264,6 @@ export default function RejectedSetups() {
   const downloadSetups = () => {
     const rows = setups.map((s) => ({
       rejected_at: s.rejected_at,
-      first_seen_at: s.first_seen_at,
-      last_seen_at: s.last_seen_at,
-      scanner_observations: s.occurrence_count,
       symbol: s.symbol,
       direction: s.direction,
       rejection_type: s.rejection_type,
@@ -962,12 +271,6 @@ export default function RejectedSetups() {
       tier1_count: s.tier1_count,
       tier1_factors: s.tier1_factors,
       failed_gates: s.failed_gates,
-      normalized_gates: s.normalized_gates,
-      current_decision: getShadowAudit(s)?.currentSystem?.decision,
-      current_reason: getShadowAudit(s)?.currentSystem?.reason,
-      shadow_decision: getShadowAudit(s)?.decision,
-      shadow_risk_band: getShadowAudit(s)?.riskBand,
-      shadow_reasons: getShadowAudit(s)?.reasons,
       entry_price: s.entry_price,
       stop_loss: s.stop_loss,
       take_profit: s.take_profit,
@@ -980,9 +283,6 @@ export default function RejectedSetups() {
       fotsi_quote_tsi: s.fotsi_quote_tsi,
       price_at_rejection: s.price_at_rejection,
       outcome_status: s.outcome_status,
-      outcome_reason: s.outcome_reason,
-      outcome_window_hours: s.outcome_window_hours,
-      mixed_outcome: s.mixed_outcome,
       mfe_pips: s.mfe_pips,
       mae_pips: s.mae_pips,
       tp_hit: s.tp_hit,
@@ -1008,156 +308,34 @@ export default function RejectedSetups() {
     }
   };
 
-  const downloadShadowEvidence = () => {
-    const summaries = [
-      shadowEvidenceReport.gameplanHierarchy,
-      shadowEvidenceReport.thesisConviction,
-    ];
-    const rows = summaries.flatMap((summary) => [
-      {
-        section: "summary",
-        feature: summary.label,
-        status: summary.status,
-        total_candidates: summary.totalCandidates,
-        evidence_count: summary.evidenceCount,
-        coverage_pct: summary.coveragePercent.toFixed(2),
-        resolved: summary.resolved,
-        changed: summary.changed,
-        beneficial: summary.beneficial,
-        harmful: summary.harmful,
-        beneficial_rate_pct: summary.beneficialRate?.toFixed(2) ?? "",
-        rescued_winners: summary.rescuedWinners,
-        avoided_losses: summary.avoidedLosses,
-        admitted_losses: summary.admittedLosses,
-        blocked_winners: summary.blockedWinners,
-      },
-      ...summary.byStyle.map((row) => ({
-        section: "style",
-        feature: summary.label,
-        key: row.key,
-        resolved: row.resolved,
-        changed: row.changed,
-        beneficial: row.beneficial,
-        harmful: row.harmful,
-        beneficial_rate_pct: row.beneficialRate?.toFixed(2) ?? "",
-      })),
-      ...summary.byPair.map((row) => ({
-        section: "pair",
-        feature: summary.label,
-        key: row.key,
-        resolved: row.resolved,
-        changed: row.changed,
-        beneficial: row.beneficial,
-        harmful: row.harmful,
-        beneficial_rate_pct: row.beneficialRate?.toFixed(2) ?? "",
-      })),
-    ]);
-    downloadFile(`shadow-evidence-${tsStamp()}.csv`, toCSV(rows), "text/csv");
-  };
-
   const downloadAll = () => {
-    let advisor: unknown = null;
-    try {
-      const raw = localStorage.getItem("strategyAdvisor:lastResult");
-      advisor = raw ? JSON.parse(raw) : null;
-    } catch (error) {
-      advisor = {
-        error: error instanceof Error ? error.message : "Invalid saved advisor result",
-      };
-    }
-
-    const bundle = {
-      exportVersion: "rejected-setup-evidence.v2",
-      exportedAt: new Date().toISOString(),
-      filters: {
-        days,
-        symbol: symbolFilter,
-        outcome: outcomeFilter,
-      },
-      summary: {
-        distinctOpportunities: stats.total,
-        scannerObservations: displayedScanCount,
-        repeatedObservationsCollapsed: displayedScanCount - setups.length,
-        resolved: stats.resolved,
-        wouldHaveWon: stats.winners,
-        wouldHaveLost: stats.losers,
-        winnerBlockRatePercent: stats.winnerBlockRate,
-        averageMfePips: stats.avgMfe,
-        averageMaePips: stats.avgMae,
-        averageConfluenceScore: stats.avgScore,
-        entryReachedRatePercent: stats.entryReachedRate,
-      },
-      analytics: {
-        outcomeDistribution,
-        dailyTrend,
-        gateBreakdown,
-      },
-      datasets: {
-        rawRejectedScans: filteredRawSetups,
-        distinctOpportunities: setups,
-        closedTradeEvidence: filteredClosedTradeEvidence,
-        shadowEvidence: shadowEvidenceReport,
-        shadowEvidenceReviews,
-        ictScannerWorkflowComparison: ictScannerComparison ?? null,
-        authorityOutcomeComparison: authorityOutcomeComparison ?? null,
-        marketStructureAuthorityEvidence: filteredRawSetups.flatMap((setup) => {
-          const detail = setup.raw_detail as Record<string, any> | null;
-          return detail?.canonicalStructureDecision ? [{
-            id: setup.id, symbol: setup.symbol, direction: setup.direction,
-            outcomeStatus: setup.outcome_status,
-            structureAuthority: detail.canonicalStructureAuthority ?? null,
-            liquiditySequence: detail.canonicalLiquiditySequence ?? null,
-            structureDecision: detail.canonicalStructureDecision,
-            structureEnforcement: detail.canonicalStructureEnforcement ?? null,
-            scannerState: detail.canonicalScannerState ?? null,
-          }] : [];
-        }),
-        impulseEntryLifecycleEvidence: impulseEntryLifecycleEvidence ?? null,
-        impulseLifecycleReplaySummary: impulseLifecycleReplaySummary ?? null,
-        impulseLifecycleCertificate: impulseLifecycleCertificate ?? null,
-        strategyEvidenceCertificates,
-        strategyActivations,
-        ictEntryZoneAuthorityValidation,
-        zoneLocalValidation,
-        tradeDecisionComparison: singleOwnershipComparison ?? null,
-        streamlinedDecisionComparison: streamlinedDecisionComparison ?? null,
-        canonicalDealingRangeComparison: dealingRangeComparison ?? null,
-        pendingLifecycleEvidence: filteredPendingLifecycleEvidence ?? null,
-        stopPolicyEvidence: filteredStopPolicyEvidence ?? null,
-        advisor,
-      },
-    };
-
-    downloadFile(
-      `rejected-evidence-bundle-${tsStamp()}.json`,
-      JSON.stringify(bundle, null, 2),
-      "application/json",
-    );
-    toast.success("Complete Shadow Evidence and rejected-setup data downloaded as one file.");
+    downloadSummary();
+    downloadOverview();
+    downloadGates();
+    downloadSetups();
+    downloadAdvisor();
   };
 
   // Pie chart data
-  const outcomeDistribution = useMemo(
-    () => buildRejectedOutcomeDistribution(setups),
-    [setups],
-  );
+  const outcomeDistribution = useMemo(() => [
+    { name: "Would Have Won", value: stats.winners, color: OUTCOME_COLORS.would_have_won },
+    { name: "Would Have Lost", value: stats.losers, color: OUTCOME_COLORS.would_have_lost },
+    { name: "Inconclusive", value: setups.filter(s => s.outcome_status === "inconclusive").length, color: OUTCOME_COLORS.inconclusive },
+    { name: "Pending", value: setups.filter(s => s.outcome_status === "pending").length, color: OUTCOME_COLORS.pending },
+  ].filter(d => d.value > 0), [stats, setups]);
 
   return (
     <AppShell>
-      <WorkspacePage>
-        <WorkspaceHeader
-          icon={ShieldX}
-          eyebrow="Decision evidence"
-          title="Rejected Setups Analytics"
-          description="Counterfactual outcomes of blocked setups. Observation only; no trade is reopened or executed."
-          actions={(
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Badge variant="outline" className="text-[9px] border-info-c/40 text-info-c">
-                MONITORING
-              </Badge>
-              <div className="grid grid-cols-[minmax(0,1fr)_2.25rem_minmax(0,1fr)] sm:flex items-center gap-2">
+      <div className="space-y-4 pb-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
+            <p className="text-sm text-muted-foreground">Counterfactual outcomes of gate-blocked and below-threshold setups</p>
+          </div>
+          <div className="flex items-center gap-2">
             <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-              <SelectTrigger className="w-full sm:w-[100px] h-9 sm:h-8 text-xs">
+              <SelectTrigger className="w-[100px] h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1167,21 +345,12 @@ export default function RejectedSetups() {
                 <SelectItem value="30">30 days</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                refetch();
-                refetchClosedTrades();
-                refetchDealingRangeComparison();
-              }}
-              className="h-9 w-9 p-0"
-            >
+            <Button variant="ghost" size="sm" onClick={() => refetch()} className="h-8 w-8 p-0">
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 w-full sm:w-auto gap-1.5 text-xs">
+                <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
                   <Download className="h-3.5 w-3.5" /> Download
                 </Button>
               </DropdownMenuTrigger>
@@ -1191,23 +360,19 @@ export default function RejectedSetups() {
                 <DropdownMenuItem onClick={downloadSummary} className="text-xs">Summary Analytics (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadOverview} className="text-xs">Overview Charts (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadGates} className="text-xs">Gate Analysis (CSV)</DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadShadowEvidence} className="text-xs">Shadow Evidence (CSV)</DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadSetups} className="text-xs">Distinct Opportunities (CSV)</DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">Advisor (JSON)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadSetups} className="text-xs">All Setups (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">AI Advisor (JSON)</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={downloadAll} className="text-xs font-medium">Download All</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-            </div>
-          )}
-        />
+        </div>
 
-        <WorkspaceBody className="space-y-4 pb-6">
         {/* Filters */}
-        <div className="grid grid-cols-2 sm:flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Select value={symbolFilter} onValueChange={setSymbolFilter}>
-            <SelectTrigger className="w-full sm:w-[130px] h-9 sm:h-8 text-xs">
+            <SelectTrigger className="w-[130px] h-8 text-xs">
               <Filter className="h-3 w-3 mr-1" />
               <SelectValue placeholder="Symbol" />
             </SelectTrigger>
@@ -1217,7 +382,7 @@ export default function RejectedSetups() {
             </SelectContent>
           </Select>
           <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
-            <SelectTrigger className="w-full sm:w-[150px] h-9 sm:h-8 text-xs">
+            <SelectTrigger className="w-[150px] h-8 text-xs">
               <ArrowUpDown className="h-3 w-3 mr-1" />
               <SelectValue placeholder="Outcome" />
             </SelectTrigger>
@@ -1235,11 +400,8 @@ export default function RejectedSetups() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Card className="border-border/50">
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Distinct Opportunities</p>
+              <p className="text-xs text-muted-foreground">Total Rejected</p>
               <p className="text-2xl font-bold">{stats.total}</p>
-              <p className="text-[10px] text-muted-foreground">
-                {displayedScanCount} scans · {displayedScanCount - setups.length} repeats removed
-              </p>
             </CardContent>
           </Card>
           <Card className="border-border/50">
@@ -1276,17 +438,14 @@ export default function RejectedSetups() {
 
         {/* Charts */}
         <Tabs defaultValue="overview" className="w-full">
-          <div className="-mx-2.5 px-2.5 overflow-x-auto">
-          <TabsList className="h-10 min-w-max justify-start">
-            <TabsTrigger value="overview" className="text-xs h-9">Outcomes</TabsTrigger>
-            <TabsTrigger value="gates" className="text-xs h-9">Rejection Gates</TabsTrigger>
-            <TabsTrigger value="shadow" className="text-xs h-9">Evidence Research</TabsTrigger>
-            <TabsTrigger value="advisor" className="text-xs h-9 gap-1">
+          <TabsList className="h-8">
+            <TabsTrigger value="overview" className="text-xs h-7">Overview</TabsTrigger>
+            <TabsTrigger value="gates" className="text-xs h-7">Gate Analysis</TabsTrigger>
+            <TabsTrigger value="advisor" className="text-xs h-7 gap-1">
               <Sparkles className="h-3 w-3" /> Advisor
             </TabsTrigger>
-            <TabsTrigger value="table" className="text-xs h-9">Setup Records</TabsTrigger>
+            <TabsTrigger value="table" className="text-xs h-7">All Setups</TabsTrigger>
           </TabsList>
-          </div>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-4 mt-3">
@@ -1298,8 +457,7 @@ export default function RejectedSetups() {
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {outcomeDistribution.length > 0 ? (
-                    <>
-                    <ChartContainer config={{ won: { label: "Won", color: "#22c55e" }, lost: { label: "Lost", color: "#ef4444" }, developing: { label: "Developing", color: "#f59e0b" }, terminal: { label: "Terminal", color: "#6b7280" } }} className="h-[200px] w-full">
+                    <ChartContainer config={{ won: { label: "Won", color: "#22c55e" }, lost: { label: "Lost", color: "#ef4444" }, inconclusive: { label: "Inconclusive", color: "#6b7280" }, pending: { label: "Pending", color: "#f59e0b" } }} className="h-[200px] w-full">
                       <PieChart>
                         <Pie
                           data={outcomeDistribution}
@@ -1320,19 +478,6 @@ export default function RejectedSetups() {
                         <ChartTooltip content={<ChartTooltipContent hideIndicator />} />
                       </PieChart>
                     </ChartContainer>
-                    <div className="grid gap-1 px-3 pb-1 text-[10px]">
-                      {outcomeDistribution.map((item) => (
-                        <div key={item.key} className="flex items-start justify-between gap-3">
-                          <span className="flex min-w-0 items-start gap-1.5 text-muted-foreground" title={item.description}>
-                            <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
-                            <span>{item.name}</span>
-                          </span>
-                          <span className="font-mono text-foreground">{item.value}</span>
-                        </div>
-                      ))}
-                      <p className="pt-1 text-muted-foreground">Only resolved wins and losses count toward Winner-Block Rate.</p>
-                    </div>
-                    </>
                   ) : (
                     <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                   )}
@@ -1342,7 +487,7 @@ export default function RejectedSetups() {
               {/* Daily Trend */}
               <Card className="border-border/50">
                 <CardHeader className="pb-2 pt-3 px-4">
-                  <CardTitle className="text-sm font-medium">Daily Opportunities & Outcomes</CardTitle>
+                  <CardTitle className="text-sm font-medium">Daily Rejections & Outcomes</CardTitle>
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {dailyTrend.length > 0 ? (
@@ -1364,11 +509,11 @@ export default function RejectedSetups() {
               </Card>
             </div>
 
-            <AuthorityOutcomeResearchCard report={authorityOutcomeComparison} loading={isLoadingAuthorityOutcomes} />
-
             {/* Score Distribution */}
-            <details className="border border-border/50 bg-card">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Legacy Confluence Score vs Outcome <span className="ml-2 text-[10px] font-normal text-muted-foreground">Diagnostic only · does not authorize entry</span></summary>
+            <Card className="border-border/50">
+              <CardHeader className="pb-2 pt-3 px-4">
+                <CardTitle className="text-sm font-medium">Confluence Score vs Outcome</CardTitle>
+              </CardHeader>
               <CardContent className="px-2 pb-3">
                 {setups.length > 0 ? (
                   <ChartContainer config={{ won: { label: "Would Have Won", color: "#22c55e" }, lost: { label: "Would Have Lost", color: "#ef4444" } }} className="h-[200px] w-full">
@@ -1383,7 +528,7 @@ export default function RejectedSetups() {
                       ];
                       for (const s of setups) {
                         const score = s.confluence_score;
-                        const idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
+                        let idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
                         if (s.outcome_status === "would_have_won") buckets[idx].won++;
                         if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
                       }
@@ -1401,7 +546,7 @@ export default function RejectedSetups() {
                   <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                 )}
               </CardContent>
-            </details>
+            </Card>
           </TabsContent>
 
           {/* Gate Analysis Tab */}
@@ -1409,7 +554,7 @@ export default function RejectedSetups() {
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4">
                 <CardTitle className="text-sm font-medium">Gate Effectiveness</CardTitle>
-                <p className="text-xs text-muted-foreground">Distinct opportunities by normalized gate. High winner-block % may indicate an overly aggressive gate.</p>
+                <p className="text-xs text-muted-foreground">Which gates block the most would-have-won setups? High % = gate may be too aggressive.</p>
               </CardHeader>
               <CardContent className="px-4 pb-3">
                 {gateBreakdown.length > 0 ? (
@@ -1433,7 +578,7 @@ export default function RejectedSetups() {
                             />
                           </div>
                           <span className={`text-xs font-mono w-12 text-right ${g.winRate > 50 ? "text-warn" : "text-profit"}`}>
-                            {g.winRate.toFixed(0)}% WB
+                            {g.winRate.toFixed(0)}% WR
                           </span>
                         </div>
                       </div>
@@ -1467,379 +612,10 @@ export default function RejectedSetups() {
             )}
           </TabsContent>
 
-          {/* Shadow Evidence Tab */}
-          <TabsContent value="shadow" className="space-y-4 mt-3">
-            <Card className="border-primary/30 bg-primary/5">
-              <CardContent className="p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">
-                      Observation only — no execution impact
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      Compares the feature&apos;s proposed decision with the actual system decision across distinct rejected opportunities and completed trades.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
-                      {shadowEvidenceReport.totalCandidates} CANDIDATES
-                    </Badge>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-[10px]"
-                      disabled={isGeneratingCertificate}
-                      onClick={generateStrategyEvidenceCertificate}
-                    >
-                      <RefreshCw className={`h-3 w-3 mr-1 ${isGeneratingCertificate ? "animate-spin" : ""}`} />
-                      {isGeneratingCertificate ? "Certifying…" : `Certify ${days} days`}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-sm font-medium">Gameplan Scenario Viability</CardTitle>
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      A scenario can only be traded if its target is further away than the instrument&apos;s minimum stop &times; minimum R:R. Observation only — nothing is blocked on this.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-[9px]">
-                      {planScenarios.filter((s) => s.viable === false).length} UNVIABLE / {planScenarios.length}
-                    </Badge>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-[10px]"
-                      onClick={() => refetchPlanScenarios()}
-                    >
-                      <RefreshCw className={`h-3 w-3 mr-1 ${isLoadingPlanScenarios ? "animate-spin" : ""}`} />
-                      Refresh
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="px-4 pb-4">
-                {isLoadingPlanScenarios ? (
-                  <div className="py-6 text-center text-xs text-muted-foreground">Loading active plans…</div>
-                ) : planScenarios.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-muted-foreground">
-                    No active Gameplan scenarios. Plans expire — refresh the Gameplan to repopulate.
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {planScenarios.map((sc) => (
-                      <div
-                        key={`${sc.symbol}-${sc.index}`}
-                        className="grid grid-cols-1 md:grid-cols-[110px_70px_1fr_auto] gap-2 rounded border border-border/50 p-2 items-start"
-                      >
-                        <div>
-                          <p className="text-xs font-semibold">{sc.symbol}</p>
-                          <p className="text-[9px] text-muted-foreground uppercase">
-                            {sc.direction || "—"} · {sc.bias || "—"} {sc.biasConfidence ?? "—"}%
-                          </p>
-                        </div>
-                        <div className="font-mono text-[10px]">
-                          <p className={sc.viable === false ? "text-destructive font-bold" : "text-foreground"}>
-                            {sc.rewardPips == null ? "—" : `${sc.rewardPips}p`}
-                          </p>
-                          <p className="text-[9px] text-muted-foreground">
-                            need {sc.minStopPips == null ? "—" : Math.round(sc.minStopPips * 1.5)}p
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-foreground">{sc.condition}</p>
-                          {sc.viabilityNote && (
-                            <p className="text-[9px] text-destructive mt-0.5">{sc.viabilityNote}</p>
-                          )}
-                          {sc.entryLevel != null && sc.targetLevel != null && (
-                            <p className="text-[9px] text-muted-foreground font-mono mt-0.5">
-                              entry {sc.entryLevel} → target {sc.targetLevel}
-                            </p>
-                          )}
-                        </div>
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] ${
-                            sc.viable === false
-                              ? "border-destructive/50 text-destructive"
-                              : sc.viable === true
-                              ? "border-success/50 text-success"
-                              : "border-border text-muted-foreground"
-                          }`}
-                        >
-                          {sc.viable === false ? "UNVIABLE" : sc.viable === true ? "VIABLE" : "NO TARGET"}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-medium">Evidence Review: What Happens Next</CardTitle>
-                <p className="text-[10px] text-muted-foreground mt-1">Trusted certificates convert completed Shadow Evidence into an action recommendation. No recommendation changes trade execution.</p>
-              </CardHeader>
-              <CardContent className="px-4 pb-4 space-y-2">
-                {shadowEvidenceReviews.map(({ summary, certificate, review }) => (
-                  <div key={summary.feature} className="grid grid-cols-1 md:grid-cols-[180px_160px_1fr] gap-2 rounded border border-border/50 p-3 items-start">
-                    <div>
-                      <p className="text-xs font-semibold">{summary.label}</p>
-                      <p className="text-[9px] text-muted-foreground">{certificate ? certificate.resolved_count + " resolved · " + certificate.changed_count + " changed" : "Not certified"}</p>
-                    </div>
-                    <Badge variant="outline" className={"w-fit text-[9px] " + (review.action === "promote_log_only" ? "border-success/40 text-success" : review.action === "remove_candidate" ? "border-destructive/40 text-destructive" : "border-warning/40 text-warning")}>
-                      {review.label}
-                    </Badge>
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">{review.reason}</p>
-                  </div>
-                ))}
-                <p className="text-[9px] text-muted-foreground">Promotion means Log-only review first. It does not mean soft adjustment, hard blocking, paper execution, or live execution.</p>
-              </CardContent>
-            </Card>
-
-            <ImpulseEntryLifecycleEvidenceCard
-              evidence={impulseEntryLifecycleEvidence}
-              loading={isLoadingImpulseEntryLifecycleEvidence}
-              replay={impulseLifecycleReplaySummary}
-              certificate={impulseLifecycleCertificate}
-              replaying={isReplayingImpulseLifecycle}
-              reviewing={isReviewingImpulseLifecycle}
-              onReplay={runImpulseLifecycleReplay}
-              onReview={reviewImpulseLifecycleCertificate}
-            />
-
-            <PendingLifecycleEvidenceCard
-              report={filteredPendingLifecycleEvidence}
-              loading={isLoadingPendingLifecycleEvidence}
-            />
-
-            <StopPolicyEvidenceCard
-              report={filteredStopPolicyEvidence}
-              loading={isLoadingStopPolicyEvidence}
-            />
-
-            <StructureAuthorityEvidenceCard setups={setups} />
-
-            <Card className="border-cyan-500/25">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-sm font-medium">ICT Scanner Workflow Comparison</CardTitle>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Current system outcomes compared with the observed canonical workflow stages. Watch means the setup needed more evidence; it does not mean immediate entry.</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-400">
-                      {isLoadingICTScannerComparison ? "Loading" : `${ictScannerComparison?.summary.comparable ?? 0}/${ictScannerComparison?.summary.sampleSize ?? 0} comparable`}
-                    </Badge>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-[10px]"
-                      disabled={!ictScannerComparison}
-                      onClick={() => {
-                        if (!ictScannerComparison) return;
-                        const blob = new Blob([JSON.stringify(ictScannerComparison, null, 2)], { type: "application/json" });
-                        const url = URL.createObjectURL(blob);
-                        const anchor = document.createElement("a");
-                        anchor.href = url;
-                        anchor.download = `ict-scanner-workflow-${new Date().toISOString().slice(0, 10)}.json`;
-                        anchor.click();
-                        URL.revokeObjectURL(url);
-                      }}
-                    >
-                      <Download className="mr-1 h-3 w-3" /> Dataset
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3 px-4 pb-4">
-                {isLoadingICTScannerComparison ? (
-                  <div className="py-8 text-center text-sm text-muted-foreground">Loading ICT Scanner Workflow evidence…</div>
-                ) : ictScannerComparison ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-4 xl:grid-cols-6">
-                      <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{ictScannerComparison.summary.coveragePercent.toFixed(1)}%</p></div>
-                      <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{ictScannerComparison.summary.agreements}</p></div>
-                      <div><span className="text-muted-foreground">Workflow watches</span><p className="font-mono font-bold text-warning">{ictScannerComparison.summary.workflowWatches}</p></div>
-                      <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{ictScannerComparison.summary.winnersPreserved}</p></div>
-                      <div><span className="text-muted-foreground">Winners blocked/watched</span><p className="font-mono font-bold text-destructive">{ictScannerComparison.summary.winnersBlocked}</p></div>
-                      <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{ictScannerComparison.summary.poorEntriesRejected}</p></div>
-                      <div><span className="text-muted-foreground">Poor entries watched</span><p className="font-mono font-bold text-warning">{ictScannerComparison.summary.poorEntriesWatched}</p></div>
-                      <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-destructive">{ictScannerComparison.summary.poorEntriesAllowed}</p></div>
-                      <div><span className="text-muted-foreground">Unavailable history</span><p className="font-mono font-bold text-muted-foreground">{ictScannerComparison.summary.unavailable}</p></div>
-                    </div>
-                    <div>
-                      <p className="mb-1.5 text-[10px] font-medium uppercase text-muted-foreground">Stage distribution</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {Object.entries(ictScannerComparison.summary.stageCounts).sort((a, b) => b[1] - a[1]).map(([stage, count]) => (
-                          <Badge key={stage} variant="outline" className="text-[9px]">
-                            {stage.replace(/_/g, " ")} · {count}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      {ictScannerComparison.rows.filter(row => row.decisionsMatch === false).slice(0, 12).map(row => (
-                        <div key={`ict-workflow:${row.source}:${row.id}`} className="border-l-2 border-warning pl-3 text-xs">
-                          <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · actual {row.actualDecision} · workflow {row.workflowDecision || "unavailable"} · {(row.stage || "unavailable").replace(/_/g, " ")}</span>
-                          <p className="mt-0.5 text-muted-foreground">{row.explanation || row.reasonCode?.replace(/_/g, " ") || "Workflow evidence unavailable"}</p>
-                          {row.missingAuthorities.length > 0 && <p className="mt-0.5 text-warning">Missing: {row.missingAuthorities.join(", ")}</p>}
-                        </div>
-                      ))}
-                    </div>
-                    {ictScannerComparison.summary.comparable === 0 && (
-                      <p className="text-[10px] text-muted-foreground">Historical records created before deployment do not contain canonical workflow evidence. Coverage will grow automatically as new scans, rejections and trades are recorded.</p>
-                    )}
-                  </>
-                ) : (
-                  <div className="py-8 text-center text-sm text-muted-foreground">ICT Scanner Workflow comparison is unavailable.</div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
-                <CardTitle className="text-sm font-medium">Trade Decision Comparison</CardTitle>
-                <p className="text-[10px] text-muted-foreground mt-1">ICT setup decisions compared with legacy scores and filters.</p>
-              </div><Badge variant="outline" className="text-[9px]">{isLoadingSingleOwnership ? "Loading" : <>{singleOwnershipComparison?.summary.comparable ?? 0}/{singleOwnershipComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
-              <CardContent className="px-4 pb-4">
-                {singleOwnershipComparison ? <div className="space-y-3">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
-                    <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{singleOwnershipComparison.summary.coveragePercent.toFixed(1)}%</p></div>
-                    <div><span className="text-muted-foreground">Disagreements</span><p className="font-mono font-bold">{singleOwnershipComparison.summary.disagreements}</p></div>
-                    <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{singleOwnershipComparison.summary.winnersPreserved}</p></div>
-                    <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{singleOwnershipComparison.summary.poorEntriesRejected}</p></div>
-                  </div>
-                  {singleOwnershipComparison.rows.filter(row => row.decisionsMatch === false).slice(0, 10).map(row => <div key={["ownership", row.source, row.id].join(":")} className="border-l-2 border-warning pl-3 text-xs">
-                    <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · legacy {row.legacyDecision} · owned {row.proposedDecision}</span>
-                    <p className="text-muted-foreground mt-0.5">{row.reasonCodes.join(", ") || "ICT setup rules allow this setup without legacy score ownership"}</p>
-                  </div>)}
-                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Trade decision comparison is unavailable.</div>}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4"><div className="flex flex-wrap items-center justify-between gap-2"><div>
-                <CardTitle className="text-sm font-medium">Decision Research Comparison</CardTitle>
-                <p className="text-[10px] text-muted-foreground mt-1">Point-in-time legacy decisions compared with the four-pillar observation.</p>
-              </div><Badge variant="outline" className="text-[9px]">{isLoadingStreamlinedDecisionComparison ? "Loading" : <>{streamlinedDecisionComparison?.summary.comparable ?? 0}/{streamlinedDecisionComparison?.summary.sampleSize ?? 0} comparable</>}</Badge></div></CardHeader>
-              <CardContent className="px-4 pb-4">
-                {streamlinedDecisionComparison ? <div className="space-y-3">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
-                    <div><span className="text-muted-foreground">Coverage</span><p className="font-mono font-bold">{streamlinedDecisionComparison.summary.coveragePercent.toFixed(1)}%</p></div>
-                    <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{streamlinedDecisionComparison.summary.agreements}</p></div>
-                    <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{streamlinedDecisionComparison.summary.winnersPreserved}</p></div>
-                    <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{streamlinedDecisionComparison.summary.poorEntriesRejected}</p></div>
-                  </div>
-                  {streamlinedDecisionComparison.rows.filter(row => row.comparable && row.disagreementReasons.length > 0).slice(0, 10).map(row => <div key={["streamlined", row.source, row.id].join(":")} className="border-l-2 border-warning pl-3 text-xs">
-                    <span className="font-mono">{row.symbol} {row.direction.toUpperCase()} · {row.currentDecision} to {row.proposedDecision}</span>
-                    <p className="text-muted-foreground mt-0.5">{row.disagreementReasons.join(", ") || "Decision changed"}</p>
-                  </div>)}
-                </div> : <div className="py-8 text-center text-sm text-muted-foreground">Streamlined comparison is unavailable.</div>}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-sm font-medium">Premium/Discount Range Comparison</CardTitle>
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      Last 100 setups: rolling entry-timeframe decisions compared with the frozen HTF impulse range.
-                    </p>
-                  </div>
-                  <Badge variant="outline" className="text-[9px]">
-                    {isLoadingDealingRangeComparison
-                      ? "Loading"
-                      : `${dealingRangeComparison?.summary.available ?? 0}/${dealingRangeComparison?.summary.sampleSize ?? 0} comparable`}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="px-4 pb-4">
-                {isLoadingDealingRangeComparison ? (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    Loading Premium/Discount range comparison…
-                  </div>
-                ) : dealingRangeComparison ? (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
-                      <div><span className="text-muted-foreground">Agreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.agreements}</p></div>
-                      <div><span className="text-muted-foreground">Disagreements</span><p className="font-mono font-bold">{dealingRangeComparison.summary.disagreements}</p></div>
-                      <div><span className="text-muted-foreground">Winners preserved</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.winnersPreserved}</p></div>
-                      <div><span className="text-muted-foreground">Winners blocked</span><p className="font-mono font-bold text-destructive">{dealingRangeComparison.summary.winnersBlocked}</p></div>
-                      <div><span className="text-muted-foreground">Poor entries rejected</span><p className="font-mono font-bold text-success">{dealingRangeComparison.summary.poorEntriesRejected}</p></div>
-                      <div><span className="text-muted-foreground">Poor entries allowed</span><p className="font-mono font-bold text-warning">{dealingRangeComparison.summary.poorEntriesAllowed}</p></div>
-                      <div><span className="text-muted-foreground">HTF range blocks</span><p className="font-mono font-bold">{dealingRangeComparison.summary.canonicalBlocked}</p></div>
-                      <div><span className="text-muted-foreground">Unavailable</span><p className="font-mono font-bold text-muted-foreground">{dealingRangeComparison.summary.unavailable}</p></div>
-                    </div>
-                    {dealingRangeComparison.rows
-                      .filter((row) => row.decisionsMatch === false)
-                      .slice(0, 10)
-                      .map((row) => (
-                        <div key={`${row.source}:${row.id}`} className="border-l-2 border-warning pl-3 text-xs">
-                          <span className="font-mono">
-                            {row.symbol} {row.direction.toUpperCase()} · {row.canonicalPercent?.toFixed(1) ?? "—"}%
-                          </span>
-                          <p className="text-muted-foreground mt-0.5">
-                            {row.explanation || "Premium/Discount explanation unavailable"}
-                          </p>
-                        </div>
-                      ))}
-                  </div>
-                ) : (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    Premium/Discount range comparison is unavailable.
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ||
-                isLoadingStrategyEvidenceCertificates || isLoadingZoneLocalValidation ||
-                isLoadingICTEntryZoneAuthorityValidation ? (
-              <Card className="border-border/50">
-                <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                  Loading shadow evidence…
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="space-y-4">
-                <ICTEntryZoneAuthorityCard rows={ictEntryZoneAuthorityValidation} />
-                <ZoneLocalValidationCard
-                  rows={filteredZoneLocalValidation}
-                  activation={activationByFeature.get("zone_local_confluence")}
-                  crossTimeframeActivation={activationByFeature.get("cross_timeframe_authority")}
-                />
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  <ShadowFeatureEvidenceCard
-                    summary={shadowEvidenceReport.gameplanHierarchy}
-                    activation={activationByFeature.get("gameplan_hierarchy")}
-                    certificate={certificateByFeature.get("gameplan_hierarchy")}
-                  />
-                  <ShadowFeatureEvidenceCard
-                    summary={shadowEvidenceReport.thesisConviction}
-                    activation={activationByFeature.get("thesis_conviction")}
-                    certificate={certificateByFeature.get("thesis_conviction")}
-                  />
-                </div>
-              </div>
-            )}
-          </TabsContent>
-
           {/* Table Tab */}
           {/* Strategy Advisor Tab */}
           <TabsContent value="advisor" className="mt-3">
-            <RecommendationsDashboard botId="smc" defaultReviewMode="on_demand" />
+            <StrategyAdvisor days={days} />
           </TabsContent>
 
           <TabsContent value="table" className="mt-3">
@@ -1848,7 +624,7 @@ export default function RejectedSetups() {
                 {isLoading ? (
                   <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>
                 ) : setups.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-muted-foreground">No rejected opportunities in this period</div>
+                  <div className="py-12 text-center text-sm text-muted-foreground">No rejected setups in this period</div>
                 ) : isMobile ? (
                   /* Mobile: stacked cards */
                   <div className="divide-y divide-border/30">
@@ -1861,23 +637,21 @@ export default function RejectedSetups() {
                               {s.direction.toUpperCase()}
                             </Badge>
                           </div>
-                          <OutcomeBadge status={s.outcome_status} reason={s.outcome_reason} />
+                          <OutcomeBadge status={s.outcome_status} />
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                           <span>{formatBrokerTime(s.rejected_at)}</span>
                           <span>Score: {s.confluence_score.toFixed(1)}</span>
                           <span>T1: {s.tier1_count}</span>
-                          {s.occurrence_count > 1 && <span>{s.occurrence_count} scans</span>}
                         </div>
-                        {getDisplayGates(s).length > 0 && (
+                        {s.failed_gates && s.failed_gates.length > 0 && (
                           <div className="flex flex-wrap gap-1">
-                            {getDisplayGates(s).slice(0, 3).map((g, i) => (
+                            {s.failed_gates.slice(0, 3).map((g, i) => (
                               <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
                             ))}
-                            {getDisplayGates(s).length > 3 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{getDisplayGates(s).length - 3}</Badge>}
+                            {s.failed_gates.length > 3 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{s.failed_gates.length - 3}</Badge>}
                           </div>
                         )}
-                        <ShadowDecision audit={getShadowAudit(s)} />
                         {(s.mfe_pips !== null || s.mae_pips !== null) && (
                           <div className="flex gap-3 text-[10px]">
                             {s.mfe_pips !== null && <span className="text-profit">MFE: {formatPipDisplay(s.mfe_pips, s.symbol)}</span>}
@@ -1903,7 +677,6 @@ export default function RejectedSetups() {
                           <th className="text-left px-3 py-2 font-medium">RR</th>
                           <th className="text-left px-3 py-2 font-medium">MFE</th>
                           <th className="text-left px-3 py-2 font-medium">MAE</th>
-                          <th className="text-left px-3 py-2 font-medium">Current vs Shadow</th>
                           <th className="text-left px-3 py-2 font-medium">Outcome</th>
                         </tr>
                       </thead>
@@ -1914,12 +687,7 @@ export default function RejectedSetups() {
                               className={`border-b border-border/20 hover:bg-muted/20 cursor-pointer transition-colors ${expandedRow === s.id ? 'bg-muted/30' : ''}`}
                               onClick={() => setExpandedRow(expandedRow === s.id ? null : s.id)}
                             >
-                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
-                                <div>{formatBrokerTime(s.rejected_at)}</div>
-                                {s.occurrence_count > 1 && (
-                                  <div className="text-[9px]">{s.occurrence_count} scans collapsed</div>
-                                )}
-                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatBrokerTime(s.rejected_at)}</td>
                               <td className="px-3 py-2 font-medium">{s.symbol}</td>
                               <td className="px-3 py-2">
                                 <span className={s.direction === "long" ? "text-profit" : "text-loss"}>
@@ -1931,21 +699,20 @@ export default function RejectedSetups() {
                               <td className="px-3 py-2">{s.tier1_count}</td>
                               <td className="px-3 py-2 max-w-[200px]">
                                 <div className="flex flex-wrap gap-0.5">
-                                  {getDisplayGates(s).slice(0, 2).map((g, i) => (
+                                  {(s.failed_gates || []).slice(0, 2).map((g, i) => (
                                     <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
                                   ))}
-                                  {getDisplayGates(s).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{getDisplayGates(s).length - 2}</Badge>}
+                                  {(s.failed_gates || []).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{(s.failed_gates || []).length - 2}</Badge>}
                                 </div>
                               </td>
                               <td className="px-3 py-2 font-mono">{s.rr_ratio ? s.rr_ratio.toFixed(1) : "—"}</td>
                               <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
                               <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
-                              <td className="px-3 py-2 min-w-[150px]"><ShadowDecision audit={getShadowAudit(s)} /></td>
-                              <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} reason={s.outcome_reason} /></td>
+                              <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
                             </tr>
                             {expandedRow === s.id && (
                               <tr>
-                                <td colSpan={12} className="px-3 py-0">
+                                <td colSpan={11} className="px-3 py-0">
                                   <TradeDetailCard
                                     symbol={s.symbol}
                                     direction={s.direction}
@@ -1979,798 +746,19 @@ export default function RejectedSetups() {
             </Card>
           </TabsContent>
         </Tabs>
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }
 
 // ── Sub-components ──
-const SHADOW_STATUS_CONFIG = {
-  no_data: {
-    label: "NO DATA",
-    className: "border-border text-muted-foreground",
-  },
-  collecting: {
-    label: "COLLECTING",
-    className: "border-info-c/40 text-info-c",
-  },
-  paper_candidate: {
-    label: "PAPER CANDIDATE",
-    className: "border-success/40 text-success",
-  },
-  keep_shadow: {
-    label: "KEEP SHADOW",
-    className: "border-warning/40 text-warning",
-  },
-} as const;
-
-function EvidenceBreakdownTable({
-  title,
-  rows,
-}: {
-  title: string;
-  rows: ShadowEvidenceBreakdown[];
-}) {
-  return (
-    <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-        {title}
-      </p>
-      {rows.length === 0 ? (
-        <p className="text-[10px] text-muted-foreground">No resolved decision changes yet.</p>
-      ) : (
-        <div className="space-y-1">
-          {rows.slice(0, 8).map((row) => (
-            <div
-              key={row.key}
-              className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded border border-border/40 px-2 py-1.5"
-            >
-              <div className="min-w-0">
-                <OverflowText
-                  text={row.key}
-                  className="block text-[11px] font-medium"
-                />
-                <p className="text-[9px] text-muted-foreground">
-                  {row.resolved} resolved · {row.changed} changed
-                </p>
-              </div>
-              <span className="text-[10px] text-success">{row.beneficial} useful</span>
-              <span className="text-[10px] text-destructive">{row.harmful} harmful</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ImpulseEntryLifecycleEvidenceCard({
-  evidence, loading, replay, certificate, replaying, reviewing, onReplay, onReview,
-}: {
-  evidence?: ImpulseEntryLifecycleEvidence; loading: boolean;
-  replay?: ImpulseLifecycleReplaySummary | null; replaying: boolean;
-  certificate?: ImpulseLifecycleEnforcementCertificate | null; reviewing: boolean;
-  onReplay: () => void; onReview: () => void;
-}) {
-  const evidenceReviewed = certificate?.status === "eligible" && certificate.reviewed &&
-    certificate.minimum_sample_ready;
-  const readyForReview = certificate?.status === "eligible" &&
-    certificate.minimum_sample_ready && !certificate.reviewed;
-  const evidenceStatus = evidenceReviewed
-    ? "EVIDENCE REVIEWED"
-    : readyForReview
-    ? "READY FOR REVIEW"
-    : certificate?.status === "rejected"
-    ? "EVIDENCE REJECTED"
-    : "EVIDENCE COLLECTING";
-  return (
-    <Card className="border-border/50">
-      <CardHeader className="pb-2 pt-3 px-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <CardTitle className="text-sm font-medium">Impulse & Entry Zone Lifecycle</CardTitle>
-            <p className="text-[10px] text-muted-foreground mt-1">
-              Tracks whether a failed entry zone could advance deeper inside the same frozen impulse. Observation does not change execution.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button type="button" size="sm" variant="outline" className="h-7 text-[10px]" onClick={onReplay} disabled={replaying}>
-              <RefreshCw className={`h-3 w-3 mr-1 `} />
-              {replaying ? "Replaying…" : "Replay 100"}
-            </Button>
-            {readyForReview && (
-              <Button type="button" size="sm" className="h-7 text-[10px]" onClick={onReview} disabled={reviewing}>
-                {reviewing ? "Reviewing…" : "Review Evidence"}
-              </Button>
-            )}
-            <Badge variant="outline" className={`text-[9px] ${evidenceReviewed ? "border-success/40 text-success" : readyForReview ? "border-info-c/40 text-info-c" : "border-warning/40 text-warning"}`}>
-              {evidenceStatus}
-            </Badge>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="px-4 pb-4">
-        {loading ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">Loading impulse lifecycle evidence…</div>
-        ) : !evidence ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">
-            No lifecycle dataset is available. Apply the lifecycle migration and collect Observe-mode setups.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-3 text-xs">
-              <div><span className="text-muted-foreground">Lifecycles</span><p className="font-mono font-bold">{evidence.lifecycleCount}</p></div>
-              <div><span className="text-muted-foreground">Active</span><p className="font-mono font-bold">{evidence.activeCount}</p></div>
-              <div><span className="text-muted-foreground">Zone touches</span><p className="font-mono font-bold">{evidence.zoneTouches}</p></div>
-              <div><span className="text-muted-foreground">Zone failures</span><p className="font-mono font-bold">{evidence.candidateFailures}</p></div>
-              <div><span className="text-muted-foreground">Deeper advances</span><p className="font-mono font-bold text-info-c">{evidence.deeperAdvances}</p></div>
-              <div><span className="text-muted-foreground">Impulse invalidations</span><p className="font-mono font-bold text-destructive">{evidence.impulseInvalidations}</p></div>
-              <div><span className="text-muted-foreground">Confirmed entries</span><p className="font-mono font-bold text-success">{evidence.confirmations}</p></div>
-              <div><span className="text-muted-foreground">Entered</span><p className="font-mono font-bold">{evidence.enteredCount}</p></div>
-              <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{evidence.exhaustedCount}</p></div>
-              <div><span className="text-muted-foreground">Cancelled</span><p className="font-mono font-bold">{evidence.cancelledCount}</p></div>
-              <div><span className="text-muted-foreground">Transitions</span><p className="font-mono font-bold">{evidence.transitionCount}</p></div>
-            </div>
-            {replay && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-border/40 pt-2 text-xs">
-                <div><span className="text-muted-foreground">Replays</span><p className="font-mono font-bold">{replay.replay_count}</p></div>
-                <div><span className="text-muted-foreground">Entries</span><p className="font-mono font-bold">{replay.entries}</p></div>
-                <div><span className="text-muted-foreground">No entry</span><p className="font-mono font-bold">{replay.no_entries}</p></div>
-                <div><span className="text-muted-foreground">Zone never touched</span><p className="font-mono font-bold">{replay.never_touched}</p></div>
-                <div><span className="text-muted-foreground">Touch, no trigger lock</span><p className="font-mono font-bold">{replay.touched_trigger_not_locked}</p></div>
-                <div><span className="text-muted-foreground">Trigger locked, no confirmation</span><p className="font-mono font-bold">{replay.trigger_locked_not_confirmed}</p></div>
-                <div><span className="text-muted-foreground">Inconclusive</span><p className="font-mono font-bold">{replay.inconclusive}</p></div>
-                <div><span className="text-muted-foreground">Resolved outcomes</span><p className="font-mono font-bold">{replay.resolved_outcomes} / 30</p></div>
-                <div><span className="text-muted-foreground">Invalidated</span><p className="font-mono font-bold text-destructive">{replay.invalidated}</p></div>
-                <div><span className="text-muted-foreground">Expired</span><p className="font-mono font-bold">{replay.expired}</p></div>
-                <div><span className="text-muted-foreground">No zones left</span><p className="font-mono font-bold">{replay.exhausted}</p></div>
-                <div><span className="text-muted-foreground">Winners retained</span><p className="font-mono font-bold text-success">{replay.winners_retained}</p></div>
-                <div><span className="text-muted-foreground">Rescued winners</span><p className="font-mono font-bold text-success">{replay.rescued_winners}</p></div>
-                <div><span className="text-muted-foreground">Added losses</span><p className="font-mono font-bold text-destructive">{replay.added_losses}</p></div>
-                <div><span className="text-muted-foreground">Evidence readiness</span><p className="font-mono font-bold">{replay.minimum_sample_ready ? "30+ READY" : "COLLECTING"}</p></div>
-              </div>
-            )}
-            {evidence.recent.length > 0 && (
-              <div className="space-y-1.5 border-t border-border/40 pt-2">
-                {evidence.recent.slice(0, 5).map((row) => (
-                  <div key={row.id} className="border-l-2 border-info-c/50 pl-2 text-[10px]">
-                    <span className="font-mono uppercase">{row.event_type.replace(/_/g, " ")}</span>
-                    <span className="text-muted-foreground"> · {formatBrokerTime(row.created_at)}</span>
-                    <p className="text-muted-foreground mt-0.5">{row.reason}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="text-[9px] text-muted-foreground">
-              Certificates are advisory evidence for strategy review. Runtime enforcement is selected separately in Bot Config and is frozen when a setup is created.
-            </p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ICTEntryZoneAuthorityCard({
-  rows,
-}: {
-  rows: ICTEntryZoneAuthoritySummary[];
-}) {
-  const summarize = (dataset: ICTEntryZoneAuthoritySummary[]) =>
-    dataset.reduce((sum, row) => ({
-      observed: sum.observed + Number(row.observed_scans || 0),
-      comparable: sum.comparable + Number(row.comparable_scans || 0),
-      unavailable: sum.unavailable + Number(row.geometry_unavailable_scans || 0),
-      disagreements: sum.disagreements + Number(row.disagreement_scans || 0),
-      resolved: sum.resolved + Number(row.resolved_authority_setups || 0),
-      winners: sum.winners + Number(row.authority_winners || 0),
-      losers: sum.losers + Number(row.authority_losers || 0),
-      retained: sum.retained + Number(row.winners_retained || 0),
-      avoided: sum.avoided + Number(row.losers_avoided || 0),
-      missed: sum.missed + Number(row.missed_opportunities || 0),
-    }), {
-      observed: 0,
-      comparable: 0,
-      unavailable: 0,
-      disagreements: 0,
-      resolved: 0,
-      winners: 0,
-      losers: 0,
-      retained: 0,
-      avoided: 0,
-      missed: 0,
-    });
-  const forwardRows = rows.filter(
-    (row) => row.evidence_source === "forward_observation",
-  );
-  const forwardImpulseRows = forwardRows.filter(
-    (row) => row.setup_family !== "structure_poi",
-  );
-  const forwardStructureRows = forwardRows.filter(
-    (row) => row.setup_family === "structure_poi",
-  );
-  const replayRows = rows.filter(
-    (row) => row.evidence_source === "retrospective_replay",
-  );
-  const forwardImpulse = summarize(forwardImpulseRows);
-  const forwardStructure = summarize(forwardStructureRows);
-  const replay = summarize(replayRows);
-  const impulseReady = forwardImpulseRows.some(
-    (row) => row.activation_eligible && row.minimum_sample_ready,
-  );
-  const structureReady = forwardStructureRows.some(
-    (row) => row.activation_eligible && row.minimum_sample_ready,
-  );
-  const metrics = (totals: ReturnType<typeof summarize>, setupFamily: "impulse" | "structure_poi") => (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-      <div><p className="text-[9px] text-muted-foreground">Observed</p><p className="font-mono font-bold">{totals.observed}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Comparable" : "Different choice"}</p><p className="font-mono font-bold">{setupFamily === "structure_poi" ? totals.comparable : totals.disagreements}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Resolved</p><p className="font-mono font-bold">{totals.resolved}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Would win</p><p className="font-mono font-bold text-success">{totals.winners}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">Would lose</p><p className="font-mono font-bold text-destructive">{totals.losers}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Geometry unavailable" : "Winners kept"}</p><p className="font-mono font-bold">{setupFamily === "structure_poi" ? totals.unavailable : totals.retained}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Added losses" : "Losers avoided"}</p><p className={`font-mono font-bold ${setupFamily === "structure_poi" ? "text-destructive" : "text-success"}`}>{setupFamily === "structure_poi" ? totals.losers : totals.avoided}</p></div>
-      <div><p className="text-[9px] text-muted-foreground">{setupFamily === "structure_poi" ? "Missed winners" : "Missed"}</p><p className="font-mono font-bold text-warning">{totals.missed}</p></div>
-    </div>
-  );
-  return (
-    <Card className="border-border/50">
-      <CardHeader className="px-4 pt-3 pb-2">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <CardTitle className="text-sm font-medium">ICT Entry Zone Authority</CardTitle>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Type-neutral OB, FVG, Breaker and overlap decisions compared with the current selector.
-            </p>
-          </div>
-          <Button asChild size="sm" variant="outline" className="h-7 text-[10px]">
-            <Link to="/backtest?zoneLocalReplay=1">Run Historical Replay</Link>
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 px-4 pb-4">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium">Forward Observation · Impulse-owned</p>
-            <Badge variant="outline" className="border-success/40 text-success text-[9px]">
-              {impulseReady ? "READY FOR REVIEW" : "COLLECTING"}
-            </Badge>
-          </div>
-          {metrics(forwardImpulse, "impulse")}
-        </div>
-        <div className="space-y-2 rounded border border-amber-500/25 bg-amber-500/5 p-2">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="text-[11px] font-medium">Forward Observation · Structure POI</p>
-              <p className="text-[9px] text-muted-foreground">Existing OB/FVG/breaker selector when the impulse path has no executable zone.</p>
-            </div>
-            <Badge variant="outline" className="border-amber-500/40 text-amber-500 text-[9px]">
-              {structureReady ? "READY FOR REVIEW" : "COLLECTING"}
-            </Badge>
-          </div>
-          {metrics(forwardStructure, "structure_poi")}
-        </div>
-        <div className="space-y-2 rounded border border-cyan-500/25 bg-cyan-500/5 p-2">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium">Historical Replay</p>
-            <Badge variant="outline" className="border-cyan-500/40 text-cyan-500 text-[9px]">
-              RESEARCH ONLY
-            </Badge>
-          </div>
-          {metrics(replay, "impulse")}
-        </div>
-        <p className="text-[9px] text-muted-foreground">
-          Replay uses only later candles for outcomes and can never satisfy the
-          30 forward-disagreement requirement or change trade execution.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ZoneLocalValidationCard({
-  rows,
-  activation,
-  crossTimeframeActivation,
-}: {
-  rows: ZoneLocalValidationSummary[];
-  activation?: StrategyActivationRecord;
-  crossTimeframeActivation?: StrategyActivationRecord;
-}) {
-  const activationDisplay = getStrategyActivationDisplay(activation);
-  const crossTimeframeActivationDisplay = getStrategyActivationDisplay(
-    crossTimeframeActivation,
-  );
-  const forwardRows = rows.filter(
-    (row) => row.evidence_source === "forward_observation",
-  );
-  const replayRows = rows.filter(
-    (row) => row.evidence_source === "retrospective_replay",
-  );
-  const totals = forwardRows.reduce(
-    (acc, row) => ({
-      scans: acc.scans + Number(row.observed_scans || 0),
-      disagreements: acc.disagreements + Number(row.disagreement_scans || 0),
-      resolved: acc.resolved + Number(row.resolved_candidates || 0),
-    }),
-    { scans: 0, disagreements: 0, resolved: 0 },
-  );
-
-  return (
-    <Card className="border-border/50">
-      <CardHeader className="px-4 pt-3 pb-2">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <CardTitle className="text-sm font-medium">
-              Zone Candidate & Cross-TF Validation
-            </CardTitle>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Reports zone-local ranking and parent/child timeframe evidence
-              separately, with an independent rollout status for each policy.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button asChild size="sm" variant="outline" className="h-7 text-[10px]">
-              <Link to="/backtest?zoneLocalReplay=1">
-                Run Historical Replay
-              </Link>
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-3">
-        <div className="rounded border border-primary/25 bg-primary/5 p-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              POI CONFLUENCE
-            </Badge>
-            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
-              {activationDisplay.authorityLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px]">
-              {activationDisplay.scopeLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              SOURCE SEPARATED
-            </Badge>
-          </div>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-            {activationDisplay.description} Forward observations and historical
-            replay are reported separately. Replay data is permanently
-            ineligible to activate Soft or Hard enforcement.
-          </p>
-        </div>
-
-        <div className="rounded border border-cyan-500/25 bg-cyan-500/5 p-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              CROSS-TF ALIGNMENT
-            </Badge>
-            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
-              {crossTimeframeActivationDisplay.authorityLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px]">
-              {crossTimeframeActivationDisplay.scopeLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              {crossTimeframeActivationDisplay.runtimeLabel}
-            </Badge>
-          </div>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-            {crossTimeframeActivationDisplay.description} Cross-timeframe
-            readiness below is calculated from parent/child disagreements,
-            not from POI-ranking readiness.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-sm font-semibold">{totals.scans}</p>
-            <p className="text-[9px] text-muted-foreground">observed scans</p>
-          </div>
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-sm font-semibold text-warning">{totals.disagreements}</p>
-            <p className="text-[9px] text-muted-foreground">rank disagreements</p>
-          </div>
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-sm font-semibold">{totals.resolved}</p>
-            <p className="text-[9px] text-muted-foreground">resolved candidates</p>
-          </div>
-        </div>
-
-        <ZoneLocalDatasetTable
-          title="Forward Observation"
-          description="Natural scanner evidence. This is the only dataset that may become activation-ready."
-          rows={forwardRows}
-          retrospective={false}
-        />
-        <ZoneLocalDatasetTable
-          title="Retrospective Replay"
-          description="Backtest-derived research for faster learning. It can inform review, but never runtime activation."
-          rows={replayRows}
-          retrospective
-        />
-        <p className="text-[9px] text-muted-foreground">
-          “Ready” applies only to forward observations and still means review,
-          not automatic permission to change live or paper execution.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ZoneLocalDatasetTable({
-  title,
-  description,
-  rows,
-  retrospective,
-}: {
-  title: string;
-  description: string;
-  rows: ZoneLocalValidationSummary[];
-  retrospective: boolean;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-[11px] font-medium">{title}</p>
-          <p className="text-[9px] text-muted-foreground">{description}</p>
-        </div>
-        <Badge
-          variant="outline"
-          className={`text-[8px] ${
-            retrospective
-              ? "border-cyan-500/40 text-cyan-500"
-              : "border-success/40 text-success"
-          }`}
-        >
-          {retrospective ? "RESEARCH ONLY" : "ACTIVATION EVIDENCE"}
-        </Badge>
-      </div>
-      {rows.length === 0 ? (
-        <div className="rounded border border-dashed border-border/60 p-3 text-center">
-          <p className="text-[10px] text-muted-foreground">
-            {retrospective
-              ? "No historical replay evidence yet. Use Run Historical Replay to collect it."
-              : "No forward rank disagreement has completed outcome tracking yet."}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="space-y-2 md:hidden">
-            {rows.map((row) => (
-              <article key={`mobile:${row.evidence_source}:${row.trading_style}:${row.symbol}`} className="border border-border/50 bg-card p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold">{row.symbol}</p>
-                    <p className="text-[11px] capitalize text-muted-foreground">{row.trading_style}</p>
-                  </div>
-                  {retrospective ? (
-                    <Badge variant="outline" className="text-[10px]">{Number(row.replay_runs || 0)} replays</Badge>
-                  ) : (
-                    <div className="flex flex-col items-end gap-1">
-                      <Badge variant="outline" className={`text-[9px] ${row.minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
-                        {row.minimum_sample_ready ? "POI 30+ READY" : "POI COLLECTING"}
-                      </Badge>
-                      <Badge variant="outline" className={`text-[9px] ${row.cross_tf_minimum_sample_ready ? "border-success/40 text-success" : "border-warning/40 text-warning"}`}>
-                        {row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"}
-                      </Badge>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                  <Metric label="Resolved" value={Number(row.resolved_candidates || 0)} />
-                  <Metric label="Disagreements" value={Number(row.disagreement_scans || 0)} />
-                  <Metric label="Legacy win" value={formatValidationPercent(row.legacy_disagreement_win_rate)} />
-                  <Metric label="Local win" value={formatValidationPercent(row.shadow_disagreement_win_rate)} emphasis="primary" />
-                  <Metric label="Winners kept" value={Number(row.winners_retained || 0)} emphasis="success" />
-                  <Metric label="Losers avoided" value={Number(row.losers_avoided || 0)} emphasis="success" />
-                  <Metric label="Missed" value={Number(row.missed_opportunities || 0)} emphasis="warning" />
-                  <Metric label="False positives" value={Number(row.false_positives || 0)} emphasis="danger" />
-                </div>
-              </article>
-            ))}
-          </div>
-          <div className="hidden overflow-x-auto rounded border border-border/40 md:block">
-          <table className="w-full min-w-[1180px] text-[10px]">
-            <thead className="bg-muted/30 text-muted-foreground">
-              <tr>
-                <th className="px-2 py-1.5 text-left font-medium">Style / Pair</th>
-                <th className="px-2 py-1.5 text-right font-medium">Disagreements</th>
-                <th className="px-2 py-1.5 text-right font-medium">Resolved</th>
-                <th className="px-2 py-1.5 text-right font-medium">Legacy win</th>
-                <th className="px-2 py-1.5 text-right font-medium">Local win</th>
-                <th className="px-2 py-1.5 text-right font-medium">Local MFE</th>
-                <th className="px-2 py-1.5 text-right font-medium">Local MAE</th>
-                <th className="px-2 py-1.5 text-right font-medium">TF disagreements</th>
-                <th className="px-2 py-1.5 text-right font-medium">Winners kept</th>
-                <th className="px-2 py-1.5 text-right font-medium">Losers avoided</th>
-                <th className="px-2 py-1.5 text-right font-medium">Missed</th>
-                <th className="px-2 py-1.5 text-right font-medium">False +</th>
-                <th className="px-2 py-1.5 text-right font-medium">Expectancy Δ</th>
-                <th className="px-2 py-1.5 text-right font-medium">
-                  {retrospective ? "Replay runs" : "Readiness"}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={`${row.evidence_source}:${row.trading_style}:${row.symbol}`}
-                  className="border-t border-border/30"
-                >
-                  <td className="px-2 py-1.5">
-                    <span className="font-medium">{row.symbol}</span>
-                    <span className="ml-1 text-muted-foreground">
-                      {row.trading_style}
-                    </span>
-                  </td>
-                  <td className="px-2 py-1.5 text-right">{Number(row.disagreement_scans || 0)}</td>
-                  <td className="px-2 py-1.5 text-right">{Number(row.resolved_candidates || 0)}</td>
-                  <td className="px-2 py-1.5 text-right">{formatValidationPercent(row.legacy_disagreement_win_rate)}</td>
-                  <td className="px-2 py-1.5 text-right font-medium text-primary">{formatValidationPercent(row.shadow_disagreement_win_rate)}</td>
-                  <td className="px-2 py-1.5 text-right text-success">{formatValidationPips(row.shadow_winner_avg_mfe_pips, row.symbol)}</td>
-                  <td className="px-2 py-1.5 text-right text-destructive">{formatValidationPips(row.shadow_winner_avg_mae_pips, row.symbol)}</td>
-                  <td className="px-2 py-1.5 text-right">{Number(row.cross_tf_disagreement_scans || 0)}</td>
-                  <td className="px-2 py-1.5 text-right text-success">{Number(row.winners_retained || 0)}</td>
-                  <td className="px-2 py-1.5 text-right text-success">{Number(row.losers_avoided || 0)}</td>
-                  <td className="px-2 py-1.5 text-right text-warning">{Number(row.missed_opportunities || 0)}</td>
-                  <td className="px-2 py-1.5 text-right text-destructive">{Number(row.false_positives || 0)}</td>
-                  <td className={`px-2 py-1.5 text-right font-mono ${
-                    Number(row.cross_tf_expectancy_delta_r || 0) >= 0
-                      ? "text-success"
-                      : "text-destructive"
-                  }`}>
-                    {row.cross_tf_expectancy_delta_r == null
-                      ? "—"
-                      : `${Number(row.cross_tf_expectancy_delta_r).toFixed(3)}R`}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    {retrospective ? (
-                      <span>{Number(row.replay_runs || 0)}</span>
-                    ) : (
-                      <div className="flex flex-col items-end gap-1">
-                        <Badge
-                          variant="outline"
-                          className={`text-[8px] ${
-                            row.minimum_sample_ready
-                              ? "border-success/40 text-success"
-                              : "border-warning/40 text-warning"
-                          }`}
-                        >
-                          {row.minimum_sample_ready ? "POI 30+ READY" : "POI COLLECTING"}
-                        </Badge>
-                        <Badge
-                          variant="outline"
-                          className={`text-[8px] ${
-                            row.cross_tf_minimum_sample_ready
-                              ? "border-success/40 text-success"
-                              : "border-warning/40 text-warning"
-                          }`}
-                        >
-                          {row.cross_tf_minimum_sample_ready ? "TF 30+ READY" : "TF COLLECTING"}
-                        </Badge>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function Metric({ label, value, emphasis }: { label: string; value: React.ReactNode; emphasis?: "primary" | "success" | "warning" | "danger" }) {
-  const valueColor = emphasis === "success" ? "text-success"
-    : emphasis === "warning" ? "text-warning"
-    : emphasis === "danger" ? "text-destructive"
-    : emphasis === "primary" ? "text-primary"
-    : "text-foreground";
-  return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/30 pb-1">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`font-mono font-semibold ${valueColor}`}>{value}</span>
-    </div>
-  );
-}
-
-function formatValidationPercent(value: number | null): string {
-  if (value == null) return "—";
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? `${parsed.toFixed(1)}%` : "—";
-}
-
-function formatValidationPips(value: number | null, symbol: string): string {
-  if (value == null) return "—";
-  const parsed = Number(value);
-  return Number.isFinite(parsed)
-    ? formatPipDisplay(parsed, symbol, { showSign: false })
-    : "—";
-}
-
-function ShadowFeatureEvidenceCard({
-  summary,
-  activation,
-  certificate,
-}: {
-  summary: ShadowFeatureEvidenceSummary;
-  activation?: StrategyActivationRecord;
-  certificate?: StrategyEvidenceCertificateRecord;
-}) {
-  const status = SHADOW_STATUS_CONFIG[summary.status];
-  const activationDisplay = getStrategyActivationDisplay(activation);
-  const certificateStatus = certificate
-    ? STRATEGY_EVIDENCE_STATUS[certificate.status]
-    : null;
-  return (
-    <Card className="border-border/50">
-      <CardHeader className="px-4 pt-3 pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-sm font-medium">{summary.label}</CardTitle>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {summary.evidenceCount}/{summary.totalCandidates} candidates have comparable evidence
-            </p>
-          </div>
-          <Badge variant="outline" className={`text-[9px] ${status.className}`}>
-            {status.label}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-3">
-        <div className="rounded border border-primary/25 bg-primary/5 p-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
-              {activationDisplay.authorityLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px]">
-              {activationDisplay.scopeLabel}
-            </Badge>
-            <Badge variant="outline" className="text-[9px] border-warning/40 text-warning">
-              {activationDisplay.runtimeLabel}
-            </Badge>
-          </div>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-            {activationDisplay.description}
-          </p>
-        </div>
-
-        <div className="rounded border border-border/40 p-2">
-          {certificate && certificateStatus ? (
-            <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] ${certificateStatus.className}`}
-                >
-                  {certificateStatus.label}
-                </Badge>
-                <span className="font-mono text-[9px] text-muted-foreground">
-                  {shortCertificateHash(certificate.certificate_hash)}
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
-                <span>
-                  Out-of-sample:{" "}
-                  <strong>{certificate.out_of_sample_passed ? "PASS" : "WAIT"}</strong>
-                </span>
-                <span>
-                  Walk-forward:{" "}
-                  <strong>{certificate.walk_forward_consistent ? "PASS" : "WAIT"}</strong>
-                </span>
-                <span>Expectancy Δ: {certificate.expectancy_delta_r.toFixed(3)}R</span>
-                <span>Drawdown Δ: {certificate.max_drawdown_delta_percent.toFixed(1)}%</span>
-                <span>Good trades kept: {certificate.good_trade_retention_percent.toFixed(0)}%</span>
-                <span>{certificate.resolved_count} resolved · {certificate.changed_count} changed</span>
-              </div>
-              <p className="mt-1 text-[9px] text-muted-foreground">
-                Server-generated certificate. It can recommend Log-only but cannot activate it.
-              </p>
-            </>
-          ) : (
-            <>
-              <Badge variant="outline" className="text-[9px] border-border text-muted-foreground">
-                NO TRUSTED CERTIFICATE
-              </Badge>
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                Use Certify to create an immutable server-side snapshot of the selected history window.
-              </p>
-            </>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-[9px] text-muted-foreground uppercase">Coverage</p>
-            <p className="text-lg font-bold">{summary.coveragePercent.toFixed(0)}%</p>
-          </div>
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-[9px] text-muted-foreground uppercase">Resolved</p>
-            <p className="text-lg font-bold">{summary.resolved}</p>
-          </div>
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-[9px] text-muted-foreground uppercase">Changes</p>
-            <p className="text-lg font-bold">{summary.changed}</p>
-          </div>
-          <div className="rounded border border-border/40 p-2">
-            <p className="text-[9px] text-muted-foreground uppercase">Useful Rate</p>
-            <p className="text-lg font-bold">
-              {summary.beneficialRate === null ? "—" : `${summary.beneficialRate.toFixed(0)}%`}
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded bg-muted/20 p-2 text-[10px]">
-          <span className="text-success">Rescued winners: {summary.rescuedWinners}</span>
-          <span className="text-success">Avoided losses: {summary.avoidedLosses}</span>
-          <span className="text-destructive">Admitted losses: {summary.admittedLosses}</span>
-          <span className="text-destructive">Blocked winners: {summary.blockedWinners}</span>
-        </div>
-
-        <p className="text-[10px] leading-relaxed text-muted-foreground">
-          {summary.statusReason}
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <EvidenceBreakdownTable title="By trading style" rows={summary.byStyle} />
-          <EvidenceBreakdownTable title="By pair" rows={summary.byPair} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function OutcomeBadge({ status, reason }: { status: string; reason?: string | null }) {
-  const fullLabel = rejectedOutcomeLabel({ outcome_status: status, outcome_reason: reason });
-  const className = status === "would_have_won"
-    ? "bg-emerald-500/10 text-profit border-emerald-500/30"
-    : status === "would_have_lost"
-    ? "bg-destructive/10 text-loss border-destructive/30"
-    : status === "pending"
-    ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
-    : "bg-muted text-muted-foreground border-border/50";
-  const compactLabel = status === "would_have_won" ? "Won"
-    : status === "would_have_lost" ? "Lost"
-    : fullLabel.replace("Developing: ", "").replace(" Before Expiry", "").replace(" at Window End", " at Expiry").replace("Legacy Result ", "");
-  return <Badge title={fullLabel} variant="outline" className={`text-[10px] px-1.5 py-0 ${className}`}>{compactLabel}</Badge>;
-}
-
-function ShadowDecision({ audit }: { audit: ShadowAudit | null }) {
-  if (!audit) {
-    return <span className="text-[10px] text-muted-foreground">Available on new scans</span>;
-  }
-
-  const current = audit.currentSystem?.decision || "not_evaluated";
-  const proposed = audit.decision || "not_evaluated";
-  const reason = [
-    audit.currentSystem?.reason ? `Current: ${audit.currentSystem.reason}` : null,
-    audit.reasons?.length ? `Shadow: ${audit.reasons.join("; ")}` : null,
-  ].filter(Boolean).join("\n");
-
-  return (
-    <div className="flex flex-wrap items-center gap-1" title={reason}>
-      <Badge variant="outline" className="text-[9px] px-1 py-0">
-        NOW {current.toUpperCase()}
-      </Badge>
-      <span className="text-[9px] text-muted-foreground">→</span>
-      <Badge
-        variant="outline"
-        className={`text-[9px] px-1 py-0 ${
-          proposed === "eligible"
-            ? "text-profit border-emerald-500/30"
-            : proposed === "skip"
-              ? "text-loss border-destructive/30"
-              : "text-amber-500 border-amber-500/30"
-        }`}
-      >
-        SHADOW {proposed.toUpperCase()}
-      </Badge>
-    </div>
-  );
+function OutcomeBadge({ status }: { status: string }) {
+  const config: Record<string, { label: string; className: string }> = {
+    would_have_won: { label: "Won ✓", className: "bg-emerald-500/10 text-profit border-emerald-500/30" },
+    would_have_lost: { label: "Lost ✗", className: "bg-destructive/10 text-loss border-destructive/30" },
+    inconclusive: { label: "Inconclusive", className: "bg-muted text-muted-foreground border-border/50" },
+    pending: { label: "Pending", className: "bg-amber-500/10 text-amber-500 border-amber-500/30" },
+  };
+  const c = config[status] || config.pending;
+  return <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${c.className}`}>{c.label}</Badge>;
 }

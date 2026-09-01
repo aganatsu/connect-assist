@@ -73,26 +73,13 @@ This is a **live forex/crypto trading bot** built on Smart Money Concepts (SMC).
 
 ---
 
-## The Scan Pipeline (`bot-scanner/index.ts`)
+## The Scan Pipeline (bot-scanner/index.ts — 6512 lines)
 
-The bot-scanner is the **heart of the system**. It runs on the active style's
-configured interval and processes a bounded slice of the configured instrument
-universe through a multi-stage pipeline:
-
-### Stage 0: Discovery scheduling
-
-`_shared/rotatingImpulseUniverse.ts` owns the bounded discovery universe. It
-keeps lifecycle-owned symbols out of discovery slots because staged setups,
-pending orders, and open positions already have a separate monitoring lane.
-The live selector remains least-recently-scanned. A session-aware proposal
-reuses the captured session, resolved style, session affinity, and active
-Gameplan focus list, but is currently stored and displayed in Observe mode only;
-it does not change candle requests or trade execution.
+The bot-scanner is the **heart of the system**. It runs on a configurable interval (default 5 minutes) and processes each of the 16 watchlist pairs through a multi-stage pipeline:
 
 ### Stage 1: Data Fetching
-- Fetches through the shared candle-source and scan-cycle cache contracts
-- Persistent cache currently pre-warms Daily and Weekly candles
-- Analysis timeframes come from the resolved trading-style policy
+- Fetches candles from MetaAPI (primary) with TwelveData and Polygon.io as fallbacks
+- Timeframes: 15m, 1H, 4H, Daily
 - Also fetches live spread data for gate calculations
 
 ### Stage 2: Market Structure Analysis (smcAnalysis.ts)
@@ -248,20 +235,6 @@ bot-scanner detects setup
                 └─ Impulse invalidated → cancel order
 ```
 
-### Frozen setup contract
-
-The setup lifecycle persists one versioned, style-aware `entryZone` contract
-for impulse and cascade setups, with `structure_poi` reserved for observation
-until evidence supports a separate paper-only rollout. It freezes the selected
-market-object identity, evidence provenance, timeframe, bounds, lifecycle,
-entry, invalidation, stop, target, style hashes, and timeframe roles. This is
-distinct from the setup lifecycle UUID, which identifies the opportunity's
-journey through watchlist, pending order, and position state.
-
-Historical `scenarioZoneStory` / `zoneStory` / `impulse_zone` records are
-normalized by compatibility readers. They are not rewritten, and no parallel
-decision implementation is retained.
-
 ---
 
 ## Position Management (paper-trading/index.ts)
@@ -337,20 +310,19 @@ Tracks compliance with funded account rules:
 ## Data Flow Summary
 
 ```
-Configured instrument universe
-    → Discovery rotation + lifecycle-owned monitoring
-        → Market Data (MetaAPI/TwelveData/Polygon)
-            → Candles (style-resolved timeframes)
-                → SMC Analysis (structure, zones, liquidity)
-                    → Direction Engine (style-resolved HTF sequence)
-                        → Impulse/Unified Zone analysis
-                            → Confluence Scoring
-                                → Safety Gates
-                                    → Trade Decision (enter/reject/watch)
-                                        → Execution (paper + optional live mirror)
-                                            → Position Management (SL/TP/trail)
-                                                → Outcome Tracking (P&L, post-mortem)
-                                                    → Self-Learning (daily/weekly review)
+Market Data (MetaAPI/TwelveData/Polygon)
+    → Candles (15m, 1H, 4H, Daily)
+        → SMC Analysis (structure, zones, liquidity)
+            → Direction Engine (D→4H→1H)
+                → Impulse Zone Engine (best zone, score/11)
+                → Unified Zone Engine (full story, score/14)
+                    → Confluence Scoring (tiered, /24)
+                        → Safety Gates (21 checks)
+                            → Trade Decision (enter/reject/watch)
+                                → Execution (paper + optional live mirror)
+                                    → Position Management (SL/TP/trail)
+                                        → Outcome Tracking (P&L, post-mortem)
+                                            → Self-Learning (daily/weekly review)
 ```
 
 ---
@@ -363,8 +335,8 @@ The bot is highly configurable via the `config_json` column:
 |----------|-------------|
 | **Risk** | riskPerTrade (%), maxOpenPositions, maxPerSymbol, portfolioHeat, maxDrawdown |
 | **Scoring** | minConfluence, tier1MinFactors, minRR |
-| **Sessions** | enabledSessions (Asian, London, New York, Off-Hours), openingRangeMinutes |
-| **Instruments** | configured watchlist, symbol overrides, rotatingImpulseScanEnabled, rotatingImpulseSlotCount |
+| **Sessions** | killZones (London, NY, Tokyo, Sydney), openingRangeMinutes |
+| **Instruments** | watchlist (16 pairs), symbol overrides |
 | **Gates** | Each gate can be enabled/disabled independently |
 | **Execution** | orderType (market/limit), slippage, spread tolerance |
 | **Exit** | trailEnabled, trailATRMultiple, partialCloseEnabled, regimeTPAdjust |

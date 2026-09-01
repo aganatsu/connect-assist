@@ -2,12 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
 import { generatePendingOrderNarrative } from "@/lib/narrative";
 import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
-import {
-  pendingOrderConfirmationPresentation,
-  pendingOrderDisplayStage,
-  pendingOrderDistancePrice,
-  pendingOrderNestedPoiPresentation,
-} from "@/lib/pendingOrderDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle, Eye, Crosshair } from "lucide-react";
@@ -23,28 +17,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
-  const [loadWarning, setLoadWarning] = useState<string | null>(null);
   const { toast } = useToast();
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const snapshot = await scannerApi.pendingSnapshot();
-      if (snapshot.fallback) {
-        setLoadWarning(snapshot.error || "Zone Setup data is temporarily unavailable.");
-        return;
-      }
-      if (!Array.isArray(snapshot.active) || !Array.isArray(snapshot.history)) {
-        throw new Error("Invalid Zone Setup snapshot response");
-      }
-      setOrders(snapshot.active);
-      setHistory(snapshot.history.filter((o: PendingOrder) =>
-        pendingOrderDisplayStage(o) === "history"
-      ));
-      setLoadWarning(null);
+      const [activeRes, allRes] = await Promise.all([
+        scannerApi.activePending(),
+        scannerApi.allPending(),
+      ]);
+      setOrders(activeRes || []);
+      setHistory((allRes || []).filter((o: PendingOrder) => o.status !== "pending" && o.status !== "awaiting_confirmation"));
     } catch (err) {
       console.error("Failed to fetch zone setups:", err);
-      setLoadWarning("Could not refresh Zone Setups. The last known state is still shown.");
     } finally {
       setLoading(false);
     }
@@ -88,64 +73,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     return Math.min(100, Math.max(0, (elapsed / total) * 100));
   };
 
-  const liquidityReason = (reason?: string): string => {
-    switch (reason) {
-      case "sequence_confirmed": return "Fresh sweep followed by later structure confirmation observed";
-      case "zone_touch_pending": return "Waiting for price to touch the frozen entry zone";
-      case "no_qualifying_sweep": return "Zone touched; no fresh qualifying liquidity sweep yet";
-      case "sweep_before_zone_touch": return "Only a pre-touch sweep is available; a fresh sequence is required";
-      case "confirmation_pending": return "Fresh sweep observed; waiting for later structure confirmation";
-      case "confirmation_not_after_sweep": return "Structure confirmation is not later than the sweep";
-      case "sweep_identity_unresolved": return "Sweep identity could not be resolved";
-      case "legacy_contract_requires_fresh_sequence": return "Legacy evidence cannot authorize this sequence";
-      case "setup_activation_time_unavailable": return "Setup activation time is unavailable";
-      default: return "No sequence observation recorded yet";
-    }
-  };
-
-  const confirmationBuildReason = (
-    diagnostic?: PendingOrder["confirmation_build_diagnostic"],
-  ): string | null => {
-    if (!diagnostic) return null;
-    const timeframe = diagnostic.confirmationTimeframe
-      ? " " + diagnostic.confirmationTimeframe
-      : "";
-    switch (diagnostic.reasonCode) {
-      case "inactive_contract":
-        return "The frozen confirmation contract is not active";
-      case "insufficient_history":
-        return "Waiting for candle history (" + diagnostic.barsAfterTouch + "/" + diagnostic.requiredBars + " bars available)";
-      case "insufficient_post_touch_bars":
-        return "Waiting for closed" + timeframe + " bars after touch (" + diagnostic.barsAfterTouch + "/" + diagnostic.requiredBars + ")";
-      case "protected_pivot_missing":
-        return "No confirmed post-touch protected pivot yet (" + diagnostic.swingCount + " swings detected)";
-      case "break_pivot_missing":
-        return "Protected pivot found; no qualifying opposing break pivot exists in the bounded context";
-      case "trigger_ready":
-        return "Protected pivot and break level are available";
-      default:
-        return null;
-    }
-  };
-
-  const getDistanceDisplay = (
-    order: PendingOrder,
-    target: "entry" | "outer_zone" = "entry",
-  ): string => {
-    const distance = pendingOrderDistancePrice(order, target);
-    if (distance === null) return "—";
-    return formatPipDisplay(distance / getPipSize(order.symbol), order.symbol, {
-      showSign: false,
-    });
+  const getDistanceDisplay = (order: PendingOrder): string => {
+    if (!order.current_price) return "—";
+    const pipSize = getPipSize(order.symbol);
+    const rawPips = Math.abs(Number(order.current_price) - Number(order.entry_price)) / pipSize;
+    return formatPipDisplay(rawPips, order.symbol, { showSign: false });
   };
 
   const statusIcon = (status: string) => {
     switch (status) {
       case "filled": return <TrendingUp className="w-3 h-3 text-profit" />;
       case "expired": return <Clock className="w-3 h-3 text-highlight" />;
-      case "invalidated": return <AlertTriangle className="w-3 h-3 text-loss" />;
-      case "reconciliation_required": return <AlertTriangle className="w-3 h-3 text-warn" />;
-      case "broker_rejected": return <X className="w-3 h-3 text-loss" />;
       case "cancelled": return <X className="w-3 h-3 text-loss" />;
       default: return <Target className="w-3 h-3 text-info-c" />;
     }
@@ -155,91 +93,18 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     switch (status) {
       case "filled": return "text-profit";
       case "expired": return "text-highlight";
-      case "invalidated": return "text-loss";
-      case "broker_rejected": return "text-loss";
-      case "reconciliation_required": return "text-warn";
       case "cancelled": return "text-loss";
       default: return "text-info-c";
     }
   };
 
-  // The frozen retracement plan is the authoritative presentation stage.
-  // This keeps a valid setup visible even if an older scanner reset its outer
-  // pending-order status before the one-time data repair runs.
-  const retracementOrders = orders.filter(o =>
-    pendingOrderDisplayStage(o) === "retracement"
-  );
-  const watchingOrders = orders.filter(o =>
-    pendingOrderDisplayStage(o) === "watching"
-  );
-  const huntingOrders = orders.filter(o =>
-    pendingOrderDisplayStage(o) === "confirmation"
-  );
-  const nestedHuntingCount = huntingOrders.filter((order) =>
-    pendingOrderNestedPoiPresentation(order).route === "enforce"
-  ).length;
-  const huntingHeading = nestedHuntingCount === 0
-    ? "Hunting Confirmation"
-    : nestedHuntingCount === huntingOrders.length
-    ? "Hunting Nested POI"
-    : "Hunting Entry Trigger";
-  const reconciliationOrders = orders.filter(o =>
-    pendingOrderDisplayStage(o) === "reconciliation"
-  );
+  // Separate orders into watching (pending) and hunting (awaiting_confirmation)
+  const watchingOrders = orders.filter(o => o.status === "pending");
+  const huntingOrders = orders.filter(o => o.status === "awaiting_confirmation");
 
   const renderOrderCard = (order: PendingOrder, isHunting: boolean) => {
     const expiryPct = getExpiryPercent(order.placed_at, order.expires_at);
     const isExpiringSoon = expiryPct > 75;
-    const buildingReason = confirmationBuildReason(order.confirmation_build_diagnostic);
-    const signalReason = typeof order.signal_reason === "string"
-      ? (() => {
-        try {
-          return JSON.parse(order.signal_reason);
-        } catch {
-          return {};
-        }
-      })()
-      : (order.signal_reason || {});
-    const zoneStopPolicyAppliedAtArm =
-      signalReason.zoneSetupStopPolicyAppliedAtArm === true;
-    const zoneStopPolicyMode = zoneStopPolicyAppliedAtArm
-      ? signalReason.zoneSetupStopPolicyMode
-      : "observe";
-    const zoneStopPolicyLabel = zoneStopPolicyMode === "enforce_live"
-      ? "PAPER + LIVE"
-      : zoneStopPolicyMode === "enforce_paper"
-      ? "PAPER"
-      : "OBSERVE";
-    const zoneStopPolicyPlan = signalReason.zoneSetupStopPolicy || null;
-    const stopLossLabel = zoneStopPolicyAppliedAtArm ? "Arm-time SL" : "SL";
-
-    const decision = order.decision_context ||
-      signalReason.decisionContext ||
-      order.final_authorization?.decisionContext ||
-      null;
-    const confirmation =
-      pendingOrderConfirmationPresentation(order);
-    const nestedPoi = pendingOrderNestedPoiPresentation(order);
-    const nestedPoiEnforced = nestedPoi.route === "enforce";
-    const confirmationLabel = confirmation.methodKnown
-      ? confirmation.label
-      : "current confirmation settings";
-    const confirmationRequirement =
-      confirmation.methodSource === "runtime_observation"
-        ? `currently observed ${confirmationLabel}`
-        : confirmation.methodSource === "fallback"
-        ? "current confirmation settings"
-        : `saved ${confirmationLabel}`;
-    const retracementPlan = order.post_confirmation_entry;
-    const waitingForRetracement =
-      retracementPlan?.state === "awaiting_retracement";
-    const retracementReady = retracementPlan?.state === "ready";
-    const hasActiveRetracement = !nestedPoiEnforced &&
-      (waitingForRetracement || retracementReady);
-    const authorizationWait = order.final_authorization?.authorized === false &&
-      order.final_authorization?.retryable === true
-      ? order.final_authorization.reason
-      : null;
     return (
       <div
         key={order.order_id}
@@ -262,7 +127,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             </span>
             <Badge
               variant="outline"
-              className={`text-[11px] px-1.5 py-0 ${
+              className={`text-[10px] px-1.5 py-0 ${
                 order.direction === "long"
                   ? "border-success/50 text-profit bg-badge-profit"
                   : "border-destructive/50 text-loss bg-badge-loss"
@@ -272,35 +137,26 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             </Badge>
             <Badge
               variant="outline"
-              className="text-[11px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
+              className="text-[10px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
             >
-              {String(order.entry_zone_type || order.order_type).toLowerCase().includes("ob")
-                ? "OB"
-                : String(order.entry_zone_type || order.order_type).toLowerCase().includes("fvg")
-                ? "FVG"
-                : "ZONE"}
+              {order.order_type === "limit_ob" ? "OB" : "FVG"}
             </Badge>
             {isHunting && (
               <Badge
                 variant="outline"
-                className="text-[11px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
+                className="text-[10px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
               >
                 <Crosshair className="w-2.5 h-2.5 mr-0.5" />
-                {hasActiveRetracement ? "RETRACEMENT" : "HUNTING"}
+                HUNTING
               </Badge>
             )}
             {!isHunting && order.from_watchlist && (
               <Badge
                 variant="outline"
-                className="text-[11px] px-1.5 py-0 border-cyan-500/50 text-cyan-300 bg-cyan-500/10"
+                className="text-[10px] px-1.5 py-0 border-cyan-500/50 text-cyan-300 bg-cyan-500/10"
               >
                 WL
               </Badge>
-            )}
-            {order.candidate_id && (
-              <span className="text-[9px] font-mono text-foreground/45">
-                #{order.candidate_id.slice(0, 8)}
-              </span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -318,37 +174,26 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Row 2: Status-specific info */}
         {isHunting ? (
-          <div className="flex items-center justify-between text-[12px]">
+          <div className="flex items-center justify-between text-[11px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
-              {nestedPoiEnforced
-                ? nestedPoi.complete
-                  ? "Nested POI touched — running fresh final authorization"
-                  : "Outer zone entered — awaiting frozen nested POI"
-                : waitingForRetracement
-                ? `CHoCH confirmed — waiting for ${retracementPlan.zone.type.replace(/_/g, " ")} [${Number(retracementPlan.zone.low).toFixed(5)} – ${Number(retracementPlan.zone.high).toFixed(5)}]`
-                : retracementReady
-                ? "Retracement reached — running fresh final authorization"
-                : `Price in zone — awaiting ${order.direction === "short" ? "bearish" : "bullish"} ${confirmationLabel}`}
+              Price in zone — waiting for {order.direction === "short" ? "bearish" : "bullish"} CHoCH on 5m
             </span>
-            <span className="text-foreground/60">
-              {stopLossLabel}: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+            <span className="text-muted-foreground">
+              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
               TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
           </div>
         ) : (
-          <div className="flex items-center justify-between text-[12px] text-foreground/70">
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
             <span>
               Current: <span className="text-foreground font-mono">{order.current_price ? Number(order.current_price).toFixed(5) : "—"}</span>
               {" · "}
-              <span className="text-info-c">
-                {getDistanceDisplay(order, nestedPoiEnforced ? "outer_zone" : "entry")} away
-                {nestedPoiEnforced ? " from outer zone" : ""}
-              </span>
+              <span className="text-info-c">{getDistanceDisplay(order)} away</span>
             </span>
             <span>
-              {stopLossLabel}: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
               TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
@@ -356,223 +201,38 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         )}
 
         {/* Row 3: Zone info */}
-        <div className="text-[12px] text-foreground/70">
+        <div className="text-[11px] text-muted-foreground">
           Zone: <span className={isHunting ? "text-warn" : "text-info-c"}>{order.entry_zone_type}</span>
           {" "}[{Number(order.entry_zone_low).toFixed(5)} – {Number(order.entry_zone_high).toFixed(5)}]
           {" · "}
-          Size: <span className="text-foreground">
-            {order.size == null ? "Calculated at final authorization" : `${order.size} lots`}
-          </span>
+          Size: <span className="text-foreground">{order.size} lots</span>
           {" · "}
           Score: <span className="text-foreground">{Number(order.signal_score).toFixed(1)}%</span>
         </div>
 
         {/* Narrative sentence */}
-        <p className="text-[11px] text-foreground/50 italic leading-tight">
-          {nestedPoiEnforced
-            ? isHunting
-              ? `The outer ${order.entry_zone_type} has been entered. ${nestedPoi.detail}. The broad zone cannot authorize entry by itself.`
-              : `The outer ${order.entry_zone_type} only arms this setup. ${nestedPoi.detail}.`
-            : waitingForRetracement
-            ? `The saved CHoCH is confirmed. Price must retrace into the frozen ${retracementPlan.zone.type.replace(/_/g, " ")} before final authorization.`
-            : retracementReady
-            ? "The frozen retracement was reached. Final authorization must pass before entry."
-            : isHunting
-            ? confirmation.structureLifecycleEnforced
-              ? `Price has entered the ${order.entry_zone_type} zone. The enforced structure lifecycle requires a later displaced close through its locked MSS/CHoCH break${confirmation.method === "indicators" || confirmation.method === "choch_and_indicators" ? " and indicator consensus" : ""} before entry.`
-              : `Price has entered the ${order.entry_zone_type} zone. The ${confirmationRequirement} rule must pass before entry.`
+        <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
+          {isHunting
+            ? `Price has entered the ${order.entry_zone_type} zone. Watching 5m candles for ${order.direction === "short" ? "bearish" : "bullish"} CHoCH confirmation before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2 text-[11px]">
-          <span className="text-foreground/70">
-            Zone stop policy / <span className="font-medium text-foreground">{zoneStopPolicyLabel}</span>
-          </span>
-          <span className={zoneStopPolicyAppliedAtArm ? "text-profit" : "text-foreground/50"}>
-            {zoneStopPolicyAppliedAtArm
-              ? `ENFORCED / ${zoneStopPolicyPlan?.executionFloorSource === "broker_snapshot" ? "broker constraints" : "arm-time spread proxy"} · Final SL recalculated at authorization`
-              : "OBSERVE ONLY"}
-          </span>
-        </div>
-
-        {authorizationWait && (
-          <div className="border border-highlight/30 bg-highlight/5 px-2 py-1.5 text-[11px] text-highlight">
-            Waiting for final entry conditions: {authorizationWait}
-          </div>
-        )}
-
-        {order.liquidity_confirmation_observation && (
-          <details className="border-t border-border/40 pt-2 text-[11px]">
-            <summary className="cursor-pointer text-foreground/70 font-medium">
-              Liquidity → structure observation · {order.liquidity_confirmation_observation.ready ? "SEQUENCE SEEN" : "WAITING"}
-              <span className="ml-2 text-[9px] text-highlight">OBSERVE ONLY</span>
-            </summary>
-            <div className="mt-1.5 space-y-1 text-foreground/60">
-              <p>{liquidityReason(order.liquidity_confirmation_observation.reasonCode)}</p>
-              <p className="text-[10px] text-muted-foreground">
-                This v2 observation records evidence only. It does not authorize or block this order.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-3 gap-y-1 font-mono text-[9px]">
-                <span>Touch: {order.liquidity_confirmation_observation.zoneTouchTime ? new Date(order.liquidity_confirmation_observation.zoneTouchTime).toLocaleString() : "pending"}</span>
-                <span>Sweep: {order.liquidity_confirmation_observation.sweepTime ? new Date(order.liquidity_confirmation_observation.sweepTime).toLocaleString() : "pending"}</span>
-                <span>Confirmation: {order.liquidity_confirmation_observation.confirmationTime ? new Date(order.liquidity_confirmation_observation.confirmationTime).toLocaleString() : "pending"}</span>
-              </div>
-            </div>
-          </details>
-        )}
-
-        {nestedPoi.route === "observe" && (
-          <div className="border-t border-border/40 pt-2 text-[11px] text-foreground/60">
-            <div className="font-medium text-foreground/70">
-              Nested POI observation <span className="ml-2 text-[9px] text-highlight">OBSERVE ONLY</span>
-            </div>
-            <p className="mt-1">{nestedPoi.detail}</p>
-          </div>
-        )}
-
-        {nestedPoiEnforced && order.impulse_entry_lifecycle?.confirmation && (
-          <details className="border-t border-border/40 pt-2 text-[11px]">
-            <summary className="cursor-pointer text-foreground/70 font-medium">
-              Nested POI market plan · {nestedPoi.complete
-                ? "TOUCHED"
-                : isHunting
-                ? "WAITING"
-                : "STARTS AFTER OUTER TOUCH"}
-              <span className="ml-2 text-[9px] text-warn">ENFORCED</span>
-            </summary>
-            <div className="mt-1.5 space-y-1 text-foreground/60">
-              <p>{nestedPoi.detail}</p>
-              <p className="text-[10px] text-muted-foreground">
-                Candidate <span className="font-mono">{order.impulse_entry_lifecycle.confirmation.candidateId.slice(0, 10)}</span> · current market price is used only after fresh final authorization.
-              </p>
-              <p className="text-[10px] text-muted-foreground">
-                {order.impulse_entry_lifecycle.lastTransitionReason}
-              </p>
-            </div>
-          </details>
-        )}
-
-        {!nestedPoiEnforced && order.impulse_entry_lifecycle?.confirmation && (
-          <details className="border-t border-border/40 pt-2 text-[11px]">
-            <summary className="cursor-pointer text-foreground/70 font-medium">
-              Structure confirmation plan · {(!isHunting && order.impulse_entry_lifecycle.confirmation.status === "building")
-                ? "STARTS AFTER TOUCH"
-                : order.impulse_entry_lifecycle.confirmation.status.replace(/_/g, " ").toUpperCase()}
-              <span className={`ml-2 text-[9px] ${order.impulse_entry_lifecycle.mode === "enforce" ? "text-warn" : "text-highlight"}`}>
-                {order.impulse_entry_lifecycle.mode === "enforce" ? "ENFORCED" : "OBSERVE ONLY"}
-              </span>
-            </summary>
-            <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-foreground/60">
-              <span>
-                Candidate: <strong className="font-mono text-foreground/80">
-                  {order.impulse_entry_lifecycle.confirmation.candidateId.slice(0, 10)}
-                </strong> · generation {order.impulse_entry_lifecycle.confirmation.generation}
-              </span>
-              <span>
-                Protected pivot: <strong className="font-mono text-foreground/80">
-                  {order.impulse_entry_lifecycle.confirmation.protectedLevel == null
-                    ? "Building"
-                    : Number(order.impulse_entry_lifecycle.confirmation.protectedLevel).toFixed(5)}
-                </strong>
-              </span>
-              <span>
-                CHoCH/MSS break: <strong className="font-mono text-foreground/80">
-                  {order.impulse_entry_lifecycle.confirmation.breakLevel == null
-                    ? "Building"
-                    : Number(order.impulse_entry_lifecycle.confirmation.breakLevel).toFixed(5)}
-                </strong>
-              </span>
-              <span>
-                Revisions: <strong className="font-mono text-foreground/80">
-                  {order.impulse_entry_lifecycle.confirmation.revisions?.length || 0}
-                </strong>
-              </span>
-              {order.impulse_entry_lifecycle.confirmation.status === "building" && buildingReason && (
-                <p className="sm:col-span-2 text-[10px] text-highlight">
-                  Waiting: {buildingReason}
-                </p>
-              )}
-              <p className="sm:col-span-2 text-[10px] text-muted-foreground">
-                {order.impulse_entry_lifecycle.lastTransitionReason}
-              </p>
-              {(order.impulse_entry_lifecycle.confirmation.revisions || []).slice(-3).reverse().map((revision) => (
-                <p key={revision.revision} className="sm:col-span-2 text-[9px] font-mono text-muted-foreground">
-                  r{revision.revision} · protected {Number(revision.protectedLevel).toFixed(5)} · break {Number(revision.breakLevel).toFixed(5)} · {revision.reason}
-                </p>
-              ))}
-            </div>
-          </details>
-        )}
-
-        {decision && (
-          <div className="border border-border/50 bg-background/30 p-2 space-y-1">
-            <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
-              <span className="text-muted-foreground">
-                GP v{decision.gamePlan?.version?.slice(0, 8) || "none"}
-              </span>
-              <span className={
-                decision.directionVerdict?.shouldBlock
-                  ? "text-loss"
-                  : "text-foreground"
-              }>
-                DV {(decision.directionVerdict?.verdict || "missing").toUpperCase()}
-                {Number.isFinite(Number(decision.directionVerdict?.confidence))
-                  ? ` ${Math.round(Number(decision.directionVerdict.confidence))}%`
-                  : ""}
-              </span>
-              <span className={
-                decision.thesisValidity?.valid === false
-                  ? "text-loss"
-                  : decision.thesisValidity?.valid === true
-                  ? "text-profit"
-                  : "text-highlight"
-              }>
-                Thesis {decision.thesisValidity?.valid === true
-                  ? "VALID"
-                  : decision.thesisValidity?.valid === false
-                  ? "INVALID"
-                  : "PENDING"}
-              </span>
-              <span className={
-                decision.entryConfirmation?.passed
-                  ? "text-profit"
-                  : "text-highlight"
-              }>
-                {nestedPoiEnforced ? "Nested POI" : "Confirmation"} {decision.entryConfirmation?.passed
-                  ? "PASSED"
-                  : nestedPoiEnforced
-                  ? "WAITING"
-                  : `WAITING (${confirmationLabel})`}
-              </span>
-            </div>
-            <p className="text-[9px] text-muted-foreground">
-              {decision.hierarchy?.reason ||
-                "Decision evidence will be refreshed before any fill."}
-            </p>
-          </div>
-        )}
-
         {/* Row 4: Expiry bar (only for watching stage) */}
         {!isHunting && (
           <div className="space-y-1">
-            <div className="flex items-center justify-between text-[11px]">
+            <div className="flex items-center justify-between text-[10px]">
               <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3 text-foreground/50" />
-                <span className={isExpiringSoon ? "text-warn" : "text-foreground/60"}>
+                <Clock className="w-3 h-3 text-muted-foreground" />
+                <span className={isExpiringSoon ? "text-warn" : "text-muted-foreground"}>
                   {getTimeRemaining(order.expires_at)}
                 </span>
               </div>
-              <span className="text-foreground/40">
+              <span className="text-muted-foreground/60">
                 {new Date(order.placed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
-            {order.from_watchlist && (
-              <p className="text-[10px] text-foreground/45">
-                Expiry is inherited from the original Watchlist setup and does not restart when this zone is pre-armed.
-              </p>
-            )}
-            <div className="h-1.5 bg-muted/30 rounded-full overflow-hidden">
+            <div className="h-1 bg-muted/30 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
                   isExpiringSoon ? "bg-amber-500" : "bg-blue-500"
@@ -585,16 +245,16 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Hunting stage: show confirmation info instead of expiry */}
         {isHunting && (
-          <div className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center justify-between text-[10px]">
             <div className="flex items-center gap-1">
               <Crosshair className="w-3 h-3 text-warn animate-pulse" />
               <span className="text-warn">
-                {nestedPoiEnforced ? "Nested trigger active" : "Confirmation active"} · {getTimeRemaining(order.expires_at)}
+                Confirmation active — no time limit
               </span>
             </div>
-            <span className="text-foreground/40">
-              {nestedPoiEnforced ? "Outer zone touched" : "Zone touched"}: {order.zone_touch_time
-                ? new Date(order.zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            <span className="text-muted-foreground/60">
+              Zone touched: {(order as any).zone_touch_time
+                ? new Date((order as any).zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                 : "just now"
               }
             </span>
@@ -630,48 +290,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         </Button>
       </div>
 
-      {loadWarning && (
-        <div className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-warn">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>{loadWarning}</span>
-        </div>
-      )}
-
       {/* Active Zone Setups */}
       {orders.length === 0 ? (
-        loadWarning ? null : (
-          <div className="text-xs text-foreground/50 py-2 text-center">
-            No active zone setups. When the bot identifies an impulse zone entry, it will appear here.
-          </div>
-        )
+        <div className="text-xs text-muted-foreground/60 py-2 text-center">
+          No active zone setups. When the bot identifies an impulse zone entry, it will appear here.
+        </div>
       ) : (
         <div className="space-y-3">
-          {reconciliationOrders.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
-                <AlertTriangle className="w-3 h-3" />
-                Broker Reconciliation ({reconciliationOrders.length})
-              </div>
-              {reconciliationOrders.map((order) => renderOrderCard(order, true))}
-            </div>
-          )}
-
-          {retracementOrders.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
-                <Crosshair className="w-3 h-3" />
-                Waiting for Retracement ({retracementOrders.length})
-              </div>
-              {retracementOrders.map((order) => renderOrderCard(order, true))}
-            </div>
-          )}
-
           {/* Hunting section (higher priority) */}
           {huntingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[10px] text-warn uppercase tracking-wider font-semibold">
                 <Crosshair className="w-3 h-3" />
-                {huntingHeading} ({huntingOrders.length})
+                Hunting Confirmation ({huntingOrders.length})
               </div>
               {huntingOrders.map((order) => renderOrderCard(order, true))}
             </div>
@@ -680,7 +311,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {/* Watching section */}
           {watchingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-info-c uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[10px] text-info-c uppercase tracking-wider font-semibold">
                 <Eye className="w-3 h-3" />
                 Watching — Waiting for Zone ({watchingOrders.length})
               </div>
@@ -695,7 +326,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         <div className="pt-1">
           <button
             onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center gap-1 text-[11px] text-foreground/50 hover:text-foreground/70 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
           >
             {showHistory ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             {showHistory ? "Hide" : "Show"} setup history ({history.length})
@@ -703,17 +334,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
           {showHistory && (
             <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto">
-              {history.map((order) => (
+              {history.slice(0, 20).map((order) => (
                 <div
                   key={order.order_id}
-                  className="flex items-center justify-between text-[12px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
+                  className="flex items-center justify-between text-[11px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
                 >
                   <div className="flex items-center gap-2">
                     {statusIcon(order.status)}
                     <span className="font-mono text-foreground">{order.symbol}</span>
                     <Badge
                       variant="outline"
-                      className={`text-[10px] px-1 py-0 ${
+                      className={`text-[9px] px-1 py-0 ${
                         order.direction === "long"
                           ? "border-success/30 text-profit"
                           : "border-destructive/30 text-loss"
@@ -721,22 +352,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                     >
                       {order.direction.toUpperCase()}
                     </Badge>
-                    <span className="text-foreground/60">@ {Number(order.entry_price).toFixed(5)}</span>
+                    <span className="text-muted-foreground">@ {Number(order.entry_price).toFixed(5)}</span>
                   </div>
-                  <div className="flex max-w-[65%] flex-col items-end gap-0.5 text-right">
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <span className={`capitalize ${statusColor(order.status)}`}>
                       {order.status === "filled" ? "confirmed" : order.status}
                     </span>
-                    <span className="text-foreground/40">
+                    <span className="text-muted-foreground/50">
                       {order.resolved_at
                         ? new Date(order.resolved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                         : ""}
                     </span>
-                    </div>
-                    {order.cancel_reason && (
-                      <span className="text-[11px] leading-snug text-loss/90">{order.cancel_reason}</span>
-                    )}
                   </div>
                 </div>
               ))}

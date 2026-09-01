@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { applyRecommendationToConfig } from "@/lib/applyRecommendation";
 import { BotConfigModal } from "@/components/BotConfigModal";
-import { OverflowText } from "@/components/ui/overflow-text";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -105,12 +104,7 @@ const assessmentConfig: Record<string, { color: string; icon: React.ReactNode; l
   losing: { color: "text-loss", icon: <TrendingDown className="w-3.5 h-3.5" />, label: "LOSING" },
   breakeven: { color: "text-highlight", icon: <Minus className="w-3.5 h-3.5" />, label: "BREAKEVEN" },
   insufficient_data: { color: "text-muted-foreground", icon: <Clock className="w-3.5 h-3.5" />, label: "INSUFFICIENT DATA" },
-  analysis: { color: "text-primary", icon: <Brain className="w-3.5 h-3.5" />, label: "ANALYSIS" },
 };
-
-function assessmentDisplay(value: string) {
-  return assessmentConfig[value] || assessmentConfig.analysis;
-}
 
 const categoryIcons: Record<string, React.ReactNode> = {
   stop_loss: <Shield className="w-3.5 h-3.5" />,
@@ -164,7 +158,7 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "maxPerSymbol": { label: "Max Per Symbol", tab: "risk", search: "per symbol" },
   "fixedLotSize": { label: "Fixed Lot Size", tab: "risk", search: "lot size" },
   "confluenceThreshold": { label: "Confluence Threshold", tab: "strategy", search: "confluence threshold" },
-  "tier1Minimum": { label: "Legacy Core-Factor Minimum", tab: "strategy", search: "legacy core score" },
+  "tier1Minimum": { label: "Tier 1 Minimum", tab: "strategy", search: "tier" },
   "fixedSLPips": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
   "SL": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
   "fixedTPPips": { label: "Take Profit (pips)", tab: "entry_exit", search: "take profit" },
@@ -227,7 +221,8 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "htfBiasHardVeto": { label: "HTF Bias Hard Veto", tab: "strategy", search: "HTF bias" },
   "requireHTFBias": { label: "Require HTF Bias", tab: "strategy", search: "HTF bias" },
   "normalizedScoring": { label: "Normalized Scoring", tab: "strategy", search: "normalized" },
-  "dealingRangeMode": { label: "Premium/Discount Entry Rule", tab: "strategy", search: "HTF premium discount range" },
+  "onlyBuyInDiscount": { label: "Only Buy in Discount Zone", tab: "strategy", search: "discount" },
+  "onlySellInPremium": { label: "Only Sell in Premium Zone", tab: "strategy", search: "premium" },
   "useOrderBlocks": { label: "Use Order Blocks", tab: "strategy", search: "order block" },
   "useFVG": { label: "Use Fair Value Gaps", tab: "strategy", search: "FVG" },
   "useBreakerBlocks": { label: "Use Breaker Blocks", tab: "strategy", search: "breaker" },
@@ -750,13 +745,9 @@ function FactorSuggestionsTable({ suggestions }: { suggestions: PerformanceSumma
 
 interface RecommendationsDashboardProps {
   botId: string;
-  defaultReviewMode?: "on_demand" | "daily" | "weekly";
 }
 
-export function RecommendationsDashboard({
-  botId,
-  defaultReviewMode = "on_demand",
-}: RecommendationsDashboardProps) {
+export function RecommendationsDashboard({ botId }: RecommendationsDashboardProps) {
   const queryClient = useQueryClient();
   const [expandedReview, setExpandedReview] = useState<string | null>(null);
 
@@ -1105,39 +1096,38 @@ export function RecommendationsDashboard({
   });
   // Trigger manual review
   const triggerReviewMutation = useMutation({
-    mutationFn: async (reviewType: "on_demand" | "daily" | "weekly") => {
+    mutationFn: async (reviewType: "daily" | "weekly") => {
+      const funcName = reviewType === "daily" ? "bot-daily-review" : "bot-weekly-advisor";
       const mappedBotId = botId === "fotsi" ? "fotsi_mr" : "smc";
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError || !authData.user) throw new Error("Not signed in");
       const toastId = toast.loading(
-        `Running ${reviewType === "on_demand" ? "evidence" : reviewType} review... The Advisor is analyzing your data.`
+        `Running ${reviewType} review... AI is analyzing your trades, this may take 30-60s.`
       );
       try {
-        const { data, error } = await supabase.functions.invoke("advisor", {
-          body: { mode: reviewType, bot_id: mappedBotId, user_id: authData.user.id },
+        const { data, error } = await supabase.functions.invoke(funcName, {
+          body: { bot_id: mappedBotId },
         });
         if (error) throw error;
-        if (data?.success === false || Number(data?.failed || 0) > 0) {
-          const detailError = data?.details?.find((detail: { error?: string }) => detail.error)?.error;
-          throw new Error(data.error || detailError || "Advisor review could not complete");
+        // Function returns 200 even when LLM fails internally — only treat
+        // explicit error/failure statuses as failures. Values like
+        // "losing"/"winning"/"breakeven" are assessment labels, not errors.
+        const results: Array<{ status?: string }> = data?.results || [];
+        const failed = results.find(r =>
+          typeof r.status === "string" &&
+          /^(error|failed|failure|llm_error|exception)$/i.test(r.status)
+        );
+        if (failed) {
+          throw new Error(`Review could not complete: ${failed.status}`);
         }
-        if (reviewType === "on_demand" && !data?.result && !data?.skipped) {
-          throw new Error("Not enough resolved trade or Shadow Evidence data for a review yet");
-        }
-        return { reviewType, toastId, skipped: data?.skipped === true };
+        return { reviewType, toastId };
       } catch (err) {
         toast.dismiss(toastId);
         throw err;
       }
     },
-    onSuccess: ({ reviewType, toastId, skipped }) => {
+    onSuccess: ({ reviewType, toastId }) => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
-      if (skipped) {
-        toast.info("A fresh evidence review already exists. Showing that review instead.", { id: toastId });
-        return;
-      }
       toast.success(
-        `${reviewType === "on_demand" ? "Evidence" : reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
+        `${reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
         { id: toastId }
       );
     },
@@ -1172,7 +1162,7 @@ export function RecommendationsDashboard({
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-primary" />
           <span className="text-[11px] font-bold uppercase tracking-wider text-foreground">
-            Advisor
+            AI Strategy Advisor
           </span>
           {pending.length > 0 && (
             <Badge variant="destructive" className="text-[9px] px-1.5 py-0 h-4">
@@ -1180,21 +1170,7 @@ export function RecommendationsDashboard({
             </Badge>
           )}
         </div>
-        <div className="flex flex-wrap justify-end gap-1.5">
-          <Button
-            size="sm"
-            variant={defaultReviewMode === "on_demand" ? "default" : "outline"}
-            className="h-6 text-[10px] px-2"
-            onClick={() => triggerReviewMutation.mutate("on_demand")}
-            disabled={triggerReviewMutation.isPending}
-          >
-            {triggerReviewMutation.isPending ? (
-              <Clock className="w-3 h-3 mr-1 animate-spin" />
-            ) : (
-              <Brain className="w-3 h-3 mr-1" />
-            )}
-            Review Evidence
-          </Button>
+        <div className="flex gap-1.5">
           <Button
             size="sm"
             variant="outline"
@@ -1311,7 +1287,7 @@ export function RecommendationsDashboard({
               size="sm"
               variant="default"
               className="h-7 text-[10px]"
-              onClick={() => triggerReviewMutation.mutate(defaultReviewMode)}
+              onClick={() => triggerReviewMutation.mutate("daily")}
               disabled={triggerReviewMutation.isPending}
             >
               {triggerReviewMutation.isPending ? (
@@ -1334,7 +1310,7 @@ export function RecommendationsDashboard({
             Pending Review ({pending.length})
           </span>
           {pending.map(review => {
-            const assessment = assessmentDisplay(review.overall_assessment);
+            const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
             const isExpanded = expandedReview === review.id;
 
             return (
@@ -1344,7 +1320,7 @@ export function RecommendationsDashboard({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/30">
-                        {review.review_type === "on_demand" ? "EVIDENCE" : review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
+                        {review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
                       </Badge>
                       <span className={`flex items-center gap-1 text-[11px] font-bold ${assessment.color}`}>
                         {assessment.icon} {assessment.label}
@@ -1457,7 +1433,7 @@ export function RecommendationsDashboard({
             History ({resolved.length})
           </span>
           {resolved.map(review => {
-            const assessment = assessmentDisplay(review.overall_assessment);
+            const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
             const statusBadge = review.status === "approved"
               ? { color: "bg-badge-profit text-profit border-success/30", label: "APPROVED" }
               : { color: "bg-muted text-muted-foreground border-border", label: "DISMISSED" };
@@ -1472,7 +1448,7 @@ export function RecommendationsDashboard({
                         {statusBadge.label}
                       </Badge>
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4">
-                        {review.review_type === "on_demand" ? "EVIDENCE" : review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
+                        {review.review_type === "weekly" ? "WEEKLY" : "DAILY"}
                       </Badge>
                       <span className={`flex items-center gap-1 text-[10px] ${assessment.color}`}>
                         {assessment.icon} {assessment.label}
@@ -1480,11 +1456,7 @@ export function RecommendationsDashboard({
                     </div>
                     <span className="text-[9px] text-muted-foreground">{timeAgo(review.created_at)}</span>
                   </div>
-                  <OverflowText
-                    text={review.diagnosis}
-                    lines={2}
-                    className="block text-[10px] leading-relaxed text-muted-foreground"
-                  />
+                  <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-2">{review.diagnosis}</p>
 
                   <button
                     onClick={() => setExpandedReview(isExpanded ? null : review.id)}

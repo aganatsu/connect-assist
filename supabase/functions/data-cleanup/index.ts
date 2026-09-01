@@ -4,24 +4,13 @@
 // Retention rules:
 // - scan_logs: delete rows older than 30 days
 // - close_audit_log: delete rows older than 30 days
-// - stop_policy_observations: delete rows older than the named 90-day evidence window
 // - paper_trade_history: archive rows older than 90 days to trade_archive
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyCronCaller } from "../_shared/cronAuth.ts";
-import {
-  buildCompactSummary,
-  type EvidenceRow,
-} from "../_shared/zoneTimeframeEvidence.ts";
-import { STOP_POLICY_EVIDENCE_RETENTION_DAYS } from "../_shared/stopPolicyEvidence.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-
-  // Gate 0: Only the cron scheduler may invoke this function.
-  const authError = verifyCronCaller(req);
-  if (authError) return authError;
 
   try {
     const supabase = createClient(
@@ -39,25 +28,6 @@ Deno.serve(async (req) => {
       .lt("scanned_at", thirtyDaysAgo);
     if (slErr) console.error("[data-cleanup] scan_logs error:", slErr.message);
     results.scan_logs_deleted = scanLogsDeleted || 0;
-
-    const { count: candleSnapshotsDeleted, error: candleSnapshotErr } = await supabase
-      .from("scan_candle_snapshots")
-      .delete({ count: "exact" })
-      .lt("created_at", thirtyDaysAgo);
-    if (candleSnapshotErr) console.error("[data-cleanup] scan_candle_snapshots error:", candleSnapshotErr.message);
-    results.scan_candle_snapshots_deleted = candleSnapshotsDeleted || 0;
-
-    const stopPolicyCutoff = new Date(
-      Date.now() - STOP_POLICY_EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    const { count: stopPolicyDeleted, error: stopPolicyError } = await supabase
-      .from("stop_policy_observations")
-      .delete({ count: "exact" })
-      .lt("created_at", stopPolicyCutoff);
-    if (stopPolicyError) {
-      console.error("[data-cleanup] stop_policy_observations error:", stopPolicyError.message);
-    }
-    results.stop_policy_observations_deleted = stopPolicyDeleted || 0;
 
     // 2. Delete close_audit_log older than 30 days
     const { count: auditDeleted, error: alErr } = await supabase
@@ -103,92 +73,6 @@ Deno.serve(async (req) => {
     }
 
     console.log("[data-cleanup] Results:", JSON.stringify(results));
-
-    // 4. Zone timeframe evidence — adaptive retention.
-    //    Raw payloads: 30 days, or 90 days when linked to a setup, trade,
-    //    lifecycle event, disagreement or golden replay. Compact summaries
-    //    preserve lineage indefinitely.
-    try {
-      const linkedFilter =
-        "linked_setup_id.not.is.null,linked_trade_id.not.is.null,event_linked.eq.true,has_disagreement.eq.true,golden_replay_linked.eq.true";
-      const routineFilter =
-        "linked_setup_id.is.null,linked_trade_id.is.null,event_linked.eq.false,has_disagreement.eq.false,golden_replay_linked.eq.false";
-      let compacted = 0;
-      let batches = 0;
-      const maxBatches = 20;
-      const batchSize = 500;
-
-      while (batches < maxBatches) {
-        const { data: expiring, error: expErr } = await supabase
-          .from("zone_timeframe_evidence")
-          .select("*")
-          .or(
-            `and(observed_at.lt.${thirtyDaysAgo},${routineFilter}),`
-            + `and(observed_at.lt.${ninetyDaysAgo},or(${linkedFilter}))`,
-          )
-          .order("observed_at", { ascending: true })
-          .limit(batchSize);
-        if (expErr) throw new Error(expErr.message);
-        if (!expiring || expiring.length === 0) break;
-
-        const summaries = expiring.map((row: EvidenceRow) => ({
-          evidence_id: row.id,
-          user_id: row.user_id,
-          bot_id: row.bot_id,
-          symbol: row.symbol,
-          direction: row.direction,
-          scan_cycle_id: row.scan_cycle_id,
-          observed_at: row.observed_at,
-          parent_evidence_id: row.parent_evidence_id ?? null,
-          evidence_source: row.evidence_source,
-          contract_version: row.contract_version ?? null,
-          trading_style: row.trading_style ?? null,
-          style_policy_version: row.style_policy_version ?? null,
-          style_base_policy_hash: row.style_base_policy_hash ?? null,
-          style_policy_hash: row.style_policy_hash ?? null,
-          style_policy_snapshot: row.style_policy_snapshot ?? null,
-          canonical_detector_version:
-            row.canonical_detector_version ?? null,
-          canonical_parity: row.canonical_parity ?? null,
-          pending_order_id: row.pending_order_id ?? null,
-          confirmation_attempt: row.confirmation_attempt ?? 0,
-          event_linked: row.event_linked ?? false,
-          has_disagreement: row.has_disagreement ?? false,
-          golden_replay_linked: row.golden_replay_linked ?? false,
-          ...buildCompactSummary(row),
-        }));
-        const { error: sumErr } = await supabase
-          .from("zone_timeframe_evidence_summary")
-          .upsert(summaries, { onConflict: "evidence_id", ignoreDuplicates: true });
-        if (sumErr) throw new Error(sumErr.message);
-        const { count: evidenceDeleted, error: delEvErr } = await supabase
-          .from("zone_timeframe_evidence")
-          .delete({ count: "exact" })
-          .in("id", expiring.map((r: any) => r.id));
-        if (delEvErr) throw new Error(delEvErr.message);
-        compacted += evidenceDeleted || 0;
-        batches++;
-        if (expiring.length < batchSize) break;
-      }
-      results.zone_evidence_compacted = compacted;
-      results.zone_evidence_compaction_batches = batches;
-      results.zone_evidence_backlog_possible = batches === maxBatches;
-
-      const { count: countersDeleted, error: counterErr } = await supabase
-        .from("zone_confirmation_evidence_counters")
-        .delete({ count: "exact" })
-        .lt("updated_at", ninetyDaysAgo);
-      if (counterErr) throw new Error(counterErr.message);
-      results.zone_confirmation_counters_deleted = countersDeleted || 0;
-    } catch (evErr: any) {
-      console.error("[data-cleanup] zone_timeframe_evidence error:", evErr?.message);
-      results.zone_evidence_error = evErr?.message;
-    }
-
-    console.log("[data-cleanup] Evidence retention:", JSON.stringify({
-      compacted: results.zone_evidence_compacted,
-      error: results.zone_evidence_error ?? null,
-    }));
 
     return new Response(JSON.stringify({ success: true, ...results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

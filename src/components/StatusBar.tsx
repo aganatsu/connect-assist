@@ -2,27 +2,21 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Wifi, WifiOff } from "lucide-react";
 import { paperApi } from "@/lib/api";
-import { readExecutionMode, type ExecutionModeState } from "@/lib/executionMode";
-
-export function getExecutionMode(status: any): ExecutionModeState {
-  return readExecutionMode(status);
-}
 
 export function StatusBar() {
   const [time, setTime] = useState(new Date());
   const [online, setOnline] = useState(navigator.onLine);
 
-  const { data: status, isPending: statusPending, isError: statusError, error } = useQuery({
+  const { data: status } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 10000,
     retry: false,
   });
 
-  const executionMode = statusPending || statusError ? "unknown" : getExecutionMode(status);
-  const openPositions = executionMode === "unknown" ? null : status.positions.length;
+  const executionMode = status?.account?.execution_mode || "paper";
+  const openPositions = status?.positions?.length ?? 0;
   const isLive = executionMode === "live";
-  const modeLabel = executionMode === "unknown" ? "STATUS UNKNOWN" : executionMode === "live" ? "LIVE MODE" : "PAPER MODE";
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 60000);
@@ -47,13 +41,10 @@ export function StatusBar() {
             <><WifiOff className="h-2.5 w-2.5 text-destructive" /><span className="hidden sm:inline"> Disconnected</span></>
           )}
         </span>
-        <span
-          className={`font-medium ${executionMode === "unknown" ? "text-warning" : isLive ? "text-destructive" : "text-warning"}`}
-          title={executionMode === "unknown" ? (error instanceof Error ? error.message : "Trading account status is unavailable") : undefined}
-        >
-          {modeLabel}
+        <span className={`font-medium ${isLive ? "text-destructive" : "text-warning"}`}>
+          {isLive ? "LIVE" : "PAPER"}<span className="hidden sm:inline"> MODE</span>
         </span>
-        {openPositions !== null && openPositions > 0 && (
+        {openPositions > 0 && (
           <span className="text-muted-foreground">{openPositions} open</span>
         )}
       </div>

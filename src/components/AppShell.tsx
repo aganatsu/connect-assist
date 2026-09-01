@@ -19,10 +19,11 @@ export function AppShell({ children }: AppShellProps) {
 
   if (isMobile) {
     return (
-      <div className="h-screen h-[100dvh] flex flex-col max-w-full overflow-hidden">
+      <div className="h-screen flex flex-col max-w-full overflow-hidden">
+        {/* Mobile search overlay */}
         {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} mobile />}
         <MobileTopBar />
-        <main className="flex-1 w-full max-w-full min-w-0 px-2.5 py-3 overflow-y-auto overflow-x-hidden overscroll-x-none touch-pan-y pb-[calc(5rem+env(safe-area-inset-bottom))]">
+        <main className="flex-1 w-full max-w-full min-w-0 px-3 py-3 overflow-y-auto overflow-x-hidden overscroll-x-none touch-pan-y pb-20">
           {children}
         </main>
         <MobileNav onSearchToggle={toggleSearch} />

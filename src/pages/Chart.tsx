@@ -1,8 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
 import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
@@ -28,13 +26,8 @@ function getRefreshInterval(tf: Timeframe): number {
 }
 
 export default function Chart() {
-  const [searchParams] = useSearchParams();
-  const requestedSymbol = searchParams.get('symbol');
-  const [selectedSymbol, setSelectedSymbol] = useState(() =>
-    requestedSymbol && INSTRUMENTS.some((instrument) => instrument.symbol === requestedSymbol) ? requestedSymbol : 'EUR/USD'
-  );
+  const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('4h');
-  const [chartMode, setChartMode] = useState<'evidence' | 'live'>('evidence');
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelMode, setPanelMode] = useState<'context' | 'detail'>('context');
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
@@ -52,10 +45,8 @@ export default function Chart() {
     if (overlayVisibility.fvg) s.add('fvgs');
     if (overlayVisibility.sp) s.add('swingPoints');
     if (overlayVisibility.liq) s.add('liquidity');
-    if (overlayVisibility.bsl) s.add('bslSsl');
     if (overlayVisibility.fib) s.add('fibs');
     if (overlayVisibility.sr) { s.add('support'); s.add('resistance'); }
-    if (overlayVisibility.ipda) s.add('ipda');
     if (overlayVisibility.bos) s.add('bosChoch');
     if (overlayVisibility.disp) s.add('displacement');
     if (overlayVisibility.judas) s.add('judasSwing');
@@ -91,34 +82,29 @@ export default function Chart() {
   });
 
   const { data: candleData } = useQuery({
-    queryKey: ['chart-candles', chartMode, selectedSymbol, selectedTimeframe],
-    queryFn: () => chartMode === 'evidence'
-      ? marketApi.botEvidenceCandles(selectedSymbol, selectedTimeframe)
-      : marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 500),
+    queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
+    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 500),
     staleTime: refreshInterval / 2,
     refetchInterval: refreshInterval,
   });
   const candles = candleData?.candles;
   const candleSource: CandleSource = candleData?.source ?? "unknown";
-  const candleScanCycleId = (candleData as any)?.scanCycleId as string | null | undefined;
 
   const { data: dailyCandles } = useQuery({
-    queryKey: ['chart-daily', chartMode, selectedSymbol],
-    queryFn: async () => chartMode === 'evidence'
-      ? (await marketApi.botEvidenceCandles(selectedSymbol, '1day')).candles
-      : marketApi.candles(selectedSymbol, '1day', 30),
+    queryKey: ['chart-daily', selectedSymbol],
+    queryFn: () => marketApi.candles(selectedSymbol, '1day', 30),
     staleTime: 300000,
   });
 
   const { data: analysis } = useQuery({
-    queryKey: ['chart-smc', chartMode, selectedSymbol, candles?.length],
+    queryKey: ['chart-smc', selectedSymbol, candles?.length],
     queryFn: () => smcApi.fullAnalysis(candles!, dailyCandles),
     enabled: !!candles && candles.length > 0,
     staleTime: refreshInterval / 2,
     refetchInterval: refreshInterval,
   });
 
-  const { data: paperStatus, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
+  const { data: paperStatus } = useQuery({
     queryKey: ['paper-status'],
     queryFn: () => paperApi.status(),
     staleTime: 30000,
@@ -136,9 +122,8 @@ export default function Chart() {
         .maybeSingle();
       if (error) throw error;
       const details = Array.isArray(data?.details_json) ? data.details_json : [];
-      const meta = (details as any[]).find((d) => d?.__meta);
       const match = (details as any[]).find((d) => d?.pair === selectedSymbol);
-      return match ? { signal: match, scannedAt: data?.scanned_at as string, scanCycleId: meta?.scanCycleId ?? null } : null;
+      return match ? { signal: match, scannedAt: data?.scanned_at as string } : null;
     },
     refetchInterval: 30000,
     staleTime: 25000,
@@ -146,10 +131,9 @@ export default function Chart() {
 
   const session = getCurrentSession();
   const kz = isInKillzone();
-  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!paperStatus;
-  const balance = accountStatusKnown ? Number(paperStatus.balance) : null;
+  const balance = paperStatus?.balance ?? 10000;
   const riskPct = 1.5;
-  const riskAmount = balance === null ? null : balance * (riskPct / 100);
+  const riskAmount = balance * (riskPct / 100);
 
   const bias = analysis?.bias || 'neutral';
   const structure = analysis?.structure || {};
@@ -170,8 +154,7 @@ export default function Chart() {
 
     // Build impulse zone from bot scan signal if available
     let impulseZone: SMCOverlays["impulseZone"] = undefined;
-    const evidenceMatchesScan = chartMode !== "evidence" || !candleScanCycleId || candleScanCycleId === botScanSignal?.scanCycleId;
-    const sig = evidenceMatchesScan ? botScanSignal?.signal : null;
+    const sig = botScanSignal?.signal;
     if (sig?.impulseZone?.hasZone && sig.impulseZone.impulse) {
       const iz = sig.impulseZone;
       impulseZone = {
@@ -188,7 +171,7 @@ export default function Chart() {
       };
     }
 
-    const htfPOIs = sig?.htfPOIs?.map((p: any) => ({
+    const htfPOIs = botScanSignal?.signal?.htfPOIs?.map((p: any) => ({
       timeframe: p.timeframe, type: p.type, high: p.high, low: p.low, direction: p.direction,
     })) ?? [];
 
@@ -248,45 +231,18 @@ export default function Chart() {
     }
 
     return {
-      orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).map((ob: any) => ({
-        high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type, state: ob.state,
+      orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
+        high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
       })) : [],
-      fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).map((f: any) => ({
-        high: f.high, low: f.low, datetime: f.datetime, direction: f.type, state: f.state, fillPercent: f.fillPercent,
+      fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
+        high: f.high, low: f.low, datetime: f.datetime, direction: f.type,
       })) : [],
       swingPoints: overlayVisibility.sp ? (analysis.structure?.swingPoints || []).map((sp: any) => ({
         price: sp.price, index: sp.index, type: sp.type, datetime: sp.datetime,
       })) : [],
       liquidityPools: overlayVisibility.liq ? (analysis.liquidityPools || []).map((lp: any) => ({
-        price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept, state: lp.state,
+        price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept,
       })) : [],
-      // BSL/SSL: derive from scanner chartOverlays liquidity pools (directional)
-      bslSsl: overlayVisibility.bsl ? (() => {
-        const scannerLPs = botScanSignal?.signal?.chartOverlays?.liquidityPools || [];
-        return scannerLPs.map((lp: any) => ({
-          price: lp.price,
-          type: lp.direction === 'bullish' || lp.direction === 'bsl' ? 'bsl' : 'ssl',
-          strength: lp.strength,
-          swept: lp.state === 'swept_rejected' || lp.state === 'swept_absorbed',
-          state: lp.state,
-        }));
-      })() : [],
-      // IPDA: from scanner dailyEntities premiumDiscount + fib levels
-      ipda: overlayVisibility.ipda ? (() => {
-        const dailyEnts = botScanSignal?.signal?.chartOverlays?.dailyEntities;
-        const pd = dailyEnts?.premiumDiscount;
-        const fibs = dailyEnts?.fibLevels;
-        if (pd && fibs?.swingHigh && fibs?.swingLow) {
-          return {
-            swingHigh: fibs.swingHigh,
-            swingLow: fibs.swingLow,
-            currentZone: pd.currentZone,
-            zonePercent: pd.zonePercent,
-            oteZone: pd.oteZone ?? false,
-          };
-        }
-        return null;
-      })() : null,
       fibLevels: computedFibLevels,
       fiftyPercentLevel: computedFiftyPercent,
       keySupport: computedSupport?.length ? computedSupport : undefined,
@@ -304,12 +260,8 @@ export default function Chart() {
         index: d.index, direction: d.direction, bodyRatio: d.bodyRatio, rangeMultiple: d.rangeMultiple,
       })) : [],
       judasSwing: overlayVisibility.judas ? (analysis.judasSwing ?? null) : null,
-      // Pass breaker state for lifecycle coloring
-      breakerBlocks: (analysis.breakerBlocks || []).map((bb: any) => ({
-        high: bb.high, low: bb.low, datetime: bb.datetime, direction: bb.type, state: bb.state,
-      })),
     };
-  }, [analysis, botScanSignal, candleData, candleScanCycleId, chartMode, overlayVisibility, candles]);
+  }, [analysis, botScanSignal, overlayVisibility, candles]);
 
   // Layer detail tooltips
   const layerDetails = useMemo(() => ({
@@ -317,23 +269,11 @@ export default function Chart() {
     fvg: activeFVGs.length > 0 ? `${activeFVGs.length} unfilled` : 'none',
     sp: `${(analysis?.structure?.swingPoints || []).length} points`,
     liq: `${(analysis?.liquidityPools || []).length} pools`,
-    bsl: (() => {
-      const lps = botScanSignal?.signal?.chartOverlays?.liquidityPools || [];
-      const bslCount = lps.filter((l: any) => l.direction === 'bullish' || l.direction === 'bsl').length;
-      const sslCount = lps.length - bslCount;
-      return lps.length > 0 ? `${bslCount} BSL, ${sslCount} SSL` : 'no scan data';
-    })(),
     fib: analysis?.structure?.swingPoints?.length ? '5 levels' : 'no swings',
     iz: botScanSignal?.signal?.impulseZone?.hasZone ? `${botScanSignal.signal.impulseZone.selectedTF} zone` : 'no signal',
     sr: pdLevels ? 'PDH/PDL/PWH/PWL/DO/WO' : 'loading',
     bos: `${(analysis?.structure?.bos || []).length} BOS, ${(analysis?.structure?.choch || []).length} CHoCH`,
     disp: `${(analysis?.extendedFactors?.displacement?.displacementCandles || []).length} candles`,
-    ipda: (() => {
-      const dailyEnts = botScanSignal?.signal?.chartOverlays?.dailyEntities;
-      const pd = dailyEnts?.premiumDiscount;
-      if (pd) return `${pd.currentZone} (${pd.zonePercent?.toFixed(0)}%)${pd.oteZone ? ' — in OTE' : ''}`;
-      return 'no scan data';
-    })(),
     judas: analysis?.judasSwing?.detected ? `${analysis.judasSwing.type} ${analysis.judasSwing.confirmed ? '(confirmed)' : '(unconfirmed)'}` : 'none',
     sessions: 'Asian/London/NY boxes',
     killZones: 'London 02-05 / NY 08:30-12',
@@ -341,15 +281,7 @@ export default function Chart() {
 
   return (
     <AppShell>
-      <WorkspacePage layout="canvas">
-        <WorkspaceHeader
-          icon={Activity}
-          eyebrow="Market workspace"
-          title="SMC Chart"
-          actions={<span className="workspace-page__action font-mono">{selectedSymbol} · {selectedTimeframe}</span>}
-        />
-        <WorkspaceBody padded={false}>
-      <div className="flex h-full min-h-0 flex-col gap-0 lg:flex-row">
+      <div className="flex flex-col lg:flex-row gap-0 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* ═══════ Chart Area ═══════ */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top toolbar */}
@@ -369,10 +301,6 @@ export default function Chart() {
               ))}
             </div>
             <div className="ml-auto flex items-center gap-2 text-[10px] flex-wrap">
-              <div className="inline-flex border border-border rounded-sm overflow-hidden">
-                <button onClick={() => setChartMode("evidence")} className={chartMode === "evidence" ? "px-2 py-1 bg-primary text-primary-foreground" : "px-2 py-1 bg-card text-muted-foreground"}>Bot Evidence</button>
-                <button onClick={() => setChartMode("live")} className={chartMode === "live" ? "px-2 py-1 bg-primary text-primary-foreground" : "px-2 py-1 bg-card text-muted-foreground"}>Live Broker</button>
-              </div>
               <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
@@ -394,20 +322,19 @@ export default function Chart() {
             <SMCChart
               candles={(candles as any[]) ?? []}
               symbol={selectedSymbol}
-              overlays={chartMode === "evidence" ? chartOverlays : undefined}
+              overlays={chartOverlays}
               loading={!candles}
               hideToolbar
               visibleLayers={smcVisibleLayers}
             />
-            {chartMode === "evidence" && candles?.length === 0 && <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground pointer-events-none">No Bot Evidence snapshot yet. Run a complete scan for this pair and timeframe.</div>}
             {/* Floating HUD */}
-            {chartMode === "evidence" ? <ChartOverlayHUD
+            <ChartOverlayHUD
               visibility={overlayVisibility}
               onToggle={toggleOverlay}
               confluenceScore={unified?.total}
               direction={unified?.direction === 'BUY' ? 'bullish' : unified?.direction === 'SELL' ? 'bearish' : 'neutral'}
               layerDetails={layerDetails}
-            /> : <div className="absolute top-3 left-3 px-2 py-1 bg-card/90 border border-border text-[10px] text-muted-foreground">Live broker candles · bot evidence overlays hidden</div>}
+            />
           </div>
         </div>
 
@@ -626,12 +553,11 @@ export default function Chart() {
                     </AccordionTrigger>
                     <AccordionContent className="px-3 pb-2">
                       <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
-                        {!accountStatusKnown && <p className="pb-1 text-warning">Account status unavailable; risk amounts are not calculated.</p>}
-                        <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">{balance === null ? "—" : "$" + balance.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">${balance.toFixed(2)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Risk %</span><span className="font-mono">{riskPct}%</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">{riskAmount === null ? "—" : "$" + riskAmount.toFixed(2)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">{riskAmount === null ? "—" : "$" + (riskAmount * 2).toFixed(2)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">{riskAmount === null ? "—" : "$" + (riskAmount * 3).toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">${riskAmount.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">${(riskAmount * 2).toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">${(riskAmount * 3).toFixed(2)}</span></div>
                       </div>
                     </AccordionContent>
                   </AccordionItem>
@@ -660,8 +586,6 @@ export default function Chart() {
           </div>
         )}
       </div>
-        </WorkspaceBody>
-      </WorkspacePage>
     </AppShell>
   );
 }

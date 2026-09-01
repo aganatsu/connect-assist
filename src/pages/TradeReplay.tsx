@@ -1,9 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
-import { paperApi, marketApi, scannerApi, type CandleSource } from "@/lib/api";
-import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { paperApi, marketApi, scannerApi } from "@/lib/api";
 import TradeReplayChart, {
   type TradeMarker,
   type ZoneOverlay,
@@ -25,10 +23,6 @@ import {
   Shield,
   Maximize2,
   Minimize2,
-  Target,
-  Hash,
-  AlertTriangle,
-  History,
 } from "lucide-react";
 
 /* ─── Timeframe options ─── */
@@ -47,27 +41,22 @@ const OVERLAY_TOGGLES = [
   { key: "sr", label: "S/R", icon: TrendingUp, color: "#f59e0b" },
   { key: "liquidity", label: "Liq", icon: Droplets, color: "#06b6d4" },
   { key: "breaker", label: "BRK", icon: Shield, color: "#ec4899" },
-  { key: "fib", label: "Fib", icon: Hash, color: "#fbbf24" },
-  { key: "bslssl", label: "BSL/SSL", icon: Target, color: "#d946ef" },
 ];
 
 export default function TradeReplay() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState("4h");
-  const [chartMode, setChartMode] = useState<"evidence" | "live">("evidence");
   const [overlays, setOverlays] = useState<Record<string, boolean>>({
-    ob: true, fvg: true, sr: true, liquidity: true, breaker: true, fib: true, bslssl: true,
+    ob: true, fvg: true, sr: true, liquidity: true, breaker: true,
   });
   const [detailsExpanded, setDetailsExpanded] = useState(true);
 
   /* ─── Fetch positions + history ─── */
-  const { data: status, isPending: accountStatusPending, isError: accountStatusUnavailable } = useQuery({
+  const { data: status } = useQuery({
     queryKey: ["paper-status-replay"],
     queryFn: () => paperApi.status(),
     refetchInterval: 15000,
   });
-
-  const accountStatusKnown = !accountStatusPending && !accountStatusUnavailable && !!status;
 
   /* ─── Fetch staged setups ─── */
   const { data: stagedSetups } = useQuery({
@@ -88,7 +77,7 @@ export default function TradeReplay() {
     const items: TradeItem[] = [];
 
     // Open positions
-    const positions = accountStatusKnown && Array.isArray(status?.positions) ? status.positions : [];
+    const positions = Array.isArray(status?.positions) ? status.positions : [];
     if (positions.length > 0) {
       for (const p of positions) {
         items.push({
@@ -108,7 +97,7 @@ export default function TradeReplay() {
     }
 
     // Closed trades
-    const history = accountStatusKnown && Array.isArray(status?.tradeHistory) ? status.tradeHistory : [];
+    const history = Array.isArray(status?.tradeHistory) ? status.tradeHistory : [];
     if (history.length > 0) {
       for (const t of history) {
         items.push({
@@ -151,7 +140,7 @@ export default function TradeReplay() {
     }
 
     return items;
-  }, [status, stagedSetups, accountStatusKnown]);
+  }, [status, stagedSetups]);
 
   /* ─── Selected trade ─── */
   const selectedTrade = useMemo(
@@ -168,12 +157,14 @@ export default function TradeReplay() {
 
   /* ─── Fetch candles for selected trade ─── */
   const { data: candleData, isLoading: candlesLoading } = useQuery({
-    queryKey: ["replay-candles", chartMode, selectedTrade?.symbol, timeframe],
+    queryKey: ["replay-candles", selectedTrade?.symbol, timeframe],
     queryFn: async () => {
-      if (!selectedTrade?.symbol) return { candles: [], source: "unknown" as CandleSource };
-      return chartMode === "evidence"
-        ? marketApi.botEvidenceCandles(selectedTrade.symbol, timeframe)
-        : marketApi.candlesWithMeta(selectedTrade.symbol, timeframe, 300);
+      if (!selectedTrade?.symbol) return [];
+      const result = await marketApi.candles(selectedTrade.symbol, timeframe, 300);
+      if (Array.isArray(result)) return result;
+      if (result?.values && Array.isArray(result.values)) return result.values;
+      if (result?.data && Array.isArray(result.data)) return result.data;
+      return [];
     },
     enabled: !!selectedTrade?.symbol,
     staleTime: 60000,
@@ -181,8 +172,8 @@ export default function TradeReplay() {
 
   /* ─── Transform candles for lightweight-charts ─── */
   const chartCandles: CandlestickData<Time>[] = useMemo(() => {
-    if (!candleData?.candles || !Array.isArray(candleData.candles)) return [];
-    return candleData.candles
+    if (!candleData || !Array.isArray(candleData)) return [];
+    return candleData
       .map((c: any) => {
         const time = c.datetime
           ? Math.floor(new Date(c.datetime.replace(" ", "T") + "Z").getTime() / 1000)
@@ -251,15 +242,12 @@ export default function TradeReplay() {
     };
   }, [selectedTrade]);
 
-  /* ─── Zone overlays from scan detail + signal_reason (entry-time data) ─── */
+  /* ─── Zone overlays from scan detail ─── */
   const zones: ZoneOverlay[] = useMemo(() => {
-    if (!selectedTrade) return [];
+    if (!selectedTrade || !scanLogs) return [];
     const z: ZoneOverlay[] = [];
 
-    // Priority 1: Use signal_reason (entry-time snapshot) for entity lifecycles
-    const sr = selectedTrade.signal_reason || {};
-
-    // Priority 2: Fall back to scan_logs analysis_snapshot (latest data)
+    // Find the most recent scan log that has details for this symbol
     const logs = Array.isArray(scanLogs) ? scanLogs : (scanLogs?.logs ? (Array.isArray(scanLogs.logs) ? scanLogs.logs : []) : []);
     let scanDetail: any = null;
     for (const log of logs) {
@@ -270,117 +258,84 @@ export default function TradeReplay() {
       }
     }
 
-    const snap = scanDetail?.analysis_snapshot || {};
+    if (!scanDetail?.analysis_snapshot) return z;
+    const snap = scanDetail.analysis_snapshot;
 
-    // ── Order Blocks ──
-    const obsSource = sr.entityLifecycles?.orderBlocks || snap.orderBlock?.zones || snap.orderBlocks || [];
-    const obs = Array.isArray(obsSource) ? obsSource : [];
-    for (const ob of obs) {
-      const high = ob.high || ob.top || 0;
-      const low = ob.low || ob.bottom || 0;
-      if (!high && !low) continue;
-      z.push({
-        type: "ob",
-        high,
-        low,
-        label: `OB ${ob.type || ob.direction || ""} [${ob.state || "active"}]`.trim(),
-        state: ob.state || "active",
-      });
+    // Order Blocks
+    if (snap.orderBlock?.zones || snap.orderBlocks) {
+      const obsRaw = snap.orderBlock?.zones || snap.orderBlocks || [];
+      const obs = Array.isArray(obsRaw) ? obsRaw : [];
+      for (const ob of obs) {
+        z.push({
+          type: "ob",
+          high: ob.high || ob.top || 0,
+          low: ob.low || ob.bottom || 0,
+          label: `OB ${ob.type || ""} ${ob.state || ""}`.trim(),
+          state: ob.state,
+        });
+      }
     }
 
-    // ── FVGs ──
-    const fvgSource = sr.entityLifecycles?.fvgs || snap.fvg?.zones || snap.fvgs || [];
-    const fvgs = Array.isArray(fvgSource) ? fvgSource : [];
-    for (const fvg of fvgs) {
-      const high = fvg.high || fvg.top || 0;
-      const low = fvg.low || fvg.bottom || 0;
-      if (!high && !low) continue;
-      z.push({
-        type: "fvg",
-        high,
-        low,
-        label: `FVG ${fvg.type || fvg.direction || ""} [${fvg.state || "active"}]`.trim(),
-        state: fvg.state || "active",
-      });
+    // FVGs
+    if (snap.fvg?.zones || snap.fvgs) {
+      const fvgsRaw = snap.fvg?.zones || snap.fvgs || [];
+      const fvgs = Array.isArray(fvgsRaw) ? fvgsRaw : [];
+      for (const fvg of fvgs) {
+        z.push({
+          type: "fvg",
+          high: fvg.high || fvg.top || 0,
+          low: fvg.low || fvg.bottom || 0,
+          label: `FVG ${fvg.type || ""} ${fvg.state || ""}`.trim(),
+          state: fvg.state,
+        });
+      }
     }
 
-    // ── S/R levels ──
-    const srSource = sr.structureIntel?.derivedSR || snap.structureIntel?.derivedSR || scanDetail?.structureIntel?.derivedSR || [];
-    const srLevels = Array.isArray(srSource) ? srSource : [];
-    for (const level of srLevels) {
-      const price = level.price || level.level || 0;
-      if (!price) continue;
-      z.push({
-        type: "sr",
-        high: price,
-        low: price,
-        label: `S/R ${level.type || ""} ${level.touches ? `(${level.touches}x)` : ""}`.trim(),
-        state: level.state || "active",
-      });
+    // S/R levels from structure intel
+    if (snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR) {
+      const srRaw = snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR || [];
+      const srLevels = Array.isArray(srRaw) ? srRaw : [];
+      for (const sr of srLevels) {
+        const price = sr.price || sr.level || 0;
+        z.push({
+          type: "sr",
+          high: price + (price * 0.0002),
+          low: price - (price * 0.0002),
+          label: `S/R ${sr.type || ""} ${sr.state || ""}`.trim(),
+          state: sr.state,
+        });
+      }
     }
 
-    // ── Liquidity pools ──
-    const poolSource = sr.entityLifecycles?.liquidityPools || snap.liquiditySweep?.pools || snap.liquidityPools || [];
-    const pools = Array.isArray(poolSource) ? poolSource : [];
-    for (const pool of pools.slice(0, 10)) {
-      const price = pool.level || pool.price || 0;
-      if (!price) continue;
-      z.push({
-        type: "liquidity",
-        high: price,
-        low: price,
-        label: `Liq ${pool.type || pool.direction || ""} [${pool.state || "active"}]`.trim(),
-        state: pool.state || "active",
-        strength: pool.strength,
-      });
+    // Liquidity pools
+    if (snap.liquiditySweep?.pools || snap.liquidityPools) {
+      const poolsRaw = snap.liquiditySweep?.pools || snap.liquidityPools || [];
+      const pools = Array.isArray(poolsRaw) ? poolsRaw : [];
+      for (const pool of pools.slice(0, 10)) { // limit to 10 most relevant
+        const price = pool.level || pool.price || 0;
+        z.push({
+          type: "liquidity",
+          high: price + (price * 0.0001),
+          low: price - (price * 0.0001),
+          label: `Liq ${pool.type || ""} ${pool.state || ""}`.trim(),
+          state: pool.state,
+        });
+      }
     }
 
-    // ── Breaker blocks ──
-    const brkSource = sr.entityLifecycles?.breakerBlocks || snap.breakerBlock?.zones || snap.breakerBlocks || [];
-    const breakers = Array.isArray(brkSource) ? brkSource : [];
-    for (const brk of breakers) {
-      const high = brk.high || brk.top || 0;
-      const low = brk.low || brk.bottom || 0;
-      if (!high && !low) continue;
-      z.push({
-        type: "breaker",
-        high,
-        low,
-        label: `BRK ${brk.type || ""} [${brk.state || "active"}]`.trim(),
-        state: brk.state || "active",
-      });
-    }
-
-    // ── BSL/SSL (Buy-Side / Sell-Side Liquidity) ──
-    const bslSslSource = sr.entityLifecycles?.swingPoints || snap.swingPoints || snap.liquiditySweep?.pools || [];
-    const bslSsl = Array.isArray(bslSslSource) ? bslSslSource : [];
-    for (const pt of bslSsl) {
-      const price = pt.level || pt.price || pt.high || 0;
-      if (!price) continue;
-      const isBuy = pt.type === "high" || pt.direction === "bullish" || pt.side === "buy";
-      z.push({
-        type: isBuy ? "bsl" : "ssl",
-        high: price,
-        low: price,
-        label: `${isBuy ? "BSL" : "SSL"} ${pt.state === "swept" ? "[swept]" : ""}`.trim(),
-        state: pt.state || "active",
-        strength: pt.strength || pt.touches,
-      });
-    }
-
-    // ── Fibonacci levels ──
-    const fibSource = sr.fibLevels || snap.fibonacci?.levels || scanDetail?.fibLevels || [];
-    const fibs = Array.isArray(fibSource) ? fibSource : [];
-    for (const fib of fibs) {
-      const price = fib.price || fib.level || 0;
-      if (!price) continue;
-      z.push({
-        type: "fib",
-        high: price,
-        low: price,
-        label: `Fib ${fib.ratio || fib.label || ""}`.trim(),
-        state: "active",
-      });
+    // Breaker blocks
+    if (snap.breakerBlock?.zones || snap.breakerBlocks) {
+      const breakersRaw = snap.breakerBlock?.zones || snap.breakerBlocks || [];
+      const breakers = Array.isArray(breakersRaw) ? breakersRaw : [];
+      for (const brk of breakers) {
+        z.push({
+          type: "breaker",
+          high: brk.high || brk.top || 0,
+          low: brk.low || brk.bottom || 0,
+          label: `BRK ${brk.type || ""} ${brk.state || ""}`.trim(),
+          state: brk.state,
+        });
+      }
     }
 
     return z;
@@ -393,18 +348,13 @@ export default function TradeReplay() {
 
   return (
     <AppShell>
-    <WorkspacePage layout="canvas">
-      <WorkspaceHeader
-        icon={History}
-        eyebrow="Execution review"
-        title="Trade Replay"
-        actions={<span className="workspace-page__action font-mono">{trades.length} records</span>}
-      />
-      <WorkspaceBody padded={false}>
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Top toolbar */}
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-border bg-card/50">
         <div className="flex items-center gap-3">
+          <h1 className="text-sm font-bold tracking-wide text-foreground">
+            TRADE REPLAY
+          </h1>
           {selectedTrade && (
             <span className="text-xs font-mono text-muted-foreground">
               {selectedTrade.symbol} — {selectedTrade.direction}
@@ -413,12 +363,6 @@ export default function TradeReplay() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="inline-flex border border-border rounded-sm overflow-hidden">
-            <button onClick={() => setChartMode("evidence")} className={cn("px-2 py-1 text-[10px]", chartMode === "evidence" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>Bot Evidence</button>
-            <button onClick={() => setChartMode("live")} className={cn("px-2 py-1 text-[10px]", chartMode === "live" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>Live Broker</button>
-          </div>
-          <DataSourceBadge source={candleData?.source} />
-
           {/* Timeframe selector */}
           <ToggleGroup
             type="single"
@@ -484,15 +428,6 @@ export default function TradeReplay() {
         </div>
       </div>
 
-      {!accountStatusKnown && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
-          <AlertTriangle className="h-4 w-4" />
-          {accountStatusPending
-            ? "Loading account positions and trade history."
-            : "Account positions and trade history are unavailable. Only independently loaded staged setups can appear."}
-        </div>
-      )}
-
       {/* Main content */}
       <div className="flex-1 flex min-h-0">
         {/* Sidebar */}
@@ -521,14 +456,9 @@ export default function TradeReplay() {
               <TradeReplayChart
                 candles={chartCandles}
                 markers={markers}
-                zones={chartMode === "evidence" ? zones : []}
-                levels={chartMode === "evidence" ? levels : null}
-                overlayToggles={{
-                  ...overlays,
-                  // Map bslssl toggle to both bsl and ssl types in the chart
-                  bsl: overlays.bslssl,
-                  ssl: overlays.bslssl,
-                }}
+                zones={zones}
+                levels={levels}
+                overlayToggles={overlays}
               />
             )}
 
@@ -621,18 +551,6 @@ export default function TradeReplay() {
                       <span className="text-muted-foreground">Breaker</span>
                     </div>
                   )}
-                  {overlays.fib && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-0.5" style={{ background: "#fbbf24" }} />
-                      <span className="text-muted-foreground">Fibonacci</span>
-                    </div>
-                  )}
-                  {overlays.bslssl && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-0.5" style={{ background: "#d946ef" }} />
-                      <span className="text-muted-foreground">BSL/SSL</span>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
@@ -647,8 +565,6 @@ export default function TradeReplay() {
         </div>
       </div>
     </div>
-      </WorkspaceBody>
-    </WorkspacePage>
     </AppShell>
   );
 }

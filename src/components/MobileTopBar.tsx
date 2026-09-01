@@ -2,7 +2,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Sun, Moon, Monitor } from "lucide-react";
 import { paperApi } from "@/lib/api";
-import { readExecutionMode } from "@/lib/executionMode";
 import { useTheme } from "@/contexts/ThemeContext";
 
 const TITLES: Record<string, string> = {
@@ -17,8 +16,6 @@ const TITLES: Record<string, string> = {
   "/brokers": "Brokers",
   "/trade-replay": "Trade Replay",
   "/prop-firm": "Prop Firm",
-  "/rejected-setups": "Rejected Setups",
-  "/optimizer": "Optimizer",
   "/settings": "Settings",
 };
 
@@ -27,7 +24,7 @@ export function MobileTopBar() {
   const location = useLocation();
   const { theme, setTheme } = useTheme();
 
-  const { data: status, isPending: statusPending, isError: statusError } = useQuery({
+  const { data: status } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 10000,
@@ -37,8 +34,7 @@ export function MobileTopBar() {
   const path = "/" + (location.pathname.split("/")[1] || "");
   const title = TITLES[path] ?? "SMC";
   const isRoot = path === "/";
-  const accountStatusKnown = !statusPending && !statusError && readExecutionMode(status) !== "unknown";
-  const isRunning = accountStatusKnown && !!status?.isRunning;
+  const isRunning = !!status?.isRunning;
 
   const cycleTheme = () => {
     const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
@@ -54,24 +50,24 @@ export function MobileTopBar() {
             <button
               onClick={() => navigate(-1)}
               aria-label="Back"
-              className="h-11 w-11 -ml-2 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
+              className="p-1.5 -ml-1.5 text-muted-foreground hover:text-foreground"
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
           )}
-          <h1 className="text-sm font-bold truncate" title={title}>{title}</h1>
+          <h1 className="text-sm font-bold truncate">{title}</h1>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span className="flex items-center gap-1.5 text-[10px] font-medium">
             <span className={isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-            <span className={isRunning ? "text-success" : accountStatusKnown ? "text-muted-foreground" : "text-warning"}>
-              {accountStatusKnown ? (isRunning ? "ON" : "OFF") : "UNKNOWN"}
+            <span className={isRunning ? "text-success" : "text-muted-foreground"}>
+              {isRunning ? "ON" : "OFF"}
             </span>
           </span>
           <button
             onClick={cycleTheme}
             aria-label="Toggle theme"
-            className="h-11 w-11 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
+            className="p-1.5 text-muted-foreground hover:text-foreground"
           >
             <ThemeIcon className="h-4 w-4" />
           </button>

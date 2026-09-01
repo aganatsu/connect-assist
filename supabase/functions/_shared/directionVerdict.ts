@@ -5,12 +5,12 @@
  * Consolidates 6 competing direction sources into ONE verdict:
  *
  *   SPINE (determines direction):
- *     1. confirmedTrend (fib-filtered MSBs on the style bias role)
- *     2. SimpleDirection (style bias → structure → setup roles)
+ *     1. confirmedTrend (fib-filtered MSBs on Daily)
+ *     2. SimpleDirection fallback (4H+1H CHoCH/BOS)
  *
  *   CONTEXT (modifies confidence, never flips direction):
  *     3. Regime Classification (trending/ranging/volatile)
- *     4. Weekly Bias (only when Weekly is the style bias role)
+ *     4. Weekly Bias (ICT HTF weekly candle structure)
  *
  *   ADVISORY (score modifier only):
  *     5. Game Plan Bias (LLM-generated premarket analysis)
@@ -26,7 +26,6 @@
  * Once validated, it replaces Gate 1, Gate 20, falling knife guard,
  * Factor 22, and the GP bias adjustment.
  */
-import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -36,7 +35,7 @@ export interface DirectionSource {
   name: string;
   direction: "bullish" | "bearish" | "neutral" | null;
   confidence: number; // 0-100
-  weight: number; // How much this source matters (0-1)
+  weight: number;     // How much this source matters (0-1)
   detail: string;
 }
 
@@ -57,13 +56,9 @@ export interface DirectionVerdictResult {
   agreement: number; // 0-1 (1 = all agree)
   /** Human-readable summary */
   summary: string;
-  /** Exact style/timeframe evidence shared by every decision layer. */
-  decisionEvidence?: StyleDecisionEvidence | null;
 }
 
 export interface DirectionVerdictInput {
-  /** Exact style/timeframe evidence used to build the structural sources. */
-  decisionEvidence?: StyleDecisionEvidence | null;
   /** From directionEngine.ts confirmedTrend() */
   confirmedTrend: {
     trend: "bullish" | "bearish" | "ranging";
@@ -74,7 +69,7 @@ export interface DirectionVerdictInput {
   simpleDirection: {
     direction: "long" | "short" | null;
     bias: "bullish" | "bearish" | null;
-    biasSource: string | null;
+    biasSource: "daily" | "4h" | null;
     h4Retrace: boolean;
     h4ChochAgainst: boolean;
     h1Confirmed: boolean;
@@ -83,33 +78,31 @@ export interface DirectionVerdictInput {
 
   /** From smcAnalysis.ts classifyInstrumentRegime() */
   regime: {
-    regime: string; // "strong_trend" | "mild_trend" | "choppy_range" | "mild_range" | "transitional"
-    confidence: number; // 0-1
+    regime: string;       // "strong_trend" | "mild_trend" | "choppy_range" | "mild_range" | "transitional"
+    confidence: number;   // 0-1
     directionalBias: string; // "bullish" | "bearish" | "neutral"
   } | null;
 
   /** From weeklyBiasDOL.ts analyzeWeeklyBiasAndDOL() */
   weeklyBias: {
     bias: "bullish" | "bearish" | "neutral";
-    confidence: number; // 0-100
+    confidence: number;   // 0-100
   } | null;
 
   /** From gamePlan.ts */
   gamePlanBias: {
     bias: "bullish" | "bearish" | "neutral";
-    confidence: number; // 0-100
+    confidence: number;   // 0-100
   } | null;
 }
 
 // ─── Configuration ───────────────────────────────────────────────────
 
 export interface DirectionVerdictConfig {
-  /** Minimum confidence to produce a non-neutral verdict (default: 55) */
+  /** Minimum confidence to produce a non-neutral verdict (default: 40) */
   minConfidence: number;
   /** Confidence below which the trade is blocked (default: 25) */
   blockThreshold: number;
-  /** Minimum agreement ratio (0-1) to produce a non-neutral verdict (default: 0.50) */
-  agreementFloor: number;
   /** Maximum score penalty for opposing context (default: -2.0) */
   maxPenalty: number;
   /** Maximum score bonus for aligned context (default: 1.5) */
@@ -121,9 +114,8 @@ export interface DirectionVerdictConfig {
 }
 
 export const DEFAULT_VERDICT_CONFIG: DirectionVerdictConfig = {
-  minConfidence: 55,
+  minConfidence: 40,
   blockThreshold: 25,
-  agreementFloor: 0.50,
   maxPenalty: -2.0,
   maxBonus: 1.5,
   regimeCanVeto: true,
@@ -136,11 +128,11 @@ export const DEFAULT_VERDICT_CONFIG: DirectionVerdictConfig = {
 // Context sources can only reduce confidence, never flip direction.
 
 const WEIGHTS = {
-  confirmedTrend: 0.40, // Strongest — fib-filtered, close-based MSBs
-  simpleDirection: 0.25, // Second — multi-TF CHoCH/BOS
-  regime: 0.15, // Context — can reduce confidence
-  weeklyBias: 0.12, // Context — weekly structure
-  gamePlan: 0.08, // Advisory — LLM-generated, lowest weight
+  confirmedTrend: 0.40,   // Strongest — fib-filtered, close-based MSBs
+  simpleDirection: 0.25,  // Second — multi-TF CHoCH/BOS
+  regime: 0.15,           // Context — can reduce confidence
+  weeklyBias: 0.12,       // Context — weekly structure
+  gamePlan: 0.08,         // Advisory — LLM-generated, lowest weight
 } as const;
 
 // ─── Main Function ───────────────────────────────────────────────────
@@ -181,8 +173,7 @@ export function computeDirectionVerdict(
 
   // 1b. Simple Direction (fallback/confirmation)
   if (input.simpleDirection && input.simpleDirection.direction) {
-    const dir = input.simpleDirection.bias ??
-      (input.simpleDirection.direction === "long" ? "bullish" : "bearish");
+    const dir = input.simpleDirection.bias ?? (input.simpleDirection.direction === "long" ? "bullish" : "bearish");
     let conf = 50; // Base confidence for simple direction
     if (input.simpleDirection.h1Confirmed) conf += 15;
     if (input.simpleDirection.h4Retrace) conf += 10;
@@ -200,10 +191,12 @@ export function computeDirectionVerdict(
     if (!spineDirection) {
       spineDirection = dir;
       spineConfidence = Math.max(0, Math.min(100, conf));
-    } // If confirmedTrend agrees, boost confidence
+    }
+    // If confirmedTrend agrees, boost confidence
     else if (spineDirection === dir) {
       spineConfidence = Math.min(100, spineConfidence + 10);
-    } // If confirmedTrend disagrees, reduce confidence
+    }
+    // If confirmedTrend disagrees, reduce confidence
     else {
       spineConfidence = Math.max(20, spineConfidence - 20);
     }
@@ -224,12 +217,10 @@ export function computeDirectionVerdict(
       confidence: 0,
       scoreAdjustment: 0,
       shouldBlock: true,
-      blockReason:
-        "No directional signal from either confirmedTrend or simpleDirection",
+      blockReason: "No directional signal from either confirmedTrend or simpleDirection",
       sources,
       agreement: 0,
       summary: "No direction — both structural sources are neutral/unavailable",
-      decisionEvidence: input.decisionEvidence || null,
     };
   }
 
@@ -239,16 +230,11 @@ export function computeDirectionVerdict(
 
   // 2a. Regime Classification
   if (input.regime && input.regime.confidence > 0.5) {
-    const regimeBias = input.regime.directionalBias as
-      | "bullish"
-      | "bearish"
-      | "neutral";
+    const regimeBias = input.regime.directionalBias as "bullish" | "bearish" | "neutral";
     const regimeConf = input.regime.confidence * 100;
     const isAligned = regimeBias === spineDirection;
-    const isOpposing = regimeBias !== "neutral" &&
-      regimeBias !== spineDirection;
-    const isRanging = input.regime.regime.includes("range") ||
-      input.regime.regime === "choppy_range";
+    const isOpposing = regimeBias !== "neutral" && regimeBias !== spineDirection;
+    const isRanging = input.regime.regime.includes("range") || input.regime.regime === "choppy_range";
 
     if (isAligned) {
       contextAdjustment += 10 * input.regime.confidence;
@@ -257,10 +243,7 @@ export function computeDirectionVerdict(
         direction: regimeBias,
         confidence: regimeConf,
         weight: WEIGHTS.regime,
-        detail:
-          `${input.regime.regime} regime ALIGNS with ${spineDirection} (conf: ${
-            regimeConf.toFixed(0)
-          }%)`,
+        detail: `${input.regime.regime} regime ALIGNS with ${spineDirection} (conf: ${regimeConf.toFixed(0)}%)`,
       });
     } else if (isOpposing) {
       contextAdjustment -= 20 * input.regime.confidence;
@@ -269,10 +252,7 @@ export function computeDirectionVerdict(
         direction: regimeBias,
         confidence: regimeConf,
         weight: WEIGHTS.regime,
-        detail:
-          `${input.regime.regime} regime OPPOSES ${spineDirection} — bias is ${regimeBias} (conf: ${
-            regimeConf.toFixed(0)
-          }%)`,
+        detail: `${input.regime.regime} regime OPPOSES ${spineDirection} — bias is ${regimeBias} (conf: ${regimeConf.toFixed(0)}%)`,
       });
     } else if (isRanging) {
       contextAdjustment -= 10 * input.regime.confidence;
@@ -281,9 +261,7 @@ export function computeDirectionVerdict(
         direction: "neutral",
         confidence: regimeConf,
         weight: WEIGHTS.regime,
-        detail: `${input.regime.regime} — no directional edge (conf: ${
-          regimeConf.toFixed(0)
-        }%)`,
+        detail: `${input.regime.regime} — no directional edge (conf: ${regimeConf.toFixed(0)}%)`,
       });
     } else {
       sources.push({
@@ -305,10 +283,7 @@ export function computeDirectionVerdict(
   }
 
   // 2b. Weekly Bias
-  if (
-    input.weeklyBias && input.weeklyBias.bias !== "neutral" &&
-    input.weeklyBias.confidence > 40
-  ) {
+  if (input.weeklyBias && input.weeklyBias.bias !== "neutral" && input.weeklyBias.confidence > 40) {
     const wkBias = input.weeklyBias.bias;
     const wkConf = input.weeklyBias.confidence;
     const isAligned = wkBias === spineDirection;
@@ -330,8 +305,7 @@ export function computeDirectionVerdict(
         direction: wkBias,
         confidence: wkConf,
         weight: WEIGHTS.weeklyBias,
-        detail:
-          `Weekly bias ${wkBias} OPPOSES ${spineDirection} (conf: ${wkConf}%)`,
+        detail: `Weekly bias ${wkBias} OPPOSES ${spineDirection} (conf: ${wkConf}%)`,
       });
     }
   } else {
@@ -340,18 +314,13 @@ export function computeDirectionVerdict(
       direction: input.weeklyBias?.bias ?? null,
       confidence: input.weeklyBias?.confidence ?? 0,
       weight: WEIGHTS.weeklyBias,
-      detail: input.weeklyBias
-        ? `Weekly bias ${input.weeklyBias.bias} (conf: ${input.weeklyBias.confidence}% — below threshold)`
-        : "No weekly data",
+      detail: input.weeklyBias ? `Weekly bias ${input.weeklyBias.bias} (conf: ${input.weeklyBias.confidence}% — below threshold)` : "No weekly data",
     });
   }
 
   // ── 3. ADVISORY: Game Plan (lightest touch) ──
 
-  if (
-    input.gamePlanBias && input.gamePlanBias.bias !== "neutral" &&
-    input.gamePlanBias.confidence >= 50
-  ) {
+  if (input.gamePlanBias && input.gamePlanBias.bias !== "neutral" && input.gamePlanBias.confidence >= 50) {
     const gpBias = input.gamePlanBias.bias;
     const gpConf = input.gamePlanBias.confidence;
     const isAligned = gpBias === spineDirection;
@@ -366,9 +335,7 @@ export function computeDirectionVerdict(
       direction: gpBias,
       confidence: gpConf,
       weight: WEIGHTS.gamePlan,
-      detail: `GP bias ${gpBias} ${
-        isAligned ? "aligns" : "opposes"
-      } (conf: ${gpConf}%)`,
+      detail: `GP bias ${gpBias} ${isAligned ? "aligns" : "opposes"} (conf: ${gpConf}%)`,
     });
   } else {
     sources.push({
@@ -376,51 +343,24 @@ export function computeDirectionVerdict(
       direction: input.gamePlanBias?.bias ?? null,
       confidence: input.gamePlanBias?.confidence ?? 0,
       weight: WEIGHTS.gamePlan,
-      detail: input.gamePlanBias
-        ? `GP bias ${input.gamePlanBias.bias} (conf: ${input.gamePlanBias.confidence}% — below threshold)`
-        : "No game plan",
+      detail: input.gamePlanBias ? `GP bias ${input.gamePlanBias.bias} (conf: ${input.gamePlanBias.confidence}% — below threshold)` : "No game plan",
     });
   }
 
   // ── 4. COMPUTE FINAL CONFIDENCE ──
 
-  const finalConfidence = Math.max(
-    0,
-    Math.min(100, spineConfidence + contextAdjustment),
-  );
+  const finalConfidence = Math.max(0, Math.min(100, spineConfidence + contextAdjustment));
 
-  // ── 5. AGREEMENT CALCULATION (moved before verdict to use in decision) ──
-
-  const directionalSources = sources.filter((s) =>
-    s.direction && s.direction !== "neutral"
-  );
-  const agreeing =
-    directionalSources.filter((s) => s.direction === spineDirection).length;
-  const agreement = directionalSources.length > 0
-    ? agreeing / directionalSources.length
-    : 0;
-
-  // ── 6. DETERMINE VERDICT ──
-  // Verdict requires BOTH confidence threshold AND agreement floor.
-  // This eliminates low-conviction calls where one spine source says X but everything else disagrees.
+  // ── 5. DETERMINE VERDICT ──
 
   let verdict: VerdictDirection;
-  let verdictReason = "";
   if (finalConfidence < cfg.minConfidence) {
     verdict = "neutral";
-    verdictReason = `confidence ${
-      finalConfidence.toFixed(0)
-    }% < ${cfg.minConfidence}% threshold`;
-  } else if (agreement < cfg.agreementFloor) {
-    verdict = "neutral";
-    verdictReason = `agreement ${(agreement * 100).toFixed(0)}% < ${
-      (cfg.agreementFloor * 100).toFixed(0)
-    }% floor (${agreeing}/${directionalSources.length} sources agree)`;
   } else {
     verdict = spineDirection === "bullish" ? "long" : "short";
   }
 
-  // ── 7. BLOCK CHECK ──
+  // ── 6. BLOCK CHECK ──
 
   let shouldBlock = false;
   let blockReason: string | null = null;
@@ -428,35 +368,23 @@ export function computeDirectionVerdict(
   // Block if confidence is too low
   if (finalConfidence < cfg.blockThreshold) {
     shouldBlock = true;
-    blockReason = `Direction confidence ${
-      finalConfidence.toFixed(0)
-    }% below block threshold ${cfg.blockThreshold}%`;
-  }
-
-  // Block if verdict is neutral (no directional edge = no trade)
-  if (!shouldBlock && verdict === "neutral" && verdictReason) {
-    shouldBlock = true;
-    blockReason = `No directional edge: ${verdictReason}`;
+    blockReason = `Direction confidence ${finalConfidence.toFixed(0)}% below block threshold ${cfg.blockThreshold}%`;
   }
 
   // Regime veto: if regime strongly opposes and confidence is high
   if (cfg.regimeCanVeto && input.regime && !shouldBlock) {
     const regimeBias = input.regime.directionalBias;
-    const isStronglyOpposing = regimeBias !== "neutral" &&
-      regimeBias !== spineDirection;
+    const isStronglyOpposing = regimeBias !== "neutral" && regimeBias !== spineDirection;
     const regimeIsStrong = input.regime.confidence >= cfg.regimeVetoThreshold;
-    const regimeIsTrending = input.regime.regime === "strong_trend" ||
-      input.regime.regime === "mild_trend";
+    const regimeIsTrending = input.regime.regime === "strong_trend" || input.regime.regime === "mild_trend";
 
     if (isStronglyOpposing && regimeIsStrong && regimeIsTrending) {
       shouldBlock = true;
-      blockReason = `Regime veto: ${input.regime.regime} (${
-        (input.regime.confidence * 100).toFixed(0)
-      }% conf) strongly opposes ${spineDirection} direction`;
+      blockReason = `Regime veto: ${input.regime.regime} (${(input.regime.confidence * 100).toFixed(0)}% conf) strongly opposes ${spineDirection} direction`;
     }
   }
 
-  // ── 8. SCORE ADJUSTMENT ──
+  // ── 7. SCORE ADJUSTMENT ──
   // Convert confidence into a score modifier (replaces regime + GP + Factor 22 adjustments)
 
   let scoreAdjustment = 0;
@@ -468,32 +396,22 @@ export function computeDirectionVerdict(
     } else {
       scoreAdjustment = normalizedConf * Math.abs(cfg.maxPenalty);
     }
-    scoreAdjustment = Math.max(
-      cfg.maxPenalty,
-      Math.min(cfg.maxBonus, scoreAdjustment),
-    );
+    scoreAdjustment = Math.max(cfg.maxPenalty, Math.min(cfg.maxBonus, scoreAdjustment));
   }
+
+  // ── 8. AGREEMENT CALCULATION ──
+
+  const directionalSources = sources.filter(s => s.direction && s.direction !== "neutral");
+  const agreeing = directionalSources.filter(s => s.direction === spineDirection).length;
+  const agreement = directionalSources.length > 0 ? agreeing / directionalSources.length : 0;
 
   // ── 9. SUMMARY ──
 
   const summaryParts: string[] = [];
-  summaryParts.push(
-    `${verdict.toUpperCase()} (${finalConfidence.toFixed(0)}% conf)`,
-  );
+  summaryParts.push(`${verdict.toUpperCase()} (${finalConfidence.toFixed(0)}% conf)`);
   if (shouldBlock) summaryParts.push(`BLOCKED: ${blockReason}`);
-  if (verdictReason && !shouldBlock) {
-    summaryParts.push(`Note: ${verdictReason}`);
-  }
-  summaryParts.push(
-    `Agreement: ${
-      (agreement * 100).toFixed(0)
-    }% (${agreeing}/${directionalSources.length} sources)`,
-  );
-  summaryParts.push(
-    `Score adj: ${scoreAdjustment >= 0 ? "+" : ""}${
-      scoreAdjustment.toFixed(2)
-    }`,
-  );
+  summaryParts.push(`Agreement: ${(agreement * 100).toFixed(0)}% (${agreeing}/${directionalSources.length} sources)`);
+  summaryParts.push(`Score adj: ${scoreAdjustment >= 0 ? "+" : ""}${scoreAdjustment.toFixed(2)}`);
 
   return {
     verdict,
@@ -504,6 +422,5 @@ export function computeDirectionVerdict(
     sources,
     agreement: +agreement.toFixed(2),
     summary: summaryParts.join(" | "),
-    decisionEvidence: input.decisionEvidence || null,
   };
 }

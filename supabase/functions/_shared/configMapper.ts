@@ -23,64 +23,6 @@
  */
 
 import { normalizeSessionFilter } from "./sessions.ts";
-import type { ImpulseEntryLifecycleMode } from "./impulseEntryLifecycle.ts";
-import {
-  normalizeNestedPoiMarketMode,
-  type NestedPoiMarketMode,
-} from "./botConfigBehavior.ts";
-
-/**
- * SMC Video Enhancement configuration — opt-in module toggles.
- * When the entire object is null (default), no enhancement modules run.
- * When provided, only modules with their flag set to true will execute.
- */
-export interface SMCEnhancementsConfig {
-  /** Enable price-action phase detection (consolidation/expansion/trend) */
-  enablePhaseDetection?: boolean;
-  /** Enable breaker block detection (break & retest entry model) */
-  enableBreakerBlocks?: boolean;
-  /** Enable zone lifecycle v2 (close-based invalidation, multi-retest) */
-  enableZoneLifecycleV2?: boolean;
-  /** Enable 3-point Fibonacci extension TP (measured from entry) */
-  enableFibExtension3Point?: boolean;
-  /** Legacy UI alias retained while saved configs are migrated */
-  enableFib3PointTP?: boolean;
-  /** Enable trendline liquidity analysis (4th-touch trap, broken TL bonus) */
-  enableTrendlineLiquidity?: boolean;
-  /** Enable monthly timeframe structural containment */
-  enableMonthlyContainment?: boolean;
-  /** Max retests before zone is exhausted (zone lifecycle v2). Default: 3 */
-  maxZoneRetests?: number;
-  /** Confidence decay per retest (0-1). Default: 0.3 */
-  retestDecay?: number;
-  /** Min displacement ATR multiple for breaker detection. Default: 1.5 */
-  breakerMinDisplacementATR?: number;
-  /** Fib extension levels for 3-point TP. Default: [1.272, 1.618, 2.0] */
-  fib3PointLevels?: number[];
-  /** Min trendline touches to qualify. Default: 3 */
-  trendlineMinTouches?: number;
-  /** Consolidation detection threshold (regime score). Default: 4 */
-  consolidationThreshold?: number;
-  /** UI field: trend score threshold */
-  trendThreshold?: number;
-  /** UI field: maximum zone retests */
-  maxRetests?: number;
-  /** UI field: confidence decay applied per retest */
-  confidenceDecay?: number;
-  /** UI field: breaker displacement threshold */
-  breakerMinDisplacement?: number;
-  /** UI field: breaker position-size multiplier */
-  breakerSizeMultiplier?: number;
-  /** UI field: first Fib extension ratio to evaluate */
-  primaryFibLevel?: number;
-  /** UI field: trendline trap touch number */
-  trendlineTrapTouch?: number;
-  phaseConfig?: any;
-  zoneLifecycleConfig?: any;
-  breakerConfig?: any;
-  fibExtensionConfig?: any;
-  trendlineConfig?: any;
-}
 
 // ─── Runtime Defaults ─────────────────────────────────────────────────
 // These are the FLAT runtime defaults used by the scanning/backtesting engine.
@@ -93,14 +35,6 @@ export const RUNTIME_DEFAULTS = {
   htfBiasHardVeto: false,
   onlyBuyInDiscount: false,
   onlySellInPremium: false,
-  dealingRangeMode: "avoid_wrong_side",
-  impulseEntryLifecycleMode: "observe" as ImpulseEntryLifecycleMode,
-  zoneSetupStopPolicyMode: "observe" as "observe" | "enforce_paper" | "enforce_live",
-  singleOwnershipMode: "observe",
-  directionUnavailableMode: "observe_fail_closed",
-  canonicalScannerMode: "observe",
-  canonicalStructureMode: "observe",
-  streamlinedDecisionMode: "observe",
   normalizedScoring: true,
 
   // ── Factor Toggles ──
@@ -131,10 +65,8 @@ export const RUNTIME_DEFAULTS = {
   maxDrawdown: 20,
   maxDailyLoss: 5,
   riskPerTrade: 1,
-  standaloneMultiplier: 0.5,
-  positionSizingMethod: "percent_risk" as "percent_risk" | "fixed_lot" | "volatility_adjusted",
+  positionSizingMethod: "percent_risk" as "percent_risk" | "fixed_lot" | "atr_volatility",
   fixedLotSize: 0.1,
-  atrVolatilityMultiplier: 1.5,
   maxOpenPositions: 3,
   maxPerSymbol: 2,
   allowSameDirectionStacking: false,
@@ -151,7 +83,6 @@ export const RUNTIME_DEFAULTS = {
   slBufferPips: 2,
   instrumentBuffers: {} as Record<string, { slBufferPips?: number }>,
   tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
-  nextLevelFallback: "reject" as "reject" | "rr_ratio",
   fixedTPPips: 50,
   tpRatio: 2.0,
   tpATRMultiple: 2.0,
@@ -159,7 +90,6 @@ export const RUNTIME_DEFAULTS = {
   // ── Exit Management ──
   breakEvenEnabled: true,
   breakEvenPips: 20,
-  breakEvenOffsetPips: 3,
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
@@ -181,8 +111,6 @@ export const RUNTIME_DEFAULTS = {
     "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
     "XAU/USD", "BTC/USD",
   ] as string[],
-  rotatingImpulseScanEnabled: true,
-  rotatingImpulseSlotCount: 8,
 
   // ── Spread Filter ──
   spreadFilterEnabled: true,
@@ -196,15 +124,6 @@ export const RUNTIME_DEFAULTS = {
   // ── News Event Filter ──
   newsFilterEnabled: true,
   newsFilterPauseMinutes: 30,
-
-  // ── Game Plan + Direction Verdict Alignment Gate ──
-  gamePlanEnabled: true,
-  gamePlanValidityMinutes: 240,
-  // off = log only, soft = score impact, hard = require strict alignment.
-  gpEnforcementMode: "hard" as "off" | "soft" | "hard",
-  // In hard mode, the aligned Game Plan must meet this minimum confidence.
-  // Set to 0 only for legacy configs; config mapping treats it as mode=off.
-  gpHardBlockThreshold: 75,
 
   // ── Entry Behaviour ──
   scanIntervalMinutes: 15,
@@ -224,10 +143,6 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneBonus: 1.0,
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
   minZoneScore: 4,
-  zoneQualityThreshold: 40,
-  zoneMaxAgeBars: 200,
-  zoneMinBodyRatio: 0.5,
-  zoneMinDisplacementATR: 1.5,
   impulseSlCapMultiplier: 4,
   /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
   originOBRetest: false,
@@ -236,26 +151,6 @@ export const RUNTIME_DEFAULTS = {
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
-  requireLiquiditySweep: false, // Liquidity Sweep Gate: when true, block entry until entry-trigger BSL/SSL pool is swept+rejected
-  sweptAbsorbedPenalty: 2.0, // Penalty applied to liquidity score when entry-trigger pool is swept but absorbed (broken through)
-  // Zone-local confluence is requested here, but the activation registry caps
-  // the effective mode. Missing/unapproved activation always resolves Observe.
-  zoneLocalEnforcementMode: "observe" as "observe" | "soft" | "hard",
-  zoneLocalSoftPenalty: 10,
-  zoneLocalMinimumScore: 1,
-  // Cross-timeframe impulse authority. Requested mode is always capped by the
-  // evidence activation registry before it can affect runtime decisions.
-  crossTfAuthorityMode: "observe" as "observe" | "soft" | "hard",
-  crossTfRequireNestedImpulse: true,
-  crossTfAllowStandaloneLowerTimeframe: false,
-  crossTfMaximumZoneSeparationATR: 0.25,
-  crossTfMinimumParentChildOverlapPercent: 50,
-  crossTfRequireSweepOrigin: false,
-  crossTfRetestQuality: "fresh_or_held" as
-    | "fresh_only"
-    | "fresh_or_held"
-    | "any_non_violated",
-  crossTfMaximumCandidatesPerTimeframe: 3,
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -290,29 +185,12 @@ export const RUNTIME_DEFAULTS = {
 
   // ── Limit Orders ──
   limitOrderEnabled: false,
-  preArmZoneSetups: false,
   limitOrderExpiryMinutes: 60,
-  pendingOrderCooldownMinutes: 0, // 0 = use limitOrderExpiryMinutes as cooldown (default). Set >0 to override.
   limitOrderMaxDistancePips: 30,
   limitOrderMinDistancePips: 3,
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest",
   marketFillAtZone: true,
-  nestedPoiMarketMode: "off" as NestedPoiMarketMode,
   marketFillStrictATRMult: 0.3,
-  confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",
-  afterChochMode: "confirmation_close" as "confirmation_close" | "observe_retracement" | "wait_retracement",
-  afterChochExpiryMinutes: 30,
-  maxConfirmationAttempts: 3,
-  indicatorMinCount: 3,
-
-  // ── Gameplan / Thesis Inputs ──
-  ipdaRangesEnabled: true,
-  thesisConvictionEnabled: true,
-  thesisConvictionMode: "shadow" as "shadow" | "active",
-  thesisConvictionDecayPerCycle: 8,
-  thesisConvictionRecoveryPerCycle: 5,
-  thesisConvictionRevokeThreshold: 50,
-  thesisConvictionKillThreshold: 30,
 
   // ── Opening Range ──
   openingRange: {
@@ -393,9 +271,8 @@ export const RUNTIME_DEFAULTS = {
   ictRiskFVGRuleOfTwoExit: true,
 
   // ── Correlation Filter ──
-  correlationFilterEnabled: false,
-  maxCorrelatedPositions: 1,
-  maxCorrelation: 0.8,
+  correlationFilterEnabled: true,
+  maxCorrelatedPositions: 2,
 
   // ── Entry/HTF Timeframes (set by style) ──
   entryTimeframe: "15min",
@@ -406,11 +283,6 @@ export const RUNTIME_DEFAULTS = {
   // When a symbol has an entry here, those fields override the global config
   // for that symbol only. Non-overridden fields fall through to global values.
   pairGateOverrides: {} as Record<string, PairGateOverride>,
-
-  // ── SMC Video Enhancements (opt-in) ──
-  // When non-null, enables additional SMC analysis modules.
-  // All sub-flags default to false — user must explicitly enable each module.
-  smcEnhancements: null as SMCEnhancementsConfig | null,
 
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
@@ -493,29 +365,29 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       }
       return raw_mc;
     })(),
-    htfBiasRequired: strategy.htfBiasRequired ?? strategy.requireHTFBias ?? raw.htfBiasRequired ?? RUNTIME_DEFAULTS.htfBiasRequired,
+    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? RUNTIME_DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? raw.htfBiasHardVeto ?? RUNTIME_DEFAULTS.htfBiasHardVeto,
     normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? RUNTIME_DEFAULTS.normalizedScoring,
 
     // ── Factor Toggles ──
     enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
     enableFVG: strategy.useFVG ?? strategy.enableFVG ?? true,
-    enableLiquiditySweep: strategy.enableLiquidity ?? strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
-    enableStructureBreak: strategy.enableStructure ?? strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
-    useDisplacement: strategy.enableDisplacement ?? strategy.useDisplacement ?? true,
-    useBreakerBlocks: strategy.enableBreaker ?? strategy.useBreakerBlocks ?? true,
-    useUnicornModel: strategy.enableUnicorn ?? strategy.useUnicornModel ?? true,
+    enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
+    enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
+    useDisplacement: strategy.useDisplacement ?? true,
+    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
+    useUnicornModel: strategy.useUnicornModel ?? true,
     useSilverBullet: strategy.useSilverBullet ?? true,
     useMacroWindows: strategy.useMacroWindows ?? true,
-    useSMT: strategy.enableSMT ?? strategy.useSMT ?? true,
+    useSMT: strategy.useSMT ?? true,
     smtOppositeVeto: strategy.smtOppositeVeto ?? raw.smtOppositeVeto ?? true,
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
-    useAMD: strategy.enableAMD ?? strategy.useAMD ?? true,
-    useFOTSI: strategy.enableFOTSI ?? strategy.useFOTSI ?? true,
-    useVolumeProfile: strategy.enableVolumeProfile ?? strategy.useVolumeProfile ?? true,
-    useTrendDirection: strategy.enableTrendDirection ?? strategy.useTrendDirection ?? true,
-    useDailyBias: strategy.enableDailyBias ?? strategy.useDailyBias ?? true,
+    useAMD: strategy.useAMD ?? true,
+    useFOTSI: strategy.useFOTSI ?? true,
+    useVolumeProfile: strategy.useVolumeProfile ?? true,
+    useTrendDirection: strategy.useTrendDirection ?? true,
+    useDailyBias: strategy.useDailyBias ?? true,
 
     // ── Regime Scoring ──
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? RUNTIME_DEFAULTS.regimeScoringEnabled,
@@ -524,28 +396,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── Premium/Discount Filters ──
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? RUNTIME_DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? RUNTIME_DEFAULTS.onlySellInPremium,
-    dealingRangeMode: strategy.dealingRangeMode ?? raw.dealingRangeMode ??
-      RUNTIME_DEFAULTS.dealingRangeMode,
-    impulseEntryLifecycleMode: strategy.impulseEntryLifecycleMode ??
-      raw.impulseEntryLifecycleMode ?? RUNTIME_DEFAULTS.impulseEntryLifecycleMode,
-    zoneSetupStopPolicyMode: exit.zoneSetupStopPolicyMode ??
-      raw.zoneSetupStopPolicyMode ?? RUNTIME_DEFAULTS.zoneSetupStopPolicyMode,
-    directionUnavailableMode: strategy.directionUnavailableMode ??
-      raw.directionUnavailableMode ?? RUNTIME_DEFAULTS.directionUnavailableMode,
-    canonicalScannerMode: strategy.canonicalScannerMode ??
-      raw.canonicalScannerMode ?? RUNTIME_DEFAULTS.canonicalScannerMode,
-    canonicalStructureMode: strategy.canonicalStructureMode ??
-      raw.canonicalStructureMode ?? RUNTIME_DEFAULTS.canonicalStructureMode,
-    singleOwnershipMode: (() => {
-      const ownership = strategy.singleOwnershipMode ?? raw.singleOwnershipMode;
-      const streamlined = strategy.streamlinedDecisionMode ?? raw.streamlinedDecisionMode;
-      return ownership === "enforce" || ownership === "enforce_live" || streamlined === "enforce"
-        ? "enforce"
-        : "observe";
-    })(),
-    // Retained internally for historical comparison records only. Single Ownership
-    // is the sole execution authority after config normalization.
-    streamlinedDecisionMode: "observe",
 
     // ── P1 Tuning Fields ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? RUNTIME_DEFAULTS.obLookbackCandles,
@@ -564,29 +414,12 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? RUNTIME_DEFAULTS.impulseZoneBonus,
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
-    zoneQualityThreshold: strategy.zoneQualityThreshold ?? raw.zoneQualityThreshold ?? RUNTIME_DEFAULTS.zoneQualityThreshold,
-    zoneMaxAgeBars: strategy.zoneMaxAgeBars ?? raw.zoneMaxAgeBars ?? RUNTIME_DEFAULTS.zoneMaxAgeBars,
-    zoneMinBodyRatio: strategy.zoneMinBodyRatio ?? raw.zoneMinBodyRatio ?? RUNTIME_DEFAULTS.zoneMinBodyRatio,
-    zoneMinDisplacementATR: strategy.zoneMinDisplacementATR ?? raw.zoneMinDisplacementATR ?? RUNTIME_DEFAULTS.zoneMinDisplacementATR,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
     fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
-    requireLiquiditySweep: strategy.requireLiquiditySweep ?? strategy.liquiditySweepRequired ?? raw.requireLiquiditySweep ?? raw.liquiditySweepRequired ?? RUNTIME_DEFAULTS.requireLiquiditySweep,
-    sweptAbsorbedPenalty: strategy.sweptAbsorbedPenalty ?? raw.sweptAbsorbedPenalty ?? RUNTIME_DEFAULTS.sweptAbsorbedPenalty,
-    zoneLocalEnforcementMode: (strategy.zoneLocalEnforcementMode ?? raw.zoneLocalEnforcementMode ?? RUNTIME_DEFAULTS.zoneLocalEnforcementMode) as "observe" | "soft" | "hard",
-    zoneLocalSoftPenalty: strategy.zoneLocalSoftPenalty ?? raw.zoneLocalSoftPenalty ?? RUNTIME_DEFAULTS.zoneLocalSoftPenalty,
-    zoneLocalMinimumScore: strategy.zoneLocalMinimumScore ?? raw.zoneLocalMinimumScore ?? RUNTIME_DEFAULTS.zoneLocalMinimumScore,
-    crossTfAuthorityMode: (strategy.crossTfAuthorityMode ?? raw.crossTfAuthorityMode ?? RUNTIME_DEFAULTS.crossTfAuthorityMode) as "observe" | "soft" | "hard",
-    crossTfRequireNestedImpulse: strategy.crossTfRequireNestedImpulse ?? raw.crossTfRequireNestedImpulse ?? RUNTIME_DEFAULTS.crossTfRequireNestedImpulse,
-    crossTfAllowStandaloneLowerTimeframe: strategy.crossTfAllowStandaloneLowerTimeframe ?? raw.crossTfAllowStandaloneLowerTimeframe ?? RUNTIME_DEFAULTS.crossTfAllowStandaloneLowerTimeframe,
-    crossTfMaximumZoneSeparationATR: strategy.crossTfMaximumZoneSeparationATR ?? raw.crossTfMaximumZoneSeparationATR ?? RUNTIME_DEFAULTS.crossTfMaximumZoneSeparationATR,
-    crossTfMinimumParentChildOverlapPercent: strategy.crossTfMinimumParentChildOverlapPercent ?? raw.crossTfMinimumParentChildOverlapPercent ?? RUNTIME_DEFAULTS.crossTfMinimumParentChildOverlapPercent,
-    crossTfRequireSweepOrigin: strategy.crossTfRequireSweepOrigin ?? raw.crossTfRequireSweepOrigin ?? RUNTIME_DEFAULTS.crossTfRequireSweepOrigin,
-    crossTfRetestQuality: (strategy.crossTfRetestQuality ?? raw.crossTfRetestQuality ?? RUNTIME_DEFAULTS.crossTfRetestQuality) as "fresh_only" | "fresh_or_held" | "any_non_violated",
-    crossTfMaximumCandidatesPerTimeframe: strategy.crossTfMaximumCandidatesPerTimeframe ?? raw.crossTfMaximumCandidatesPerTimeframe ?? RUNTIME_DEFAULTS.crossTfMaximumCandidatesPerTimeframe,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,
@@ -597,11 +430,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     confirmedTrendSwingLookback: strategy.confirmedTrendSwingLookback ?? raw.confirmedTrendSwingLookback ?? RUNTIME_DEFAULTS.confirmedTrendSwingLookback,
 
     // ── Structural Conviction Gate ──
-    structuralConvictionEnabled:
-      strategy.structuralConvictionEnabled
-      ?? strategy.structuralConvictionGate
-      ?? raw.structuralConvictionEnabled
-      ?? RUNTIME_DEFAULTS.structuralConvictionEnabled,
+    structuralConvictionEnabled: strategy.structuralConvictionEnabled !== false,
     structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? RUNTIME_DEFAULTS.structuralConvictionS2FLong,
     structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? RUNTIME_DEFAULTS.structuralConvictionS2FShort,
     structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? RUNTIME_DEFAULTS.structuralConvictionOppositeLong,
@@ -620,24 +449,15 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── Setup Staging / Watchlist ──
     stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? RUNTIME_DEFAULTS.stagingEnabled,
     watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? RUNTIME_DEFAULTS.watchThreshold,
-    stagingTTLMinutes: entry.zoneWatchExpiry !== undefined
-      ? Math.max(1, Number(entry.zoneWatchExpiry)) * 60
-      : strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? RUNTIME_DEFAULTS.stagingTTLMinutes,
+    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? RUNTIME_DEFAULTS.stagingTTLMinutes,
     minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? RUNTIME_DEFAULTS.minStagingCycles,
 
     // ── Risk Mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? RUNTIME_DEFAULTS.riskPerTrade,
-    standaloneMultiplier: risk.standaloneMultiplier ?? raw.standaloneMultiplier ?? RUNTIME_DEFAULTS.standaloneMultiplier,
-    positionSizingMethod: (() => {
-      const method = risk.positionSizingMethod ?? raw.positionSizingMethod ?? RUNTIME_DEFAULTS.positionSizingMethod;
-      return method === "atr_volatility" ? "volatility_adjusted" : method;
-    })() as RuntimeConfig["positionSizingMethod"],
+    positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? RUNTIME_DEFAULTS.positionSizingMethod,
     fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? RUNTIME_DEFAULTS.fixedLotSize,
-    atrVolatilityMultiplier: risk.atrVolatilityMultiplier ?? raw.atrVolatilityMultiplier ?? RUNTIME_DEFAULTS.atrVolatilityMultiplier,
     maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? RUNTIME_DEFAULTS.maxDailyLoss,
-    // Canonical: risk.maxConcurrentTrades (UI field). Legacy risk.maxOpenPositions is ignored
-    // after the 2026-07-11 migration removed it from DB configs.
-    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxConcurrentTrades ?? RUNTIME_DEFAULTS.maxOpenPositions,
+    maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? RUNTIME_DEFAULTS.maxOpenPositions,
     minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? RUNTIME_DEFAULTS.minRiskReward,
     maxPerSymbol: risk.maxPositionsPerSymbol ?? RUNTIME_DEFAULTS.maxPerSymbol,
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? RUNTIME_DEFAULTS.allowSameDirectionStacking,
@@ -649,27 +469,14 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? RUNTIME_DEFAULTS.scanIntervalMinutes,
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
-    slBufferPips: exit.slBufferPips ?? entry.slBufferPips ?? raw.slBufferPips ?? RUNTIME_DEFAULTS.slBufferPips,
+    slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? RUNTIME_DEFAULTS.slBufferPips,
 
     // ── SL/TP Method Mappings ──
-    slMethod: (() => {
-      const method = exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? RUNTIME_DEFAULTS.slMethod;
-      return method === "atr" ? "atr_based" : method === "fixed" ? "fixed_pips" : method;
-    })() as RuntimeConfig["slMethod"],
+    slMethod: exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? RUNTIME_DEFAULTS.slMethod,
     fixedSLPips: exit.fixedSLPips ?? raw.fixedSLPips ?? RUNTIME_DEFAULTS.fixedSLPips,
     slATRMultiple: exit.slATRMultiple ?? raw.slATRMultiple ?? RUNTIME_DEFAULTS.slATRMultiple,
     slATRPeriod: exit.slATRPeriod ?? raw.slATRPeriod ?? RUNTIME_DEFAULTS.slATRPeriod,
-    tpMethod: (() => {
-      const method = exit.takeProfitMethod ?? exit.tpMethod ?? raw.tpMethod ?? RUNTIME_DEFAULTS.tpMethod;
-      return method === "rr"
-        ? "rr_ratio"
-        : method === "atr"
-        ? "atr_multiple"
-        : method === "fixed"
-        ? "fixed_pips"
-        : method;
-    })() as RuntimeConfig["tpMethod"],
-    nextLevelFallback: (exit.nextLevelFallback ?? raw.nextLevelFallback ?? RUNTIME_DEFAULTS.nextLevelFallback) as RuntimeConfig["nextLevelFallback"],
+    tpMethod: exit.takeProfitMethod ?? exit.tpMethod ?? raw.tpMethod ?? RUNTIME_DEFAULTS.tpMethod,
     fixedTPPips: exit.fixedTPPips ?? raw.fixedTPPips ?? RUNTIME_DEFAULTS.fixedTPPips,
     tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? RUNTIME_DEFAULTS.tpRatio,
     tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? RUNTIME_DEFAULTS.tpATRMultiple,
@@ -680,16 +487,11 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? RUNTIME_DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? RUNTIME_DEFAULTS.breakEvenPips,
-    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? RUNTIME_DEFAULTS.breakEvenOffsetPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
     maxHoldEnabled: exit.maxHoldEnabled ?? raw.maxHoldEnabled ?? RUNTIME_DEFAULTS.maxHoldEnabled,
     maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
-    structureInvalidationEnabled:
-      exit.structureInvalidationEnabled
-      ?? raw.structureInvalidationEnabled
-      ?? RUNTIME_DEFAULTS.structureInvalidationEnabled,
 
     // ── Instruments ──
     instruments: Array.isArray(instruments.enabled)
@@ -697,14 +499,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       : enabledInstrumentList
         ? enabledInstrumentList
         : (Array.isArray(raw.instruments) ? raw.instruments : RUNTIME_DEFAULTS.instruments),
-    rotatingImpulseScanEnabled: instruments.rotatingImpulseScanEnabled
-      ?? raw.rotatingImpulseScanEnabled
-      ?? RUNTIME_DEFAULTS.rotatingImpulseScanEnabled,
-    rotatingImpulseSlotCount: Number(
-      instruments.rotatingImpulseSlotCount
-      ?? raw.rotatingImpulseSlotCount
-      ?? RUNTIME_DEFAULTS.rotatingImpulseSlotCount
-    ),
 
     // ── Sessions ──
     enabledSessions: (
@@ -743,18 +537,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ),
 
     // ── Opening Range & Trading Style ──
-    openingRange: {
-      ...RUNTIME_DEFAULTS.openingRange,
-      ...(raw.openingRange || {}),
-      useJudasSwing:
-        raw.openingRange?.useJudasSwing
-        ?? raw.openingRange?.judasSwing
-        ?? RUNTIME_DEFAULTS.openingRange.useJudasSwing,
-      useKeyLevels:
-        raw.openingRange?.useKeyLevels
-        ?? raw.openingRange?.keyLevels
-        ?? RUNTIME_DEFAULTS.openingRange.useKeyLevels,
-    },
+    openingRange: { ...RUNTIME_DEFAULTS.openingRange, ...(raw.openingRange || {}) },
     tradingStyle: { ...RUNTIME_DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
 
     // ── Factor Weights ──
@@ -769,54 +552,12 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── News Event Filter ──
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? RUNTIME_DEFAULTS.newsFilterEnabled,
-    newsFilterPauseMinutes:
-      sessions.newsBufferMinutes
-      ?? sessions.newsFilterPauseMinutes
-      ?? raw.newsFilterPauseMinutes
-      ?? RUNTIME_DEFAULTS.newsFilterPauseMinutes,
-
-    // ── Game Plan + Direction Verdict Alignment Gate ──
-    gamePlanEnabled:
-      raw.gamePlan?.enabled
-      ?? raw.gamePlanEnabled
-      ?? RUNTIME_DEFAULTS.gamePlanEnabled,
-    gamePlanValidityMinutes:
-      raw.gamePlan?.validityMinutes
-      ?? raw.gamePlanValidityMinutes
-      ?? RUNTIME_DEFAULTS.gamePlanValidityMinutes,
-    gpEnforcementMode: (
-      raw.gamePlan?.enforcementMode
-      ?? strategy.gpEnforcementMode
-      ?? raw.gpEnforcementMode
-      ?? (
-        (raw.gamePlan?.hardBlockThreshold ?? strategy.gpHardBlockThreshold ?? raw.gpHardBlockThreshold) === 0
-          ? "off"
-          : RUNTIME_DEFAULTS.gpEnforcementMode
-      )
-    ) as "off" | "soft" | "hard",
-    gpHardBlockThreshold:
-      raw.gamePlan?.hardBlockThreshold
-      ?? strategy.gpHardBlockThreshold
-      ?? raw.gpHardBlockThreshold
-      ?? RUNTIME_DEFAULTS.gpHardBlockThreshold,
-    ipdaRangesEnabled: raw.ipdaRangesEnabled ?? raw.gamePlan?.ipdaRangesEnabled ?? RUNTIME_DEFAULTS.ipdaRangesEnabled,
+    newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? RUNTIME_DEFAULTS.newsFilterPauseMinutes,
 
     // ── ATR Volatility Filter ──
-    atrFilterEnabled:
-      instruments.atrFilterEnabled
-      ?? instruments.volatilityFilterEnabled
-      ?? raw.atrFilterEnabled
-      ?? RUNTIME_DEFAULTS.atrFilterEnabled,
-    atrFilterMin:
-      instruments.atrFilterMinPips
-      ?? instruments.minATR
-      ?? raw.atrFilterMin
-      ?? RUNTIME_DEFAULTS.atrFilterMin,
-    atrFilterMax:
-      instruments.atrFilterMaxPips
-      ?? instruments.maxATR
-      ?? raw.atrFilterMax
-      ?? RUNTIME_DEFAULTS.atrFilterMax,
+    atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? RUNTIME_DEFAULTS.atrFilterEnabled,
+    atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? RUNTIME_DEFAULTS.atrFilterMin,
+    atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? RUNTIME_DEFAULTS.atrFilterMax,
 
     // ── ICT HTF Framework ──
     ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? RUNTIME_DEFAULTS.ictHTFEnabled,
@@ -830,11 +571,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── ICT Displacement MSS Validation ──
     ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? RUNTIME_DEFAULTS.ictDisplacementMSSEnabled,
     ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? RUNTIME_DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
-    ictDisplacementMSSMinBodyRatio:
-      strategy.ictDisplacementMSSMinBodyRatio
-      ?? strategy.ictDisplacementMinRatio
-      ?? raw.ictDisplacementMSSMinBodyRatio
-      ?? RUNTIME_DEFAULTS.ictDisplacementMSSMinBodyRatio,
+    ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? RUNTIME_DEFAULTS.ictDisplacementMSSMinBodyRatio,
     ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? RUNTIME_DEFAULTS.ictDisplacementMSSMinRangeATR,
     ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? RUNTIME_DEFAULTS.ictDisplacementMSSLookback,
     ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? RUNTIME_DEFAULTS.ictDisplacementMSSPenalty,
@@ -873,99 +610,21 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ictRiskMaxTradesPerDay: strategy.ictRiskMaxTradesPerDay ?? raw.ictRiskMaxTradesPerDay ?? RUNTIME_DEFAULTS.ictRiskMaxTradesPerDay,
     ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? RUNTIME_DEFAULTS.ictRiskFVGRuleOfTwoExit,
 
-    // ── Correlation Filter (source: instruments, matching bot-scanner) ──
-    correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
-    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
-    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation,
+    // ── Correlation Filter ──
+    correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
+    maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
 
     // ── Limit Orders ──
-    limitOrderEnabled: entry.pendingZoneOrders ?? entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,
-    preArmZoneSetups: entry.preArmZoneSetups ?? raw.preArmZoneSetups ?? RUNTIME_DEFAULTS.preArmZoneSetups,
-    limitOrderExpiryMinutes: entry.zoneWatchExpiry !== undefined
-      ? Math.max(1, Number(entry.zoneWatchExpiry)) * 60
-      : entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? RUNTIME_DEFAULTS.limitOrderExpiryMinutes,
-    pendingOrderCooldownMinutes: entry.pendingOrderCooldownMinutes ?? raw.pendingOrderCooldownMinutes ?? RUNTIME_DEFAULTS.pendingOrderCooldownMinutes,
+    limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,
+    limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? RUNTIME_DEFAULTS.limitOrderExpiryMinutes,
     limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? RUNTIME_DEFAULTS.limitOrderMaxDistancePips,
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? RUNTIME_DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? RUNTIME_DEFAULTS.limitOrderPreferZone,
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
-    nestedPoiMarketMode: normalizeNestedPoiMarketMode(
-      entry.nestedPoiMarketMode ?? raw.nestedPoiMarketMode,
-    ),
-    marketFillStrictATRMult: entry.zoneProximityATR ?? entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
-    confirmationMethod: (entry.confirmationMethod ?? raw.confirmationMethod ?? RUNTIME_DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
-    afterChochMode: (entry.afterChochMode ?? raw.afterChochMode ?? RUNTIME_DEFAULTS.afterChochMode) as "confirmation_close" | "observe_retracement" | "wait_retracement",
-    afterChochExpiryMinutes: Math.max(5, Number(entry.afterChochExpiryMinutes ?? raw.afterChochExpiryMinutes ?? RUNTIME_DEFAULTS.afterChochExpiryMinutes)),
-    maxConfirmationAttempts: entry.maxConfirmationAttempts ?? raw.maxConfirmationAttempts ?? RUNTIME_DEFAULTS.maxConfirmationAttempts,
-    indicatorMinCount: entry.indicatorMinCount ?? raw.indicatorMinCount ?? RUNTIME_DEFAULTS.indicatorMinCount,
-
-    // ── Thesis Conviction ──
-    thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? RUNTIME_DEFAULTS.thesisConvictionEnabled,
-    thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? RUNTIME_DEFAULTS.thesisConvictionMode) as "shadow" | "active",
-    thesisConvictionDecayPerCycle: strategy.thesisConvictionDecayPerCycle ?? raw.thesisConvictionDecayPerCycle ?? RUNTIME_DEFAULTS.thesisConvictionDecayPerCycle,
-    thesisConvictionRecoveryPerCycle: strategy.thesisConvictionRecoveryPerCycle ?? raw.thesisConvictionRecoveryPerCycle ?? RUNTIME_DEFAULTS.thesisConvictionRecoveryPerCycle,
-    thesisConvictionRevokeThreshold: strategy.thesisConvictionRevokeThreshold ?? raw.thesisConvictionRevokeThreshold ?? RUNTIME_DEFAULTS.thesisConvictionRevokeThreshold,
-    thesisConvictionKillThreshold: strategy.thesisConvictionKillThreshold ?? raw.thesisConvictionKillThreshold ?? RUNTIME_DEFAULTS.thesisConvictionKillThreshold,
+    marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
 
     // ── Per-Pair Gate Overrides ──
     pairGateOverrides: raw.pairGateOverrides ?? RUNTIME_DEFAULTS.pairGateOverrides,
-
-    // ── SMC Video Enhancements ──
-    smcEnhancements: (() => {
-      const enhancements = raw.smcEnhancements ?? strategy.smcEnhancements;
-      if (!enhancements) return RUNTIME_DEFAULTS.smcEnhancements;
-      const confidenceDecay = Number(enhancements.confidenceDecay);
-      const selectedFibRatio = Math.abs(Number(enhancements.primaryFibLevel));
-      const defaultFibRatios = [0.272, 0.618, 1, 1.272, 1.618];
-      const extensionRatios = Number.isFinite(selectedFibRatio) && selectedFibRatio > 0
-        ? [selectedFibRatio, ...defaultFibRatios.filter((ratio) => ratio !== selectedFibRatio)]
-        : defaultFibRatios;
-      return {
-        ...enhancements,
-        enableFibExtension3Point:
-          enhancements.enableFibExtension3Point
-          ?? enhancements.enableFib3PointTP
-          ?? false,
-        phaseConfig: {
-          ...(enhancements.phaseConfig || {}),
-          ...(enhancements.trendThreshold !== undefined
-            ? { trendThreshold: enhancements.trendThreshold }
-            : {}),
-        },
-        zoneLifecycleConfig: {
-          ...(enhancements.zoneLifecycleConfig || {}),
-          ...(enhancements.maxRetests !== undefined
-            ? { maxRetests: enhancements.maxRetests }
-            : {}),
-          ...(Number.isFinite(confidenceDecay)
-            ? {
-              confidenceByRetest: [0, 1, 2, 3].map((index) =>
-                Math.max(0, 1 - confidenceDecay * index)
-              ),
-            }
-            : {}),
-        },
-        breakerConfig: {
-          ...(enhancements.breakerConfig || {}),
-          ...(enhancements.breakerMinDisplacement !== undefined
-            ? { minDisplacementATR: enhancements.breakerMinDisplacement }
-            : {}),
-        },
-        fibExtensionConfig: {
-          ...(enhancements.fibExtensionConfig || {}),
-          extensionRatios,
-        },
-        trendlineConfig: {
-          ...(enhancements.trendlineConfig || {}),
-          ...(enhancements.trendlineMinTouches !== undefined
-            ? { minTouches: enhancements.trendlineMinTouches }
-            : {}),
-          ...(enhancements.trendlineTrapTouch !== undefined
-            ? { trapTouchThreshold: enhancements.trendlineTrapTouch }
-            : {}),
-        },
-      };
-    })(),
 
     // ── Per-pair scratch ──
     _currentSymbol: "",

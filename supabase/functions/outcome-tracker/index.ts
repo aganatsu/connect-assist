@@ -16,31 +16,13 @@
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
-import { isInstrumentMarketOpen } from "../_shared/gamePlanMarketScope.ts";
 import { SPECS } from "../_shared/smcAnalysis.ts";
-import {
-  classifyTrackedOutcome,
-  simulateOutcome,
-} from "../_shared/outcomeSimulation.ts";
-import {
-  normalizeTradingStyle,
-  outcomeCandleRequest,
-} from "../_shared/decisionOutcomeContract.ts";
-
-import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-
-setCreditCallerContext("outcome-tracker");
-
-export { simulateOutcome } from "../_shared/outcomeSimulation.ts";
 
 // ── Constants ──
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation
-const SHADOW_BATCH_SIZE = 100;    // Disagreement winners only; cached by symbol
 const MIN_AGE_MS = 60 * 60 * 1000;  // 1 hour minimum age before checking
-const OUTCOME_WINDOW_HOURS = 24;     // Legacy fallback; new records freeze their style window
-const SHADOW_MIN_AGE_MS = OUTCOME_WINDOW_HOURS * 60 * 60 * 1000;
+const OUTCOME_WINDOW_HOURS = 24;     // Look 24h ahead for outcome
 const RETENTION_DAYS = 30;           // Delete records older than this
 const ALERT_THRESHOLD = 0.50;        // Alert if >50% would have won
 const ALERT_ROLLING_DAYS = 7;        // Rolling window for alert calculation
@@ -53,6 +35,123 @@ function getPipSize(symbol: string): number {
   return (SPECS as any)[symbol]?.pipSize ?? 0.0001;
 }
 
+interface OutcomeResult {
+  outcome_status: "inconclusive" | "would_have_won" | "would_have_lost";
+  price_reached_entry: boolean;
+  tp_hit: boolean;
+  sl_hit: boolean;
+  tp_hit_time_minutes: number | null;
+  mfe_pips: number;
+  mae_pips: number;
+}
+
+/**
+ * Simulate the outcome of a rejected setup using candle data.
+ * Returns the outcome based on whether price reached entry, then hit TP or SL first.
+ */
+function simulateOutcome(
+  candles: Array<{ datetime: string; open: number; high: number; low: number; close: number }>,
+  direction: "long" | "short",
+  entryPrice: number,
+  stopLoss: number | null,
+  takeProfit: number | null,
+  rejectedAt: string,
+): OutcomeResult {
+  const pipSize = 0.0001; // Will be overridden per-symbol in the caller
+  const result: OutcomeResult = {
+    outcome_status: "inconclusive",
+    price_reached_entry: false,
+    tp_hit: false,
+    sl_hit: false,
+    tp_hit_time_minutes: null,
+    mfe_pips: 0,
+    mae_pips: 0,
+  };
+
+  const rejectedTime = new Date(rejectedAt).getTime();
+  let entryReachedTime: number | null = null;
+  let maxFavorable = 0;
+  let maxAdverse = 0;
+
+  for (const candle of candles) {
+    const candleTime = new Date(candle.datetime).getTime();
+    // Only look at candles after rejection
+    if (candleTime <= rejectedTime) continue;
+    // Only look within the outcome window (24h)
+    if (candleTime > rejectedTime + OUTCOME_WINDOW_HOURS * 60 * 60 * 1000) break;
+
+    // Check if price reached entry
+    if (!result.price_reached_entry) {
+      if (direction === "long" && candle.low <= entryPrice) {
+        result.price_reached_entry = true;
+        entryReachedTime = candleTime;
+      } else if (direction === "short" && candle.high >= entryPrice) {
+        result.price_reached_entry = true;
+        entryReachedTime = candleTime;
+      }
+    }
+
+    // Once entry is reached, track MFE/MAE and check TP/SL
+    if (result.price_reached_entry && entryReachedTime !== null) {
+      if (direction === "long") {
+        const favorable = candle.high - entryPrice;
+        const adverse = entryPrice - candle.low;
+        maxFavorable = Math.max(maxFavorable, favorable);
+        maxAdverse = Math.max(maxAdverse, adverse);
+
+        if (takeProfit !== null && candle.high >= takeProfit && !result.tp_hit) {
+          result.tp_hit = true;
+          result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        }
+        if (stopLoss !== null && candle.low <= stopLoss) {
+          result.sl_hit = true;
+        }
+      } else {
+        // Short
+        const favorable = entryPrice - candle.low;
+        const adverse = candle.high - entryPrice;
+        maxFavorable = Math.max(maxFavorable, favorable);
+        maxAdverse = Math.max(maxAdverse, adverse);
+
+        if (takeProfit !== null && candle.low <= takeProfit && !result.tp_hit) {
+          result.tp_hit = true;
+          result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        }
+        if (stopLoss !== null && candle.high >= stopLoss) {
+          result.sl_hit = true;
+        }
+      }
+    }
+  }
+
+  // Assign MFE/MAE in raw price units (caller converts to pips)
+  result.mfe_pips = maxFavorable;
+  result.mae_pips = maxAdverse;
+
+  // Determine final outcome
+  if (!result.price_reached_entry) {
+    result.outcome_status = "inconclusive";
+  } else if (result.tp_hit && !result.sl_hit) {
+    result.outcome_status = "would_have_won";
+  } else if (result.sl_hit && !result.tp_hit) {
+    result.outcome_status = "would_have_lost";
+  } else if (result.tp_hit && result.sl_hit) {
+    // Both hit — check which was hit first by time (tp_hit_time_minutes gives TP timing)
+    // If TP was hit first (tp_hit_time_minutes is set), it's a win
+    result.outcome_status = result.tp_hit_time_minutes !== null ? "would_have_won" : "would_have_lost";
+  } else {
+    // Entry reached but neither TP nor SL hit within window
+    // Use MFE vs MAE to determine likely outcome
+    if (maxFavorable > maxAdverse) {
+      result.outcome_status = "would_have_won";
+    } else {
+      result.outcome_status = "would_have_lost";
+    }
+  }
+
+  return result;
+}
+
 // ── Main Handler ──
 
 Deno.serve(async (req: Request) => {
@@ -60,28 +159,13 @@ Deno.serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  // Gate 0: Only the cron scheduler may invoke this function.
-  const authError = verifyCronCaller(req);
-  if (authError) return authError;
-
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
-  const marketNow = new Date();
 
   try {
-    const results: Record<string, any> = {
-      processed: 0,
-      updated: 0,
-      errors: 0,
-      cleaned: 0,
-      shadow_processed: 0,
-      shadow_updated: 0,
-      shadow_errors: 0,
-      shadow_cleaned: 0,
-      developing: 0,
-    };
+    const results: Record<string, any> = { processed: 0, updated: 0, errors: 0, cleaned: 0 };
 
     // ── Step 1: Fetch pending outcomes older than 1 hour ──
     const cutoff = new Date(Date.now() - MIN_AGE_MS).toISOString();
@@ -90,7 +174,6 @@ Deno.serve(async (req: Request) => {
       .select("*")
       .eq("outcome_status", "pending")
       .lt("rejected_at", cutoff)
-      .order("outcome_checked_at", { ascending: true, nullsFirst: true })
       .order("rejected_at", { ascending: true })
       .limit(BATCH_SIZE);
 
@@ -107,56 +190,30 @@ Deno.serve(async (req: Request) => {
       console.log(`[outcome-tracker] Processing ${pendingSetups.length} pending setups`);
 
       for (const setup of pendingSetups) {
-        if (!isInstrumentMarketOpen(setup.symbol, marketNow)) {
-          continue;
-        }
         results.processed++;
         try {
-          const evaluatedAt = new Date().toISOString();
-          const outcomeWindowHours = Number(setup.outcome_window_hours) || OUTCOME_WINDOW_HOURS;
-          const frozenStyle = normalizeTradingStyle(setup.decision_outcome_snapshot?.tradingStyle);
-          const candleRequest = outcomeCandleRequest(
-            frozenStyle,
-            setup.rejected_at,
-            outcomeWindowHours,
-            evaluatedAt,
-          );
+          // Fetch 1H candles for the symbol (covers 24h+ after rejection)
           const { candles } = await fetchCandlesWithFallback({
             symbol: setup.symbol,
-            interval: candleRequest.interval,
-            limit: candleRequest.limit,
-            startAt: candleRequest.startAt,
-            endAt: candleRequest.endAt,
-            skipBroker: true,
+            interval: "1h",
+            limit: 48, // 48 hours of 1H candles — plenty of coverage
           });
 
           if (candles.length < 5) {
             console.warn(`[outcome-tracker] Insufficient candles for ${setup.symbol} (${candles.length})`);
-            await supabase.from("rejected_setups").update({
-              outcome_checked_at: evaluatedAt,
-              outcome_reason: "candle_data_unavailable",
-            }).eq("id", setup.id);
             results.errors++;
             continue;
           }
 
           const pipSize = getPipSize(setup.symbol);
-          const simulated = simulateOutcome(
+          const outcome = simulateOutcome(
             candles,
             setup.direction as "long" | "short",
             parseFloat(setup.entry_price),
             setup.stop_loss ? parseFloat(setup.stop_loss) : null,
             setup.take_profit ? parseFloat(setup.take_profit) : null,
             setup.rejected_at,
-            outcomeWindowHours,
           );
-          const outcome = classifyTrackedOutcome(
-            simulated,
-            setup.rejected_at,
-            outcomeWindowHours,
-            evaluatedAt,
-          );
-          if (outcome.outcome_status === "pending") results.developing++;
 
           // Convert MFE/MAE from price units to pips
           const mfePips = outcome.mfe_pips / pipSize;
@@ -167,16 +224,11 @@ Deno.serve(async (req: Request) => {
             .from("rejected_setups")
             .update({
               outcome_status: outcome.outcome_status,
-              outcome_checked_at: evaluatedAt,
+              outcome_checked_at: new Date().toISOString(),
               price_reached_entry: outcome.price_reached_entry,
               tp_hit: outcome.tp_hit,
               sl_hit: outcome.sl_hit,
               tp_hit_time_minutes: outcome.tp_hit_time_minutes,
-              sl_hit_time_minutes: outcome.sl_hit_time_minutes,
-              outcome_reason: outcome.outcome_reason,
-              mfe_r: outcome.mfe_r == null ? null : Number(outcome.mfe_r.toFixed(3)),
-              mae_r: outcome.mae_r == null ? null : Number(outcome.mae_r.toFixed(3)),
-              outcome_r: outcome.outcome_r == null ? null : Number(outcome.outcome_r.toFixed(3)),
               mfe_pips: parseFloat(mfePips.toFixed(2)),
               mae_pips: parseFloat(maePips.toFixed(2)),
             })
@@ -190,182 +242,17 @@ Deno.serve(async (req: Request) => {
           }
         } catch (e: any) {
           console.warn(`[outcome-tracker] Error processing ${setup.symbol}: ${e?.message}`);
-          await supabase.from("rejected_setups").update({
-            outcome_checked_at: new Date().toISOString(),
-            outcome_reason: "tracking_error",
-          }).eq("id", setup.id);
           results.errors++;
         }
       }
     }
 
-    // ── Step 3: Resolve observe-only zone-ranking disagreement outcomes ──
-    try {
-      const shadowCutoff = new Date(
-        Date.now() - SHADOW_MIN_AGE_MS,
-      ).toISOString();
-      const { data: shadowRows, error: shadowFetchErr } = await supabase
-        .from("zone_candidate_shadow_observations")
-        .select(
-          "id, symbol, direction, entry_price, stop_loss, take_profit, observed_at",
-        )
-        .eq("evidence_source", "forward_observation")
-        .eq("outcome_status", "pending")
-        .lt("observed_at", shadowCutoff)
-        .order("observed_at", { ascending: true })
-        .limit(SHADOW_BATCH_SIZE);
-
-      if (shadowFetchErr) {
-        console.warn(
-          `[outcome-tracker] Zone shadow fetch error: ${
-            shadowFetchErr.message
-          }`,
-        );
-        results.shadow_errors++;
-      } else if (shadowRows && shadowRows.length > 0) {
-        const candleCache = new Map<string, any[]>();
-        for (const row of shadowRows) {
-          if (!isInstrumentMarketOpen(row.symbol, marketNow)) {
-            continue;
-          }
-          results.shadow_processed++;
-          try {
-            let candles = candleCache.get(row.symbol);
-            if (!candles) {
-              const fetched = await fetchCandlesWithFallback({
-                symbol: row.symbol,
-                interval: "1h",
-                limit: 72,
-              });
-              candles = fetched.candles;
-              candleCache.set(row.symbol, candles);
-            }
-            if (candles.length < 24) {
-              results.shadow_errors++;
-              continue;
-            }
-            const outcome = simulateOutcome(
-              candles,
-              row.direction as "long" | "short",
-              Number(row.entry_price),
-              row.stop_loss == null ? null : Number(row.stop_loss),
-              row.take_profit == null ? null : Number(row.take_profit),
-              row.observed_at,
-            );
-            const pipSize = getPipSize(row.symbol);
-            const status = outcome.price_reached_entry
-              ? outcome.outcome_status
-              : "no_entry";
-            const { error: shadowUpdateErr } = await supabase
-              .from("zone_candidate_shadow_observations")
-              .update({
-                outcome_status: status,
-                outcome_checked_at: new Date().toISOString(),
-                price_reached_entry: outcome.price_reached_entry,
-                tp_hit: outcome.tp_hit,
-                sl_hit: outcome.sl_hit,
-                tp_hit_time_minutes: outcome.tp_hit_time_minutes,
-                mfe_pips: Number(
-                  (outcome.mfe_pips / pipSize).toFixed(2),
-                ),
-                mae_pips: Number(
-                  (outcome.mae_pips / pipSize).toFixed(2),
-                ),
-              })
-              .eq("id", row.id);
-            if (shadowUpdateErr) {
-              console.warn(
-                `[outcome-tracker] Zone shadow update error ${row.id}:`
-                + ` ${shadowUpdateErr.message}`,
-              );
-              results.shadow_errors++;
-            } else {
-              results.shadow_updated++;
-            }
-          } catch (shadowErr: any) {
-            console.warn(
-              `[outcome-tracker] Zone shadow error ${row.symbol}:`
-              + ` ${shadowErr?.message}`,
-            );
-            results.shadow_errors++;
-          }
-        }
-      }
-    } catch (shadowErr: any) {
-      console.warn(
-        `[outcome-tracker] Zone shadow batch error: ${shadowErr?.message}`,
-      );
-      results.shadow_errors++;
-    }
-
-    // Resolve the new type-neutral authority counterfactual with the same
-    // market-data and outcome engine used by legacy zone observations.
-    try {
-      const authorityCutoff = new Date(
-        Date.now() - SHADOW_MIN_AGE_MS,
-      ).toISOString();
-      const { data: authorityRows, error: authorityFetchErr } = await supabase
-        .from("ict_entry_zone_authority_observations")
-        .select("id, symbol, direction, entry_price, stop_loss, take_profit, observed_at")
-        .eq("comparison_status", "comparable")
-        .eq("outcome_status", "pending")
-        .lt("observed_at", authorityCutoff)
-        .order("observed_at", { ascending: true })
-        .limit(SHADOW_BATCH_SIZE);
-      if (authorityFetchErr) {
-        console.warn(`[outcome-tracker] ICT authority fetch unavailable: ${authorityFetchErr.message}`);
-      } else if (authorityRows && authorityRows.length > 0) {
-        const candleCache = new Map<string, any[]>();
-        for (const row of authorityRows) {
-          if (!isInstrumentMarketOpen(row.symbol, marketNow)) {
-            continue;
-          }
-          try {
-            let candles = candleCache.get(row.symbol);
-            if (!candles) {
-              candles = (await fetchCandlesWithFallback({
-                symbol: row.symbol,
-                interval: "1h",
-                limit: 72,
-              })).candles;
-              candleCache.set(row.symbol, candles);
-            }
-            if (candles.length < 24) continue;
-            const outcome = simulateOutcome(
-              candles,
-              row.direction as "long" | "short",
-              Number(row.entry_price),
-              Number(row.stop_loss),
-              Number(row.take_profit),
-              row.observed_at,
-            );
-            const pipSize = getPipSize(row.symbol);
-            await supabase.from("ict_entry_zone_authority_observations").update({
-              outcome_status: outcome.price_reached_entry
-                ? outcome.outcome_status
-                : "no_entry",
-              outcome_checked_at: new Date().toISOString(),
-              price_reached_entry: outcome.price_reached_entry,
-              tp_hit: outcome.tp_hit,
-              sl_hit: outcome.sl_hit,
-              mfe_pips: Number((outcome.mfe_pips / pipSize).toFixed(2)),
-              mae_pips: Number((outcome.mae_pips / pipSize).toFixed(2)),
-            }).eq("id", row.id);
-          } catch (authorityErr: any) {
-            console.warn(`[outcome-tracker] ICT authority outcome error ${row.symbol}: ${authorityErr?.message}`);
-          }
-        }
-      }
-    } catch (authorityErr: any) {
-      console.warn(`[outcome-tracker] ICT authority batch unavailable: ${authorityErr?.message}`);
-    }
-
-    // ── Step 4: Check rolling 7-day winner-block rate and alert ──
+    // ── Step 3: Check rolling 7-day winner-block rate and alert ──
     try {
       const sevenDaysAgo = new Date(Date.now() - ALERT_ROLLING_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { data: recentResolved, error: alertErr } = await supabase
         .from("rejected_setups")
-        .select("outcome_status, user_id, symbol, normalized_gates")
+        .select("outcome_status, user_id")
         .neq("outcome_status", "pending")
         .neq("outcome_status", "inconclusive")
         .gte("rejected_at", sevenDaysAgo);
@@ -404,33 +291,11 @@ Deno.serve(async (req: Request) => {
               })();
 
               if (chatIds.length > 0) {
-                const topOf = (key: string) => {
-                  const counts = new Map<string, number>();
-                  for (const w of winners as any[]) {
-                    const raw = w?.[key];
-                    const values = Array.isArray(raw) ? raw : [raw];
-                    for (const item of values) {
-                      const v = String(item ?? "").trim();
-                      if (!v) continue;
-                      counts.set(v, (counts.get(v) || 0) + 1);
-                    }
-                  }
-                  return [...counts.entries()]
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 3)
-                    .map(([v, c]) => `${v.replace(/_/g, " ")} (${c})`)
-                    .join(", ");
-                };
-                const topReasons = topOf("normalized_gates");
-                const topSymbols = topOf("symbol");
                 const msg = `📊 <b>Gate Effectiveness Alert</b>\n\n` +
                   `<b>Winner-block rate:</b> ${(winnerRate * 100).toFixed(1)}%\n` +
                   `<b>Period:</b> Last ${ALERT_ROLLING_DAYS} days\n` +
                   `<b>Resolved setups:</b> ${recentResolved.length}\n` +
-                  `<b>Would-have-won:</b> ${winners.length}\n` +
-                  (topReasons ? `<b>Top blocking gates:</b> ${topReasons}\n` : "") +
-                  (topSymbols ? `<b>Most affected pairs:</b> ${topSymbols}\n` : "") +
-                  `\n` +
+                  `<b>Would-have-won:</b> ${winners.length}\n\n` +
                   `⚠️ Gates may be too strict — more than half of blocked setups would have been profitable.\n` +
                   `Consider reviewing gate thresholds.`;
 
@@ -470,7 +335,7 @@ Deno.serve(async (req: Request) => {
       console.warn(`[outcome-tracker] Alert check error: ${alertErr?.message}`);
     }
 
-    // ── Step 5: 30-day retention cleanup ──
+    // ── Step 4: 30-day retention cleanup ──
     try {
       const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { count: cleaned, error: cleanErr } = await supabase
@@ -482,30 +347,6 @@ Deno.serve(async (req: Request) => {
         console.warn(`[outcome-tracker] Cleanup error: ${cleanErr.message}`);
       } else {
         results.cleaned = cleaned || 0;
-      }
-
-      const { count: shadowCleaned, error: shadowCleanErr } =
-        await supabase
-          .from("zone_candidate_shadow_observations")
-          .delete({ count: "exact" })
-          .eq("evidence_source", "forward_observation")
-          .lt("observed_at", retentionCutoff);
-      if (shadowCleanErr) {
-        console.warn(
-          `[outcome-tracker] Zone shadow cleanup error: ${
-            shadowCleanErr.message
-          }`,
-        );
-      } else {
-        results.shadow_cleaned = shadowCleaned || 0;
-      }
-
-      const { error: authorityCleanErr } = await supabase
-        .from("ict_entry_zone_authority_observations")
-        .delete()
-        .lt("observed_at", retentionCutoff);
-      if (authorityCleanErr) {
-        console.warn(`[outcome-tracker] ICT authority cleanup unavailable: ${authorityCleanErr.message}`);
       }
     } catch (cleanErr: any) {
       console.warn(`[outcome-tracker] Cleanup error: ${cleanErr?.message}`);

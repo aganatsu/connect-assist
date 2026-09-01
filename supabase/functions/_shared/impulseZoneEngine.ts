@@ -16,40 +16,8 @@ import type {
   Candle, SwingPoint, OrderBlock, FairValueGap, StructureBreak, BreakerBlock, FibLevel, FibLevels,
 } from "./smcAnalysis.ts";
 import {
-  analyzeMarketStructure,
-  calculateATR,
-  detectBreakerBlocks,
-  detectFVGs,
-  detectOrderBlocks,
+  analyzeMarketStructure, detectOrderBlocks, detectFVGs, calculateATR,
 } from "./smcAnalysis.ts";
-import { evaluateZoneLifecycle, type ZoneLifecycleConfig, type ZoneLifecycleResult } from "./zoneLifecycle.ts";
-import { buildConceptEvidence, type MarketConceptEvidence } from "./conceptEvidence.ts";
-import {
-  createZoneLocalConfluenceObservation,
-  observeContextOnly,
-  observeZoneLocalPoint,
-  observeZoneLocalRange,
-  type ZoneLocalConfluenceObservation,
-  type ZoneLocalEvidenceObservation,
-  type ZoneLocalEvidenceSource,
-} from "./zoneLocalConfluence.ts";
-import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
-import {
-  CANONICAL_IMPULSE_DETECTOR_VERSION,
-  measureCanonicalImpulseMetrics,
-  type CanonicalImpulseMetrics,
-} from "./canonicalImpulseDetector.ts";
-import {
-  type CanonicalZoneLifecycleObservation,
-  type ZoneCandidateModelObservation,
-} from "./zoneCandidateModel.ts";
-import type { CrossTimeframeZoneLineage } from "./crossTimeframeZoneLineage.ts";
-import { canonicalStructureForLegacyConsumers } from "./canonicalStructureAdapter.ts";
-import {
-  type ICTNestedEntryZoneCandidate,
-  type ICTNestedEntryZoneType,
-  selectICTEntryZone,
-} from "./ictEntryZoneAuthority.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,62 +26,13 @@ export interface ImpulseLeg {
   low: number;          // Swing low wick (Fib level 0)
   direction: "bullish" | "bearish";
   startIndex: number;   // Index of the swing that started the move
-  endIndex: number;     // Index of the latest directional extreme on a closed candle
-  breakIndex?: number;  // Index of the BOS/CHoCH candle that confirmed the leg
+  endIndex: number;     // Index of the BOS candle
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
-  breakType?: "bos" | "choch";
-  closeBased?: boolean;
-  structureSignificance?: "internal" | "external";
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
-  endDate?: string;     // ISO date of the latest directional extreme
-  breakDate?: string;   // ISO date of the BOS/CHoCH confirmation candle
-  extendedBeyondBreak?: boolean; // True when continuation extended after the confirming break
+  endDate?: string;     // ISO date of the BOS candle
   spanBars?: number;    // Number of candles in the impulse leg
-}
-
-export type ImpulseQualificationState =
-  | "forming"
-  | "completed_unqualified"
-  | "qualified"
-  | "stale"
-  | "invalidated";
-
-export interface ImpulseQualification {
-  contractVersion: "impulse-zone-qualification.v4";
-  state: ImpulseQualificationState;
-  qualified: boolean;
-  reasons: string[];
-  /**
-   * Quality reasons that were recorded but not enforced. Non-empty only for a
-   * hand-marked leg, where "is this really an impulse?" has already been
-   * answered by the person who drew it. Structural reasons are never softened.
-   */
-  softenedReasons: string[];
-  measurements: {
-    breakType: "bos" | "choch" | null;
-    closeBasedBreak: boolean;
-    originProtected: boolean;
-    impulseATRMultiple: number | null;
-    strongestDirectionalBodyRatio: number | null;
-    strongestDirectionalRangeATR: number | null;
-    recencyBars: number;
-    directionalCandleRatio: number | null;
-    directionalBodyDominance: number | null;
-    pathEfficiency: number | null;
-    averageCandleOverlap: number | null;
-  };
-  thresholds: {
-    minImpulseATR: number;
-    minBodyRatio: number;
-    minDirectionalRangeATR: number;
-    maxAgeBars: number;
-    minDirectionalCandleRatio: number;
-    minDirectionalBodyDominance: number;
-    minPathEfficiency: number;
-    maxAverageCandleOverlap: number;
-  };
 }
 
 export interface ImpulsePOI {
@@ -123,19 +42,14 @@ export interface ImpulsePOI {
   candleIndex: number;
   direction: "bullish" | "bearish";
   isOriginOB?: boolean;   // True if this OB was synthesized as the impulse-origin re-test candidate
-  /** Observe-only canonical identity; absent when no evidence context is supplied. */
-  evidence?: MarketConceptEvidence;
 }
 
 export interface RankedPOI {
   poi: ImpulsePOI;
   fibLevel: number;       // Nearest Fib ratio (e.g. 0.618, 0.786)
-  /** Actual price of the named Fib level. Kept separate from POI fibDepth. */
-  fibPrice?: number;
   fibDepth: number;       // How deep into the retracement (higher = better)
   fibScore: number;       // 1-4 score based on depth
   srConfirmed: boolean;   // Historical S/R overlaps this zone
-  srLevel?: number;       // The actual S/R price level that confirmed this zone
   ltfRefined: boolean;    // LTF OB/FVG found inside
   refinedEntry?: number;  // Precise entry from LTF refinement
   refinedSL?: number;     // Precise SL from LTF refinement
@@ -143,75 +57,6 @@ export interface RankedPOI {
   htfConfluenceScore: number; // Score from HTF confluence layers (4H OB/FVG/Breaker, HTF Fib, P/D)
   htfLayers: string[];        // Labels of HTF layers that overlap this zone
   totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1) + htfConfluenceScore
-  /** Observe-only proximity evidence. It never participates in ranking or gates. */
-  localConfluence?: ZoneLocalConfluenceObservation;
-  /**
-   * Additional contained evidence collected only for nested-POI selection.
-   * This is deliberately separate from localConfluence so enabling support for
-   * the rollout cannot change legacy shadow ranking or zone-local enforcement.
-   */
-  nestedPoiEvidence?: ZoneLocalEvidenceObservation[];
-  /** Alternative candidate ordering for audit only. */
-  shadowRanking?: ZoneCandidateShadowRanking;
-  /** Counterfactual levels used only for outcome validation. */
-  validationTrade?: ZoneValidationTrade;
-  /** Observation-only Phase 3 lifecycle classification. */
-  candidateLifecycle?: CanonicalZoneLifecycleObservation;
-  /** Relative impulse metrics inherited from this candidate's timeframe. */
-  canonicalImpulseMetrics?: CanonicalImpulseMetrics | null;
-  /** Observation-only Phase 3 cross-factor candidate rank. */
-  candidateModel?: ZoneCandidateModelObservation;
-  /** Observation-only Phase 4 parent/child timeframe relationship. */
-  timeframeLineage?: CrossTimeframeZoneLineage;
-}
-
-export const NESTED_POI_ENTRY_VERSION = "nested-poi-entry.v1";
-
-export type NestedPoiTriggerType = ICTNestedEntryZoneType;
-
-export interface NestedPoiTriggerCandidate {
-  id: string;
-  type: NestedPoiTriggerType;
-  geometry: "range" | "level";
-  source: ZoneLocalEvidenceSource;
-  direction: "bullish" | "bearish";
-  low: number;
-  high: number;
-  entryPrice: number;
-  timeframe: string;
-  lifecycle: string | null;
-  evidenceId: string;
-  entityId: string;
-  supportingEvidenceIds: string[];
-  supportingFamilies: NestedPoiTriggerType[];
-  independentEvidenceCount: number;
-  localScore: number;
-  lifecycleRank: number;
-  depth: number;
-  widthRatio: number;
-  rank: number;
-}
-
-export interface NestedPoiEntryPlan {
-  contractVersion: typeof NESTED_POI_ENTRY_VERSION;
-  enforcement: "observe_only";
-  outerCandidateId: string | null;
-  outerZone: {
-    low: number;
-    high: number;
-    direction: "bullish" | "bearish";
-  };
-  selected: NestedPoiTriggerCandidate | null;
-  candidates: NestedPoiTriggerCandidate[];
-  reason: "selected" | "local_evidence_unavailable" | "no_contained_trigger";
-}
-
-export interface ZoneValidationTrade {
-  direction: "long" | "short";
-  entryPrice: number;
-  stopLoss: number;
-  takeProfit: number;
-  source: "ltf_refinement" | "zone_bounds";
 }
 
 export interface BestZone {
@@ -237,72 +82,8 @@ export interface HTFConfluenceData {
 export interface ZoneEngineResult {
   bestZone: BestZone | null;
   impulse: ImpulseLeg | null;
-  impulseQualification?: ImpulseQualification | null;
-  entryZoneQualification?: EntryZoneQualification | null;
   allZones: RankedPOI[];
   reason: string;         // Human-readable explanation of outcome
-  /** Present only when the observation-only collector is explicitly enabled. */
-  evidence?: ZoneEngineEvidenceSnapshot;
-}
-
-export interface ZoneEngineEvidenceSnapshot {
-  timeframe: string | null;
-  currentPrice: number;
-  impulses: ImpulseLegCandidate[];
-  mappedPOIs: ImpulsePOI[];
-  qualificationMeasurements: POIQualificationMeasurement[];
-  rankedZones: RankedPOI[];
-  canonicalImpulse: { detectorVersion: string; timeframe: string | null; direction: "bullish" | "bearish"; impulse: ImpulseLeg; metrics: CanonicalImpulseMetrics; selectionKey: string } | null;
-  canonicalMatchesLegacy: boolean | null;
-  impulseQualification: ImpulseQualification | null;
-  entryZoneQualification: EntryZoneQualification | null;
-}
-
-export interface ZoneQualificationResult {
-  contractVersion: "entry-zone-qualification.v1";
-  state: "missing" | "rejected" | "candidate_available";
-  stage: "mapping" | "quality";
-  qualified: false;
-  reasons: string[];
-  measurements: EntryZoneQualification["measurements"];
-  accepted: ImpulsePOI[];
-  rejected: Record<"age" | "body_ratio" | "displacement", number>;
-}
-
-export type EntryZoneQualificationState =
-  | "not_evaluated"
-  | "missing"
-  | "rejected"
-  | "candidate_available"
-  | "selected";
-
-export type EntryZoneQualificationStage =
-  | "mapping"
-  | "quality"
-  | "impulse"
-  | "fib"
-  | "daily_bounds"
-  | "ranking"
-  | "selected";
-
-/**
- * Entry-zone status is intentionally separate from impulse qualification.
- * A structural impulse can be valid even when no executable POI survives the
- * zone-selection pipeline.
- */
-export interface EntryZoneQualification {
-  contractVersion: "entry-zone-qualification.v1";
-  state: EntryZoneQualificationState;
-  stage: EntryZoneQualificationStage;
-  qualified: boolean;
-  reasons: string[];
-  measurements: {
-    mappedCount: number;
-    qualityAcceptedCount: number;
-    fibAlignedCount: number | null;
-    finalCandidateCount: number | null;
-    rejected: Record<"age" | "body_ratio" | "displacement", number>;
-  };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -336,97 +117,6 @@ const PRICE_AT_ZONE_ATR_MULT = 1.5;
 /** Proximity threshold for "price at zone" — STRICT (market fill decisions) */
 const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
 
-function appendNestedPoiEvidence(
-  zone: RankedPOI,
-  item: ZoneLocalEvidenceObservation,
-): void {
-  const entityId = item.evidence?.entityId;
-  if (!entityId) return;
-  if (
-    zone.localConfluence?.items.some((existing) =>
-      existing.evidence?.entityId === entityId
-    ) || zone.nestedPoiEvidence?.some((existing) =>
-      existing.evidence?.entityId === entityId
-    )
-  ) return;
-  (zone.nestedPoiEvidence ??= []).push(item);
-}
-
-function freezeNestedPoiCandidate(
-  candidate: ICTNestedEntryZoneCandidate,
-): NestedPoiTriggerCandidate {
-  return {
-    id: candidate.id,
-    type: candidate.type,
-    geometry: candidate.geometry,
-    source: candidate.source,
-    direction: candidate.direction,
-    low: candidate.low,
-    high: candidate.high,
-    entryPrice: candidate.entryPrice,
-    timeframe: candidate.timeframe,
-    lifecycle: candidate.lifecycle,
-    evidenceId: candidate.evidenceId,
-    entityId: candidate.entityId,
-    supportingEvidenceIds: candidate.supportingEvidenceIds,
-    supportingFamilies: candidate.supportingFamilies,
-    independentEvidenceCount: candidate.independentEvidenceCount,
-    localScore: candidate.localScore,
-    lifecycleRank: candidate.lifecycleRank,
-    depth: candidate.depth,
-    widthRatio: candidate.widthRatio,
-    rank: candidate.rank,
-  };
-}
-
-/**
- * Adapts the ICT entry-zone authority result into the frozen nested-entry
- * contract. Candidate eligibility and ranking remain owned by the authority.
- */
-export function buildNestedPoiEntryPlan(zone: RankedPOI): NestedPoiEntryPlan {
-  const outerLow = Math.min(zone.poi.low, zone.poi.high);
-  const outerHigh = Math.max(zone.poi.low, zone.poi.high);
-  const local = zone.localConfluence;
-  const base: Omit<
-    NestedPoiEntryPlan,
-    "selected" | "candidates" | "reason"
-  > = {
-    contractVersion: NESTED_POI_ENTRY_VERSION,
-    enforcement: "observe_only" as const,
-    outerCandidateId: local?.candidateId || zone.poi.evidence?.entityId || null,
-    outerZone: {
-      low: outerLow,
-      high: outerHigh,
-      direction: zone.poi.direction,
-    },
-  };
-  if (!local) {
-    return {
-      ...base,
-      selected: null,
-      candidates: [],
-      reason: "local_evidence_unavailable",
-    };
-  }
-
-  const authority = selectICTEntryZone({
-    mode: "nested_poi",
-    outerZone: base.outerZone,
-    impulseId: base.outerCandidateId || "unknown",
-    evidence: [...local.items, ...(zone.nestedPoiEvidence || [])],
-  });
-  const candidates = authority.ranked.map(freezeNestedPoiCandidate);
-  return {
-    ...base,
-    selected: authority.selected
-      ? freezeNestedPoiCandidate(authority.selected)
-      : null,
-    candidates,
-    reason: authority.selected ? "selected" : "no_contained_trigger",
-  };
-}
-
-
 // ─── 1. findImpulseLeg ────────────────────────────────────────────────────────
 
 /**
@@ -444,49 +134,23 @@ export function buildNestedPoiEntryPlan(zone: RankedPOI): NestedPoiEntryPlan {
  * @param timeframe - Optional: which timeframe these candles represent (for metadata)
  * @returns ImpulseLeg or null if no valid impulse found
  */
-export function findStructuralLeg(
+export function findImpulseLeg(
   candles: Candle[],
   direction: "bullish" | "bearish",
   timeframe?: "D" | "4H" | "1H",
-  collector?: (candidate: ImpulseLegCandidate) => void,
-  structureAuthorityMode: "observe" | "enforce" = "observe",
 ): ImpulseLeg | null {
   if (candles.length < 20) return null;
 
-  const canonicalStructure = canonicalStructureForLegacyConsumers(candles);
-  const legacyStructure = analyzeMarketStructure(candles);
-  const legacyBreaks = [
-    ...legacyStructure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
-    ...legacyStructure.choch.map((item) => ({ ...item, breakType: "choch" as const })),
-  ];
-  const activeBreaks = structureAuthorityMode === "enforce"
-    ? canonicalStructure.breaks
-    : legacyBreaks;
-  const activeSwings = structureAuthorityMode === "enforce"
-    ? canonicalStructure.swings
-    : legacyStructure.swingPoints;
-  const allBreaks = activeBreaks
+  const structure = analyzeMarketStructure(candles);
+  const allBreaks = [...structure.bos, ...structure.choch]
     .filter(b => b.type === direction)
     .sort((a, b) => b.index - a.index); // Most recent first
 
   if (allBreaks.length === 0) return null;
 
-  const validCandidates: ImpulseLeg[] = [];
-
-  // Evaluate every structural break. Recency alone must not replace a cleaner
-  // authoritative impulse with a choppy internal leg.
+  // Try each BOS from most recent to oldest
   for (const bos of allBreaks) {
-    let emittedCandidate = false;
-    const impulse = validateImpulseFromBOS(
-      candles,
-      bos,
-      direction,
-      activeSwings,
-      (candidate) => {
-        emittedCandidate = true;
-        collector?.(candidate);
-      },
-    );
+    const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
     if (impulse && impulse.isValid) {
       // Enrich with timeframe metadata if provided
       if (timeframe) {
@@ -496,97 +160,28 @@ export function findStructuralLeg(
       const startCandle = candles[impulse.startIndex];
       const endCandle = candles[impulse.endIndex];
       if (startCandle?.datetime) {
-        // Keep date + time (YYYY-MM-DD HH:MM) so the impulse leg is traceable
-        // on the chart down to the exact bar, not just the day.
-        impulse.startDate = startCandle.datetime;
+        impulse.startDate = startCandle.datetime.slice(0, 10);
       }
       if (endCandle?.datetime) {
-        impulse.endDate = endCandle.datetime;
-      }
-      const breakCandle = candles[impulse.breakIndex ?? impulse.endIndex];
-      if (breakCandle?.datetime) {
-        impulse.breakDate = breakCandle.datetime;
+        impulse.endDate = endCandle.datetime.slice(0, 10);
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
-      impulse.structureSignificance = bos.significance ?? "internal";
-      validCandidates.push(impulse);
-      continue;
-    }
-    if (!impulse && !emittedCandidate) {
-      collector?.({
-        leg: {
-          high: bos.price,
-          low: bos.price,
-          direction,
-          startIndex: bos.index,
-          endIndex: bos.index,
-          breakIndex: bos.index,
-          isValid: false,
-          bosPrice: bos.price,
-          breakType: bos.breakType,
-          closeBased: bos.closeBased === true,
-          timeframe,
-          startDate: candles[bos.index]?.datetime,
-          endDate: candles[bos.index]?.datetime,
-          breakDate: candles[bos.index]?.datetime,
-          extendedBeyondBreak: false,
-          spanBars: 0,
-        },
-        selected: false,
-        rejection: {
-          code: "origin_broken_or_invalid",
-          explanation:
-            `No valid swing origin for the ${direction} break at index ${bos.index}`,
-        },
-      });
+      return impulse;
     }
   }
 
-  const rankedCandidates = validCandidates
-    .map((leg) => {
-      const metrics = measureCanonicalImpulseMetrics(candles, leg);
-      const quality =
-        (metrics.displacementPercentile ?? 0) +
-        (metrics.bodyStrengthPercentile ?? 0) +
-        (metrics.pathEfficiency ?? 0) * 100 +
-        (metrics.directionalBodyDominance ?? 0) * 50 -
-        (metrics.averageCandleOverlap ?? 0) * 50 +
-        (leg.structureSignificance === "external" ? 40 : 0) -
-        Math.min(metrics.recencyBars, 40) * 0.5;
-      return { leg, quality };
-    })
-    .sort((left, right) =>
-      right.quality - left.quality || right.leg.endIndex - left.leg.endIndex
-    );
-  const selected = rankedCandidates[0]?.leg ?? null;
-
-  for (const { leg } of rankedCandidates) {
-    collector?.({
-      leg,
-      selected: leg === selected,
-      rejection: leg === selected
-        ? null
-        : {
-          code: "stronger_candidate_selected",
-          explanation: "A stronger intact impulse candidate retained authority",
-        },
-    });
-  }
-  return selected;
+  return null;
 }
 
 /**
- * Given a BOS/CHoCH, trace back to its swing origin and then advance the leg to
- * the latest same-direction extreme printed by a closed candle. The structural
- * break and terminal extreme are deliberately retained as separate indexes:
- * the break confirms the leg, while the terminal extreme owns its Fib range.
+ * Given a BOS, trace back to find the swing origin and validate that the
+ * origin has not been broken by subsequent price action (after the BOS).
  */
 function validateImpulseFromBOS(
   candles: Candle[],
-  bos: StructureBreak & { breakType?: "bos" | "choch" },
+  bos: StructureBreak,
   direction: "bullish" | "bearish",
   swingPoints: SwingPoint[],
-  collector?: (candidate: ImpulseLegCandidate) => void,
 ): ImpulseLeg | null {
   const bosIdx = bos.index;
 
@@ -604,26 +199,28 @@ function validateImpulseFromBOS(
   // Try each candidate swing as the impulse origin
   for (const origin of candidates.slice(0, 5)) { // Check up to 5 candidates
     const startIdx = origin.index;
+    const endIdx = bosIdx;
 
-    if (bosIdx - startIdx < 3) continue; // Too short to be meaningful
+    if (endIdx - startIdx < 3) continue; // Too short to be meaningful
 
-    const breakCandle = candles[bosIdx];
-    const originPrice = Number(origin.price);
-    if (!breakCandle || !Number.isFinite(originPrice)) continue;
+    // Determine impulse high and low from wicks within the range
+    let impulseHigh = -Infinity;
+    let impulseLow = Infinity;
 
-    // The break candle is the earliest possible terminal bar. A later closed
-    // candle may extend the move without printing another BOS/CHoCH; that
-    // continuation still belongs to this impulse and must update its Fib range.
-    let endIdx = bosIdx;
-    let terminalPrice = direction === "bullish"
-      ? breakCandle.high
-      : breakCandle.low;
+    for (let i = startIdx; i <= Math.min(endIdx, candles.length - 1); i++) {
+      if (candles[i].high > impulseHigh) impulseHigh = candles[i].high;
+      if (candles[i].low < impulseLow) impulseLow = candles[i].low;
+    }
+
+    const impulseRange = impulseHigh - impulseLow;
+    if (impulseRange <= 0) continue;
 
     // Validate: origin not broken — check candles AFTER the BOS to see if
     // price has retraced past the impulse origin (invalidating the leg).
     // Internal pullbacks within the impulse are expected (wave structure).
+    const originPrice = direction === "bullish" ? impulseLow : impulseHigh;
     let originBroken = false;
-    for (let j = bosIdx + 1; j < candles.length; j++) {
+    for (let j = endIdx + 1; j < candles.length; j++) {
       if (direction === "bullish" && candles[j].close < originPrice) {
         originBroken = true;
         break;
@@ -632,22 +229,7 @@ function validateImpulseFromBOS(
         originBroken = true;
         break;
       }
-      const directionalExtreme = direction === "bullish"
-        ? candles[j].high
-        : candles[j].low;
-      const extendsLeg = direction === "bullish"
-        ? directionalExtreme > terminalPrice
-        : directionalExtreme < terminalPrice;
-      if (extendsLeg) {
-        terminalPrice = directionalExtreme;
-        endIdx = j;
-      }
     }
-
-    const impulseHigh = direction === "bullish" ? terminalPrice : originPrice;
-    const impulseLow = direction === "bullish" ? originPrice : terminalPrice;
-    const impulseRange = impulseHigh - impulseLow;
-    if (impulseRange <= 0) continue;
 
     if (!originBroken) {
       return {
@@ -656,40 +238,10 @@ function validateImpulseFromBOS(
         direction,
         startIndex: startIdx,
         endIndex: endIdx,
-        breakIndex: bosIdx,
         isValid: true,
         bosPrice: bos.price,
-        breakType: bos.breakType,
-        closeBased: bos.closeBased === true,
-        breakDate: candles[bosIdx]?.datetime,
-        extendedBeyondBreak: endIdx > bosIdx,
       };
     }
-    collector?.({
-      leg: {
-        high: impulseHigh,
-        low: impulseLow,
-        direction,
-        startIndex: startIdx,
-        endIndex: endIdx,
-        breakIndex: bosIdx,
-        isValid: false,
-        bosPrice: bos.price,
-        breakType: bos.breakType,
-        timeframe: undefined,
-        startDate: candles[startIdx]?.datetime,
-        endDate: candles[endIdx]?.datetime,
-        breakDate: candles[bosIdx]?.datetime,
-        extendedBeyondBreak: endIdx > bosIdx,
-        spanBars: endIdx - startIdx,
-      },
-      selected: false,
-      rejection: {
-        code: "origin_broken_or_invalid",
-        explanation:
-          "Impulse origin was broken by a later candle close before evaluation",
-      },
-    });
   }
 
   return null;
@@ -700,121 +252,6 @@ function validateImpulseFromBOS(
 // that have normal wave 2/4 corrections. Replaced with origin-not-broken
 // validation: an impulse is valid as long as price hasn't closed past the
 // swing origin that started the move.
-/** @deprecated Use findStructuralLeg. This wrapper does not implement a second selector. */
-export function findImpulseLeg(
-  candles: Candle[],
-  direction: "bullish" | "bearish",
-  timeframe?: "D" | "4H" | "1H",
-  collector?: (candidate: ImpulseLegCandidate) => void,
-  structureAuthorityMode: "observe" | "enforce" = "observe",
-): ImpulseLeg | null {
-  return findStructuralLeg(candles, direction, timeframe, collector, structureAuthorityMode);
-}
-
-export function qualifyImpulseLeg(
-  candles: Candle[],
-  leg: ImpulseLeg,
-  options?: Pick<
-    ZoneEngineOptions,
-    "maxAgeBars" | "minBodyRatio" | "minDisplacementATR" | "softQualification"
-  >,
-): ImpulseQualification {
-  const metrics = measureCanonicalImpulseMetrics(candles, leg);
-  const minImpulseATR = Math.max(0.5, Number(options?.minDisplacementATR ?? 1.5));
-  const minBodyRatio = Math.max(0.1, Math.min(1, Number(options?.minBodyRatio ?? 0.5)));
-  const minDirectionalRangeATR = minImpulseATR;
-  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
-  const minDirectionalCandleRatio = 0.55;
-  const minDirectionalBodyDominance = 0.35;
-  const minPathEfficiency = 0.2;
-  const maxAverageCandleOverlap = 0.65;
-  const legCandles = candles.slice(leg.startIndex, leg.endIndex + 1);
-  const atr = metrics.atr;
-  const directionalRanges = legCandles
-    .filter((candle) => leg.direction === "bullish" ? candle.close > candle.open : candle.close < candle.open)
-    .map((candle) => candle.high - candle.low);
-  const strongestDirectionalRangeATR = atr > 0 && directionalRanges.length > 0
-    ? Math.max(...directionalRanges) / atr
-    : null;
-
-  // Two kinds of reason. STRUCTURAL ones say the leg itself is invalid because
-  // its origin is gone. QUALITY ones ask
-  // "is this really an impulse?", which is exactly the judgement a person makes
-  // when they draw one by hand. Only quality reasons can be softened.
-  const structuralReasons: string[] = [];
-  const qualityReasons: string[] = [];
-  const soft = options?.softQualification === true;
-
-  if (!leg.isValid) structuralReasons.push("Impulse origin was broken by a later candle close");
-  if (leg.breakType !== "bos") qualityReasons.push("CHoCH detected, but a continuation BOS is still required");
-  if (leg.closeBased !== true) qualityReasons.push("Structure break was not confirmed by a candle close");
-  if (metrics.atrNormalizedSize === null || metrics.atrNormalizedSize < minImpulseATR) {
-    qualityReasons.push("Impulse range " + (metrics.atrNormalizedSize?.toFixed(2) ?? "unavailable") + "x ATR is below " + minImpulseATR.toFixed(2) + "x");
-  }
-  if (metrics.strongestDirectionalBodyRatio === null || metrics.strongestDirectionalBodyRatio < minBodyRatio) {
-    qualityReasons.push("Strongest directional body ratio " + (metrics.strongestDirectionalBodyRatio?.toFixed(2) ?? "unavailable") + " is below " + minBodyRatio.toFixed(2));
-  }
-  if (strongestDirectionalRangeATR === null || strongestDirectionalRangeATR < minDirectionalRangeATR) {
-    qualityReasons.push("Directional displacement " + (strongestDirectionalRangeATR?.toFixed(2) ?? "unavailable") + "x ATR is below " + minDirectionalRangeATR.toFixed(2) + "x");
-  }
-  if (metrics.directionalCandleRatio === null || metrics.directionalCandleRatio < minDirectionalCandleRatio) {
-    qualityReasons.push("Only " + ((metrics.directionalCandleRatio ?? 0) * 100).toFixed(0) + "% of candles moved with the impulse; at least " + (minDirectionalCandleRatio * 100).toFixed(0) + "% is required");
-  }
-  if (metrics.directionalBodyDominance === null || metrics.directionalBodyDominance < minDirectionalBodyDominance) {
-    qualityReasons.push("Whole-leg directional body dominance " + (metrics.directionalBodyDominance?.toFixed(2) ?? "unavailable") + " is below " + minDirectionalBodyDominance.toFixed(2));
-  }
-  if (metrics.pathEfficiency === null || metrics.pathEfficiency < minPathEfficiency) {
-    qualityReasons.push("Whole-leg displacement efficiency " + (metrics.pathEfficiency?.toFixed(2) ?? "unavailable") + " is below " + minPathEfficiency.toFixed(2));
-  }
-  if (metrics.averageCandleOverlap !== null && metrics.averageCandleOverlap > maxAverageCandleOverlap) {
-    qualityReasons.push("Average candle overlap " + (metrics.averageCandleOverlap * 100).toFixed(0) + "% exceeds " + (maxAverageCandleOverlap * 100).toFixed(0) + "%");
-  }
-  if (maxAgeBars > 0 && metrics.recencyBars > maxAgeBars) {
-    qualityReasons.push("Impulse is " + metrics.recencyBars + " bars old; maximum is " + maxAgeBars);
-  }
-  const blocking = soft ? structuralReasons : [...structuralReasons, ...qualityReasons];
-  const reasons = [...structuralReasons, ...qualityReasons];
-  const softenedReasons = soft ? [...qualityReasons] : [];
-  // Hand-marked soft qualification deliberately treats age as advisory. Keep
-  // that authorization behavior intact while making hard-mode diagnostics
-  // distinguish an old leg from one that can still complete structurally.
-  const stale = !soft && maxAgeBars > 0 && metrics.recencyBars > maxAgeBars;
-  const structureStillForming = leg.breakType !== "bos" || leg.closeBased !== true;
-  const state: ImpulseQualificationState = !leg.isValid
-    ? "invalidated"
-    : stale
-    ? "stale"
-    : blocking.length === 0
-    ? "qualified"
-    : structureStillForming
-    ? "forming"
-    : "completed_unqualified";
-  return {
-    contractVersion: "impulse-zone-qualification.v4",
-    state,
-    qualified: state === "qualified",
-    softenedReasons,
-    reasons,
-    measurements: {
-      breakType: leg.breakType ?? null,
-      closeBasedBreak: leg.closeBased === true,
-      originProtected: leg.isValid,
-      impulseATRMultiple: metrics.atrNormalizedSize,
-      strongestDirectionalBodyRatio: metrics.strongestDirectionalBodyRatio,
-      strongestDirectionalRangeATR: strongestDirectionalRangeATR === null ? null : Number(strongestDirectionalRangeATR.toFixed(6)),
-      recencyBars: metrics.recencyBars,
-      directionalCandleRatio: metrics.directionalCandleRatio,
-      directionalBodyDominance: metrics.directionalBodyDominance,
-      pathEfficiency: metrics.pathEfficiency,
-      averageCandleOverlap: metrics.averageCandleOverlap,
-    },
-    thresholds: {
-      minImpulseATR, minBodyRatio, minDirectionalRangeATR, maxAgeBars,
-      minDirectionalCandleRatio, minDirectionalBodyDominance,
-      minPathEfficiency, maxAverageCandleOverlap,
-    },
-  };
-}
 // ─── 2. mapImpulsePOIs ────────────────────────────────────────────────────────
 
 /**
@@ -828,11 +265,7 @@ export function qualifyImpulseLeg(
 export function mapImpulsePOIs(
   candles: Candle[],
   impulse: ImpulseLeg,
-  options?: {
-    originOBRetest?: boolean;
-    zoneLifecycleV2?: { enabled: boolean; config?: Partial<ZoneLifecycleConfig>; allCandles?: Candle[] };
-    evidenceContext?: ZoneEvidenceContext;
-  },
+  options?: { originOBRetest?: boolean },
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
 
@@ -842,74 +275,44 @@ export function mapImpulsePOIs(
 
   if (impulseCandles.length < 3) return [];
 
-  // ── Detection window runs to the LAST candle, not to the BOS ──
-  // POIs are only *created* inside the impulse, but they are *consumed* during
-  // the retracement that follows it — which is exactly the period we are
-  // planning to trade into. Slicing the window at impulse.endIndex froze every
-  // POI's lifecycle at the break, so a gap or order block that price had since
-  // torn straight through was still published as tradeable.
-  //
-  // Each detector keeps its own invalidation rule (FVG = wick fill, OB = 50%
-  // penetration / close-through). Only the window changes. Formation is still
-  // bounded to the impulse by the index checks below.
+  // ── FVGs: detect on impulse slice (purely geometric, no lifecycle issue) ──
+  const impulseStructure = analyzeMarketStructure(impulseCandles);
+  const impulseBreaks = [...impulseStructure.bos, ...impulseStructure.choch];
+  const fvgs = detectFVGs(impulseCandles, impulseBreaks);
+
+  // ── OBs: detect on FULL candle set to avoid lifecycle false-negatives ──
+  // The OB (last opposing candle) often sits just before the impulse starts.
+  // Running detection on only the impulse slice causes OBs to be marked as
+  // "broken" or "mitigated" by the impulse candles themselves.
+  // We include a lookback window before the impulse so the engulfing pattern
+  // and the institutional candle are both captured.
   const obLookback = 10; // bars before impulse to include for OB context
   const obStart = Math.max(0, start - obLookback);
-  const lifecycleCandles = candles.slice(obStart);
-  const lifecycleStructure = analyzeMarketStructure(lifecycleCandles);
-  const lifecycleBreaks = [...lifecycleStructure.bos, ...lifecycleStructure.choch];
-
-  // The default 50-bar recency/cap limits are relative to the END of the window.
-  // Now that the window extends past the impulse, they must be widened or the
-  // impulse's own POIs fall outside the scan / get crowded out of the top-N.
-  const windowLen = lifecycleCandles.length;
-  const fvgs = detectFVGs(lifecycleCandles, lifecycleBreaks, windowLen)
-    // Re-base to full-candle indices and keep only gaps formed by the impulse.
-    .map((fvg) => ({ ...fvg, index: obStart + fvg.index }))
-    .filter((fvg) => fvg.index >= start && fvg.index <= impulse.endIndex);
-
-  const obs = detectOrderBlocks(lifecycleCandles, lifecycleBreaks, windowLen, Math.max(5, windowLen))
-    .map((ob) => ({ ...ob, index: obStart + ob.index }));
+  const obCandles = candles.slice(obStart, end);
+  const obStructure = analyzeMarketStructure(obCandles);
+  const obBreaks = [...obStructure.bos, ...obStructure.choch];
+  const obs = detectOrderBlocks(obCandles, obBreaks);
 
   const pois: ImpulsePOI[] = [];
 
   // Map FVGs — only include those aligned with impulse direction
   for (const fvg of fvgs) {
     if (fvg.type === impulse.direction && fvg.state !== "filled") {
-      const candleIndex = fvg.index; // already re-based to full-candle indices
-      const sourceStart = candles[Math.max(0, candleIndex - 1)]?.datetime ?? fvg.datetime;
-      const sourceEnd = candles[Math.min(candles.length - 1, candleIndex + 1)]?.datetime ?? fvg.datetime;
       pois.push({
         type: "fvg",
         high: fvg.high,
         low: fvg.low,
-        candleIndex,
+        candleIndex: start + fvg.index,
         direction: fvg.type,
-        evidence: options?.evidenceContext ? buildConceptEvidence({
-          concept: "fvg",
-          detector: { name: "smcAnalysis.detectFVGs", version: "1" },
-          symbol: options.evidenceContext.symbol,
-          timeframe: options.evidenceContext.timeframe,
-          sourceCandleStart: sourceStart,
-          sourceCandleEnd: sourceEnd,
-          observedAt: options.evidenceContext.observedAt ?? candles[candles.length - 1]?.datetime ?? sourceEnd,
-          direction: fvg.type,
-          bounds: { high: fvg.high, low: fvg.low },
-          lifecycle: fvg.state,
-          attributes: {
-            sourceIndex: candleIndex,
-            quality: fvg.quality ?? null,
-            fillPercent: fvg.fillPercent,
-          },
-        }) : undefined,
       });
     }
   }
 
   // Map OBs — filter to those within or just before the impulse range,
   // aligned with direction, and not broken/mitigated.
-  // Indices are already re-based to full-candle indices above.
+  // The OB index is relative to obCandles, so we convert back to full-candle index.
   for (const ob of obs) {
-    const fullIndex = ob.index;
+    const fullIndex = obStart + ob.index;
     // OB must be within the impulse range or in the lookback zone just before it
     if (fullIndex < obStart || fullIndex > impulse.endIndex) continue;
     // OB price must be within the impulse price range
@@ -917,39 +320,14 @@ export function mapImpulsePOIs(
     const impLow = Math.min(impulse.high, impulse.low);
     if (ob.high < impLow || ob.low > impHigh) continue;
 
-    if (ob.type !== impulse.direction) continue;
-
-    // Zone Lifecycle v2: use close-based invalidation instead of state check
-    if (options?.zoneLifecycleV2?.enabled && options.zoneLifecycleV2.allCandles) {
-      // Get candles AFTER this OB formed
-      const candlesAfterOB = options.zoneLifecycleV2.allCandles.slice(fullIndex + 1);
-      const lifecycleResult = evaluateZoneLifecycle(
-        { high: ob.high, low: ob.low, direction: ob.type === "bullish" ? "bullish" : "bearish" },
-        candlesAfterOB,
-        options.zoneLifecycleV2.config,
-      );
-      if (lifecycleResult.canStillTrade) {
-        pois.push({
-          type: "ob",
-          high: ob.high,
-          low: ob.low,
-          candleIndex: fullIndex,
-          direction: ob.type,
-          evidence: buildPOIEvidence("smcAnalysis.detectOrderBlocks", ob.datetime, fullIndex, ob.high, ob.low, ob.type, ob.state, options?.evidenceContext, candles),
-        });
-      }
-    } else {
-      // Default: original state-based filter
-      if (ob.state !== "broken" && ob.state !== "mitigated") {
-        pois.push({
-          type: "ob",
-          high: ob.high,
-          low: ob.low,
-          candleIndex: fullIndex,
-          direction: ob.type,
-          evidence: buildPOIEvidence("smcAnalysis.detectOrderBlocks", ob.datetime, fullIndex, ob.high, ob.low, ob.type, ob.state, options?.evidenceContext, candles),
-        });
-      }
+    if (ob.type === impulse.direction && ob.state !== "broken" && ob.state !== "mitigated") {
+      pois.push({
+        type: "ob",
+        high: ob.high,
+        low: ob.low,
+        candleIndex: fullIndex,
+        direction: ob.type,
+      });
     }
   }
 
@@ -996,325 +374,12 @@ export function mapImpulsePOIs(
           candleIndex: originCandleIdx,
           direction: impulse.direction,
           isOriginOB: true,
-          evidence: buildPOIEvidence("impulseZone.originOBRetest", oc.datetime, originCandleIdx, oc.high, oc.low, impulse.direction, "synthetic_origin_candidate", options?.evidenceContext, candles),
         });
       }
     }
   }
 
   return pois;
-}
-
-function buildPOIEvidence(
-  detectorName: string,
-  sourceDatetime: string,
-  sourceIndex: number,
-  high: number,
-  low: number,
-  direction: "bullish" | "bearish",
-  lifecycle: string,
-  context: ZoneEvidenceContext | undefined,
-  candles: Candle[],
-): MarketConceptEvidence | undefined {
-  if (!context) return undefined;
-  return buildConceptEvidence({
-    concept: "order_block",
-    detector: { name: detectorName, version: "1" },
-    symbol: context.symbol,
-    timeframe: context.timeframe,
-    sourceCandleStart: sourceDatetime,
-    observedAt: context.observedAt ?? candles[candles.length - 1]?.datetime ?? sourceDatetime,
-    direction,
-    bounds: { high, low },
-    lifecycle,
-    attributes: { sourceIndex },
-  });
-}
-
-/**
- * Apply the Bot Config zone-quality controls before Fib scoring.
- *
- * - Age is measured from the POI candle to the newest structural candle.
- * - Body ratio applies to OB candles only; FVGs use their displacement candle.
- * - Displacement uses the FVG middle candle or the strongest directional candle
- *   immediately following an OB.
- */
-export function qualifyImpulsePOIs(
-  candles: Candle[],
-  impulse: ImpulseLeg,
-  pois: ImpulsePOI[],
-  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
-): ZoneQualificationResult {
-  const rejected = { age: 0, body_ratio: 0, displacement: 0 };
-  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
-  const minBodyRatio = Math.max(0, Math.min(1, Number(options?.minBodyRatio ?? 0)));
-  const minDisplacementATR = Math.max(0, Number(options?.minDisplacementATR ?? 0));
-  const atr = minDisplacementATR > 0 ? calculateATR(candles) : 0;
-
-  const accepted = pois.filter((poi) => {
-    const ageBars = Math.max(0, candles.length - 1 - poi.candleIndex);
-    if (maxAgeBars > 0 && ageBars > maxAgeBars) {
-      rejected.age++;
-      return false;
-    }
-
-    const source = candles[poi.candleIndex];
-    if (poi.type === "ob" && minBodyRatio > 0 && source) {
-      const range = Math.max(0, source.high - source.low);
-      const bodyRatio = range > 0 ? Math.abs(source.close - source.open) / range : 0;
-      if (bodyRatio < minBodyRatio) {
-        rejected.body_ratio++;
-        return false;
-      }
-    }
-
-    if (minDisplacementATR > 0 && atr > 0) {
-      let displacement = source;
-      if (poi.type === "ob") {
-        const start = Math.min(candles.length - 1, poi.candleIndex + 1);
-        const end = Math.min(candles.length - 1, impulse.endIndex, poi.candleIndex + 3);
-        const directional = candles.slice(start, end + 1).filter((candle) =>
-          impulse.direction === "bullish"
-            ? candle.close > candle.open
-            : candle.close < candle.open
-        );
-        displacement = directional.sort(
-          (a, b) => (b.high - b.low) - (a.high - a.low),
-        )[0] ?? candles[start];
-      }
-      const displacementRange = displacement
-        ? Math.max(0, displacement.high - displacement.low)
-        : 0;
-      if (displacementRange < atr * minDisplacementATR) {
-        rejected.displacement++;
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  const rejectedSummary = Object.entries(rejected)
-    .filter(([, count]) => count > 0)
-    .map(([reason, count]) => `${reason}=${count}`)
-    .join(", ");
-  const state = pois.length === 0
-    ? "missing" as const
-    : accepted.length === 0
-    ? "rejected" as const
-    : "candidate_available" as const;
-  return {
-    contractVersion: "entry-zone-qualification.v1",
-    state,
-    stage: pois.length === 0 ? "mapping" : "quality",
-    qualified: false,
-    reasons: state === "missing"
-      ? ["No FVG or Order Block candidate was mapped to the impulse"]
-      : state === "rejected"
-      ? [
-        `Bot Config zone qualification rejected all mapped candidates${
-          rejectedSummary ? ` (${rejectedSummary})` : ""
-        }`,
-      ]
-      : ["Entry-zone candidates passed mapping and quality checks"],
-    measurements: {
-      mappedCount: pois.length,
-      qualityAcceptedCount: accepted.length,
-      fibAlignedCount: null,
-      finalCandidateCount: null,
-      rejected,
-    },
-    accepted,
-    rejected,
-  };
-}
-
-function describeEntryZoneQualification(
-  qualification: ZoneQualificationResult,
-): EntryZoneQualification {
-  return {
-    contractVersion: qualification.contractVersion,
-    state: qualification.state,
-    stage: qualification.stage,
-    qualified: qualification.qualified,
-    reasons: qualification.reasons,
-    measurements: qualification.measurements,
-  };
-}
-
-function advanceEntryZoneQualification(
-  current: EntryZoneQualification,
-  update: Pick<EntryZoneQualification, "state" | "stage" | "qualified" | "reasons"> & {
-    fibAlignedCount?: number | null;
-    finalCandidateCount?: number | null;
-  },
-): EntryZoneQualification {
-  return {
-    ...current,
-    state: update.state,
-    stage: update.stage,
-    qualified: update.qualified,
-    reasons: update.reasons,
-    measurements: {
-      ...current.measurements,
-      ...(update.fibAlignedCount !== undefined
-        ? { fibAlignedCount: update.fibAlignedCount }
-        : {}),
-      ...(update.finalCandidateCount !== undefined
-        ? { finalCandidateCount: update.finalCandidateCount }
-        : {}),
-    },
-  };
-}
-
-export function zoneQualityPercent(zone: RankedPOI): number {
-  return Math.max(0, Math.min(100, (zone.totalScore / 9) * 100));
-}
-
-// ─── Observation-only measurement (Phase 1 evidence) ─────────────────────────
-
-export interface POIQualificationMeasurement {
-  poi: ImpulsePOI;
-  ageBars: number;
-  bodyRatio: number | null;
-  displacementRange: number | null;
-  displacementATRMultiple: number | null;
-  atr: number;
-  accepted: boolean;
-  rejection:
-    | {
-      code: "poi_age_above_max" | "ob_body_ratio_below_min" | "displacement_below_min_atr";
-      measured: number;
-      threshold: number;
-      comparator: ">" | "<";
-      explanation: string;
-    }
-    | null;
-}
-
-/**
- * Observation-only mirror of `qualifyImpulsePOIs` that reports the measured
- * value, the threshold and a structured rejection code per POI.
- *
- * Pure and side-effect free. It is never called on the trading path and never
- * feeds scoring, ranking or gating — it exists so evidence can explain exactly
- * why a candidate was dropped.
- */
-export function measureImpulsePOIQualification(
-  candles: Candle[],
-  impulse: ImpulseLeg,
-  pois: ImpulsePOI[],
-  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
-): POIQualificationMeasurement[] {
-  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
-  const minBodyRatio = Math.max(0, Math.min(1, Number(options?.minBodyRatio ?? 0)));
-  const minDisplacementATR = Math.max(0, Number(options?.minDisplacementATR ?? 0));
-  const atr = minDisplacementATR > 0 ? calculateATR(candles) : 0;
-
-  return pois.map((poi) => {
-    const ageBars = Math.max(0, candles.length - 1 - poi.candleIndex);
-    const source = candles[poi.candleIndex];
-    let bodyRatio: number | null = null;
-    if (poi.type === "ob" && source) {
-      const range = Math.max(0, source.high - source.low);
-      bodyRatio = range > 0 ? Math.abs(source.close - source.open) / range : 0;
-    }
-
-    let displacementRange: number | null = null;
-    if (atr > 0) {
-      let displacement = source;
-      if (poi.type === "ob") {
-        const start = Math.min(candles.length - 1, poi.candleIndex + 1);
-        const end = Math.min(candles.length - 1, impulse.endIndex, poi.candleIndex + 3);
-        const directional = candles.slice(start, end + 1).filter((candle) =>
-          impulse.direction === "bullish"
-            ? candle.close > candle.open
-            : candle.close < candle.open
-        );
-        displacement = directional.slice().sort(
-          (a, b) => (b.high - b.low) - (a.high - a.low),
-        )[0] ?? candles[start];
-      }
-      displacementRange = displacement
-        ? Math.max(0, displacement.high - displacement.low)
-        : 0;
-    }
-
-    let rejection: POIQualificationMeasurement["rejection"] = null;
-    if (maxAgeBars > 0 && ageBars > maxAgeBars) {
-      rejection = {
-        code: "poi_age_above_max",
-        measured: ageBars,
-        threshold: maxAgeBars,
-        comparator: ">",
-        explanation: `POI age ${ageBars} bars exceeds maximum ${maxAgeBars}`,
-      };
-    } else if (
-      poi.type === "ob" && minBodyRatio > 0 && bodyRatio !== null &&
-      bodyRatio < minBodyRatio
-    ) {
-      rejection = {
-        code: "ob_body_ratio_below_min",
-        measured: Number(bodyRatio.toFixed(6)),
-        threshold: minBodyRatio,
-        comparator: "<",
-        explanation: `OB body ratio ${bodyRatio.toFixed(3)} below required ${minBodyRatio}`,
-      };
-    } else if (
-      minDisplacementATR > 0 && atr > 0 && displacementRange !== null &&
-      displacementRange < atr * minDisplacementATR
-    ) {
-      rejection = {
-        code: "displacement_below_min_atr",
-        measured: Number((displacementRange / atr).toFixed(6)),
-        threshold: minDisplacementATR,
-        comparator: "<",
-        explanation:
-          `Displacement ${(displacementRange / atr).toFixed(2)}x ATR below required ${minDisplacementATR}x`,
-      };
-    }
-
-    return {
-      poi,
-      ageBars,
-      bodyRatio: bodyRatio === null ? null : Number(bodyRatio.toFixed(6)),
-      displacementRange,
-      displacementATRMultiple: displacementRange !== null && atr > 0
-        ? Number((displacementRange / atr).toFixed(6))
-        : null,
-      atr,
-      accepted: rejection === null,
-      rejection,
-    };
-  });
-}
-
-export interface ImpulseLegCandidate {
-  leg: ImpulseLeg;
-  selected: boolean;
-  rejection:
-    | { code: "origin_broken_or_invalid" | "stronger_candidate_selected"; explanation: string }
-    | null;
-}
-
-/**
- * Observation-only enumeration of every impulse leg the engine considered for
- * a direction, in the same order `findImpulseLeg` evaluates them. Pure; never
- * used by the trading path.
- */
-export function collectImpulseLegCandidates(
-  candles: Candle[],
-  direction: "bullish" | "bearish",
-  timeframe?: string,
-): ImpulseLegCandidate[] {
-  const out: ImpulseLegCandidate[] = [];
-  findStructuralLeg(
-    candles,
-    direction,
-    timeframe as ImpulseLeg["timeframe"],
-    (candidate) => out.push(candidate),
-  );
-  return out;
 }
 
 // ─── 3. overlayFibOnPOIs ──────────────────────────────────────────────────────
@@ -1336,13 +401,7 @@ export function collectImpulseLegCandidates(
 export function overlayFibOnPOIs(
   impulse: ImpulseLeg,
   pois: ImpulsePOI[],
-  options?: {
-    fibMaxRetracement?: number;
-    originOBRetest?: boolean;
-    pipSize?: number;
-    atr?: number;
-    evidenceContext?: ZoneEvidenceContext;
-  },
+  options?: { fibMaxRetracement?: number; originOBRetest?: boolean },
 ): RankedPOI[] {
   if (pois.length === 0) return [];
 
@@ -1379,7 +438,6 @@ export function overlayFibOnPOIs(
 
     // Find the nearest Fib level
     let nearestFib = 0;
-    let nearestFibPrice = 0;
     let nearestDist = Infinity;
     for (const level of FIB_LEVELS) {
       const fibPrice = impulse.direction === "bullish"
@@ -1389,7 +447,6 @@ export function overlayFibOnPOIs(
       if (dist < nearestDist) {
         nearestDist = dist;
         nearestFib = level;
-        nearestFibPrice = fibPrice;
       }
     }
 
@@ -1408,10 +465,9 @@ export function overlayFibOnPOIs(
       fibDepth >= 0.5 ? 1 : 0
     );
 
-    const rankedPOI: RankedPOI = {
+    ranked.push({
       poi,
       fibLevel: nearestFib,
-      fibPrice: nearestFibPrice,
       fibDepth,
       fibScore,
       srConfirmed: false,
@@ -1419,56 +475,7 @@ export function overlayFibOnPOIs(
       htfConfluenceScore: 0,
       htfLayers: [],
       totalScore: fibScore, // Will be updated by subsequent steps
-    };
-
-    if (options?.evidenceContext && poi.evidence) {
-      const observedAt = options.evidenceContext.observedAt ||
-        impulse.endDate ||
-        impulse.startDate ||
-        "unknown";
-      const fibEvidence = buildConceptEvidence({
-        concept: "fib_level",
-        detector: { name: "impulseZone.overlayFibOnPOIs", version: "1" },
-        symbol: options.evidenceContext.symbol,
-        timeframe: options.evidenceContext.timeframe,
-        sourceCandleStart: impulse.startDate || observedAt,
-        sourceCandleEnd: impulse.endDate || observedAt,
-        observedAt,
-        direction: impulse.direction,
-        level: nearestFibPrice,
-        discriminator: nearestFib,
-        attributes: {
-          ratio: nearestFib,
-          rawFibDepth: fibDepth,
-          nearestDistance: nearestDist,
-          legacyTolerance: tolerance,
-          admittedByOTEWindow: inOTE,
-          admittedByNamedFibTolerance: nearFib,
-        },
-      });
-      const localConfluence = createZoneLocalConfluenceObservation({
-        candidateId: poi.evidence.entityId,
-        zone: { low: poi.low, high: poi.high },
-        pipSize: options.pipSize ?? 0.0001,
-        atr: options.atr ?? 0,
-      });
-      localConfluence.items.push(observeZoneLocalPoint({
-        source: "impulse_fib",
-        label: `Impulse Fib ${(nearestFib * 100).toFixed(1)}%`,
-        evidence: fibEvidence,
-        candidate: localConfluence,
-        level: nearestFibPrice,
-        legacyScoreContribution: fibScore,
-        attributes: {
-          rawFibDepth: fibDepth,
-          poiMid,
-          nearestDistance: nearestDist,
-        },
-      }));
-      rankedPOI.localConfluence = localConfluence;
-    }
-
-    ranked.push(rankedPOI);
+    });
   }
 
   // Sort by fibDepth descending (deepest first = best)
@@ -1495,10 +502,6 @@ export function checkHistoricalSR(
   candles: Candle[],
   zones: RankedPOI[],
   impulseStartIndex: number,
-  options?: {
-    evidenceContext?: ZoneEvidenceContext;
-    collectNestedPoiEvidence?: boolean;
-  },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
 
@@ -1527,64 +530,12 @@ export function checkHistoricalSR(
   for (const zone of zones) {
     const zoneHigh = zone.poi.high;
     const zoneLow = zone.poi.low;
-    let srCounted = false;
 
     for (const sr of srLevels) {
       if (sr >= zoneLow && sr <= zoneHigh) {
-        const isLegacyMatch = !srCounted;
-        if (isLegacyMatch) {
-          zone.srConfirmed = true;
-          zone.srLevel = sr;
-          zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
-          srCounted = true;
-        }
-        if (
-          zone.localConfluence &&
-          options?.evidenceContext
-        ) {
-          const observedAt = options.evidenceContext.observedAt ||
-            candles[candles.length - 1]?.datetime ||
-            "unknown";
-          const srEvidence = buildConceptEvidence({
-            concept: "support_resistance",
-            detector: {
-              name: "impulseZone.findCloseClusters",
-              version: "1",
-            },
-            symbol: options.evidenceContext.symbol,
-            timeframe: options.evidenceContext.timeframe,
-            sourceCandleStart: candles[lookbackStart]?.datetime || observedAt,
-            sourceCandleEnd: candles[Math.max(lookbackStart, lookbackEnd - 1)]
-              ?.datetime || observedAt,
-            observedAt,
-            direction: "neutral",
-            level: sr,
-            discriminator: `${lookbackStart}:${lookbackEnd}`,
-            attributes: {
-              minimumTouches: SR_MIN_TOUCHES,
-              clusterTolerance,
-              lookbackStart,
-              lookbackEnd,
-            },
-          });
-          const observation = observeZoneLocalPoint({
-            source: "historical_sr",
-            label: "Historical close S/R",
-            evidence: srEvidence,
-            candidate: zone.localConfluence,
-            level: sr,
-            legacyScoreContribution: 1,
-          });
-          if (isLegacyMatch) {
-            zone.localConfluence.items.push(observation);
-          } else if (
-            options.collectNestedPoiEvidence &&
-            sr > zoneLow && sr < zoneHigh
-          ) {
-            appendNestedPoiEvidence(zone, observation);
-          }
-        }
-        if (!options?.collectNestedPoiEvidence) break;
+        zone.srConfirmed = true;
+        zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
+        break;
       }
     }
   }
@@ -1648,10 +599,6 @@ function findCloseClusters(
 export function checkHTFConfluence(
   zones: RankedPOI[],
   htfData: HTFConfluenceData,
-  options?: {
-    evidenceContext?: ZoneEvidenceContext;
-    collectNestedPoiEvidence?: boolean;
-  },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
 
@@ -1662,7 +609,6 @@ export function checkHTFConfluence(
     const zoneLow = zone.poi.low;
 
     // ── 4H Order Blocks ──
-    let orderBlockCounted = false;
     for (const ob of htfData.h4OBs) {
       // Only consider OBs aligned with trade direction and not broken/mitigated
       if (ob.state === "broken" || ob.state === "mitigated") continue;
@@ -1672,52 +618,13 @@ export function checkHTFConfluence(
       ) continue;
       // Overlap check: max(zone.low, ob.low) <= min(zone.high, ob.high)
       if (Math.max(zoneLow, ob.low) <= Math.min(zoneHigh, ob.high)) {
-        const isLegacyMatch = !orderBlockCounted;
-        if (isLegacyMatch) {
-          score += 1;
-          layers.push("4H_OB");
-          orderBlockCounted = true;
-        }
-        if (zone.localConfluence && options?.evidenceContext) {
-          const evidence = buildConceptEvidence({
-            concept: "order_block",
-            detector: { name: "smcAnalysis.detectOrderBlocks", version: "1" },
-            symbol: options.evidenceContext.symbol,
-            timeframe: "4H",
-            sourceCandleStart: ob.datetime,
-            observedAt: options.evidenceContext.observedAt || ob.datetime,
-            direction: ob.type,
-            bounds: { low: ob.low, high: ob.high },
-            lifecycle: ob.state,
-            discriminator: ob.index,
-            attributes: {
-              testedCount: ob.testedCount,
-              mitigatedPercent: ob.mitigatedPercent,
-            },
-          });
-          const observation = observeZoneLocalRange({
-            source: "htf_order_block",
-            label: "4H Order Block",
-            evidence,
-            candidate: zone.localConfluence,
-            bounds: { low: ob.low, high: ob.high },
-            legacyScoreContribution: 1,
-          });
-          if (isLegacyMatch) {
-            zone.localConfluence.items.push(observation);
-          } else if (
-            options.collectNestedPoiEvidence &&
-            ob.low > zoneLow && ob.high < zoneHigh
-          ) {
-            appendNestedPoiEvidence(zone, observation);
-          }
-        }
-        if (!options?.collectNestedPoiEvidence) break;
+        score += 1;
+        layers.push("4H_OB");
+        break; // Count at most once per layer type
       }
     }
 
     // ── 4H Fair Value Gaps ──
-    let fairValueGapCounted = false;
     for (const fvg of htfData.h4FVGs) {
       if (fvg.state === "filled") continue;
       if (
@@ -1725,52 +632,13 @@ export function checkHTFConfluence(
         (htfData.direction === "bearish" && fvg.type !== "bearish")
       ) continue;
       if (Math.max(zoneLow, fvg.low) <= Math.min(zoneHigh, fvg.high)) {
-        const isLegacyMatch = !fairValueGapCounted;
-        if (isLegacyMatch) {
-          score += 1;
-          layers.push("4H_FVG");
-          fairValueGapCounted = true;
-        }
-        if (zone.localConfluence && options?.evidenceContext) {
-          const evidence = buildConceptEvidence({
-            concept: "fvg",
-            detector: { name: "smcAnalysis.detectFVGs", version: "1" },
-            symbol: options.evidenceContext.symbol,
-            timeframe: "4H",
-            sourceCandleStart: fvg.datetime,
-            observedAt: options.evidenceContext.observedAt || fvg.datetime,
-            direction: fvg.type,
-            bounds: { low: fvg.low, high: fvg.high },
-            lifecycle: fvg.state,
-            discriminator: fvg.index,
-            attributes: {
-              fillPercent: fvg.fillPercent,
-              respectedCount: fvg.respectedCount,
-            },
-          });
-          const observation = observeZoneLocalRange({
-            source: "htf_fvg",
-            label: "4H Fair Value Gap",
-            evidence,
-            candidate: zone.localConfluence,
-            bounds: { low: fvg.low, high: fvg.high },
-            legacyScoreContribution: 1,
-          });
-          if (isLegacyMatch) {
-            zone.localConfluence.items.push(observation);
-          } else if (
-            options.collectNestedPoiEvidence &&
-            fvg.low > zoneLow && fvg.high < zoneHigh
-          ) {
-            appendNestedPoiEvidence(zone, observation);
-          }
-        }
-        if (!options?.collectNestedPoiEvidence) break;
+        score += 1;
+        layers.push("4H_FVG");
+        break;
       }
     }
 
     // ── 4H Breaker Blocks ──
-    let breakerCounted = false;
     for (const bb of htfData.h4Breakers) {
       if (!bb.isActive || bb.state === "broken") continue;
       // Breaker alignment: bullish_breaker for bullish direction, bearish_breaker for bearish
@@ -1779,54 +647,9 @@ export function checkHTFConfluence(
         (htfData.direction === "bearish" && bb.type !== "bearish_breaker")
       ) continue;
       if (Math.max(zoneLow, bb.low) <= Math.min(zoneHigh, bb.high)) {
-        const isLegacyMatch = !breakerCounted;
-        if (isLegacyMatch) {
-          score += 1;
-          layers.push("4H_BREAKER");
-          breakerCounted = true;
-        }
-        if (zone.localConfluence && options?.evidenceContext) {
-          const observedAt = options.evidenceContext.observedAt || "unknown";
-          const evidence = buildConceptEvidence({
-            concept: "breaker",
-            detector: {
-              name: "smcAnalysis.detectBreakerBlocks",
-              version: "1",
-            },
-            symbol: options.evidenceContext.symbol,
-            timeframe: "4H",
-            sourceCandleStart: observedAt,
-            observedAt,
-            direction: bb.type === "bullish_breaker"
-              ? "bullish"
-              : "bearish",
-            bounds: { low: bb.low, high: bb.high },
-            lifecycle: bb.state,
-            discriminator: bb.mitigatedAt,
-            attributes: {
-              subtype: bb.subtype,
-              testedCount: bb.testedCount,
-              sourceIndex: bb.mitigatedAt,
-            },
-          });
-          const observation = observeZoneLocalRange({
-            source: "htf_breaker",
-            label: "4H Breaker",
-            evidence,
-            candidate: zone.localConfluence,
-            bounds: { low: bb.low, high: bb.high },
-            legacyScoreContribution: 1,
-          });
-          if (isLegacyMatch) {
-            zone.localConfluence.items.push(observation);
-          } else if (
-            options.collectNestedPoiEvidence &&
-            bb.low > zoneLow && bb.high < zoneHigh
-          ) {
-            appendNestedPoiEvidence(zone, observation);
-          }
-        }
-        if (!options?.collectNestedPoiEvidence) break;
+        score += 1;
+        layers.push("4H_BREAKER");
+        break;
       }
     }
 
@@ -1838,7 +661,6 @@ export function checkHTFConfluence(
 
     let bestFibScore = 0;
     let bestFibLabel = "";
-    let bestFib: { fib: FibLevel; prefix: string } | null = null;
     for (const { levels, prefix } of fibSources) {
       for (const fib of levels.retracements) {
         if (fib.price >= zoneLow && fib.price <= zoneHigh) {
@@ -1847,7 +669,6 @@ export function checkHTFConfluence(
             if (1.5 > bestFibScore) {
               bestFibScore = 1.5;
               bestFibLabel = `${prefix}_FIB_${(fib.ratio * 100).toFixed(1)}`;
-              bestFib = { fib, prefix };
             }
           }
           // 50% Fib gets +0.5
@@ -1855,7 +676,6 @@ export function checkHTFConfluence(
             if (0.5 > bestFibScore) {
               bestFibScore = 0.5;
               bestFibLabel = `${prefix}_FIB_50.0`;
-              bestFib = { fib, prefix };
             }
           }
         }
@@ -1864,46 +684,6 @@ export function checkHTFConfluence(
     if (bestFibScore > 0) {
       score += bestFibScore;
       layers.push(bestFibLabel);
-      if (
-        bestFib &&
-        zone.localConfluence &&
-        options?.evidenceContext
-      ) {
-        const levels = bestFib.prefix === "D1"
-          ? htfData.dailyFibLevels
-          : htfData.htfFibLevels;
-        const observedAt = options.evidenceContext.observedAt || "unknown";
-        const sourceStart = levels?.pivotLow?.datetime ||
-          levels?.pivotHigh?.datetime ||
-          observedAt;
-        const sourceEnd = levels?.pivotHigh?.datetime ||
-          levels?.pivotLow?.datetime ||
-          observedAt;
-        const evidence = buildConceptEvidence({
-          concept: "fib_level",
-          detector: { name: "smcAnalysis.calculateFibLevels", version: "1" },
-          symbol: options.evidenceContext.symbol,
-          timeframe: bestFib.prefix === "D1" ? "D1" : "4H",
-          sourceCandleStart: sourceStart,
-          sourceCandleEnd: sourceEnd,
-          observedAt,
-          direction: levels?.direction === "up" ? "bullish" : "bearish",
-          level: bestFib.fib.price,
-          discriminator: bestFib.fib.ratio,
-          attributes: {
-            ratio: bestFib.fib.ratio,
-            prefix: bestFib.prefix,
-          },
-        });
-        zone.localConfluence.items.push(observeZoneLocalPoint({
-          source: "htf_fib",
-          label: bestFibLabel,
-          evidence,
-          candidate: zone.localConfluence,
-          level: bestFib.fib.price,
-          legacyScoreContribution: bestFibScore,
-        }));
-      }
     }
 
     // ── Premium/Discount Alignment ──
@@ -1915,21 +695,6 @@ export function checkHTFConfluence(
       ) {
         score += 0.5;
         layers.push("PD_ALIGNED");
-        if (zone.localConfluence) {
-          zone.localConfluence.items.push(observeContextOnly({
-            source: "premium_discount",
-            label: "Premium/Discount alignment",
-            evidence: null,
-            candidate: zone.localConfluence,
-            legacyScoreContribution: 0.5,
-            reasonCode: "directional_context_not_price_local",
-            attributes: {
-              currentZone: pd.currentZone,
-              zonePercent: pd.zonePercent,
-              oteZone: pd.oteZone,
-            },
-          }));
-        }
       }
     }
 
@@ -1956,11 +721,6 @@ export function checkHTFConfluence(
 export function refineLowerTF(
   entryCandles: Candle[],
   zone: RankedPOI,
-  options?: {
-    evidenceContext?: ZoneEvidenceContext;
-    entryTimeframe?: string;
-    collectNestedPoiEvidence?: boolean;
-  },
 ): RankedPOI {
   if (entryCandles.length < 10) return zone;
 
@@ -1979,19 +739,14 @@ export function refineLowerTF(
     }
   }
 
-  const legacyRefinementEligible = insideCandles.length >= 3;
-  const collectNestedPoiEvidence = options?.collectNestedPoiEvidence === true &&
-    zone.localConfluence != null &&
-    options.evidenceContext != null;
-  if (!legacyRefinementEligible && !collectNestedPoiEvidence) return zone;
+  if (insideCandles.length < 3) return zone; // Not enough LTF data inside zone
 
-  let ltfFVGs: FairValueGap[] = [];
-  if (legacyRefinementEligible) {
-    // Keep the existing legacy FVG refinement ranking on inside-zone candles.
-    const ltfStructure = analyzeMarketStructure(insideCandles);
-    const ltfBreaks = [...ltfStructure.bos, ...ltfStructure.choch];
-    ltfFVGs = detectFVGs(insideCandles, ltfBreaks);
-  }
+  // Run structure analysis on the inside candles (for FVGs)
+  const ltfStructure = analyzeMarketStructure(insideCandles);
+  const ltfBreaks = [...ltfStructure.bos, ...ltfStructure.choch];
+
+  // FVGs: detect on inside candles (purely geometric, no lifecycle issue)
+  const ltfFVGs = detectFVGs(insideCandles, ltfBreaks);
 
   // OBs: detect on FULL entryCandles to avoid lifecycle false-negatives.
   // The OB (last opposing candle) may sit just outside the zone boundary,
@@ -2002,230 +757,52 @@ export function refineLowerTF(
   const ltfOBs = detectOrderBlocks(entryCandles, fullBreaks);
 
   // Find the best LTF POI aligned with the impulse direction
-  let bestLTF: {
-    type: "ob" | "fvg";
-    high: number;
-    low: number;
-    datetime: string;
-    sourceIndex: number;
-    lifecycle: string;
-  } | null = null;
+  let bestLTF: { type: "ob" | "fvg"; high: number; low: number } | null = null;
 
-  if (legacyRefinementEligible) {
-    // Prefer OBs over FVGs for precision
-    for (const ob of ltfOBs) {
-      if (
-        ob.type === zone.poi.direction &&
-        ob.state !== "broken" &&
-        ob.state !== "mitigated"
-      ) {
-        // Ensure the OB is actually inside the zone boundaries
-        if (ob.high <= zoneHigh && ob.low >= zoneLow) {
-          bestLTF = {
-            type: "ob",
-            high: ob.high,
-            low: ob.low,
-            datetime: ob.datetime,
-            sourceIndex: ob.index,
-            lifecycle: ob.state,
-          };
+  // Prefer OBs over FVGs for precision
+  for (const ob of ltfOBs) {
+    if (ob.type === zone.poi.direction && ob.state !== "broken" && ob.state !== "mitigated") {
+      // Ensure the OB is actually inside the zone boundaries
+      if (ob.high <= zoneHigh && ob.low >= zoneLow) {
+        bestLTF = { type: "ob", high: ob.high, low: ob.low };
+        break;
+      }
+    }
+  }
+
+  // Fallback to FVG if no OB found
+  if (!bestLTF) {
+    for (const fvg of ltfFVGs) {
+      if (fvg.type === zone.poi.direction && fvg.state !== "filled") {
+        if (fvg.high <= zoneHigh && fvg.low >= zoneLow) {
+          bestLTF = { type: "fvg", high: fvg.high, low: fvg.low };
           break;
         }
       }
     }
-
-    // Fallback to FVG if no OB found
-    if (!bestLTF) {
-      for (const fvg of ltfFVGs) {
-        if (fvg.type === zone.poi.direction && fvg.state !== "filled") {
-          if (fvg.high <= zoneHigh && fvg.low >= zoneLow) {
-            bestLTF = {
-              type: "fvg",
-              high: fvg.high,
-              low: fvg.low,
-              datetime: fvg.datetime,
-              sourceIndex: fvg.index,
-              lifecycle: fvg.state,
-            };
-            break;
-          }
-        }
-      }
-    }
   }
 
-  if (bestLTF) {
-    // Calculate refined entry and SL from the LTF POI
-    const refinedEntry = zone.poi.direction === "bullish"
-      ? bestLTF.high // Enter at the top of the LTF OB/FVG for longs
-      : bestLTF.low; // Enter at the bottom for shorts
+  if (!bestLTF) return zone; // No LTF refinement found
 
-    const refinedSL = zone.poi.direction === "bullish"
-      ? bestLTF.low // SL below the LTF OB/FVG for longs
-      : bestLTF.high; // SL above for shorts
+  // Calculate refined entry and SL from the LTF POI
+  const refinedEntry = zone.poi.direction === "bullish"
+    ? bestLTF.high  // Enter at the top of the LTF OB/FVG for longs
+    : bestLTF.low;  // Enter at the bottom for shorts
 
-    // Update the zone with LTF refinement
-    zone.ltfRefined = true;
-    zone.refinedEntry = refinedEntry;
-    zone.refinedSL = refinedSL;
-    zone.ltfType = bestLTF.type;
-    zone.totalScore = zone.fibScore + zone.htfConfluenceScore +
-      (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
-    if (zone.localConfluence && options?.evidenceContext) {
-      const observedAt = options.evidenceContext.observedAt ||
-        entryCandles[entryCandles.length - 1]?.datetime ||
-        bestLTF.datetime;
-      const evidence = buildConceptEvidence({
-        concept: bestLTF.type === "ob" ? "order_block" : "fvg",
-        detector: {
-          name: bestLTF.type === "ob"
-            ? "smcAnalysis.detectOrderBlocks"
-            : "smcAnalysis.detectFVGs",
-          version: "1",
-        },
-        symbol: options.evidenceContext.symbol,
-        timeframe: "LTF",
-        sourceCandleStart: bestLTF.datetime,
-        observedAt,
-        direction: zone.poi.direction,
-        bounds: { low: bestLTF.low, high: bestLTF.high },
-        lifecycle: bestLTF.lifecycle,
-        discriminator: bestLTF.sourceIndex,
-        attributes: {
-          parentTimeframe: options.evidenceContext.timeframe,
-          refinementType: bestLTF.type,
-        },
-      });
-      zone.localConfluence.items.push(observeZoneLocalRange({
-        source: "ltf_refinement",
-        label: `LTF ${bestLTF.type.toUpperCase()} refinement`,
-        evidence,
-        candidate: zone.localConfluence,
-        bounds: { low: bestLTF.low, high: bestLTF.high },
-        legacyScoreContribution: 1,
-      }));
-    }
-  }
+  const refinedSL = zone.poi.direction === "bullish"
+    ? bestLTF.low   // SL below the LTF OB/FVG for longs
+    : bestLTF.high; // SL above for shorts
 
-  if (collectNestedPoiEvidence) {
-    const observedAt = options!.evidenceContext!.observedAt ||
-      entryCandles[entryCandles.length - 1]?.datetime || "unknown";
-    const timeframe = options!.entryTimeframe ||
-      options!.evidenceContext!.timeframe || "unknown";
-    const addRangeEvidence = (input: {
-      concept: "order_block" | "fvg" | "breaker";
-      detector: string;
-      label: string;
-      low: number;
-      high: number;
-      direction: "bullish" | "bearish";
-      lifecycle: string;
-      sourceTime: string;
-      discriminator: string | number;
-      attributes?: Record<string, unknown>;
-    }) => {
-      if (
-        input.direction !== zone.poi.direction ||
-        input.low <= zoneLow || input.high >= zoneHigh ||
-        !(input.high > input.low)
-      ) return;
-      const legacyType = input.concept === "order_block" ? "ob" : input.concept;
-      if (
-        bestLTF?.type === legacyType &&
-        bestLTF.low === input.low &&
-        bestLTF.high === input.high
-      ) return;
-      const evidence = buildConceptEvidence({
-        concept: input.concept,
-        detector: { name: input.detector, version: "1" },
-        symbol: options!.evidenceContext!.symbol,
-        timeframe,
-        sourceCandleStart: input.sourceTime,
-        observedAt,
-        direction: input.direction,
-        bounds: { low: input.low, high: input.high },
-        lifecycle: input.lifecycle,
-        discriminator: input.discriminator,
-        attributes: {
-          parentTimeframe: options!.evidenceContext!.timeframe,
-          ...input.attributes,
-        },
-      });
-      appendNestedPoiEvidence(
-        zone,
-        observeZoneLocalRange({
-          source: "ltf_refinement",
-          label: input.label,
-          evidence,
-          candidate: zone.localConfluence!,
-          bounds: { low: input.low, high: input.high },
-          legacyScoreContribution: input.concept === "breaker" ? 0 : 1,
-        }),
-      );
-    };
-
-    for (const ob of ltfOBs) {
-      if (ob.state === "broken" || ob.state === "mitigated") continue;
-      addRangeEvidence({
-        concept: "order_block",
-        detector: "smcAnalysis.detectOrderBlocks",
-        label: timeframe + " Order Block refinement",
-        low: ob.low,
-        high: ob.high,
-        direction: ob.type,
-        lifecycle: ob.state,
-        sourceTime: ob.datetime,
-        discriminator: ob.index,
-      });
-    }
-
-    const fullLtfFVGs = detectFVGs(entryCandles, fullBreaks);
-    for (const fvg of fullLtfFVGs) {
-      if (fvg.state === "filled") continue;
-      addRangeEvidence({
-        concept: "fvg",
-        detector: "smcAnalysis.detectFVGs",
-        label: timeframe + " FVG refinement",
-        low: fvg.low,
-        high: fvg.high,
-        direction: fvg.type,
-        lifecycle: fvg.state,
-        sourceTime: fvg.datetime,
-        discriminator: fvg.index,
-      });
-    }
-
-    const ltfBreakers = detectBreakerBlocks(
-      ltfOBs,
-      entryCandles,
-      fullBreaks,
-    );
-    for (const breaker of ltfBreakers) {
-      if (
-        breaker.subtype !== "breaker" || !breaker.isActive ||
-        breaker.state === "broken"
-      ) continue;
-      addRangeEvidence({
-        concept: "breaker",
-        detector: "smcAnalysis.detectBreakerBlocks",
-        label: timeframe + " active Breaker refinement",
-        low: breaker.low,
-        high: breaker.high,
-        direction: breaker.type === "bullish_breaker" ? "bullish" : "bearish",
-        lifecycle: breaker.state,
-        sourceTime: entryCandles[breaker.mitigatedAt]?.datetime || observedAt,
-        discriminator: breaker.mitigatedAt,
-        attributes: {
-          subtype: breaker.subtype,
-          testedCount: breaker.testedCount,
-          originalOBType: breaker.originalOBType,
-        },
-      });
-    }
-  }
+  // Update the zone with LTF refinement
+  zone.ltfRefined = true;
+  zone.refinedEntry = refinedEntry;
+  zone.refinedSL = refinedSL;
+  zone.ltfType = bestLTF.type;
+  zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
 
   return zone;
 }
+
 // ─── 6. rankAndSelectBestZone ─────────────────────────────────────────────────
 
 /**
@@ -2262,35 +839,6 @@ export function rankAndSelectBestZone(
   return best || null;
 }
 
-export function buildZoneValidationTrade(
-  zone: RankedPOI,
-  impulse: ImpulseLeg,
-): ZoneValidationTrade {
-  const width = Math.max(0, zone.poi.high - zone.poi.low);
-  if (zone.poi.direction === "bullish") {
-    const entryPrice = zone.refinedEntry ?? zone.poi.low;
-    let stopLoss = zone.refinedSL ?? zone.poi.low - width * 0.5;
-    if (stopLoss < impulse.low) stopLoss = impulse.low;
-    return {
-      direction: "long",
-      entryPrice,
-      stopLoss,
-      takeProfit: impulse.bosPrice,
-      source: zone.ltfRefined ? "ltf_refinement" : "zone_bounds",
-    };
-  }
-  const entryPrice = zone.refinedEntry ?? zone.poi.high;
-  let stopLoss = zone.refinedSL ?? zone.poi.high + width * 0.5;
-  if (stopLoss > impulse.high) stopLoss = impulse.high;
-  return {
-    direction: "short",
-    entryPrice,
-    stopLoss,
-    takeProfit: impulse.bosPrice,
-    source: zone.ltfRefined ? "ltf_refinement" : "zone_bounds",
-  };
-}
-
 // ─── 7. Main Entry Point: findBestEntryZone ───────────────────────────────────
 
 /**
@@ -2313,252 +861,41 @@ export function findBestEntryZone(
   htfData?: HTFConfluenceData,
   options?: ZoneEngineOptions,
 ): ZoneEngineResult {
-  const collectedImpulses: ImpulseLegCandidate[] = [];
-  let collectedPOIs: ImpulsePOI[] = [];
-  let collectedMeasurements: POIQualificationMeasurement[] = [];
-  let collectedRankedZones: RankedPOI[] = [];
-  let canonicalImpulse: ZoneEngineEvidenceSnapshot["canonicalImpulse"] = null;
-  let impulseQualification: ImpulseQualification | null = null;
-  let entryZoneQualification: EntryZoneQualification = {
-    contractVersion: "entry-zone-qualification.v1",
-    state: "not_evaluated",
-    stage: "mapping",
-    qualified: false,
-    reasons: ["No structural impulse was available for entry-zone evaluation"],
-    measurements: {
-      mappedCount: 0,
-      qualityAcceptedCount: 0,
-      fibAlignedCount: null,
-      finalCandidateCount: null,
-      rejected: { age: 0, body_ratio: 0, displacement: 0 },
-    },
-  };
-  const finish = (result: ZoneEngineResult): ZoneEngineResult => {
-    const completedResult = { ...result, entryZoneQualification };
-    if (!options?.collectEvidence) return completedResult;
-    return {
-      ...completedResult,
-      evidence: {
-        timeframe: options.evidenceContext?.timeframe ?? null,
-        currentPrice,
-        impulses: collectedImpulses,
-        mappedPOIs: collectedPOIs,
-        qualificationMeasurements: collectedMeasurements,
-        rankedZones: collectedRankedZones,
-        canonicalImpulse,
-        canonicalMatchesLegacy: canonicalImpulse?.selectionKey === null ? null : true,
-        impulseQualification,
-        entryZoneQualification,
-      },
-    };
-  };
-
-  // Step 1: Rank every intact structural leg. The strongest leg is evaluated
-  // first, but a candidate without an accepted displacement POI cannot own the
-  // authoritative impulse range.
-  // A hand-marked impulse OVERRIDES detection for this pair. The rest of the
-  // pipeline is unchanged — POIs, fib grid, confluence, gates and sizing all
-  // take an ImpulseLeg and do not care where it came from. See
-  // _shared/manualImpulse.ts for the marking rules and why they are enforced at
-  // marking time rather than silently here.
-  let impulse = options?.manualImpulse ?? findStructuralLeg(
-    htfCandles,
-    direction,
-    undefined,
-    (candidate) => collectedImpulses.push(candidate),
-    options?.structureAuthorityMode ?? "observe",
-  );
+  // Step 1: Find impulse leg
+  const impulse = findImpulseLeg(htfCandles, direction);
   if (!impulse) {
-    const rejectedLeg = collectedImpulses.findLast((candidate) => !candidate.selected)?.leg ?? null;
-    impulseQualification = rejectedLeg
-      ? qualifyImpulseLeg(htfCandles, rejectedLeg, options)
-      : null;
-    return finish({
+    return {
       bestZone: null,
-      impulse: rejectedLeg,
-      impulseQualification,
+      impulse: null,
       allZones: [],
-      reason: impulseQualification
-        ? `Invalidated structural leg: ${impulseQualification.reasons.join("; ")}`
-        : `No ${direction} structural break and swing origin were found`,
-    });
-  }
-
-  // Step 2: Evaluate impulse quality and entry-zone availability independently.
-  // Existing execution behavior is preserved: a candidate advances only when
-  // both contracts pass. Lower-ranked intact legs are still tried when the
-  // structurally strongest leg lacks a usable displacement zone.
-  const rankedLegs = collectedImpulses
-    .filter((candidate) => candidate.leg.isValid)
-    .map((candidate) => candidate.leg)
-    .filter((leg, index, legs) =>
-      legs.findIndex((item) =>
-        item.startIndex === leg.startIndex && item.endIndex === leg.endIndex
-      ) === index
-    );
-  if (!rankedLegs.some((leg) => leg === impulse)) rankedLegs.unshift(impulse);
-
-  let mappedPOIs: ImpulsePOI[] = [];
-  let poiQualification = qualifyImpulsePOIs(htfCandles, impulse, [], options);
-  type CandidateEvaluation = {
-    impulse: ImpulseLeg;
-    mappedPOIs: ImpulsePOI[];
-    poiQualification: ZoneQualificationResult;
-    impulseQualification: ImpulseQualification;
-    entryZoneQualification: EntryZoneQualification;
-  };
-  let strongestFailedEvaluation: CandidateEvaluation | null = null;
-  let qualifiedEvaluation: CandidateEvaluation | null = null;
-  for (const candidate of rankedLegs) {
-    const candidatePOIs = mapImpulsePOIs(htfCandles, candidate, {
-      originOBRetest: options?.originOBRetest,
-      zoneLifecycleV2: options?.zoneLifecycleV2,
-      evidenceContext: options?.evidenceContext,
-    });
-    const candidatePOIQualification = qualifyImpulsePOIs(
-      htfCandles, candidate, candidatePOIs, options,
-    );
-    const candidateQualification = qualifyImpulseLeg(
-      htfCandles, candidate, options,
-    );
-    const candidateEntryZoneQualification = describeEntryZoneQualification(
-      candidatePOIQualification,
-    );
-    const evaluation = {
-      impulse: candidate,
-      mappedPOIs: candidatePOIs,
-      poiQualification: candidatePOIQualification,
-      impulseQualification: candidateQualification,
-      entryZoneQualification: candidateEntryZoneQualification,
-    };
-    if (
-      candidateQualification.qualified &&
-      candidateEntryZoneQualification.state === "candidate_available"
-    ) {
-      qualifiedEvaluation = evaluation;
-      break;
-    }
-    // rankedLegs is strongest-first. If every candidate fails, retain the
-    // strongest failure for diagnostics instead of silently exposing the last
-    // (and therefore weakest) candidate inspected by the loop.
-    strongestFailedEvaluation ??= evaluation;
-  }
-  const retainedEvaluation = qualifiedEvaluation ?? strongestFailedEvaluation;
-  if (retainedEvaluation) {
-    impulse = retainedEvaluation.impulse;
-    mappedPOIs = retainedEvaluation.mappedPOIs;
-    poiQualification = retainedEvaluation.poiQualification;
-    impulseQualification = retainedEvaluation.impulseQualification;
-    entryZoneQualification = retainedEvaluation.entryZoneQualification;
-  }
-  collectedPOIs = mappedPOIs;
-  if (!impulseQualification) {
-    throw new Error("Impulse candidate evaluation did not produce a qualification");
-  }
-  if (options?.collectEvidence) {
-    const metrics = measureCanonicalImpulseMetrics(htfCandles, impulse);
-    canonicalImpulse = {
-      detectorVersion: CANONICAL_IMPULSE_DETECTOR_VERSION,
-      timeframe: options.evidenceContext?.timeframe ?? null,
-      direction,
-      impulse,
-      metrics,
-      selectionKey: [direction, impulse.startIndex, impulse.endIndex, impulse.low.toFixed(10), impulse.high.toFixed(10), impulse.bosPrice.toFixed(10)].join(":"),
+      reason: `No valid ${direction} impulse leg found (no BOS or origin broken)`,
     };
   }
-  if (!impulseQualification.qualified) {
-    if (entryZoneQualification.state === "candidate_available") {
-      entryZoneQualification = advanceEntryZoneQualification(
-        entryZoneQualification,
-        {
-          state: "candidate_available",
-          stage: "impulse",
-          qualified: false,
-          reasons: [
-            "Entry-zone candidates passed their own checks, but the impulse did not qualify",
-          ],
-        },
-      );
-    }
-    return finish({
-      bestZone: null,
-      impulse,
-      impulseQualification,
-      allZones: [],
-      reason: (impulseQualification.state === "invalidated"
-        ? "Invalidated structural leg"
-        : impulseQualification.state === "stale"
-        ? "Stale structural leg"
-        : impulseQualification.state === "forming"
-        ? "Structural leg is still forming"
-        : "Completed structural leg did not qualify") + ": " + impulseQualification.reasons.join("; "),
-    });
-  }
-  const qualification = poiQualification;
-  if (options?.collectEvidence) {
-    collectedMeasurements = measureImpulsePOIQualification(
-      htfCandles,
-      impulse,
-      mappedPOIs,
-      options,
-    );
-  }
-  const pois = qualification.accepted;
+
+  // Step 2: Map POIs within the impulse
+  const pois = mapImpulsePOIs(htfCandles, impulse, { originOBRetest: options?.originOBRetest });
   if (pois.length === 0) {
-    return finish({
+    return {
       bestZone: null,
       impulse,
-      impulseQualification,
       allZones: [],
-      reason: entryZoneQualification.reasons.join("; "),
-    });
+      reason: `Impulse found but no POIs (FVGs/OBs) detected within it`,
+    };
   }
 
   // Step 3: Overlay Fib and score by depth
-  const zoneATR = calculateATR(htfCandles);
   let rankedZones = overlayFibOnPOIs(impulse, pois, {
     fibMaxRetracement: options?.fibMaxRetracement,
     originOBRetest: options?.originOBRetest,
-    pipSize: options?.pipSize,
-    atr: zoneATR,
-    evidenceContext: options?.evidenceContext,
   });
-  collectedRankedZones = rankedZones;
   if (rankedZones.length === 0) {
-    entryZoneQualification = advanceEntryZoneQualification(
-      entryZoneQualification,
-      {
-        state: "rejected",
-        stage: "fib",
-        qualified: false,
-        reasons: [
-          `No entry-zone candidate aligned with the accepted Fib range (50%-${
-            ((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)
-          }%)`,
-        ],
-        fibAlignedCount: 0,
-        finalCandidateCount: 0,
-      },
-    );
-    return finish({
+    return {
       bestZone: null,
       impulse,
-      impulseQualification,
       allZones: [],
       reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
-    });
+    };
   }
-  entryZoneQualification = advanceEntryZoneQualification(
-    entryZoneQualification,
-    {
-      state: "candidate_available",
-      stage: "fib",
-      qualified: false,
-      reasons: ["Entry-zone candidates passed mapping, quality and Fib checks"],
-      fibAlignedCount: rankedZones.length,
-      finalCandidateCount: rankedZones.length,
-    },
-  );
 
   // Step 3b: Filter by Daily zone bounds (if provided)
   if (options?.dailyZoneBounds) {
@@ -2569,139 +906,47 @@ export function findBestEntryZone(
       // Overlap check: max(zone.low, daily.low) <= min(zone.high, daily.high)
       return Math.max(zLow, bounds.low) <= Math.min(zHigh, bounds.high);
     });
-    collectedRankedZones = rankedZones;
     if (rankedZones.length === 0) {
-      entryZoneQualification = advanceEntryZoneQualification(
-        entryZoneQualification,
-        {
-          state: "rejected",
-          stage: "daily_bounds",
-          qualified: false,
-          reasons: [
-            `No entry-zone candidate overlaps the configured Daily zone [${
-              bounds.low.toFixed(5)
-            }-${bounds.high.toFixed(5)}]`,
-          ],
-          finalCandidateCount: 0,
-        },
-      );
-      return finish({
+      return {
         bestZone: null,
         impulse,
-        impulseQualification,
         allZones: [],
         reason: `POIs found at Fib levels but none overlap with Daily zone [${bounds.low.toFixed(5)}-${bounds.high.toFixed(5)}]`,
-      });
+      };
     }
-    entryZoneQualification = advanceEntryZoneQualification(
-      entryZoneQualification,
-      {
-        state: "candidate_available",
-        stage: "daily_bounds",
-        qualified: false,
-        reasons: ["Entry-zone candidates passed the configured Daily bounds"],
-        finalCandidateCount: rankedZones.length,
-      },
-    );
   }
 
   // Step 4: Check historical S/R
-  rankedZones = checkHistoricalSR(
-    htfCandles,
-    rankedZones,
-    impulse.startIndex,
-    {
-      evidenceContext: options?.evidenceContext,
-      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
-    },
-  );
+  rankedZones = checkHistoricalSR(htfCandles, rankedZones, impulse.startIndex);
 
   // Step 5: HTF confluence scoring (if data available)
   if (htfData) {
-    rankedZones = checkHTFConfluence(rankedZones, htfData, {
-      evidenceContext: options?.evidenceContext,
-      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
-    });
+    rankedZones = checkHTFConfluence(rankedZones, htfData);
   }
 
   // Step 6: LTF refinement on top zones (only refine top 3 to save compute)
   const topZones = rankedZones.slice(0, 3);
   for (let i = 0; i < topZones.length; i++) {
-    topZones[i] = refineLowerTF(entryCandles, topZones[i], {
-      evidenceContext: options?.evidenceContext,
-      entryTimeframe: options?.entryTimeframe,
-      collectNestedPoiEvidence: options?.collectNestedPoiEvidence,
-    });
+    topZones[i] = refineLowerTF(entryCandles, topZones[i]);
   }
   // Replace in full array
   for (let i = 0; i < topZones.length; i++) {
     rankedZones[i] = topZones[i];
   }
-  for (const zone of rankedZones) {
-    zone.validationTrade = buildZoneValidationTrade(zone, impulse);
-  }
-  collectedRankedZones = rankedZones;
 
   // Step 6: Rank and select best
   const bestZonePOI = rankAndSelectBestZone(rankedZones);
   if (!bestZonePOI) {
-    entryZoneQualification = advanceEntryZoneQualification(
-      entryZoneQualification,
-      {
-        state: "rejected",
-        stage: "ranking",
-        qualified: false,
-        reasons: [
-          "Entry-zone candidates did not meet the minimum ranking depth",
-        ],
-        finalCandidateCount: rankedZones.length,
-      },
-    );
-    return finish({
+    return {
       bestZone: null,
       impulse,
-      impulseQualification,
       allZones: rankedZones,
       reason: `Zones found but none scored high enough (need fibScore >= 1, i.e., at 50% or deeper)`,
-    });
+    };
   }
-  const minQualityScore = Math.max(0, Math.min(100, Number(options?.minQualityScore ?? 0)));
-  const qualityPercent = zoneQualityPercent(bestZonePOI);
-  if (qualityPercent < minQualityScore) {
-    entryZoneQualification = advanceEntryZoneQualification(
-      entryZoneQualification,
-      {
-        state: "rejected",
-        stage: "ranking",
-        qualified: false,
-        reasons: [
-          `Best entry-zone quality ${qualityPercent.toFixed(1)}% is below the configured minimum ${minQualityScore.toFixed(1)}%`,
-        ],
-        finalCandidateCount: rankedZones.length,
-      },
-    );
-    return finish({
-      bestZone: null,
-      impulse,
-      impulseQualification,
-      allZones: rankedZones,
-      reason: `Best zone quality ${qualityPercent.toFixed(1)}% is below Bot Config minimum ${minQualityScore.toFixed(1)}%`,
-    });
-  }
-
-  entryZoneQualification = advanceEntryZoneQualification(
-    entryZoneQualification,
-    {
-      state: "selected",
-      stage: "selected",
-      qualified: true,
-      reasons: ["An executable entry zone completed the selection pipeline"],
-      finalCandidateCount: rankedZones.length,
-    },
-  );
 
   // Step 7: Check if current price is at the zone
-  const atr = zoneATR;
+  const atr = calculateATR(htfCandles);
   const looseThreshold = atr * PRICE_AT_ZONE_ATR_MULT;       // 1.5×ATR (watchlist)
   const effectiveStrictMult = options?.strictATRMult ?? PRICE_AT_ZONE_STRICT_ATR_MULT;
   const strictThreshold = atr * effectiveStrictMult; // configurable (default 0.3×ATR)
@@ -2778,7 +1023,7 @@ export function findBestEntryZone(
     proximityLabel = `price ${distancePips.toFixed(1)} pips away`;
   }
 
-  return finish({
+  return {
     bestZone: {
       zone: bestZonePOI,
       impulse,
@@ -2790,52 +1035,17 @@ export function findBestEntryZone(
       distancePips,
     },
     impulse,
-    impulseQualification,
     allZones: rankedZones,
     reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/9${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
-  });
+  };
 }
 
 
 // ─── Options ─────────────────────────────────────────────────────────────────
 /** Options to override engine constants at runtime (config-driven). */
 export interface ZoneEngineOptions {
-  /**
-   * A hand-marked impulse. When supplied it REPLACES automatic detection for
-   * this invocation — the caller has decided which leg is being traded, so no
-   * structural search runs and no candidates are ranked.
-   *
-   * Everything after selection is untouched: POIs are still mapped inside the
-   * leg, the fib grid is still overlaid, and every gate still applies. Callers
-   * must resolve and validate the marking first (see
-   * _shared/manualImpulse.ts) — an invalid leg must never reach here.
-   */
-  manualImpulse?: ImpulseLeg | null;
-  /**
-   * Record but do not enforce the "is this really an impulse?" quality checks.
-   * Set when a hand-marked leg is supplied: the person drawing it has already
-   * made that judgement, and the thresholds exist to stop AUTOMATIC detection
-   * promoting a choppy drift. The structural-origin check is never softened;
-   * entry-zone availability is reported by entryZoneQualification instead.
-   */
-  softQualification?: boolean;
-  /**
-   * Attach an observation-only snapshot of the exact legs, POIs and ranked
-   * candidates traversed by this invocation. Defaults off.
-   */
-  collectEvidence?: boolean;
-  /** Canonical structure is compared in observe mode and owns impulse selection only in enforce mode. */
-  structureAuthorityMode?: "observe" | "enforce";
   /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
   strictATRMult?: number;
-  /** Minimum normalized zone score (0-100). 0 disables this filter. */
-  minQualityScore?: number;
-  /** Maximum POI age in structural-timeframe bars. 0 disables this filter. */
-  maxAgeBars?: number;
-  /** Minimum OB candle body/range ratio (0-1). 0 disables this filter. */
-  minBodyRatio?: number;
-  /** Minimum displacement candle range as an ATR multiple. 0 disables this filter. */
-  minDisplacementATR?: number;
   /**
    * Daily zone bounds filter. When provided, only zones that overlap with these
    * bounds are kept. This integrates the cascade (Daily→4H→1H) approach:
@@ -2854,33 +1064,6 @@ export interface ZoneEngineOptions {
    * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
    */
   originOBRetest?: boolean;
-  /** Observe-only identity context. It never participates in scoring or gates. */
-  evidenceContext?: ZoneEvidenceContext;
-  /** Actual timeframe of entryCandles, persisted on nested trigger evidence. */
-  entryTimeframe?: string;
-  /**
-   * Collect additional strictly-contained evidence for nested-POI selection.
-   * Defaults off so legacy scoring and detector cost remain unchanged.
-   */
-  collectNestedPoiEvidence?: boolean;
-  /**
-   * Zone Lifecycle v2: When enabled, replaces the default 50% penetration invalidation
-   * with close-based invalidation. Zones survive wick penetration and can be traded
-   * multiple times with decreasing confidence.
-   * When null/undefined, uses the default state-based filter (broken/mitigated = skip).
-   */
-  zoneLifecycleV2?: {
-    enabled: boolean;
-    config?: Partial<ZoneLifecycleConfig>;
-    /** All candles available AFTER zone formation for lifecycle evaluation */
-    allCandles?: Candle[];
-  };
-}
-
-export interface ZoneEvidenceContext {
-  symbol: string;
-  timeframe: string;
-  observedAt?: string;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
@@ -2888,22 +1071,9 @@ export interface ZoneEvidenceContext {
  * Result from the multi-TF zone engine.
  * Includes the best zone across timeframes and individual TF results for transparency.
  */
-/** Maps the three engine slots to human-readable timeframe labels.
- * Default (day_trader): { top: "D", mid: "4H", low: "1H" }
- * Scalper:              { top: "1H", mid: "15m", low: "5m" }
- * Swing:               { top: "W", mid: "D", low: "4H" }
- */
-export interface TFSlotLabels {
-  top: string;   // Highest TF slot ("Daily" slot in engine)
-  mid: string;   // Middle TF slot ("4H" slot in engine)
-  low: string;   // Lowest TF slot ("1H" slot in engine)
-}
-
-export const DEFAULT_TF_LABELS: TFSlotLabels = { top: "D", mid: "4H", low: "1H" };
-
 export interface MultiTFZoneResult {
   bestZone: BestZone | null;
-  selectedTF: string | null;  // Which timeframe produced the winning zone (style-aware label)
+  selectedTF: "D" | "1H" | "4H" | null;  // Which timeframe produced the winning zone
   reason: string;
   h1Result: ZoneEngineResult;
   h4Result: ZoneEngineResult | null; // null when 4H candles not available
@@ -2942,42 +1112,20 @@ export function findBestEntryZoneMultiTF(
   htfData?: HTFConfluenceData,
   options?: ZoneEngineOptions,
   dailyCandles?: Candle[],
-  tfLabels?: TFSlotLabels,
 ): MultiTFZoneResult {
-  const labels = tfLabels ?? DEFAULT_TF_LABELS;
-  const optionsFor = (timeframe: string): ZoneEngineOptions | undefined => {
-    if (!options) return options;
-    // A hand-marked impulse belongs to the timeframe it was marked on. The
-    // waterfall evaluates every slot, so passing it through unfiltered would
-    // silently override detection on timeframes the user never touched.
-    const manualImpulse = options.manualImpulse &&
-        options.manualImpulse.timeframe === timeframe
-      ? options.manualImpulse
-      : null;
-    return {
-      ...options,
-      manualImpulse,
-      // Soften quality checks only for the slot actually running a marked leg.
-      // Derived here rather than set by callers so the two can never disagree.
-      softQualification: manualImpulse != null,
-      ...(options.evidenceContext
-        ? { evidenceContext: { ...options.evidenceContext, timeframe } }
-        : {}),
-    };
-  };
   // ── WATERFALL: Try Daily first (A+ setup) ──
   let dailyResult: ZoneEngineResult | null = null;
   if (dailyCandles && dailyCandles.length >= 20) {
-    dailyResult = findBestEntryZone(dailyCandles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.top));
+    dailyResult = findBestEntryZone(dailyCandles, entryCandles, direction, currentPrice, htfData, options);
     // If Daily produces a valid zone, it wins immediately (highest conviction)
     if (dailyResult.bestZone) {
       const allZones: RankedPOI[] = [...dailyResult.allZones];
       return {
         bestZone: dailyResult.bestZone,
-        selectedTF: labels.top,
-        reason: `${labels.top} zone selected (A+ setup): ${dailyResult.reason}`,
-        h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.low)),
-        h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.mid)) : null,
+        selectedTF: "D",
+        reason: `Daily zone selected (A+ setup): ${dailyResult.reason}`,
+        h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options),
+        h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options) : null,
         dailyResult,
         allZones,
       };
@@ -2986,12 +1134,12 @@ export function findBestEntryZoneMultiTF(
 
   // ── FALLBACK: Run 1H and 4H (existing logic) ──
   // Always run 1H
-  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.low));
+  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options);
 
   // Run 4H only if sufficient candles
   let h4Result: ZoneEngineResult | null = null;
   if (h4Candles.length >= 20) {
-    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.mid));
+    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options);
   }
 
   // Combine all zones from all TFs for transparency
@@ -3009,10 +1157,10 @@ export function findBestEntryZoneMultiTF(
 
   // Case: Neither TF has a zone
   if (!h1Zone && !h4Zone) {
-    const reasons: string[] = [`${labels.low}: ${h1Result.reason}`];
-    if (h4Result) reasons.push(`${labels.mid}: ${h4Result.reason}`);
-    else reasons.push(`${labels.mid}: Not available (insufficient candles)`);
-    if (dailyResult) reasons.push(`${labels.top}: ${dailyResult.reason}`);
+    const reasons: string[] = [`1H: ${h1Result.reason}`];
+    if (h4Result) reasons.push(`4H: ${h4Result.reason}`);
+    else reasons.push("4H: Not available (insufficient candles)");
+    if (dailyResult) reasons.push(`Daily: ${dailyResult.reason}`);
     return {
       bestZone: null,
       selectedTF: null,
@@ -3024,12 +1172,12 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Case: Only low-TF has a zone
+  // Case: Only 1H has a zone
   if (h1Zone && !h4Zone) {
     return {
       bestZone: h1Zone,
-      selectedTF: labels.low,
-      reason: `${labels.low} zone selected (${labels.mid} ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
+      selectedTF: "1H",
+      reason: `1H zone selected (4H ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3037,12 +1185,12 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Case: Only mid-TF has a zone
+  // Case: Only 4H has a zone
   if (!h1Zone && h4Zone) {
     return {
       bestZone: h4Zone,
-      selectedTF: labels.mid,
-      reason: `${labels.mid} zone selected (${labels.low} found no zone): ${h4Result!.reason}`,
+      selectedTF: "4H",
+      reason: `4H zone selected (1H found no zone): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3057,8 +1205,8 @@ export function findBestEntryZoneMultiTF(
   if (h4Score > h1Score) {
     return {
       bestZone: h4Zone!,
-      selectedTF: labels.mid,
-      reason: `${labels.mid} zone wins (score ${h4Score} > ${labels.low} score ${h1Score}): ${h4Result!.reason}`,
+      selectedTF: "4H",
+      reason: `4H zone wins (score ${h4Score} > 1H score ${h1Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3069,8 +1217,8 @@ export function findBestEntryZoneMultiTF(
   if (h1Score > h4Score) {
     return {
       bestZone: h1Zone!,
-      selectedTF: labels.low,
-      reason: `${labels.low} zone wins (score ${h1Score} > ${labels.mid} score ${h4Score}): ${h1Result.reason}`,
+      selectedTF: "1H",
+      reason: `1H zone wins (score ${h1Score} > 4H score ${h4Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3085,8 +1233,8 @@ export function findBestEntryZoneMultiTF(
   if (h4Depth > h1Depth) {
     return {
       bestZone: h4Zone!,
-      selectedTF: labels.mid,
-      reason: `${labels.mid} zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
+      selectedTF: "4H",
+      reason: `4H zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3097,8 +1245,8 @@ export function findBestEntryZoneMultiTF(
   if (h1Depth > h4Depth) {
     return {
       bestZone: h1Zone!,
-      selectedTF: labels.low,
-      reason: `${labels.low} zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
+      selectedTF: "1H",
+      reason: `1H zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -3106,11 +1254,11 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Perfect tie — mid-TF wins (higher timeframe = more significant structure)
+  // Perfect tie — 4H wins (higher timeframe = more significant structure)
   return {
     bestZone: h4Zone!,
-    selectedTF: labels.mid,
-    reason: `${labels.mid} zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
+    selectedTF: "4H",
+    reason: `4H zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
     h1Result,
     h4Result,
     dailyResult,

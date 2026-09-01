@@ -18,11 +18,6 @@
 import { type Candle, calculateATR, detectDisplacement, analyzeMarketStructure } from "./smcAnalysis.ts";
 import { type Inducement } from "./inducementDetection.ts";
 import { type SweepEvent } from "./zoneLiquidity.ts";
-import {
-  buildConfirmationAuthorityObservation,
-  type ConfirmationAuthorityLevel,
-  type ConfirmationAuthorityObservation,
-} from "./confirmationAuthority.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -48,7 +43,6 @@ export interface ConfirmationResult {
   detail: string;
   /** Whether the confirmation is inside the zone bounds */
   insideZone: boolean;
-  authority?: ConfirmationAuthorityObservation;
 }
 
 export interface ConfirmationInput {
@@ -71,31 +65,6 @@ export interface ConfirmationInput {
 
 // ─── Core Function ──────────────────────────────────────────────────
 
-
-function attachHierarchyAuthority(
-  result: Omit<ConfirmationResult, "authority">,
-  candles: Candle[],
-  level: ConfirmationAuthorityLevel,
-): ConfirmationResult {
-  const direction = result.direction === "bullish" ? "long" : "short";
-  const candle = result.confirmationIndex === null
-    ? null
-    : candles[result.confirmationIndex] || null;
-  return {
-    ...result,
-    authority: buildConfirmationAuthorityObservation({
-      source: "unified_hierarchy", level, direction,
-      entryReadyUnderCurrentBehavior: result.entryReady,
-      evaluatedAt: candle?.datetime || null,
-      candleIndex: result.confirmationIndex,
-      candleTime: candle?.datetime || null,
-      price: candle?.close || null,
-      closeBased: level.includes("choch") ? true : null,
-      supportingSignals: [result.type],
-      reasonCodes: [result.type, result.entryReady ? "entry_ready" : "watch_only"],
-    }),
-  };
-}
 /**
  * Evaluate the confirmation hierarchy for a zone entry.
  *
@@ -119,7 +88,7 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
   } = input;
 
   if (confirmationCandles.length < 15) {
-    return noConfirmation(direction, confirmationCandles);
+    return noConfirmation(direction);
   }
 
   const currentIndex = confirmationCandles.length - 1;
@@ -142,10 +111,7 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
   if (sweepEvent && (choch || ltfChoch)) {
     const confirmIdx = choch?.index ?? ltfChoch?.index ?? null;
     const insideZone = choch?.insideZone ?? ltfChoch?.insideZone ?? false;
-    const authorityCandles = choch
-      ? confirmationCandles
-      : ltfCandles || confirmationCandles;
-    return attachHierarchyAuthority({
+    return {
       type: "sweep_choch",
       score: 2.5,
       entryReady: true,
@@ -153,38 +119,38 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       direction,
       detail: `Sweep @ ${sweepEvent.level.toFixed(5)} + ${choch ? "CHoCH" : "LTF CHoCH"} (${direction})`,
       insideZone,
-    }, authorityCandles, "sweep_close_choch");
+    };
   }
 
   // Level 2: LTF CHoCH (without sweep)
   if (ltfChoch) {
-    return attachHierarchyAuthority({
+    return {
       type: "ltf_choch",
       score: 2.0,
       entryReady: true,
       confirmationIndex: ltfChoch.index,
       direction,
-      detail: `LTF CHoCH (${direction}) @ ${ltfChoch.price.toFixed(5)}${ltfCandles && ltfCandles[ltfChoch.index]?.datetime ? " (" + ltfCandles[ltfChoch.index].datetime.slice(5, 16).replace("T", " ") + ")" : ""}`,
+      detail: `LTF CHoCH (${direction}) @ index ${ltfChoch.index}`,
       insideZone: ltfChoch.insideZone,
-    }, ltfCandles || confirmationCandles, "close_choch");
+    };
   }
 
   // Level 2b: Same-TF CHoCH (without sweep)
   if (choch) {
-    return attachHierarchyAuthority({
+    return {
       type: "ltf_choch",
       score: 2.0,
       entryReady: true,
       confirmationIndex: choch.index,
       direction,
-      detail: `CHoCH (${direction}) @ ${choch.price.toFixed(5)}${confirmationCandles[choch.index]?.datetime ? " (" + confirmationCandles[choch.index].datetime.slice(5, 16).replace("T", " ") + ")" : ""}`,
+      detail: `CHoCH (${direction}) @ index ${choch.index}`,
       insideZone: choch.insideZone,
-    }, confirmationCandles, "close_choch");
+    };
   }
 
   // Level 3: Displacement (strong momentum candle)
   if (disp) {
-    return attachHierarchyAuthority({
+    return {
       type: "displacement",
       score: 1.5,
       entryReady: true,
@@ -192,12 +158,12 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       direction,
       detail: `Displacement (${direction}) body ${(disp.bodyRatio * 100).toFixed(0)}%`,
       insideZone: disp.insideZone,
-    }, confirmationCandles, "displacement");
+    };
   }
 
   // Level 4: Inducement only (sweep pattern without structure shift)
   if (inducement && inducement.confirmed) {
-    return attachHierarchyAuthority({
+    return {
       type: "inducement",
       score: 1.0,
       entryReady: false, // Not enough for entry alone, but adds to score
@@ -205,12 +171,12 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       direction,
       detail: `Inducement: ${inducement.type} (quality ${inducement.quality}/10)`,
       insideZone: inducement.level >= zoneLow && inducement.level <= zoneHigh,
-    }, confirmationCandles, "none");
+    };
   }
 
   // Level 5: Sweep without any structure shift
   if (sweepEvent && sweepEvent.rejected) {
-    return attachHierarchyAuthority({
+    return {
       type: "inducement",
       score: 1.0,
       entryReady: false,
@@ -218,11 +184,11 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       direction,
       detail: `Sweep rejected @ ${sweepEvent.level.toFixed(5)} (no CHoCH yet)`,
       insideZone: sweepEvent.level >= zoneLow && sweepEvent.level <= zoneHigh,
-    }, confirmationCandles, "none");
+    };
   }
 
   // Level 6: None
-  return noConfirmation(direction, confirmationCandles);
+  return noConfirmation(direction);
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────
@@ -341,11 +307,8 @@ function findDirectionalDisplacement(
   return null;
 }
 
-function noConfirmation(
-  direction: "bullish" | "bearish",
-  candles: Candle[],
-): ConfirmationResult {
-  return attachHierarchyAuthority({
+function noConfirmation(direction: "bullish" | "bearish"): ConfirmationResult {
+  return {
     type: "none",
     score: 0,
     entryReady: false,
@@ -353,5 +316,5 @@ function noConfirmation(
     direction,
     detail: "No confirmation — watchlist only",
     insideZone: false,
-  }, candles, "none");
+  };
 }

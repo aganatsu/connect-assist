@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable/index";
-import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,18 +11,9 @@ import { TrendingUp } from "lucide-react";
 
 const Login = () => {
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-
-  // A valid session must never be left sitting on the sign-in page (this is
-  // what made OAuth returns look like "stuck at sign in").
-  useEffect(() => {
-    if (!authLoading && user) navigate("/", { replace: true });
-  }, [authLoading, user, navigate]);
-
-
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,8 +30,7 @@ const Login = () => {
   const handleGoogleLogin = async () => {
     setLoading(true);
     const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: `${window.location.origin}/auth/callback`,
-      extraParams: { prompt: "select_account" },
+      redirect_uri: window.location.origin,
     });
     if (result.error) {
       toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
@@ -49,8 +38,7 @@ const Login = () => {
       return;
     }
     if (result.redirected) return;
-    const { data } = await supabase.auth.getUser();
-    if (data.user) navigate("/", { replace: true });
+    navigate("/");
     setLoading(false);
   };
 

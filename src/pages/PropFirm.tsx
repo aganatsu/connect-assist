@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { WorkspaceBody, WorkspaceHeader, WorkspacePage } from "@/components/WorkspacePage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +10,6 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { OverflowText } from "@/components/ui/overflow-text";
 import { propFirmApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -112,85 +110,35 @@ export default function PropFirm() {
     },
   });
 
-  const setActiveMutation = useMutation({
-    mutationFn: (active: boolean) => propFirmApi.setActive(active),
-    onSuccess: (_data, active) => {
-      queryClient.invalidateQueries({ queryKey: ["prop-firm-status"] });
-      toast.success(active ? "Prop firm gate enabled" : "Prop firm gate disabled — scans will resume");
-    },
-    onError: (e: any) => toast.error(`Toggle failed: ${e?.message || "Unknown error"}`),
-  });
-
-  const unlockMutation = useMutation({
-    mutationFn: () => propFirmApi.unlockToday(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prop-firm-status"] });
-      queryClient.invalidateQueries({ queryKey: ["prop-firm-events"] });
-      toast.success("Today unlocked — scans will resume on next cycle");
-    },
-    onError: (e: any) => toast.error(`Unlock failed: ${e?.message || "Unknown error"}`),
-  });
-
   const isActive = statusData?.active === true;
   const config: PropFirmConfig | null = statusData?.config || null;
   const dailyState: DailyState | null = statusData?.dailyState || null;
-  const configExists = !!config;
-  const gateEnabled = !!config?.is_active;
   const derived = statusData?.derived || {};
   const events: PropFirmEvent[] = eventsData?.events || statusData?.events || [];
   const history = historyData?.history || [];
 
   return (
     <AppShell>
-      <WorkspacePage>
-        <WorkspaceHeader
-          icon={Shield}
-          eyebrow="Risk controls"
-          title="Prop Firm Compliance"
-          description="FTMO risk management and daily tracking"
-          actions={(
-            <div className="flex items-center gap-2">
-            {configExists && gateEnabled && (
+      <div className="container max-w-6xl py-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Shield className="w-7 h-7 text-primary" />
+            <div>
+              <h1 className="text-2xl font-bold">Prop Firm Compliance</h1>
+              <p className="text-sm text-muted-foreground">FTMO risk management & daily tracking</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {isActive && (
               <Badge variant={dailyState?.is_locked ? "destructive" : "default"} className="gap-1">
                 {dailyState?.is_locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
                 {dailyState?.is_locked ? "LOCKED" : "ACTIVE"}
               </Badge>
             )}
-            {configExists && !gateEnabled && (
-              <Badge variant="outline" className="gap-1">
-                <Unlock className="w-3 h-3" /> DISABLED
-              </Badge>
-            )}
-            {!configExists && <Badge variant="secondary">Not Configured</Badge>}
-            {configExists && dailyState?.is_locked && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => unlockMutation.mutate()}
-                disabled={unlockMutation.isPending}
-                className="gap-1"
-              >
-                <Unlock className="w-3 h-3" />
-                {unlockMutation.isPending ? "Unlocking…" : "Unlock today"}
-              </Button>
-            )}
-            {configExists && (
-              <div className="flex items-center gap-2 pl-2 border-l">
-                <Label htmlFor="pf-gate-toggle" className="text-xs text-muted-foreground cursor-pointer">
-                  Prop firm gate
-                </Label>
-                <Switch
-                  id="pf-gate-toggle"
-                  checked={gateEnabled}
-                  disabled={setActiveMutation.isPending}
-                  onCheckedChange={(v) => setActiveMutation.mutate(v)}
-                />
-              </div>
-            )}
-            </div>
-          )}
-        />
-        <WorkspaceBody className="mx-auto w-full max-w-6xl space-y-6">
+            {!isActive && <Badge variant="secondary">Not Configured</Badge>}
+          </div>
+        </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
@@ -245,8 +193,7 @@ export default function PropFirm() {
             />
           </TabsContent>
         </Tabs>
-        </WorkspaceBody>
-      </WorkspacePage>
+      </div>
     </AppShell>
   );
 }
@@ -438,7 +385,7 @@ function RecentEvents({ events }: { events: PropFirmEvent[] }) {
           <div key={event.id} className="flex items-start gap-2 text-xs border-b border-border/50 pb-2 last:border-0">
             <SeverityIcon severity={event.severity} />
             <div className="flex-1 min-w-0">
-              <OverflowText text={event.message} className="block" />
+              <p className="truncate">{event.message}</p>
               <p className="text-muted-foreground">{new Date(event.created_at).toLocaleString()}</p>
             </div>
           </div>

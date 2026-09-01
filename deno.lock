@@ -1,9 +1,9 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@deno/installer-shell-setup@*": "0.3.4",
     "npm:@eslint/js@^9.32.0": "9.39.4",
     "npm:@hookform/resolvers@^3.10.0": "3.10.0_react-hook-form@7.77.0__react@18.3.1_react@18.3.1",
+    "npm:@lovable.dev/cloud-auth-js@^1.1.1": "1.1.2",
     "npm:@radix-ui/react-accordion@^1.2.11": "1.2.13_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-alert-dialog@^1.1.14": "1.1.16_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-aspect-ratio@^1.1.7": "1.1.9_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
@@ -33,6 +33,8 @@
     "npm:@radix-ui/react-tooltip@^1.2.7": "1.2.9_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@supabase/supabase-js@^2.103.2": "2.107.0",
     "npm:@tailwindcss/typography@~0.5.16": "0.5.19_tailwindcss@3.4.19",
+    "npm:@tanstack/query-core@5.83.0": "5.83.0",
+    "npm:@tanstack/react-query@^5.83.0": "5.101.0_react@18.3.1",
     "npm:@testing-library/jest-dom@^6.6.0": "6.9.1",
     "npm:@testing-library/react@16": "16.3.2_@testing-library+dom@10.4.1_@types+react@18.3.31_@types+react-dom@18.3.7__@types+react@18.3.31_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@types/node@^22.16.5": "22.19.20",
@@ -74,11 +76,6 @@
     "npm:vite@^5.4.19": "5.4.21_@types+node@22.19.20",
     "npm:vitest@^3.2.4": "3.2.6_@types+node@22.19.20_jsdom@20.0.3",
     "npm:zod@^3.25.76": "3.25.76"
-  },
-  "jsr": {
-    "@deno/installer-shell-setup@0.3.4": {
-      "integrity": "48665d1a737d487cce6874bc97bba70a5aeffa7053aca3f60df93c6fab8963b4"
-    }
   },
   "npm": {
     "@adobe/css-tools@4.5.0": {
@@ -4022,22 +4019,16 @@
     "https://deno.land/std@0.224.0/path/windows/normalize_glob.ts": "9c87a829b6c0f445d03b3ecadc14492e2864c3ebb966f4cea41e98326e4435c6",
     "https://deno.land/std@0.224.0/path/windows/resolve.ts": "8dae1dadfed9d46ff46cc337c9525c0c7d959fb400a6308f34595c45bdca1972",
     "https://esm.sh/@supabase/auth-js@2.103.2/denonext/auth-js.mjs": "18974046025d0e2cca7f0bd8b84d1f38aa558cb2b755a8955b180813713aae3c",
-    "https://esm.sh/@supabase/auth-js@2.103.3/denonext/auth-js.mjs": "36f2e569c37f9d7daa0326c731f30e567575180517acb56b352fde64738b987e",
     "https://esm.sh/@supabase/functions-js@2.103.2/denonext/functions-js.mjs": "c020f2488bec52923a9b827403dc5fb01e99909c60863e2450d610f68accf170",
-    "https://esm.sh/@supabase/functions-js@2.103.3/denonext/functions-js.mjs": "e60163a997b70c62dcfed1c1a33d2663a15177f4726b1c42a394f434f1d95f9e",
     "https://esm.sh/@supabase/phoenix@0.4.0/denonext/phoenix.mjs": "d9187057b2e3276d1110b9d814f737d4f8eff7f8b2765c4aa6bf7c7c30d070c9",
     "https://esm.sh/@supabase/phoenix@0.4.0?target=denonext": "c1df3cfcdcf13e9cfddf86181efbdd8d4099b9a2682188b74106596277a69d16",
     "https://esm.sh/@supabase/postgrest-js@2.103.2/denonext/postgrest-js.mjs": "3c3ec348985947a68cd25cf35de45b4f6a8bdf23a78e4ae8ced56245fbf8b82b",
-    "https://esm.sh/@supabase/postgrest-js@2.103.3/denonext/postgrest-js.mjs": "521950bb98145b09aef1ae7d35df945f7e17448d386af27d2e5c229ae140144c",
     "https://esm.sh/@supabase/realtime-js@2.103.2/denonext/realtime-js.mjs": "dce82bd3e0a2317b19152bf2871d8c39b0c99edf830da96f79c39c610d1acacd",
-    "https://esm.sh/@supabase/realtime-js@2.103.3/denonext/realtime-js.mjs": "11042afb894b6eda6f2213b7d4d261445ddc28607ada9925c3a705259a537075",
     "https://esm.sh/@supabase/storage-js@2.103.2/denonext/storage-js.mjs": "7818321946600e79df3e5519b6ee082686a4c7c7a1bdc016bf7c24af43a37454",
-    "https://esm.sh/@supabase/storage-js@2.103.3/denonext/storage-js.mjs": "593705d072aacb29d8b328cf1eaadf0639e0b7000564a571142b16b3b7344345",
     "https://esm.sh/@supabase/supabase-js@2.103.2": "1968d4a6cdad0a4f112bea9ede6ac2dccf0e42fd7a1668997b90854997aab8bc",
     "https://esm.sh/@supabase/supabase-js@2.103.2/cors": "1d2529a33f5a1cc0de4543088489dded56fdf4e8e8221c7abba8227316eec33c",
     "https://esm.sh/@supabase/supabase-js@2.103.2/denonext/supabase-js.mjs": "671683e34ebe01a8187cf96a64c3bcbcee6a3ce337e1f2b610e047a1d1fc54f3",
     "https://esm.sh/@supabase/supabase-js@2.103.3": "f6efbe62d34ae9d50f3cf7eb51496246ec9378f422c38ff2b637a38157d4fc6b",
-    "https://esm.sh/@supabase/supabase-js@2.103.3/denonext/supabase-js.mjs": "845c8b56bcda848f8a84aaba8dff7e5115d3c81342821474701704c39f8b7ead",
     "https://esm.sh/@supabase/supabase-js@2.49.4": "d52c4d06946766d328fdd0ac2e007f52bb6d2ef7ce6103ad9f0f57d92b73e978",
     "https://esm.sh/@supabase/supabase-js@2.95.0/cors": "fa80f37e10c00e18f4855aca12f619ab648d7b720e6cb5b352a4dc339eda1162",
     "https://esm.sh/iceberg-js@0.8.1/denonext/iceberg-js.mjs": "d839d81a2e3966500ca2cdd0c1cb458e9608bacfc91f7bb67a69b2e878dcdb4f",
@@ -4049,7 +4040,7 @@
       "dependencies": [
         "npm:@eslint/js@^9.32.0",
         "npm:@hookform/resolvers@^3.10.0",
-        "npm:@lovable.dev/cloud-auth-js@1.1.2",
+        "npm:@lovable.dev/cloud-auth-js@^1.1.1",
         "npm:@radix-ui/react-accordion@^1.2.11",
         "npm:@radix-ui/react-alert-dialog@^1.1.14",
         "npm:@radix-ui/react-aspect-ratio@^1.1.7",
@@ -4079,8 +4070,8 @@
         "npm:@radix-ui/react-tooltip@^1.2.7",
         "npm:@supabase/supabase-js@^2.103.2",
         "npm:@tailwindcss/typography@~0.5.16",
-        "npm:@tanstack/query-core@5.101.4",
-        "npm:@tanstack/react-query@^5.101.4",
+        "npm:@tanstack/query-core@5.83.0",
+        "npm:@tanstack/react-query@^5.83.0",
         "npm:@testing-library/jest-dom@^6.6.0",
         "npm:@testing-library/react@16",
         "npm:@types/node@^22.16.5",

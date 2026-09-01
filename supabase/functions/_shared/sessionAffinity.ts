@@ -19,11 +19,12 @@
  *   // affinity.tier → "prime" | "good" | "marginal" | "avoid"
  *   // affinity.detail → human-readable explanation
  *
- * BEHAVIOR IMPACT: This is the single pure-computation owner for pair/session
- * suitability. confluenceScoring.ts already consumes it as Factor 26 when that
- * factor is enabled. rotatingImpulseUniverse.ts also consumes it for an
- * observation-only discovery-order proposal; that proposal does not change the
- * live scan universe, fetch market data, or authorize a trade.
+ * BEHAVIOR IMPACT: This module is INFORMATIONAL ONLY. It does not modify
+ * any gates, factor weights, or scoring in confluenceScoring.ts.
+ * It exports pure functions that the scanner can call to annotate results.
+ *
+ * To promote to a scoring factor, add it to confluenceScoring.ts as Factor 26
+ * with a weight key "sessionAffinity" in DEFAULT_FACTOR_WEIGHTS.
  */
 
 import { type SessionName, type SessionFilterKey, toNYTime, toNYTimeAt } from "./sessions.ts";

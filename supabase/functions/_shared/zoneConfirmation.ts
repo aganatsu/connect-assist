@@ -16,7 +16,7 @@
  *     (engulfing, rejection wick, FVG, or volume spike)
  * 
  *   Tier 3 — Reversal Pattern (No CHoCH Required):
- *     Route-aware candlestick reversal pattern with required sweep and/or displacement support
+ *     Engulfing pattern + rejection wick + displacement above instrument threshold
  *     This IS a reversal — it just hasn't broken structure on 5m yet.
  * 
  * Instrument-Aware Thresholds:
@@ -31,17 +31,6 @@
 
 import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
 import { evaluateConfirmation, type ConfirmationResult } from "./confirmationHierarchy.ts";
-import {
-  evaluateCandlestickConfirmation,
-  type CandlestickConfirmationProfile,
-} from "./candlestickConfirmation.ts";
-import {
-  buildConfirmationAuthorityObservation,
-  confirmationLevelFromLegacySignal,
-  type ConfirmationAuthorityLevel,
-  type ConfirmationAuthorityObservation,
-  type ConfirmationAuthoritySource,
-} from "./confirmationAuthority.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -64,34 +53,6 @@ export interface ConfirmationSignal {
   significance: "internal" | "external" | undefined;
   closeBased: boolean;          // true = candle body closed through (strong)
   supportingSignals: string[];  // additional confirmation factors
-  authority?: ConfirmationAuthorityObservation;
-}
-
-function attachConfirmationAuthority(
-  signal: Omit<ConfirmationSignal, "authority">,
-  candles: Candle[],
-  direction: "long" | "short",
-  source: ConfirmationAuthoritySource,
-  level?: ConfirmationAuthorityLevel,
-): ConfirmationSignal {
-  const candle = candles[signal.candleIndex];
-  return {
-    ...signal,
-    authority: buildConfirmationAuthorityObservation({
-      source,
-      level: level || confirmationLevelFromLegacySignal(signal),
-      direction,
-      entryReadyUnderCurrentBehavior: true,
-      evaluatedAt: candle?.datetime || null,
-      candleIndex: signal.candleIndex,
-      candleTime: candle?.datetime || null,
-      price: signal.price,
-      closeBased: signal.closeBased,
-      displacement: signal.displacement,
-      supportingSignals: signal.supportingSignals,
-      reasonCodes: [source, level || "legacy_tier_" + signal.tier, ...signal.supportingSignals.filter((value) => value.startsWith("pattern:")).map((value) => "candlestick_" + value.toLowerCase().replace(/[^a-z0-9]+/g, "_"))],
-    }),
-  };
 }
 
 export interface ZoneConfirmationConfig {
@@ -230,33 +191,12 @@ function detectSupportingSignals(
  * Maps a ConfirmationResult from confirmationHierarchy to the ConfirmationSignal
  * format expected by callers. Returns null if the mapping isn't possible.
  */
-export function mapHierarchyToSignal(
+function mapHierarchyToSignal(
   result: ConfirmationResult,
-  confirmationCandles: Candle[],
+  candles: Candle[],
   direction: "long" | "short",
-  ltfCandles?: Candle[],
 ): ConfirmationSignal | null {
-  const authorityTime = result.authority?.candleTime || null;
-  const authorityPrice = result.authority?.price;
-  const sources = [
-    ...(ltfCandles ? [ltfCandles] : []),
-    confirmationCandles,
-  ];
-  let candles = confirmationCandles;
-  let idx = result.confirmationIndex;
-  if (authorityTime) {
-    for (const source of sources) {
-      const match = source.findIndex((candle) =>
-        candle.datetime === authorityTime &&
-        (authorityPrice == null || Math.abs(candle.close - authorityPrice) < 1e-10)
-      );
-      if (match >= 0) {
-        candles = source;
-        idx = match;
-        break;
-      }
-    }
-  }
+  const idx = result.confirmationIndex;
   if (idx === null || idx < 0 || idx >= candles.length) return null;
 
   const candle = candles[idx];
@@ -287,10 +227,7 @@ export function mapHierarchyToSignal(
   const mapping = typeMap[result.type];
   if (!mapping) return null;
 
-  const hierarchyLevel: ConfirmationAuthorityLevel = result.type === "sweep_choch"
-    ? "sweep_close_choch"
-    : result.type === "ltf_choch" ? "close_choch" : "displacement";
-  return attachConfirmationAuthority({
+  return {
     type: mapping.type,
     tier: mapping.tier,
     price: candle.close,
@@ -299,7 +236,7 @@ export function mapHierarchyToSignal(
     significance: undefined,
     closeBased: mapping.closeBased,
     supportingSignals: [result.type, result.detail],
-  }, candles, direction, "unified_hierarchy", hierarchyLevel);
+  };
 }
 
 // ─── Main Detection Function (Tiered) ───────────────────────────────────────
@@ -325,11 +262,6 @@ export function detectZoneConfirmation(
   symbol?: string,
   /** Optional zone bounds — when provided, delegates to confirmationHierarchy first */
   zoneBounds?: { zoneHigh: number; zoneLow: number },
-  /** Optional 1m candles for LTF CHoCH detection (Level 2 in hierarchy) */
-  ltfCandles?: Candle[],
-  /** Optional sweep event for Sweep+CHoCH detection (Level 1 in hierarchy) */
-  sweepEvent?: { level: number; type: string } | null,
-  candlestickProfile: CandlestickConfirmationProfile | "legacy" = "legacy",
 ): ConfirmationSignal | null {
   if (candles5m.length < 10) return null;
 
@@ -343,14 +275,10 @@ export function detectZoneConfirmation(
       zoneLow: zoneBounds.zoneLow,
       direction: hierarchyDir,
       maxLookback: config.maxLookbackCandles,
-      // Pass LTF candles when available (enables Level 2: LTF CHoCH)
-      ...(ltfCandles && ltfCandles.length >= 15 ? { ltfCandles } : {}),
-      // Pass sweep event when available (enables Level 1: Sweep + CHoCH)
-      ...(sweepEvent ? { sweepEvent: sweepEvent as any } : {}),
     });
     // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level)
     if (hierarchyResult.entryReady && hierarchyResult.type !== "none") {
-      const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction, ltfCandles);
+      const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction);
       if (mapped) return mapped;
     }
   }
@@ -394,7 +322,7 @@ export function detectZoneConfirmation(
       const significance = (choch as any).significance;
       if (significance === "external") supporting.signals.push("external_significance");
 
-      return attachConfirmationAuthority({
+      return {
         type: requiredChochType === "bearish" ? "bearish_choch" : "bullish_choch",
         tier: 1,
         price: candle.close,
@@ -403,7 +331,7 @@ export function detectZoneConfirmation(
         significance,
         closeBased: true,
         supportingSignals: supporting.signals,
-      }, candles5m, direction, "legacy_tier", "close_choch");
+      };
     }
   }
 
@@ -435,7 +363,7 @@ export function detectZoneConfirmation(
 
       if (supportCount < 1) continue;
 
-      return attachConfirmationAuthority({
+      return {
         type: requiredChochType === "bearish" ? "bearish_choch_relaxed" : "bullish_choch_relaxed",
         tier: 2,
         price: candle.close,
@@ -444,21 +372,20 @@ export function detectZoneConfirmation(
         significance,
         closeBased: false,
         supportingSignals: supporting.signals,
-      }, candles5m, direction, "legacy_tier", "wick_choch_supported");
+      };
     }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // TIER 3: Reversal Pattern (no CHoCH required)
   // Strong reversal evidence without a structural break on 5m.
-  // Uses engulfing, morning/evening star, hammer/shooting-star, and doji follow-through evidence.
+  // Requires: engulfing + rejection wick + displacement above threshold.
   // This IS a reversal — it just hasn't broken the 5m swing yet.
   // ═══════════════════════════════════════════════════════════════════════════
   if (config.tier3Enabled) {
     // Scan recent candles (within lookback window, after zone touch)
     const scanStart = Math.max(minIndex, afterZoneTouch);
     const scanEnd = candles5m.length;
-    let candlestickCandidate: ConfirmationSignal | null = null;
 
     for (let i = scanEnd - 1; i >= scanStart; i--) {
       const candle = candles5m[i];
@@ -467,6 +394,10 @@ export function detectZoneConfirmation(
       if (range === 0) continue;
       const displacement = Math.abs(candle.close - candle.open) / range;
 
+      // Tier 3 requires stronger displacement than Tier 1/2 to compensate
+      // for the lack of structural break
+      if (displacement < effectiveDisplacement) continue;
+
       // Must be a candle in the correct direction
       const isBearishCandle = candle.close < candle.open;
       const isBullishCandle = candle.close > candle.open;
@@ -474,30 +405,11 @@ export function detectZoneConfirmation(
       if (direction === "long" && !isBullishCandle) continue;
 
       const supporting = detectSupportingSignals(candles5m, i, direction);
-      const pattern = candlestickProfile === "legacy"
-        ? null
-        : evaluateCandlestickConfirmation({
-          candles: candles5m,
-          candleIndex: i,
-          direction,
-          profile: candlestickProfile,
-          minimumDisplacement: effectiveDisplacement,
-          hasSweep: !!sweepEvent,
-        });
-      const legacyEngulfingRejection = displacement >= effectiveDisplacement &&
-        supporting.hasEngulfing &&
-        supporting.hasRejectionWick &&
-        (candlestickProfile !== "standalone" || !!sweepEvent);
-      const patternAuthorized = pattern?.authorized === true;
-      if (!legacyEngulfingRejection && !patternAuthorized) continue;
-      if (patternAuthorized && pattern.pattern) {
-        supporting.signals.push(
-          "pattern:" + pattern.pattern,
-          "pattern_strength:" + pattern.strength,
-        );
-      }
 
-      const candidate = attachConfirmationAuthority({
+      // Tier 3 requires BOTH engulfing AND rejection wick
+      if (!supporting.hasEngulfing || !supporting.hasRejectionWick) continue;
+
+      return {
         type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",
         tier: 3,
         price: candle.close,
@@ -506,15 +418,8 @@ export function detectZoneConfirmation(
         significance: undefined,
         closeBased: false, // no structural break
         supportingSignals: supporting.signals,
-      }, candles5m, direction, "legacy_tier", "reversal_pattern");
-
-      // Preserve the established engulfing + rejection-wick priority. A newer
-      // canonical pattern is retained only as a fallback when no such signal exists.
-      if (legacyEngulfingRejection) return candidate;
-      if (!candlestickCandidate) candlestickCandidate = candidate;
+      };
     }
-
-    if (candlestickCandidate) return candlestickCandidate;
   }
 
   // No confirmation found at any tier
@@ -524,23 +429,15 @@ export function detectZoneConfirmation(
 // ─── Zone Boundary Check ─────────────────────────────────────────────────────
 
 /**
- * Check if price has left the zone in the WRONG direction (invalidation).
- * 
- * DIRECTIONAL LOGIC:
- *   - For LONG (demand zone): price leaving ABOVE zone is the confirmation direction
- *     (potential CHoCH). Only return false when price drops BELOW zoneLow - buffer.
- *   - For SHORT (supply zone): price leaving BELOW zone is the confirmation direction
- *     (potential CHoCH). Only return false when price rises ABOVE zoneHigh + buffer.
- * 
- * When price leaves in the profitable direction, we return true to allow
- * the confirmation check to run before deciding to reset.
+ * Check if price is still within the zone boundaries.
+ * Used to determine if confirmation hunting should continue or reset.
  * 
  * @param currentPrice - current live price
  * @param zoneLow - lower boundary of the entry zone
  * @param zoneHigh - upper boundary of the entry zone
  * @param direction - trade direction
  * @param atr - ATR value for proximity buffer (optional)
- * @returns true if price is still valid for confirmation hunting
+ * @returns true if price is still in/near the zone
  */
 export function isPriceInZone(
   currentPrice: number,
@@ -549,18 +446,15 @@ export function isPriceInZone(
   direction: "long" | "short",
   atr?: number,
 ): boolean {
-  // Buffer: 10% of zone width or 0.2×ATR to avoid premature resets from minor wicks
+  // Add a small buffer (10% of zone width or ATR-based) to avoid premature resets
+  // from minor wicks outside the zone
   const zoneWidth = zoneHigh - zoneLow;
   const buffer = atr ? atr * 0.2 : zoneWidth * 0.1;
 
-  if (direction === "long") {
-    // Demand zone: price dropping below = wrong direction (invalidation)
-    // Price rising above = confirmation direction (let CHoCH check run first)
-    return currentPrice >= (zoneLow - buffer);
+  if (direction === "short") {
+    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
   } else {
-    // Supply zone: price rising above = wrong direction (invalidation)
-    // Price dropping below = confirmation direction (let CHoCH check run first)
-    return currentPrice <= (zoneHigh + buffer);
+    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
   }
 }
 

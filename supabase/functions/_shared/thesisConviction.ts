@@ -22,7 +22,7 @@
  *
  * EVIDENCE SOURCES (zero additional API cost — all pre-computed):
  *   1. Direction Verdict agreement (0-1) — how many direction sources agree
- *   2. Style structure regime — does the active structure role support it?
+ *   2. Regime 4H bias — does the 4H regime support the thesis direction?
  *   3. Opposing factor count — how many scored factors oppose the trade?
  *   4. Direction Verdict confidence — overall confidence in the direction
  *   5. FOTSI alignment — does currency strength support the thesis?
@@ -60,10 +60,8 @@ export interface EvidenceSnapshot {
   verdictAgreement: number;
   /** Direction verdict confidence (0-100) */
   verdictConfidence: number;
-  /** Whether the style-authoritative structure regime supports the thesis. */
+  /** Whether 4H regime bias supports thesis direction */
   regime4HAligned: boolean;
-  /** Label of the structure timeframe used (for example 15m, 4H, Daily). */
-  structureTimeframeLabel?: string;
   /** Number of opposing factors from confluence scoring */
   opposingCount: number;
   /** Whether FOTSI supports the thesis direction (null if unavailable) */
@@ -119,13 +117,6 @@ export interface ConvictionInput {
     regime: string;
     confidence: number;
     bias: string; // "bullish" | "bearish" | "neutral"
-  } | null;
-  /** Preferred style-aware structure context. `regime4H` is legacy fallback. */
-  structureContext?: {
-    regime: string;
-    confidence: number;
-    bias: string;
-    timeframeLabel: string;
   } | null;
   /** Opposing factor count from tieredScoring */
   opposingFactorCount: number;
@@ -198,16 +189,10 @@ export function evaluateEvidence(
   const verdictConfidence = input.directionVerdict?.confidence ?? 50;
   if (verdictAgreement >= 0.7) {
     supportingCount++;
-    details.push(
-      `Verdict agreement ${(verdictAgreement * 100).toFixed(0)}% — supporting`,
-    );
+    details.push(`Verdict agreement ${(verdictAgreement * 100).toFixed(0)}% — supporting`);
   } else if (verdictAgreement < 0.4) {
     opposingCount++;
-    details.push(
-      `Verdict agreement ${
-        (verdictAgreement * 100).toFixed(0)
-      }% — opposing (sources disagree)`,
-    );
+    details.push(`Verdict agreement ${(verdictAgreement * 100).toFixed(0)}% — opposing (sources disagree)`);
   }
 
   // 2. Direction Verdict Confidence
@@ -216,66 +201,40 @@ export function evaluateEvidence(
     const verdictDir = input.directionVerdict?.verdict;
     if (verdictDir === input.direction) {
       supportingCount++;
-      details.push(
-        `Verdict confidence ${verdictConfidence}% for ${verdictDir} — supporting`,
-      );
-    } else if (
-      verdictDir && verdictDir !== "neutral" && verdictDir !== input.direction
-    ) {
+      details.push(`Verdict confidence ${verdictConfidence}% for ${verdictDir} — supporting`);
+    } else if (verdictDir && verdictDir !== "neutral" && verdictDir !== input.direction) {
       opposingCount++;
-      details.push(
-        `Verdict confidence ${verdictConfidence}% for ${verdictDir} — OPPOSING thesis (${input.direction})`,
-      );
+      details.push(`Verdict confidence ${verdictConfidence}% for ${verdictDir} — OPPOSING thesis (${input.direction})`);
     }
   }
 
-  // 3. Style-authoritative structure alignment
-  const structureContext = input.structureContext || (
-    input.regime4H ? { ...input.regime4H, timeframeLabel: "4H" } : null
-  );
+  // 3. Regime 4H Alignment
   let regime4HAligned = true; // default: neutral = not opposing
-  if (structureContext && structureContext.confidence > 0.5) {
-    const regimeBias = structureContext.bias;
+  if (input.regime4H && input.regime4H.confidence > 0.5) {
+    const regimeBias = input.regime4H.bias;
     const thesisBullish = input.direction === "long";
     if (regimeBias === "bullish" && !thesisBullish) {
       regime4HAligned = false;
       opposingCount++;
-      details.push(
-        `${structureContext.timeframeLabel} structure regime bullish (conf ${
-          (structureContext.confidence * 100).toFixed(0)
-        }%) — OPPOSING short thesis`,
-      );
+      details.push(`4H regime bullish (conf ${(input.regime4H.confidence * 100).toFixed(0)}%) — OPPOSING short thesis`);
     } else if (regimeBias === "bearish" && thesisBullish) {
       regime4HAligned = false;
       opposingCount++;
-      details.push(
-        `${structureContext.timeframeLabel} structure regime bearish (conf ${
-          (structureContext.confidence * 100).toFixed(0)
-        }%) — OPPOSING long thesis`,
-      );
-    } else if (
-      (regimeBias === "bullish" && thesisBullish) ||
-      (regimeBias === "bearish" && !thesisBullish)
-    ) {
+      details.push(`4H regime bearish (conf ${(input.regime4H.confidence * 100).toFixed(0)}%) — OPPOSING long thesis`);
+    } else if ((regimeBias === "bullish" && thesisBullish) || (regimeBias === "bearish" && !thesisBullish)) {
       supportingCount++;
-      details.push(
-        `${structureContext.timeframeLabel} structure regime ${regimeBias} — supporting ${input.direction} thesis`,
-      );
+      details.push(`4H regime ${regimeBias} — supporting ${input.direction} thesis`);
     }
   }
 
   // 4. Opposing Factor Count
   if (input.opposingFactorCount >= 3) {
     opposingCount++;
-    details.push(
-      `${input.opposingFactorCount} opposing factors — significant counter-evidence`,
-    );
+    details.push(`${input.opposingFactorCount} opposing factors — significant counter-evidence`);
   } else if (input.opposingFactorCount >= 2) {
     // Mild opposing — counts as 0.5
     opposingCount += 0.5;
-    details.push(
-      `${input.opposingFactorCount} opposing factors — mild counter-evidence`,
-    );
+    details.push(`${input.opposingFactorCount} opposing factors — mild counter-evidence`);
   } else if (input.opposingFactorCount === 0) {
     supportingCount++;
     details.push(`0 opposing factors — clean signal`);
@@ -298,24 +257,17 @@ export function evaluateEvidence(
 
   // 6. Game Plan Bias
   let gamePlanAligned: boolean | null = null;
-  if (
-    input.gamePlanBias && input.gamePlanBias.bias !== "neutral" &&
-    input.gamePlanBias.confidence >= 50
-  ) {
+  if (input.gamePlanBias && input.gamePlanBias.bias !== "neutral" && input.gamePlanBias.confidence >= 50) {
     const gpBullish = input.gamePlanBias.bias === "bullish";
     const thesisBullish = input.direction === "long";
     if (gpBullish === thesisBullish) {
       gamePlanAligned = true;
       supportingCount++;
-      details.push(
-        `Game plan ${input.gamePlanBias.bias} (${input.gamePlanBias.confidence}%) — aligned with thesis`,
-      );
+      details.push(`Game plan ${input.gamePlanBias.bias} (${input.gamePlanBias.confidence}%) — aligned with thesis`);
     } else {
       gamePlanAligned = false;
       opposingCount++;
-      details.push(
-        `Game plan ${input.gamePlanBias.bias} (${input.gamePlanBias.confidence}%) — OPPOSES thesis`,
-      );
+      details.push(`Game plan ${input.gamePlanBias.bias} (${input.gamePlanBias.confidence}%) — OPPOSES thesis`);
     }
   }
 
@@ -327,9 +279,7 @@ export function evaluateEvidence(
   // Compute cycle conviction (independent of history — just this cycle's evidence)
   // Scale: 6 sources max, each either +1 or -1. Map to 0-100.
   const totalSources = supportingCount + opposingCount;
-  const netAlignment = totalSources > 0
-    ? (supportingCount - opposingCount) / totalSources
-    : 0;
+  const netAlignment = totalSources > 0 ? (supportingCount - opposingCount) / totalSources : 0;
   const cycleConviction = Math.round(50 + netAlignment * 50); // 0-100, 50 = neutral
 
   const snapshot: EvidenceSnapshot = {
@@ -337,7 +287,6 @@ export function evaluateEvidence(
     verdictAgreement,
     verdictConfidence,
     regime4HAligned,
-    structureTimeframeLabel: structureContext?.timeframeLabel,
     opposingCount: input.opposingFactorCount,
     fotsiAligned,
     gamePlanAligned,
@@ -376,14 +325,9 @@ export function updateConviction(
 
   // Accelerated decay if consecutive declines exceed threshold
   if (delta < 0 && state.consecutiveDeclines >= config.acceleratedDecayAfter) {
-    const extraDecay = Math.abs(delta) *
-      (config.acceleratedDecayMultiplier - 1);
+    const extraDecay = Math.abs(delta) * (config.acceleratedDecayMultiplier - 1);
     newConviction -= extraDecay;
-    details.push(
-      `Accelerated decay: ${state.consecutiveDeclines} consecutive declines → extra -${
-        extraDecay.toFixed(1)
-      }`,
-    );
+    details.push(`Accelerated decay: ${state.consecutiveDeclines} consecutive declines → extra -${extraDecay.toFixed(1)}`);
   }
 
   // Clamp to 0-100
@@ -392,9 +336,7 @@ export function updateConviction(
   // Track consecutive declines
   const consecutiveDeclines = delta < 0
     ? state.consecutiveDeclines + 1
-    : delta > 0
-    ? 0
-    : state.consecutiveDeclines;
+    : delta > 0 ? 0 : state.consecutiveDeclines;
 
   // Update peak
   const peakConviction = Math.max(state.peakConviction, newConviction);
@@ -428,27 +370,17 @@ export function updateConviction(
   }
 
   // Detect degrading thesis (conviction trending down over last 3+ cycles)
-  const thesisDegrading = consecutiveDeclines >= 3 ||
-    (history.length >= 3 && newConviction < peakConviction * 0.6);
+  const thesisDegrading = consecutiveDeclines >= 3
+    || (history.length >= 3 && newConviction < peakConviction * 0.6);
 
   // Build summary
-  const decisionEmoji = impulseCreditDecision === "granted"
-    ? "✅"
-    : impulseCreditDecision === "reduced"
-    ? "⚠️"
-    : "🚫";
-  const summary =
-    `${decisionEmoji} Conviction ${
-      newConviction.toFixed(0)
-    }% (${impulseCreditDecision}) | ` +
-    `Δ${delta >= 0 ? "+" : ""}${delta.toFixed(1)} | ` +
-    `${history.length} cycles | ` +
-    `${
-      consecutiveDeclines > 0
-        ? `${consecutiveDeclines} consecutive declines | `
-        : ""
-    }` +
-    details.slice(0, 3).join("; ");
+  const decisionEmoji = impulseCreditDecision === "granted" ? "✅"
+    : impulseCreditDecision === "reduced" ? "⚠️" : "🚫";
+  const summary = `${decisionEmoji} Conviction ${newConviction.toFixed(0)}% (${impulseCreditDecision}) | `
+    + `Δ${delta >= 0 ? "+" : ""}${delta.toFixed(1)} | `
+    + `${history.length} cycles | `
+    + `${consecutiveDeclines > 0 ? `${consecutiveDeclines} consecutive declines | ` : ""}`
+    + details.slice(0, 3).join("; ");
 
   const result: ConvictionResult = {
     conviction: updatedState.conviction,
@@ -520,12 +452,7 @@ export async function saveConvictionState(
   state: ThesisConvictionState,
 ): Promise<void> {
   try {
-    const key = buildConvictionKey(
-      userId,
-      botId,
-      state.symbol,
-      state.direction,
-    );
+    const key = buildConvictionKey(userId, botId, state.symbol, state.direction);
     const now = Date.now();
     const expiresAt = now + CONVICTION_TTL_MS;
 

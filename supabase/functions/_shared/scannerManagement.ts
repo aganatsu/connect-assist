@@ -27,19 +27,11 @@ import type {
   DisplacementResult,
 } from "./smcAnalysis.ts";
 
-import { SPECS } from "./smcAnalysis.ts";
 import {
-  computeManagementDecision,
-  type DecisionAction,
-} from "./computeManagementDecision.ts";
-import {
-  resolvePositionManagementPolicy,
-} from "./managementPolicy.ts";
-import {
-  buildStructureInvalidationEvidence,
-  computePartialCloseDecision,
-  type StructureInvalidationEvidence,
-} from "./exitParity.ts";
+  SPECS,
+  analyzeMarketStructure,
+} from "./smcAnalysis.ts";
+import { computeAdaptiveTrail } from "./exitEngine.ts";
 
 // ─── Setup Classification Types ──────────────────────────────────────
 
@@ -84,7 +76,7 @@ export const EXECUTION_PROFILES: Record<string, SetupClassification["executionPr
 export interface ExitAttribution {
   trigger: "trailing_stop" | "break_even" | "partial_tp" | "structure_invalidated"
          | "session_close" | "max_hold_exceeded" | "tp_hit" | "sl_hit"
-         | "trailing_enabled" | "partial_enabled" | "partial_tp_executed" | "be_enabled" | "no_action";
+         | "trailing_enabled" | "partial_enabled" | "be_enabled" | "no_action";
   detail: string;           // human-readable explanation
   rMultiple: number;        // R-multiple at time of action
   timestamp: string;        // ISO-8601
@@ -280,7 +272,7 @@ export function classifySetupType(analysis: {
 export interface ManagementAction {
   positionId: string;
   symbol: string;
-  action: "sl_tightened" | "tp_extended" | "early_exit" | "trailing_enabled" | "partial_enabled" | "partial_tp_executed" | "be_enabled" | "no_change";
+  action: "sl_tightened" | "tp_extended" | "early_exit" | "trailing_enabled" | "partial_enabled" | "be_enabled" | "no_change";
   reason: string;
   newSL?: number;
   newTP?: number;
@@ -312,6 +304,33 @@ export async function manageOpenPositions(
   const actions: ManagementAction[] = [];
   if (!positions || positions.length === 0) return actions;
 
+  // Read trading style for style-aware management decisions
+  const tradingStyle: string = config.tradingStyle?.mode ?? "day_trader";
+
+  // Read management params from user config (set via STYLE_OVERRIDES + user overrides)
+  const trailingEnabled = config.trailingStopEnabled ?? false;
+  const trailingPips = config.trailingStopPips ?? 15;
+  const trailingActivation = config.trailingStopActivation ?? "after_1r";
+  const partialTPEnabled = config.partialTPEnabled ?? false;
+  const partialTPPercent = config.partialTPPercent ?? 50;
+  const partialTPLevel = config.partialTPLevel ?? 1.0;
+  const breakEvenEnabled = config.breakEvenEnabled ?? true;
+  const breakEvenPips = config.breakEvenPips ?? 20;
+  // Offset above/below entry when SL is moved to breakeven. Default 3 pips
+  // to absorb spread + commission so a "BE stop" still nets ~flat instead of
+  // closing slightly negative on live brokers.
+  const breakEvenOffsetPips = Math.max(0, Number(config.breakEvenOffsetPips ?? 3));
+  const maxHoldEnabled = config.maxHoldEnabled ?? false;
+  const maxHoldHours = config.maxHoldHours ?? 0; // 0 = no limit
+
+  // Helper: round price to instrument precision to avoid floating point garbage
+  // e.g. pipSize 0.01 → 2 decimals, pipSize 0.0001 → 4 decimals, pipSize 1 → 0 decimals
+  const roundPrice = (price: number, pipSize: number): number => {
+    const decimals = Math.max(0, Math.round(-Math.log10(pipSize)) + 1);
+    const factor = Math.pow(10, decimals);
+    return Math.round(price * factor) / factor;
+  };
+
   for (const pos of positions) {
     try {
       const symbol: string = pos.symbol;
@@ -335,15 +354,38 @@ export async function manageOpenPositions(
         ? parseFloat(signalData.brokerEntryPrice)
         : paperEntryPrice;
 
-      // Resolve the immutable entry-time management policy. New positions use
-      // the frozen setup/style snapshot; legacy positions use their saved
-      // exitFlags intent before today's runtime config. Explicit per-trade
-      // overrides remain the only way to alter an already-open position.
-      const managementPolicy = resolvePositionManagementPolicy(pos, config);
-      const managementConfig = managementPolicy.decision;
-      const posPartialTPEnabled = managementConfig.partialTPEnabled;
-      const posPartialTPPercent = managementPolicy.partialTPPercent;
-      const posPartialTPLevel = managementPolicy.partialTPLevel;
+      // ── Per-Trade Overrides: individual position settings override global config ──
+      // If trade_overrides JSON exists on this position, those values take priority.
+      // Missing fields fall back to the global config values read above.
+      let posTrailingEnabled = trailingEnabled;
+      let posTrailingPips = trailingPips;
+      let posTrailingActivation = trailingActivation;
+      let posBreakEvenEnabled = breakEvenEnabled;
+      let posBreakEvenPips = breakEvenPips;
+      let posBreakEvenOffsetPips = breakEvenOffsetPips;
+      let posPartialTPEnabled = partialTPEnabled;
+      let posPartialTPPercent = partialTPPercent;
+      let posPartialTPLevel = partialTPLevel;
+      let posMaxHoldEnabled = maxHoldEnabled;
+      let posMaxHoldHours = maxHoldHours;
+      if (pos.trade_overrides) {
+        let overrides: any = {};
+        try { overrides = typeof pos.trade_overrides === 'string' ? JSON.parse(pos.trade_overrides) : pos.trade_overrides; } catch {}
+        if (overrides.trailingStopEnabled !== undefined) posTrailingEnabled = overrides.trailingStopEnabled;
+        if (overrides.trailingStopPips !== undefined) posTrailingPips = overrides.trailingStopPips;
+        if (overrides.trailingStopActivation !== undefined) posTrailingActivation = overrides.trailingStopActivation;
+        if (overrides.breakEvenEnabled !== undefined) posBreakEvenEnabled = overrides.breakEvenEnabled;
+        if (overrides.breakEvenPips !== undefined) posBreakEvenPips = overrides.breakEvenPips;
+        if (overrides.breakEvenOffsetPips !== undefined) posBreakEvenOffsetPips = Math.max(0, Number(overrides.breakEvenOffsetPips));
+        if (overrides.partialTPEnabled !== undefined) posPartialTPEnabled = overrides.partialTPEnabled;
+        if (overrides.partialTPPercent !== undefined) posPartialTPPercent = overrides.partialTPPercent;
+        if (overrides.partialTPLevel !== undefined) posPartialTPLevel = overrides.partialTPLevel;
+        if (overrides.maxHoldEnabled !== undefined) posMaxHoldEnabled = overrides.maxHoldEnabled;
+        if (overrides.maxHoldHours !== undefined) posMaxHoldHours = overrides.maxHoldHours;
+        // Direct SL/TP override: if user manually set a new SL or TP price
+        // These are applied immediately via the update-trade API, not here.
+        // Management respects the current pos.stop_loss and pos.take_profit values.
+      }
 
       // Calculate current R-multiple using ORIGINAL SL (not the moved SL after BE/trailing)
       // signalData.originalSL is stored at trade open time; fall back to current SL for legacy trades
@@ -358,6 +400,10 @@ export async function manageOpenPositions(
       const openedAt = new Date(pos.created_at || pos.opened_at || Date.now());
       const holdHours = (Date.now() - openedAt.getTime()) / (1000 * 60 * 60);
 
+      // Track whether exitFlags were modified this cycle
+      let exitFlagsUpdated = false;
+      const updatedFlags = { ...exitFlags };
+
       // Helper to build attribution
       const makeAttribution = (
         trigger: ExitAttribution["trigger"],
@@ -371,333 +417,425 @@ export async function manageOpenPositions(
         marketContext,
       });
 
-      // ── Shared live/backtest management authority ──
-      // The pure calculator is also used by backtest-engine. Live supplies the
-      // current tick as both currentPrice and bestPrice; backtest supplies the
-      // candle close plus its favorable high/low.
-      let adaptiveTrailCandles:
-        | Array<{ open: number; high: number; low: number; close: number }>
-        | null = null;
-      if (
-        managementConfig.adaptiveTrailingEnabled &&
-        exitFlags.trailingStopActivated === true &&
-        rMultiple > 0
-      ) {
-        try {
-          adaptiveTrailCandles = await fetchCandlesFn(
-            symbol,
-            signalData.entryTimeframe || "15min",
-            "2d",
-          ).then((candles) =>
-            candles.slice(-10).map((candle) => ({
-              open: candle.open,
-              high: candle.high,
-              low: candle.low,
-              close: candle.close,
-            }))
-          ).catch(() => []);
-        } catch {
-          adaptiveTrailCandles = [];
-        }
-      }
-      const managementSession = detectSessionFn(config);
-      const normalizedManagementSession = managementSession.filterKey ||
-        managementSession.name.toLowerCase().replace(/[\s-]/g, "");
-      let structureEvidence: StructureInvalidationEvidence | null = null;
-      if (
-        managementConfig.structureInvalidationEnabled &&
-        exitFlags.structureInvalidationFired !== true &&
-        rMultiple < 0 &&
-        rMultiple > -0.8
-      ) {
-        try {
-          const invalidationTimeframe = signalData.entryTimeframe ||
-            signalData.frozenStrategyContext?.stylePolicy?.timeframes?.runtimeEntry ||
-            signalData.decisionContext?.stylePolicy?.timeframes?.runtimeEntry ||
-            "15m";
-          const [structureCandles, regimeCandles] = await Promise.all([
-            fetchCandlesFn(symbol, invalidationTimeframe, "2d")
-              .catch(() => [] as Candle[]),
-            fetchCandlesFn(symbol, "1d", "1y")
-              .catch(() => [] as Candle[]),
-          ]);
-          structureEvidence = buildStructureInvalidationEvidence({
-            direction: pos.direction as "long" | "short",
-            structureCandles,
-            regimeCandles,
-            evaluatedAt: Date.now(),
-          });
-          if (structureEvidence.regimeSuppressed) {
-            console.log(
-              `[mgmt ${scanCycleId}] Structure invalidation SUPPRESSED ${symbol} | ${structureEvidence.reason}`,
+      // ── 1. MAX HOLD TIME CHECK ──
+      // If maxHoldEnabled and maxHoldHours is set and exceeded, flag for tightening
+      if (posMaxHoldEnabled && posMaxHoldHours > 0 && holdHours >= posMaxHoldHours) {
+        // Respect the Break-Even toggle: only auto-move SL to BE when BE is enabled.
+        // When BE is disabled, leave SL alone — the paper-trading engine will close at
+        // market via the `time_exit` path instead of silently tightening the stop.
+        if (rMultiple > 0 && posBreakEvenEnabled) {
+          const beSL = pos.direction === "long"
+            ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+            : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
+          const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
+          if (shouldMove) {
+            const attribution = makeAttribution(
+              "max_hold_exceeded",
+              `Position held ${holdHours.toFixed(1)}h, max allowed ${posMaxHoldHours}h — SL moved to breakeven`,
             );
+            const updatedSignal = {
+              ...signalData,
+              exitFlags: { ...updatedFlags, maxHoldExceeded: true },
+              exitAttribution: [...(signalData.exitAttribution || []), attribution],
+            };
+            await supabase.from("paper_positions").update({
+              stop_loss: roundPrice(beSL, spec.pipSize).toString(),
+              signal_reason: JSON.stringify(updatedSignal),
+            }).eq("id", pos.id);
+
+            actions.push({
+              positionId: pos.position_id, symbol, action: "sl_tightened",
+              reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] MAX HOLD ${symbol} | ${holdHours.toFixed(1)}h/${posMaxHoldHours}h | SL→BE at ${beSL.toFixed(5)}`);
+            continue;
           }
-        } catch (error) {
-          console.warn(
-            `[mgmt ${scanCycleId}] Invalidation evidence failed for ${symbol}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
         }
       }
-      const sharedDecision = computeManagementDecision(
-        {
-          symbol,
-          direction: pos.direction as "long" | "short",
-          entryPrice,
-          currentPrice,
-          bestPrice: currentPrice,
-          currentSL: sl,
-          originalSL: originalSl,
-          takeProfit: tp,
-          holdHours,
-          exitFlags,
-          structureCheck: structureEvidence?.structureCheck || null,
-          adaptiveTrailCandles,
-          atrValue: signalData.atrValue ?? 0,
-          regimeInfo: signalData.regimeInfo ?? null,
-          currentSession: normalizedManagementSession,
-        },
-        managementConfig,
-      );
-      if (sharedDecision.action !== "no_change") {
-        const actionMap: Record<
-          Exclude<DecisionAction, "no_change" | "structure_invalidated">,
-          {
-            action: ManagementAction["action"];
-            trigger: ExitAttribution["trigger"];
+
+      // ── 2. BREAK-EVEN ACTIVATION (R-based) ──
+      // Triggers when trade reaches a certain R-multiple, not a fixed pip count.
+      // This ensures BE activates proportionally to the trade's risk — a 40-pip SL trade
+      // won't get stopped at BE on a normal pullback the way a 20-pip fixed trigger would.
+      // breakEvenPips is now interpreted as a fallback; primary trigger is R-based.
+      const beActivationR = posBreakEvenPips > 0 && riskPips > 0
+        ? Math.min(2.0, Math.max(1.0, posBreakEvenPips / riskPips))  // At least 1R, capped at 2R max
+        : 1.0;  // Default: activate BE at 1R
+      if (posBreakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
+        const profitPipsAbs = Math.abs(profitPips);
+        const beSL = pos.direction === "long"
+          ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+          : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
+        const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
+        if (shouldMove) {
+          const attribution = makeAttribution(
+            "be_enabled",
+            `Break-even activated at ${rMultiple.toFixed(2)}R / ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${beActivationR.toFixed(2)}R) — SL moved to ${beSL.toFixed(5)}`,
+          );
+          updatedFlags.breakEvenActivated = true;
+          exitFlagsUpdated = true;
+
+          // FIX: Co-activate trailing stop so next scan cycle enters Phase B (tightening)
+          // instead of Phase A (first-time activation which requires rMultiple >= activationR again).
+          // Without this, if price retraces below activationR before next cycle, trailing never
+          // activates and SL stays at entry+1 pip permanently — causing +1 pip "wins".
+          const proportionalTrailPipsForBE = Math.max(posTrailingPips, riskPips * 0.5);
+          if (posTrailingEnabled && !exitFlags.trailingStopActivated) {
+            updatedFlags.trailingStopActivated = true;
+            updatedFlags.trailingStopLevel = beSL; // Trail reference starts from BE level
+            updatedFlags.trailingStopPips = Math.round(proportionalTrailPipsForBE * 10) / 10;
+            updatedFlags.trailingStopActivation = posTrailingActivation;
           }
-        > = {
-          be_activated: { action: "be_enabled", trigger: "be_enabled" },
-          trailing_activated: {
-            action: "trailing_enabled",
-            trigger: "trailing_enabled",
-          },
-          trailing_tightened: {
-            action: "sl_tightened",
-            trigger: "trailing_stop",
-          },
-          max_hold_be: {
-            action: "sl_tightened",
-            trigger: "max_hold_exceeded",
-          },
-          session_close_be: {
-            action: "sl_tightened",
-            trigger: "session_close",
-          },
-        };
-        const mapped = sharedDecision.action === "structure_invalidated"
-          ? {
-            action: "sl_tightened" as const,
-            trigger: "structure_invalidated" as const,
+
+          const updatedSignal = {
+            ...signalData,
+            exitFlags: updatedFlags,
+            exitAttribution: [...(signalData.exitAttribution || []), attribution],
+          };
+          await supabase.from("paper_positions").update({
+            stop_loss: roundPrice(beSL, spec.pipSize).toString(),
+            signal_reason: JSON.stringify(updatedSignal),
+          }).eq("id", pos.id);
+
+          actions.push({
+            positionId: pos.position_id, symbol, action: "be_enabled",
+            reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
+          });
+          const trailMsg = (posTrailingEnabled && !exitFlags.trailingStopActivated)
+            ? ` | trailing co-activated (trail: ${proportionalTrailPipsForBE.toFixed(1)} pips)`
+            : '';
+          console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}${trailMsg}`);
+          continue;
+        }
+      }
+
+      // ── 3. TRAILING STOP ACTIVATION + TIGHTENING (R-proportional) ──
+      // Trail distance is now proportional to the SL distance (0.5× SL) instead of a fixed pip count.
+      // This ensures a 40-pip SL trade trails at 20 pips, while a 15-pip SL trade trails at 7.5 pips.
+      // If partial TP is enabled, trailing only activates AFTER partial TP has been triggered,
+      // letting the trade run freely to its first target.
+      const trailingAlreadyActivated = exitFlags.trailingStopActivated === true;
+      // Proportional trail distance: use config trailingPips as a minimum, but prefer 50% of SL distance
+      const proportionalTrailPips = Math.max(posTrailingPips, riskPips * 0.5);
+      // If partial TP is enabled, delay trailing activation until partial TP has fired
+      const partialTPBlocksTrailing = posPartialTPEnabled && !exitFlags.partialTPActivated;
+      if (posTrailingEnabled && !trailingAlreadyActivated && !partialTPBlocksTrailing) {
+        // ── Phase A: First-time activation ──
+        const activationR = posTrailingActivation === "after_1r" ? 1.0
+          : posTrailingActivation === "after_0.5r" ? 0.5
+          : posTrailingActivation === "after_1.5r" ? 1.5
+          : posTrailingActivation === "after_2r" ? 2.0
+          : posTrailingActivation === "immediate" ? 0.0
+          : 1.0;
+
+        if (rMultiple >= activationR) {
+          const newTrailLevel = pos.direction === "long"
+            ? currentPrice - (proportionalTrailPips * spec.pipSize)
+            : currentPrice + (proportionalTrailPips * spec.pipSize);
+          updatedFlags.trailingStopActivated = true;
+          updatedFlags.trailingStopLevel = newTrailLevel;
+          updatedFlags.trailingStopPips = Math.round(proportionalTrailPips * 10) / 10; // Store the actual proportional distance
+          updatedFlags.trailingStopActivation = posTrailingActivation;
+          exitFlagsUpdated = true;
+
+          // Also move the actual SL if the trail level is better than current SL
+          const shouldMoveSL = pos.direction === "long" ? newTrailLevel > sl : newTrailLevel < sl;
+          if (shouldMoveSL) {
+            const attribution = makeAttribution(
+              "trailing_enabled",
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${posTrailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL moved to ${newTrailLevel.toFixed(5)}`,
+            );
+            const updatedSignal = {
+              ...signalData,
+              exitFlags: updatedFlags,
+              exitAttribution: [...(signalData.exitAttribution || []), attribution],
+            };
+            await supabase.from("paper_positions").update({
+              stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
+              signal_reason: JSON.stringify(updatedSignal),
+            }).eq("id", pos.id);
+
+            actions.push({
+              positionId: pos.position_id, symbol, action: "trailing_enabled",
+              reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL→${newTrailLevel.toFixed(5)} (${proportionalTrailPips.toFixed(1)} pips trail = 0.5× SL)`);
+            continue;
+          } else {
+            const attribution = makeAttribution(
+              "trailing_enabled",
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${posTrailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL already better, keeping ${sl.toFixed(5)}`,
+            );
+            actions.push({
+              positionId: pos.position_id, symbol, action: "trailing_enabled",
+              reason: attribution.detail, attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL already better at ${sl.toFixed(5)}`);
           }
-          : actionMap[sharedDecision.action];
+        }
+      } else if (posTrailingEnabled && trailingAlreadyActivated && rMultiple > 0) {
+        // ── Phase B: Trailing tightening — ratchet SL forward ──
+        const prevTrailLevel = exitFlags.trailingStopLevel ?? sl;
+        const effectiveTrailPips = exitFlags.trailingStopPips ?? posTrailingPips;
+
+        // ── Adaptive trailing (momentum-fade) when enabled ──
+        const adaptiveTrailingOn = config.adaptiveTrailingEnabled ?? false;
+        let newTrailLevel: number;
+        let trailReason: string;
+
+        if (adaptiveTrailingOn) {
+          // Fetch recent candles for momentum detection
+          let recentCandles: Array<{ open: number; high: number; low: number; close: number }> = [];
+          try {
+            recentCandles = await fetchCandlesFn(symbol, "15min", "2d").catch(() => []);
+          } catch { /* use empty array — neutral momentum */ }
+
+          const atrVal = signalData.atrValue ?? 0;
+          const regimeInfo = signalData.regimeInfo ?? null;
+
+          const adaptiveResult = computeAdaptiveTrail({
+            entryPrice,
+            currentPrice,
+            currentSL: sl,
+            direction: pos.direction as "long" | "short",
+            rMultiple,
+            regimeInfo,
+            atrValue: atrVal,
+            pipSize: spec.pipSize,
+            recentCandles: recentCandles.slice(-10),
+            baseTrailATRMultiple: config.baseTrailATRMultiple ?? 1.5,
+            momentumFadeThreshold: config.momentumFadeThreshold ?? 0.4,
+            tightenFactor: config.trailTightenFactor ?? 0.6,
+            widenFactor: config.trailWidenFactor ?? 1.3,
+          });
+
+          newTrailLevel = adaptiveResult.newSL;
+          trailReason = `Adaptive trail (${adaptiveResult.momentumState}): ${adaptiveResult.reason} → ${adaptiveResult.trailDistancePips.toFixed(1)} pips`;
+        } else {
+          // Original fixed-pip trailing
+          newTrailLevel = pos.direction === "long"
+            ? currentPrice - (effectiveTrailPips * spec.pipSize)
+            : currentPrice + (effectiveTrailPips * spec.pipSize);
+          trailReason = `Fixed trail: ${effectiveTrailPips} pips behind price`;
+        }
+
+        // Only ratchet forward (tighten), never widen
+        const shouldTighten = pos.direction === "long"
+          ? newTrailLevel > sl && newTrailLevel > prevTrailLevel
+          : newTrailLevel < sl && newTrailLevel < prevTrailLevel;
+
+        if (shouldTighten) {
+          updatedFlags.trailingStopLevel = newTrailLevel;
+          exitFlagsUpdated = true;
+
+          const attribution = makeAttribution(
+            "trailing_stop",
+            `Trailing SL tightened at ${rMultiple.toFixed(2)}R — SL moved from ${sl.toFixed(5)} to ${roundPrice(newTrailLevel, spec.pipSize).toFixed(5)} | ${trailReason}`,
+          );
+          const updatedSignal = {
+            ...signalData,
+            exitFlags: updatedFlags,
+            exitAttribution: [...(signalData.exitAttribution || []), attribution],
+          };
+          await supabase.from("paper_positions").update({
+            stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
+            signal_reason: JSON.stringify(updatedSignal),
+          }).eq("id", pos.id);
+
+          actions.push({
+            positionId: pos.position_id, symbol, action: "sl_tightened",
+            reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
+          });
+          console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${roundPrice(newTrailLevel, spec.pipSize).toFixed(5)} | ${trailReason}`);
+          continue;
+        }
+      }
+
+      // ── 4. PARTIAL TP ACTIVATION ──
+      // If partial TP is enabled in config and hasn't been activated yet
+      // Use partialTPActivated (new format). Old positions stored partialTP
+      // as config intent — check the dedicated Activated field.
+      const partialAlreadyActivated = exitFlags.partialTPActivated === true;
+      if (posPartialTPEnabled && !partialAlreadyActivated && rMultiple >= posPartialTPLevel) {
+        updatedFlags.partialTPActivated = true;
+        updatedFlags.partialTPPercent = posPartialTPPercent;
+        updatedFlags.partialTPLevel = posPartialTPLevel;
+        exitFlagsUpdated = true;
+
         const attribution = makeAttribution(
-          mapped.trigger,
-          sharedDecision.detail,
-          {
-            session: normalizedManagementSession,
-            trend: structureEvidence?.trend,
-            chochCount: structureEvidence?.chochAgainstCount,
-          },
+          "partial_enabled",
+          `Partial TP enabled at ${rMultiple.toFixed(2)}R — ${posPartialTPPercent}% at ${posPartialTPLevel}R`,
         );
-        const updatedSignal = {
-          ...signalData,
-          exitFlags: sharedDecision.updatedExitFlags,
-          managementPolicy: {
-            contractVersion: managementPolicy.contractVersion,
-            source: managementPolicy.source,
-            stylePolicyVersion: managementPolicy.stylePolicyVersion,
-            stylePolicyHash: managementPolicy.stylePolicyHash,
-            basePolicyHash: managementPolicy.basePolicyHash,
-            tradingStyle: managementPolicy.tradingStyle,
-          },
-          exitAttribution: [
-            ...(signalData.exitAttribution || []),
-            attribution,
-          ],
-          ...(sharedDecision.action === "structure_invalidated"
-            ? {
-              invalidationHistory: [
-                ...(signalData.invalidationHistory || []),
-                {
-                  at: new Date().toISOString(),
-                  rMultiple: sharedDecision.rMultiple.toFixed(2),
-                  reason: structureEvidence?.reason ||
-                    "CHoCH against trade direction",
-                  evidence: structureEvidence,
-                },
-              ],
+        actions.push({
+          positionId: pos.position_id, symbol, action: "partial_enabled",
+          reason: attribution.detail, attribution,
+        });
+        console.log(`[mgmt ${scanCycleId}] PARTIAL TP ${symbol} | ${rMultiple.toFixed(2)}R | ${posPartialTPPercent}% at ${posPartialTPLevel}R`);
+      }
+
+      // ── 5. STRUCTURE INVALIDATION CHECK ──
+      // If the trade is underwater but not yet at SL, check if structure broke against it.
+      // ONE-SHOT: only fires once per position to prevent progressive squeeze.
+      // Without this guard, repeated CHoCH detections would halve the SL distance
+      // every scan cycle, squeezing it to near-zero and guaranteeing a stop-out.
+      const structureInvalidationEnabled = config.structureInvalidationEnabled ?? false;
+      const structureInvalidationAlreadyFired = exitFlags.structureInvalidationFired === true;
+      if (structureInvalidationEnabled && !structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
+        try {
+          // C4 fix: Use the position's entry timeframe for structure invalidation
+          // instead of hardcoded 15m. Scalpers (5m) need 5m structure checks,
+          // swing traders (1h) need 1h structure checks. Falls back to 15m for
+          // legacy positions that don't have entryTimeframe stored.
+          const invalidationTF = signalData.entryTimeframe || "15m";
+          const checkCandles = await fetchCandlesFn(symbol, invalidationTF, "2d").catch(() => [] as Candle[]);
+          if (checkCandles.length >= 20) {
+            const currentStructure = analyzeMarketStructure(checkCandles);
+
+            // If structure has broken against the trade direction
+            const structureAgainst =
+              (pos.direction === "long" && currentStructure.trend === "bearish") ||
+              (pos.direction === "short" && currentStructure.trend === "bullish");
+
+            // Check for CHoCH against the trade (strongest invalidation signal)
+            const chochAgainst = currentStructure.choch.filter((c: any) =>
+              (pos.direction === "long" && c.type === "bearish") ||
+              (pos.direction === "short" && c.type === "bullish")
+            );
+            const hasFreshCHoCH = chochAgainst.length > 0;
+
+            if (structureAgainst && hasFreshCHoCH) {
+              // Tighten SL to reduce loss — move SL 50% closer to current price
+              const currentSLDistance = Math.abs(currentPrice - sl);
+              const tightenedDistance = currentSLDistance * 0.5;
+              let newSL = pos.direction === "long"
+                ? currentPrice - tightenedDistance
+                : currentPrice + tightenedDistance;
+
+              // ── SL Floor Enforcement ──────────────────────────────────
+              // Prevent structure invalidation from tightening SL below the
+              // per-instrument minimum. Use 60% of the static floor as the
+              // management floor — tighter than entry (acknowledging the
+              // adverse CHoCH) but still wide enough to avoid noise stop-outs.
+              const MGMT_SL_FLOOR_PIPS: Record<string, number> = {
+                "GBP/JPY": 21, "EUR/JPY": 18, "USD/JPY": 15,
+                "AUD/JPY": 15, "CAD/JPY": 15, "NZD/JPY": 15, "CHF/JPY": 15,
+                "GBP/USD": 15, "GBP/AUD": 18, "GBP/CAD": 18, "GBP/NZD": 18, "GBP/CHF": 15,
+                "EUR/USD": 12, "EUR/GBP": 9, "EUR/AUD": 15, "EUR/CAD": 15, "EUR/NZD": 15, "EUR/CHF": 11,
+                "AUD/USD": 11, "NZD/USD": 11, "USD/CAD": 11, "USD/CHF": 11,
+                "AUD/CAD": 12, "AUD/NZD": 12, "AUD/CHF": 12, "NZD/CAD": 12, "NZD/CHF": 12, "CAD/CHF": 11,
+                "XAU/USD": 30, "BTC/USD": 90,
+              };
+              const mgmtFloorPips = MGMT_SL_FLOOR_PIPS[symbol] ?? 10;
+              const mgmtFloorDistance = mgmtFloorPips * spec.pipSize;
+              const newSLDistFromEntry = Math.abs(entryPrice - newSL);
+              if (newSLDistFromEntry < mgmtFloorDistance) {
+                newSL = pos.direction === "long"
+                  ? entryPrice - mgmtFloorDistance
+                  : entryPrice + mgmtFloorDistance;
+                console.log(`[mgmt ${scanCycleId}] SL FLOOR enforced ${symbol} | tightened SL capped at ${mgmtFloorPips} pips from entry`);
+              }
+
+              // Only tighten (never widen)
+              const shouldTighten = pos.direction === "long" ? newSL > sl : newSL < sl;
+              if (shouldTighten) {
+                // Mark as fired so this only happens once per position
+                updatedFlags.structureInvalidationFired = true;
+                exitFlagsUpdated = true;
+
+                const attribution = makeAttribution(
+                  "structure_invalidated",
+                  `CHoCH against ${pos.direction} detected (${chochAgainst.length} events) — structure now ${currentStructure.trend} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)} (floor: ${mgmtFloorPips}p, one-shot)`,
+                  {
+                    trend: currentStructure.trend,
+                    chochCount: chochAgainst.length,
+                  },
+                );
+                const updatedSignalForSL = {
+                  ...signalData,
+                  exitFlags: updatedFlags,
+                  invalidationHistory: [
+                    ...(signalData.invalidationHistory || []),
+                    { at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: "CHoCH against trade direction (one-shot)" },
+                  ],
+                  exitAttribution: [...(signalData.exitAttribution || []), attribution],
+                };
+                await supabase.from("paper_positions").update({
+                  stop_loss: roundPrice(newSL, spec.pipSize).toString(),
+                  signal_reason: JSON.stringify(updatedSignalForSL),
+                }).eq("id", pos.id);
+
+                actions.push({
+                  positionId: pos.position_id, symbol, action: "sl_tightened",
+                  reason: attribution.detail, newSL: roundPrice(newSL, spec.pipSize), attribution,
+                });
+                console.log(`[mgmt ${scanCycleId}] SL TIGHTENED ${symbol} ${pos.direction} | CHoCH against | SL ${sl.toFixed(5)}→${newSL.toFixed(5)} at ${rMultiple.toFixed(2)}R`);
+                continue; // Already handled
+              }
             }
-            : {}),
-        };
-        const update: Record<string, unknown> = {
-          signal_reason: JSON.stringify(updatedSignal),
-          exit_flags: sharedDecision.updatedExitFlags,
-          ...(sharedDecision.action === "be_activated" ? { close_reason: "be" } : {}),
-          ...((sharedDecision.action === "trailing_activated" ||
-              sharedDecision.action === "trailing_tightened")
-            ? { close_reason: "trail" }
-            : {}),
-        };
-        if (sharedDecision.newSL !== null) {
-          update.stop_loss = sharedDecision.newSL.toString();
+          }
+        } catch (e: any) {
+          console.warn(`[mgmt ${scanCycleId}] Invalidation check failed for ${symbol}: ${e?.message}`);
         }
-        await supabase.from("paper_positions").update(update).eq("id", pos.id);
-        actions.push({
-          positionId: pos.position_id,
-          symbol,
-          action: mapped.action,
-          reason: sharedDecision.detail,
-          newSL: sharedDecision.newSL ?? undefined,
-          attribution,
-        });
-        console.log(
-          `[mgmt ${scanCycleId}] SHARED ${symbol} `
-            + `${sharedDecision.action} source=${managementPolicy.source} `
-            + `policy=${managementPolicy.stylePolicyHash?.slice(0, 12) || "legacy"}`,
-        );
-        continue;
       }
 
-      // ── Shared partial-close authority ──
-      // Live uses the observed market price as both the favorable observation
-      // and fill price. The adapter below owns only durable database writes.
-      const partialDecision = computePartialCloseDecision({
-        symbol,
-        direction: pos.direction as "long" | "short",
-        entryPrice,
-        originalSL: originalSl,
-        currentPrice,
-        favorablePrice: currentPrice,
-        positionSize: parseFloat(pos.size),
-        enabled: posPartialTPEnabled,
-        alreadyActivated:
-          exitFlags.partialTPActivated === true ||
-          pos.partial_tp_fired === true,
-        partialTPPercent: posPartialTPPercent,
-        partialTPLevel: posPartialTPLevel,
-        executionPriceMode: "observed_market",
-      });
-      if (partialDecision.triggered) {
-        const partialExecutionPrice =
-          partialDecision.executionPrice ?? currentPrice;
-        const attribution = makeAttribution(
-          "partial_tp_executed",
-          `${partialDecision.reason} for $${partialDecision.netPnl.toFixed(2)}`,
-        );
-        const partialEvidence = {
-          contractVersion: partialDecision.contractVersion,
-          triggerPrice: partialDecision.triggerPrice,
-          executionPrice: partialDecision.executionPrice,
-          closeSize: partialDecision.closeSize,
-          remainingSize: partialDecision.remainingSize,
-          grossPnl: partialDecision.grossPnl,
-          commission: partialDecision.commission,
-          spreadCost: partialDecision.spreadCost,
-          totalTradingCost: partialDecision.totalTradingCost,
-          netPnl: partialDecision.netPnl,
-          pnlPips: partialDecision.pnlPips,
-          rMultiple: partialDecision.rMultiple,
-        };
-        const updatedSignalData = {
-          ...signalData,
-          exitFlags: {
-            ...exitFlags,
-            partialTPActivated: true,
-            partialTPPercent: posPartialTPPercent,
-            partialTPLevel: posPartialTPLevel,
-          },
-          managementPolicy: {
-            contractVersion: managementPolicy.contractVersion,
-            source: managementPolicy.source,
-            stylePolicyVersion: managementPolicy.stylePolicyVersion,
-            stylePolicyHash: managementPolicy.stylePolicyHash,
-            basePolicyHash: managementPolicy.basePolicyHash,
-            tradingStyle: managementPolicy.tradingStyle,
-          },
-          partialCloseEvidence: [
-            ...(signalData.partialCloseEvidence || []),
-            { ...partialEvidence, at: new Date().toISOString() },
-          ],
-          exitAttribution: [
-            ...(signalData.exitAttribution || []),
-            attribution,
-          ],
-        };
+      // ── 6. SESSION-BASED MANAGEMENT ──
+      // Only scalps get session-based tightening. Day trades and swings are
+      // designed to be held across sessions — tightening them during off-hours
+      // defeats their purpose.
+      // Respect the Break-Even toggle. Session-end SL→BE was effectively a hidden
+      // BE move; if the user has BE disabled, leave the stop where it is.
+      if (tradingStyle === "scalper" && rMultiple > 0.3 && posBreakEvenEnabled) {
+        const currentSession = detectSessionFn(config);
+        // Use filterKey directly from session result (canonical: asian, london, newyork, offhours)
+        const normalizedCurrentSession = currentSession.filterKey || currentSession.name.toLowerCase().replace(/[\s-]/g, "");
 
-        await supabase.from("paper_trade_history").insert({
-          user_id: pos.user_id,
-          position_id: `${pos.position_id}_partial`,
-          symbol,
-          direction: pos.direction,
-          size: partialDecision.closeSize.toString(),
-          entry_price: entryPrice.toString(),
-          exit_price: partialExecutionPrice.toString(),
-          pnl: partialDecision.netPnl.toFixed(2),
-          pnl_pips: partialDecision.pnlPips.toFixed(1),
-          open_time: pos.open_time,
-          closed_at: new Date().toISOString(),
-          close_reason: "partial_tp",
-          signal_reason: JSON.stringify(updatedSignalData),
-          signal_score: pos.signal_score,
-          order_id: pos.order_id,
-          source_pending_order_id: pos.source_pending_order_id || null,
-          stop_loss: pos.stop_loss || null,
-          take_profit: pos.take_profit || null,
-        });
+        if (normalizedCurrentSession === "offhours" || normalizedCurrentSession === "off-hours") {
+          const beSL = pos.direction === "long"
+            ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+            : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
+          const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
+          if (shouldMove) {
+            const attribution = makeAttribution(
+              "session_close",
+              `Session ended (now ${normalizedCurrentSession}) at ${rMultiple.toFixed(2)}R — SL moved to breakeven at ${beSL.toFixed(5)}`,
+              { session: normalizedCurrentSession },
+            );
+            const updatedSignalForSession = {
+              ...signalData,
+              exitFlags: updatedFlags,
+              exitAttribution: [...(signalData.exitAttribution || []), attribution],
+            };
+            await supabase.from("paper_positions").update({
+              stop_loss: roundPrice(beSL, spec.pipSize).toString(),
+              signal_reason: JSON.stringify(updatedSignalForSession),
+            }).eq("id", pos.id);
 
+            actions.push({
+              positionId: pos.position_id, symbol, action: "sl_tightened",
+              reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] SESSION END ${symbol} | SL→BE at ${beSL.toFixed(5)}`);
+            continue;
+          }
+        }
+      }
+
+      // ── Write any exitFlags updates that were accumulated ──
+      if (exitFlagsUpdated) {
+        const updatedSignalData = { ...signalData, exitFlags: updatedFlags };
         await supabase.from("paper_positions").update({
-          size: partialDecision.remainingSize.toString(),
-          partial_tp_fired: true,
           signal_reason: JSON.stringify(updatedSignalData),
-          exit_flags: updatedSignalData.exitFlags,
         }).eq("id", pos.id);
-
-        const posBotId = pos.bot_id || "smc";
-        const { data: account } = await supabase.from("paper_accounts")
-          .select("balance, peak_balance")
-          .eq("user_id", pos.user_id)
-          .eq("bot_id", posBotId)
-          .maybeSingle();
-        if (account) {
-          const currentBalance = parseFloat(account.balance || "10000");
-          const newBalance = currentBalance + partialDecision.netPnl;
-          const newPeak = Math.max(
-            parseFloat(account.peak_balance || "10000"),
-            newBalance,
-          );
-          await supabase.from("paper_accounts").update({
-            balance: newBalance.toFixed(2),
-            peak_balance: newPeak.toFixed(2),
-          }).eq("user_id", pos.user_id).eq("bot_id", posBotId);
-        }
-
-        actions.push({
-          positionId: pos.position_id,
-          symbol,
-          action: "partial_tp_executed",
-          reason: attribution.detail,
-          attribution,
-        });
-        console.log(
-          `[mgmt ${scanCycleId}] SHARED PARTIAL ${symbol} | ${partialDecision.rMultiple.toFixed(2)}R | closed ${partialDecision.closeSize} lots ($${partialDecision.netPnl.toFixed(2)}) | remain ${partialDecision.remainingSize}`,
-        );
-        continue;
       }
 
-      const noActionAttribution = makeAttribution(
-        "no_action",
-        `At ${rMultiple.toFixed(2)}R, ${holdHours.toFixed(1)}h held — no management action needed`,
-      );
-      actions.push({
-        positionId: pos.position_id,
-        symbol,
-        action: "no_change",
-        reason: noActionAttribution.detail,
-        attribution: noActionAttribution,
-      });
-      continue;
+      // ── No action taken ──
+      if (actions.filter(a => a.positionId === pos.position_id).length === 0) {
+        const attribution = makeAttribution("no_action", `At ${rMultiple.toFixed(2)}R, ${holdHours.toFixed(1)}h held — no management action needed`);
+        actions.push({
+          positionId: pos.position_id, symbol, action: "no_change",
+          reason: attribution.detail, attribution,
+        });
+      }
 
     } catch (e: any) {
       console.warn(`[mgmt ${scanCycleId}] Error managing ${pos.symbol}: ${e?.message}`);

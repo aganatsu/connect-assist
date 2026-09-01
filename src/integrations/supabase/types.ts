@@ -14,272 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      active_direction_verdicts: {
-        Row: {
-          agreement: number
-          block_reason: string | null
-          bot_id: string
-          confidence: number
-          contract_version: string
-          created_at: string
-          evaluated_at: string
-          expires_at: string
-          game_plan_id: string | null
-          game_plan_version: string | null
-          id: string
-          is_active: boolean
-          scan_cycle_id: string | null
-          score_adjustment: number
-          should_block: boolean
-          source_candle_timestamp: string | null
-          style_base_policy_hash: string | null
-          style_policy: Json | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
-          superseded_at: string | null
-          symbol: string
-          user_id: string
-          verdict: string
-          verdict_json: Json
-          verdict_version: string
-        }
-        Insert: {
-          agreement: number
-          block_reason?: string | null
-          bot_id?: string
-          confidence: number
-          contract_version?: string
-          created_at?: string
-          evaluated_at: string
-          expires_at: string
-          game_plan_id?: string | null
-          game_plan_version?: string | null
-          id?: string
-          is_active?: boolean
-          scan_cycle_id?: string | null
-          score_adjustment?: number
-          should_block: boolean
-          source_candle_timestamp?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          superseded_at?: string | null
-          symbol: string
-          user_id: string
-          verdict: string
-          verdict_json: Json
-          verdict_version: string
-        }
-        Update: {
-          agreement?: number
-          block_reason?: string | null
-          bot_id?: string
-          confidence?: number
-          contract_version?: string
-          created_at?: string
-          evaluated_at?: string
-          expires_at?: string
-          game_plan_id?: string | null
-          game_plan_version?: string | null
-          id?: string
-          is_active?: boolean
-          scan_cycle_id?: string | null
-          score_adjustment?: number
-          should_block?: boolean
-          source_candle_timestamp?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          superseded_at?: string | null
-          symbol?: string
-          user_id?: string
-          verdict?: string
-          verdict_json?: Json
-          verdict_version?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "active_direction_verdicts_game_plan_id_fkey"
-            columns: ["game_plan_id"]
-            isOneToOne: false
-            referencedRelation: "active_game_plans"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      active_game_plans: {
-        Row: {
-          bias: string
-          bias_confidence: number
-          bot_id: string
-          config_snapshot: Json
-          contract_version: string
-          created_at: string
-          expires_at: string
-          focus_pairs: Json
-          generated_at: string
-          generation_source: string
-          id: string
-          invalidation_conditions: Json
-          is_active: boolean
-          market_data_snapshot: Json
-          news_events: Json
-          news_impacts: Json
-          plan_json: Json
-          plan_version: string
-          session: string
-          source_candle_timestamps: Json
-          state: string
-          state_reason: string | null
-          style_base_policy_hash: string | null
-          style_policy: Json | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
-          summary: string
-          superseded_at: string | null
-          symbol: string
-          user_id: string
-          v2_conviction: Json
-        }
-        Insert: {
-          bias: string
-          bias_confidence: number
-          bot_id?: string
-          config_snapshot?: Json
-          contract_version?: string
-          created_at?: string
-          expires_at: string
-          focus_pairs?: Json
-          generated_at: string
-          generation_source: string
-          id?: string
-          invalidation_conditions?: Json
-          is_active?: boolean
-          market_data_snapshot?: Json
-          news_events?: Json
-          news_impacts?: Json
-          plan_json: Json
-          plan_version: string
-          session: string
-          source_candle_timestamps?: Json
-          state: string
-          state_reason?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          summary?: string
-          superseded_at?: string | null
-          symbol: string
-          user_id: string
-          v2_conviction?: Json
-        }
-        Update: {
-          bias?: string
-          bias_confidence?: number
-          bot_id?: string
-          config_snapshot?: Json
-          contract_version?: string
-          created_at?: string
-          expires_at?: string
-          focus_pairs?: Json
-          generated_at?: string
-          generation_source?: string
-          id?: string
-          invalidation_conditions?: Json
-          is_active?: boolean
-          market_data_snapshot?: Json
-          news_events?: Json
-          news_impacts?: Json
-          plan_json?: Json
-          plan_version?: string
-          session?: string
-          source_candle_timestamps?: Json
-          state?: string
-          state_reason?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          summary?: string
-          superseded_at?: string | null
-          symbol?: string
-          user_id?: string
-          v2_conviction?: Json
-        }
-        Relationships: []
-      }
-      api_credit_usage: {
-        Row: {
-          caller: string | null
-          id: number
-          provider: string
-          reserved_at: string
-        }
-        Insert: {
-          caller?: string | null
-          id?: number
-          provider: string
-          reserved_at?: string
-        }
-        Update: {
-          caller?: string | null
-          id?: number
-          provider?: string
-          reserved_at?: string
-        }
-        Relationships: []
-      }
-      backtest_history_datasets: {
-        Row: {
-          base_timeframe: string
-          candle_count: number
-          created_at: string
-          end_at: string
-          id: string
-          original_filename: string
-          source: string
-          start_at: string
-          storage_path: string
-          symbol: string
-          timezone: string
-          user_id: string
-          validation: Json
-        }
-        Insert: {
-          base_timeframe?: string
-          candle_count: number
-          created_at?: string
-          end_at: string
-          id?: string
-          original_filename: string
-          source?: string
-          start_at: string
-          storage_path: string
-          symbol: string
-          timezone?: string
-          user_id: string
-          validation?: Json
-        }
-        Update: {
-          base_timeframe?: string
-          candle_count?: number
-          created_at?: string
-          end_at?: string
-          id?: string
-          original_filename?: string
-          source?: string
-          start_at?: string
-          storage_path?: string
-          symbol?: string
-          timezone?: string
-          user_id?: string
-          validation?: Json
-        }
-        Relationships: []
-      }
       backtest_runs: {
         Row: {
           completed_at: string | null
@@ -321,48 +55,6 @@ export type Database = {
           results?: Json | null
           started_at?: string | null
           status?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      bot_config_change_log: {
-        Row: {
-          change_type: string
-          changed_at: string
-          changed_by: string | null
-          config_id: string | null
-          connection_id: string | null
-          id: string
-          next_config: Json | null
-          next_hash: string | null
-          previous_config: Json | null
-          previous_hash: string | null
-          user_id: string
-        }
-        Insert: {
-          change_type: string
-          changed_at?: string
-          changed_by?: string | null
-          config_id?: string | null
-          connection_id?: string | null
-          id?: string
-          next_config?: Json | null
-          next_hash?: string | null
-          previous_config?: Json | null
-          previous_hash?: string | null
-          user_id: string
-        }
-        Update: {
-          change_type?: string
-          changed_at?: string
-          changed_by?: string | null
-          config_id?: string | null
-          connection_id?: string | null
-          id?: string
-          next_config?: Json | null
-          next_hash?: string | null
-          previous_config?: Json | null
-          previous_hash?: string | null
           user_id?: string
         }
         Relationships: []
@@ -464,7 +156,6 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
-          commission_mode: string
           commission_per_lot: number
           created_at: string
           detected_commission_per_lot: number | null
@@ -481,7 +172,6 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
-          commission_mode?: string
           commission_per_lot?: number
           created_at?: string
           detected_commission_per_lot?: number | null
@@ -498,7 +188,6 @@ export type Database = {
           account_id?: string
           api_key?: string
           broker_type?: string
-          commission_mode?: string
           commission_per_lot?: number
           created_at?: string
           detected_commission_per_lot?: number | null
@@ -512,77 +201,6 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
-      }
-      broker_execution_ledger: {
-        Row: {
-          action: string
-          attempt_count: number
-          bot_id: string
-          broker_connection_id: string
-          broker_order_id: string | null
-          claim_token: string
-          created_at: string
-          finished_at: string | null
-          id: string
-          last_error: string | null
-          position_id: string
-          request_payload: Json
-          response_payload: Json | null
-          route: string
-          started_at: string
-          status: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          action?: string
-          attempt_count?: number
-          bot_id?: string
-          broker_connection_id: string
-          broker_order_id?: string | null
-          claim_token?: string
-          created_at?: string
-          finished_at?: string | null
-          id?: string
-          last_error?: string | null
-          position_id: string
-          request_payload?: Json
-          response_payload?: Json | null
-          route: string
-          started_at?: string
-          status?: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          action?: string
-          attempt_count?: number
-          bot_id?: string
-          broker_connection_id?: string
-          broker_order_id?: string | null
-          claim_token?: string
-          created_at?: string
-          finished_at?: string | null
-          id?: string
-          last_error?: string | null
-          position_id?: string
-          request_payload?: Json
-          response_payload?: Json | null
-          route?: string
-          started_at?: string
-          status?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "broker_execution_ledger_broker_connection_id_fkey"
-            columns: ["broker_connection_id"]
-            isOneToOne: false
-            referencedRelation: "broker_connections"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       close_audit_log: {
         Row: {
@@ -629,33 +247,6 @@ export type Database = {
         }
         Relationships: []
       }
-      config_backups: {
-        Row: {
-          backup_id: string
-          config_id: string
-          config_snapshot: Json
-          created_at: string
-          id: string
-          user_id: string
-        }
-        Insert: {
-          backup_id: string
-          config_id: string
-          config_snapshot?: Json
-          created_at?: string
-          id?: string
-          user_id: string
-        }
-        Update: {
-          backup_id?: string
-          config_id?: string
-          config_snapshot?: Json
-          created_at?: string
-          id?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       config_presets: {
         Row: {
           config_json: Json
@@ -686,452 +277,6 @@ export type Database = {
         }
         Relationships: []
       }
-      game_plan_refresh_status: {
-        Row: {
-          active_plan_expires_at: string | null
-          bot_id: string
-          details: Json
-          failure_code: string | null
-          failure_message: string | null
-          last_attempt_at: string | null
-          last_success_at: string | null
-          next_retry_at: string | null
-          status: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          active_plan_expires_at?: string | null
-          bot_id?: string
-          details?: Json
-          failure_code?: string | null
-          failure_message?: string | null
-          last_attempt_at?: string | null
-          last_success_at?: string | null
-          next_retry_at?: string | null
-          status?: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          active_plan_expires_at?: string | null
-          bot_id?: string
-          details?: Json
-          failure_code?: string | null
-          failure_message?: string | null
-          last_attempt_at?: string | null
-          last_success_at?: string | null
-          next_retry_at?: string | null
-          status?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      ict_entry_zone_authority_observations: {
-        Row: {
-          activation_eligible: boolean
-          authority_candidate_id: string
-          authority_observation: Json
-          authority_score: number
-          authority_zone_high: number
-          authority_zone_low: number
-          authority_zone_type: string
-          bot_id: string
-          candle_snapshot_refs: Json
-          comparison_status: string
-          component_ids: string[]
-          cost_assumptions: Json | null
-          created_at: string
-          current_impulse_decision: Json | null
-          decision_observations: Json | null
-          direction: string
-          disagreed: boolean
-          effective_risk_reward: number | null
-          entry_price: number | null
-          evidence_source: string
-          geometry_failure_reason: string | null
-          gross_risk_reward: number | null
-          id: string
-          legacy_candidate_id: string | null
-          legacy_outcome_status: string | null
-          legacy_zone_high: number | null
-          legacy_zone_low: number | null
-          legacy_zone_type: string | null
-          mae_pips: number | null
-          mfe_pips: number | null
-          minimum_risk_reward: number | null
-          observed_at: string
-          opportunity_key: string | null
-          outcome_checked_at: string | null
-          outcome_status: string
-          price_reached_entry: boolean | null
-          replay_contract_version: string | null
-          replay_run_id: string | null
-          risk_reward_passed: boolean | null
-          scan_cycle_id: string
-          setup_family: string
-          sl_hit: boolean | null
-          source_evidence_ids: string[]
-          source_window: Json | null
-          stop_loss: number | null
-          style_base_policy_hash: string | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
-          symbol: string
-          take_profit: number | null
-          timeframe_evidence_id: string | null
-          timeframe_roles: Json | null
-          tp_hit: boolean | null
-          trading_style: string
-          user_id: string
-        }
-        Insert: {
-          activation_eligible?: boolean
-          authority_candidate_id: string
-          authority_observation: Json
-          authority_score: number
-          authority_zone_high: number
-          authority_zone_low: number
-          authority_zone_type: string
-          bot_id?: string
-          candle_snapshot_refs?: Json
-          comparison_status?: string
-          component_ids?: string[]
-          cost_assumptions?: Json | null
-          created_at?: string
-          current_impulse_decision?: Json | null
-          decision_observations?: Json | null
-          direction: string
-          disagreed?: boolean
-          effective_risk_reward?: number | null
-          entry_price?: number | null
-          evidence_source?: string
-          geometry_failure_reason?: string | null
-          gross_risk_reward?: number | null
-          id?: string
-          legacy_candidate_id?: string | null
-          legacy_outcome_status?: string | null
-          legacy_zone_high?: number | null
-          legacy_zone_low?: number | null
-          legacy_zone_type?: string | null
-          mae_pips?: number | null
-          mfe_pips?: number | null
-          minimum_risk_reward?: number | null
-          observed_at: string
-          opportunity_key?: string | null
-          outcome_checked_at?: string | null
-          outcome_status?: string
-          price_reached_entry?: boolean | null
-          replay_contract_version?: string | null
-          replay_run_id?: string | null
-          risk_reward_passed?: boolean | null
-          scan_cycle_id: string
-          setup_family?: string
-          sl_hit?: boolean | null
-          source_evidence_ids?: string[]
-          source_window?: Json | null
-          stop_loss?: number | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          symbol: string
-          take_profit?: number | null
-          timeframe_evidence_id?: string | null
-          timeframe_roles?: Json | null
-          tp_hit?: boolean | null
-          trading_style: string
-          user_id: string
-        }
-        Update: {
-          activation_eligible?: boolean
-          authority_candidate_id?: string
-          authority_observation?: Json
-          authority_score?: number
-          authority_zone_high?: number
-          authority_zone_low?: number
-          authority_zone_type?: string
-          bot_id?: string
-          candle_snapshot_refs?: Json
-          comparison_status?: string
-          component_ids?: string[]
-          cost_assumptions?: Json | null
-          created_at?: string
-          current_impulse_decision?: Json | null
-          decision_observations?: Json | null
-          direction?: string
-          disagreed?: boolean
-          effective_risk_reward?: number | null
-          entry_price?: number | null
-          evidence_source?: string
-          geometry_failure_reason?: string | null
-          gross_risk_reward?: number | null
-          id?: string
-          legacy_candidate_id?: string | null
-          legacy_outcome_status?: string | null
-          legacy_zone_high?: number | null
-          legacy_zone_low?: number | null
-          legacy_zone_type?: string | null
-          mae_pips?: number | null
-          mfe_pips?: number | null
-          minimum_risk_reward?: number | null
-          observed_at?: string
-          opportunity_key?: string | null
-          outcome_checked_at?: string | null
-          outcome_status?: string
-          price_reached_entry?: boolean | null
-          replay_contract_version?: string | null
-          replay_run_id?: string | null
-          risk_reward_passed?: boolean | null
-          scan_cycle_id?: string
-          setup_family?: string
-          sl_hit?: boolean | null
-          source_evidence_ids?: string[]
-          source_window?: Json | null
-          stop_loss?: number | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          symbol?: string
-          take_profit?: number | null
-          timeframe_evidence_id?: string | null
-          timeframe_roles?: Json | null
-          tp_hit?: boolean | null
-          trading_style?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      impulse_entry_lifecycle_replays: {
-        Row: {
-          bot_id: string
-          contract_version: string
-          entered: boolean
-          evidence_source: string
-          id: string
-          lifecycle_id: string
-          mae: number | null
-          mfe: number | null
-          outcome: string
-          replayed_at: string
-          rescued_deeper_entry: boolean
-          result: Json
-          retained_winner: boolean
-          snapshot_id: string
-          user_id: string
-        }
-        Insert: {
-          bot_id?: string
-          contract_version?: string
-          entered: boolean
-          evidence_source?: string
-          id?: string
-          lifecycle_id: string
-          mae?: number | null
-          mfe?: number | null
-          outcome: string
-          replayed_at?: string
-          rescued_deeper_entry: boolean
-          result: Json
-          retained_winner: boolean
-          snapshot_id: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          contract_version?: string
-          entered?: boolean
-          evidence_source?: string
-          id?: string
-          lifecycle_id?: string
-          mae?: number | null
-          mfe?: number | null
-          outcome?: string
-          replayed_at?: string
-          rescued_deeper_entry?: boolean
-          result?: Json
-          retained_winner?: boolean
-          snapshot_id?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "impulse_entry_lifecycle_replays_lifecycle_id_fkey"
-            columns: ["lifecycle_id"]
-            isOneToOne: false
-            referencedRelation: "impulse_entry_lifecycles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "impulse_entry_lifecycle_replays_snapshot_id_fkey"
-            columns: ["snapshot_id"]
-            isOneToOne: false
-            referencedRelation: "scan_candle_snapshots"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      impulse_entry_lifecycle_transitions: {
-        Row: {
-          created_at: string
-          event_payload: Json
-          event_type: string
-          from_candidate_id: string | null
-          from_revision: number
-          id: string
-          lifecycle_id: string
-          lifecycle_snapshot: Json
-          reason: string
-          to_candidate_id: string | null
-          to_revision: number
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          event_payload?: Json
-          event_type: string
-          from_candidate_id?: string | null
-          from_revision: number
-          id?: string
-          lifecycle_id: string
-          lifecycle_snapshot: Json
-          reason: string
-          to_candidate_id?: string | null
-          to_revision: number
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          event_payload?: Json
-          event_type?: string
-          from_candidate_id?: string | null
-          from_revision?: number
-          id?: string
-          lifecycle_id?: string
-          lifecycle_snapshot?: Json
-          reason?: string
-          to_candidate_id?: string | null
-          to_revision?: number
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "impulse_entry_lifecycle_transitions_lifecycle_id_fkey"
-            columns: ["lifecycle_id"]
-            isOneToOne: false
-            referencedRelation: "impulse_entry_lifecycles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      impulse_entry_lifecycles: {
-        Row: {
-          active_candidate_id: string | null
-          bot_id: string
-          created_at: string
-          direction: string
-          id: string
-          impulse_id: string
-          impulse_timeframe: string
-          lifecycle: Json
-          mode: string
-          revision: number
-          setup_id: string
-          status: string
-          symbol: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          active_candidate_id?: string | null
-          bot_id?: string
-          created_at?: string
-          direction: string
-          id?: string
-          impulse_id: string
-          impulse_timeframe: string
-          lifecycle: Json
-          mode?: string
-          revision?: number
-          setup_id: string
-          status?: string
-          symbol: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          active_candidate_id?: string | null
-          bot_id?: string
-          created_at?: string
-          direction?: string
-          id?: string
-          impulse_id?: string
-          impulse_timeframe?: string
-          lifecycle?: Json
-          mode?: string
-          revision?: number
-          setup_id?: string
-          status?: string
-          symbol?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      impulse_lifecycle_enforcement_certificates: {
-        Row: {
-          added_losses: number
-          bot_id: string
-          evidence: Json
-          evidence_hash: string
-          generated_at: string
-          id: string
-          is_current: boolean
-          minimum_sample_ready: boolean
-          replay_count: number
-          rescued_winners: number
-          resolved_count: number
-          reviewed: boolean
-          reviewed_at: string | null
-          status: string
-          user_id: string
-        }
-        Insert: {
-          added_losses: number
-          bot_id?: string
-          evidence: Json
-          evidence_hash: string
-          generated_at?: string
-          id?: string
-          is_current?: boolean
-          minimum_sample_ready: boolean
-          replay_count: number
-          rescued_winners: number
-          resolved_count: number
-          reviewed?: boolean
-          reviewed_at?: string | null
-          status: string
-          user_id: string
-        }
-        Update: {
-          added_losses?: number
-          bot_id?: string
-          evidence?: Json
-          evidence_hash?: string
-          generated_at?: string
-          id?: string
-          is_current?: boolean
-          minimum_sample_ready?: boolean
-          replay_count?: number
-          rescued_winners?: number
-          resolved_count?: number
-          reviewed?: boolean
-          reviewed_at?: string | null
-          status?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       kv_cache: {
         Row: {
           expires_at: string
@@ -1150,123 +295,6 @@ export type Database = {
           key?: string
           updated_at?: string
           value?: string
-        }
-        Relationships: []
-      }
-      manual_impulses: {
-        Row: {
-          bot_id: string
-          created_at: string
-          direction: string
-          expires_at: string
-          high: number
-          high_time: string | null
-          id: string
-          last_resolution_detail: string | null
-          last_resolved_at: string | null
-          low: number
-          low_time: string | null
-          resolution_reason: string | null
-          status: string
-          symbol: string
-          timeframe: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          bot_id?: string
-          created_at?: string
-          direction: string
-          expires_at: string
-          high: number
-          high_time?: string | null
-          id?: string
-          last_resolution_detail?: string | null
-          last_resolved_at?: string | null
-          low: number
-          low_time?: string | null
-          resolution_reason?: string | null
-          status?: string
-          symbol: string
-          timeframe?: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          created_at?: string
-          direction?: string
-          expires_at?: string
-          high?: number
-          high_time?: string | null
-          id?: string
-          last_resolution_detail?: string | null
-          last_resolved_at?: string | null
-          low?: number
-          low_time?: string | null
-          resolution_reason?: string | null
-          status?: string
-          symbol?: string
-          timeframe?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      optimizer_runs: {
-        Row: {
-          auto_applied: boolean | null
-          baseline_score: number | null
-          best_score: number | null
-          completed_at: string | null
-          config_snapshot: Json | null
-          error_message: string | null
-          id: string
-          improvement_percent: number | null
-          progress: number | null
-          progress_message: string | null
-          reject_reason: string | null
-          result_summary: Json | null
-          started_at: string
-          status: string
-          trials_count: number | null
-          user_id: string
-        }
-        Insert: {
-          auto_applied?: boolean | null
-          baseline_score?: number | null
-          best_score?: number | null
-          completed_at?: string | null
-          config_snapshot?: Json | null
-          error_message?: string | null
-          id?: string
-          improvement_percent?: number | null
-          progress?: number | null
-          progress_message?: string | null
-          reject_reason?: string | null
-          result_summary?: Json | null
-          started_at?: string
-          status?: string
-          trials_count?: number | null
-          user_id: string
-        }
-        Update: {
-          auto_applied?: boolean | null
-          baseline_score?: number | null
-          best_score?: number | null
-          completed_at?: string | null
-          config_snapshot?: Json | null
-          error_message?: string | null
-          id?: string
-          improvement_percent?: number | null
-          progress?: number | null
-          progress_message?: string | null
-          reject_reason?: string | null
-          result_summary?: Json | null
-          started_at?: string
-          status?: string
-          trials_count?: number | null
-          user_id?: string
         }
         Relationships: []
       }
@@ -1351,253 +379,95 @@ export type Database = {
       paper_positions: {
         Row: {
           bot_id: string | null
-          broker_close_error: string | null
-          broker_close_state: string
-          broker_execution_error: string | null
-          broker_execution_state: string
-          broker_execution_updated_at: string | null
-          candidate_id: string | null
-          canonical_dealing_range: Json | null
-          canonical_dealing_range_impulse_id: string | null
-          canonical_dealing_range_timeframe: string | null
-          canonical_dealing_range_version: string | null
           close_reason: string | null
-          confirmation_config: Json
-          confirmation_method: string | null
           created_at: string
-          cross_tf_context_version: string | null
-          cross_tf_effective_mode: string | null
-          cross_tf_entry_allowed: boolean | null
-          cross_tf_entry_authority: Json | null
-          cross_tf_relationship: string | null
-          cross_tf_timeframe_evidence_id: string | null
           current_price: number | null
           current_price_old: string | null
-          decision_context: Json | null
           direction: string
-          direction_verdict: Json | null
-          direction_verdict_id: string | null
-          entry_confirmation: Json | null
           entry_price: number | null
           entry_price_old: string | null
-          final_authorization: Json | null
-          frozen_strategy_context: Json | null
-          frozen_strategy_hash: string | null
-          game_plan_id: string | null
-          game_plan_version: string | null
           id: string
-          impulse_entry_lifecycle: Json | null
-          impulse_entry_lifecycle_id: string | null
           mirrored_connection_ids: string[]
           open_time: string
           order_id: string
           order_type: string | null
-          originating_zone: Json | null
           partial_tp_fired: boolean
-          policy_frozen_at: string | null
           position_id: string
           position_status: string
           signal_reason: string | null
           signal_score: string
           size: number | null
           size_old: string | null
-          source_candidate_key: string | null
-          source_pending_order_id: string | null
-          staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
-          streamlined_decision_frozen_at: string | null
-          streamlined_decision_latest: Json | null
-          streamlined_decision_origin: Json | null
-          style_base_policy_hash: string | null
-          style_policy: Json | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
           symbol: string
           take_profit: number | null
           take_profit_old: string | null
-          thesis_validation: Json | null
-          thesis_version: string | null
           trade_overrides: Json | null
           trigger_price: string | null
           user_id: string
         }
         Insert: {
           bot_id?: string | null
-          broker_close_error?: string | null
-          broker_close_state?: string
-          broker_execution_error?: string | null
-          broker_execution_state?: string
-          broker_execution_updated_at?: string | null
-          candidate_id?: string | null
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
           close_reason?: string | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number | null
           current_price_old?: string | null
-          decision_context?: Json | null
           direction: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
-          entry_confirmation?: Json | null
           entry_price?: number | null
           entry_price_old?: string | null
-          final_authorization?: Json | null
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
           mirrored_connection_ids?: string[]
           open_time: string
           order_id: string
           order_type?: string | null
-          originating_zone?: Json | null
           partial_tp_fired?: boolean
-          policy_frozen_at?: string | null
           position_id: string
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
           size_old?: string | null
-          source_candidate_key?: string | null
-          source_pending_order_id?: string | null
-          staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
           symbol: string
           take_profit?: number | null
           take_profit_old?: string | null
-          thesis_validation?: Json | null
-          thesis_version?: string | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id: string
         }
         Update: {
           bot_id?: string | null
-          broker_close_error?: string | null
-          broker_close_state?: string
-          broker_execution_error?: string | null
-          broker_execution_state?: string
-          broker_execution_updated_at?: string | null
-          candidate_id?: string | null
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
           close_reason?: string | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number | null
           current_price_old?: string | null
-          decision_context?: Json | null
           direction?: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
-          entry_confirmation?: Json | null
           entry_price?: number | null
           entry_price_old?: string | null
-          final_authorization?: Json | null
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
           mirrored_connection_ids?: string[]
           open_time?: string
           order_id?: string
           order_type?: string | null
-          originating_zone?: Json | null
           partial_tp_fired?: boolean
-          policy_frozen_at?: string | null
           position_id?: string
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
           size_old?: string | null
-          source_candidate_key?: string | null
-          source_pending_order_id?: string | null
-          staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
           symbol?: string
           take_profit?: number | null
           take_profit_old?: string | null
-          thesis_validation?: Json | null
-          thesis_version?: string | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "paper_positions_direction_verdict_id_fkey"
-            columns: ["direction_verdict_id"]
-            isOneToOne: false
-            referencedRelation: "active_direction_verdicts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "paper_positions_game_plan_id_fkey"
-            columns: ["game_plan_id"]
-            isOneToOne: false
-            referencedRelation: "active_game_plans"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "paper_positions_impulse_entry_lifecycle_id_fkey"
-            columns: ["impulse_entry_lifecycle_id"]
-            isOneToOne: false
-            referencedRelation: "impulse_entry_lifecycles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "paper_positions_staged_setup_id_fkey"
-            columns: ["staged_setup_id"]
-            isOneToOne: false
-            referencedRelation: "staged_setups"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       paper_trade_history: {
         Row: {
@@ -1622,12 +492,7 @@ export type Database = {
           signal_score: string
           size: number | null
           size_old: string | null
-          source_pending_order_id: string | null
-          source_position_row_id: string | null
           stop_loss: string | null
-          streamlined_decision_frozen_at: string | null
-          streamlined_decision_latest: Json | null
-          streamlined_decision_origin: Json | null
           symbol: string
           take_profit: string | null
           user_id: string
@@ -1654,12 +519,7 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
-          source_pending_order_id?: string | null
-          source_position_row_id?: string | null
           stop_loss?: string | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
           symbol: string
           take_profit?: string | null
           user_id: string
@@ -1686,55 +546,9 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
-          source_pending_order_id?: string | null
-          source_position_row_id?: string | null
           stop_loss?: string | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
           symbol?: string
           take_profit?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "paper_trade_history_source_pending_order_id_fkey"
-            columns: ["source_pending_order_id"]
-            isOneToOne: false
-            referencedRelation: "pending_orders"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      paper_trade_history_duplicate_audit: {
-        Row: {
-          bot_id: string
-          duplicate_history_id: string
-          duplicate_pnl: number
-          duplicate_row: Json
-          kept_history_id: string
-          position_id: string
-          reconciled_at: string
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          duplicate_history_id: string
-          duplicate_pnl: number
-          duplicate_row: Json
-          kept_history_id: string
-          position_id: string
-          reconciled_at?: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          duplicate_history_id?: string
-          duplicate_pnl?: number
-          duplicate_row?: Json
-          kept_history_id?: string
-          position_id?: string
-          reconciled_at?: string
           user_id?: string
         }
         Relationships: []
@@ -1743,28 +557,10 @@ export type Database = {
         Row: {
           bot_id: string
           cancel_reason: string | null
-          candidate_id: string | null
-          canonical_dealing_range: Json | null
-          canonical_dealing_range_impulse_id: string | null
-          canonical_dealing_range_timeframe: string | null
-          canonical_dealing_range_version: string | null
           confirmation_attempts: number | null
-          confirmation_build_diagnostic: Json | null
-          confirmation_config: Json
-          confirmation_method: string | null
           created_at: string
-          cross_tf_context_version: string | null
-          cross_tf_effective_mode: string | null
-          cross_tf_entry_allowed: boolean | null
-          cross_tf_entry_authority: Json | null
-          cross_tf_relationship: string | null
-          cross_tf_timeframe_evidence_id: string | null
           current_price: number
-          decision_context: Json | null
           direction: string
-          direction_verdict: Json | null
-          direction_verdict_id: string | null
-          entry_confirmation: Json | null
           entry_price: number
           entry_zone_high: number | null
           entry_zone_low: number | null
@@ -1774,27 +570,11 @@ export type Database = {
           expiry_minutes: number
           fill_reason: string | null
           filled_at: string | null
-          final_authorization: Json | null
           from_watchlist: boolean
-          frozen_strategy_context: Json | null
-          frozen_strategy_hash: string | null
-          game_plan_id: string | null
-          game_plan_version: string | null
-          handoff_reason: string | null
           id: string
-          impulse_entry_lifecycle: Json | null
-          impulse_entry_lifecycle_id: string | null
-          last_confirmation_checked_at: string | null
-          last_touch_checked_at: string | null
-          liquidity_confirmation_observation: Json | null
           order_id: string
           order_type: string
-          originating_zone: Json | null
-          pending_authorization_observation: Json | null
           placed_at: string
-          policy_frozen_at: string | null
-          post_confirmation_entry: Json | null
-          post_confirmation_observation: Json | null
           refined_zone_high: number | null
           refined_zone_low: number | null
           resolved_at: string | null
@@ -1802,27 +582,14 @@ export type Database = {
           setup_type: string | null
           signal_reason: Json | null
           signal_score: number | null
-          size: number | null
+          size: number
           staged_cycles: number | null
           staged_initial_score: number | null
-          staged_setup_id: string | null
           status: string
           stop_loss: number
-          streamlined_decision_frozen_at: string | null
-          streamlined_decision_latest: Json | null
-          streamlined_decision_origin: Json | null
-          structural_invalidation: number | null
-          structural_invalidation_source: string | null
-          style_base_policy_hash: string | null
-          style_policy: Json | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
-          superseded_candidate_id: string | null
           symbol: string
           take_profit: number
           thesis_cancel_reason: string | null
-          thesis_validation: Json | null
-          thesis_version: string | null
           updated_at: string
           user_id: string
           zone_touch_time: string | null
@@ -1830,28 +597,10 @@ export type Database = {
         Insert: {
           bot_id?: string
           cancel_reason?: string | null
-          candidate_id?: string | null
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
-          confirmation_build_diagnostic?: Json | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_price: number
-          decision_context?: Json | null
           direction: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
-          entry_confirmation?: Json | null
           entry_price: number
           entry_zone_high?: number | null
           entry_zone_low?: number | null
@@ -1861,27 +610,11 @@ export type Database = {
           expiry_minutes?: number
           fill_reason?: string | null
           filled_at?: string | null
-          final_authorization?: Json | null
           from_watchlist?: boolean
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
-          handoff_reason?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
-          last_confirmation_checked_at?: string | null
-          last_touch_checked_at?: string | null
-          liquidity_confirmation_observation?: Json | null
           order_id: string
           order_type?: string
-          originating_zone?: Json | null
-          pending_authorization_observation?: Json | null
           placed_at?: string
-          policy_frozen_at?: string | null
-          post_confirmation_entry?: Json | null
-          post_confirmation_observation?: Json | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -1889,27 +622,14 @@ export type Database = {
           setup_type?: string | null
           signal_reason?: Json | null
           signal_score?: number | null
-          size?: number | null
+          size: number
           staged_cycles?: number | null
           staged_initial_score?: number | null
-          staged_setup_id?: string | null
           status?: string
           stop_loss: number
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          structural_invalidation?: number | null
-          structural_invalidation_source?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          superseded_candidate_id?: string | null
           symbol: string
           take_profit: number
           thesis_cancel_reason?: string | null
-          thesis_validation?: Json | null
-          thesis_version?: string | null
           updated_at?: string
           user_id: string
           zone_touch_time?: string | null
@@ -1917,28 +637,10 @@ export type Database = {
         Update: {
           bot_id?: string
           cancel_reason?: string | null
-          candidate_id?: string | null
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
           confirmation_attempts?: number | null
-          confirmation_build_diagnostic?: Json | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_price?: number
-          decision_context?: Json | null
           direction?: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
-          entry_confirmation?: Json | null
           entry_price?: number
           entry_zone_high?: number | null
           entry_zone_low?: number | null
@@ -1948,27 +650,11 @@ export type Database = {
           expiry_minutes?: number
           fill_reason?: string | null
           filled_at?: string | null
-          final_authorization?: Json | null
           from_watchlist?: boolean
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
-          handoff_reason?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
-          last_confirmation_checked_at?: string | null
-          last_touch_checked_at?: string | null
-          liquidity_confirmation_observation?: Json | null
           order_id?: string
           order_type?: string
-          originating_zone?: Json | null
-          pending_authorization_observation?: Json | null
           placed_at?: string
-          policy_frozen_at?: string | null
-          post_confirmation_entry?: Json | null
-          post_confirmation_observation?: Json | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -1976,89 +662,17 @@ export type Database = {
           setup_type?: string | null
           signal_reason?: Json | null
           signal_score?: number | null
-          size?: number | null
+          size?: number
           staged_cycles?: number | null
           staged_initial_score?: number | null
-          staged_setup_id?: string | null
           status?: string
           stop_loss?: number
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          structural_invalidation?: number | null
-          structural_invalidation_source?: string | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          superseded_candidate_id?: string | null
           symbol?: string
           take_profit?: number
           thesis_cancel_reason?: string | null
-          thesis_validation?: Json | null
-          thesis_version?: string | null
           updated_at?: string
           user_id?: string
           zone_touch_time?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pending_orders_direction_verdict_id_fkey"
-            columns: ["direction_verdict_id"]
-            isOneToOne: false
-            referencedRelation: "active_direction_verdicts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pending_orders_game_plan_id_fkey"
-            columns: ["game_plan_id"]
-            isOneToOne: false
-            referencedRelation: "active_game_plans"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pending_orders_impulse_entry_lifecycle_id_fkey"
-            columns: ["impulse_entry_lifecycle_id"]
-            isOneToOne: false
-            referencedRelation: "impulse_entry_lifecycles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pending_orders_staged_setup_id_fkey"
-            columns: ["staged_setup_id"]
-            isOneToOne: false
-            referencedRelation: "staged_setups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      profiles: {
-        Row: {
-          avatar_url: string | null
-          created_at: string
-          display_name: string | null
-          id: string
-          preferences: Json
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          avatar_url?: string | null
-          created_at?: string
-          display_name?: string | null
-          id?: string
-          preferences?: Json
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          avatar_url?: string | null
-          created_at?: string
-          display_name?: string | null
-          id?: string
-          preferences?: Json
-          updated_at?: string
-          user_id?: string
         }
         Relationships: []
       }
@@ -2254,7 +868,6 @@ export type Database = {
           bot_id: string
           confluence_score: number
           created_at: string
-          decision_outcome_snapshot: Json | null
           direction: string
           entry_price: number
           failed_gates: string[] | null
@@ -2264,17 +877,9 @@ export type Database = {
           gp_bias_confidence: number | null
           id: string
           mae_pips: number | null
-          mae_r: number | null
           mfe_pips: number | null
-          mfe_r: number | null
-          normalized_gates: string[]
-          opportunity_key: string | null
           outcome_checked_at: string | null
-          outcome_contract_version: string | null
-          outcome_r: number | null
-          outcome_reason: string | null
           outcome_status: string
-          outcome_window_hours: number | null
           price_at_rejection: number | null
           price_reached_entry: boolean | null
           raw_detail: Json | null
@@ -2283,13 +888,8 @@ export type Database = {
           rejection_type: string
           rr_ratio: number | null
           session_name: string | null
-          shadow_decision: Json | null
           sl_hit: boolean | null
-          sl_hit_time_minutes: number | null
           stop_loss: number | null
-          streamlined_decision_frozen_at: string | null
-          streamlined_decision_latest: Json | null
-          streamlined_decision_origin: Json | null
           symbol: string
           take_profit: number | null
           tier1_count: number
@@ -2302,7 +902,6 @@ export type Database = {
           bot_id?: string
           confluence_score: number
           created_at?: string
-          decision_outcome_snapshot?: Json | null
           direction: string
           entry_price: number
           failed_gates?: string[] | null
@@ -2312,17 +911,9 @@ export type Database = {
           gp_bias_confidence?: number | null
           id?: string
           mae_pips?: number | null
-          mae_r?: number | null
           mfe_pips?: number | null
-          mfe_r?: number | null
-          normalized_gates?: string[]
-          opportunity_key?: string | null
           outcome_checked_at?: string | null
-          outcome_contract_version?: string | null
-          outcome_r?: number | null
-          outcome_reason?: string | null
           outcome_status?: string
-          outcome_window_hours?: number | null
           price_at_rejection?: number | null
           price_reached_entry?: boolean | null
           raw_detail?: Json | null
@@ -2331,13 +922,8 @@ export type Database = {
           rejection_type: string
           rr_ratio?: number | null
           session_name?: string | null
-          shadow_decision?: Json | null
           sl_hit?: boolean | null
-          sl_hit_time_minutes?: number | null
           stop_loss?: number | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
           symbol: string
           take_profit?: number | null
           tier1_count?: number
@@ -2350,7 +936,6 @@ export type Database = {
           bot_id?: string
           confluence_score?: number
           created_at?: string
-          decision_outcome_snapshot?: Json | null
           direction?: string
           entry_price?: number
           failed_gates?: string[] | null
@@ -2360,17 +945,9 @@ export type Database = {
           gp_bias_confidence?: number | null
           id?: string
           mae_pips?: number | null
-          mae_r?: number | null
           mfe_pips?: number | null
-          mfe_r?: number | null
-          normalized_gates?: string[]
-          opportunity_key?: string | null
           outcome_checked_at?: string | null
-          outcome_contract_version?: string | null
-          outcome_r?: number | null
-          outcome_reason?: string | null
           outcome_status?: string
-          outcome_window_hours?: number | null
           price_at_rejection?: number | null
           price_reached_entry?: boolean | null
           raw_detail?: Json | null
@@ -2379,67 +956,14 @@ export type Database = {
           rejection_type?: string
           rr_ratio?: number | null
           session_name?: string | null
-          shadow_decision?: Json | null
           sl_hit?: boolean | null
-          sl_hit_time_minutes?: number | null
           stop_loss?: number | null
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
           symbol?: string
           take_profit?: number | null
           tier1_count?: number
           tier1_factors?: string[] | null
           tp_hit?: boolean | null
           tp_hit_time_minutes?: number | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      scan_candle_snapshots: {
-        Row: {
-          bot_id: string
-          candle_count: number
-          candles: Json
-          completed_candle_cutoff: string | null
-          contract_version: string
-          created_at: string
-          id: string
-          observed_at: string
-          provider: string
-          scan_cycle_id: string
-          symbol: string
-          timeframe: string
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          candle_count: number
-          candles: Json
-          completed_candle_cutoff?: string | null
-          contract_version?: string
-          created_at?: string
-          id?: string
-          observed_at: string
-          provider: string
-          scan_cycle_id: string
-          symbol: string
-          timeframe: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          candle_count?: number
-          candles?: Json
-          completed_candle_cutoff?: string | null
-          contract_version?: string
-          created_at?: string
-          id?: string
-          observed_at?: string
-          provider?: string
-          scan_cycle_id?: string
-          symbol?: string
-          timeframe?: string
           user_id?: string
         }
         Relationships: []
@@ -2504,219 +1028,6 @@ export type Database = {
         }
         Relationships: []
       }
-      scanner_authorization_failures: {
-        Row: {
-          function_name: string
-          id: number
-          occurred_at: string
-          reason: string
-          request_metadata: Json
-        }
-        Insert: {
-          function_name: string
-          id?: never
-          occurred_at?: string
-          reason: string
-          request_metadata?: Json
-        }
-        Update: {
-          function_name?: string
-          id?: never
-          occurred_at?: string
-          reason?: string
-          request_metadata?: Json
-        }
-        Relationships: []
-      }
-      scanner_health_monitor_state: {
-        Row: {
-          bot_id: string
-          first_observed_at: string
-          last_evaluated_at: string
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          first_observed_at?: string
-          last_evaluated_at?: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          first_observed_at?: string
-          last_evaluated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      scanner_operation_runs: {
-        Row: {
-          bot_id: string
-          created_at: string
-          error_code: string | null
-          error_message: string | null
-          expected_pairs: number | null
-          function_name: string
-          heartbeat_at: string
-          id: string
-          invoked_at: string
-          metadata: Json
-          operation: string
-          pair_processing_completed_at: string | null
-          phase: string
-          position_management_completed_at: string | null
-          processed_pairs: number
-          scan_completed_at: string | null
-          scan_cycle_id: string | null
-          scan_started_at: string | null
-          status: string
-          trigger_source: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          bot_id?: string
-          created_at?: string
-          error_code?: string | null
-          error_message?: string | null
-          expected_pairs?: number | null
-          function_name: string
-          heartbeat_at?: string
-          id?: string
-          invoked_at?: string
-          metadata?: Json
-          operation: string
-          pair_processing_completed_at?: string | null
-          phase?: string
-          position_management_completed_at?: string | null
-          processed_pairs?: number
-          scan_completed_at?: string | null
-          scan_cycle_id?: string | null
-          scan_started_at?: string | null
-          status?: string
-          trigger_source: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          created_at?: string
-          error_code?: string | null
-          error_message?: string | null
-          expected_pairs?: number | null
-          function_name?: string
-          heartbeat_at?: string
-          id?: string
-          invoked_at?: string
-          metadata?: Json
-          operation?: string
-          pair_processing_completed_at?: string | null
-          phase?: string
-          position_management_completed_at?: string | null
-          processed_pairs?: number
-          scan_completed_at?: string | null
-          scan_cycle_id?: string | null
-          scan_started_at?: string | null
-          status?: string
-          trigger_source?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      scanner_operational_alerts: {
-        Row: {
-          alert_type: string
-          bot_id: string
-          created_at: string
-          dedupe_key: string
-          evidence: Json
-          first_detected_at: string
-          id: string
-          last_detected_at: string
-          message: string
-          occurrences: number
-          resolved_at: string | null
-          run_id: string | null
-          severity: string
-          status: string
-          title: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          alert_type: string
-          bot_id?: string
-          created_at?: string
-          dedupe_key?: string
-          evidence?: Json
-          first_detected_at?: string
-          id?: string
-          last_detected_at?: string
-          message: string
-          occurrences?: number
-          resolved_at?: string | null
-          run_id?: string | null
-          severity?: string
-          status?: string
-          title: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          alert_type?: string
-          bot_id?: string
-          created_at?: string
-          dedupe_key?: string
-          evidence?: Json
-          first_detected_at?: string
-          id?: string
-          last_detected_at?: string
-          message?: string
-          occurrences?: number
-          resolved_at?: string | null
-          run_id?: string | null
-          severity?: string
-          status?: string
-          title?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      scanner_runtime_locks: {
-        Row: {
-          acquired_at: string
-          bot_id: string
-          heartbeat_at: string
-          lease_token: string
-          lease_until: string
-          lock_scope: string
-          run_id: string | null
-          user_id: string
-        }
-        Insert: {
-          acquired_at?: string
-          bot_id: string
-          heartbeat_at?: string
-          lease_token: string
-          lease_until: string
-          lock_scope: string
-          run_id?: string | null
-          user_id: string
-        }
-        Update: {
-          acquired_at?: string
-          bot_id?: string
-          heartbeat_at?: string
-          lease_token?: string
-          lease_until?: string
-          lock_scope?: string
-          run_id?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
       scheduled_tasks: {
         Row: {
           action: string
@@ -2777,133 +1088,30 @@ export type Database = {
         }
         Relationships: []
       }
-      setup_lifecycle_events: {
-        Row: {
-          bot_id: string
-          candidate_id: string
-          created_at: string
-          direction: string
-          evidence: Json
-          from_status: string | null
-          id: string
-          lifecycle_phase: string | null
-          reason: string | null
-          reason_code: string | null
-          staged_setup_id: string
-          symbol: string
-          to_status: string
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          candidate_id: string
-          created_at?: string
-          direction: string
-          evidence?: Json
-          from_status?: string | null
-          id?: string
-          lifecycle_phase?: string | null
-          reason?: string | null
-          reason_code?: string | null
-          staged_setup_id: string
-          symbol: string
-          to_status: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          candidate_id?: string
-          created_at?: string
-          direction?: string
-          evidence?: Json
-          from_status?: string | null
-          id?: string
-          lifecycle_phase?: string | null
-          reason?: string | null
-          reason_code?: string | null
-          staged_setup_id?: string
-          symbol?: string
-          to_status?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "setup_lifecycle_events_staged_setup_id_fkey"
-            columns: ["staged_setup_id"]
-            isOneToOne: false
-            referencedRelation: "staged_setups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       staged_setups: {
         Row: {
           analysis_snapshot: Json | null
-          authorization_result: Json | null
           bot_id: string
-          candidate_id: string
-          canonical_dealing_range: Json | null
-          canonical_dealing_range_impulse_id: string | null
-          canonical_dealing_range_timeframe: string | null
-          canonical_dealing_range_version: string | null
-          confirmation_config: Json
-          confirmation_method: string | null
           created_at: string
-          cross_tf_context_version: string | null
-          cross_tf_effective_mode: string | null
-          cross_tf_entry_allowed: boolean | null
-          cross_tf_entry_authority: Json | null
-          cross_tf_relationship: string | null
-          cross_tf_timeframe_evidence_id: string | null
           current_factors: Json
           current_score: number
           direction: string
-          direction_verdict: Json | null
-          direction_verdict_id: string | null
           entry_price: number | null
-          execution_eligible: boolean
-          frozen_strategy_context: Json | null
-          frozen_strategy_hash: string | null
-          game_plan_id: string | null
-          game_plan_version: string | null
           id: string
-          impulse_entry_lifecycle: Json | null
-          impulse_entry_lifecycle_id: string | null
           initial_factors: Json
           initial_score: number
           invalidation_reason: string | null
           last_eval_at: string
-          lifecycle_evidence: Json
-          lifecycle_phase: string | null
-          lifecycle_reason: string | null
-          lifecycle_reason_code: string | null
-          lifecycle_version: string
-          liquidity_confirmation_observation: Json | null
           min_cycles: number
           missing_factors: Json
-          observation_parent_id: string | null
-          observation_reason: string | null
-          originating_zone: Json | null
-          pending_order_id: string | null
-          policy_frozen_at: string | null
-          position_id: string | null
           promotion_reason: string | null
-          qualified_at: string | null
           resolved_at: string | null
           scan_cycles: number
           setup_type: string | null
           sl_level: number | null
           staged_at: string
           status: string
-          streamlined_decision_frozen_at: string | null
-          streamlined_decision_latest: Json | null
-          streamlined_decision_origin: Json | null
-          style_base_policy_hash: string | null
-          style_policy: Json | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
           symbol: string
-          thesis_version: string | null
           tier1_count: number
           tier2_count: number
           tier3_count: number
@@ -2915,71 +1123,27 @@ export type Database = {
         }
         Insert: {
           analysis_snapshot?: Json | null
-          authorization_result?: Json | null
           bot_id?: string
-          candidate_id?: string
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_factors?: Json
           current_score: number
           direction: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
           entry_price?: number | null
-          execution_eligible?: boolean
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
           initial_factors?: Json
           initial_score: number
           invalidation_reason?: string | null
           last_eval_at?: string
-          lifecycle_evidence?: Json
-          lifecycle_phase?: string | null
-          lifecycle_reason?: string | null
-          lifecycle_reason_code?: string | null
-          lifecycle_version?: string
-          liquidity_confirmation_observation?: Json | null
           min_cycles?: number
           missing_factors?: Json
-          observation_parent_id?: string | null
-          observation_reason?: string | null
-          originating_zone?: Json | null
-          pending_order_id?: string | null
-          policy_frozen_at?: string | null
-          position_id?: string | null
           promotion_reason?: string | null
-          qualified_at?: string | null
           resolved_at?: string | null
           scan_cycles?: number
           setup_type?: string | null
           sl_level?: number | null
           staged_at?: string
           status?: string
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
           symbol: string
-          thesis_version?: string | null
           tier1_count?: number
           tier2_count?: number
           tier3_count?: number
@@ -2991,71 +1155,27 @@ export type Database = {
         }
         Update: {
           analysis_snapshot?: Json | null
-          authorization_result?: Json | null
           bot_id?: string
-          candidate_id?: string
-          canonical_dealing_range?: Json | null
-          canonical_dealing_range_impulse_id?: string | null
-          canonical_dealing_range_timeframe?: string | null
-          canonical_dealing_range_version?: string | null
-          confirmation_config?: Json
-          confirmation_method?: string | null
           created_at?: string
-          cross_tf_context_version?: string | null
-          cross_tf_effective_mode?: string | null
-          cross_tf_entry_allowed?: boolean | null
-          cross_tf_entry_authority?: Json | null
-          cross_tf_relationship?: string | null
-          cross_tf_timeframe_evidence_id?: string | null
           current_factors?: Json
           current_score?: number
           direction?: string
-          direction_verdict?: Json | null
-          direction_verdict_id?: string | null
           entry_price?: number | null
-          execution_eligible?: boolean
-          frozen_strategy_context?: Json | null
-          frozen_strategy_hash?: string | null
-          game_plan_id?: string | null
-          game_plan_version?: string | null
           id?: string
-          impulse_entry_lifecycle?: Json | null
-          impulse_entry_lifecycle_id?: string | null
           initial_factors?: Json
           initial_score?: number
           invalidation_reason?: string | null
           last_eval_at?: string
-          lifecycle_evidence?: Json
-          lifecycle_phase?: string | null
-          lifecycle_reason?: string | null
-          lifecycle_reason_code?: string | null
-          lifecycle_version?: string
-          liquidity_confirmation_observation?: Json | null
           min_cycles?: number
           missing_factors?: Json
-          observation_parent_id?: string | null
-          observation_reason?: string | null
-          originating_zone?: Json | null
-          pending_order_id?: string | null
-          policy_frozen_at?: string | null
-          position_id?: string | null
           promotion_reason?: string | null
-          qualified_at?: string | null
           resolved_at?: string | null
           scan_cycles?: number
           setup_type?: string | null
           sl_level?: number | null
           staged_at?: string
           status?: string
-          streamlined_decision_frozen_at?: string | null
-          streamlined_decision_latest?: Json | null
-          streamlined_decision_origin?: Json | null
-          style_base_policy_hash?: string | null
-          style_policy?: Json | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
           symbol?: string
-          thesis_version?: string | null
           tier1_count?: number
           tier2_count?: number
           tier3_count?: number
@@ -3064,474 +1184,6 @@ export type Database = {
           updated_at?: string
           user_id?: string
           watch_threshold?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "staged_setups_direction_verdict_id_fkey"
-            columns: ["direction_verdict_id"]
-            isOneToOne: false
-            referencedRelation: "active_direction_verdicts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "staged_setups_game_plan_id_fkey"
-            columns: ["game_plan_id"]
-            isOneToOne: false
-            referencedRelation: "active_game_plans"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "staged_setups_impulse_entry_lifecycle_id_fkey"
-            columns: ["impulse_entry_lifecycle_id"]
-            isOneToOne: false
-            referencedRelation: "impulse_entry_lifecycles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "staged_setups_observation_parent_id_fkey"
-            columns: ["observation_parent_id"]
-            isOneToOne: false
-            referencedRelation: "staged_setups"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "staged_setups_pending_order_id_fkey"
-            columns: ["pending_order_id"]
-            isOneToOne: false
-            referencedRelation: "pending_orders"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "staged_setups_position_id_fkey"
-            columns: ["position_id"]
-            isOneToOne: false
-            referencedRelation: "paper_positions"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      stop_policy_observations: {
-        Row: {
-          bot_id: string
-          broker_digits: number | null
-          broker_stops_level: number | null
-          candidate_id: string
-          confirmation_atr: number
-          confirmation_timeframe: string
-          contract_version: string
-          created_at: string
-          current_plan_reason: string | null
-          current_plan_valid: boolean
-          current_risk_reward: number | null
-          current_stop_loss: number | null
-          current_take_profit: number | null
-          current_take_profit_fallback_reason: string | null
-          current_take_profit_source: string | null
-          direction: string
-          entry_price: number
-          execution_floor_quote_distance: number
-          execution_floor_source: string
-          id: string
-          observation_only: boolean
-          observed_at: string
-          pip_size: number
-          scan_cycle_id: string
-          setup_source: string
-          shadow_measurements: Json
-          shadow_plan_reason: string | null
-          shadow_plan_valid: boolean
-          shadow_risk_reward: number | null
-          shadow_stop_loss: number | null
-          shadow_take_profit: number | null
-          shadow_take_profit_fallback_reason: string | null
-          shadow_take_profit_source: string | null
-          spread_pips: number
-          spread_safety_multiplier: number
-          spread_source: string
-          structural_invalidation: number
-          symbol: string
-          tick_size: number | null
-          trading_style: string
-          user_id: string
-        }
-        Insert: {
-          bot_id?: string
-          broker_digits?: number | null
-          broker_stops_level?: number | null
-          candidate_id: string
-          confirmation_atr: number
-          confirmation_timeframe: string
-          contract_version?: string
-          created_at?: string
-          current_plan_reason?: string | null
-          current_plan_valid: boolean
-          current_risk_reward?: number | null
-          current_stop_loss?: number | null
-          current_take_profit?: number | null
-          current_take_profit_fallback_reason?: string | null
-          current_take_profit_source?: string | null
-          direction: string
-          entry_price: number
-          execution_floor_quote_distance: number
-          execution_floor_source: string
-          id?: string
-          observation_only?: boolean
-          observed_at: string
-          pip_size: number
-          scan_cycle_id: string
-          setup_source: string
-          shadow_measurements: Json
-          shadow_plan_reason?: string | null
-          shadow_plan_valid: boolean
-          shadow_risk_reward?: number | null
-          shadow_stop_loss?: number | null
-          shadow_take_profit?: number | null
-          shadow_take_profit_fallback_reason?: string | null
-          shadow_take_profit_source?: string | null
-          spread_pips: number
-          spread_safety_multiplier: number
-          spread_source: string
-          structural_invalidation: number
-          symbol: string
-          tick_size?: number | null
-          trading_style: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          broker_digits?: number | null
-          broker_stops_level?: number | null
-          candidate_id?: string
-          confirmation_atr?: number
-          confirmation_timeframe?: string
-          contract_version?: string
-          created_at?: string
-          current_plan_reason?: string | null
-          current_plan_valid?: boolean
-          current_risk_reward?: number | null
-          current_stop_loss?: number | null
-          current_take_profit?: number | null
-          current_take_profit_fallback_reason?: string | null
-          current_take_profit_source?: string | null
-          direction?: string
-          entry_price?: number
-          execution_floor_quote_distance?: number
-          execution_floor_source?: string
-          id?: string
-          observation_only?: boolean
-          observed_at?: string
-          pip_size?: number
-          scan_cycle_id?: string
-          setup_source?: string
-          shadow_measurements?: Json
-          shadow_plan_reason?: string | null
-          shadow_plan_valid?: boolean
-          shadow_risk_reward?: number | null
-          shadow_stop_loss?: number | null
-          shadow_take_profit?: number | null
-          shadow_take_profit_fallback_reason?: string | null
-          shadow_take_profit_source?: string | null
-          spread_pips?: number
-          spread_safety_multiplier?: number
-          spread_source?: string
-          structural_invalidation?: number
-          symbol?: string
-          tick_size?: number | null
-          trading_style?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      strategy_activation_events: {
-        Row: {
-          activation_id: string
-          actor_id: string | null
-          bot_id: string
-          created_at: string
-          evidence_contract_version: string
-          evidence_hash: string
-          evidence_snapshot: Json
-          feature_key: string
-          from_authority_stage: string | null
-          from_runtime_scope: string | null
-          id: string
-          reason: string
-          revision: number
-          to_authority_stage: string
-          to_runtime_scope: string
-          user_id: string
-          variant_key: string
-        }
-        Insert: {
-          activation_id: string
-          actor_id?: string | null
-          bot_id: string
-          created_at?: string
-          evidence_contract_version: string
-          evidence_hash: string
-          evidence_snapshot: Json
-          feature_key: string
-          from_authority_stage?: string | null
-          from_runtime_scope?: string | null
-          id?: string
-          reason: string
-          revision: number
-          to_authority_stage: string
-          to_runtime_scope: string
-          user_id: string
-          variant_key: string
-        }
-        Update: {
-          activation_id?: string
-          actor_id?: string | null
-          bot_id?: string
-          created_at?: string
-          evidence_contract_version?: string
-          evidence_hash?: string
-          evidence_snapshot?: Json
-          feature_key?: string
-          from_authority_stage?: string | null
-          from_runtime_scope?: string | null
-          id?: string
-          reason?: string
-          revision?: number
-          to_authority_stage?: string
-          to_runtime_scope?: string
-          user_id?: string
-          variant_key?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "strategy_activation_events_activation_id_fkey"
-            columns: ["activation_id"]
-            isOneToOne: false
-            referencedRelation: "strategy_activation_registry"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      strategy_activation_registry: {
-        Row: {
-          activation_scope: Json
-          activation_scope_hash: string
-          approved_at: string | null
-          approved_by: string | null
-          authority_stage: string
-          bot_id: string
-          created_at: string
-          evidence_contract_version: string
-          evidence_hash: string
-          evidence_snapshot: Json
-          evidence_window_end: string | null
-          evidence_window_start: string | null
-          feature_key: string
-          id: string
-          revision: number
-          runtime_enforced: boolean
-          runtime_scope: string
-          transition_reason: string | null
-          updated_at: string
-          user_id: string
-          variant_key: string
-        }
-        Insert: {
-          activation_scope?: Json
-          activation_scope_hash: string
-          approved_at?: string | null
-          approved_by?: string | null
-          authority_stage?: string
-          bot_id?: string
-          created_at?: string
-          evidence_contract_version?: string
-          evidence_hash: string
-          evidence_snapshot?: Json
-          evidence_window_end?: string | null
-          evidence_window_start?: string | null
-          feature_key: string
-          id?: string
-          revision?: number
-          runtime_enforced?: boolean
-          runtime_scope?: string
-          transition_reason?: string | null
-          updated_at?: string
-          user_id: string
-          variant_key?: string
-        }
-        Update: {
-          activation_scope?: Json
-          activation_scope_hash?: string
-          approved_at?: string | null
-          approved_by?: string | null
-          authority_stage?: string
-          bot_id?: string
-          created_at?: string
-          evidence_contract_version?: string
-          evidence_hash?: string
-          evidence_snapshot?: Json
-          evidence_window_end?: string | null
-          evidence_window_start?: string | null
-          feature_key?: string
-          id?: string
-          revision?: number
-          runtime_enforced?: boolean
-          runtime_scope?: string
-          transition_reason?: string | null
-          updated_at?: string
-          user_id?: string
-          variant_key?: string
-        }
-        Relationships: []
-      }
-      strategy_evidence_certificates: {
-        Row: {
-          activation_scope: Json
-          activation_scope_hash: string
-          beneficial_rate_percent: number | null
-          bot_id: string
-          certificate: Json
-          certificate_hash: string
-          changed_count: number
-          contract_version: string
-          coverage_percent: number
-          created_at: string
-          evidence_count: number
-          expectancy_delta_r: number
-          feature_key: string
-          generated_at: string
-          generator_version: string
-          good_trade_retention_percent: number
-          id: string
-          is_current: boolean
-          max_drawdown_delta_percent: number
-          out_of_sample_passed: boolean
-          resolved_count: number
-          source_window_end: string | null
-          source_window_start: string | null
-          status: string
-          superseded_at: string | null
-          total_candidates: number
-          user_id: string
-          variant_key: string
-          walk_forward_consistent: boolean
-        }
-        Insert: {
-          activation_scope?: Json
-          activation_scope_hash: string
-          beneficial_rate_percent?: number | null
-          bot_id?: string
-          certificate: Json
-          certificate_hash: string
-          changed_count: number
-          contract_version?: string
-          coverage_percent: number
-          created_at?: string
-          evidence_count: number
-          expectancy_delta_r: number
-          feature_key: string
-          generated_at: string
-          generator_version: string
-          good_trade_retention_percent: number
-          id?: string
-          is_current?: boolean
-          max_drawdown_delta_percent: number
-          out_of_sample_passed: boolean
-          resolved_count: number
-          source_window_end?: string | null
-          source_window_start?: string | null
-          status: string
-          superseded_at?: string | null
-          total_candidates: number
-          user_id: string
-          variant_key?: string
-          walk_forward_consistent: boolean
-        }
-        Update: {
-          activation_scope?: Json
-          activation_scope_hash?: string
-          beneficial_rate_percent?: number | null
-          bot_id?: string
-          certificate?: Json
-          certificate_hash?: string
-          changed_count?: number
-          contract_version?: string
-          coverage_percent?: number
-          created_at?: string
-          evidence_count?: number
-          expectancy_delta_r?: number
-          feature_key?: string
-          generated_at?: string
-          generator_version?: string
-          good_trade_retention_percent?: number
-          id?: string
-          is_current?: boolean
-          max_drawdown_delta_percent?: number
-          out_of_sample_passed?: boolean
-          resolved_count?: number
-          source_window_end?: string | null
-          source_window_start?: string | null
-          status?: string
-          superseded_at?: string | null
-          total_candidates?: number
-          user_id?: string
-          variant_key?: string
-          walk_forward_consistent?: boolean
-        }
-        Relationships: []
-      }
-      streamlined_decision_certificates: {
-        Row: {
-          certified: boolean
-          comparable: number
-          created_at: string
-          evidence: Json
-          expires_at: string
-          id: string
-          minimum_comparable: number
-          runtime_targets: string[]
-          styles: string[]
-          user_id: string
-        }
-        Insert: {
-          certified?: boolean
-          comparable?: number
-          created_at?: string
-          evidence?: Json
-          expires_at: string
-          id?: string
-          minimum_comparable?: number
-          runtime_targets?: string[]
-          styles?: string[]
-          user_id: string
-        }
-        Update: {
-          certified?: boolean
-          comparable?: number
-          created_at?: string
-          evidence?: Json
-          expires_at?: string
-          id?: string
-          minimum_comparable?: number
-          runtime_targets?: string[]
-          styles?: string[]
-          user_id?: string
-        }
-        Relationships: []
-      }
-      telegram_notification_claims: {
-        Row: {
-          claim_key: string
-          created_at: string
-          expires_at: string
-        }
-        Insert: {
-          claim_key: string
-          created_at?: string
-          expires_at: string
-        }
-        Update: {
-          claim_key?: string
-          created_at?: string
-          expires_at?: string
         }
         Relationships: []
       }
@@ -3710,45 +1362,6 @@ export type Database = {
           },
         ]
       }
-      trade_review_notes: {
-        Row: {
-          created_at: string
-          id: string
-          lesson: string | null
-          notes: string | null
-          position_id: string
-          review_status: string
-          reviewed_at: string | null
-          tags: string[]
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          lesson?: string | null
-          notes?: string | null
-          position_id: string
-          review_status?: string
-          reviewed_at?: string | null
-          tags?: string[]
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          lesson?: string | null
-          notes?: string | null
-          position_id?: string
-          review_status?: string
-          reviewed_at?: string | null
-          tags?: string[]
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       trades: {
         Row: {
           confluence_score: number | null
@@ -3896,924 +1509,12 @@ export type Database = {
         }
         Relationships: []
       }
-      zone_candidate_shadow_observations: {
-        Row: {
-          activation_eligible: boolean
-          bot_id: string
-          candidate_id: string
-          candidate_lifecycle: Json | null
-          candidate_lifecycle_state: string | null
-          candidate_lineage: Json | null
-          candidate_model: Json | null
-          candidate_model_rank: number | null
-          candidate_model_version: string | null
-          candidate_model_winner: boolean
-          created_at: string
-          cross_tf_disagreed: boolean
-          cross_tf_evaluation: Json | null
-          cross_tf_policy: Json | null
-          cross_tf_policy_version: string | null
-          cross_tf_reason_codes: string[]
-          cross_tf_shadow_decision: string | null
-          direction: string
-          entry_price: number
-          evidence_source: string
-          id: string
-          legacy_comparable_score: number
-          legacy_execution_decision: string | null
-          legacy_rank: number
-          legacy_winner: boolean
-          legacy_zone_score: number
-          local_confluence: Json
-          mae_pips: number | null
-          mfe_pips: number | null
-          observed_at: string
-          outcome_checked_at: string | null
-          outcome_status: string
-          parent_candidate_id: string | null
-          price_reached_entry: boolean | null
-          rank_delta: number
-          ranking_disagreed: boolean
-          replay_contract_version: string | null
-          replay_run_id: string | null
-          scan_cycle_id: string
-          shadow_local_score: number
-          shadow_rank: number
-          shadow_ranking: Json
-          shadow_winner: boolean
-          sl_hit: boolean | null
-          stop_loss: number | null
-          style_base_policy_hash: string | null
-          style_policy_hash: string | null
-          style_policy_version: string | null
-          symbol: string
-          take_profit: number | null
-          timeframe_relationship: string | null
-          tp_hit: boolean | null
-          tp_hit_time_minutes: number | null
-          trading_style: string
-          user_id: string
-          zone_high: number
-          zone_low: number
-          zone_type: string
-        }
-        Insert: {
-          activation_eligible?: boolean
-          bot_id?: string
-          candidate_id: string
-          candidate_lifecycle?: Json | null
-          candidate_lifecycle_state?: string | null
-          candidate_lineage?: Json | null
-          candidate_model?: Json | null
-          candidate_model_rank?: number | null
-          candidate_model_version?: string | null
-          candidate_model_winner?: boolean
-          created_at?: string
-          cross_tf_disagreed?: boolean
-          cross_tf_evaluation?: Json | null
-          cross_tf_policy?: Json | null
-          cross_tf_policy_version?: string | null
-          cross_tf_reason_codes?: string[]
-          cross_tf_shadow_decision?: string | null
-          direction: string
-          entry_price: number
-          evidence_source?: string
-          id?: string
-          legacy_comparable_score: number
-          legacy_execution_decision?: string | null
-          legacy_rank: number
-          legacy_winner?: boolean
-          legacy_zone_score: number
-          local_confluence: Json
-          mae_pips?: number | null
-          mfe_pips?: number | null
-          observed_at?: string
-          outcome_checked_at?: string | null
-          outcome_status?: string
-          parent_candidate_id?: string | null
-          price_reached_entry?: boolean | null
-          rank_delta: number
-          ranking_disagreed?: boolean
-          replay_contract_version?: string | null
-          replay_run_id?: string | null
-          scan_cycle_id: string
-          shadow_local_score: number
-          shadow_rank: number
-          shadow_ranking: Json
-          shadow_winner?: boolean
-          sl_hit?: boolean | null
-          stop_loss?: number | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          symbol: string
-          take_profit?: number | null
-          timeframe_relationship?: string | null
-          tp_hit?: boolean | null
-          tp_hit_time_minutes?: number | null
-          trading_style: string
-          user_id: string
-          zone_high: number
-          zone_low: number
-          zone_type: string
-        }
-        Update: {
-          activation_eligible?: boolean
-          bot_id?: string
-          candidate_id?: string
-          candidate_lifecycle?: Json | null
-          candidate_lifecycle_state?: string | null
-          candidate_lineage?: Json | null
-          candidate_model?: Json | null
-          candidate_model_rank?: number | null
-          candidate_model_version?: string | null
-          candidate_model_winner?: boolean
-          created_at?: string
-          cross_tf_disagreed?: boolean
-          cross_tf_evaluation?: Json | null
-          cross_tf_policy?: Json | null
-          cross_tf_policy_version?: string | null
-          cross_tf_reason_codes?: string[]
-          cross_tf_shadow_decision?: string | null
-          direction?: string
-          entry_price?: number
-          evidence_source?: string
-          id?: string
-          legacy_comparable_score?: number
-          legacy_execution_decision?: string | null
-          legacy_rank?: number
-          legacy_winner?: boolean
-          legacy_zone_score?: number
-          local_confluence?: Json
-          mae_pips?: number | null
-          mfe_pips?: number | null
-          observed_at?: string
-          outcome_checked_at?: string | null
-          outcome_status?: string
-          parent_candidate_id?: string | null
-          price_reached_entry?: boolean | null
-          rank_delta?: number
-          ranking_disagreed?: boolean
-          replay_contract_version?: string | null
-          replay_run_id?: string | null
-          scan_cycle_id?: string
-          shadow_local_score?: number
-          shadow_rank?: number
-          shadow_ranking?: Json
-          shadow_winner?: boolean
-          sl_hit?: boolean | null
-          stop_loss?: number | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_version?: string | null
-          symbol?: string
-          take_profit?: number | null
-          timeframe_relationship?: string | null
-          tp_hit?: boolean | null
-          tp_hit_time_minutes?: number | null
-          trading_style?: string
-          user_id?: string
-          zone_high?: number
-          zone_low?: number
-          zone_type?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "zone_candidate_shadow_observations_replay_run_id_fkey"
-            columns: ["replay_run_id"]
-            isOneToOne: false
-            referencedRelation: "backtest_runs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      zone_confirmation_evidence_counters: {
-        Row: {
-          bot_id: string
-          last_attempt: number
-          pending_order_id: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          last_attempt?: number
-          pending_order_id: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          last_attempt?: number
-          pending_order_id?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      zone_timeframe_evidence: {
-        Row: {
-          bot_id: string
-          canonical_detector_version: string | null
-          canonical_parity: boolean | null
-          confirmation_attempt: number
-          contract_version: string
-          created_at: string
-          direction: string
-          engine_options: Json
-          evaluated_at: string
-          event_linked: boolean
-          evidence_source: string
-          final_reason: string | null
-          golden_replay_linked: boolean
-          has_disagreement: boolean
-          id: string
-          linked_setup_id: string | null
-          linked_trade_id: string | null
-          observed_at: string
-          parent_evidence_id: string | null
-          payload_truncated: boolean
-          pending_order_id: string
-          replay_provenance: string | null
-          replay_run_id: string | null
-          scan_cycle_id: string
-          selected_timeframe: string | null
-          slots: Json
-          style_base_policy_hash: string | null
-          style_policy_hash: string | null
-          style_policy_snapshot: Json | null
-          style_policy_version: string | null
-          symbol: string
-          trading_style: string | null
-          truncation_detail: Json | null
-          user_id: string
-        }
-        Insert: {
-          bot_id: string
-          canonical_detector_version?: string | null
-          canonical_parity?: boolean | null
-          confirmation_attempt?: number
-          contract_version?: string
-          created_at?: string
-          direction: string
-          engine_options?: Json
-          evaluated_at?: string
-          event_linked?: boolean
-          evidence_source?: string
-          final_reason?: string | null
-          golden_replay_linked?: boolean
-          has_disagreement?: boolean
-          id?: string
-          linked_setup_id?: string | null
-          linked_trade_id?: string | null
-          observed_at?: string
-          parent_evidence_id?: string | null
-          payload_truncated?: boolean
-          pending_order_id?: string
-          replay_provenance?: string | null
-          replay_run_id?: string | null
-          scan_cycle_id: string
-          selected_timeframe?: string | null
-          slots?: Json
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_snapshot?: Json | null
-          style_policy_version?: string | null
-          symbol: string
-          trading_style?: string | null
-          truncation_detail?: Json | null
-          user_id: string
-        }
-        Update: {
-          bot_id?: string
-          canonical_detector_version?: string | null
-          canonical_parity?: boolean | null
-          confirmation_attempt?: number
-          contract_version?: string
-          created_at?: string
-          direction?: string
-          engine_options?: Json
-          evaluated_at?: string
-          event_linked?: boolean
-          evidence_source?: string
-          final_reason?: string | null
-          golden_replay_linked?: boolean
-          has_disagreement?: boolean
-          id?: string
-          linked_setup_id?: string | null
-          linked_trade_id?: string | null
-          observed_at?: string
-          parent_evidence_id?: string | null
-          payload_truncated?: boolean
-          pending_order_id?: string
-          replay_provenance?: string | null
-          replay_run_id?: string | null
-          scan_cycle_id?: string
-          selected_timeframe?: string | null
-          slots?: Json
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_snapshot?: Json | null
-          style_policy_version?: string | null
-          symbol?: string
-          trading_style?: string | null
-          truncation_detail?: Json | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      zone_timeframe_evidence_summary: {
-        Row: {
-          bot_id: string
-          canonical_detector_version: string | null
-          canonical_parity: boolean | null
-          confirmation_attempt: number | null
-          contract_version: string | null
-          created_at: string
-          direction: string
-          event_linked: boolean
-          evidence_hash: string
-          evidence_id: string
-          evidence_source: string | null
-          final_reason: string | null
-          golden_replay_linked: boolean
-          has_disagreement: boolean
-          id: string
-          observed_at: string
-          parent_evidence_id: string | null
-          pending_order_id: string | null
-          rejection_code_counts: Json
-          scan_cycle_id: string
-          selected_timeframe: string | null
-          style_base_policy_hash: string | null
-          style_policy_hash: string | null
-          style_policy_snapshot: Json | null
-          style_policy_version: string | null
-          symbol: string
-          trading_style: string | null
-          user_id: string
-          winner_candidate_id: string | null
-        }
-        Insert: {
-          bot_id: string
-          canonical_detector_version?: string | null
-          canonical_parity?: boolean | null
-          confirmation_attempt?: number | null
-          contract_version?: string | null
-          created_at?: string
-          direction: string
-          event_linked?: boolean
-          evidence_hash: string
-          evidence_id: string
-          evidence_source?: string | null
-          final_reason?: string | null
-          golden_replay_linked?: boolean
-          has_disagreement?: boolean
-          id?: string
-          observed_at: string
-          parent_evidence_id?: string | null
-          pending_order_id?: string | null
-          rejection_code_counts?: Json
-          scan_cycle_id: string
-          selected_timeframe?: string | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_snapshot?: Json | null
-          style_policy_version?: string | null
-          symbol: string
-          trading_style?: string | null
-          user_id: string
-          winner_candidate_id?: string | null
-        }
-        Update: {
-          bot_id?: string
-          canonical_detector_version?: string | null
-          canonical_parity?: boolean | null
-          confirmation_attempt?: number | null
-          contract_version?: string | null
-          created_at?: string
-          direction?: string
-          event_linked?: boolean
-          evidence_hash?: string
-          evidence_id?: string
-          evidence_source?: string | null
-          final_reason?: string | null
-          golden_replay_linked?: boolean
-          has_disagreement?: boolean
-          id?: string
-          observed_at?: string
-          parent_evidence_id?: string | null
-          pending_order_id?: string | null
-          rejection_code_counts?: Json
-          scan_cycle_id?: string
-          selected_timeframe?: string | null
-          style_base_policy_hash?: string | null
-          style_policy_hash?: string | null
-          style_policy_snapshot?: Json | null
-          style_policy_version?: string | null
-          symbol?: string
-          trading_style?: string | null
-          user_id?: string
-          winner_candidate_id?: string | null
-        }
-        Relationships: []
-      }
     }
     Views: {
-      cross_timeframe_authority_runtime_status: {
-        Row: {
-          activation_updated_at: string | null
-          allow_standalone_lower_timeframe: boolean | null
-          authority_stage: string | null
-          available: boolean | null
-          bot_id: string | null
-          certified_maximum: string | null
-          effective_mode: string | null
-          evidence_hash: string | null
-          maximum_candidates_per_timeframe: number | null
-          maximum_zone_separation_atr: number | null
-          minimum_parent_child_overlap_percent: number | null
-          requested_mode: string | null
-          require_nested_impulse: boolean | null
-          require_sweep_origin: boolean | null
-          retest_quality: string | null
-          revision: number | null
-          runtime_enforced: boolean | null
-          runtime_scope: string | null
-          runtime_target: string | null
-          user_id: string | null
-        }
-        Relationships: []
-      }
-      cross_timeframe_entry_authority_audit: {
-        Row: {
-          bot_id: string | null
-          candidate_id: string | null
-          cross_tf_effective_mode: string | null
-          cross_tf_entry_allowed: boolean | null
-          cross_tf_entry_authority: Json | null
-          direction: string | null
-          lifecycle_stage: string | null
-          observed_at: string | null
-          row_id: string | null
-          symbol: string | null
-          user_id: string | null
-        }
-        Relationships: []
-      }
-      ict_entry_zone_authority_validation_summary: {
-        Row: {
-          activation_eligible: boolean | null
-          authority_avg_mae_pips: number | null
-          authority_avg_mfe_pips: number | null
-          authority_losers: number | null
-          authority_winners: number | null
-          bot_id: string | null
-          comparable_scans: number | null
-          disagreement_scans: number | null
-          enforcement: string | null
-          evidence_source: string | null
-          false_positives: number | null
-          geometry_unavailable_scans: number | null
-          losers_avoided: number | null
-          minimum_sample_ready: boolean | null
-          missed_opportunities: number | null
-          observed_scans: number | null
-          replay_runs: number | null
-          resolved_authority_setups: number | null
-          setup_family: string | null
-          symbol: string | null
-          trading_style: string | null
-          user_id: string | null
-          winners_retained: number | null
-        }
-        Relationships: []
-      }
-      impulse_entry_lifecycle_replay_summary: {
-        Row: {
-          added_losses: number | null
-          avg_mae: number | null
-          avg_mfe: number | null
-          bot_id: string | null
-          deeper_entries: number | null
-          entries: number | null
-          evidence_source: string | null
-          exhausted: number | null
-          expired: number | null
-          inconclusive: number | null
-          invalidated: number | null
-          losers: number | null
-          minimum_sample_ready: boolean | null
-          never_touched: number | null
-          no_entries: number | null
-          replay_count: number | null
-          rescued_winners: number | null
-          resolved_outcomes: number | null
-          touched_trigger_not_locked: number | null
-          trigger_locked_not_confirmed: number | null
-          user_id: string | null
-          winners: number | null
-          winners_retained: number | null
-        }
-        Relationships: []
-      }
-      zone_candidate_shadow_validation_summary: {
-        Row: {
-          activation_eligible: boolean | null
-          bot_id: string | null
-          cross_tf_avg_mae_pips: number | null
-          cross_tf_avg_mfe_pips: number | null
-          cross_tf_disagreement_scans: number | null
-          cross_tf_enforcement: string | null
-          cross_tf_expectancy_delta_r: number | null
-          cross_tf_expectancy_r: number | null
-          cross_tf_minimum_sample_ready: boolean | null
-          cross_tf_resolved_legacy_trades: number | null
-          disagreement_scans: number | null
-          enforcement: string | null
-          evidence_source: string | null
-          false_positives: number | null
-          legacy_disagreement_samples: number | null
-          legacy_disagreement_win_rate: number | null
-          legacy_expectancy_r: number | null
-          losers_avoided: number | null
-          minimum_sample_ready: boolean | null
-          missed_opportunities: number | null
-          observed_scans: number | null
-          replay_runs: number | null
-          resolved_candidates: number | null
-          shadow_disagreement_samples: number | null
-          shadow_disagreement_win_rate: number | null
-          shadow_winner_avg_mae_pips: number | null
-          shadow_winner_avg_mfe_pips: number | null
-          symbol: string | null
-          trading_style: string | null
-          user_id: string | null
-          winners_retained: number | null
-        }
-        Relationships: []
-      }
+      [_ in never]: never
     }
     Functions: {
-      activate_direction_verdict: {
-        Args: {
-          p_agreement: number
-          p_block_reason: string
-          p_bot_id: string
-          p_confidence: number
-          p_evaluated_at: string
-          p_expires_at: string
-          p_game_plan_id: string
-          p_game_plan_version: string
-          p_scan_cycle_id: string
-          p_score_adjustment: number
-          p_should_block: boolean
-          p_source_candle_timestamp: string
-          p_symbol: string
-          p_user_id: string
-          p_verdict: string
-          p_verdict_json: Json
-          p_verdict_version: string
-        }
-        Returns: Json
-      }
-      activate_game_plan_version: {
-        Args: {
-          p_bot_id: string
-          p_config_snapshot: Json
-          p_market_data_snapshot: Json
-          p_plan_version: string
-          p_session_plan: Json
-          p_source: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      advance_impulse_entry_lifecycle: {
-        Args: {
-          p_event_payload: Json
-          p_event_type: string
-          p_expected_revision: number
-          p_lifecycle_id: string
-          p_next_lifecycle: Json
-          p_reason: string
-        }
-        Returns: {
-          active_candidate_id: string | null
-          bot_id: string
-          created_at: string
-          direction: string
-          id: string
-          impulse_id: string
-          impulse_timeframe: string
-          lifecycle: Json
-          mode: string
-          revision: number
-          setup_id: string
-          status: string
-          symbol: string
-          updated_at: string
-          user_id: string
-        }
-        SetofOptions: {
-          from: "*"
-          to: "impulse_entry_lifecycles"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
-      allocate_zone_confirmation_evidence_attempt: {
-        Args: {
-          p_bot_id: string
-          p_pending_order_id: string
-          p_user_id: string
-        }
-        Returns: number
-      }
-      broker_close_has_terminal_proof: {
-        Args: {
-          p_request_payload: Json
-          p_response_payload: Json
-          p_status: string
-        }
-        Returns: boolean
-      }
-      broker_close_resolves_open: {
-        Args: {
-          p_close_request_payload: Json
-          p_close_response_payload: Json
-          p_close_started_at: string
-          p_close_status: string
-          p_open_completed_at: string
-          p_open_position_id: string
-        }
-        Returns: boolean
-      }
-      broker_connection_effective_account_identity: {
-        Args: { p_account_id: string; p_api_key: string; p_broker_type: string }
-        Returns: string
-      }
-      broker_connection_has_unresolved_managed_exposure: {
-        Args: { p_connection_id: string; p_user_id: string }
-        Returns: boolean
-      }
-      broker_connection_mutation_preflight: {
-        Args: { p_connection_id: string; p_user_id: string }
-        Returns: Json
-      }
-      broker_open_exact_position_id: {
-        Args: { p_broker_type: string; p_response_payload: Json }
-        Returns: string
-      }
-      claim_broker_execution: {
-        Args: {
-          p_action: string
-          p_bot_id: string
-          p_broker_connection_id: string
-          p_position_id: string
-          p_request_payload: Json
-          p_route: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      claim_scanner_runtime_lock: {
-        Args: {
-          p_bot_id: string
-          p_lease_seconds?: number
-          p_lease_token: string
-          p_lock_scope: string
-          p_run_id: string
-          p_user_id: string
-        }
-        Returns: boolean
-      }
-      claim_telegram_notification: {
-        Args: { p_claim_key: string; p_expires_at: string }
-        Returns: boolean
-      }
-      complete_broker_execution: {
-        Args: {
-          p_broker_order_id: string
-          p_claim_token: string
-          p_last_error: string
-          p_ledger_id: string
-          p_response_payload: Json
-          p_status: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      evaluate_scanner_operational_health: { Args: never; Returns: Json }
-      finalize_live_broker_position: {
-        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
-        Returns: Json
-      }
-      finalize_market_entry: {
-        Args: {
-          p_allow_same_direction: boolean
-          p_authorization: Json
-          p_bot_id: string
-          p_close_on_reverse: boolean
-          p_max_open_positions: number
-          p_max_per_symbol: number
-          p_position: Json
-          p_source_candidate_key: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      finalize_paper_position_close: {
-        Args: {
-          p_bot_id: string
-          p_close_reason: string
-          p_closed_at: string
-          p_exit_price: number
-          p_pnl: number
-          p_pnl_pips: number
-          p_position_row_id: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      finalize_pending_order_fill: {
-        Args: {
-          p_allow_same_direction: boolean
-          p_authorization: Json
-          p_bot_id: string
-          p_current_price: number
-          p_fill_price: number
-          p_fill_reason: string
-          p_max_open_positions: number
-          p_max_per_symbol: number
-          p_pending_id: string
-          p_position_order_id: string
-          p_signal_reason: Json
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      heartbeat_scanner_runtime_lock: {
-        Args: {
-          p_bot_id: string
-          p_lease_seconds?: number
-          p_lease_token: string
-          p_lock_scope: string
-          p_user_id: string
-        }
-        Returns: boolean
-      }
-      list_unresolved_broker_open_orphans: {
-        Args: { p_bot_id: string; p_limit?: number; p_user_id: string }
-        Returns: {
-          bot_id: string
-          broker_connection_id: string
-          broker_order_id: string
-          broker_position_id: string
-          open_ledger_id: string
-          position_id: string
-          request_payload: Json
-          response_payload: Json
-          status: string
-          updated_at: string
-          user_id: string
-        }[]
-      }
-      load_paper_position_close_context: {
-        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
-        Returns: Json
-      }
-      paper_account_has_unresolved_managed_exposure: {
-        Args: { p_bot_id: string; p_user_id: string }
-        Returns: boolean
-      }
-      paper_position_broker_close_requirements: {
-        Args: { p_bot_id: string; p_position_id: string; p_user_id: string }
-        Returns: {
-          broker_position_ids: Json
-          missing_close_connection_ids: string[]
-          position_found: boolean
-          required_connection_ids: string[]
-          unknown_identity_connection_ids: string[]
-        }[]
-      }
-      publish_strategy_evidence_certificate: {
-        Args: {
-          p_activation_scope: Json
-          p_bot_id: string
-          p_certificate: Json
-          p_feature_key: string
-          p_user_id: string
-          p_variant_key: string
-        }
-        Returns: Json
-      }
-      release_scanner_runtime_lock: {
-        Args: {
-          p_bot_id: string
-          p_lease_token: string
-          p_lock_scope: string
-          p_user_id: string
-        }
-        Returns: boolean
-      }
-      reserve_api_credit:
-        | {
-            Args: {
-              p_limit: number
-              p_provider: string
-              p_window_seconds?: number
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              p_caller?: string
-              p_limit: number
-              p_provider: string
-              p_window_seconds?: number
-            }
-            Returns: boolean
-          }
-      resolve_scanner_operational_alert: {
-        Args: {
-          p_alert_type: string
-          p_bot_id: string
-          p_dedupe_key?: string
-          p_user_id: string
-        }
-        Returns: number
-      }
-      retarget_pending_to_impulse_candidate: {
-        Args: { p_bot_id: string; p_pending_id: string; p_user_id: string }
-        Returns: Json
-      }
-      review_impulse_lifecycle_certificate: {
-        Args: { p_evidence_hash: string }
-        Returns: Json
-      }
-      set_strategy_runtime_enforcement: {
-        Args: {
-          p_activation_scope: Json
-          p_actor_id?: string
-          p_bot_id: string
-          p_enabled: boolean
-          p_expected_revision?: number
-          p_feature_key: string
-          p_reason: string
-          p_user_id: string
-          p_variant_key: string
-        }
-        Returns: Json
-      }
-      strategy_activation_json_hash: {
-        Args: { p_value: Json }
-        Returns: string
-      }
-      transition_staged_setup: {
-        Args: {
-          p_evidence?: Json
-          p_pending_order_id?: string
-          p_position_id?: string
-          p_reason: string
-          p_setup_id: string
-          p_to_status: string
-          p_user_id: string
-        }
-        Returns: Json
-      }
-      transition_strategy_activation: {
-        Args: {
-          p_activation_scope: Json
-          p_actor_id?: string
-          p_bot_id: string
-          p_evidence_snapshot: Json
-          p_evidence_window_end?: string
-          p_evidence_window_start?: string
-          p_expected_revision?: number
-          p_feature_key: string
-          p_reason: string
-          p_to_authority_stage: string
-          p_to_runtime_scope: string
-          p_user_id: string
-          p_variant_key: string
-        }
-        Returns: Json
-      }
-      upsert_scanner_operational_alert: {
-        Args: {
-          p_alert_type: string
-          p_bot_id: string
-          p_dedupe_key: string
-          p_evidence?: Json
-          p_message: string
-          p_run_id?: string
-          p_severity: string
-          p_title: string
-          p_user_id: string
-        }
-        Returns: string
-      }
+      [_ in never]: never
     }
     Enums: {
       [_ in never]: never

@@ -46,7 +46,7 @@ interface PendingOrderNarrativeInput {
   entry_price: number;
   current_price: number | null;
   entry_zone_type: string;
-  order_type: "limit" | "limit_ob" | "limit_fvg";
+  order_type: "limit_ob" | "limit_fvg";
   expires_at: string;
   signal_score: number;
   setup_type: string | null;
@@ -214,7 +214,7 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
 
 /**
  * Zone setup narrative — describes what the bot is watching for.
- * Example: "Watching for price to reach OB zone at 157.82. The saved confirmation rule starts after touch."
+ * Example: "Watching for price to reach OB zone at 157.82 → will hunt 5m CHoCH. Expires in 45 min."
  */
 export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput): string {
   const { direction, entry_price, entry_zone_type, order_type, expires_at, from_watchlist, signal_score } = input;
@@ -229,7 +229,7 @@ export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput)
     narrative = `Watching for price to reach ${entry_zone_type} zone`;
   }
   narrative += ` at ${Number(entry_price).toFixed(entry_price > 100 ? 2 : 5)}`;
-  narrative += `. After touch, the saved ${confirmType} confirmation rule starts`;
+  narrative += ` → will hunt ${confirmType} CHoCH on 5m`;
 
   if (mins > 0) {
     const timeStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;

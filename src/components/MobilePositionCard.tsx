@@ -1,24 +1,15 @@
-import { useState } from "react";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { OverrideBadge, TradeOverrideEditor } from "@/components/TradeOverrideEditor";
-import { SLTPEditor } from "@/components/ExpandedPositionCard";
-import { SignalReasoningCard } from "@/components/SignalReasoningCard";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { ChevronRight, Info } from "lucide-react";
+import { OverrideBadge } from "@/components/TradeOverrideEditor";
+import { ChevronRight } from "lucide-react";
 
 interface MobilePositionCardProps {
   position: any;
-  mutationsEnabled: boolean;
-  closeEnabled: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   onClose: (id: string) => void;
-  onSaved: () => void;
 }
 
-export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled, isExpanded, onToggle, onClose, onSaved }: MobilePositionCardProps) {
-  const [detailSheet, setDetailSheet] = useState(false);
-
+export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose }: MobilePositionCardProps) {
   const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
   const pipSize = inst?.pipSize || 0.0001;
   const entry = parseFloat(p.entryPrice);
@@ -45,23 +36,7 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
   const openMs = new Date(p.openTime).getTime();
   const holdHours = (Date.now() - openMs) / 3600000;
 
-  // Entry confirmation data for detail sheet
-  const conf = sr.confirmation || {};
-  const lo = sr.limitOrderOrigin || {};
-  const iz = sr.impulseZoneEntry || sr.impulseZone?.bestZone || {};
-
-  const confirmTypeLabels: Record<string, string> = {
-    engulfing: "Engulfing", rejection_wick: "Rejection Wick",
-    fvg: "FVG Created", sweep_reclaim: "Sweep + Reclaim",
-    displacement: "Displacement", volume_spike: "Volume Spike",
-  };
-
-  const zoneType = lo.zoneType || iz.zoneType || iz.type || null;
-  const zoneLow = lo.zoneLow || iz.zoneLow || iz.low;
-  const zoneHigh = lo.zoneHigh || iz.zoneHigh || iz.high;
-
   return (
-    <>
     <div className="border-b border-border/40 last:border-0 max-w-full overflow-hidden">
       <button
         onClick={onToggle}
@@ -73,7 +48,7 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
         {/* Main info */}
         <div className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-xs font-mono font-medium truncate" title={p.symbol}>{p.symbol}</span>
+            <span className="text-xs font-mono font-medium truncate">{p.symbol}</span>
             <span className={`text-[9px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
               {p.direction === "long" ? "LONG" : "SHORT"}
             </span>
@@ -81,19 +56,9 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
               <span title="Mirrored to broker" className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
             )}
             {p.mirrorStatus === "orphan" && (
-              <span title="No broker position linked — internal management runs, but updates cannot be sent to MT4/MT5" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
+              <span title="Live mode but NOT mirrored to MT4/MT5 (broker was down at open) — management will not fan out" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
             )}
             <OverrideBadge position={p} />
-            {sr.signalSource && (
-              <span className={`text-[8px] font-mono font-bold px-1 py-0 rounded shrink-0 ${
-                sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
-                sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
-                sr.signalSource === "breaker" ? "bg-amber-500/15 text-amber-400 border border-amber-500/30" :
-                "bg-orange-500/15 text-orange-400 border border-orange-500/30"
-              }`}>
-                {sr.signalSource === "unified" ? "UNI" : sr.signalSource === "cascade" ? "CAS" : sr.signalSource === "breaker" ? "BRK½" : "STD½"}
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5 min-w-0 overflow-hidden">
             {/* Management badges — compact, no emojis */}
@@ -108,10 +73,7 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
               </span>
             )}
             {holdEnabled && (
-              <span
-                className="text-[8px] text-muted-foreground font-mono truncate"
-                title={`${holdHours.toFixed(1)}h/${ef.maxHoldHours}h`}
-              >
+              <span className="text-[8px] text-muted-foreground font-mono truncate">
                 {holdHours.toFixed(1)}h/{ef.maxHoldHours}h
               </span>
             )}
@@ -134,12 +96,6 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 pt-0 space-y-2">
-          {/* Signal source context note */}
-          {sr.signalSource === "standalone" && (
-            <div className="text-[9px] text-orange-400/80 bg-orange-500/10 border border-orange-500/20 rounded px-2 py-1">
-              Entry via standalone impulse zone — unified confirmation not met. Size halved (×0.5).
-            </div>
-          )}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] font-mono pl-4 border-l-2 border-border">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Entry</span>
@@ -165,264 +121,17 @@ export function MobilePositionCard({ position: p, mutationsEnabled, closeEnabled
               <span className="text-muted-foreground">Size</span>
               <span>{parseFloat(p.size || 0).toFixed(2)}</span>
             </div>
-            {p.signalScore != null && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Score</span>
-                <span className="text-primary font-bold">{Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}</span>
-              </div>
-            )}
-            {trailFired && sl !== null && origSl !== null && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Locked R</span>
-                <span className="text-cyan-400 font-bold">
-                  {(() => {
-                    const risk = p.direction === "long" ? entry - origSl : origSl - entry;
-                    if (risk <= 0) return "—";
-                    const locked = p.direction === "long" ? sl - entry : entry - sl;
-                    return `${(locked / risk).toFixed(2)}R`;
-                  })()}
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Hold</span>
-              <span>{holdHours.toFixed(1)}h</span>
-            </div>
           </div>
           <div className="pl-4 flex gap-2">
             <button
-              onClick={(e) => { e.stopPropagation(); if (closeEnabled) onClose(p.id); }}
-              disabled={!closeEnabled}
-              className="text-[10px] font-medium text-destructive border border-destructive/30 px-2 py-1 hover:bg-destructive/10 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={(e) => { e.stopPropagation(); onClose(p.id); }}
+              className="text-[10px] font-medium text-destructive border border-destructive/30 px-2 py-1 hover:bg-destructive/10 transition-colors"
             >
               Close Position
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setDetailSheet(true); }}
-              className="text-[10px] font-medium text-primary border border-primary/30 px-2 py-1 hover:bg-primary/10 transition-colors flex items-center gap-1"
-            >
-              <Info className="h-3 w-3" />
-              Manage Trade
             </button>
           </div>
         </div>
       )}
     </div>
-
-    {/* Full Detail Bottom Sheet */}
-    <Sheet open={detailSheet} onOpenChange={setDetailSheet}>
-      <SheetContent side="bottom" className="h-[92dvh] max-h-[92dvh] overflow-y-auto overscroll-contain rounded-t-lg pb-[calc(1rem+env(safe-area-inset-bottom))]">
-        <SheetHeader className="pb-2 pr-8">
-          <SheetTitle className="text-sm flex flex-wrap items-center gap-2">
-            <span className={`w-2 h-5 rounded-full ${p.direction === "long" ? "bg-success" : "bg-destructive"}`} />
-            <span className="font-mono">{p.symbol}</span>
-            <span className={`text-[10px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
-              {p.direction === "long" ? "LONG" : "SHORT"}
-            </span>
-            {p.signalScore != null && (
-              <span className="text-xs font-mono text-muted-foreground">
-                {Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}
-              </span>
-            )}
-          </SheetTitle>
-          {/* Signal source badge — always visible below title */}
-          <div className="flex items-center gap-2 mt-1">
-            {sr.signalSource ? (
-              <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
-                sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
-                sr.signalSource === "breaker" ? "bg-amber-500/15 text-amber-400 border border-amber-500/30" :
-                "bg-orange-500/15 text-orange-400 border border-orange-500/30"
-              }`}>
-                {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : sr.signalSource === "breaker" ? "BREAKER ×0.5" : "STANDALONE ×0.5"}
-              </span>
-            ) : (
-              <span className="text-[9px] font-mono text-muted-foreground px-1.5 py-0.5 rounded border border-border">
-                {sr.entryMethod === "market_fill_at_zone" ? "MARKET FILL" : sr.filledFromLimitOrder ? "LIMIT FILL" : "DIRECT ENTRY"}
-              </span>
-            )}
-            {sr.promotedFromWatchlist && (
-              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                WATCHLIST
-              </span>
-            )}
-          </div>
-        </SheetHeader>
-
-        <fieldset disabled={!mutationsEnabled} className="min-w-0 border-0 p-0 disabled:opacity-60">
-        <div className="space-y-4 pb-6">
-          {/* Entry Confirmation Story */}
-          {(sr.confirmationEntry || sr.entryMethod === "market_fill_at_zone" || sr.filledFromLimitOrder) && (
-            <div className="rounded-lg border border-border/40 bg-secondary/30 px-3 py-2 space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-muted-foreground">Entry Confirmation</span>
-                {sr.confirmationEntry && conf.tier && (
-                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${
-                    conf.tier === 1 ? "bg-success/15 border-success/40 text-success" :
-                    conf.tier === 2 ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-400" :
-                    "bg-purple-500/15 border-purple-500/40 text-purple-400"
-                  }`}>
-                    T{conf.tier}
-                  </span>
-                )}
-                {sr.entryMethod === "market_fill_at_zone" && !sr.confirmationEntry && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 border border-amber-500/40 text-amber-400">
-                    Market Fill at Zone
-                  </span>
-                )}
-                {sr.filledFromLimitOrder && !sr.confirmationEntry && sr.entryMethod !== "market_fill_at_zone" && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 border border-blue-500/40 text-blue-400">
-                    Limit Order Fill
-                  </span>
-                )}
-              </div>
-
-              {/* Confirmation signal details */}
-              {sr.confirmationEntry && conf.type && (
-                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] font-mono">
-                  <span className="text-muted-foreground">Signal: <span className="text-foreground font-semibold">{confirmTypeLabels[conf.type] || conf.type || "\u2014"}</span></span>
-                  {conf.displacement != null && (
-                    <span className="text-muted-foreground">Disp: <span className={`font-semibold ${conf.displacement >= 1.5 ? "text-success" : conf.displacement >= 1.0 ? "text-foreground" : "text-warn"}`}>{conf.displacement.toFixed(2)}\u00d7</span></span>
-                  )}
-                  {conf.significance && (
-                    <span className="text-muted-foreground">Strength: <span className={`font-semibold ${conf.significance === "high" ? "text-success" : conf.significance === "medium" ? "text-foreground" : "text-muted-foreground"}`}>{conf.significance}</span></span>
-                  )}
-                </div>
-              )}
-
-              {/* Supporting signals */}
-              {sr.confirmationEntry && Array.isArray(conf.supportingSignals) && conf.supportingSignals.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {conf.supportingSignals.map((sig: string, i: number) => (
-                    <span key={i} className="rounded-full bg-secondary/60 border border-border px-2 py-0.5 text-[9px] text-foreground/70">
-                      {sig.replace(/_/g, " ")}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Zone info */}
-              {(zoneType || zoneLow != null) && (
-                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] font-mono">
-                  {zoneType && (
-                    <span className="text-muted-foreground">Zone: <span className="text-foreground font-semibold">{zoneType}</span></span>
-                  )}
-                  {zoneLow != null && zoneHigh != null && (
-                    <span className="text-muted-foreground">[{Number(zoneLow).toFixed(5)} \u2013 {Number(zoneHigh).toFixed(5)}]</span>
-                  )}
-                </div>
-              )}
-
-              {/* Watchlist origin */}
-              {sr.promotedFromWatchlist && sr.watchlistOrigin && (
-                <div className="flex items-center gap-2 text-[10px] text-cyan-400/80">
-                  <span>Watched {sr.watchlistOrigin.cyclesWatched} cycles</span>
-                  {sr.watchlistOrigin.initialScore != null && (
-                    <span>{"\u00b7"} Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Signal Reasoning Card — full factor breakdown, tier scores, zone qualifiers, exit strategy */}
-          {p.signalReason && (
-            <div>
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold mb-1.5">Signal Breakdown</p>
-              <SignalReasoningCard signalReason={p.signalReason} />
-            </div>
-          )}
-
-          {/* Trade Metrics Summary */}
-          <div>
-            <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold mb-1.5">Trade Metrics</p>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] font-mono border border-border/40 rounded-lg px-3 py-2">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Entry</span>
-                <span>{entry.toFixed(5)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Current</span>
-                <span>{current.toFixed(5)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Stop Loss</span>
-                <span className="text-destructive">{sl !== null ? sl.toFixed(5) : "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Take Profit</span>
-                <span className="text-success">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">P&L (pips)</span>
-                <span className={profitPips >= 0 ? "text-success" : "text-destructive"}>{profitPips >= 0 ? "+" : ""}{profitPips.toFixed(1)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">R Multiple</span>
-                <span className={rMult >= 0 ? "text-success" : "text-destructive"}>{rMult >= 0 ? "+" : ""}{rMult.toFixed(2)}R</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Size</span>
-                <span>{parseFloat(p.size || 0).toFixed(2)} lots</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Hold Time</span>
-                <span>{holdHours.toFixed(1)}h</span>
-              </div>
-              {origSl !== null && origSl !== sl && (
-                <div className="flex justify-between col-span-2">
-                  <span className="text-muted-foreground">Original SL</span>
-                  <span className="text-muted-foreground/70">{origSl.toFixed(5)}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Management Status */}
-          {(beEnabled || trailEnabled || holdEnabled) && (
-            <div>
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold mb-1.5">Trade Management</p>
-              <div className="space-y-1 text-[11px]">
-                {beEnabled && (
-                  <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full ${beFired ? "bg-success" : "bg-muted-foreground"}`} />
-                    <span className="text-muted-foreground">Break Even</span>
-                    <span className={beFired ? "text-success font-medium" : "text-muted-foreground"}>
-                      {beFired ? "Activated" : `Pending (${ef.breakEvenPips || "—"} pips)`}
-                    </span>
-                  </div>
-                )}
-                {trailEnabled && (
-                  <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full ${trailFired ? "bg-cyan-400" : "bg-muted-foreground"}`} />
-                    <span className="text-muted-foreground">Trailing Stop</span>
-                    <span className={trailFired ? "text-cyan-400 font-medium" : "text-muted-foreground"}>
-                      {trailFired ? "Active" : `Pending (${ef.trailingStopPips || "—"} pips)`}
-                    </span>
-                  </div>
-                )}
-                {holdEnabled && (
-                  <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full ${holdHours >= ef.maxHoldHours ? "bg-warning" : "bg-muted-foreground"}`} />
-                    <span className="text-muted-foreground">Max Hold</span>
-                    <span className={holdHours >= ef.maxHoldHours ? "text-warning font-medium" : "text-muted-foreground"}>
-                      {holdHours.toFixed(1)}h / {ef.maxHoldHours}h
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-3 border-t border-border pt-3">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Adjust Protection</p>
-            <SLTPEditor position={p} onSaved={onSaved} />
-            <TradeOverrideEditor position={p} onSaved={onSaved} />
-          </div>
-        </div>
-        </fieldset>
-      </SheetContent>
-    </Sheet>
-    </>
   );
 }

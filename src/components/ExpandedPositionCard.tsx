@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,8 +7,7 @@ import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatPrice } from "@/lib/formatTime";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
-import type { TieredScoringMeta } from "./TierFactorBreakdown";
-import { LegacyDiagnosticsPanel } from "./LegacyDiagnosticsPanel";
+import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
 import { TradeOverrideEditor } from "./TradeOverrideEditor";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -48,21 +47,19 @@ function ManagementCard({
   lines,
   borderColor,
   badgeColor,
-  pendingLabel = "Pending",
 }: {
   title: string;
   active: boolean;
   lines: string[];
   borderColor: string;
   badgeColor: string;
-  pendingLabel?: string;
 }) {
   return (
     <div className={`flex-1 min-w-0 rounded-lg border-l-[3px] ${borderColor} bg-secondary/40 px-2.5 py-2`}>
       <div className="flex items-center justify-between mb-1">
         <span className="text-[11px] font-bold text-foreground/80 uppercase tracking-wider">{title}</span>
         <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${badgeColor}`}>
-          {active ? "ACTIVE" : pendingLabel}
+          {active ? "ACTIVE" : "Pending"}
         </span>
       </div>
       {lines.map((line, i) => (
@@ -76,7 +73,7 @@ function ManagementCard({
 
 // ─── Inline SL/TP Editor (ROW 6) ───────────────────────────────────
 
-export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void }) {
+function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void }) {
   const [sl, setSl] = useState(position.stopLoss ? String(parseFloat(position.stopLoss)) : "");
   const [tp, setTp] = useState(position.takeProfit ? String(parseFloat(position.takeProfit)) : "");
   const [saving, setSaving] = useState(false);
@@ -84,11 +81,6 @@ export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () =
   const initialSl = position.stopLoss ? String(parseFloat(position.stopLoss)) : "";
   const initialTp = position.takeProfit ? String(parseFloat(position.takeProfit)) : "";
   const dirty = sl !== initialSl || tp !== initialTp;
-
-  useEffect(() => {
-    setSl(initialSl);
-    setTp(initialTp);
-  }, [initialSl, initialTp]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -107,8 +99,8 @@ export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () =
   };
 
   return (
-    <div className="grid grid-cols-2 md:flex md:items-end gap-2 md:gap-3 pt-2 border-t border-border/30">
-      <div className="space-y-1 min-w-0 md:flex-1">
+    <div className="flex items-end gap-3 pt-2 border-t border-border/30">
+      <div className="space-y-1 flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Current SL</Label>
         <Input
           type="number" step="0.00001" value={sl}
@@ -116,7 +108,7 @@ export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () =
           className="h-9 text-xs font-mono px-2"
         />
       </div>
-      <div className="space-y-1 min-w-0 md:flex-1">
+      <div className="space-y-1 flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Take Profit</Label>
         <Input
           type="number" step="0.00001" value={tp}
@@ -126,14 +118,14 @@ export function SLTPEditor({ position, onSaved }: { position: any; onSaved: () =
       </div>
       <Button
         size="sm"
-        className="h-10 md:h-9 px-4 md:px-6 text-xs bg-cyan-600 hover:bg-cyan-700 text-white"
+        className="h-9 px-6 text-xs bg-cyan-600 hover:bg-cyan-700 text-white"
         disabled={!dirty || saving}
         onClick={handleSave}
       >
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
       </Button>
       {dirty && !saving && (
-        <Button size="sm" variant="ghost" className="h-10 md:h-9 text-xs"
+        <Button size="sm" variant="ghost" className="h-9 text-xs"
           onClick={() => { setSl(initialSl); setTp(initialTp); }}>
           Reset
         </Button>
@@ -149,7 +141,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   let sr: any = {};
   try { sr = JSON.parse(p.signalReason || "{}"); } catch { /* ignore */ }
 
-  const ef = { ...(sr.exitFlags || {}), ...(p.effectiveConfig || {}) };
+  const ef = sr.exitFlags || {};
   const exitAttribution: any[] = sr.exitAttribution || [];
   const invalidHistory = sr.invalidationHistory || [];
 
@@ -202,13 +194,9 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
   const beR = ef.breakEvenPips != null && riskDist && riskDist > 0
-    ? (ef.breakEvenPips * pipSize) / riskDist
+    ? Math.min(2.0, Math.max(1.0, (ef.breakEvenPips * pipSize) / riskDist))
     : null;
   const bePrice = beR != null && riskSl != null ? priceAtR(direction, entry, riskSl, beR) : null;
-  const beOffsetPips = ef.breakEvenOffsetPips ?? 0;
-  const beStopPrice = direction === "long"
-    ? entry + beOffsetPips * pipSize
-    : entry - beOffsetPips * pipSize;
 
   // Partial TP level
   const partialR = ef.partialTPLevel ?? null;
@@ -237,10 +225,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     ? trailActivationR * riskPips : null;
   const trailActivationDollar = trailActivationPips != null && dollarPerPip != null
     ? trailActivationPips * dollarPerPip : null;
-  const configuredTrailPips = ef.trailingStopPips ?? null;
-  const trailDistPips = configuredTrailPips != null && riskPips != null
-    ? Math.max(configuredTrailPips, riskPips * 0.5)
-    : configuredTrailPips;
+  const trailDistPips = ef.trailingStopPips ?? null;
 
   // Break-even: trigger pips & dollar
   const beTriggerPips = ef.breakEvenPips ?? null;
@@ -317,24 +302,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
   // Exit strategy config rows
   const exitConfig: { label: string; value: string }[] = [];
-  // TP Method — show the targeting strategy used for this trade
-  if (sr.tpMethod) {
-    const tpMethodLabels: Record<string, string> = {
-      rr_ratio: `R:R (${ef.tpRatio || sr.exitFlags?.tpRatio || "2.0"}:1)`,
-      next_level: "Next Structure Level",
-      fixed_pips: "Fixed Pips",
-      atr_multiple: "ATR Multiple",
-      fib_extension_3pt: "Fib Extension (3-Point)",
-    };
-    exitConfig.push({ label: "TP Target", value: tpMethodLabels[sr.tpMethod] || sr.tpMethod });
-  }
   if (ef.trailingStopPips != null) {
     exitConfig.push({ label: "Trailing", value: `${ef.trailingStopPips} pips${ef.trailingStopActivation ? ` (${ef.trailingStopActivation})` : ""}` });
   }
   if (ef.breakEvenPips != null) {
     exitConfig.push({ label: "BE", value: `${ef.breakEvenPips} pips` });
   }
-  if (ef.tpRatio != null && sr.tpMethod !== "rr_ratio") {
+  if (ef.tpRatio != null) {
     exitConfig.push({ label: "TP Ratio", value: `${ef.tpRatio}` });
   }
   if (ef.maxHoldHours != null) {
@@ -386,7 +360,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           {p.mirrorStatus === "orphan" && (
             <span
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-warning/15 border border-warning/40 text-warning"
-              title="No broker position is linked. Internal trade management still runs, but SL/TP and close actions cannot be sent to MT4/MT5."
+              title="Live mode but no broker link — this trade was NOT mirrored to MT4/MT5 at open (broker likely undeployed). SL/TP, reverse-close and management will NOT fan out. Close manually on MT5 if needed."
             >
               <span className="w-1.5 h-1.5 rounded-full bg-warning" /> ORPHAN
             </span>
@@ -395,16 +369,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" title={sr.watchlistOrigin?.promotionReason || "Promoted from watchlist"}>
               \ud83d\udccb WATCHLIST
               {sr.watchlistOrigin?.cyclesWatched && <span className="text-cyan-300/70">({sr.watchlistOrigin.cyclesWatched} cycles)</span>}
-            </span>
-          )}
-          {sr.signalSource && (
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold ${
-              sr.signalSource === "unified" ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" :
-              sr.signalSource === "cascade" ? "bg-purple-500/15 border border-purple-500/40 text-purple-400" :
-              sr.signalSource === "breaker" ? "bg-amber-500/15 border border-amber-500/40 text-amber-400" :
-              "bg-orange-500/15 border border-orange-500/40 text-orange-400"
-            }`} title={sr.signalSource === "unified" ? "Full unified confirmation — full position size" : sr.signalSource === "cascade" ? "Cascade zone confirmation — full position size" : sr.signalSource === "breaker" ? "Breaker block retest entry — half position size" : "Standalone impulse zone entry — position size halved (×0.5)"}>
-              {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : sr.signalSource === "breaker" ? "BREAKER ×0.5" : "STANDALONE ×0.5"}
             </span>
           )}
         </div>
@@ -479,12 +443,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                   Limit Order Fill
                 </span>
               )}
-              {/* Confirmation method badge — only show when non-default */}
-              {sr.confirmationMethod && sr.confirmationMethod !== "choch" && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-violet-500/15 border border-violet-500/40 text-violet-400">
-                  {sr.confirmationMethod === "indicators" ? `Indicator Consensus` : `CHoCH + Indicators`}
-                </span>
-              )}
             </div>
 
             {/* Confirmation signal details */}
@@ -543,7 +501,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               <div className="flex items-center gap-2 text-[10px] text-cyan-400/80">
                 <span>Watched {sr.watchlistOrigin.cyclesWatched} cycles</span>
                 {sr.watchlistOrigin.initialScore != null && (
-                  <span>{"\u00b7"} Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
+                  <span>\u00b7 Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
                 )}
               </div>
             )}
@@ -563,11 +521,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 ? "bg-badge-profit text-profit"
                 : "bg-badge-warn text-highlight"
               }
-              pendingLabel={(ef.partialTPEnabled || ef.partialTP) && !(ef.partialTPActivated || p.partialTpFired)
-                ? "WAITING ON PARTIAL"
-                : (currentR != null && trailActivationR != null && currentR >= trailActivationR)
-                ? "NEXT MANAGE PASS"
-                : "PENDING"}
               lines={ef.trailingStopActivated
                 ? [
                     sl != null ? `SL: ${formatPrice(sl, p.symbol)}` : "Active",
@@ -584,7 +537,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                         ? `Triggers ${ef.trailingStopActivation}`
                         : `${ef.trailingStopPips ?? "?"}p step`),
                     trailDistPips != null
-                      ? `Effective trail: ${trailDistPips.toFixed(1)}p${configuredTrailPips != null && trailDistPips > configuredTrailPips ? ` (minimum ${configuredTrailPips}p; ${(trailDistPips / riskPips!).toFixed(1)}× SL floor)` : " behind price"}`
+                      ? `Trail: ${trailDistPips}p behind price${riskPips ? ` (${(trailDistPips / riskPips).toFixed(1)}× SL)` : ""}`
                       : "",
                   ].filter(Boolean)
               }
@@ -601,13 +554,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 : "bg-badge-warn text-highlight"
               }
               lines={ef.breakEvenActivated
-                ? [`SL moved to protected entry (${formatPrice(beStopPrice, p.symbol)})`]
+                ? [`SL moved to entry (${formatPrice(entry, p.symbol)})`]
                 : [
                     bePrice != null
-                      ? `Trigger: ${fmtPipsDollar(beTriggerPips, beTriggerDollar)} (${beR?.toFixed(2)}R)`
+                      ? `Trigger: ${beR?.toFixed(1)}R (${fmtPipsDollar(beTriggerPips, beTriggerDollar)})`
                       : `${ef.breakEvenPips} pips from entry`,
                     bePrice != null
-                      ? `SL → ${formatPrice(beStopPrice, p.symbol)} at ${formatPrice(bePrice, p.symbol)}`
+                      ? `SL → ${formatPrice(entry, p.symbol)} at ${formatPrice(bePrice, p.symbol)}`
                       : "",
                   ].filter(Boolean)
               }
@@ -654,7 +607,12 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 Direction {summaryDir}
               </span>
             )}
+            <span className="text-[11px] text-foreground/80 font-mono">
+              {factorCount != null ? `${factorCount} factors${factorTotal ? ` (of ${factorTotal})` : ""}` : ""}
+              {summaryScore != null ? ` \u00B7 score ${summaryScore > 10 ? `${summaryScore.toFixed(1)}%` : `${summaryScore}/10`}` : ""}
+            </span>
           </div>
+          {sr.tieredScoring && <div className="mt-1"><TierScoreSummary tieredScoring={sr.tieredScoring} /></div>}
           {setupType && (
             <div className="text-[11px] text-foreground/70 font-mono mt-0.5">
               Setup: {setupType}{setupConfidence != null ? ` ${Math.round(setupConfidence * 100)}% conf` : ""}
@@ -677,17 +635,21 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
         )}
       </div>
 
-      <LegacyDiagnosticsPanel
-        score={summaryScore}
-        factorCount={factorCount}
-        factorTotal={factorTotal}
-        factors={Array.isArray(sr.factorScores) ? sr.factorScores : null}
-        legacyFactorNames={alignedFactors}
-        tieredScoring={sr.tieredScoring ?? null}
-        gates={sr.gates ?? null}
-        ownershipDiagnostics={sr.legacyGateDiagnostics ?? null}
-        compact
-      />
+      {/* ═══ ROW 4: Factor Breakdown (Tier-Grouped or Legacy Pills) ═══ */}
+      {Array.isArray(sr.factorScores) && sr.factorScores.length > 0 ? (
+        <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring ?? null} compact />
+      ) : alignedFactors.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {alignedFactors.map((f, i) => (
+            <span
+              key={i}
+              className="rounded-full bg-secondary/60 border border-border px-2.5 py-0.5 text-[10px] text-foreground/80"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {/* ═══ ROW 5: Exit Attribution Timeline ═══ */}
       {exitAttribution.length > 0 && (

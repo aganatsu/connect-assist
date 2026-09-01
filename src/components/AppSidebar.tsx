@@ -1,4 +1,4 @@
-import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX, Zap, PenLine } from "lucide-react";
+import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -6,27 +6,17 @@ import {
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter, useSidebar,
 } from "@/components/ui/sidebar";
 
-const navGroups = [
-  { label: "Trade", items: [
-    { title: "Dashboard", url: "/", icon: LayoutDashboard },
-    { title: "Bot", url: "/bot", icon: Bot },
-    { title: "Chart", url: "/chart", icon: LineChart },
-    { title: "Game Plan", url: "/game-plan", icon: Crosshair },
-    { title: "Manual Impulse", url: "/manual-impulse", icon: PenLine },
-    { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
-  ] },
-  { label: "Review", items: [
-    { title: "Journal", url: "/journal", icon: BookOpen },
-    { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
-  ] },
-  { label: "Research", items: [
-    { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
-    { title: "Backtest", url: "/backtest", icon: FlaskConical },
-    { title: "Optimizer", url: "/optimizer", icon: Zap },
-  ] },
-  { label: "System", items: [
-    { title: "Settings", url: "/settings", icon: Settings },
-  ] },
+const navItems = [
+  { title: "Dashboard", url: "/", icon: LayoutDashboard },
+  { title: "Chart", url: "/chart", icon: LineChart },
+  { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
+  { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
+  { title: "Game Plan", url: "/game-plan", icon: Crosshair },
+  { title: "Bot", url: "/bot", icon: Bot },
+  { title: "Journal", url: "/journal", icon: BookOpen },
+  { title: "Backtest", url: "/backtest", icon: FlaskConical },
+  { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
@@ -48,25 +38,23 @@ export function AppSidebar() {
         {collapsed && <span className="text-lg font-bold text-primary">S</span>}
       </SidebarHeader>
       <SidebarContent>
-        {navGroups.map((group) => (
-          <SidebarGroup key={group.label}>
-            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton asChild>
-                      <NavLink to={item.url} end={item.url === "/"} className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
-                        <item.icon className="mr-2 h-4 w-4" />
-                        {!collapsed && <span>{item.title}</span>}
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        <SidebarGroup>
+          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {navItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild>
+                    <NavLink to={item.url} end={item.url === "/"} className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
+                      <item.icon className="mr-2 h-4 w-4" />
+                      {!collapsed && <span>{item.title}</span>}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-2">
         <button
