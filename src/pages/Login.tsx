@@ -93,11 +93,14 @@ const Login = () => {
           </form>
 
           <button
+            type="button"
             onClick={handleForgotPassword}
-            className="text-sm text-muted-foreground hover:text-primary w-full text-center"
+            disabled={resetting}
+            className="text-sm text-muted-foreground hover:text-primary w-full text-center disabled:opacity-50"
           >
-            Forgot password?
+            {resetting ? "Sending reset email..." : "Forgot password?"}
           </button>
+
         </CardContent>
         <CardFooter className="justify-center">
           <p className="text-sm text-muted-foreground">
