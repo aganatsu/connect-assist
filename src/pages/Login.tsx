@@ -38,9 +38,22 @@ const Login = () => {
       return;
     }
     if (result.redirected) return;
-    navigate("/");
+
+    // Wait until the session is actually hydrated before navigating, otherwise
+    // the route guard can bounce us straight back to /login.
+    for (let i = 0; i < 20; i++) {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        navigate("/", { replace: true });
+        setLoading(false);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    toast.error("Sign-in did not complete. Please try again.");
     setLoading(false);
   };
+
 
   const handleForgotPassword = async () => {
     if (!email) {
