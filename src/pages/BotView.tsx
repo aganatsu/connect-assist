@@ -1031,7 +1031,35 @@ export default function BotView() {
               </Card>
             )}
 
+            {/* Activity Log — recent scan events */}
+            <Card>
+              <CardContent className="pt-3 pb-2 text-[11px]">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Activity Log</p>
+                  <span className="text-[9px] text-muted-foreground font-mono">
+                    {d.scanCount ?? 0} scans · {d.signalCount ?? 0} signals · {d.totalTrades ?? 0} trades
+                  </span>
+                </div>
+                {logs.length === 0 ? (
+                  <p className="text-muted-foreground text-[10px] py-2">No activity yet — start the bot or run a manual scan.</p>
+                ) : (
+                  <div className="max-h-56 overflow-y-auto divide-y divide-border/20">
+                    {logs.slice(0, 25).map((log: any, i: number) => (
+                      <button
+                        key={log.id ?? i}
+                        onClick={() => { setSelectedScanIdx(i); setSelectedPairIdx(0); }}
+                        className={`w-full text-left px-1 hover:bg-secondary/40 ${safeScanIdx === i ? "bg-primary/10" : ""}`}
+                      >
+                        <ScanLogLine log={log} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
           </div>
+
           )}
         </div>
 
