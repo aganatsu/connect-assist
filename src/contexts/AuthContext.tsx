@@ -24,9 +24,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let mounted = true;
+    let fallback: ReturnType<typeof window.setTimeout> | undefined;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) return;
+      if (fallback !== undefined) window.clearTimeout(fallback);
       setSession(nextSession);
       setLoading(false);
     });
@@ -34,7 +36,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // onAuthStateChange emits INITIAL_SESSION after the async preview storage has
     // initialized. This fallback prevents an indefinite loader if initialization
     // is interrupted without racing a second session snapshot against that event.
-    const fallback = window.setTimeout(async () => {
+    fallback = window.setTimeout(async () => {
       const { data, error } = await supabase.auth.getSession();
       if (!mounted) return;
       if (!error) setSession(data.session);
@@ -43,7 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => {
       mounted = false;
-      window.clearTimeout(fallback);
+      if (fallback !== undefined) window.clearTimeout(fallback);
       subscription.unsubscribe();
     };
   }, []);
