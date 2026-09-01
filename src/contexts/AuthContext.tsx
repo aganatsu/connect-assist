@@ -23,30 +23,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+    // Tracks whether a live auth event (e.g. OAuth sign-in) already delivered a
+    // session, so the slower initial getSession() check can never overwrite it.
+    let sawAuthEvent = false;
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      sawAuthEvent = true;
       setSession(session);
       setLoading(false);
     });
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return;
       if (session) {
-        // Validate session against the server. If JWT is bad (e.g. missing sub),
-        // sign out so the user can re-authenticate instead of being stuck.
+        // Validate session against the server. Only sign out when the server
+        // explicitly rejects the token (401/403) — transient network failures
+        // must not log a valid user out.
         const { error } = await supabase.auth.getUser();
-        if (error) {
+        if (!mounted) return;
+        const status = (error as { status?: number } | null)?.status;
+        if (error && (status === 401 || status === 403)) {
           console.warn("[Auth] Invalid session detected, signing out:", error.message);
           await supabase.auth.signOut();
+          if (!mounted) return;
           setSession(null);
           setLoading(false);
           return;
         }
       }
+      if (sawAuthEvent) {
+        // A newer auth event already set state; don't clobber it with this snapshot.
+        setLoading(false);
+        return;
+      }
       setSession(session);
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
 
   const signOut = async () => {
     await supabase.auth.signOut();

@@ -39,8 +39,23 @@ const Signup = () => {
     if (result.error) {
       toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
       setLoading(false);
+      return;
     }
+    if (result.redirected) return;
+
+    // Popup flow: wait for the session to hydrate before leaving this page.
+    for (let i = 0; i < 20; i++) {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        window.location.href = "/";
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    toast.error("Sign-in did not complete. Please try again.");
+    setLoading(false);
   };
+
 
   if (submitted) {
     return (
