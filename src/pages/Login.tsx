@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable/index";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +12,14 @@ import { TrendingUp } from "lucide-react";
 
 const Login = () => {
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading && user) navigate("/", { replace: true });
+  }, [authLoading, navigate, user]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +36,8 @@ const Login = () => {
   const handleGoogleLogin = async () => {
     setLoading(true);
     const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
+      redirect_uri: `${window.location.origin}/auth/callback`,
+      extraParams: { prompt: "select_account" },
     });
     if (result.error) {
       toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
@@ -41,14 +48,14 @@ const Login = () => {
 
     // Wait until the session is actually hydrated before navigating, otherwise
     // the route guard can bounce us straight back to /login.
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       const { data } = await supabase.auth.getSession();
       if (data.session) {
         navigate("/", { replace: true });
         setLoading(false);
         return;
       }
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 200));
     }
     toast.error("Sign-in did not complete. Please try again.");
     setLoading(false);
