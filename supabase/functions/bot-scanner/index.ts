@@ -6857,6 +6857,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
+      // Credit budget health. `unenforced` non-zero means the shared budget
+      // failed open and we are back to per-isolate limiting; `gaveUp` counts
+      // fetches abandoned at the wait ceiling, which surface downstream as
+      // skipped pairs. Both read 0 in a healthy cycle.
+      creditBudget: {
+        rateLimited429: throttleStats.rateLimited429,
+        unenforced: throttleStats.unenforcedCount,
+        gaveUp: throttleStats.gaveUpCount,
+        rpcFailures: throttleStats.budgetRpcFailures,
+        refused: throttleStats.budgetRefused,
+      },
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
@@ -6867,6 +6878,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     ...scanDetails,
   ];
   console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, polygon=${sourceTally.polygon}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount})`);
+  console.log(`[scan ${scanCycleId}] TwelveData budget: 429s=${throttleStats.rateLimited429}, gaveUp=${throttleStats.gaveUpCount}, refused=${throttleStats.budgetRefused}, unenforced=${throttleStats.unenforcedCount}, rpcFailures=${throttleStats.budgetRpcFailures}`);
 
   // Log the scan
   await supabase.from("scan_logs").insert({
