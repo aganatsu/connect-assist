@@ -4615,21 +4615,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const judasConfig: JudasSwingConfig = {
           ...DEFAULT_JUDAS_SWING_CONFIG,
-          lookback: pairConfig.ictJudasSwingLookback,
-          minDepthATR: pairConfig.ictJudasSwingMinDepthATR,
+          sweepLookback: pairConfig.ictJudasSwingLookback,
+          minSweepDepthATR: pairConfig.ictJudasSwingMinDepthATR,
           requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
         ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
-        const statusTag = ictJudasResult.detected ? "DETECTED" : "NOT_FOUND";
+        const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
         (detail as any).ictJudas = {
           gateMode: pairConfig.ictJudasSwingGateMode,
-          detected: ictJudasResult.detected,
+          detected: ictJudasResult.found,
           reason: ictJudasResult.reason,
-          sweepLevel: ictJudasResult.sweepLevel,
-          sweepDepthATR: ictJudasResult.sweepDepthATR,
+          sweepLevel: ictJudasResult.sweep?.sweptLevel ?? null,
+          sweepDepthATR: ictJudasResult.sweep?.wickDepthATR ?? null,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Judas error (non-fatal): ${e?.message}`);
