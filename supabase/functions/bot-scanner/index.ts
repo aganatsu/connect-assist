@@ -4589,16 +4589,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const mssConfig: DisplacementMSSConfig = {
           ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
           minBodyRatio: pairConfig.ictDisplacementMSSMinBodyRatio,
-          minRangeATR: pairConfig.ictDisplacementMSSMinRangeATR,
-          lookback: pairConfig.ictDisplacementMSSLookback,
+          minRangeATRMult: pairConfig.ictDisplacementMSSMinRangeATR,
+          lookbackCandles: pairConfig.ictDisplacementMSSLookback,
         };
-        ictMSSResult = validateRecentMSS(candles, mssConfig);
+        const mssDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        ictMSSResult = validateRecentMSS(candles, [], mssDirection, mssConfig);
         const modeTag = pairConfig.ictDisplacementMSSGateMode.toUpperCase();
-        const statusTag = ictMSSResult.valid ? "VALID" : "INVALID";
+        const statusTag = ictMSSResult.isValid ? "VALID" : "INVALID";
         console.log(`[scan ${scanCycleId}] ${pair} ICT MSS [${modeTag}]: ${statusTag} — ${ictMSSResult.reason}`);
         (detail as any).ictMSS = {
           gateMode: pairConfig.ictDisplacementMSSGateMode,
-          valid: ictMSSResult.valid,
+          valid: ictMSSResult.isValid,
           reason: ictMSSResult.reason,
           displacementStrength: ictMSSResult.displacementStrength,
         };
