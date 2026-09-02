@@ -2,6 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+// Attribute this isolate's TwelveData credits. Several functions reach the
+// provider through candleSource; without this they are indistinguishable in
+// api_credit_usage and the breakdown cannot say which one to tune.
+setCreditCallerContext("bot-scanner");
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,

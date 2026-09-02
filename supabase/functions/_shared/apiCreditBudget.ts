@@ -17,6 +17,22 @@ const RESERVE_TIMEOUT_MS = 2_000;
 let _rpcFailures = 0;
 let _reservationsRefused = 0;
 
+// Which Edge Function this isolate is. Several functions reach TwelveData
+// through candleSource, so without this every credit is attributed to
+// "candleSource" and the breakdown says nothing about who to tune.
+//
+// p_caller must always be sent, and not only for attribution: the database
+// carries both a 3-arg and a 4-arg reserve_api_credit, and a 3-arg call matches
+// both. PostgREST then refuses to choose (PGRST203, HTTP 300), which this
+// module reads as a reason to fail open — enforcement silently off while
+// appearing configured. Naming all four parameters resolves it unambiguously.
+let _callerContext = "unknown";
+
+/** Call once at module load in each Edge Function that fetches market data. */
+export function setCreditCallerContext(name: string): void {
+  _callerContext = name;
+}
+
 export interface CreditReservation {
   granted: boolean;
   /** True when the budget was consulted; false when we failed open. */
@@ -38,6 +54,7 @@ export async function reserveApiCredit(
   provider: string,
   limit: number,
   windowSeconds = 60,
+  caller = _callerContext,
 ): Promise<CreditReservation> {
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -59,6 +76,7 @@ export async function reserveApiCredit(
         p_provider: provider,
         p_limit: limit,
         p_window_seconds: windowSeconds,
+        p_caller: caller,
       }),
       signal: abort.signal,
     });
