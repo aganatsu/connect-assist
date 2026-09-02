@@ -1307,6 +1307,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedNoSLTP: 0,
       skippedImpulseNoZone: 0,
       skippedImpulseNotAtZone: 0,
+      skippedByPreGate: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
       highestScoreSeen: 0,
@@ -1314,6 +1315,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
       gateBlockReasons: {} as Record<string, number>,
+      confluenceErrors: 0,
+      firstConfluenceError: "" as string | undefined,
     };
 
     // Compute enabledFactorCount
