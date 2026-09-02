@@ -21,11 +21,13 @@ let _reservationsRefused = 0;
 // through candleSource, so without this every credit is attributed to
 // "candleSource" and the breakdown says nothing about who to tune.
 //
-// p_caller must always be sent, and not only for attribution: the database
-// carries both a 3-arg and a 4-arg reserve_api_credit, and a 3-arg call matches
-// both. PostgREST then refuses to choose (PGRST203, HTTP 300), which this
-// module reads as a reason to fail open — enforcement silently off while
-// appearing configured. Naming all four parameters resolves it unambiguously.
+// Sending p_caller is also what keeps the RPC resolvable. The database briefly
+// carried both a 3-arg and a 4-arg reserve_api_credit, and a 3-arg call matched
+// both — PostgREST refused to choose (PGRST203, HTTP 300), which this module
+// reads as a reason to fail open, leaving enforcement silently off while
+// appearing configured. 20260901190000 dropped the 3-arg form, so a call with
+// any subset now resolves against the survivor via p_caller's DEFAULT. Naming
+// all four parameters keeps that true if the overload is ever reintroduced.
 let _callerContext = "unknown";
 
 /** Call once at module load in each Edge Function that fetches market data. */
