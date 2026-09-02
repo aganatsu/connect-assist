@@ -247,7 +247,7 @@ export function detectJudasSwing(
     scoreAdjustment = 0;
     reason = found
       ? `[OFF] Judas Swing confirmed: swept ${bestSweep!.sweptLevel.toFixed(5)} by ${bestSweep!.wickDepthATR.toFixed(2)}x ATR`
-      : `[OFF] No Judas Swing found before MSS — would have ${config.gateMode === "hard" ? "blocked" : "penalized"}`;
+      : `[OFF] No Judas Swing found before MSS — would have blocked/penalized`;
   } else if (!found) {
     if (config.gateMode === "hard") {
       passed = false;

@@ -38,9 +38,9 @@ export interface RejectedSetupParams {
   /** Entry price (zone level or last price) */
   entryPrice: number;
   /** Stop loss level */
-  stopLoss?: number;
+  stopLoss?: number | null;
   /** Take profit level */
-  takeProfit?: number;
+  takeProfit?: number | null;
   /** Risk:Reward ratio */
   rrRatio?: number;
   /** Current session name */
