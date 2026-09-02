@@ -7,6 +7,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { classifyInstrumentRegime as classifyInstrumentRegimeShared, type InstrumentRegime } from "../_shared/smcAnalysis.ts";
 import {
   computeGatePerformance,
@@ -14,6 +15,12 @@ import {
   type ResolvedRejection,
   type ClosedTrade,
 } from "../_shared/gatePerformanceEngine.ts";
+
+// Attribute this isolate's TwelveData credits. Six functions reach the
+// provider through candleSource; unlabelled, they all report as "unknown"
+// and api_credit_usage cannot say which one to trim. Measured 2026-09-02:
+// 250 of 589 credits in a 29-minute window were unattributed.
+setCreditCallerContext("bot-weekly-advisor");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

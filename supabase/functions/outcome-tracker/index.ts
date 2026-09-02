@@ -17,7 +17,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { SPECS } from "../_shared/smcAnalysis.ts";
+
+// Attribute this isolate's TwelveData credits. Six functions reach the
+// provider through candleSource; unlabelled, they all report as "unknown"
+// and api_credit_usage cannot say which one to trim. Measured 2026-09-02:
+// 250 of 589 credits in a 29-minute window were unattributed.
+setCreditCallerContext("outcome-tracker");
 
 // ── Constants ──
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation

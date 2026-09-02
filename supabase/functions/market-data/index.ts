@@ -1,6 +1,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+
+// Attribute this isolate's TwelveData credits. Six functions reach the
+// provider through candleSource; unlabelled, they all report as "unknown"
+// and api_credit_usage cannot say which one to trim. Measured 2026-09-02:
+// 250 of 589 credits in a 29-minute window were unattributed.
+setCreditCallerContext("market-data");
 
 // market-data: unified candle/quote endpoint with MetaAPI → Twelve Data → Polygon.io failover.
 // If the caller is authenticated and has an active MetaAPI broker connection, we prefer it.

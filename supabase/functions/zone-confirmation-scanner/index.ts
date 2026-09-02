@@ -25,6 +25,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
 import {
   SPECS,
@@ -39,6 +40,12 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
+
+// Attribute this isolate's TwelveData credits. Six functions reach the
+// provider through candleSource; unlabelled, they all report as "unknown"
+// and api_credit_usage cannot say which one to trim. Measured 2026-09-02:
+// 250 of 589 credits in a 29-minute window were unattributed.
+setCreditCallerContext("zone-confirmation-scanner");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const BOT_ID = "smc";

@@ -99,9 +99,16 @@ import {
   checkOverboughtOversoldVeto,
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+
+// Attribute this isolate's TwelveData credits. Six functions reach the
+// provider through candleSource; unlabelled, they all report as "unknown"
+// and api_credit_usage cannot say which one to trim. Measured 2026-09-02:
+// 250 of 589 credits in a 29-minute window were unattributed.
+setCreditCallerContext("backtest-engine");
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
