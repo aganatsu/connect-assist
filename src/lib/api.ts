@@ -216,22 +216,33 @@ export async function invokeFunction<T = any>(
       ({ data, error } = await invokeSupabaseFunction(functionName, body));
     }
     if (isAuthError(error, data)) {
-      await supabase.auth.signOut().catch(() => {});
-      if (typeof window !== "undefined") {
-        try {
-          const { toast } = await import("sonner");
-          toast.error("Session expired", {
-            description: "Redirecting you to sign in again…",
-            duration: 2500,
-          });
-        } catch {}
-        setTimeout(() => {
-          window.location.href = "/login";
-        }, 1800);
+      // Only force a sign-out when the local session is genuinely gone. A 401/403
+      // coming from a single edge function (e.g. its own authorization check, or a
+      // request that fell back to the publishable key) must never log the user out
+      // and bounce them back to /login.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const stillSignedIn = !!sessionData.session?.access_token;
+      if (!stillSignedIn) {
+        if (typeof window !== "undefined") {
+          try {
+            const { toast } = await import("sonner");
+            toast.error("Session expired", {
+              description: "Redirecting you to sign in again…",
+              duration: 2500,
+            });
+          } catch {}
+          setTimeout(() => {
+            window.location.href = "/login";
+          }, 1800);
+        }
+        throw new Error("Session expired. Please sign in again.");
       }
-      throw new Error("Session expired. Please sign in again.");
+      throw new Error(
+        (error?.message || data?.error || `${functionName} request was not authorized`).toString()
+      );
     }
   }
+
 
   if (error) throw new Error(error.message || `${functionName} failed`);
   if (data?.error && !data?.fallback) throw new Error(data.error);
