@@ -4679,17 +4679,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const kzConfig: ICTKillZoneConfig = {
           ...DEFAULT_ICT_KILLZONE_CONFIG,
-          silverBullet: pairConfig.ictKillZoneSilverBullet,
-          pmSession: pairConfig.ictKillZonePMSession,
+          enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
+          enablePMSession: pairConfig.ictKillZonePMSession,
         };
         ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
-        const statusTag = ictKZResult.inKillZone ? `IN (${ictKZResult.activeZone})` : `OUT (${ictKZResult.reason})`;
+        const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.currentWindow})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
         (detail as any).ictKillZone = {
           gateMode: pairConfig.ictKillZoneGateMode,
-          inKillZone: ictKZResult.inKillZone,
-          activeZone: ictKZResult.activeZone,
+          inKillZone: ictKZResult.isKillZone,
+          activeZone: ictKZResult.currentWindow,
           isPrime: ictKZResult.isPrime,
           reason: ictKZResult.reason,
         };
