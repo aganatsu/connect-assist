@@ -9,6 +9,22 @@ import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 // 250 of 589 credits in a 29-minute window were unattributed.
 setCreditCallerContext("market-data");
 
+/**
+ * Candles requested for a quote.
+ *
+ * A quote needs two closes — last and previous — but fetchCandlesWithFallback
+ * discards any source returning fewer than 30, so asking for fewer than 30 is
+ * asking for nothing. TwelveData bills per request, not per candle, so 60 costs
+ * exactly what 5 cost and actually clears the floor.
+ *
+ * Clearing it also makes the result cacheable: setCachedCandles is only reached
+ * from the same >= 30 branches, and daily candles hold for CACHE_TTL_DAILY_MS
+ * (5 minutes). Measured 2026-09-02, market-data was the single largest consumer
+ * of the plan at ~32 credits/min — 58% of a 55/min plan — every one of them
+ * returning NO_DATA.
+ */
+const QUOTE_CANDLE_LIMIT = 60;
+
 // market-data: unified candle/quote endpoint with MetaAPI → Twelve Data → Polygon.io failover.
 // If the caller is authenticated and has an active MetaAPI broker connection, we prefer it.
 // Otherwise we fall back to Twelve Data, then Polygon.io.
@@ -54,9 +70,16 @@ Deno.serve(async (req) => {
     const brokerConn = await loadBrokerConn(req);
 
     if (action === "quote") {
-      // Quote = last close from a small daily fetch
+      // Quote = last close from a daily fetch.
+      //
+      // QUOTE_CANDLE_LIMIT, not 5. fetchCandlesWithFallback rejects any source
+      // returning fewer than 30 candles, at every accept point, so a 5-candle
+      // request spent the credit and then failed the floor — falling through to
+      // Polygon, which has no key, and returning NO_DATA every time. It was also
+      // never cached, because setCachedCandles only runs inside those same
+      // >= 30 branches, so all six polls a minute went to the network.
       const { candles, source } = await fetchCandlesWithFallback({
-        symbol, interval: "1d", limit: 5, brokerConn,
+        symbol, interval: "1d", limit: QUOTE_CANDLE_LIMIT, brokerConn,
       });
       if (candles.length === 0) {
         return new Response(JSON.stringify({ error: "NO_DATA", fallback: true }), {
@@ -89,7 +112,7 @@ Deno.serve(async (req) => {
       await Promise.all(batchSymbols.map(async (sym: string) => {
         try {
           const { candles, source } = await fetchCandlesWithFallback({
-            symbol: sym, interval: "1d", limit: 5, brokerConn,
+            symbol: sym, interval: "1d", limit: QUOTE_CANDLE_LIMIT, brokerConn,
           });
           if (candles.length === 0) {
             results[sym] = { error: "NO_DATA" };

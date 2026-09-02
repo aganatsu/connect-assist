@@ -25,16 +25,48 @@ function makeCandle(o: number, h: number, l: number, c: number, idx: number): Ca
   };
 }
 
+/**
+ * Deterministic stand-in for Math.random (mulberry32).
+ *
+ * The fixture below called Math.random directly, so every run walked a
+ * different path and this file failed intermittently — measured across 12 runs,
+ * three assertions failed 4, 2 and 4 times respectively, and a full-suite run
+ * would report 6, 7 or 8 failures for identical code.
+ *
+ * The cause is not drift in price level. findZoneLiquidity detects inducement
+ * from the candle pattern alone, independently of the pools a test passes in,
+ * so a walk that happens to print a sweep-and-reject sets `inducement` to
+ * something like "Bull trap at 1.11243" and adds to liquidityScore. Every test
+ * here assumes an uneventful baseline — the first one asserts inducement is
+ * null with no pools at all — and roughly a third of random walks are not
+ * uneventful.
+ *
+ * The seed is therefore chosen to produce a neutral series. That property is
+ * self-enforcing rather than a magic number: the "returns empty result when no
+ * pools provided" test fails immediately if a future change makes the fixture
+ * eventful again.
+ */
+function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** Generate 50 candles ranging from 1.1000 to 1.1500 with ~50 pip ATR */
-function generateBaseCandles(count = 50): Candle[] {
+function generateBaseCandles(count = 50, seed = 31337): Candle[] {
+  const rand = seededRandom(seed);
   const candles: Candle[] = [];
   let price = 1.1000;
   for (let i = 0; i < count; i++) {
-    const move = (Math.random() - 0.5) * 0.0050;
+    const move = (rand() - 0.5) * 0.0050;
     const open = price;
     const close = price + move;
-    const high = Math.max(open, close) + Math.random() * 0.0020;
-    const low = Math.min(open, close) - Math.random() * 0.0020;
+    const high = Math.max(open, close) + rand() * 0.0020;
+    const low = Math.min(open, close) - rand() * 0.0020;
     candles.push(makeCandle(open, high, low, close, i));
     price = close;
   }
