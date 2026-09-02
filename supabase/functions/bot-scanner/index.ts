@@ -1045,6 +1045,21 @@ async function runSafetyGates(
   if (directionVerdict) {
     if (directionVerdict.shouldBlock) {
       gates.push({ passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    } else if (directionVerdict.verdict !== "neutral" && directionVerdict.verdict !== direction) {
+      // The verdict disagrees with the direction being traded.
+      //
+      // This gate replaced the legacy HTF bias check, which DID compare — see
+      // the `htfTrend !== entryBias` branch below. The replacement only reported
+      // the verdict and passed, so a contradiction was logged as approval.
+      //
+      // Measured 2026-09-02: four GBP/JPY entries recorded
+      // "Direction OK: SHORT (conf: 60%, agreement: 67%)" on a LONG trade. All
+      // four closed at stop, -1,110 of a -2,546 week. The system had the right
+      // answer, said so in the gate reason, and traded the opposite way.
+      gates.push({
+        passed: false,
+        reason: `Direction CONFLICT: verdict is ${directionVerdict.verdict.toUpperCase()} but entry is ${direction.toUpperCase()} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)`,
+      });
     } else {
       gates.push({ passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
     }
