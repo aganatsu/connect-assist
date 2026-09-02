@@ -1442,11 +1442,19 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           <Input type="number" value={config.exit?.fixedTPPips ?? 50} onChange={e => updateField('exit', 'fixedTPPips', parseFloat(e.target.value) || 0)} step={1} min={1} className="h-9 text-sm" />
                         </FieldGroup>
                       )}
-                      {(config.exit?.takeProfitMethod === "rr_ratio" || !config.exit?.takeProfitMethod) && (
-                        <FieldGroup label="R:R Ratio (TP Target)" description="Sets the Take Profit distance: TP = SL × this ratio. (Risk tab's Min R:R is the gate that rejects trades below a threshold.)">
-                          <Input type="number" value={config.exit?.tpRRRatio ?? 2.0} onChange={e => updateField('exit', 'tpRRRatio', parseFloat(e.target.value) || 0)} step={0.5} min={1} max={10} className="h-9 text-sm" />
-                        </FieldGroup>
-                      )}
+                      {/* Always shown, whatever the TP method.
+                          bot-scanner recomputes TP as entry ± risk × tpRatio after the
+                          structural SL pass and again whenever the SL floor widens the
+                          stop, overwriting whatever calculateSLTP produced. So this
+                          ratio decides the take profit on every trade regardless of the
+                          method selected above.
+                          Hiding it cost real money: a config carrying an unrecognised
+                          method ("fib_extension_3pt") left this field off screen while
+                          tpRRRatio sat at 1. Fourteen trades were placed at 1:1 against a
+                          13% win rate, and the only way to change it was SQL. */}
+                      <FieldGroup label="R:R Ratio (TP Target)" description="Sets the Take Profit distance: TP = SL × this ratio. Applies to every TP method — the scanner recomputes TP from this ratio after the stop is placed. (Risk tab's Min R:R is the gate that rejects trades below a threshold; keep it below this value or setups fail on spread and commission.)">
+                        <Input type="number" value={config.exit?.tpRRRatio ?? 2.0} onChange={e => updateField('exit', 'tpRRRatio', parseFloat(e.target.value) || 0)} step={0.5} min={1} max={10} className="h-9 text-sm" />
+                      </FieldGroup>
                       {config.exit?.takeProfitMethod === "next_level" && (
                         <p className="text-[10px] text-muted-foreground italic">TP targets nearest PDH/PDL/PWH/PWL or liquidity pool. Falls back to Fixed Pips if none found.</p>
                       )}
