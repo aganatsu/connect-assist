@@ -90,6 +90,7 @@ export const RUNTIME_DEFAULTS = {
   // ── Exit Management ──
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  breakEvenOffsetPips: 20,
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
