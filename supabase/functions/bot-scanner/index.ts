@@ -6262,9 +6262,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               let brokerFillPrice: number | null = null; // Actual fill price from first successful broker execution
               for (const conn of connections) {
+                let connHealth: BrokerHealth = brokerHealthMap[conn.id] || createInitialHealth(conn.id);
                 try {
                   // ── Circuit Breaker: skip connections that have failed repeatedly ──
-                  const connHealth = brokerHealthMap[conn.id] || createInitialHealth(conn.id);
+                  connHealth = brokerHealthMap[conn.id] || createInitialHealth(conn.id);
                   if (!isConnectionAvailable(connHealth)) {
                     mirrorResults.push(`${conn.display_name}: skipped (circuit-breaker open until ${connHealth.cooldownUntil})`);
                     continue;
