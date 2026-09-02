@@ -692,16 +692,18 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
   let data: any = null;
   // Try connection-specific config first
   if (connectionId) {
-    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
+    const res = await supabase.from("bot_configs").select("id, config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
     data = res.data;
   }
   // Fall back to global config
   if (!data) {
-    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
+    const res = await supabase.from("bot_configs").select("id, config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
     data = res.data;
   }
   // Delegate to shared mapper (single source of truth for field resolution)
-  return mapNestedToFlat(data?.config_json || null);
+  const flat = mapNestedToFlat(data?.config_json || null);
+  if (data?.id) (flat as any).id = data.id;
+  return flat;
 }
 
 // ─── LEGACY loadConfig body preserved as reference (DO NOT USE) ──────
