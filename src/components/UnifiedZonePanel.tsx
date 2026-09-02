@@ -11,7 +11,7 @@
 interface UnifiedZoneData {
   hasZone: boolean;
   state: string;
-  selectedTF: "D" | "4H" | "1H" | null;
+  selectedTF: string | null;
   unifiedScore: number;
   scoreBreakdown: {
     baseScore: number;

@@ -72,7 +72,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
@@ -4356,7 +4356,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         let zoneConfirmCandles: Candle[];
         let zoneLtfConfirmCandles: Candle[];
 
+        // Style-aware TF labels for the zone engine
+        let zoneTFLabels: TFSlotLabels;
         if (resolvedStyle === "scalper") {
+          zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
           // Scalper waterfall: 1H → 15m → 5m (entry)
           zoneH1Candles = candles;              // 5m = lowest structural TF slot
           zoneH4Candles = m15Candles;           // 15m = mid structural TF slot
@@ -4365,6 +4368,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
           zoneLtfConfirmCandles = candles;
         } else if (resolvedStyle === "swing_trader") {
+          zoneTFLabels = { top: "W", mid: "D", low: "4H" };
           // Swing waterfall: Weekly → Daily → 4H (entry=1H)
           zoneH1Candles = h4Candles;            // 4H = lowest structural TF slot
           zoneH4Candles = dailyCandles;         // Daily = mid structural TF slot
@@ -4373,6 +4377,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
           zoneLtfConfirmCandles = h4Candles;
         } else {
+          zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
           // Day trader (default): Daily → 4H → 1H (entry=15m)
           zoneH1Candles = hourlyCandles;
           zoneH4Candles = h4Candles;
@@ -4399,6 +4404,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
+          // config slot: liquidity-sweep options belong to a later feature that
+          // is not on this tree, so it stays default.
+          undefined,
+          zoneTFLabels,
         );
 
         // Store the full unified story for the frontend narrative panel
