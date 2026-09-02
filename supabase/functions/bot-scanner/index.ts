@@ -4704,7 +4704,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const { data: recentTrades } = await supabase
           .from("trade_history")
           .select("pnl_percent, closed_at")
-          .eq("bot_config_id", configId)
+          .eq("bot_config_id", (config as any).id)
           .order("closed_at", { ascending: false })
           .limit(20);
         const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
