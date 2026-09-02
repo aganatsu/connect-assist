@@ -5371,7 +5371,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
-    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.valid) {
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.isValid) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
       detail.reason = ictMSSResult.reason;
@@ -5380,7 +5380,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
-    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.detected) {
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.found) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
       detail.reason = ictJudasResult.reason;
@@ -5389,16 +5389,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
-    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.validCount === 0 && ictFVGResult.totalCount > 0) {
+    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && fvgTotal > 0 && fvgInvalidated + fvgExhausted === fvgTotal) {
       detail.status = "rejected";
-      detail.rejectionReasons = [`ICT FVG BLOCKED: All ${ictFVGResult.totalCount} FVGs invalidated/exhausted`];
-      detail.reason = `All FVGs invalidated (${ictFVGResult.invalidatedCount} closed, ${ictFVGResult.exhaustedCount} exhausted)`;
+      detail.rejectionReasons = [`ICT FVG BLOCKED: All ${fvgTotal} FVGs invalidated/exhausted`];
+      detail.reason = `All FVGs invalidated (${fvgInvalidated} closed, ${fvgExhausted} exhausted)`;
       rejectedCount++;
       scanDetails.push(detail);
       continue;
     }
     // ICT Kill Zone hard gate: block trade if outside all kill zones
-    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.inKillZone) {
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.isKillZone) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
       detail.reason = ictKZResult.reason;
@@ -5409,8 +5409,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ICT Risk hard gate: block trade if risk limits exceeded
     if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
       detail.status = "rejected";
-      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reason}`];
-      detail.reason = ictRiskResult.reason;
+      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reasons.join("; ")}`];
+      detail.reason = ictRiskResult.reasons.join("; ");
       rejectedCount++;
       scanDetails.push(detail);
       continue;
