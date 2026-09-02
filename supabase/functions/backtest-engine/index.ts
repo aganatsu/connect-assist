@@ -1463,8 +1463,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
-    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
 
     // Seed state from prior chunks
