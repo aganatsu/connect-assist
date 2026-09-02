@@ -1391,12 +1391,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         .maybeSingle();
       cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
     }
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     if (cachedFotsi && Array.isArray(cachedFotsi)) {
       for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
       console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
     } else try {
-      const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
-      const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
       for (let i = 0; i < fotsiPairs.length; i += 7) {
