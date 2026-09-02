@@ -1108,6 +1108,58 @@ Deno.serve(async (req) => {
               const closeSize = size * (exitFlags.partialTPPercent / 100);
               const remainSize = size - closeSize;
               const { pnl: partialPnl, pnlPips: partialPnlPips } = calcPnl(pos.direction, entryPrice, currentPrice, closeSize, pos.symbol);
+
+              // ── Claim the partial BEFORE booking it ──
+              //
+              // Profit used to be written to history and credited to the
+              // balance first, and the partial_tp_fired flag persisted after.
+              // None of those awaits checked for an error, so anything failing
+              // in between — a rejected update, or the JSON.parse of
+              // signal_reason throwing — left the flag unset with the money
+              // already booked. The next manage cycle then fired again.
+              //
+              // Measured: position 39c5161f fired 16 times in 29 minutes on
+              // 2026-08-07, booking 3,292.25; 7660699c fired 3 times in 56
+              // seconds for 816.75. Roughly 3,631 of phantom profit credited to
+              // paper_accounts.balance for two positions that both closed at
+              // stop. The partial_tp_fired guard and its column were added
+              // 2026-04-17 (0ffd0a33) and were present throughout — the guard
+              // was correct, the ordering was not.
+              //
+              // The update is conditional on partial_tp_fired = false and
+              // returns the claimed row, so it is a compare-and-set: only the
+              // first caller gets a row back, and a failed or racing write
+              // books nothing at all.
+              let claimedSignalReason: string;
+              try {
+                claimedSignalReason = JSON.stringify({
+                  ...JSON.parse(pos.signal_reason || "{}"),
+                  exitFlags: { ...exitFlags, partialTPActivated: true },
+                });
+              } catch {
+                // Unparseable signal_reason must not cost us the guard.
+                claimedSignalReason = pos.signal_reason || "";
+              }
+
+              const { data: claimed, error: claimErr } = await supabase
+                .from("paper_positions")
+                .update({
+                  size: remainSize.toString(),
+                  partial_tp_fired: true,
+                  signal_reason: claimedSignalReason,
+                })
+                .eq("id", pos.id)
+                .eq("partial_tp_fired", false)
+                .select("id");
+
+              if (claimErr) {
+                console.error(`[paper] partial TP claim failed for ${pos.position_id}: ${claimErr.message} — not booking`);
+              }
+              if (claimErr || !claimed || claimed.length === 0) {
+                if (!claimErr) {
+                  console.warn(`[paper] partial TP already claimed for ${pos.position_id} — skipping duplicate fire`);
+                }
+              } else {
               // Record partial close in history
               await supabase.from("paper_trade_history").insert({
                 user_id: user.id, position_id: `${pos.position_id}_partial`, symbol: pos.symbol,
@@ -1118,14 +1170,9 @@ Deno.serve(async (req) => {
                 signal_score: pos.signal_score, order_id: pos.order_id,
                 stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
               });
-              // Update position size, set fired flag + partialTPActivated in exitFlags
-              const updatedExitFlagsPartial = { ...exitFlags, partialTPActivated: true };
-              const updatedSignalReasonPartial = { ...JSON.parse(pos.signal_reason || "{}"), exitFlags: updatedExitFlagsPartial };
-              await supabase.from("paper_positions").update({
-                size: remainSize.toString(),
-                partial_tp_fired: true,
-                signal_reason: JSON.stringify(updatedSignalReasonPartial),
-              }).eq("id", pos.id);
+              // Position row was already updated by the claim above — size,
+              // partial_tp_fired and signal_reason are persisted before any
+              // money moves. Nothing left to write here.
               exitFlags.partialTPActivated = true; // keep local in sync (unblocks trailing)
               size = remainSize; // FIX: sync local size so same-cycle SL/TP close uses reduced size
               // Determine which bot's account to update based on position's bot_id
@@ -1145,6 +1192,7 @@ Deno.serve(async (req) => {
               // FIX 2: Mirror partial close to broker
               const partialBrokerResults = await partialCloseBroker(supabase, user.id, pos.position_id, pos.symbol, exitFlags.partialTPPercent / 100, pos.mirrored_connection_ids);
               console.log(`Partial TP broker mirror [${pos.position_id}]: ${partialBrokerResults.join("; ")}`);
+              } // end claimed branch
             }
           }
 
