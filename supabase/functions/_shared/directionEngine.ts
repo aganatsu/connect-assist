@@ -203,7 +203,11 @@ export function confirmedTrend(
 export interface DirectionResult {
   direction: "long" | "short" | null;
   bias: "bullish" | "bearish" | null;       // the HTF bias that set the direction
-  biasSource: "daily" | "4h" | null;        // which TF provided the bias
+  /** Which TF provided the bias. determineDirection only ever emits "daily"
+   *  or "4h", but determineDirectionStyleAware emits the style's own label
+   *  ("1h", "15m", "weekly"...) and bot-scanner stores that result here —
+   *  previously via a cast that claimed a scalper's "1h" was "daily". */
+  biasSource: string | null;
   h4Retrace: boolean;                       // true = 4H is pulling back without CHoCH
   h4ChochAgainst: boolean;                  // true = 4H CHoCH against bias → hard block
   h1Confirmed: boolean;                     // true = 1H BOS in bias direction

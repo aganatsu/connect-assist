@@ -3992,7 +3992,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           simpleDirectionResult = {
             direction: styleDirectionResult.direction,
             bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            biasSource: styleDirectionResult.biasSource,
             h4Retrace: styleDirectionResult.structureRetrace,
             h4ChochAgainst: styleDirectionResult.structureChochAgainst,
             h1Confirmed: styleDirectionResult.confirmBOS,
@@ -4011,7 +4011,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           simpleDirectionResult = {
             direction: styleDirectionResult.direction,
             bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            biasSource: styleDirectionResult.biasSource,
             h4Retrace: styleDirectionResult.structureRetrace,
             h4ChochAgainst: styleDirectionResult.structureChochAgainst,
             h1Confirmed: styleDirectionResult.confirmBOS,

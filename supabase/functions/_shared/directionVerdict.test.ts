@@ -118,10 +118,66 @@ Deno.test("confirmedTrend + simpleDirection disagree → reduced confidence", ()
       reason: "4H CHoCH against",
     },
   }));
-  // Direction should follow confirmedTrend (stronger)
-  assertEquals(result.verdict, "long");
-  // But confidence should be reduced
+  // CONTRACT CHANGED 2026-09-02. This previously asserted verdict === "long" on
+  // the grounds that confirmedTrend is "stronger". That is the behaviour being
+  // removed: the trend cannot flip a structural read, it can only reduce
+  // conviction. Here simpleDirection is bearish with a CHoCH against the bias
+  // (50 - 30 = 20) and the trend disagrees (20 - 20 = 20), which falls under
+  // minConfidence 40 — so the honest answer is neutral, not a confident long
+  // against a structure that has already broken.
+  assertEquals(result.verdict, "neutral");
   assert(result.confidence < 80, `Expected < 80 due to disagreement, got ${result.confidence}`);
+});
+
+Deno.test("a disagreeing trend reduces conviction but does not flip direction", () => {
+  // The common case, and the one that produced 255 of 320 verdict/entry
+  // conflicts before this change: a clean structural read with the macro trend
+  // pointing the other way. The structural read stands; confidence drops.
+  const result = computeDirectionVerdict(makeInput({
+    confirmedTrend: { trend: "bullish", reason: "Fib-confirmed bullish" },
+    simpleDirection: {
+      direction: "short",
+      bias: "bearish",
+      biasSource: "1h",
+      h4Retrace: true,      // pulling back, structure intact
+      h4ChochAgainst: false, // no break against the bias
+      h1Confirmed: true,     // confirmation TF broke in the bias direction
+      reason: "structure intact, confirm BOS",
+    },
+  }));
+  assertEquals(result.verdict, "short", "the structural read must own the direction");
+  assert(
+    result.confidence < 75,
+    `a disagreeing trend should cost conviction, got ${result.confidence}`,
+  );
+});
+
+Deno.test("an agreeing trend raises conviction without changing direction", () => {
+  const result = computeDirectionVerdict(makeInput({
+    confirmedTrend: { trend: "bearish", reason: "Fib-confirmed bearish" },
+    simpleDirection: {
+      direction: "short",
+      bias: "bearish",
+      biasSource: "1h",
+      h4Retrace: true,
+      h4ChochAgainst: false,
+      h1Confirmed: true,
+      reason: "structure intact, confirm BOS",
+    },
+  }));
+  assertEquals(result.verdict, "short");
+  assert(result.confidence >= 75, `agreement should add conviction, got ${result.confidence}`);
+});
+
+Deno.test("trend still provides direction when there is no structural read", () => {
+  // Not a conflict risk: when simpleDirection is null the entry direction is
+  // null too (bot-scanner sets _overrideDirection from it), so the pair is
+  // skipped regardless. Falling back is better than discarding the signal.
+  const result = computeDirectionVerdict(makeInput({
+    confirmedTrend: { trend: "bullish", reason: "Fib-confirmed bullish" },
+    simpleDirection: null,
+  }));
+  assertEquals(result.verdict, "long");
 });
 
 Deno.test("h4ChochAgainst significantly reduces simpleDirection confidence", () => {

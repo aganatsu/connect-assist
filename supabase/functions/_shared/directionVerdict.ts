@@ -5,15 +5,23 @@
  * Consolidates 6 competing direction sources into ONE verdict:
  *
  *   SPINE (determines direction):
- *     1. confirmedTrend (fib-filtered MSBs on Daily)
- *     2. SimpleDirection fallback (4H+1H CHoCH/BOS)
+ *     1. simpleDirection — bias TF → structure retrace without CHoCH against →
+ *        confirmation TF BOS in the bias direction. The only source that can
+ *        tell a retracement from a reversal, and the only one that is
+ *        style-aware. Its timeframes come from STYLE_TF_LABELS.
  *
  *   CONTEXT (modifies confidence, never flips direction):
+ *     2. confirmedTrend (fib-filtered MSBs on the style's bias TF)
  *     3. Regime Classification (trending/ranging/volatile)
  *     4. Weekly Bias (ICT HTF weekly candle structure)
  *
  *   ADVISORY (score modifier only):
  *     5. Game Plan Bias (LLM-generated premarket analysis)
+ *
+ * confirmedTrend was a second spine until 2026-09-02 and could flip the
+ * direction simpleDirection had derived. It is also already used INSIDE
+ * simpleDirection as its bias step, so as a separate spine it re-voted against
+ * a conclusion it had helped produce. It is context now.
  *
  * Output: { verdict, confidence, sources, scoreAdjustment }
  *   - verdict: "long" | "short" | "neutral"
@@ -21,10 +29,11 @@
  *   - sources: which inputs agreed/disagreed
  *   - scoreAdjustment: net score modifier to apply to confluence
  *
- * This module is ADDITIVE — it does NOT modify existing gates or scoring.
- * It is wired as a parallel computation for logging/validation first.
- * Once validated, it replaces Gate 1, Gate 20, falling knife guard,
- * Factor 22, and the GP bias adjustment.
+ * NO LONGER ADDITIVE. This header described a shadow-mode rollout that has
+ * since completed: the verdict is Gate 1 (bot-scanner, "Direction OK" /
+ * "Direction CONFLICT"), it supplies scoreAdjustment to the effective score,
+ * and it subsumes the regime gate. A stale claim that it "does NOT modify
+ * existing gates" was left here through that transition.
  */
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -69,7 +78,11 @@ export interface DirectionVerdictInput {
   simpleDirection: {
     direction: "long" | "short" | null;
     bias: "bullish" | "bearish" | null;
-    biasSource: "daily" | "4h" | null;
+    /** Which timeframe set the bias. Style-dependent: "1h" for scalper,
+     *  "daily" for day_trader, "weekly" for swing. Was typed
+     *  `"daily" | "4h" | null` — day_trader values only — which forced
+     *  bot-scanner to cast a scalper's "1h" through it. */
+    biasSource: string | null;
     h4Retrace: boolean;
     h4ChochAgainst: boolean;
     h1Confirmed: boolean;
@@ -123,9 +136,18 @@ export const DEFAULT_VERDICT_CONFIG: DirectionVerdictConfig = {
 };
 
 // ─── Source Weights ──────────────────────────────────────────────────
-// These define how much each source contributes to the final confidence.
-// The spine sources (confirmedTrend + simpleDirection) determine direction.
-// Context sources can only reduce confidence, never flip direction.
+// DESCRIPTIVE ONLY — nothing multiplies by these. No arithmetic in this module
+// reads `.weight`; they are attached to each DirectionSource for logging and
+// for the UI breakdown. Direction is decided by the SPINE precedence below, and
+// confidence by the explicit +/- adjustments, not by any weighted sum.
+//
+// They are kept because they describe the intended influence of each source and
+// are surfaced in scan detail, but do not reason about this module by reading
+// them — an earlier analysis concluded confirmedTrend "outvoted" simpleDirection
+// 0.40 to 0.25 when in fact it won by claiming the spine first.
+//
+// simpleDirection is the spine: it is the only source that distinguishes a
+// retracement from a reversal. The rest are context.
 
 const WEIGHTS = {
   confirmedTrend: 0.40,   // Strongest — fib-filtered, close-based MSBs
@@ -144,34 +166,37 @@ export function computeDirectionVerdict(
   const cfg = { ...DEFAULT_VERDICT_CONFIG, ...config };
   const sources: DirectionSource[] = [];
 
-  // ── 1. SPINE: Determine base direction from structural sources ──
+  // ── 1. SPINE: simpleDirection owns the direction ──
+  //
+  // simpleDirection is the only source that can tell a retracement from a
+  // reversal. It is a conjunction, not an opinion: the bias timeframe sets a
+  // direction, the structure timeframe must be pulling back WITHOUT a CHoCH
+  // against that bias, and the confirmation timeframe must actually break in
+  // the bias direction. That sequence is what separates "this dip is an entry"
+  // from "this dip is the new trend".
+  //
+  // confirmedTrend, regime, weeklyBias and gamePlan cannot make that
+  // distinction — they report a trend and stop. Previously confirmedTrend
+  // claimed the spine first and simpleDirection could only nudge confidence,
+  // so the source that had done the reasoning was overruled by sources that
+  // had not. Measured 2026-09-02: 255 of 320 evaluations (80%) had the verdict
+  // opposing the entry direction, and the entry direction IS simpleDirection —
+  // bot-scanner sets _overrideDirection from it and confluenceScoring honours
+  // it. Every one of those was the verdict overruling its own structural read.
+  //
+  // Note also that simpleDirection ALREADY calls confirmedTrend internally as
+  // its bias step (directionEngine, step 1). Treating confirmedTrend as a
+  // second spine let the same signal vote twice against a conclusion it had
+  // already contributed to.
+  //
+  // This matches what this module's own header says context sources should do:
+  // "modifies confidence, never flips direction". confirmedTrend was classed as
+  // spine and flipped things constantly.
 
   let spineDirection: "bullish" | "bearish" | null = null;
   let spineConfidence = 0;
 
-  // 1a. Confirmed Trend (primary spine)
-  if (input.confirmedTrend && input.confirmedTrend.trend !== "ranging") {
-    const dir = input.confirmedTrend.trend; // "bullish" | "bearish"
-    spineDirection = dir;
-    spineConfidence = 80; // High base confidence for fib-confirmed trend
-    sources.push({
-      name: "confirmedTrend",
-      direction: dir,
-      confidence: 80,
-      weight: WEIGHTS.confirmedTrend,
-      detail: input.confirmedTrend.reason,
-    });
-  } else {
-    sources.push({
-      name: "confirmedTrend",
-      direction: input.confirmedTrend?.trend === "ranging" ? "neutral" : null,
-      confidence: 0,
-      weight: WEIGHTS.confirmedTrend,
-      detail: input.confirmedTrend?.reason ?? "No data",
-    });
-  }
-
-  // 1b. Simple Direction (fallback/confirmation)
+  // 1a. Simple Direction — the spine.
   if (input.simpleDirection && input.simpleDirection.direction) {
     const dir = input.simpleDirection.bias ?? (input.simpleDirection.direction === "long" ? "bullish" : "bearish");
     let conf = 50; // Base confidence for simple direction
@@ -179,27 +204,16 @@ export function computeDirectionVerdict(
     if (input.simpleDirection.h4Retrace) conf += 10;
     if (input.simpleDirection.h4ChochAgainst) conf -= 30; // Strong negative signal
 
+    spineDirection = dir;
+    spineConfidence = Math.max(0, Math.min(100, conf));
+
     sources.push({
       name: "simpleDirection",
       direction: dir,
-      confidence: Math.max(0, Math.min(100, conf)),
+      confidence: spineConfidence,
       weight: WEIGHTS.simpleDirection,
       detail: input.simpleDirection.reason,
     });
-
-    // If confirmedTrend didn't produce a direction, use simpleDirection as spine
-    if (!spineDirection) {
-      spineDirection = dir;
-      spineConfidence = Math.max(0, Math.min(100, conf));
-    }
-    // If confirmedTrend agrees, boost confidence
-    else if (spineDirection === dir) {
-      spineConfidence = Math.min(100, spineConfidence + 10);
-    }
-    // If confirmedTrend disagrees, reduce confidence
-    else {
-      spineConfidence = Math.max(20, spineConfidence - 20);
-    }
   } else {
     sources.push({
       name: "simpleDirection",
@@ -207,6 +221,41 @@ export function computeDirectionVerdict(
       confidence: 0,
       weight: WEIGHTS.simpleDirection,
       detail: input.simpleDirection?.reason ?? "No data",
+    });
+  }
+
+  // 1b. Confirmed Trend — context. Adjusts confidence, never flips direction.
+  if (input.confirmedTrend && input.confirmedTrend.trend !== "ranging") {
+    const dir = input.confirmedTrend.trend; // "bullish" | "bearish"
+    sources.push({
+      name: "confirmedTrend",
+      direction: dir,
+      confidence: 80,
+      weight: WEIGHTS.confirmedTrend,
+      detail: input.confirmedTrend.reason,
+    });
+
+    if (!spineDirection) {
+      // No structural read available at all. Fall back to the trend rather than
+      // returning neutral — a trend-only signal is weaker but not nothing, and
+      // the entry has no direction in this case either, so nothing can conflict.
+      spineDirection = dir;
+      spineConfidence = 80;
+    } else if (spineDirection === dir) {
+      spineConfidence = Math.min(100, spineConfidence + 15);
+    } else {
+      // The trend disagrees with the structural read. Reduce conviction; if it
+      // falls below minConfidence the verdict goes neutral, which is the honest
+      // answer — not a silent flip to the trend's side.
+      spineConfidence = Math.max(20, spineConfidence - 20);
+    }
+  } else {
+    sources.push({
+      name: "confirmedTrend",
+      direction: input.confirmedTrend?.trend === "ranging" ? "neutral" : null,
+      confidence: 0,
+      weight: WEIGHTS.confirmedTrend,
+      detail: input.confirmedTrend?.reason ?? "No data",
     });
   }
 
