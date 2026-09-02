@@ -4707,7 +4707,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           ...DEFAULT_ICT_RISK_CONFIG,
           baseRiskPercent: pairConfig.ictRiskBasePercent,
           drawdownHalving: pairConfig.ictRiskDrawdownHalving,
-          maxConsecutiveLosses: pairConfig.ictRiskMaxConsecLosses,
+          maxConsecutiveLossesBeforeStop: pairConfig.ictRiskMaxConsecLosses,
           dailyLossLimit: pairConfig.ictRiskDailyLimit,
           weeklyLossLimit: pairConfig.ictRiskWeeklyLimit,
           maxTradesPerDay: pairConfig.ictRiskMaxTradesPerDay,
@@ -4723,14 +4723,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
         ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
         const modeTag = "OFF"; // Risk is always informational for now
-        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.adjustedRiskPercent * 100).toFixed(2)}%, reason=${ictRiskResult.reason}`);
+        const reasonText = ictRiskResult.reasons.join("; ") || "ok";
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.effectiveRiskPercent * 100).toFixed(2)}%, reason=${reasonText}`);
         (detail as any).ictRisk = {
           canTrade: ictRiskResult.canTrade,
-          adjustedRiskPercent: ictRiskResult.adjustedRiskPercent,
-          reason: ictRiskResult.reason,
-          consecutiveLosses: ictRiskResult.consecutiveLosses,
-          dailyLossPercent: ictRiskResult.dailyLossPercent,
-          weeklyLossPercent: ictRiskResult.weeklyLossPercent,
+          adjustedRiskPercent: ictRiskResult.effectiveRiskPercent,
+          reason: reasonText,
+          consecutiveLosses: ictRiskResult.drawdownState.consecutiveLosses,
+          dailyLossPercent: ictRiskResult.dailyState.dailyPnLPercent,
+          weeklyLossPercent: ictRiskResult.weeklyState.weeklyPnLPercent,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Risk error (non-fatal): ${e?.message}`);
