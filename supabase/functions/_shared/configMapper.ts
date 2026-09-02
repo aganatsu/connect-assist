@@ -90,6 +90,7 @@ export const RUNTIME_DEFAULTS = {
   // ── Exit Management ──
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  breakEvenOffsetPips: 20,
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
@@ -487,6 +488,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? RUNTIME_DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? RUNTIME_DEFAULTS.breakEvenPips,
+    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? exit.breakEvenPips ?? raw.breakEvenOffsetPips ?? RUNTIME_DEFAULTS.breakEvenOffsetPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,

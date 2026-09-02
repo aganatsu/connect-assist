@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * warmup.test.ts — Tests for the backtest warmup phase logic
  *

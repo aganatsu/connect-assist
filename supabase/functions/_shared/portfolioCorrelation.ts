@@ -231,12 +231,15 @@ export function getCorrelation(
  * Long EUR/USD vs Long USD/CHF = negative correlation (inversely correlated pairs, same direction)
  */
 export function getDirectionalCorrelation(
-  posA: { symbol: string; direction: "long" | "short" },
-  posB: { symbol: string; direction: "long" | "short" },
+  posA: { symbol: string; direction: string },
+  posB: { symbol: string; direction: string },
   dynamicCorrelations?: Record<string, Record<string, number>>,
 ): number {
+  const dirA = posA.direction === "long" || posA.direction === "short" ? posA.direction : null;
+  const dirB = posB.direction === "long" || posB.direction === "short" ? posB.direction : null;
+  if (!dirA || !dirB) return 0;
   const rawCorr = getCorrelation(posA.symbol, posB.symbol, dynamicCorrelations);
-  const sameDirection = posA.direction === posB.direction;
+  const sameDirection = dirA === dirB;
   // Same direction on positively correlated pairs = high effective correlation
   // Opposite direction on positively correlated pairs = low effective correlation (hedging)
   // Same direction on negatively correlated pairs = low effective correlation (hedging)

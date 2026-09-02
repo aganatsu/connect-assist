@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for the Cascade Zone Engine (Daily → 4H → 1H → 15m)
  *

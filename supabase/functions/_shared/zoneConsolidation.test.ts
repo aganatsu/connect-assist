@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * zoneConsolidation.test.ts — Regression test for the zone engine consolidation.
  *

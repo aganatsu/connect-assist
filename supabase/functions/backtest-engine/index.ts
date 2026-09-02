@@ -1307,6 +1307,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedNoSLTP: 0,
       skippedImpulseNoZone: 0,
       skippedImpulseNotAtZone: 0,
+      skippedByPreGate: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
       highestScoreSeen: 0,
@@ -1314,6 +1315,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
       gateBlockReasons: {} as Record<string, number>,
+      confluenceErrors: 0,
+      firstConfluenceError: "" as string | undefined,
     };
 
     // Compute enabledFactorCount
@@ -1388,6 +1391,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         .maybeSingle();
       cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
     }
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     if (cachedFotsi && Array.isArray(cachedFotsi)) {
       for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
       console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
@@ -1458,8 +1463,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
-    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
 
     // Seed state from prior chunks
