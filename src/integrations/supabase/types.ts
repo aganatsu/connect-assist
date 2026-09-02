@@ -4717,24 +4717,15 @@ export type Database = {
         }
         Returns: boolean
       }
-      reserve_api_credit:
-        | {
-            Args: {
-              p_limit: number
-              p_provider: string
-              p_window_seconds?: number
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              p_caller?: string
-              p_limit: number
-              p_provider: string
-              p_window_seconds?: number
-            }
-            Returns: boolean
-          }
+      reserve_api_credit: {
+        Args: {
+          p_caller?: string
+          p_limit: number
+          p_provider: string
+          p_window_seconds?: number
+        }
+        Returns: boolean
+      }
       resolve_scanner_operational_alert: {
         Args: {
           p_alert_type: string
