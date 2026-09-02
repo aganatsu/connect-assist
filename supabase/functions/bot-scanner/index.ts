@@ -5707,7 +5707,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             detail.correlationAdvisory = {
               concentrationScore: portfolioCheck.concentrationScore,
               sizeMultiplier: correlationSizeMultiplier,
-              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pairs: c.conflictsWith, detail: c.detail })),
               currencyExposure: portfolioCheck.currencyExposure,
             };
           }
