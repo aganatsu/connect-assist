@@ -5,6 +5,10 @@ export type TradingStyleMode = "scalper" | "day_trader" | "swing_trader";
 export interface StyleOverrides {
   entryTimeframe: string;
   htfTimeframe: string;
+  /** Timeframe a zone touch is confirmed on. Mirrors
+   *  supabase/functions/_shared/styleTimeframes.ts — kept in sync by
+   *  supabase/tests/_shared/styleTableParity.test.ts. */
+  confirmationTimeframe: string;
   tpRatio: number;
   slBufferPips: number;
   confluenceThreshold: number; // percentage (0-100%)
@@ -26,6 +30,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   scalper: {
     entryTimeframe: "5m",
     htfTimeframe: "1h",
+    confirmationTimeframe: "5m",
     tpRatio: 2.0,
     slBufferPips: 1,
     confluenceThreshold: 40,
@@ -42,6 +47,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   day_trader: {
     entryTimeframe: "15m",
     htfTimeframe: "1d",
+    confirmationTimeframe: "15m",
     tpRatio: 2.0,
     slBufferPips: 2,
     confluenceThreshold: 55,
@@ -58,6 +64,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   swing_trader: {
     entryTimeframe: "1h",
     htfTimeframe: "1w",
+    confirmationTimeframe: "1h",
     tpRatio: 3.0,
     slBufferPips: 5,
     confluenceThreshold: 40,          // validated: cascade selectivity is the real filter

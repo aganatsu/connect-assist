@@ -3,11 +3,16 @@
  *
  * Lightweight edge function that ONLY processes pending orders in "awaiting_confirmation"
  * status. Runs every 60 seconds to provide near-real-time CHoCH detection for zone setups
- * that are actively hunting for 5m confirmation.
+ * that are actively hunting for confirmation.
+ *
+ * The confirmation timeframe follows the trading style (see
+ * _shared/styleTimeframes.ts): 5m scalper, 15m day trader, 1h swing. It was
+ * hardcoded to 5m for every style, which decided swing setups drawn from a
+ * weekly bias on five-minute noise.
  *
  * This function does NOT run the full scan — it only:
  * 1. Queries pending_orders with status = "awaiting_confirmation"
- * 2. Fetches fresh 5m candles for those specific pairs
+ * 2. Fetches fresh confirmation candles for those specific pairs
  * 3. Checks if price left the zone (reset to pending)
  * 4. Checks for impulse invalidation (cancel)
  * 5. Runs CHoCH detection
@@ -20,6 +25,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
 import {
   SPECS,
   analyzeMarketStructure,
@@ -255,16 +261,22 @@ Deno.serve(async (req) => {
         const { telegramChatIds, brokerConnections, openPositions, account, config } = userData;
         const strategyConfig = config.strategy || {};
 
-        // Fetch fresh 5m candles for this pair
-        const candles5m = await fetchCandles(pending.symbol, "5m");
-        if (candles5m.length < 10) {
-          console.log(`[zone-confirm] ${pending.symbol} — insufficient 5m candles (${candles5m.length})`);
+        // Confirm on the timeframe this style enters on, not always 5m. A swing
+        // setup drawn from a weekly bias was previously confirmed — or thrown
+        // away — on five-minute noise. config_json here is the raw nested shape;
+        // it does not pass through configMapper, so read tradingStyle directly.
+        const confirmTF = styleConfirmationTimeframe(config.tradingStyle?.mode);
+
+        // Fetch fresh confirmation candles for this pair
+        const confirmCandles = await fetchCandles(pending.symbol, confirmTF);
+        if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
+          console.log(`[zone-confirm] ${pending.symbol} — insufficient ${confirmTF} candles (${confirmCandles.length})`);
           stillHunting++;
           continue;
         }
 
         // Get current price from latest candle
-        const currentPrice = candles5m[candles5m.length - 1].close;
+        const currentPrice = confirmCandles[confirmCandles.length - 1].close;
 
         // ── Check impulse invalidation ──
         let impulseData: { high: number; low: number } | null = null;
@@ -308,10 +320,10 @@ Deno.serve(async (req) => {
 
         // ── Refined zone invalidation ──
         // If price closes THROUGH the refined zone (not just wicks), the level has failed.
-        // For longs: a 5m candle close below refined_zone_low = invalidation
-        // For shorts: a 5m candle close above refined_zone_high = invalidation
-        if (hasRefinedZone && candles5m.length > 0) {
-          const lastCandle = candles5m[candles5m.length - 1];
+        // For longs: a confirmation candle close below refined_zone_low = invalidation
+        // For shorts: a confirmation candle close above refined_zone_high = invalidation
+        if (hasRefinedZone && confirmCandles.length > 0) {
+          const lastCandle = confirmCandles[confirmCandles.length - 1];
           const dir = pending.direction as "long" | "short";
           const closedThrough = dir === "long"
             ? lastCandle.close < rawRefinedLow
@@ -319,7 +331,7 @@ Deno.serve(async (req) => {
           if (closedThrough) {
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `[zone-confirm] Refined zone failed — 5m close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
+              cancel_reason: `[zone-confirm] Refined zone failed — ${confirmTF} close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             cancelled++;
@@ -332,14 +344,14 @@ Deno.serve(async (req) => {
         let zoneTouchIdx: number | undefined;
         if (pending.zone_touch_time) {
           const touchTime = new Date(pending.zone_touch_time).getTime();
-          for (let i = candles5m.length - 1; i >= 0; i--) {
-            const candleTime = new Date(candles5m[i].datetime).getTime();
+          for (let i = confirmCandles.length - 1; i >= 0; i--) {
+            const candleTime = new Date(confirmCandles[i].datetime).getTime();
             if (candleTime <= touchTime) { zoneTouchIdx = i; break; }
           }
         }
 
         const confirmationSignal = detectZoneConfirmation(
-          candles5m,
+          confirmCandles,
           pending.direction as "long" | "short",
           DEFAULT_ZONE_CONFIRMATION_CONFIG,
           zoneTouchIdx,
@@ -470,7 +482,7 @@ Deno.serve(async (req) => {
           summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
           bias: pending.direction === "long" ? "bullish" : "bearish",
           session: "confirmation_fill",
-          timeframe: "5m",
+          timeframe: confirmTF,
         });
 
         // Update pending order to filled

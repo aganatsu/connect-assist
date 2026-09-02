@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
+import { stylePendingExpiryMinutes, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
 // Attribute this isolate's TwelveData credits. Several functions reach the
 // provider through candleSource; without this they are indistinguishable in
@@ -1907,6 +1908,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     if (styleApplied.length > 0) console.log(`[config] Style "${resolvedStyle}" applied: ${styleApplied.join(", ")}`);
+    // Not part of STYLE_OVERRIDES — zone-confirmation-scanner owns the decision
+    // — but logged here so one line says which timeframes this style is running.
+    console.log(`[config] Style "${resolvedStyle}" confirmation timeframe: ${STYLE_CONFIRMATION_TIMEFRAME[resolvedStyle as keyof typeof STYLE_CONFIRMATION_TIMEFRAME] ?? "15m"}`);
     if (userKept.length > 0) console.log(`[config] User-protected overrides kept: ${userKept.join(", ")}`);
   }
 
@@ -5856,7 +5860,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (effectiveLimitEnabled && limitEntry) {
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
-          const expiryMinutes = config.limitOrderExpiryMinutes || 60;
+          // Scaled to the style, the same way staged-setup TTL already is. A flat
+          // 60 minutes is one scan cycle for a swing trader on a 60-minute
+          // interval — the order expires at about the moment the next scan would
+          // look at it, and it now has to survive long enough for an entry to
+          // confirm on 1h candles.
+          const expiryMinutes = stylePendingExpiryMinutes(
+            resolvedStyle,
+            config.limitOrderExpiryMinutes || 60,
+          );
           const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
 
           // Recalculate SL/TP relative to the limit entry price for better R:R
