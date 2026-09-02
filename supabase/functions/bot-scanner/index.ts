@@ -4620,7 +4620,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
+        const judasMSSIndex = candles.length - 1;
+        ictJudasResult = detectICTJudasSwing(candles, judasMSSIndex, judasDirection, judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
         const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
