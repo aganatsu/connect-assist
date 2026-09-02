@@ -3077,6 +3077,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             pendingCancelled++;
             continue;
           }
+          // Same-direction stacking, checked here as well as on the market path.
+          // Gate 4/5 above only count positions; the market path additionally
+          // refuses a second position in the same direction (see the
+          // sameDirectionExists check in evaluateGates) and this path did not.
+          // A pending order that armed while an identical position was already
+          // open therefore filled anyway. Measured 2026-09-02: four GBP/JPY
+          // longs and two EUR/USD longs, opened across separate cycles with
+          // near-identical entries, all closed at SL — 1,666 of a 3,406
+          // drawdown, or 49%, from four duplicated ideas on two symbols.
+          const sameDirOpen = openPosArr.some((p: any) =>
+            p.symbol === pending.symbol && p.direction === pending.direction
+          );
+          if (sameDirOpen && !config.allowSameDirectionStacking) {
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — same-direction position already open`);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Same-direction ${pending.direction} position already open at confirmation time`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            continue;
+          }
 
           // Confirmation is go/no-go — fill at current market price (already inside refined zone)
           const actualFillPrice = currentPrice;

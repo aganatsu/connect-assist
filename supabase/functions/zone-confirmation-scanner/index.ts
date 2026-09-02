@@ -227,10 +227,39 @@ Deno.serve(async (req) => {
         .from("paper_accounts").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
-      // Bot config
-      const { data: botConfig } = await supabase
-        .from("bot_configs").select("config_json")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
+      // Bot config.
+      //
+      // bot_configs has no bot_id column — SQL_MIGRATION_BOT_ID.sql added it to
+      // paper_accounts, paper_positions and paper_trade_history only. Filtering
+      // on it returned PostgREST 42703, botConfig came back null, and this
+      // function silently ran on `{}`: every spread filter, position cap and
+      // (since the style work) the confirmation timeframe fell back to its
+      // default. The error was discarded, so nothing ever said so.
+      //
+      // Resolution mirrors bot-scanner's loadConfig — connection-specific
+      // first, then global — so both functions read the same config instead of
+      // disagreeing.
+      let botConfig: { config_json: unknown } | null = null;
+      {
+        const connectionId = (connections || []).find((c: any) => c.id)?.id ?? null;
+        if (connectionId) {
+          const res = await supabase
+            .from("bot_configs").select("config_json")
+            .eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
+          if (res.error) console.warn(`[zone-confirm] config read (connection) failed: ${res.error.message}`);
+          botConfig = res.data ?? null;
+        }
+        if (!botConfig) {
+          const res = await supabase
+            .from("bot_configs").select("config_json")
+            .eq("user_id", userId).is("connection_id", null).maybeSingle();
+          if (res.error) console.warn(`[zone-confirm] config read (global) failed: ${res.error.message}`);
+          botConfig = res.data ?? null;
+        }
+        if (!botConfig) {
+          console.warn(`[zone-confirm] no bot_config for user ${userId} — running on defaults`);
+        }
+      }
 
       // Set up broker connection for candle fetching (MetaApi preferred)
       const metaConn = (connections || []).find((c: any) => c.broker_type === "metaapi");
