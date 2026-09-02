@@ -4646,15 +4646,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           bodyCloseOnly: pairConfig.ictFVGBodyCloseOnly,
           ruleOfTwo: pairConfig.ictFVGRuleOfTwo,
         };
-        ictFVGResult = validateFVGBatch(analysis.fvgs, candles, fvgConfig);
+        const fvgInputs = (analysis.fvgs || []).map((fvg: any) => ({
+          index: fvg.index,
+          high: fvg.high,
+          low: fvg.low,
+          type: fvg.type,
+          midpoint: (fvg.high + fvg.low) / 2,
+        }));
+        ictFVGResult = validateFVGBatch(fvgInputs, candles, fvgConfig);
         const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
-        console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${ictFVGResult.validCount}/${ictFVGResult.totalCount} valid, ${ictFVGResult.invalidatedCount} invalidated, ${ictFVGResult.exhaustedCount} exhausted`);
+        const validCount = ictFVGResult.results.filter((r: any) => r.status === "fresh" || r.status === "first_touch").length;
+        const invalidatedCount = ictFVGResult.results.filter((r: any) => r.status === "invalidated").length;
+        const exhaustedCount = ictFVGResult.results.filter((r: any) => r.status === "exhausted").length;
+        const totalCount = ictFVGResult.results.length;
+        console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${validCount}/${totalCount} valid, ${invalidatedCount} invalidated, ${exhaustedCount} exhausted`);
         (detail as any).ictFVG = {
           gateMode: pairConfig.ictFVGInvalidationGateMode,
-          validCount: ictFVGResult.validCount,
-          invalidatedCount: ictFVGResult.invalidatedCount,
-          exhaustedCount: ictFVGResult.exhaustedCount,
-          totalCount: ictFVGResult.totalCount,
+          validCount,
+          invalidatedCount,
+          exhaustedCount,
+          totalCount,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT FVG error (non-fatal): ${e?.message}`);
