@@ -5202,15 +5202,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
     const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
-    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
+    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
-    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.detected)
+    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
       ? -pairConfig.ictJudasSwingPenalty : 0;
+    const fvgInvalidated = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "invalidated").length : 0;
+    const fvgExhausted = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "exhausted").length : 0;
+    const fvgTotal = ictFVGResult ? ictFVGResult.results.length : 0;
     const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
-      ? -(ictFVGResult.invalidatedCount * pairConfig.ictFVGInvalidatedPenalty + ictFVGResult.exhaustedCount * pairConfig.ictFVGExhaustedPenalty) / Math.max(ictFVGResult.totalCount, 1)
+      ? -(fvgInvalidated * pairConfig.ictFVGInvalidatedPenalty + fvgExhausted * pairConfig.ictFVGExhaustedPenalty) / Math.max(fvgTotal, 1)
       : 0;
     const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
-      ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
+      ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
     const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
