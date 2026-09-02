@@ -4868,9 +4868,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     let directionVerdict: DirectionVerdictResult | null = null;
     try {
       const gpCtx = (pairConfig as any)._gamePlanContext;
-      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
-        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+      // confirmedTrend runs on the style's BIAS timeframe, not always Daily.
+      //
+      // It carries the largest weight in the verdict (0.40 in directionVerdict's
+      // WEIGHTS) while simpleDirection — the only genuinely style-aware source —
+      // carries 0.25. On a scalper that meant a 5-minute trade was judged 40% by
+      // a Daily trend, and STYLE_TF_LABELS.scalper already says bias should be
+      // 1H. A Daily trend will routinely disagree with a valid 5m setup; that is
+      // what different timeframes do, not a malfunction. Measured 2026-09-02:
+      // 300 of 1,340 evaluations (22%) had the verdict opposing the entry, and
+      // the gate log shows the shape — "agreement: 33%", one source of three.
+      //
+      // day_trader is unchanged: its bias timeframe IS Daily.
+      // swing_trader is unchanged deliberately — its bias timeframe is Weekly,
+      // but weeklyBias already feeds the verdict as a separate source, and
+      // pointing confirmedTrend at Weekly too would count the same timeframe
+      // twice across 0.52 of the weight.
+      // Falls back to Daily when the bias timeframe is short. Daily is served
+      // from kv_cache and is close to always present; 1h is fetched live every
+      // cycle and is not. Without the fallback a single failed 1h fetch would
+      // drop confirmedTrend to null and silently remove 0.40 of the verdict's
+      // weight, which is a worse failure than judging on a slower timeframe.
+      const preferHourly = resolvedStyle === "scalper" && hourlyCandles.length >= 20;
+      const biasCandles = preferHourly ? hourlyCandles : dailyCandles;
+      const biasTFLabel = preferHourly ? "1h" : "1d";
+      const ctResult = biasCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
+        ? computeConfirmedTrend(biasCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
         : null;
+      if (ctResult) {
+        const fellBack = resolvedStyle === "scalper" && !preferHourly;
+        console.log(`[scan ${scanCycleId}] ${pair} confirmedTrend on ${biasTFLabel} (${resolvedStyle}${fellBack ? ", fell back — only " + hourlyCandles.length + " 1h candles" : ""}): ${ctResult.trend}`);
+      }
       directionVerdict = computeDirectionVerdict({
         confirmedTrend: ctResult,
         simpleDirection: simpleDirectionResult ? {
