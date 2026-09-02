@@ -4654,7 +4654,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           type: fvg.type,
           midpoint: (fvg.high + fvg.low) / 2,
         }));
-        ictFVGResult = validateFVGBatch(fvgInputs, candles, fvgConfig);
+        const fvgDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        ictFVGResult = validateFVGBatch(fvgInputs, candles, fvgDirection, fvgConfig);
         const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
         const validCount = ictFVGResult.results.filter((r: any) => r.status === "fresh" || r.status === "first_touch").length;
         const invalidatedCount = ictFVGResult.results.filter((r: any) => r.status === "invalidated").length;
