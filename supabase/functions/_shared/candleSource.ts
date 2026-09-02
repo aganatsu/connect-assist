@@ -6,6 +6,7 @@
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
+import { reserveApiCredit, resetCreditBudgetStats } from "./apiCreditBudget.ts";
 
 export interface Candle {
   datetime: string;
@@ -24,7 +25,11 @@ const _tdRequestTimestamps: number[] = [];
 const TD_RATE_LIMIT = 50;   // 50 of 55 — 5 credit safety margin
 const TD_RATE_WINDOW_MS = 60_000;
 const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Polygon
+const TD_SHARED_POLL_MS = 2_000; // Re-ask the shared budget this often while waiting
 let _tdThrottleCount = 0;      // Track how many times we throttled this invocation
+let _td429Count = 0;           // TwelveData responses that came back rate-limited
+let _tdUnenforcedCount = 0;    // Fetches that bypassed the shared budget (it failed open)
+let _tdGaveUpCount = 0;        // Fetches abandoned after TD_MAX_WAIT_MS of waiting
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
   const now = Date.now();
@@ -38,6 +43,7 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
     if (waitMs > TD_MAX_WAIT_MS) {
       // If wait is too long, skip to Polygon fallback instead of blocking
       _tdThrottleCount++;
+      _tdGaveUpCount++;
       console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms (>${TD_MAX_WAIT_MS}ms), skipping to Polygon (throttle #${_tdThrottleCount})`);
       return false;
     }
@@ -46,13 +52,70 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
     await new Promise(r => setTimeout(r, waitMs));
   }
   _tdRequestTimestamps.push(Date.now());
-  return true;
+
+  // The check above only sees THIS isolate. bot-scanner, the manage loop,
+  // zone-confirmation-scanner and paper-trading each run their own, so the
+  // plan-wide spend is the sum of several separately-compliant limiters —
+  // which is how we reached 371/min against a 55/min plan with the throttle
+  // counter reading 0. The shared budget is the one that knows the real total.
+  const deadline = Date.now() + TD_MAX_WAIT_MS;
+  for (;;) {
+    const reservation = await reserveApiCredit("twelvedata", TD_RATE_LIMIT, TD_RATE_WINDOW_MS / 1000);
+    if (reservation.granted) {
+      if (!reservation.enforced) _tdUnenforcedCount++;
+      return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      _tdThrottleCount++;
+      _tdGaveUpCount++;
+      console.warn(
+        `[candleSource] TwelveData shared budget exhausted after ${TD_MAX_WAIT_MS}ms, skipping to Polygon (throttle #${_tdThrottleCount})`,
+      );
+      return false;
+    }
+    // The window rolls continuously, so credits free up a few at a time rather
+    // than all at once. Poll rather than sleeping for a full window.
+    _tdThrottleCount++;
+    await new Promise((r) => setTimeout(r, Math.min(TD_SHARED_POLL_MS, remaining)));
+  }
 }
 
-/** Reset throttle counter — call at start of each scan cycle for clean stats */
-export function resetThrottleStats(): { throttleCount: number } {
-  const stats = { throttleCount: _tdThrottleCount };
+/**
+ * Reset throttle counters — call at start of each scan cycle for clean stats.
+ *
+ * Two numbers matter here, and neither existed before:
+ *
+ * `unenforcedCount` counts fetches that proceeded because the shared budget
+ * failed open. Non-zero means we are back to per-isolate limiting and the
+ * plan-wide total is unguarded — the exact condition that went unnoticed for
+ * months because nothing counted it.
+ *
+ * `gaveUpCount` counts fetches abandoned after waiting the full TD_MAX_WAIT_MS.
+ * These become "Insufficient candles" and a skipped pair downstream, so a
+ * rising value means the scanner is being starved rather than merely paced.
+ */
+export function resetThrottleStats(): {
+  throttleCount: number;
+  rateLimited429: number;
+  unenforcedCount: number;
+  gaveUpCount: number;
+  budgetRpcFailures: number;
+  budgetRefused: number;
+} {
+  const budget = resetCreditBudgetStats();
+  const stats = {
+    throttleCount: _tdThrottleCount,
+    rateLimited429: _td429Count,
+    unenforcedCount: _tdUnenforcedCount,
+    gaveUpCount: _tdGaveUpCount,
+    budgetRpcFailures: budget.rpcFailures,
+    budgetRefused: budget.refused,
+  };
   _tdThrottleCount = 0;
+  _td429Count = 0;
+  _tdUnenforcedCount = 0;
+  _tdGaveUpCount = 0;
   return stats;
 }
 
@@ -65,7 +128,13 @@ interface CacheEntry {
   timestamp: number;
 }
 const _candleCache = new Map<string, CacheEntry>();
-const CACHE_TTL_INTRADAY_MS = 30_000;  // 30 seconds for intraday
+// 90s, not 30s. Measured 2026-08-24: at 30s the scanner refused 202-440 credit
+// reservations per cycle and drew 50/min against a 50/min cap, because a cycle
+// takes longer than the TTL and re-fetches the same symbol/interval it just
+// fetched. Widening to 90s took refused to 0 and the draw to 3/min, and pulled
+// cycle spacing from 31min back to 7min (PR #413). The July 10 revert restored
+// the 30s value; this puts the measured fix back.
+const CACHE_TTL_INTRADAY_MS = 90_000;  // 90 seconds for intraday
 const CACHE_TTL_DAILY_MS = 300_000;    // 5 minutes for daily
 
 function getCacheKey(symbol: string, interval: string): string {
@@ -454,6 +523,22 @@ async function persistSymbolOverride(conn: BrokerConn, canonical: string, broker
 }
 
 // ─── Twelve Data ──────────────────────────────────────────────────────
+function mapTwelveDataValues(values: any[]): Candle[] {
+  return values.map((v: any) => ({
+    datetime: typeof v.datetime === "string" && v.datetime.length === 10
+      ? `${v.datetime}T00:00:00Z`
+      : `${v.datetime.replace(" ", "T")}Z`,
+    open: Number(v.open),
+    high: Number(v.high),
+    low: Number(v.low),
+    close: Number(v.close),
+    volume: v.volume != null ? Number(v.volume) : undefined,
+  })).filter((c: Candle) =>
+    Number.isFinite(c.open) && Number.isFinite(c.high) &&
+    Number.isFinite(c.low) && Number.isFinite(c.close)
+  );
+}
+
 async function twelveDataCandles(
   symbol: string,
   canon: string,
@@ -471,25 +556,16 @@ async function twelveDataCandles(
   const interval = twelveDataInterval(canon);
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
   try {
-    const res = await fetch(url);
-    // H8: Handle 429 with exponential backoff
+    let res = await fetch(url);
     if (res.status === 429) {
-      console.warn(`[candleSource] TwelveData 429 rate limited for ${symbol}, backing off`);
-      await new Promise(r => setTimeout(r, 5000)); // 5s backoff
-      const retryRes = await fetch(url);
-      if (!retryRes.ok) return [];
-      const retryData = await retryRes.json();
-      if (retryData?.status === "error" || !Array.isArray(retryData?.values)) return [];
-      return retryData.values.map((v: any) => ({
-        datetime: typeof v.datetime === "string" && v.datetime.length === 10
-          ? `${v.datetime}T00:00:00Z`
-          : `${v.datetime.replace(" ", "T")}Z`,
-        open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close),
-        volume: v.volume != null ? Number(v.volume) : undefined,
-      })).filter((c: Candle) =>
-        Number.isFinite(c.open) && Number.isFinite(c.high) &&
-        Number.isFinite(c.low) && Number.isFinite(c.close)
-      );
+      // A 429 means the plan limit is already breached. The previous code slept
+      // 5s and re-fetched without acquiring a slot, so the retry was neither
+      // paced nor counted — an unbudgeted credit spent at the exact moment we
+      // were over budget. Re-acquire instead, and give up if nothing frees up.
+      _td429Count++;
+      console.warn(`[candleSource] TwelveData 429 for ${symbol} (#${_td429Count}) — re-acquiring a slot before retry`);
+      if (!(await waitForTwelveDataSlot())) return [];
+      res = await fetch(url);
     }
     if (!res.ok) return [];
     const data = await res.json();
@@ -497,19 +573,7 @@ async function twelveDataCandles(
       if (data?.message) console.warn(`[candleSource] Twelve Data: ${data.message}`);
       return [];
     }
-    return data.values.map((v: any) => ({
-      datetime: typeof v.datetime === "string" && v.datetime.length === 10
-        ? `${v.datetime}T00:00:00Z`
-        : `${v.datetime.replace(" ", "T")}Z`,
-      open: Number(v.open),
-      high: Number(v.high),
-      low: Number(v.low),
-      close: Number(v.close),
-      volume: v.volume != null ? Number(v.volume) : undefined,
-    })).filter((c: Candle) =>
-      Number.isFinite(c.open) && Number.isFinite(c.high) &&
-      Number.isFinite(c.low) && Number.isFinite(c.close)
-    );
+    return mapTwelveDataValues(data.values);
   } catch (e: any) {
     console.warn(`[candleSource] Twelve Data fetch error: ${e?.message}`);
     return [];
@@ -711,19 +775,17 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
     return { candles: pg.slice(-limit), source: "polygon" };
   }
 
-  // M3: One more pass only if we still have budget. The inner twelveData/polygon
-  // helpers already do their own backoff-retry, so a second outer pass on top of
-  // the MetaAPI region/subscribe retries can blow past the 150s runtime limit.
+  // M3: one more pass at Polygon only.
+  //
+  // This used to retry TwelveData here too. Combined with the 429 retry inside
+  // twelveDataCandles, a single logical fetch could cost four TwelveData
+  // credits — and every one of them was spent after we had already established
+  // that the provider was not serving us, which in practice meant we were rate
+  // limited. Retrying into a rate limit deepens it. TwelveData now gets one
+  // paced attempt plus one paced retry inside the helper, and that is all.
   if (timeLeft() > 8_000) {
-    console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
+    console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying Polygon in 2s...`);
     await new Promise(r => setTimeout(r, 2000));
-
-    const tdRetry = timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : [];
-    if (tdRetry.length >= 30) {
-      if (_activeTally) _activeTally.twelvedata++;
-      setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
-      return { candles: tdRetry.slice(-limit), source: "twelvedata" };
-    }
 
     const pgRetry = timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : [];
     if (pgRetry.length >= 30) {

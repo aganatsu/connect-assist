@@ -769,7 +769,10 @@ export default function BrokerTradesTab() {
   const { data: paperStatus } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
-    refetchInterval: 5000,
+    // Shared key — React Query refetches at the SHORTEST observer interval, and
+    // each poll costs one TwelveData credit per open symbol. Kept at 10s so no
+    // single component can raise the app-wide rate.
+    refetchInterval: 10000,
   });
 
   const paperPositions = paperStatus?.positions || [];
