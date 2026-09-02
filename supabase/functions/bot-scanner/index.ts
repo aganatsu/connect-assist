@@ -4721,9 +4721,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           .eq("bot_config_id", (config as any).id)
           .order("closed_at", { ascending: false })
           .limit(20);
-        const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
-        const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
-        ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
+        // Compute risk state from recent trade history
+        const now = new Date();
+        const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+        const weekStart = new Date(todayStart);
+        weekStart.setUTCDate(todayStart.getUTCDate() - todayStart.getUTCDay());
+        let consecutiveLosses = 0;
+        for (const t of (recentTrades || [])) {
+          const pnl = t.pnl_percent || 0;
+          if (pnl < 0) consecutiveLosses++;
+          else break;
+        }
+        const tradesToday = (recentTrades || []).filter((t: any) => t.closed_at && new Date(t.closed_at) >= todayStart).length;
+        const dailyPnLPercent = (recentTrades || [])
+          .filter((t: any) => t.closed_at && new Date(t.closed_at) >= todayStart)
+          .reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        const weeklyPnLPercent = (recentTrades || [])
+          .filter((t: any) => t.closed_at && new Date(t.closed_at) >= weekStart)
+          .reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        ictRiskResult = assessRisk({ consecutiveLosses, tradesToday, dailyPnLPercent, weeklyPnLPercent, config: riskConfig });
         const modeTag = "OFF"; // Risk is always informational for now
         const reasonText = ictRiskResult.reasons.join("; ") || "ok";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.effectiveRiskPercent * 100).toFixed(2)}%, reason=${reasonText}`);
