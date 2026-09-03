@@ -1084,14 +1084,48 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     let pts = 0;
     let detail = "";
     if (config.enableLiquiditySweep !== false) {
-      // Prefer swept pools with rejection confirmation (wick through + close back)
-      const sweptPools = liquidityPools.filter(lp => lp.swept && lp.strength >= 2);
+      // A sweep is only evidence for THIS entry if it is near THIS price and took
+      // the liquidity opposing THIS direction. Neither was checked before, so any
+      // swept pool anywhere in the array scored, ranked on candle index alone.
+      //
+      // Observed live 2026-09-03 on a XAU/USD long at 4473: "+1.0 — buy-side
+      // liquidity swept + rejected at 4392.99756". That pool is $80 away (1.8% of
+      // price) and buy-side — buy stops taken and price rejecting DOWN, which is
+      // a bearish event. It was scored as confluence for a long.
+      //
+      // zoneLiquidity.ts already models this correctly (proximity threshold, side
+      // awareness, and trigger-vs-target classification) but only feeds the zone
+      // story panel, never the scorer. This brings the two into agreement on the
+      // two checks that decide relevance.
+      //
+      //   LONG  <- sell-side swept below (stops run down, then reversal up)
+      //   SHORT <- buy-side swept above  (stops run up, then reversal down)
+      //
+      // A sweep in the direction of the trade is not neutral — it means the
+      // liquidity that would have fuelled the move has already been taken — but
+      // it is excluded rather than penalised here, which is the minimal fix.
+      const atrLiq = calculateATR(candles, 14);
+      const maxSweepATR = typeof config.liquiditySweepMaxATR === "number"
+        ? config.liquiditySweepMaxATR
+        : 2.0;
+      const maxSweepDistance = atrLiq * maxSweepATR;
+      let rejectedFar = 0, rejectedSide = 0;
+      const sweptPools = liquidityPools.filter(lp => {
+        if (!lp.swept || lp.strength < 2) return false;
+        if (atrLiq > 0 && Math.abs(lp.price - lastPrice) > maxSweepDistance) { rejectedFar++; return false; }
+        if (direction === "long" && lp.type !== "sell-side") { rejectedSide++; return false; }
+        if (direction === "short" && lp.type !== "buy-side") { rejectedSide++; return false; }
+        return true;
+      });
       // Sort: rejection-confirmed first, then by strength, then by recency
       const sorted = sweptPools.sort((a, b) => {
         if (a.rejectionConfirmed !== b.rejectionConfirmed) return a.rejectionConfirmed ? -1 : 1;
         if (b.strength !== a.strength) return b.strength - a.strength;
         return (b.sweptAtIndex || 0) - (a.sweptAtIndex || 0); // more recent first
       });
+      const excluded = rejectedFar > 0 || rejectedSide > 0
+        ? ` (${rejectedFar} too far >${maxSweepATR}×ATR, ${rejectedSide} wrong side)`
+        : "";
       const best = sorted[0];
       if (best) {
         // Recency check: sweep should be within last 20 candles for full score
@@ -1099,14 +1133,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         if (best.rejectionConfirmed) {
           // Sweep + rejection = high-quality signal
           pts = isRecent ? 1.5 : 1.0;
-          detail = `${best.type} liquidity swept + rejected at ${best.price.toFixed(5)} (${best.strength} touches)${isRecent ? " — recent" : " — older sweep"}${best.strength >= 4 ? " — strong pool" : ""}`;
+          detail = `${best.type} liquidity swept + rejected at ${best.price.toFixed(5)} (${best.strength} touches, ${(Math.abs(best.price - lastPrice) / (atrLiq || 1)).toFixed(1)}×ATR away)${isRecent ? " — recent" : " — older sweep"}${best.strength >= 4 ? " — strong pool" : ""}`;
         } else {
           // Sweep without rejection = moderate signal (could be a real break, not a sweep)
           pts = isRecent ? 0.75 : 0.5;
-          detail = `${best.type} liquidity swept at ${best.price.toFixed(5)} (${best.strength} touches) — no rejection candle${isRecent ? "" : " (older sweep)"}${best.strength >= 4 ? " — strong pool" : ""}`;
+          detail = `${best.type} liquidity swept at ${best.price.toFixed(5)} (${best.strength} touches, ${(Math.abs(best.price - lastPrice) / (atrLiq || 1)).toFixed(1)}×ATR away) — no rejection candle${isRecent ? "" : " (older sweep)"}${best.strength >= 4 ? " — strong pool" : ""}`;
         }
       } else {
-        detail = "No recent liquidity sweep";
+        detail = `No relevant liquidity sweep${excluded}`;
       }
     } else {
       detail = "Liquidity Sweeps disabled";
