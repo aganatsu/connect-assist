@@ -523,8 +523,21 @@ function getEntryRange(entryTf: string): string {
  */
 function buildPdSnapshot(analysis: any, pairConfig: any, style: string) {
   const htf = (pairConfig as any)?._htfPD ?? {};
+  // rawPct/outOfRange matter more than pct here. An HTF reading is undefined
+  // whenever price has left its swing range, which in a trend is most of the
+  // time — and it degenerates toward "premium" in uptrends and "discount" in
+  // downtrends, i.e. against the trend. Any comparison of the entry reading
+  // against an HTF one has to drop the out-of-range rows or it measures nothing.
   const read = (pd: any) =>
-    pd ? { zone: pd.currentZone ?? null, pct: pd.zonePercent ?? null, ote: pd.oteZone ?? null } : null;
+    pd
+      ? {
+        zone: pd.currentZone ?? null,
+        pct: pd.zonePercent ?? null,
+        ote: pd.oteZone ?? null,
+        rawPct: pd.rawPercent ?? null,
+        outOfRange: pd.outOfRange ?? null,
+      }
+      : null;
   return {
     style,
     pd: {

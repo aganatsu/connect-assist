@@ -2173,23 +2173,63 @@ export function calculatePDLevels(dailyCandles: Candle[]) {
   };
 }
 
-export function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
-  if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+export interface PremiumDiscountResult {
+  currentZone: string;
+  /** Position within the dealing range, clamped to 0-100. */
+  zonePercent: number;
+  oteZone: boolean;
+  /** Unclamped value. Outside 0-100 when price has left the swing range. */
+  rawPercent: number;
+  /** True when price is outside the last-5-swing range entirely. */
+  outOfRange: boolean;
+}
+
+/**
+ * Where price sits inside the range described by the last 5 swing highs and lows.
+ *
+ * Swings need confirmation bars, so in a sustained trend every detectable swing
+ * sits behind price and price escapes the range. The percentage then runs past
+ * 100 or below 0 — measured 2026-09-03 on live HTF data: GBP/JPY 4H at -533%,
+ * USD/JPY 1H at -135%, AUD/USD 1H at +158%.
+ *
+ * That is not a rounding artifact, it is the metric breaking down, and it breaks
+ * down asymmetrically: in an uptrend it reads "premium" and in a downtrend it
+ * reads "discount", so acting on it vetoes trades taken WITH the trend. The
+ * entry-timeframe reading stays inside 0-100 only because a fast range keeps up
+ * with price.
+ *
+ * `zonePercent` is clamped so no caller can display or store a nonsense
+ * percentage. `rawPercent` and `outOfRange` are exposed so the breakdown is
+ * visible rather than silently classified as an extreme.
+ *
+ * Clamping cannot change any decision: the thresholds are 55 and 45, and an
+ * out-of-range value clamps to 100 or 0, which lands on the same side it
+ * already did. OTE (62-79) likewise never contains a clamped endpoint. Callers
+ * that want to reject an undefined reading must test `outOfRange` explicitly.
+ */
+export function calculatePremiumDiscount(candles: Candle[]): PremiumDiscountResult {
+  const neutral: PremiumDiscountResult = {
+    currentZone: "equilibrium", zonePercent: 50, oteZone: false,
+    rawPercent: 50, outOfRange: false,
+  };
+  if (candles.length < 10) return neutral;
   const swings = detectSwingPoints(candles);
   const recentHighs = swings.filter(s => s.type === "high").slice(-5);
   const recentLows = swings.filter(s => s.type === "low").slice(-5);
-  if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  if (recentHighs.length === 0 || recentLows.length === 0) return neutral;
   const swingHigh = Math.max(...recentHighs.map(s => s.price));
   const swingLow = Math.min(...recentLows.map(s => s.price));
   const range = swingHigh - swingLow;
-  if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  if (range === 0) return neutral;
   const lastPrice = candles[candles.length - 1].close;
-  const zonePercent = ((lastPrice - swingLow) / range) * 100;
+  const rawPercent = ((lastPrice - swingLow) / range) * 100;
+  const outOfRange = rawPercent < 0 || rawPercent > 100;
+  const zonePercent = Math.min(100, Math.max(0, rawPercent));
   let currentZone = "equilibrium";
   if (zonePercent > 55) currentZone = "premium";
   else if (zonePercent < 45) currentZone = "discount";
   const oteZone = zonePercent >= 62 && zonePercent <= 79;
-  return { currentZone, zonePercent, oteZone };
+  return { currentZone, zonePercent, oteZone, rawPercent, outOfRange };
 }
 
 export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
