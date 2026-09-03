@@ -2793,15 +2793,30 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const f = factors.find(ff => ff.name === n);
     return f && f.present && f.weight > 0 && (f as any).tier === 1;
   });
-  // Add HTF-nested confirmations to display
+  // HTF-nested confirmations are listed SEPARATELY, not as Tier 1 members.
+  // They raise tieredScore via the quality delta, but they never reach
+  // tier1Count: that only increments for names in TIER_1_FACTORS, and both
+  // carriers ("HTF POI Alignment", "HTF Fib + PD + Liquidity") are Tier 2.
+  // The counting loop also runs before the promotion block sets these flags.
+  // Listing them alongside the counted factors made the passed message print
+  // more names than the count, and the failed message used to end with
+  // ", HTF FVG/OB/Fib" — advertising a route through the gate that does not
+  // exist. Anyone reading that reason to understand a rejection was misled.
+  const htfNestedNames: string[] = [];
   const htfPoiF = factors.find(f => f.name === "HTF POI Alignment");
-  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) tier1PresentNames.push("FVG (HTF-nested)");
-  if (htfPoiF && (htfPoiF as any)._htfTier1OB) tier1PresentNames.push("OB (HTF-nested)");
+  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) htfNestedNames.push("FVG (HTF-nested)");
+  if (htfPoiF && (htfPoiF as any)._htfTier1OB) htfNestedNames.push("OB (HTF-nested)");
   const htfFibF = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
-  if (htfFibF && (htfFibF as any)._htfTier1Fib) tier1PresentNames.push("Fib (HTF-nested)");
+  if (htfFibF && (htfFibF as any)._htfTier1Fib) htfNestedNames.push("Fib (HTF-nested)");
+  const htfNestedNote = htfNestedNames.length > 0
+    ? ` [HTF-nested quality boost, not counted: ${htfNestedNames.join(", ")}]`
+    : "";
+  const tier1Qualifiers = `Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${
+    factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""
+  }`;
   const tier1GateReason = tier1GatePassed
-    ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})`
-    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}, HTF FVG/OB/Fib`;
+    ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})${htfNestedNote}`
+    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: ${tier1Qualifiers}${htfNestedNote}`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;
