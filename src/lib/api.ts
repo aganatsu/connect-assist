@@ -273,8 +273,8 @@ export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
 // (the supabase-js invoke() helper doesn't expose response headers).
 async function fetchMarketData(body: Record<string, any>): Promise<{ data: any; source: CandleSource }> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/market-data`;
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const token = await getFreshAccessToken();
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
