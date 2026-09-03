@@ -45,11 +45,25 @@ function cacheSuccessfulFunctionResponse(functionName: string, body: Record<stri
   }
 }
 
+// Returns a token that is still valid for at least 60s, refreshing proactively.
+// Without this, a session that expired while the tab sat idle is sent as-is and
+// the edge function replies 500 {"error":"JWT has expired"}.
+async function getFreshAccessToken(): Promise<string> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const expiresAt = session?.expires_at ? session.expires_at * 1000 : 0;
+  if (session?.access_token && expiresAt - Date.now() > 60_000) return session.access_token;
+  if (session) {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    if (refreshed?.session?.access_token) return refreshed.session.access_token;
+  }
+  return session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+}
+
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const token = await getFreshAccessToken();
+
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
         method: "POST",
         headers: {
