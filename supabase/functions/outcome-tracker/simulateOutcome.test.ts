@@ -330,3 +330,79 @@ Deno.test("sl_hit_time_minutes is correctly calculated", () => {
   // Entry at 01:00, SL at 03:00 → 120 minutes
   assertEquals(result.sl_hit_time_minutes, 120);
 });
+
+// ─── Resolution timeframe: the same price path, judged on 1H vs 5m bars ───
+//
+// simulateOutcome is correct. What was wrong was the bar size handed to it.
+// These two tests describe ONE gold short that wins: entry 4420, SL 4427
+// ($7 up), TP 4406 ($14 down, 2:1). Price ticks up to 4425.50 — close to the
+// stop but never touching it — then falls through TP.
+//
+// Judged on a single hourly bar the whole path collapses into one high/low, so
+// the bar's high (4425.50) and low (4405) both sit inside it. The near barrier
+// is only $7 away and the far one $14, so this shape — near-miss on the stop,
+// clean run to target — is exactly what an hourly bar cannot represent. Split
+// into 5m bars, the ordering is visible and the win is recoverable.
+//
+// This asymmetry is why "0 of 103 P/D rejections would have won" was not
+// evidence about the P/D gate: at 2:1 the SL is half as far as the TP, so clean
+// losses survive coarse bars while wins are absorbed into "inconclusive".
+
+Deno.test("a win becomes inconclusive when the hour also contains the stop", () => {
+  const hourly = [
+    makeCandle("2024-01-01T00:00:00Z", 4420, 4421.00, 4419.00, 4420), // before rejection
+    // The whole hour as one bar: it ran to target AND, later, back through the
+    // stop. Both barriers fall inside the same high/low, so the order is
+    // unknowable and the setup is discarded as inconclusive.
+    makeCandle("2024-01-01T01:00:00Z", 4420, 4428.00, 4405.00, 4426),
+  ];
+
+  const result = simulateOutcome(hourly, "short", 4420, 4427, 4406, "2024-01-01T00:30:00Z");
+
+  assertEquals(result.tp_hit, true);
+  assertEquals(result.sl_hit, true);
+  assertEquals(result.outcome_status, "inconclusive");
+});
+
+Deno.test("5m bars recover that win by resolving the ordering", () => {
+  // Identical path and identical numbers — target first, stop only afterwards.
+  // The trade was over at 00:50; what happened at 01:15 never mattered.
+  const fiveMin = [
+    makeCandle("2024-01-01T00:25:00Z", 4420, 4420.50, 4419.50, 4420), // before rejection
+    makeCandle("2024-01-01T00:35:00Z", 4420, 4423.00, 4419.80, 4422), // entry reached
+    makeCandle("2024-01-01T00:45:00Z", 4422, 4425.20, 4416.00, 4417),
+    makeCandle("2024-01-01T00:50:00Z", 4417, 4418.00, 4405.00, 4406), // TP — trade closed
+    makeCandle("2024-01-01T01:15:00Z", 4406, 4428.00, 4406.00, 4426), // stop, but too late to matter
+  ];
+
+  const result = simulateOutcome(fiveMin, "short", 4420, 4427, 4406, "2024-01-01T00:30:00Z");
+
+  assertEquals(result.outcome_status, "would_have_won");
+  assertEquals(result.sl_hit, false);
+  // And the timing is real rather than rounded to the hour.
+  assertEquals(result.tp_hit_time_minutes, 15);
+});
+
+Deno.test("the hour containing the rejection is skipped, so 1H hides fast moves", () => {
+  // Gold's real stop-outs closed in 6-9 minutes. With hourly bars, everything
+  // inside the rejection's own hour is discarded by the
+  // `candleTime <= rejectedTime` guard, so a trade that resolved in minutes
+  // leaves no trace and is scored on whatever happened an hour later.
+  const hourly = [
+    // Rejection at 00:30 falls inside this bar — skipped entirely.
+    makeCandle("2024-01-01T00:00:00Z", 4420, 4421.00, 4405.00, 4406),
+  ];
+
+  const result = simulateOutcome(hourly, "short", 4420, 4427, 4406, "2024-01-01T00:30:00Z");
+
+  assertEquals(result.price_reached_entry, false);
+  assertEquals(result.outcome_status, "inconclusive");
+
+  // The same move on 5m bars, where the bars after 00:30 exist, is a clean win.
+  const fiveMin = [
+    makeCandle("2024-01-01T00:25:00Z", 4420, 4421.00, 4419.00, 4420),
+    makeCandle("2024-01-01T00:35:00Z", 4420, 4420.50, 4405.00, 4406),
+  ];
+  const better = simulateOutcome(fiveMin, "short", 4420, 4427, 4406, "2024-01-01T00:30:00Z");
+  assertEquals(better.outcome_status, "would_have_won");
+});
