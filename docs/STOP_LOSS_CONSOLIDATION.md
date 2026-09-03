@@ -394,3 +394,39 @@ have had to see through.
 **Still required before any stop moves:** the cheap replay described above —
 both stops computed per stored setup, reported in both directions. Nothing in
 this addendum substitutes for it.
+
+
+---
+
+## Addendum — 2026-09-03: gold has been the ATR-only experiment
+
+Relevant to "What gets deleted", which proposes removing `MIN_SL_PIPS` as a
+volatility floor on the grounds that ATR does volatility and already knows the
+style.
+
+Gold has effectively been running that way already. `MIN_SL_PIPS["XAU/USD"]` was
+50 pips at `pipSize` 0.01 — $0.50 on a ~$4,400 instrument, 0.011% of price,
+against 0.16-0.31% for every forex pair. The static floor never bound, so gold's
+stop came from the ATR floor alone.
+
+Measured across five gold trades on 2026-09-02/03:
+
+```
+three real stop-outs   stops $3.03-$3.96   closed after 6, 7 and 9 minutes
+two winners            same stop range     ran 13 and 126 minutes
+net                    -733                the only net-negative symbol
+```
+
+Losses resolving in under ten minutes are stops sitting inside ordinary gold
+noise, not the market disproving the setup.
+
+Five trades proves nothing on its own. But it is a data point *against* removing
+the static floor, and the replay study this document requires should treat
+"ATR alone is sufficient" as a claim to test rather than a premise. Gold is the
+one instrument where it has already been tried.
+
+Raised to 700 pips ($7.00, 0.159%, matching GBP/JPY) as an interim measure, with
+`supabase/tests/_shared/minStopFloorPct.test.ts` asserting every floor sits in a
+comparable percentage band. That test encodes the principle this section argues
+for — floors should be comparable across asset classes — without making the
+unit change itself, which still needs the replay evidence described above.

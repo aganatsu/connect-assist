@@ -2507,7 +2507,32 @@ export const MIN_SL_PIPS: Record<string, number> = {
   // Minor crosses
   "AUD/CAD": 20, "AUD/NZD": 20, "AUD/CHF": 20, "NZD/CAD": 20, "NZD/CHF": 20, "CAD/CHF": 18,
   // Commodities & crypto
-  "XAU/USD": 50, "BTC/USD": 150,
+  //
+  // These are PIP counts, and a pip is not a comparable unit across asset
+  // classes — which is what made the gold entry wrong. XAU/USD carries
+  // pipSize 0.01 (see SPECS, and INSTRUMENTS in src/lib/marketData.ts; #300
+  // established that as the real value, replacing a guess). So 50 pips is
+  // $0.50 on a ~$4,400 instrument — 0.011% of price, where every forex floor
+  // sits between 0.16% and 0.31%. Fifteen times too small, so the static floor
+  // never bound and gold ran on the ATR floor alone.
+  //
+  // Measured 2026-09-03 across five gold trades: the three real stop-outs
+  // closed after 6, 7 and 9 minutes on stops of $3.03-$3.96, while the two
+  // winners ran 13 and 126 minutes. Losses that resolve in under ten minutes
+  // are stops sitting inside ordinary gold noise, not the market disproving the
+  // setup. Gold was the only net-negative symbol at -733.
+  //
+  // 700 pips = $7.00 = 0.159% at $4,400, matching GBP/JPY (0.163%), the
+  // tightest of the existing floors. Deliberately the conservative end: it
+  // still roughly doubles gold stops, and halves position size at the same
+  // dollar risk, so widen further only with evidence.
+  //
+  // The unit is the underlying problem. A percentage-of-price floor would make
+  // every instrument comparable and stop this recurring for the next symbol
+  // added — see docs/STOP_LOSS_CONSOLIDATION.md, which requires a replay study
+  // before any change of that scope. minStopFloorPct.test.ts asserts the band
+  // in the meantime.
+  "XAU/USD": 700, "BTC/USD": 150,
 };
 
 // ATR-based dynamic SL floor: SL must be at least this multiple of ATR(14).
