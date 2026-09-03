@@ -508,7 +508,34 @@ function getEntryRange(entryTf: string): string {
   return map[entryTf] || "5d";
 }
 
-
+/**
+ * Premium/discount readings across every timeframe we compute, for the
+ * rejected_setups.raw_detail blob.
+ *
+ * The P/D gate only ever reads the entry timeframe. The HTF readings are
+ * computed for the zone engine and then dropped, so a rejection has never
+ * recorded whether the higher timeframes agreed with the one that blocked it.
+ * Without that, "0 of 103 P/D rejections would have won" cannot distinguish a
+ * gate that reads structure from one that reads 5m noise.
+ *
+ * Shape is deliberately flat and small — one row per rejection, queried with
+ * raw_detail->'pd'->'h1'->>'zone'.
+ */
+function buildPdSnapshot(analysis: any, pairConfig: any, style: string) {
+  const htf = (pairConfig as any)?._htfPD ?? {};
+  const read = (pd: any) =>
+    pd ? { zone: pd.currentZone ?? null, pct: pd.zonePercent ?? null, ote: pd.oteZone ?? null } : null;
+  return {
+    style,
+    pd: {
+      // The reading the gate actually used.
+      entry: read(analysis?.pd),
+      h1: read(htf.h1),
+      h4: read(htf.h4),
+      d: read(htf.d),
+    },
+  };
+}
 
 // ─── Session & Time Helpers (delegated to _shared/sessions.ts) ──────
 // All imported from _shared/sessions.ts — SINGLE SOURCE OF TRUTH.
@@ -6695,6 +6722,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             fotsiBaseTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[0]] : undefined,
             fotsiQuoteTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[1]] : undefined,
             priceAtRejection: analysis.lastPrice,
+            // The P/D gate reads analysis.pd — the ENTRY timeframe, which is 5m
+            // for a scalper. htfPDD/htfPD4H/htfPD1H are computed at the top of
+            // the scan and no gate consults them. So when a setup is rejected
+            // for "selling in discount", we have never recorded whether the
+            // higher timeframes agreed. Gold on 2026-09-03 read 39.1% discount
+            // on 5m while the 1H impulse had it at 80.9% premium.
+            //
+            // Storing all four readings makes the disagreement cases countable:
+            // if setups rejected on 5m but in HTF premium go on to win, the gate
+            // is reading noise and being credited for it by a metric that never
+            // sees what it blocked.
+            rawDetail: buildPdSnapshot(analysis, pairConfig, resolvedStyle),
           });
         } catch (rsErr: any) {
           // Non-fatal: logging failure must never block the scanner
@@ -6731,6 +6770,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               fotsiBaseTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[0]] : undefined,
               fotsiQuoteTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[1]] : undefined,
               priceAtRejection: analysis.lastPrice,
+              // Same P/D snapshot as the gate-blocked path — these rows are the
+              // control group, rejected on score rather than on the P/D gate.
+              rawDetail: buildPdSnapshot(analysis, pairConfig, resolvedStyle),
             });
           } catch (rsErr: any) {
             console.warn(`[rejected-setup] Below-threshold logging error for ${pair}: ${rsErr?.message}`);

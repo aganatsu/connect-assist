@@ -28,8 +28,14 @@ setCreditCallerContext("outcome-tracker");
 
 // ── Constants ──
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation
-const MIN_AGE_MS = 60 * 60 * 1000;  // 1 hour minimum age before checking
 const OUTCOME_WINDOW_HOURS = 24;     // Look 24h ahead for outcome
+// A setup is classified once and never revisited (the query filters on
+// outcome_status = 'pending'). Checking at 1h of age therefore froze the verdict
+// after 1/24th of the window, and because SL is the nearer barrier that
+// truncation resolved losses while leaving slower winners permanently
+// "inconclusive" — the same bias the 5m switch below is meant to remove.
+// Wait out the full window so every setup is judged on the same span.
+const MIN_AGE_MS = OUTCOME_WINDOW_HOURS * 60 * 60 * 1000;
 const RETENTION_DAYS = 30;           // Delete records older than this
 const ALERT_THRESHOLD = 0.50;        // Alert if >50% would have won
 const ALERT_ROLLING_DAYS = 7;        // Rolling window for alert calculation
@@ -244,11 +250,27 @@ Deno.serve(async (req: Request) => {
       for (const setup of pendingSetups) {
         results.processed++;
         try {
-          // Fetch 1H candles for the symbol (covers 24h+ after rejection)
+          // 5m, not 1H. Resolving a scalper-scale trade on hourly bars biases
+          // the result toward "would_have_lost" in two ways, and both were
+          // reading as gate performance:
+          //
+          //   1. At 2:1 R:R the SL sits half as far as the TP, so a single 1H
+          //      bar hits SL alone easily but rarely reaches TP without also
+          //      touching SL. Clean losses survive; wins collapse into
+          //      "inconclusive" (see the both-hit branch below — it was 130 of
+          //      161 apparent winners).
+          //   2. The bar containing the rejection is skipped (candleTime <=
+          //      rejectedTime), discarding up to 60 minutes. Gold's real
+          //      stop-outs resolved in 6-9 minutes, so fast moves were simply
+          //      invisible.
+          //
+          // TwelveData bills per call, not per candle, so this costs the same
+          // as the 48-bar 1H fetch it replaces. 576 bars = 48h, keeping the 2x
+          // headroom over the 24h window in case the tracker falls behind.
           const { candles } = await fetchCandlesWithFallback({
             symbol: setup.symbol,
-            interval: "1h",
-            limit: 48, // 48 hours of 1H candles — plenty of coverage
+            interval: "5m",
+            limit: 576,
           });
 
           if (candles.length < 5) {
