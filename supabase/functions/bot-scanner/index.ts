@@ -4469,6 +4469,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         : hourlyCandles.length >= 20;
     if (analysis.direction && hasMinZoneCandles) {
       try {
+        // Same two-layer floor bot-scanner applies to the real stop at :5787.
+        // Duplicated rather than hoisted because that block runs much later and
+        // only on the entry path, while this is needed for every evaluation.
+        // Display only — feeds EntryStory.executable, never a gate.
+        const zoneSpec = SPECS[pair] || SPECS["EUR/USD"];
+        const zoneStaticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
+        const zoneAtrVal = (analysis as any).atrValue ?? 0;
+        const zoneAtrFloorPips = zoneAtrVal > 0
+          ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
+        const effectiveMinSlPipsForZone = Math.max(zoneStaticMinSlPips, zoneAtrFloorPips);
         const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
         // Combine liquidity pools from the relevant timeframes
         const combinedLiqPools = [
@@ -4533,9 +4543,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
-          // config slot: liquidity-sweep options belong to a later feature that
-          // is not on this tree, so it stays default.
-          undefined,
+          // UnifiedZoneConfig. minRR and requireConfirmation stay at their
+          // defaults — both gate whether an entry object exists at all, so
+          // moving them changes trade selection. minSlPips and tpRatio are
+          // supplied only so the engine can report what execution WOULD place
+          // (EntryStory.executable); they feed no gate.
+          {
+            minSlPips: effectiveMinSlPipsForZone,
+            tpRatio: config.tpRatio,
+          },
           zoneTFLabels,
         );
 
