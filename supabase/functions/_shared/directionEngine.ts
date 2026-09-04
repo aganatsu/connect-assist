@@ -229,6 +229,12 @@ interface DirectionConfig {
   trendSwingLookback?: number;
   /** Whether to use confirmedTrend for bias determination (default: true) */
   useConfirmedTrend?: boolean;
+  /**
+   * Make the structural hard blocks respect price rather than candle count.
+   * Default false — current behaviour. See priceAwareBlocks() below for what
+   * changes and why.
+   */
+  priceAwareStructureBlocks?: boolean;
 }
 
 const DEFAULTS = {
@@ -238,7 +244,54 @@ const DEFAULTS = {
   fibFactor: 0.25,
   trendSwingLookback: 5,
   useConfirmedTrend: true,
+  priceAwareStructureBlocks: false,
 };
+
+/**
+ * The two structural hard blocks invalidate a setup on state that changes as
+ * price travels TO its level, rather than on price breaking the level.
+ *
+ *   chochAgainst  — an opposing CHoCH blocks for the whole lookback window no
+ *                   matter where price has gone since. Observed 2026-09-04:
+ *                   a bearish CHoCH at 4368.53 still blocking XAU/USD with
+ *                   price at 4427, a level the same panel listed as SUPPORT.
+ *
+ *   trend opposes — blocks when the structure timeframe's trend disagrees with
+ *                   bias, using analyzeMarketStructure().trend. The comment on
+ *                   confirmedTrend says that read "flips on every new swing
+ *                   pair", and this module already uses confirmedTrend for
+ *                   bias — so the stable function decides bias and the unstable
+ *                   one decides a hard block. Observed 2026-09-04 on GBP/USD:
+ *                   1H bullish, 5m "Entry TF trend bullish — aligned", verdict
+ *                   LONG 83% with 100% agreement, Tier 1 passed, score 42.5%
+ *                   over a 40% threshold — blocked because the 15m read bearish
+ *                   mid-pullback.
+ *
+ * For a system that buys retracements into higher-timeframe zones this is
+ * self-defeating: reaching a demand zone REQUIRES the fall that trips both
+ * blocks. is4HRetracing already classifies that move correctly as a healthy
+ * pullback, and is then overruled two lines later.
+ *
+ * With the flag on:
+ *   1. an opposing CHoCH is ignored once price has closed back through it
+ *   2. the trend block uses confirmedTrend, so only a confirmed reversal blocks
+ *   3. the trend block is skipped entirely while is4HRetracing reports retracing
+ *
+ * Default OFF. This decides whether a direction exists at all, and the zone
+ * search, staging, scoring and entry are all gated on that — so it is the last
+ * thing that should change without measurement.
+ */
+export function chochStillValid(
+  choch: StructureBreak,
+  lastPrice: number,
+): boolean {
+  // A bearish CHoCH is spent once price closes back above the level it broke;
+  // a bullish one once price closes back below. `level` is the swing that broke,
+  // falling back to the recorded price for older rows that lack it.
+  const level = typeof choch.level === "number" ? choch.level : choch.price;
+  if (typeof level !== "number" || !Number.isFinite(level)) return true;
+  return choch.type === "bearish" ? lastPrice <= level : lastPrice >= level;
+}
 
 // ── Helper: extract recent breaks from structure ──
 
@@ -291,20 +344,28 @@ function is4HRetracing(
   bias: "bullish" | "bearish",
   h4Candles: Candle[],
   chochLookback: number,
+  priceAware = false,
 ): { retracing: boolean; chochAgainst: boolean; reason: string } {
   const recentChoch = recentBreaks(h4Structure.choch, h4Candles.length, chochLookback);
+  const lastClose = h4Candles[h4Candles.length - 1].close;
 
   // Check for CHoCH against the bias direction
   // Bullish bias → bearish CHoCH = against. Bearish bias → bullish CHoCH = against.
   const oppositeType = bias === "bullish" ? "bearish" : "bullish";
-  const chochAgainst = recentChoch.some(c => c.type === oppositeType);
+  // Recency here is candle count only. With priceAware on, a CHoCH price has
+  // already closed back through is spent and no longer blocks.
+  const opposing = recentChoch.filter(c => c.type === oppositeType);
+  const live = priceAware ? opposing.filter(c => chochStillValid(c, lastClose)) : opposing;
+  const reclaimed = opposing.length - live.length;
+  const chochAgainst = live.length > 0;
 
   if (chochAgainst) {
-    const chochPrices = recentChoch.filter(c => c.type === oppositeType).map(c => c.price.toFixed(5)).join(", ");
+    const chochPrices = live.map(c => c.price.toFixed(5)).join(", ");
+    const reclaimedNote = reclaimed > 0 ? `, ${reclaimed} reclaimed by price` : "";
     return {
       retracing: false,
       chochAgainst: true,
-      reason: `4H CHoCH against ${bias} bias (${recentChoch.filter(c => c.type === oppositeType).length} recent ${oppositeType} CHoCH at ${chochPrices})`,
+      reason: `4H CHoCH against ${bias} bias (${live.length} recent ${oppositeType} CHoCH at ${chochPrices}${reclaimedNote})`,
     };
   }
 
@@ -525,7 +586,8 @@ export function determineDirection(
   }
 
   const h4Structure = analyzeMarketStructure(h4Candles);
-  const h4Check = is4HRetracing(h4Structure, bias!, h4Candles, h4ChochLookback);
+  const priceAwareLegacy = config?.priceAwareStructureBlocks ?? DEFAULTS.priceAwareStructureBlocks;
+  const h4Check = is4HRetracing(h4Structure, bias!, h4Candles, h4ChochLookback, priceAwareLegacy);
 
   // ── Hard block: 4H CHoCH against bias ──
   if (h4Check.chochAgainst) {
@@ -539,11 +601,16 @@ export function determineDirection(
   // ── Hard block: 4H trend opposes daily bias ──
   // Catches the case where the CHoCH that flipped 4H happened outside the lookback window
   // but 4H is still trending against the daily bias (recent BOS confirms the opposing trend).
-  if (h4Structure.trend !== "ranging" && h4Structure.trend !== bias) {
+  // Same treatment as the style-aware path — see the note there.
+  const h4TrendForBlock = priceAwareLegacy
+    ? confirmedTrend(h4Candles, fibFactor, trendSwingLookback).trend
+    : h4Structure.trend;
+  const skipLegacyTrendBlock = priceAwareLegacy && h4Check.retracing;
+  if (!skipLegacyTrendBlock && h4TrendForBlock !== "ranging" && h4TrendForBlock !== bias) {
     return {
       direction: null, bias: bias!, biasSource: biasSource!,
       h4Retrace: false, h4ChochAgainst: true, h1Confirmed: false,
-      reason: `${biasSource} ${bias} bias BUT 4H trend is ${h4Structure.trend} (opposes bias) → BLOCKED`,
+      reason: `${biasSource} ${bias} bias BUT 4H trend is ${h4TrendForBlock} (opposes bias)${priceAwareLegacy ? " [confirmedTrend]" : ""} → BLOCKED`,
     };
   }
 
@@ -789,8 +856,9 @@ export function determineDirectionStyleAware(
     };
   }
 
+  const priceAware = config?.priceAwareStructureBlocks ?? DEFAULTS.priceAwareStructureBlocks;
   const structStructure = analyzeMarketStructure(structureCandles);
-  const structCheck = is4HRetracing(structStructure, bias!, structureCandles, chochLookback);
+  const structCheck = is4HRetracing(structStructure, bias!, structureCandles, chochLookback, priceAware);
 
   // ── Hard block: structure TF CHoCH against bias ──
   if (structCheck.chochAgainst) {
@@ -802,11 +870,21 @@ export function determineDirectionStyleAware(
   }
 
   // ── Hard block: structure TF trend opposes bias ──
-  if (structStructure.trend !== "ranging" && structStructure.trend !== bias) {
+  // priceAware changes two things here. The trend read comes from confirmedTrend
+  // rather than analyzeMarketStructure().trend, which the comment on that
+  // function describes as flipping "on every new swing pair" — and this module
+  // already trusts confirmedTrend for bias. And the block is skipped while
+  // is4HRetracing reports a healthy pullback, because those two checks otherwise
+  // contradict each other and the blunter one wins.
+  const structTrendForBlock = priceAware
+    ? confirmedTrend(structureCandles, fibFactor, trendSwingLookback).trend
+    : structStructure.trend;
+  const skipTrendBlock = priceAware && structCheck.retracing;
+  if (!skipTrendBlock && structTrendForBlock !== "ranging" && structTrendForBlock !== bias) {
     return {
       direction: null, bias: bias!, biasSource: biasSource!,
       structureRetrace: false, structureChochAgainst: true, confirmBOS: false,
-      reason: `${biasSource} ${bias} bias BUT ${structureTF} trend is ${structStructure.trend} (opposes bias) → BLOCKED`,
+      reason: `${biasSource} ${bias} bias BUT ${structureTF} trend is ${structTrendForBlock} (opposes bias)${priceAware ? " [confirmedTrend]" : ""} → BLOCKED`,
     };
   }
 

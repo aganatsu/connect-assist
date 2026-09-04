@@ -693,12 +693,19 @@ Deno.test("4H TREND BLOCK: source code contains the trend opposition check", () 
   const source = Deno.readTextFileSync(
     new URL("./directionEngine.ts", import.meta.url).pathname
   );
-  assertEquals(source.includes("h4Structure.trend !== \"ranging\""), true,
+  // The trend read is now indirected through h4TrendForBlock so the
+  // priceAwareStructureBlocks flag can swap analyzeMarketStructure().trend for
+  // confirmedTrend. The guard's intent is unchanged: a ranging exclusion, a
+  // comparison against bias, and 'opposes bias' in the reason.
+  assertEquals(source.includes("h4TrendForBlock !== \"ranging\""), true,
     "directionEngine.ts should contain the 4H trend ranging exclusion check");
-  assertEquals(source.includes("h4Structure.trend !== bias"), true,
+  assertEquals(source.includes("h4TrendForBlock !== bias"), true,
     "directionEngine.ts should contain the 4H trend vs bias comparison");
   assertEquals(source.includes("opposes bias"), true,
     "directionEngine.ts should contain 'opposes bias' in the block reason");
+  // And the default must still resolve to the original read.
+  assertEquals(source.includes(": h4Structure.trend;"), true,
+    "with the flag off, the block must still use analyzeMarketStructure().trend");
 });
 
 // ─── confirmedTrend tests ───────────────────────────────────────────
