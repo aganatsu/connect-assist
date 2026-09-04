@@ -2182,6 +2182,9 @@ export interface PremiumDiscountResult {
   rawPercent: number;
   /** True when price is outside the last-5-swing range entirely. */
   outOfRange: boolean;
+  /** The range the percentage is measured against, so callers can show it. */
+  swingHigh: number | null;
+  swingLow: number | null;
 }
 
 /**
@@ -2210,7 +2213,7 @@ export interface PremiumDiscountResult {
 export function calculatePremiumDiscount(candles: Candle[]): PremiumDiscountResult {
   const neutral: PremiumDiscountResult = {
     currentZone: "equilibrium", zonePercent: 50, oteZone: false,
-    rawPercent: 50, outOfRange: false,
+    rawPercent: 50, outOfRange: false, swingHigh: null, swingLow: null,
   };
   if (candles.length < 10) return neutral;
   const swings = detectSwingPoints(candles);
@@ -2229,7 +2232,7 @@ export function calculatePremiumDiscount(candles: Candle[]): PremiumDiscountResu
   if (zonePercent > 55) currentZone = "premium";
   else if (zonePercent < 45) currentZone = "discount";
   const oteZone = zonePercent >= 62 && zonePercent <= 79;
-  return { currentZone, zonePercent, oteZone, rawPercent, outOfRange };
+  return { currentZone, zonePercent, oteZone, rawPercent, outOfRange, swingHigh, swingLow };
 }
 
 export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
