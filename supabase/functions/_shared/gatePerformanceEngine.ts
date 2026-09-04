@@ -124,6 +124,11 @@ const GATE_PATTERNS: Array<{ category: string; patterns: string[] }> = [
   { category: "atr_filter", patterns: ["ATR "] },
   { category: "correlation", patterns: ["Correlation conflict", "Correlated exposure"] },
   { category: "tier1_gate", patterns: ["Tier 1", "tier1", "T1 "] },
+  // Added 2026-09-03 alongside gamePlanGateMode. Without a pattern here the
+  // gate's rejections normalise to null and never reach the confusion matrix,
+  // so the one gate we have direct evidence for would be the one gate the
+  // performance engine cannot score.
+  { category: "game_plan", patterns: ["GP filter", "Game plan:"] },
   { category: "regime_gate", patterns: ["Regime gate", "regime mismatch", "Regime alignment"] },
 ];
 

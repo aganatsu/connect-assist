@@ -1163,17 +1163,33 @@ async function runSafetyGates(
     const pdPct = analysis.pd.zonePercent ?? 50;
     const curPrice = analysis.lastPrice;
     const fmtP = (p: number) => p > 10 ? p.toFixed(3) : p.toFixed(5);
-    // Back-calculate swing high/low from zonePercent:
-    // zonePercent = ((price - swingLow) / range) * 100
-    // range = price / (pdPct/100) when pdPct > 0 (price - swingLow = range * pdPct/100 → range = (price - swingLow)/(pdPct/100))
-    // swingLow = price - range*(pdPct/100), swingHigh = swingLow + range
+    // "% of range" said nothing about WHICH range, and four different numbers in
+    // the UI answer to the name premium/discount: this gate (last-5 swings on
+    // the ENTRY timeframe), the Tier 1 "Premium/Discount & Fib" factor (a zigzag
+    // retracement), the unused htfPDD/htfPD4H/htfPD1H, and the position within
+    // the impulse leg shown by the zone story. On 2026-09-03 a XAU/USD setup
+    // read 100.0% here, 60.0% in Tier 1, and 73.9% against the 1H impulse — all
+    // correct, all differently defined, and impossible to reconcile from the
+    // screen. Name the timeframe and print the bounds.
+    //
+    // rawPercent is surfaced when price has left the range entirely, because
+    // zonePercent is clamped to 0-100 and "100.0%" hides how far outside it is.
+    const tfLabel = (config as any).entryTimeframe ?? "entry TF";
+    const sHigh = (analysis.pd as any).swingHigh;
+    const sLow = (analysis.pd as any).swingLow;
+    const rangeStr = (typeof sHigh === "number" && typeof sLow === "number")
+      ? ` of the ${tfLabel} swing range ${fmtP(sLow)}–${fmtP(sHigh)}`
+      : ` of the ${tfLabel} swing range`;
+    const rawStr = (analysis.pd as any).outOfRange === true
+      ? ` — price is OUTSIDE that range (raw ${Number((analysis.pd as any).rawPercent).toFixed(1)}%)`
+      : "";
 
     if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
-      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (premium > 55%, need discount < 45% to buy)` });
+      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (premium > 55%, need discount < 45% to buy)${rawStr}` });
     } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
-      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (discount < 45%, need premium > 55% to sell)` });
+      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (discount < 45%, need premium > 55% to sell)${rawStr}` });
     } else {
-      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%)` });
+      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%${rangeStr})${rawStr}` });
     }
   }
 
@@ -2565,9 +2581,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       let closeReason: string | null = null;
 
       // SL breach: long price <= SL, short price >= SL
+      //
+      // paper_positions.close_reason doubles as an SL-state tag while a position
+      // is open: "" = original stop, "be" = moved to break-even, "trail" =
+      // trailing stop active. paper-trading sets it and reads it back, so its
+      // own closes correctly report trail_hit / be_hit. This breach check did
+      // not, and it runs every scan cycle, so it usually closes the position
+      // first — every trailing exit was recorded as sl_hit.
+      //
+      // Measured 2026-09-03: nine trades exited on a trailing stop, six of them
+      // profitable, and all nine read as stop-outs. BotView already styles
+      // trail_hit green and labels it "(trailing stop locked profit)", so the
+      // display was waiting on a value the writer never produced.
+      const slState = (pos.close_reason || "").toString();
       if (sl > 0 && ((isLong && currentPrice <= sl) || (!isLong && currentPrice >= sl))) {
         hitPrice = sl;
-        closeReason = "sl_hit";
+        closeReason = slState === "trail" ? "trail_hit" : slState === "be" ? "be_hit" : "sl_hit";
       }
       // TP breach: long price >= TP, short price <= TP
       // SL takes priority if both are breached simultaneously (shouldn't happen, but defensive)
