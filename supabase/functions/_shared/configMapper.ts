@@ -158,6 +158,14 @@ export const RUNTIME_DEFAULTS = {
   simpleDirectionH4ChochLookback: 10,
   simpleDirectionH1BosLookback: 8,
   useConfirmedTrend: true,
+  // Structural hard blocks respect price rather than candle count. OFF keeps
+  // current behaviour: an opposing CHoCH blocks for its whole lookback window
+  // regardless of price reclaiming it, and the trend block uses the last-2-swings
+  // read that confirmedTrend exists to replace. See directionEngine.
+  priceAwareStructureBlocks: false,
+  // Game Plan bias gate. OFF/soft keep current behaviour.
+  gamePlanGateMode: "soft" as "off" | "soft" | "hard",
+  gamePlanGateMinConfidence: 50,
   confirmedTrendFibFactor: 0.25,
   confirmedTrendSwingLookback: 5,
 
@@ -427,6 +435,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? RUNTIME_DEFAULTS.simpleDirectionH4ChochLookback,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? RUNTIME_DEFAULTS.simpleDirectionH1BosLookback,
     useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? RUNTIME_DEFAULTS.useConfirmedTrend,
+    priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
+    gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
+    gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,
     confirmedTrendSwingLookback: strategy.confirmedTrendSwingLookback ?? raw.confirmedTrendSwingLookback ?? RUNTIME_DEFAULTS.confirmedTrendSwingLookback,
 

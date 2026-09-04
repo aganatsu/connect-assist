@@ -125,6 +125,11 @@ const DEFAULTS = {
   // migration: it reports what a veto would have done and lets the trade
   // through. "hard" makes it a veto again, but only above the confidence floor.
   // Default stays "soft" so enabling it is an explicit decision.
+  // NOTE: this DEFAULTS object no longer feeds config resolution — that lives in
+  // _shared/configMapper.ts (RUNTIME_DEFAULTS + mapNestedToFlat). It is still
+  // read by the STYLE_OVERRIDES loop, which decides "did the user set this?" by
+  // comparing the resolved value against it. So entries here must MIRROR
+  // RUNTIME_DEFAULTS or that detection silently misfires.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -1005,19 +1010,6 @@ function _legacyLoadConfigMapping(_raw: any) {
     correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? false,
     maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? 0.8,
     maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? 1,
-
-    // ── Game Plan Gate ──
-    // These MUST be mapped explicitly. `merged` spreads DEFAULTS and then only
-    // the keys listed here, so an unmapped key can never be set from the DB — it
-    // silently keeps its default forever. gamePlanEnabled and
-    // gamePlanRefreshHours are in exactly that state: BotConfigModal writes
-    // them, nothing maps them, and bot-scanner reads them off config with `??`
-    // fallbacks, so the master toggle and the refresh slider are both inert.
-    // Not fixed here on purpose — wiring gamePlanEnabled would immediately act
-    // on whatever is stored, and if that is `false` it would switch Game Plan
-    // off. That is a decision, not a side effect of this change.
-    gamePlanGateMode: raw.gamePlanGateMode ?? strategy.gamePlanGateMode ?? DEFAULTS.gamePlanGateMode,
-    gamePlanGateMinConfidence: raw.gamePlanGateMinConfidence ?? strategy.gamePlanGateMinConfidence ?? DEFAULTS.gamePlanGateMinConfidence,
 
     // ── News Event Filter ──
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
@@ -4079,6 +4071,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
           fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
           trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
+          // Default false — current behaviour. When true the two structural
+          // hard blocks respect price instead of candle count: a CHoCH price
+          // has reclaimed stops blocking, the trend block uses confirmedTrend
+          // rather than the last-2-swings read, and it is skipped entirely
+          // while the structure timeframe is retracing. See directionEngine.
+          priceAwareStructureBlocks: pairConfig.priceAwareStructureBlocks === true,
         };
 
         if (resolvedStyle === "scalper") {

@@ -114,14 +114,57 @@ Deno.test("the default mode leaves behaviour unchanged", () => {
   );
 });
 
-Deno.test("both new keys are mapped into the merged config", () => {
-  // merged = { ...DEFAULTS, ...explicit mappings }. An unmapped key can never be
-  // set from the DB — it keeps its default forever, which is the state
-  // gamePlanEnabled and gamePlanRefreshHours are currently in.
+const mapper = await Deno.readTextFile(
+  new URL("../../functions/_shared/configMapper.ts", import.meta.url),
+);
+
+Deno.test("both keys live in the LIVE config mapper, not bot-scanner", () => {
+  // The original version of this test asserted the mapping existed in
+  // bot-scanner — and passed, while the feature was dead. bot-scanner's
+  // `merged` block sits inside _legacyLoadConfigMapping, which nothing calls.
+  // The live path is loadConfig -> mapNestedToFlat in _shared/configMapper.ts,
+  // whose header says: "DO NOT duplicate this mapping logic elsewhere."
+  //
+  // A key mapped only in the dead path never reaches pairConfig, so the read
+  // site falls back to its default forever and the UI control does nothing.
   for (const key of ["gamePlanGateMode", "gamePlanGateMinConfidence"]) {
     assert(
-      new RegExp(`${key}: raw\\.${key} \\?\\?`).test(scanner),
-      `${key} must be mapped from raw config or it cannot be set from the UI`,
+      new RegExp(`${key}: .*RUNTIME_DEFAULTS\\.${key}`).test(mapper),
+      `${key} must be mapped in configMapper.mapNestedToFlat or it cannot be set`,
+    );
+    assert(
+      new RegExp(`^  ${key}:`, "m").test(mapper),
+      `${key} must have a RUNTIME_DEFAULTS entry`,
+    );
+  }
+});
+
+Deno.test("the dead legacy mapper is not where config gets added", () => {
+  // Guard against the same mistake recurring. _legacyLoadConfigMapping is
+  // uncalled; anything added there is invisible at runtime.
+  assert(
+    /function _legacyLoadConfigMapping/.test(scanner),
+    "legacy mapper marker missing — if it was deleted, delete this test too",
+  );
+  for (const key of ["gamePlanGateMode", "gamePlanGateMinConfidence"]) {
+    assert(
+      !new RegExp(`${key}: (raw|strategy)\\.`).test(scanner),
+      `${key} must not be re-added to bot-scanner's dead mapping`,
+    );
+  }
+});
+
+Deno.test("bot-scanner DEFAULTS mirrors RUNTIME_DEFAULTS for these keys", () => {
+  // bot-scanner's DEFAULTS no longer resolves config, but the STYLE_OVERRIDES
+  // loop still compares against it to decide "did the user set this?". If the
+  // two objects disagree, that detection misfires silently.
+  for (const key of ["gamePlanGateMode", "gamePlanGateMinConfidence"]) {
+    const a = scanner.match(new RegExp(`^  ${key}: (.+?),`, "m"));
+    const b = mapper.match(new RegExp(`^  ${key}: (.+?),`, "m"));
+    assert(a && b, `${key} missing from one of the defaults objects`);
+    assert(
+      a[1].trim() === b[1].trim(),
+      `${key} default differs — scanner has ${a[1]}, mapper has ${b[1]}`,
     );
   }
 });
