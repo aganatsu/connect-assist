@@ -4907,26 +4907,29 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
-    // Also check for staged setups in the opposite direction that should be invalidated
-    if (analysis.direction && stagingEnabled) {
-      const oppositeDir = analysis.direction === "long" ? "short" : "long";
-      const oppositeStaged = stagedMap.get(`${pair}:${oppositeDir}`);
-      if (oppositeStaged) {
-        // Direction flipped — invalidate the opposite staged setup
-        try {
-          await supabase.from("staged_setups").update({
-            status: "invalidated",
-            invalidation_reason: `Direction reversed to ${analysis.direction} (score ${analysis.score.toFixed(1)}%)`,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", oppositeStaged.id);
-          stagedInvalidated++;
-          stagedMap.delete(`${pair}:${oppositeDir}`);
-          console.log(`[staging] Invalidated ${pair} ${oppositeDir} — direction reversed to ${analysis.direction}`);
-        } catch (e: any) {
-          console.warn(`[staging] Failed to invalidate opposite staged ${pair} ${oppositeDir}: ${e?.message}`);
-        }
-      }
-    }
+    // A staged setup is NOT invalidated when the entry-timeframe direction flips.
+    //
+    // It used to be: any staged setup in the opposite direction was killed with
+    // "Direction reversed to X". That is self-defeating. Reaching a demand zone
+    // below price requires price to FALL, and a falling entry timeframe reads
+    // bearish — so the move the setup is waiting for is the move that destroyed
+    // it. Mirror image for shorts waiting on a rally into supply. Every zone
+    // setup that behaved exactly as intended was cancelled on approach.
+    //
+    // Observed 2026-09-04: ten setups sat in the zone story and none fired.
+    //
+    // A zone is a price level. It stays valid until price breaks it. The rules
+    // that still kill a staged setup are all price- or time-based:
+    //   - sl_level breached          (below, the correct invalidation)
+    //   - TTL exceeded               (:2503, keyed off staged_at — a backstop,
+    //                                 120min for scalper)
+    //   - manually dismissed
+    //
+    // Promotion still requires analysis.direction to MATCH the staged direction,
+    // which is the right sequence: price falls into the zone with the entry
+    // timeframe bearish (setup waits), then reverses and turns bullish (setup
+    // promotes). Removing the invalidation is what lets it survive the first
+    // half of that.
 
     // SL invalidation check for existing staged setups
     if (existingStaged && existingStaged.sl_level && stagingEnabled) {
@@ -6997,21 +7000,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const ts = analysis.tieredScoring;
           const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
           detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
-          // If score dropped below watch threshold, invalidate any existing staged setup
+          // A score dip does NOT invalidate a staged setup.
+          //
+          // This used to kill the setup whenever analysis.score fell below
+          // watchThreshold, and a staged setup sits in this very branch by
+          // definition — being below threshold is why it was staged. Score is
+          // computed at CURRENT price, so as price travels toward the zone the
+          // factors that reference "at level" (Order Block, FVG, Premium/
+          // Discount) fall away and the score drops. The setup was cancelled for
+          // approaching its own entry.
+          //
+          // Together with the direction-reversal kill removed above, these were
+          // the two reasons ten zone setups were watched and none fired.
+          //
+          // What still kills a staged setup: sl_level breached, TTL exceeded
+          // (120min for scalper), manual dismissal. All price- or time-based.
+          // The score is re-read on every cycle and gates promotion, so a setup
+          // that never recovers simply expires instead of being destroyed early.
           if (existingStaged && analysis.score < watchThreshold && stagingEnabled) {
-            try {
-              await supabase.from("staged_setups").update({
-                status: "invalidated",
-                invalidation_reason: `Score dropped to ${analysis.score.toFixed(1)}% (below watch threshold ${watchThreshold}%)`,
-                resolved_at: new Date().toISOString(),
-              }).eq("id", existingStaged.id);
-              stagedInvalidated++;
-              stagedMap.delete(stagedKey!);
-              console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — score dropped below watch threshold`);
-            } catch (e: any) {
-              console.warn(`[staging] Failed to invalidate ${pair}: ${e?.message}`);
-            }
-            detail.staging = { action: "invalidated", reason: "score_dropped" };
+            detail.staging = { action: "watching_below_threshold", score: analysis.score, watchThreshold };
           }
         }
       } else {
