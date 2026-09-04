@@ -76,6 +76,14 @@ interface ZoneStoryData {
   entry: {
     direction: "long" | "short";
     entryPrice: number;
+    executable?: {
+      slPrice: number;
+      tpPrice: number;
+      riskPips: number;
+      rewardPips: number;
+      rrRatio: number;
+      slWidenedToFloor: boolean;
+    } | null;
     slPrice: number;
     tpPrice: number | null;
     riskPips: number;
@@ -376,20 +384,48 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               <span className={unifiedData.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
                 {unifiedData.entry.direction.toUpperCase()}
               </span>
+              {/* Show what execution would actually place. The zone-derived
+                  slPrice/tpPrice are geometry, not a tradeable plan — the stop
+                  is half the zone's width with no floor, and the target is the
+                  BOS level rather than the configured ratio. On 2026-09-04 a
+                  2.7-pip NZD/USD zone rendered as "Risk 1.3 pips, R:R 31.48:1"
+                  for a plan the SL-override guard would have rejected outright.
+                  Falls back to the raw values only when the engine was not given
+                  minSlPips/tpRatio. */}
               <span className="font-mono ml-2">@ {fmt(unifiedData.entry.entryPrice)}</span>
-              <span className="text-red-400 font-mono ml-2">SL: {fmt(unifiedData.entry.slPrice)}</span>
-              {unifiedData.entry.tpPrice && (
-                <span className="text-green-400 font-mono ml-2">TP: {fmt(unifiedData.entry.tpPrice)}</span>
+              <span className="text-red-400 font-mono ml-2">
+                SL: {fmt(unifiedData.entry.executable?.slPrice ?? unifiedData.entry.slPrice)}
+              </span>
+              {(unifiedData.entry.executable?.tpPrice ?? unifiedData.entry.tpPrice) && (
+                <span className="text-green-400 font-mono ml-2">
+                  TP: {fmt(unifiedData.entry.executable?.tpPrice ?? unifiedData.entry.tpPrice)}
+                </span>
               )}
-              <div className="flex gap-2 mt-0.5 text-[10px]">
-                <span className="text-zinc-300">Risk: {fmtPips(unifiedData.entry.riskPips, { absolute: true })}</span>
-                {unifiedData.entry.rewardPips && <span className="text-zinc-300">Reward: {fmtPips(unifiedData.entry.rewardPips, { absolute: true })}</span>}
-                {unifiedData.entry.rrRatio && (
-                  <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
-                    R:R {unifiedData.entry.rrRatio}:1
+              <div className="flex gap-2 mt-0.5 text-[10px] flex-wrap">
+                <span className="text-zinc-300">
+                  Risk: {fmtPips(unifiedData.entry.executable?.riskPips ?? unifiedData.entry.riskPips, { absolute: true })}
+                </span>
+                {(unifiedData.entry.executable?.rewardPips ?? unifiedData.entry.rewardPips) && (
+                  <span className="text-zinc-300">
+                    Reward: {fmtPips(unifiedData.entry.executable?.rewardPips ?? unifiedData.entry.rewardPips, { absolute: true })}
+                  </span>
+                )}
+                {(unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio) && (
+                  <span className={(unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio!) >= 3 ? "text-green-400 font-bold" : (unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio!) >= 2 ? "text-cyan-400" : "text-orange-400"}>
+                    R:R {unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio}:1
+                  </span>
+                )}
+                {unifiedData.entry.executable?.slWidenedToFloor && (
+                  <span className="text-orange-400" title="The zone-derived stop was below the instrument minimum, so execution widens it to the floor.">
+                    SL widened to floor
                   </span>
                 )}
               </div>
+              {unifiedData.entry.tpPrice && unifiedData.entry.executable && (
+                <div className="text-[9px] text-zinc-500 mt-0.5">
+                  Structural target (BOS): {fmt(unifiedData.entry.tpPrice)} — not traded
+                </div>
+              )}
             </div>
           ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
             <span className="text-orange-400">R:R below minimum — no entry</span>

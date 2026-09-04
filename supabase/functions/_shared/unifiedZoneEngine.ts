@@ -123,11 +123,40 @@ export interface PriceStory {
 export interface EntryStory {
   direction: "long" | "short";
   entryPrice: number;
+  /**
+   * Zone-derived stop: zone edge plus half the zone's own width. Kept because
+   * two things read it — the Unified Zone SL Override guard in bot-scanner and
+   * the minRR check below. NOT what gets traded. Display `executable` instead.
+   */
   slPrice: number;
+  /** Structural target (the impulse BOS level). Also not what gets traded. */
   tpPrice: number | null;
   riskPips: number;
   rewardPips: number | null;
   rrRatio: number | null;
+  /**
+   * What execution would actually place, computed with the same rules
+   * bot-scanner uses: the stop floored by effectiveMinSlPips, and the target at
+   * entry +/- risk * tpRatio.
+   *
+   * These exist because the panel was showing a plan that could never be
+   * traded. Observed 2026-09-04 on NZD/USD: a 2.7-pip zone produced "Risk 1.3
+   * pips, R:R 31.48:1", while execution would have floored the stop and set a
+   * 2:1 target. The override guard rejects a stop below the floor, so that plan
+   * was never reachable — but nothing on screen said so, and it was read as an
+   * exceptional setup twice.
+   *
+   * null when the caller does not supply minSlPips/tpRatio.
+   */
+  executable: {
+    slPrice: number;
+    tpPrice: number;
+    riskPips: number;
+    rewardPips: number;
+    rrRatio: number;
+    /** True when the zone-derived stop was below the floor and had to widen. */
+    slWidenedToFloor: boolean;
+  } | null;
 }
 
 export interface ScoreBreakdown {
@@ -150,6 +179,14 @@ export interface UnifiedZoneConfig {
   minRR: number;
   /** Whether to require confirmation for entry (vs watchlist). Default: true */
   requireConfirmation: boolean;
+  /**
+   * Effective minimum stop in pips — max(MIN_SL_PIPS, ATR floor), the same
+   * value bot-scanner applies. Supplied so the displayed plan can be the one
+   * that would actually be placed. Omit and `executable` is null.
+   */
+  minSlPips?: number;
+  /** Reward multiple used by execution (entry +/- risk * tpRatio). */
+  tpRatio?: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
@@ -307,7 +344,10 @@ export function findUnifiedZone(
   // ── Step 9: Build entry story (only when confirmed) ──
   let entry: EntryStory | null = null;
   if (state === "confirmed" || state === "triggered") {
-    entry = buildEntryStory(direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR);
+    entry = buildEntryStory(
+      direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR,
+      pipSize, cfg.minSlPips, cfg.tpRatio,
+    );
   }
 
   // ── Step 10: Build story summary ──
@@ -365,6 +405,9 @@ function buildEntryStory(
   currentPrice: number,
   pipMult: number,
   minRR: number,
+  pipSize?: number,
+  minSlPips?: number,
+  tpRatio?: number,
 ): EntryStory | null {
   const entryDirection: "long" | "short" = direction === "bullish" ? "long" : "short";
 
@@ -402,6 +445,34 @@ function buildEntryStory(
     return null; // R:R too low
   }
 
+  // ── What execution would actually place ──
+  // bot-scanner floors the stop at effectiveMinSlPips and then recomputes the
+  // target as entry +/- risk * tpRatio, overwriting whatever came before. Mirror
+  // that here so the panel shows the plan that survives rather than the one the
+  // zone geometry suggests.
+  let executable: EntryStory["executable"] = null;
+  if (typeof pipSize === "number" && pipSize > 0
+      && typeof minSlPips === "number" && minSlPips > 0
+      && typeof tpRatio === "number" && tpRatio > 0) {
+    const rawRiskPrice = Math.abs(entryPrice - slPrice);
+    const floorPrice = minSlPips * pipSize;
+    const execRiskPrice = Math.max(rawRiskPrice, floorPrice);
+    const execSL = entryDirection === "long"
+      ? entryPrice - execRiskPrice
+      : entryPrice + execRiskPrice;
+    const execTP = entryDirection === "long"
+      ? entryPrice + execRiskPrice * tpRatio
+      : entryPrice - execRiskPrice * tpRatio;
+    executable = {
+      slPrice: execSL,
+      tpPrice: execTP,
+      riskPips: Math.round(execRiskPrice * pipMult * 10) / 10,
+      rewardPips: Math.round(execRiskPrice * tpRatio * pipMult * 10) / 10,
+      rrRatio: Math.round(tpRatio * 100) / 100,
+      slWidenedToFloor: execRiskPrice > rawRiskPrice,
+    };
+  }
+
   return {
     direction: entryDirection,
     entryPrice,
@@ -410,6 +481,7 @@ function buildEntryStory(
     riskPips: Math.round(riskPips * 10) / 10,
     rewardPips: rewardPips ? Math.round(rewardPips * 10) / 10 : null,
     rrRatio,
+    executable,
   };
 }
 
