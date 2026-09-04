@@ -119,6 +119,13 @@ const DEFAULTS = {
   allowSameDirectionStacking: false,
   portfolioHeat: 10,
   minRiskReward: 1.5,
+  // ── Game Plan Gate ──
+  // "soft" reproduces the behaviour this gate has had since the Phase 7
+  // migration: it reports what a veto would have done and lets the trade
+  // through. "hard" makes it a veto again, but only above the confidence floor.
+  // Default stays "soft" so enabling it is an explicit decision.
+  gamePlanGateMode: "soft" as "off" | "soft" | "hard",
+  gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
   slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
   fixedSLPips: 25,
@@ -985,6 +992,19 @@ function _legacyLoadConfigMapping(_raw: any) {
     correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? false,
     maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? 0.8,
     maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? 1,
+
+    // ── Game Plan Gate ──
+    // These MUST be mapped explicitly. `merged` spreads DEFAULTS and then only
+    // the keys listed here, so an unmapped key can never be set from the DB — it
+    // silently keeps its default forever. gamePlanEnabled and
+    // gamePlanRefreshHours are in exactly that state: BotConfigModal writes
+    // them, nothing maps them, and bot-scanner reads them off config with `??`
+    // fallbacks, so the master toggle and the refresh slider are both inert.
+    // Not fixed here on purpose — wiring gamePlanEnabled would immediately act
+    // on whatever is stored, and if that is `false` it would switch Game Plan
+    // off. That is a decision, not a side effect of this change.
+    gamePlanGateMode: raw.gamePlanGateMode ?? strategy.gamePlanGateMode ?? DEFAULTS.gamePlanGateMode,
+    gamePlanGateMinConfidence: raw.gamePlanGateMinConfidence ?? strategy.gamePlanGateMinConfidence ?? DEFAULTS.gamePlanGateMinConfidence,
 
     // ── News Event Filter ──
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
@@ -5566,19 +5586,59 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
       );
-      // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
-      // Previously a binary veto that blocked trades opposing the game plan bias.
-      // Now converted to info-only: the scoring impact is handled by the GP Bias
-      // Confidence factor (Phase 5) which applies a continuous penalty/bonus.
-      // The gate always passes but logs what the legacy behavior would have done.
+      // ── Game Plan Filter Gate ──
+      // Was a binary veto, converted to info-only by the Phase 7 migration on
+      // the grounds that GP Bias Confidence scoring would carry the load. It has
+      // been a no-op ever since, including through the 2026-09-01 revert.
+      //
+      // Modes: "off" (no gate at all), "soft" (info-only + scoring penalty —
+      // the behaviour since the Phase 7 migration and still the default), or
+      // "hard" (blocks a signal that opposes a sufficiently confident bias).
+      //
+      // Measured 2026-09-03. Of the 14 trades closed that day, the 7 where GP
+      // opposed the direction netted -1,698 with ZERO reaching take profit; the
+      // 7 where it did not netted +1,125. In R across Era B (17 trades) the
+      // opposed group ran -0.559R per trade against +0.775R for the rest. The
+      // scoring penalty that replaced this gate is -0.19 at 55% confidence,
+      // against a 40% score threshold — far too small to act on any of that.
+      //
+      // The confidence floor matters as much as the gate. filterTradeByGamePlan
+      // rejects ANY misalignment regardless of confidence, and simulated over
+      // Era B that is worse than thresholding, because it discards the low-
+      // confidence disagreements which were fine:
+      //
+      //   no gate            kept 17   +2.50R
+      //   any confidence     kept  6   +5.14R   (loses a +2.00R win at 45%)
+      //   conf >= 50         kept  9   +6.98R
+      //   conf >= 60         kept 15   +4.50R
+      //
+      // 50 is not a fitted number — it is the threshold gamePlanBiasAdjustment
+      // already uses before it applies any penalty at all.
+      //
+      // Only "misaligned" is gated. filterTradeByGamePlan also returns
+      // allowed:false for instruments the plan marked un-tradeable, and there is
+      // no outcome data on those, so they stay advisory.
       const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
       if (activeGamePlan) {
-        if (!gpFilter.allowed) {
-          const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
-          const biasConf = pairPlan?.biasConfidence ?? 0;
-          // Info-only: log what the old gate would have done
-          gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
-          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (legacy gate would have blocked at ${biasConf}% conf)`);
+        const gpGateMode = (pairConfig as any).gamePlanGateMode ?? "soft";
+        const gpMinConf = typeof (pairConfig as any).gamePlanGateMinConfidence === "number"
+          ? (pairConfig as any).gamePlanGateMinConfidence
+          : 50;
+        const biasConf = gpFilter.biasConfidence ?? 0;
+        const blockable = gpFilter.reasonCode === "misaligned" && biasConf >= gpMinConf;
+        if (gpGateMode === "off") {
+          // no gate recorded at all
+        } else if (!gpFilter.allowed && gpGateMode === "hard" && blockable) {
+          gates.push({ passed: false, reason: `GP filter (hard): ${gpFilter.reason} — bias confidence ${biasConf}% >= ${gpMinConf}%` });
+          console.log(`[scan ${scanCycleId}] ⛔ ${pair}: GP GATE — ${analysis.direction} opposes ${gpFilter.gamePlanBias} bias at ${biasConf}% conf. Blocked.`);
+        } else if (!gpFilter.allowed) {
+          const why = gpFilter.reasonCode === "not_tradeable"
+            ? "instrument marked skip — advisory only"
+            : biasConf < gpMinConf
+            ? `bias confidence ${biasConf}% < ${gpMinConf}% — below gate threshold`
+            : "handled by GP Bias Confidence scoring";
+          gates.push({ passed: true, reason: `GP filter (${gpGateMode}): ${gpFilter.reason} — ${why}` });
+          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction (${biasConf}% conf) — ${why}`);
         } else {
           gates.push({ passed: true, reason: gpFilter.reason });
         }
