@@ -907,6 +907,13 @@ export interface GamePlanFilterResult {
   gamePlanBias: BiasDirection;
   signalDirection: string;
   biasConfidence: number;
+  /**
+   * Why the filter reached its verdict. `allowed: false` has two distinct
+   * causes that callers may want to treat differently: the game plan marked the
+   * instrument un-tradeable, or the signal opposes the plan's bias. A gate that
+   * acts on one should not silently act on the other.
+   */
+  reasonCode: "no_plan" | "not_tradeable" | "neutral_bias" | "aligned" | "misaligned";
 }
 
 /**
@@ -925,28 +932,28 @@ export function filterTradeByGamePlan(
 ): GamePlanFilterResult {
   // No game plan — allow all trades (backward compatible)
   if (!gamePlan) {
-    return { allowed: true, reason: "No game plan active — using confluence scoring only", gamePlanBias: "neutral", signalDirection, biasConfidence: 0 };
+    return { allowed: true, reason: "No game plan active — using confluence scoring only", gamePlanBias: "neutral", signalDirection, biasConfidence: 0, reasonCode: "no_plan" };
   }
 
   const plan = gamePlan.plans.find(p => p.symbol === symbol);
   if (!plan) {
-    return { allowed: true, reason: `No game plan for ${symbol} — using confluence scoring only`, gamePlanBias: "neutral", signalDirection, biasConfidence: 0 };
+    return { allowed: true, reason: `No game plan for ${symbol} — using confluence scoring only`, gamePlanBias: "neutral", signalDirection, biasConfidence: 0, reasonCode: "no_plan" };
   }
 
   // If instrument is marked as not tradeable, reject
   if (!plan.tradeable) {
-    return { allowed: false, reason: `Game plan: ${symbol} marked as skip — ${plan.skipReason}`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence };
+    return { allowed: false, reason: `Game plan: ${symbol} marked as skip — ${plan.skipReason}`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence, reasonCode: "not_tradeable" };
   }
 
   // Neutral bias — allow but with reduced confidence
   if (plan.bias === "neutral") {
-    return { allowed: true, reason: `Game plan: neutral bias — trade allowed but with caution`, gamePlanBias: "neutral", signalDirection, biasConfidence: plan.biasConfidence };
+    return { allowed: true, reason: `Game plan: neutral bias — trade allowed but with caution`, gamePlanBias: "neutral", signalDirection, biasConfidence: plan.biasConfidence, reasonCode: "neutral_bias" };
   }
 
   // Check alignment
   const biasDirection = plan.bias === "bullish" ? "long" : "short";
   if (signalDirection === biasDirection) {
-    return { allowed: true, reason: `Game plan: ${signalDirection} aligns with ${plan.bias} bias (${plan.biasConfidence}%)`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence };
+    return { allowed: true, reason: `Game plan: ${signalDirection} aligns with ${plan.bias} bias (${plan.biasConfidence}%)`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence, reasonCode: "aligned" };
   }
 
   // Misaligned — reject
@@ -956,5 +963,6 @@ export function filterTradeByGamePlan(
     gamePlanBias: plan.bias,
     signalDirection,
     biasConfidence: plan.biasConfidence,
+    reasonCode: "misaligned",
   };
 }
