@@ -913,13 +913,25 @@ function _legacyLoadConfigMapping(_raw: any) {
     tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? DEFAULTS.tpATRMultiple,
 
     // ── Exit mappings ──
-    trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
+    // Each of these three has TWO names for the same switch — a legacy short
+    // form (trailingStop / breakEven / partialTP) and the current one. The
+    // toggles in BotConfigModal write both, so using them directly is safe.
+    // Presets do not: they set only the *Enabled form. Applying a preset
+    // therefore updates one name and leaves the other stale, and with the
+    // legacy name read first the stale value won.
+    //
+    // Observed 2026-09-04: trailing could not be switched off. Both keys read
+    // true, config had genuinely saved (updated_at 01:05), and a position
+    // opened at 02:40 still carried trailingStopEnabled: true. The current name
+    // now takes precedence, so whichever surface wrote last is honoured and the
+    // legacy name only applies to configs that never had the new one.
+    trailingStopEnabled: exit.trailingStopEnabled ?? exit.trailingStop ?? raw.trailingStopEnabled ?? false,
     trailingStopPips: exit.trailingStopPips ?? raw.trailingStopPips ?? 15,
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
-    breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
+    breakEvenEnabled: exit.breakEvenEnabled ?? exit.breakEven ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
     breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? DEFAULTS.breakEvenOffsetPips,
-    partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
+    partialTPEnabled: exit.partialTPEnabled ?? exit.partialTP ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
     maxHoldEnabled: exit.maxHoldEnabled ?? raw.maxHoldEnabled ?? DEFAULTS.maxHoldEnabled,
