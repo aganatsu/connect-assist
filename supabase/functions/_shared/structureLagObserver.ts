@@ -44,6 +44,16 @@ import type { Candle, StructureBreak, LiquiditySweep } from "./smcAnalysis.ts";
 export interface StructureLagReport {
   /** Breaks we could locate a corrected index for. */
   breaksAnalysed: number;
+  /**
+   * Breaks whose recorded candle was NOT closed beyond their own level.
+   * By construction that should never happen — analyzeMarketStructure only
+   * records a break when closedThrough is true — so a non-zero count means the
+   * candles passed in are not the array the indices refer to. Reported rather
+   * than skipped silently: the first version of this observer was handed the
+   * full series while structure had been computed on candles.slice(-50), and it
+   * produced confident nonsense instead of complaining.
+   */
+  breaksSkipped: number;
   /** Bars between the real close-through and where the break is recorded. */
   medianBarLag: number;
   maxBarLag: number;
@@ -117,7 +127,7 @@ export function observeStructureLag(
   sweeps: LiquiditySweep[],
 ): StructureLagReport {
   const empty: StructureLagReport = {
-    breaksAnalysed: 0, medianBarLag: 0, maxBarLag: 0, zeroLagBreaks: 0,
+    breaksAnalysed: 0, breaksSkipped: 0, medianBarLag: 0, maxBarLag: 0, zeroLagBreaks: 0,
     sweepsWithEarlierCloseThrough: 0, sweepsAnalysed: 0, barsSinceNewestBreak: null,
   };
   if (!Array.isArray(candles) || candles.length < 10) return empty;
@@ -126,10 +136,11 @@ export function observeStructureLag(
   const lags: number[] = [];
   let newestCorrected: number | null = null;
 
+  let skipped = 0;
   for (const b of allBreaks) {
-    if (typeof b.index !== "number" || typeof b.level !== "number") continue;
+    if (typeof b.index !== "number" || typeof b.level !== "number") { skipped++; continue; }
     const corrected = firstCloseThroughIndex(candles, b.index, b.level, b.type);
-    if (corrected === null) continue;
+    if (corrected === null) { skipped++; continue; }
     lags.push(b.index - corrected);
     if (newestCorrected === null || corrected > newestCorrected) newestCorrected = corrected;
   }
@@ -149,6 +160,7 @@ export function observeStructureLag(
 
   return {
     breaksAnalysed: lags.length,
+    breaksSkipped: skipped,
     medianBarLag: median(lags),
     maxBarLag: lags.length ? Math.max(...lags) : 0,
     zeroLagBreaks: lags.filter((l) => l === 0).length,
