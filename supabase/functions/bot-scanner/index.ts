@@ -75,6 +75,7 @@ import {
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
+import { observeStructureLag } from "../_shared/structureLagObserver.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
@@ -4345,6 +4346,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           active: analysis.structure.derivedSR.active.map((sr: any) => ({ price: sr.price, type: sr.type })),
           broken: analysis.structure.derivedSR.broken.map((sr: any) => ({ price: sr.price, type: sr.type })),
         } : null,
+        // ── Structure lag observation (measurement only, changes nothing) ──
+        // analyzeMarketStructure records a break at the NEXT SWING's candle and
+        // tests that candle's close against the previous swing level, rather
+        // than the candle that actually closed through. confirmedTrend does the
+        // same. So breaks are seen late, and a close-through can be filed as a
+        // sweep when the swing candle closes back inside.
+        //
+        // Structure sits under every gate in the system, so this measures the
+        // size of the problem before anything is changed. Nothing here feeds a
+        // gate, a score or a direction.
+        lagObservation: (() => {
+          try {
+            return observeStructureLag(
+              candles,
+              analysis.structure.bos || [],
+              analysis.structure.choch || [],
+              analysis.structure.sweeps || [],
+            );
+          } catch { return null; }
+        })(),
       },
       // ── ZigZag-based Fibonacci Levels (retracements + extensions) ──
       fibLevels: analysis.fibLevels ? {
