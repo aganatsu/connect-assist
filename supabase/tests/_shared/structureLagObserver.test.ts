@@ -131,3 +131,40 @@ Deno.test("the observer exposes no way to influence a decision", () => {
   const exported = [...src.matchAll(/export (?:function|const) (\w+)/g)].map((m) => m[1]);
   assertEquals(exported, ["observeStructureLag"], "only the observer should be exported");
 });
+
+Deno.test("mismatched candles are reported, not silently skipped", () => {
+  // The first deployed version was handed the full series while structure had
+  // been computed on candles.slice(-structureLookback). Every index pointed at
+  // the wrong candle, every break was skipped, and the output looked like
+  // "few breaks found" rather than "wrong input". Live result 2026-09-04:
+  // zeroLagBreaks 0 on every pair and barsSinceNewestBreak pinned at 299.
+  const candles = brokeAt12RecordedAt20();
+  // index 20 exists but is nowhere near a level of 9999 — the mismatch shape.
+  const r = observeStructureLag(candles, [brk(20, 9999, "bullish")], [], []);
+  assertEquals(r.breaksAnalysed, 0);
+  assertEquals(r.breaksSkipped, 1, "a break we cannot locate must be counted");
+});
+
+Deno.test("skipped stays zero when the window is correct", () => {
+  const candles = brokeAt12RecordedAt20();
+  const r = observeStructureLag(candles, [brk(20, 105, "bullish")], [], []);
+  assertEquals(r.breaksAnalysed, 1);
+  assertEquals(r.breaksSkipped, 0);
+});
+
+Deno.test("the call site slices to the structure window", () => {
+  // Guard the actual defect: bot-scanner must pass the same array
+  // analyzeMarketStructure saw, not the full candle series.
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(
+    /observeStructureLag\(\s*structWindow,/.test(scanner),
+    "bot-scanner must pass the structure-lookback window, not the full series",
+  );
+  assert(
+    /candles\.slice\(-structLookback\)/.test(scanner),
+    "the window must be derived from structureLookback the same way " +
+      "runConfluenceAnalysis derives it",
+  );
+});

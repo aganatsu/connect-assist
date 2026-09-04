@@ -4356,8 +4356,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // gate, a score or a direction.
         lagObservation: (() => {
           try {
+            // MUST be the same slice analyzeMarketStructure saw. runConfluence-
+            // Analysis computes structure on candles.slice(-structureLookback),
+            // so analysis.structure indices are relative to that window, not to
+            // the full series. Passing the full array made every index point at
+            // the wrong candle and the observer reported confident nonsense.
+            const structLookback = (typeof pairConfig.structureLookback === "number"
+              && pairConfig.structureLookback > 0) ? pairConfig.structureLookback : 50;
+            const structWindow = candles.length > structLookback
+              ? candles.slice(-structLookback) : candles;
             return observeStructureLag(
-              candles,
+              structWindow,
               analysis.structure.bos || [],
               analysis.structure.choch || [],
               analysis.structure.sweeps || [],
