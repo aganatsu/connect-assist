@@ -804,9 +804,23 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           pts = 1.5;
           detail += ` | Fib OTE zone (${retrace.toFixed(1)}%)`;
         } else if (retrace > 50 && retrace < 61.8) {
-          // Discount/premium zone (beyond equilibrium but not OTE)
+          // Beyond equilibrium but short of OTE.
+          //
+          // This used to print "Discount zone" for a long and "Premium zone"
+          // for a short — chosen by trade direction, not by where price is, so
+          // the label was always flattering and could never disagree with the
+          // trade. Observed 2026-09-03: a XAU/USD long read "Discount zone
+          // (58.1%)" in the same panel where the gate rejected it for being in
+          // premium at 67.7%. Those were not two measurements disagreeing; the
+          // gate measures price position and this only restated "long".
+          //
+          // The score is unchanged — retracement depth is a real quantity and
+          // 1.0pt for a beyond-equilibrium pullback is the existing behaviour.
+          // Only the wording changes, to describe the retracement instead of
+          // borrowing premium/discount vocabulary that means something else in
+          // the gate two lines away.
           pts = 1.0;
-          detail += ` | ${fibDirection === "long" ? "Discount" : "Premium"} zone (${retrace.toFixed(1)}%)`;
+          detail += ` | Beyond equilibrium (${retrace.toFixed(1)}% retrace) — favourable for ${fibDirection}`;
         } else if (retrace >= 23.6 && retrace <= 50) {
           // Below 50% — impulse zone gate requires >= 50% depth for entry.
           // Scoring here would inflate confluence on levels we can't trade.

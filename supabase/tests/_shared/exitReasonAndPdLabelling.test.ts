@@ -100,3 +100,43 @@ Deno.test("existing gate categories still resolve", () => {
     );
   }
 });
+
+const scoring = await Deno.readTextFile(
+  new URL("../../functions/_shared/confluenceScoring.ts", import.meta.url),
+);
+
+Deno.test("the Tier 1 zone label is not derived from trade direction", () => {
+  // It printed "Discount zone" for every long and "Premium zone" for every
+  // short, chosen by direction rather than by price position — so it was always
+  // flattering and could never disagree with the trade. Observed 2026-09-03: a
+  // XAU/USD long read "Discount zone (58.1%)" in the same panel where the gate
+  // rejected it for premium at 67.7%.
+  assert(
+    !/\$\{fibDirection === "long" \? "Discount" : "Premium"\} zone/.test(scoring),
+    'the beyond-equilibrium label must not be picked by fibDirection — that ' +
+      'restates the trade instead of describing price',
+  );
+  assert(
+    /Beyond equilibrium \(\$\{retrace\.toFixed\(1\)\}% retrace\)/.test(scoring),
+    "the label should describe the retracement it actually measured",
+  );
+});
+
+Deno.test("the beyond-equilibrium score is unchanged", () => {
+  // Only the wording moves. If the points change, this stops being a labelling
+  // fix and starts moving admission.
+  // Anchor on the condition and read forward — reading backwards from the label
+  // depends on comment length, which is exactly what changed here.
+  const i = scoring.indexOf("retrace > 50 && retrace < 61.8");
+  assert(i > -1, "beyond-equilibrium branch not found");
+  const branch = scoring.slice(i, scoring.indexOf("retrace >= 23.6", i));
+  assert(branch.length > 0, "could not delimit the branch");
+  assert(
+    /pts = 1\.0;/.test(branch),
+    "the beyond-equilibrium branch must still award 1.0pt",
+  );
+  assert(
+    /Beyond equilibrium \(/.test(branch),
+    "the new label must be inside this branch, not somewhere else",
+  );
+});
