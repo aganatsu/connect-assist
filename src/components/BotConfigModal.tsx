@@ -238,9 +238,9 @@ const BASE_CONFIG = {
   exit: {
     stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
     takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
-    trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
-    partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
-    breakEvenEnabled: true, breakEvenTriggerPips: 20,
+    trailingStopEnabled: false, trailingStop: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
+    partialTPEnabled: false, partialTP: false, partialTPPercent: 50, partialTPLevel: 1.0,
+    breakEvenEnabled: true, breakEven: true, breakEvenTriggerPips: 20,
     timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 24,
   },
   instruments: {
@@ -293,9 +293,9 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       exit: {
         stopLossMethod: "structure", fixedSLPips: 50, slATRMultiple: 1.5, slATRPeriod: 14,
         takeProfitMethod: "rr_ratio", fixedTPPips: 150, tpRRRatio: 3.0, tpATRMultiple: 3.0,
-        trailingStopEnabled: false, trailingStopPips: 25, trailingStopActivation: "after_2r",
-        partialTPEnabled: false, partialTPPercent: 33, partialTPLevel: 1.0,
-        breakEvenEnabled: false, breakEvenTriggerPips: 40,
+        trailingStopEnabled: false, trailingStop: false, trailingStopPips: 25, trailingStopActivation: "after_2r",
+        partialTPEnabled: false, partialTP: false, partialTPPercent: 33, partialTPLevel: 1.0,
+        breakEvenEnabled: false, breakEven: false, breakEvenTriggerPips: 40,
         timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 120,
       },
       instruments: {
@@ -345,9 +345,9 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       exit: {
         stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
         takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
-        trailingStopEnabled: true, trailingStopPips: 15, trailingStopActivation: "after_1.5r",
-        partialTPEnabled: true, partialTPPercent: 50, partialTPLevel: 1.0,
-        breakEvenEnabled: true, breakEvenTriggerPips: 20,
+        trailingStopEnabled: true, trailingStop: true, trailingStopPips: 15, trailingStopActivation: "after_1.5r",
+        partialTPEnabled: true, partialTP: true, partialTPPercent: 50, partialTPLevel: 1.0,
+        breakEvenEnabled: true, breakEven: true, breakEvenTriggerPips: 20,
         timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 24,
       },
       instruments: {
@@ -397,9 +397,9 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       exit: {
         stopLossMethod: "structure", fixedSLPips: 10, slATRMultiple: 1.5, slATRPeriod: 14,
         takeProfitMethod: "rr_ratio", fixedTPPips: 20, tpRRRatio: 2.0, tpATRMultiple: 2.0,
-        trailingStopEnabled: false, trailingStopPips: 8, trailingStopActivation: "after_1r",
-        partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
-        breakEvenEnabled: false, breakEvenTriggerPips: 8,
+        trailingStopEnabled: false, trailingStop: false, trailingStopPips: 8, trailingStopActivation: "after_1r",
+        partialTPEnabled: false, partialTP: false, partialTPPercent: 50, partialTPLevel: 1.0,
+        breakEvenEnabled: false, breakEven: false, breakEvenTriggerPips: 8,
         timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4,
       },
       instruments: {
