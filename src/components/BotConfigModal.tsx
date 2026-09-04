@@ -1915,6 +1915,45 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </div>
                     )}
 
+                    {/* ── Game Plan Bias Gate ── */}
+                    <FieldGroup label="Bias Gate Mode" description="Controls what happens when a signal opposes the game plan's directional bias.">
+                      <div className="flex items-center gap-3">
+                        <Select value={config.strategy?.gamePlanGateMode ?? 'soft'} onValueChange={(v: string) => updateField('strategy', 'gamePlanGateMode', v)}>
+                          <SelectTrigger className="h-9 text-sm w-56"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="hard">Hard — block opposing trades</SelectItem>
+                            <SelectItem value="soft">Soft — score penalty only</SelectItem>
+                            <SelectItem value="off">Off — bias informational</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {(config.strategy?.gamePlanGateMode ?? 'soft') !== 'off' && (
+                          <Badge variant="outline" className={`text-[9px] font-mono ${
+                            (config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' ? 'text-loss border-loss/40' : 'text-warn border-warn/40'
+                          }`}>
+                            {(config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' ? 'BLOCKING' : 'SCORING'}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">
+                        Soft is the long-standing behaviour: the opposition is logged and a small scoring penalty applied ({'−'}0.19 at 55% confidence), which rarely changes the outcome. Hard blocks the trade outright, but only when the bias confidence clears the floor below. Measured 2026-09-03: of 14 trades that day, the 7 the game plan opposed lost {'−'}1,698 with none reaching take profit.
+                      </p>
+                    </FieldGroup>
+
+                    {(config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' && (
+                      <FieldGroup label="Bias Gate Confidence Floor (%)" description="Only block when the game plan's bias confidence is at least this high. Low-confidence disagreements are ignored.">
+                        <Input
+                          type="number"
+                          value={config.strategy?.gamePlanGateMinConfidence ?? 50}
+                          onChange={e => updateField('strategy', 'gamePlanGateMinConfidence', Math.max(0, Math.min(100, parseInt(e.target.value) || 50)))}
+                          min={0} max={100} step={5}
+                          className="h-9 text-sm"
+                        />
+                        <p className="text-[9px] text-muted-foreground mt-1.5">
+                          Default 50 — the same threshold the bias scoring already uses before applying any penalty. Blocking on every disagreement regardless of confidence tested worse: over the same period it discarded a +2.00R winner the plan opposed at only 45% confidence.
+                        </p>
+                      </FieldGroup>
+                    )}
+
                     {!config.gamePlanEnabled && (
                       <p className="text-[10px] text-muted-foreground italic">Enable the master toggle above to activate game plan features.</p>
                     )}
