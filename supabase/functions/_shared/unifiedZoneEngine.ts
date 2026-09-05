@@ -157,6 +157,30 @@ export interface EntryStory {
     /** True when the zone-derived stop was below the floor and had to widen. */
     slWidenedToFloor: boolean;
   } | null;
+  /**
+   * What execution will do with this zone's stop.
+   *
+   *   "accepted"        within [floor, cap] — the override applies it
+   *   "widened_to_floor" below the floor — widened, then applied
+   *   "rejected_too_wide" above the cap — DISCARDED; execution uses its own
+   *                       structural stop, which this engine cannot see
+   *   "unknown"         caller did not supply the bounds
+   *
+   * Observed 2026-09-04 on BTC/USD: a 677.3-point zone stop against a 225-point
+   * cap (MIN_SL_PIPS 150 x scalper multiplier 1.5). Rejected, and execution fell
+   * back to a 150-point structural stop — the bare floor — inside a 1354-point
+   * zone. The panel showed the 677 and gave no hint it was unusable.
+   */
+  slDisposition: "accepted" | "widened_to_floor" | "rejected_too_wide" | "unknown";
+  /**
+   * ALWAYS true. Both entry routes fill at live price:
+   *   market-fill-at-zone  -> analysis.lastPrice
+   *   pending + CHoCH      -> `const actualFillPrice = currentPrice` (the log
+   *                           even records "limit was ${entryPrice}")
+   * so entryPrice is a target level, never a fill price. Kept as a field so the
+   * panel cannot quietly start presenting it as one again.
+   */
+  fillsAtMarket: true;
 }
 
 export interface ScoreBreakdown {
@@ -187,6 +211,13 @@ export interface UnifiedZoneConfig {
   minSlPips?: number;
   /** Reward multiple used by execution (entry +/- risk * tpRatio). */
   tpRatio?: number;
+  /**
+   * Upper bound the Unified Zone SL Override enforces:
+   * staticMinSlPips * impulseSlCapMultiplier. A zone stop wider than this is
+   * REJECTED and execution falls back to its own structural stop, so the plan
+   * shown must say so rather than quote a number that cannot be used.
+   */
+  maxSlPips?: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
@@ -346,7 +377,7 @@ export function findUnifiedZone(
   if (state === "confirmed" || state === "triggered") {
     entry = buildEntryStory(
       direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR,
-      pipSize, cfg.minSlPips, cfg.tpRatio,
+      pipSize, cfg.minSlPips, cfg.tpRatio, cfg.maxSlPips,
     );
   }
 
@@ -408,6 +439,7 @@ function buildEntryStory(
   pipSize?: number,
   minSlPips?: number,
   tpRatio?: number,
+  maxSlPips?: number,
 ): EntryStory | null {
   const entryDirection: "long" | "short" = direction === "bullish" ? "long" : "short";
 
@@ -451,12 +483,37 @@ function buildEntryStory(
   // that here so the panel shows the plan that survives rather than the one the
   // zone geometry suggests.
   let executable: EntryStory["executable"] = null;
+  let slDisposition: EntryStory["slDisposition"] = "unknown";
   if (typeof pipSize === "number" && pipSize > 0
       && typeof minSlPips === "number" && minSlPips > 0
       && typeof tpRatio === "number" && tpRatio > 0) {
     const rawRiskPrice = Math.abs(entryPrice - slPrice);
+    const rawRiskPips = rawRiskPrice / pipSize;
     const floorPrice = minSlPips * pipSize;
+
+    // Mirror the Unified Zone SL Override guard in bot-scanner:
+    //   if (unifiedSlPips >= effectiveMinSlPips && unifiedSlPips <= maxUnifiedSlPips)
+    // Outside that band the zone stop is discarded and execution uses its own
+    // structural stop, which this engine has no visibility of — so there is no
+    // honest executable plan to show.
+    if (typeof maxSlPips === "number" && maxSlPips > 0 && rawRiskPips > maxSlPips) {
+      slDisposition = "rejected_too_wide";
+      return {
+        direction: entryDirection,
+        entryPrice,
+        slPrice,
+        tpPrice,
+        riskPips: Math.round(riskPips * 10) / 10,
+        rewardPips: rewardPips ? Math.round(rewardPips * 10) / 10 : null,
+        rrRatio,
+        executable: null,
+        slDisposition,
+        fillsAtMarket: true,
+      };
+    }
+
     const execRiskPrice = Math.max(rawRiskPrice, floorPrice);
+    slDisposition = execRiskPrice > rawRiskPrice ? "widened_to_floor" : "accepted";
     const execSL = entryDirection === "long"
       ? entryPrice - execRiskPrice
       : entryPrice + execRiskPrice;
@@ -482,6 +539,8 @@ function buildEntryStory(
     rewardPips: rewardPips ? Math.round(rewardPips * 10) / 10 : null,
     rrRatio,
     executable,
+    slDisposition,
+    fillsAtMarket: true,
   };
 }
 
