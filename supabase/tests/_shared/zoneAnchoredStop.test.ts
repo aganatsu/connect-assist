@@ -55,7 +55,7 @@ Deno.test("an over-cap anchored stop skips the setup rather than shrinking", () 
   const i = scanner.indexOf('detail.status = "skipped_zone_too_wide"');
   const branch = scanner.slice(i, i + 800);
   assert(/continue;/.test(branch), "the skip branch must actually skip the pair");
-  assert(/reason: "exceeds_cap"/.test(branch), "and record why, for querying");
+  assert(/reason = "exceeds_cap"/.test(branch), "and record why, for querying");
 });
 
 Deno.test("a stop tighter than the floor widens away from the zone", () => {
@@ -66,9 +66,51 @@ Deno.test("a stop tighter than the floor widens away from the zone", () => {
     "the floor must still apply to the anchored stop",
   );
   assert(
-    /widenedToFloor: widened/.test(scanner),
+    /widenedToFloor = widened/.test(scanner),
     "widening must be recorded so it is visible in scan detail",
   );
+});
+
+Deno.test("the measurement runs even when the flag is off", () => {
+  // Otherwise turning the flag on is blind: the skip rate is only discovered by
+  // watching trades stop happening.
+  const i = scanner.indexOf("const zoneAnchoredStopOn");
+  const guard = scanner.slice(i, scanner.indexOf("const anchoredSL"));
+  assert(
+    !/zoneAnchoredStopOn &&/.test(guard),
+    "the outer guard must not require the flag — the arithmetic is always run",
+  );
+  for (const field of ["wouldSkip", "stopInsideZone", "zoneWidthPips", "currentSlPips", "enabled"]) {
+    assert(new RegExp(`${field}[,:]`).test(scanner), `shadow field ${field} must be recorded`);
+  }
+});
+
+Deno.test("the shadow branch cannot move a trade", () => {
+  // Everything that mutates sl/tp or skips must sit under the flag. The off
+  // branch may only log.
+  const start = scanner.indexOf("if (!zoneAnchoredStopOn) {");
+  const end = scanner.indexOf("} else if (anchoredPips > maxAnchoredPips)", start);
+  assert(start > -1 && end > start, "the flag-off branch was not found");
+  const offBranch = scanner.slice(start, end);
+  for (const forbidden of ["sl =", "tp =", "continue;", "detail.status"]) {
+    assert(
+      !offBranch.includes(forbidden),
+      `the flag-off branch must not contain \`${forbidden}\` — it must be inert`,
+    );
+  }
+});
+
+Deno.test("stopInsideZone measures the defect, not the fix", () => {
+  // A stop between the two edges is exactly the BTC failure: ordinary movement
+  // inside the zone takes it out while the zone itself never fails.
+  assert(
+    /sl > anchorZone\.low && sl < anchorZone\.high/.test(scanner),
+    "inside-the-zone must be tested against both edges, direction-independent",
+  );
+  // Sanity-check the predicate against the BTC numbers.
+  const insideZone = (sl: number) => sl > 79000 && sl < 80354.65;
+  assertEquals(insideZone(79487.76), true, "the 150-point stop that lost was inside");
+  assertEquals(insideZone(78999), false, "the anchored stop is outside");
 });
 
 Deno.test("the target is recomputed from the new risk", () => {

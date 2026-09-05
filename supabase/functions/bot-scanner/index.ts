@@ -5930,9 +5930,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // deliberate: if a structurally valid stop cannot fit the risk
         // framework, the zone is too wide for this instrument and taking it with
         // a floor-width stop is what lost money.
+        //
+        // The arithmetic runs whether or not the flag is on. With the flag off
+        // nothing is changed — the numbers are only written to scan detail, so
+        // the skip rate is knowable BEFORE the flag is flipped rather than
+        // discovered as trades quietly stopping. See the shadow block below.
         const zoneAnchoredStopOn = (pairConfig as any).zoneAnchoredStop === true;
         const anchorZone = izData?.bestZone;
-        if (zoneAnchoredStopOn && anchorZone && anchorZone.priceAtZone
+        if (anchorZone && anchorZone.priceAtZone
             && typeof anchorZone.low === "number" && typeof anchorZone.high === "number") {
           const anchoredSL = analysis.direction === "long"
             ? anchorZone.low - adjustedSlBuffer * spec.pipSize
@@ -5940,39 +5945,58 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const anchoredPips = Math.abs(analysis.lastPrice - anchoredSL) / spec.pipSize;
           const maxAnchoredPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
 
-          if (anchoredPips > maxAnchoredPips) {
+          // ── Shadow measurement (always recorded, flag or no flag) ──
+          // `stopInsideZone` is the prevalence of the actual defect: a stop that
+          // sits between the zone edges, so ordinary movement within the zone
+          // takes it out without the zone ever failing.
+          const currentSlPips = Math.abs(analysis.lastPrice - sl) / spec.pipSize;
+          const stopInsideZone = sl > anchorZone.low && sl < anchorZone.high;
+          (detail as any).zoneAnchoredStop = {
+            enabled: zoneAnchoredStopOn,
+            applied: false,
+            wouldSkip: anchoredPips > maxAnchoredPips,
+            anchoredPips,
+            maxAnchoredPips,
+            currentSlPips,
+            stopInsideZone,
+            zoneWidthPips: (anchorZone.high - anchorZone.low) / spec.pipSize,
+            zoneLow: anchorZone.low,
+            zoneHigh: anchorZone.high,
+          };
+
+          if (!zoneAnchoredStopOn) {
+            // Measured, not applied. `sl` and `tp` are left exactly as the
+            // earlier overrides set them, so this branch cannot move a trade.
+            if (stopInsideZone) {
+              console.log(`[${pair}] [shadow] stop ${currentSlPips.toFixed(1)}p sits INSIDE zone [${anchorZone.low}-${anchorZone.high}]; anchored would be ${anchoredPips.toFixed(1)}p vs cap ${maxAnchoredPips.toFixed(1)}p${anchoredPips > maxAnchoredPips ? " → would SKIP" : ""}`);
+            }
+          } else if (anchoredPips > maxAnchoredPips) {
             detail.status = "skipped_zone_too_wide";
             detail.skipReason = `Zone-anchored stop ${anchoredPips.toFixed(1)}p exceeds cap ${maxAnchoredPips.toFixed(1)}p — zone [${anchorZone.low}-${anchorZone.high}] too wide for this instrument's risk framework`;
-            (detail as any).zoneAnchoredStop = {
-              applied: false, reason: "exceeds_cap",
-              anchoredPips, maxAnchoredPips,
-              zoneLow: anchorZone.low, zoneHigh: anchorZone.high,
-            };
+            (detail as any).zoneAnchoredStop.reason = "exceeds_cap";
             console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE TOO WIDE — anchored stop ${anchoredPips.toFixed(1)}p > cap ${maxAnchoredPips.toFixed(1)}p. Skipping.`);
             scanDetails.push(detail);
             continue;
+          } else {
+            // Below the floor is possible on a very tight zone; widen, keeping
+            // the anchored side, so the stop still sits beyond the zone edge.
+            const widened = anchoredPips < effectiveMinSlPips;
+            const finalAnchoredSL = widened
+              ? (analysis.direction === "long"
+                ? analysis.lastPrice - effectiveMinSlPips * spec.pipSize
+                : analysis.lastPrice + effectiveMinSlPips * spec.pipSize)
+              : anchoredSL;
+
+            console.log(`[${pair}] Zone-anchored SL: ${currentSlPips.toFixed(1)}p → ${(Math.abs(analysis.lastPrice - finalAnchoredSL) / spec.pipSize).toFixed(1)}p (beyond zone ${analysis.direction === "long" ? "low" : "high"}${widened ? ", widened to floor" : ""})`);
+            sl = finalAnchoredSL;
+            const anchoredRisk = Math.abs(analysis.lastPrice - sl);
+            tp = analysis.direction === "long"
+              ? analysis.lastPrice + anchoredRisk * config.tpRatio
+              : analysis.lastPrice - anchoredRisk * config.tpRatio;
+            (detail as any).zoneAnchoredStop.applied = true;
+            (detail as any).zoneAnchoredStop.widenedToFloor = widened;
+            (detail as any).zoneAnchoredStop.slPips = anchoredRisk / spec.pipSize;
           }
-
-          // Below the floor is possible on a very tight zone; widen, keeping the
-          // anchored side, so the stop still sits beyond the zone edge.
-          const finalAnchoredSL = anchoredPips < effectiveMinSlPips
-            ? (analysis.direction === "long"
-              ? analysis.lastPrice - effectiveMinSlPips * spec.pipSize
-              : analysis.lastPrice + effectiveMinSlPips * spec.pipSize)
-            : anchoredSL;
-          const widened = anchoredPips < effectiveMinSlPips;
-
-          console.log(`[${pair}] Zone-anchored SL: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${(Math.abs(analysis.lastPrice - finalAnchoredSL) / spec.pipSize).toFixed(1)}p (beyond zone ${analysis.direction === "long" ? "low" : "high"}${widened ? ", widened to floor" : ""})`);
-          sl = finalAnchoredSL;
-          const anchoredRisk = Math.abs(analysis.lastPrice - sl);
-          tp = analysis.direction === "long"
-            ? analysis.lastPrice + anchoredRisk * config.tpRatio
-            : analysis.lastPrice - anchoredRisk * config.tpRatio;
-          (detail as any).zoneAnchoredStop = {
-            applied: true, widenedToFloor: widened,
-            slPips: anchoredRisk / spec.pipSize,
-            zoneLow: anchorZone.low, zoneHigh: anchorZone.high,
-          };
         }
 
         // ── Regime-Adaptive TP Adjustment ──
