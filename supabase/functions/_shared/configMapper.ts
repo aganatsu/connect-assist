@@ -163,6 +163,10 @@ export const RUNTIME_DEFAULTS = {
   // regardless of price reclaiming it, and the trend block uses the last-2-swings
   // read that confirmedTrend exists to replace. See directionEngine.
   priceAwareStructureBlocks: false,
+  // Anchor the stop beyond the zone edge instead of at a swing inside it, and
+  // skip the setup when that stop exceeds the override cap. OFF = current
+  // behaviour. See the block in bot-scanner for why.
+  zoneAnchoredStop: false,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -436,6 +440,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? RUNTIME_DEFAULTS.simpleDirectionH1BosLookback,
     useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? RUNTIME_DEFAULTS.useConfirmedTrend,
     priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
+    zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,

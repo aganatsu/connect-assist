@@ -130,6 +130,7 @@ const DEFAULTS = {
   // read by the STYLE_OVERRIDES loop, which decides "did the user set this?" by
   // comparing the resolved value against it. So entries here must MIRROR
   // RUNTIME_DEFAULTS or that detection silently misfires.
+  zoneAnchoredStop: false,             // Stop beyond the zone edge, skip if over cap. OFF = current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -5897,6 +5898,77 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           } else if (cascadeSlPips > maxCascadeSlPips) {
             console.log(`[${pair}] Cascade Zone SL too wide (${cascadeSlPips.toFixed(1)}p > max ${maxCascadeSlPips}p). Keeping current SL.`);
           }
+        }
+
+        // ── Zone-Anchored Stop (flag: zoneAnchoredStop, default OFF) ──
+        // Runs last so it takes precedence over every other override.
+        //
+        // A zone is an AREA. Price can react at the near edge, the middle, or
+        // only after tagging the far edge — that is what makes it a zone rather
+        // than a line. A stop placed INSIDE it therefore bets on WHERE within
+        // the zone price reacts, not on WHETHER the zone holds. Those are
+        // different trades and only the second one is the thesis.
+        //
+        // Every stop the system currently produces sits inside the zone:
+        //   structural swing   150 pts   (BTC 2026-09-04)
+        //   LTF refinedSL       36.7 pts
+        //   zone half-width    677 pts   — rejected as over-cap, so unused
+        //
+        // That BTC trade entered at 79637.76 inside a 79000-80354.65 zone with
+        // a 150-point stop at 79487.76. Price bottomed exactly there, never
+        // reached 79000, and it closed -$532.50. The zone was never invalidated;
+        // the trade lost anyway because the stop was 11% of the zone's width.
+        //
+        // The only level whose breach means the zone failed is the far edge.
+        //
+        // When the anchored stop exceeds the override cap the setup is SKIPPED
+        // rather than traded on a stop that does not express the idea. That is
+        // deliberate: if a structurally valid stop cannot fit the risk
+        // framework, the zone is too wide for this instrument and taking it with
+        // a floor-width stop is what lost money.
+        const zoneAnchoredStopOn = (pairConfig as any).zoneAnchoredStop === true;
+        const anchorZone = izData?.bestZone;
+        if (zoneAnchoredStopOn && anchorZone && anchorZone.priceAtZone
+            && typeof anchorZone.low === "number" && typeof anchorZone.high === "number") {
+          const anchoredSL = analysis.direction === "long"
+            ? anchorZone.low - adjustedSlBuffer * spec.pipSize
+            : anchorZone.high + adjustedSlBuffer * spec.pipSize;
+          const anchoredPips = Math.abs(analysis.lastPrice - anchoredSL) / spec.pipSize;
+          const maxAnchoredPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
+
+          if (anchoredPips > maxAnchoredPips) {
+            detail.status = "skipped_zone_too_wide";
+            detail.skipReason = `Zone-anchored stop ${anchoredPips.toFixed(1)}p exceeds cap ${maxAnchoredPips.toFixed(1)}p — zone [${anchorZone.low}-${anchorZone.high}] too wide for this instrument's risk framework`;
+            (detail as any).zoneAnchoredStop = {
+              applied: false, reason: "exceeds_cap",
+              anchoredPips, maxAnchoredPips,
+              zoneLow: anchorZone.low, zoneHigh: anchorZone.high,
+            };
+            console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE TOO WIDE — anchored stop ${anchoredPips.toFixed(1)}p > cap ${maxAnchoredPips.toFixed(1)}p. Skipping.`);
+            scanDetails.push(detail);
+            continue;
+          }
+
+          // Below the floor is possible on a very tight zone; widen, keeping the
+          // anchored side, so the stop still sits beyond the zone edge.
+          const finalAnchoredSL = anchoredPips < effectiveMinSlPips
+            ? (analysis.direction === "long"
+              ? analysis.lastPrice - effectiveMinSlPips * spec.pipSize
+              : analysis.lastPrice + effectiveMinSlPips * spec.pipSize)
+            : anchoredSL;
+          const widened = anchoredPips < effectiveMinSlPips;
+
+          console.log(`[${pair}] Zone-anchored SL: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${(Math.abs(analysis.lastPrice - finalAnchoredSL) / spec.pipSize).toFixed(1)}p (beyond zone ${analysis.direction === "long" ? "low" : "high"}${widened ? ", widened to floor" : ""})`);
+          sl = finalAnchoredSL;
+          const anchoredRisk = Math.abs(analysis.lastPrice - sl);
+          tp = analysis.direction === "long"
+            ? analysis.lastPrice + anchoredRisk * config.tpRatio
+            : analysis.lastPrice - anchoredRisk * config.tpRatio;
+          (detail as any).zoneAnchoredStop = {
+            applied: true, widenedToFloor: widened,
+            slPips: anchoredRisk / spec.pipSize,
+            zoneLow: anchorZone.low, zoneHigh: anchorZone.high,
+          };
         }
 
         // ── Regime-Adaptive TP Adjustment ──
