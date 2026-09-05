@@ -4550,6 +4550,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // (EntryStory.executable); they feed no gate.
           {
             minSlPips: effectiveMinSlPipsForZone,
+            // Same cap the Unified Zone SL Override enforces at :5838. A zone
+            // stop above it is discarded and execution uses its own structural
+            // stop instead, so the engine needs the bound to report that.
+            maxSlPips: (MIN_SL_PIPS[pair] ?? 15) * (pairConfig.impulseSlCapMultiplier ?? 4),
             tpRatio: config.tpRatio,
           },
           zoneTFLabels,

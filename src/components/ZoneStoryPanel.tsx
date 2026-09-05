@@ -84,6 +84,8 @@ interface ZoneStoryData {
       rrRatio: number;
       slWidenedToFloor: boolean;
     } | null;
+    slDisposition?: "accepted" | "widened_to_floor" | "rejected_too_wide" | "unknown";
+    fillsAtMarket?: boolean;
     slPrice: number;
     tpPrice: number | null;
     riskPips: number;
@@ -392,7 +394,12 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   for a plan the SL-override guard would have rejected outright.
                   Falls back to the raw values only when the engine was not given
                   minSlPips/tpRatio. */}
-              <span className="font-mono ml-2">@ {fmt(unifiedData.entry.entryPrice)}</span>
+              {/* "Target" not "@" — both entry routes fill at LIVE price.
+                  market-fill-at-zone uses analysis.lastPrice; the pending route
+                  sets `const actualFillPrice = currentPrice` and logs "limit
+                  was X". So this level is where you want price to come to, never
+                  the price you get. BTC 2026-09-04: level 79000, filled 79637.76. */}
+              <span className="font-mono ml-2">target {fmt(unifiedData.entry.entryPrice)}</span>
               <span className="text-red-400 font-mono ml-2">
                 SL: {fmt(unifiedData.entry.executable?.slPrice ?? unifiedData.entry.slPrice)}
               </span>
@@ -416,8 +423,18 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   </span>
                 )}
                 {unifiedData.entry.executable?.slWidenedToFloor && (
-                  <span className="text-orange-400" title="The zone-derived stop was below the instrument minimum, so execution widens it to the floor.">
+                  <span className="text-orange-400" title="The zone stop was below the instrument minimum, so execution widens it to the floor.">
                     SL widened to floor
+                  </span>
+                )}
+                {unifiedData.entry.slDisposition === "rejected_too_wide" && (
+                  <span className="text-red-400 font-bold" title="The zone stop exceeds the SL-override cap (MIN_SL_PIPS x impulseSlCapMultiplier), so execution discards it and uses its own structural stop instead.">
+                    SL too wide — execution uses structural stop
+                  </span>
+                )}
+                {unifiedData.entry.fillsAtMarket && (
+                  <span className="text-zinc-500" title="Both entry routes fill at live price; this plan assumes a fill at the target level.">
+                    fills at market
                   </span>
                 )}
               </div>

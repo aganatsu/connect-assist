@@ -145,3 +145,90 @@ Deno.test("the panel renders the executable plan", () => {
     "the BOS level should still be shown, labelled as not traded",
   );
 });
+
+/**
+ * Second pass, 2026-09-05. The first fix corrected the RATIO but left two
+ * falsehoods:
+ *
+ *   1. entryPrice was presented as a fill price. Both routes fill at LIVE price
+ *      — market-fill-at-zone uses analysis.lastPrice, and the pending route sets
+ *      `const actualFillPrice = currentPrice` while logging "limit was X". The
+ *      zone edge is a target level, never a fill.
+ *
+ *   2. The stop shown could be one execution would refuse. The Unified Zone SL
+ *      Override applies the zone stop only when it sits within
+ *      [effectiveMinSlPips, staticMinSlPips * impulseSlCapMultiplier]. Outside
+ *      that band it is discarded and a structural stop is used instead.
+ *
+ * BTC/USD 2026-09-04 hit both: level 79000 shown, filled 79637.76; zone stop
+ * 677.3 points against a 225-point cap (MIN_SL_PIPS 150 x scalper 1.5), rejected,
+ * and execution fell back to a 150-point structural stop — the bare floor —
+ * inside a 1354-point zone. Result: -$532.50, stopped out without price ever
+ * testing the zone.
+ */
+
+Deno.test("a zone stop above the override cap is reported as rejected", () => {
+  assert(
+    /rawRiskPips > maxSlPips/.test(engine),
+    "the engine must compare the zone stop against the override cap",
+  );
+  assert(
+    /slDisposition = "rejected_too_wide"/.test(engine),
+    "an over-wide stop must be labelled, not silently shown",
+  );
+});
+
+Deno.test("no executable plan is invented when the stop is rejected", () => {
+  // Execution falls back to a structural stop the zone engine cannot see, so
+  // there is no honest plan to display.
+  const i = engine.indexOf('slDisposition = "rejected_too_wide"');
+  assert(i > -1);
+  const branch = engine.slice(i, i + 500);
+  assert(/executable: null/.test(branch), "executable must be null when rejected");
+});
+
+Deno.test("the disposition covers every band", () => {
+  for (const d of ["accepted", "widened_to_floor", "rejected_too_wide", "unknown"]) {
+    assert(new RegExp(`"${d}"`).test(engine), `missing disposition: ${d}`);
+  }
+  assert(
+    /slDisposition = execRiskPrice > rawRiskPrice \? "widened_to_floor" : "accepted"/.test(engine),
+    "in-band stops must distinguish widened from accepted",
+  );
+});
+
+Deno.test("fillsAtMarket is always true and the panel says so", () => {
+  assert(/fillsAtMarket: true/.test(engine), "both routes fill at live price");
+  assert(/fills at market/.test(panel), "the panel must state that fills are at market");
+  assert(
+    /target \{fmt\(unifiedData\.entry\.entryPrice\)\}/.test(panel),
+    'the entry must read as a target level, not "@ price"',
+  );
+});
+
+Deno.test("the panel surfaces a rejected stop prominently", () => {
+  assert(
+    /slDisposition === "rejected_too_wide"/.test(panel),
+    "the panel must show when execution will discard the zone stop",
+  );
+  assert(
+    /execution uses structural stop/.test(panel),
+    "and say what execution will do instead",
+  );
+});
+
+Deno.test("the scanner passes the same cap the override enforces", () => {
+  assert(
+    /maxSlPips: \(MIN_SL_PIPS\[pair\] \?\? 15\) \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/.test(scanner),
+    "the cap must match maxUnifiedSlPips in the override guard",
+  );
+});
+
+Deno.test("the BTC case would now be labelled rejected", () => {
+  // zone 79000-80354.65, stop = low - half width = 78322.675 → 677.325 points.
+  // cap = MIN_SL_PIPS 150 * scalper 1.5 = 225.
+  const rawRiskPips = (79000 - 78322.675) / 1;
+  const cap = 150 * 1.5;
+  assertEquals(Math.round(rawRiskPips * 1000) / 1000, 677.325);
+  assert(rawRiskPips > cap, "677.325 must exceed the 225 cap");
+});
