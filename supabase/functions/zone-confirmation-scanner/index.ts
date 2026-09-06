@@ -35,7 +35,7 @@ import {
 } from "../_shared/smcAnalysis.ts";
 import {
   detectZoneConfirmation,
-  isPriceInZone,
+  isPriceInZone, classifyZoneExit,
   isImpulseBroken,
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
@@ -342,7 +342,18 @@ Deno.serve(async (req) => {
         const hasRefinedZone = rawRefinedLow > 0 && rawRefinedHigh > 0;
         const zoneLow = hasRefinedZone ? rawRefinedLow : parseFloat(pending.entry_zone_low || "0");
         const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
-        if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+        // `zoneExitDirectionAware` (default OFF) — see the twin block in
+        // bot-scanner. config_json here is the raw nested shape, so the flag is
+        // read off `strategy` directly rather than through configMapper.
+        const zoneExitAware = strategyConfig.zoneExitDirectionAware === true;
+        const zoneExit = (zoneLow > 0 && zoneHigh > 0)
+          ? classifyZoneExit(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")
+          : "inside";
+        const resetsHunt = zoneExitAware ? zoneExit === "left_breach" : zoneExit !== "inside";
+        if (zoneExit !== "inside" && !resetsHunt) {
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
+        }
+        if (resetsHunt) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
           await supabase.from("pending_orders").update({
             status: "pending",
@@ -350,7 +361,7 @@ Deno.serve(async (req) => {
             confirmation_attempts: attempts,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           resetToPending++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
           continue;
         }
 
