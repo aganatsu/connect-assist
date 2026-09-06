@@ -55,7 +55,7 @@ Deno.test("the labels match the candle arrays actually passed", () => {
 
 Deno.test("labels are threaded into the zone engine", () => {
   assert(
-    /findUnifiedZone\([\s\S]{0,1400}zoneTFLabels,/.test(scanner),
+    /findUnifiedZone\([\s\S]{0,1800}zoneTFLabels,/.test(scanner),
     "zoneTFLabels must be passed to findUnifiedZone or the engine falls back to defaults",
   );
 });

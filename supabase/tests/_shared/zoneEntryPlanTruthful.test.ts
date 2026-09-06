@@ -83,9 +83,12 @@ Deno.test("the executable target uses tpRatio, never the BOS level", () => {
 
 Deno.test("the raw fields that feed gates are untouched", () => {
   // slPrice feeds the SL-override guard; rrRatio feeds the minRR check.
+  // Written via zoneWidth since entry depth was added, but the value is
+  // unchanged: zoneWidth IS (poi.high - poi.low). The stop must stay anchored
+  // to the zone rather than following the entry inward.
   assert(
-    /slPrice = zonePOI\.poi\.high \+ \(zonePOI\.poi\.high - zonePOI\.poi\.low\) \* 0\.5/.test(engine),
-    "the raw zone-derived stop must keep its original formula",
+    /slPrice = zonePOI\.poi\.high \+ zoneWidth \* 0\.5/.test(engine),
+    "the raw zone-derived stop must keep its original value",
   );
   assert(
     /if \(rrRatio !== null && rrRatio < minRR\)/.test(engine),
