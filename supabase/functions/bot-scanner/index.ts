@@ -4252,6 +4252,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         staticFloorPips: MIN_SL_PIPS[pair] ?? 15,
       },
       pair,
+      // Scan detail carried no price at all, so nothing about where price sat
+      // relative to a zone could be reconstructed after the fact — every such
+      // question had to be inferred from pending_orders.current_price, which is
+      // overwritten every cycle and only survives as the last value before
+      // resolution. One number makes the history answerable.
+      lastPrice: analysis.lastPrice,
       score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
