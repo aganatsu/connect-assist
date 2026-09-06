@@ -108,7 +108,7 @@ Deno.test("with the flag off, every exit resets — today's behaviour exactly", 
   assertEquals(off("inside"), false);
   for (const src of [scanner, confirmScanner]) {
     assert(
-      /zoneExitAware \? zoneExit === "left_breach" : zoneExit !== "inside"/.test(src),
+      /: zoneExit !== "inside";/.test(src),
       "the flag-off path must reset on any exit",
     );
   }
@@ -161,4 +161,79 @@ Deno.test("a favourable exit leaves zone_touch_time alone", () => {
       "nothing may clear zone_touch_time before the guarded branch",
     );
   }
+});
+
+// ── Chase limit ─────────────────────────────────────────────────────────────
+//
+// Without a bound, a favourable exit keeps the hunt alive until expires_at.
+// Entry fills at market and the stop is derived from the zone, so price can
+// travel a long way, print a CHoCH out there, and fill you far from the level
+// with a zone-sized stop. That is a chase, not the setup that was staged.
+//
+// `zoneChaseMaxZoneWidths` (default 1) caps the travel in zone widths measured
+// past the buffer. Beyond it the exit resets like any other.
+
+Deno.test("a favourable exit within the limit keeps hunting", () => {
+  // Zone 20 pips wide, buffer 2 pips, limit 1 width = 20 pips past 1.1022.
+  assertEquals(classifyZoneExit(1.1040, LOW, HIGH, "long", undefined, 1), "left_favourable");
+});
+
+Deno.test("a favourable exit beyond the limit is far, and resets", () => {
+  assertEquals(classifyZoneExit(1.1100, LOW, HIGH, "long", undefined, 1), "left_favourable_far");
+  assertEquals(classifyZoneExit(1.0900, LOW, HIGH, "short", undefined, 1), "left_favourable_far");
+});
+
+Deno.test("the limit is measured from the buffer edge, not the zone edge", () => {
+  // Zone width 20 pips, buffer 2 pips. The buffer edge is 1.1022 and one zone
+  // width past it is 1.1042 — not one width past the zone edge (1.1040).
+  assertEquals(classifyZoneExit(1.1035, LOW, HIGH, "long", undefined, 1), "left_favourable");
+  assertEquals(classifyZoneExit(1.1050, LOW, HIGH, "long", undefined, 1), "left_favourable_far");
+});
+
+Deno.test("a breach is still a breach regardless of the limit", () => {
+  assertEquals(classifyZoneExit(1.0900, LOW, HIGH, "long", undefined, 1), "left_breach");
+  assertEquals(classifyZoneExit(1.1100, LOW, HIGH, "short", undefined, 1), "left_breach");
+});
+
+Deno.test("omitting the limit means no limit", () => {
+  // Preserves the behaviour from #468 for any caller that does not pass it.
+  assertEquals(classifyZoneExit(1.9000, LOW, HIGH, "long"), "left_favourable");
+  assertEquals(classifyZoneExit(1.9000, LOW, HIGH, "long", undefined, undefined), "left_favourable");
+});
+
+Deno.test("zero means never chase — reset the moment price clears the buffer", () => {
+  assertEquals(classifyZoneExit(1.1023, LOW, HIGH, "long", undefined, 0), "left_favourable_far");
+  assertEquals(classifyZoneExit(1.1021, LOW, HIGH, "long", undefined, 0), "inside");
+});
+
+Deno.test("only left_favourable survives; far and breach both reset", () => {
+  // The scanners must not treat left_favourable_far as continuable.
+  for (const src of [scanner, confirmScanner]) {
+    assert(
+      /zoneExit !== "inside" && zoneExit !== "left_favourable"/.test(src),
+      "reset must be the complement of inside + left_favourable, so a new " +
+        "ZoneExitKind added later defaults to resetting rather than chasing",
+    );
+    assert(
+      !/zoneExit === "left_breach"/.test(src),
+      "the old breach-only test would let left_favourable_far chase forever",
+    );
+    assert(/zoneChaseMaxZoneWidths/.test(src), "the limit must be passed in");
+  }
+});
+
+Deno.test("isPriceInZone is unaffected by the new kind", () => {
+  assertEquals(isPriceInZone(1.9000, LOW, HIGH, "long"), false);
+  assertEquals(classifyZoneExit(1.9000, LOW, HIGH, "long", undefined, 1), "left_favourable_far");
+});
+
+Deno.test("the limit defaults to 1 in the live mapper and bot-scanner agrees", () => {
+  const a = scanner.match(/^  zoneChaseMaxZoneWidths: (\d+),/m);
+  const b = mapper.match(/^  zoneChaseMaxZoneWidths: (\d+),/m);
+  assert(a && b, "missing from one defaults object");
+  assertEquals(a[1], b[1]);
+  assert(
+    /zoneChaseMaxZoneWidths: strategy\.zoneChaseMaxZoneWidths \?\? raw\.zoneChaseMaxZoneWidths \?\? RUNTIME_DEFAULTS\.zoneChaseMaxZoneWidths/.test(mapper),
+    "must be mapped in configMapper",
+  );
 });

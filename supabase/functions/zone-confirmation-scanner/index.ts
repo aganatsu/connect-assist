@@ -347,9 +347,12 @@ Deno.serve(async (req) => {
         // read off `strategy` directly rather than through configMapper.
         const zoneExitAware = strategyConfig.zoneExitDirectionAware === true;
         const zoneExit = (zoneLow > 0 && zoneHigh > 0)
-          ? classifyZoneExit(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")
+          ? classifyZoneExit(
+            currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short",
+            undefined, strategyConfig.zoneChaseMaxZoneWidths,
+          )
           : "inside";
-        const resetsHunt = zoneExitAware ? zoneExit === "left_breach" : zoneExit !== "inside";
+        const resetsHunt = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
         if (zoneExit !== "inside" && !resetsHunt) {
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
         }
