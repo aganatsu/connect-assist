@@ -176,6 +176,10 @@ export const RUNTIME_DEFAULTS = {
   // Consume analysis.atrValue. OFF = the zero every consumer saw while the
   // field went unpopulated. Turning it on changes stops and position size.
   atrDerivedFloorsEnabled: false,
+  // Where in the zone the resting entry sits, as a fraction of zone width from
+  // the near edge. 0 = first touch, 0.5 = midpoint, 1 = far edge (previous
+  // behaviour). Moves entry, risk, R:R and therefore trade selection.
+  zoneEntryDepth: 1,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -453,6 +457,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,
     atrDerivedFloorsEnabled: strategy.atrDerivedFloorsEnabled ?? raw.atrDerivedFloorsEnabled ?? RUNTIME_DEFAULTS.atrDerivedFloorsEnabled,
+    zoneEntryDepth: strategy.zoneEntryDepth ?? raw.zoneEntryDepth ?? RUNTIME_DEFAULTS.zoneEntryDepth,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,

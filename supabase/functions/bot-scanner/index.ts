@@ -134,6 +134,7 @@ const DEFAULTS = {
   zoneExitDirectionAware: false,       // A favourable exit from the zone does not reset the hunt. OFF = current behaviour.
   zoneChaseMaxZoneWidths: 1,           // How far a favourable exit may travel, in zone widths, before it resets anyway.
   atrDerivedFloorsEnabled: false,      // Consume analysis.atrValue. OFF = the zero everything saw while it was unpopulated.
+  zoneEntryDepth: 1,                   // Entry depth into the zone from the near edge. 1 = far edge, the previous behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -4633,6 +4634,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // stop instead, so the engine needs the bound to report that.
             maxSlPips: (MIN_SL_PIPS[pair] ?? 15) * (pairConfig.impulseSlCapMultiplier ?? 4),
             tpRatio: config.tpRatio,
+            entryDepth: (pairConfig as any).zoneEntryDepth,
           },
           zoneTFLabels,
         );
@@ -4701,6 +4703,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             sideOk: multiTF.bestZone.sideOk,
             distanceToZone: multiTF.bestZone.distanceToZone,
             distancePips: multiTF.bestZone.distancePips,
+            // How deep into the zone price has actually come, as a fraction of
+            // zone width from the NEAR edge. This is the number that decides
+            // what `zoneEntryDepth` should be: an entry at depth D fills only
+            // when penetration reaches D, and today D is pinned at 1.
+            //   <0 price has not entered the zone
+            //    0 just touched the near edge
+            //    1 reached the far edge  (what the entry currently requires)
+            //   >1 traded clean through
+            zonePenetration: (() => {
+              const zw = multiTF.bestZone.zone.poi.high - multiTF.bestZone.zone.poi.low;
+              if (!(zw > 0)) return null;
+              return analysis.direction === "long"
+                ? (multiTF.bestZone.zone.poi.high - analysis.lastPrice) / zw
+                : (analysis.lastPrice - multiTF.bestZone.zone.poi.low) / zw;
+            })(),
+            entryDepthInUse: (pairConfig as any).zoneEntryDepth ?? 1,
           } : null,
           allZonesCount: multiTF.allZones.length,
           h1HasZone: !!multiTF.h1Result.bestZone,

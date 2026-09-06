@@ -218,6 +218,12 @@ export interface UnifiedZoneConfig {
    * shown must say so rather than quote a number that cannot be used.
    */
   maxSlPips?: number;
+  /**
+   * Fraction of zone width from the NEAR edge at which the entry sits.
+   * 0 = first touch of the zone, 0.5 = midpoint, 1 = far edge (the previous
+   * behaviour, and the default).
+   */
+  entryDepth?: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
@@ -377,7 +383,7 @@ export function findUnifiedZone(
   if (state === "confirmed" || state === "triggered") {
     entry = buildEntryStory(
       direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR,
-      pipSize, cfg.minSlPips, cfg.tpRatio, cfg.maxSlPips,
+      pipSize, cfg.minSlPips, cfg.tpRatio, cfg.maxSlPips, cfg.entryDepth,
     );
   }
 
@@ -440,25 +446,55 @@ function buildEntryStory(
   minSlPips?: number,
   tpRatio?: number,
   maxSlPips?: number,
+  entryDepth?: number,
 ): EntryStory | null {
   const entryDirection: "long" | "short" = direction === "bullish" ? "long" : "short";
 
-  // Entry: edge of zone closest to current price (continuation entry)
-  // For bearish continuation: price retraces UP to zone, entry at zone HIGH (sell limit)
-  // For bullish continuation: price retraces DOWN to zone, entry at zone LOW (buy limit)
+  // ── Entry depth ──
+  // The entry used to be pinned to the FAR edge of the zone: zone low for a
+  // long, zone high for a short. A resting limit there only fills if price
+  // traverses the entire zone.
+  //
+  // Measured 2026-09-06 over 7 days of scan_logs: price was at the BTC/USD zone
+  // in 390 of 444 evaluations (88%), median distance 53.6 points — and yet only
+  // 1 of 36 BTC pending orders ever came near its entry price. Price reaches
+  // the zone constantly and crosses all of it rarely. 25 of 899 orders across
+  // all pairs ever recorded a touch.
+  //
+  // A zone is an area, so the reaction can come from anywhere inside it.
+  // Pinning entry to the far edge bets on which part reacts — the same mistake
+  // as putting the stop at a swing inside the zone, on the other side of the
+  // trade.
+  //
+  // `entryDepth` is the fraction of zone width measured from the NEAR edge, the
+  // one price arrives at:
+  //
+  //   0     near edge — fills on first touch of the zone
+  //   0.5   midpoint
+  //   1     far edge — the previous behaviour, and the default
+  //
+  // Default 1 keeps this identical until someone chooses otherwise. Entry moves
+  // risk, reward and the minRR check below, so it moves trade selection.
+  const zoneWidth = zonePOI.poi.high - zonePOI.poi.low;
+  const depth = (typeof entryDepth === "number" && entryDepth >= 0 && entryDepth <= 1)
+    ? entryDepth
+    : 1;
+
   let entryPrice: number;
   let slPrice: number;
 
   if (direction === "bearish") {
-    // Sell at zone high, SL above zone
-    entryPrice = zonePOI.poi.high;
-    slPrice = zonePOI.poi.high + (zonePOI.poi.high - zonePOI.poi.low) * 0.5;
+    // Price retraces UP into supply; the near edge is the zone LOW.
+    entryPrice = zonePOI.poi.low + zoneWidth * depth;
+    // The stop stays anchored to the zone, not to the entry — half a zone width
+    // above the HIGH regardless of how deep the entry sits.
+    slPrice = zonePOI.poi.high + zoneWidth * 0.5;
     // Cap SL at impulse origin (high of bearish impulse)
     if (slPrice > impulse.high) slPrice = impulse.high;
   } else {
-    // Buy at zone low, SL below zone
-    entryPrice = zonePOI.poi.low;
-    slPrice = zonePOI.poi.low - (zonePOI.poi.high - zonePOI.poi.low) * 0.5;
+    // Price retraces DOWN into demand; the near edge is the zone HIGH.
+    entryPrice = zonePOI.poi.high - zoneWidth * depth;
+    slPrice = zonePOI.poi.low - zoneWidth * 0.5;
     // Cap SL at impulse origin (low of bullish impulse)
     if (slPrice < impulse.low) slPrice = impulse.low;
   }
