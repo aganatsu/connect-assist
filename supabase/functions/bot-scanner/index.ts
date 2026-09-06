@@ -6355,13 +6355,56 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
             .eq("status", "pending");
-          if (stalePending && stalePending.length > 0) {
-            const staleIds = stalePending.map((s: any) => s.order_id);
+          // Measured 2026-09-06 over 60 days: 400 of 645 cancellations were
+          // "superseded", and 309 of those 400 replaced the order at the
+          // IDENTICAL entry price. Average movement on the rest was under a
+          // pip on FX. So the dominant case is a setup being re-detected
+          // unchanged, and the order being torn down and rebuilt for nothing —
+          // a new order_id, a reset confirmation_attempts, and 400 rows of
+          // "cancelled" that make the log look like the bot keeps changing its
+          // mind.
+          //
+          // When the level has not moved, refresh the existing order in place
+          // instead. expires_at is still extended exactly as a reinsert would
+          // have done, so the effective lifetime is unchanged — this removes
+          // the churn, not the order's shot at filling.
+          const samePriceOrders = (stalePending ?? []).filter((s: any) =>
+            Number(s.entry_price) === Number(limitEntry.price)
+          );
+          const movedOrders = (stalePending ?? []).filter((s: any) =>
+            Number(s.entry_price) !== Number(limitEntry.price)
+          );
+          if (samePriceOrders.length > 0) {
+            await supabase.from("pending_orders").update({
+              signal_score: analysis.score,
+              expires_at: expiresAt,
+              current_price: analysis.lastPrice,
+            }).in("order_id", samePriceOrders.map((s: any) => s.order_id)).eq("user_id", userId);
+            console.log(`[pending] ${pair} ${analysis.direction} — setup re-detected at the same level ${limitEntry.price}; refreshed ${samePriceOrders.length} order(s) in place instead of replacing`);
+          }
+          if (movedOrders.length > 0) {
+            const staleIds = movedOrders.map((s: any) => s.order_id);
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${stalePending[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${stalePending[0].entry_price})`,
+              // resolved_at was never set on this path, unlike every other
+              // cancel. Order lifetime was therefore unmeasurable for the
+              // largest cancellation bucket in the table.
+              resolved_at: new Date().toISOString(),
+              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${movedOrders[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${movedOrders[0].entry_price})`,
             }).in("order_id", staleIds).eq("user_id", userId);
-            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
+            console.log(`[pending] Expired ${movedOrders.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
+          }
+
+          // Refreshed in place — inserting as well would leave two live orders
+          // at the same level for the same symbol and direction.
+          if (samePriceOrders.length > 0) {
+            (detail as any).pendingOrder = {
+              action: "refreshed_in_place",
+              orderIds: samePriceOrders.map((s: any) => s.order_id),
+              price: limitEntry.price,
+            };
+            scanDetails.push(detail);
+            continue;
           }
 
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
