@@ -75,6 +75,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "gate 19", "core factors", "off"] },
   { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
+  { tab: "strategy", label: "Zone Entry Depth", keywords: ["zone", "entry", "depth", "limit", "fill", "near", "far", "edge", "penetration"] },
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
   { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
   { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
@@ -897,6 +898,37 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       <p className="text-[9px] text-muted-foreground mt-1.5">
                         Hard = pair is skipped if no valid impulse zone exists. Soft = score penalty ({config.strategy?.impulseZonePenalty ?? 2.0} pts) but trade can still proceed. Off = zones are shown in the Zone Story but don't affect trade decisions.
                       </p>
+                    </FieldGroup>
+                    {/* ── Zone Entry Depth ── */}
+                    <FieldGroup label="Zone Entry Depth" description="Where inside the zone the resting entry sits, measured from the edge price arrives at. The stop stays anchored to the zone either way.">
+                      <div className="flex items-center gap-3">
+                        <Slider
+                          value={[Math.round((config.strategy?.zoneEntryDepth ?? 1) * 100)]}
+                          onValueChange={([v]) => updateField('strategy', 'zoneEntryDepth', Math.round(v) / 100)}
+                          min={0}
+                          max={100}
+                          step={5}
+                          className="flex-1"
+                        />
+                        <Badge variant="outline" className={`text-[9px] font-mono w-28 justify-center ${
+                          (config.strategy?.zoneEntryDepth ?? 1) >= 1
+                            ? 'text-warn border-warn/40'
+                            : 'text-muted-foreground'
+                        }`}>
+                          {Math.round((config.strategy?.zoneEntryDepth ?? 1) * 100)}% {(config.strategy?.zoneEntryDepth ?? 1) >= 1 ? 'FAR EDGE' : (config.strategy?.zoneEntryDepth ?? 1) === 0 ? 'FIRST TOUCH' : ''}
+                        </Badge>
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">
+                        100% is the far edge — the entry only fills if price crosses the whole zone. Measured over 7 days: price was at the BTC/USD zone in 390 of 444 evaluations (88%), yet only 1 of 36 BTC orders came near its entry, and 25 of 899 orders across all pairs ever recorded a touch. 0% fills on first touch.
+                      </p>
+                      <p className="text-[9px] text-warn/80 mt-1">
+                        Shallower is not free. The stop stays anchored to the zone rather than following the entry in, so a shallower entry sits further from it — more fills, larger risk, lower R:R.
+                      </p>
+                      {(config.strategy?.zoneEntryDepth ?? 1) < 1 && (
+                        <p className="text-[9px] text-muted-foreground mt-1 font-mono">
+                          long, zone 79000&ndash;80354.65 &rarr; entry {(80354.65 - 1354.65 * (config.strategy?.zoneEntryDepth ?? 1)).toFixed(2)} (was 79000.00)
+                        </p>
+                      )}
                     </FieldGroup>
                     {/* ── Fib Max Retracement ── */}
                     <FieldGroup label="Max Fib Retracement" description="How deep a zone can sit inside the impulse retracement and still qualify. Higher = more zones qualify near the origin, but SL headroom shrinks (capped at impulse origin).">
