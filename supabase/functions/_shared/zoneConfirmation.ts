@@ -446,16 +446,50 @@ export function isPriceInZone(
   direction: "long" | "short",
   atr?: number,
 ): boolean {
-  // Add a small buffer (10% of zone width or ATR-based) to avoid premature resets
-  // from minor wicks outside the zone
+  return classifyZoneExit(currentPrice, zoneLow, zoneHigh, direction, atr) === "inside";
+}
+
+/**
+ * Where price sits relative to the zone, and — when it has left — whether it
+ * left the way the setup WANTS or the way that kills it.
+ *
+ * `isPriceInZone` collapses the last two into a single `false`, which is what
+ * the callers acted on: leaving a demand zone upward (the bounce you are
+ * waiting for) reset the confirmation hunt exactly like collapsing through the
+ * floor. The reset clears `zone_touch_time`, and `zone_touch_time` is what
+ * seeds `zoneTouchIdx` for `detectZoneConfirmation` — so the hunt is abandoned
+ * at the moment the CHoCH is forming, and re-entry needs a fresh touch. Entry
+ * fills at market on confirmation, not at the zone edge, so price having moved
+ * away is not itself a reason to stop hunting.
+ *
+ * The old signature took `direction` and then ignored it — both branches
+ * returned the identical expression.
+ *
+ *   long  (demand): breach = below zoneLow,  favourable = above zoneHigh
+ *   short (supply): breach = above zoneHigh, favourable = below zoneLow
+ */
+export type ZoneExitKind = "inside" | "left_favourable" | "left_breach";
+
+export function classifyZoneExit(
+  currentPrice: number,
+  zoneLow: number,
+  zoneHigh: number,
+  direction: "long" | "short",
+  atr?: number,
+): ZoneExitKind {
+  // A small buffer (10% of zone width, or ATR-based when supplied) avoids
+  // premature resets from minor wicks outside the zone.
   const zoneWidth = zoneHigh - zoneLow;
   const buffer = atr ? atr * 0.2 : zoneWidth * 0.1;
 
-  if (direction === "short") {
-    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
-  } else {
-    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
+  if (currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer)) {
+    return "inside";
   }
+  const leftAbove = currentPrice > (zoneHigh + buffer);
+  if (direction === "long") {
+    return leftAbove ? "left_favourable" : "left_breach";
+  }
+  return leftAbove ? "left_breach" : "left_favourable";
 }
 
 // ─── Impulse Invalidation Check ──────────────────────────────────────────────

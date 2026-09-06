@@ -76,7 +76,7 @@ import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZon
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { observeStructureLag } from "../_shared/structureLagObserver.ts";
-import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
+import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
@@ -131,6 +131,7 @@ const DEFAULTS = {
   // comparing the resolved value against it. So entries here must MIRROR
   // RUNTIME_DEFAULTS or that detection silently misfires.
   zoneAnchoredStop: false,             // Stop beyond the zone edge, skip if over cap. OFF = current behaviour.
+  zoneExitDirectionAware: false,       // A favourable exit from the zone does not reset the hunt. OFF = current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -3102,7 +3103,23 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const hasRefZone = rawRefLow > 0 && rawRefHigh > 0;
           const zoneLow = hasRefZone ? rawRefLow : parseFloat(pending.entry_zone_low || "0");
           const zoneHigh = hasRefZone ? rawRefHigh : parseFloat(pending.entry_zone_high || "0");
-          if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+          // `zoneExitDirectionAware` (default OFF): leaving a demand zone UPWARD
+          // is the bounce the setup is waiting for, not a failure. Resetting
+          // there clears zone_touch_time, which seeds zoneTouchIdx below, so the
+          // CHoCH hunt is abandoned exactly when the CHoCH is forming. Fills
+          // happen at market on confirmation, so price having moved away is not
+          // itself a reason to stop. The hunt stays bounded by expires_at.
+          // The pending-order loop runs outside the per-pair scope, so this
+          // reads the mapped global config rather than pairConfig.
+          const zoneExitAware = (config as any).zoneExitDirectionAware === true;
+          const zoneExit = (zoneLow > 0 && zoneHigh > 0)
+            ? classifyZoneExit(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")
+            : "inside";
+          const resetsHunt = zoneExitAware ? zoneExit === "left_breach" : zoneExit !== "inside";
+          if (zoneExit !== "inside" && !resetsHunt) {
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
+          }
+          if (resetsHunt) {
             // Price left zone without confirming — reset to pending, wait for next approach
             const attempts = (pending.confirmation_attempts || 0) + 1;
             await supabase.from("pending_orders").update({
@@ -3111,7 +3128,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               confirmation_attempts: attempts,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingConfirmationHunting--;
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
             continue;
           }
 
