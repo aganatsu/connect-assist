@@ -169,6 +169,10 @@ export const RUNTIME_DEFAULTS = {
   zoneAnchoredStop: false,
   // Leaving a zone the way the setup wants is not a failure. OFF = current behaviour.
   zoneExitDirectionAware: false,
+  // How far past the zone a favourable exit may travel and still keep the
+  // confirmation hunt alive, in zone widths. Only read when
+  // zoneExitDirectionAware is on.
+  zoneChaseMaxZoneWidths: 1,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -444,6 +448,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
     zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
+    zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,

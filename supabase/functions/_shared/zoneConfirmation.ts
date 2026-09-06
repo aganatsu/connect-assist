@@ -468,7 +468,11 @@ export function isPriceInZone(
  *   long  (demand): breach = below zoneLow,  favourable = above zoneHigh
  *   short (supply): breach = above zoneHigh, favourable = below zoneLow
  */
-export type ZoneExitKind = "inside" | "left_favourable" | "left_breach";
+export type ZoneExitKind =
+  | "inside"
+  | "left_favourable"
+  | "left_favourable_far"
+  | "left_breach";
 
 export function classifyZoneExit(
   currentPrice: number,
@@ -476,6 +480,7 @@ export function classifyZoneExit(
   zoneHigh: number,
   direction: "long" | "short",
   atr?: number,
+  chaseMaxZoneWidths?: number,
 ): ZoneExitKind {
   // A small buffer (10% of zone width, or ATR-based when supplied) avoids
   // premature resets from minor wicks outside the zone.
@@ -486,10 +491,23 @@ export function classifyZoneExit(
     return "inside";
   }
   const leftAbove = currentPrice > (zoneHigh + buffer);
-  if (direction === "long") {
-    return leftAbove ? "left_favourable" : "left_breach";
+  const favourable = direction === "long" ? leftAbove : !leftAbove;
+  if (!favourable) return "left_breach";
+
+  // A favourable exit is only worth continuing to hunt while price is still
+  // near the zone. Entry fills at market, and the stop is derived from the
+  // zone — so the further price travels, the larger the risk on a trade whose
+  // thesis was "react AT this level". Past the limit it is a chase, not the
+  // setup. `chaseMaxZoneWidths` is measured in zone widths beyond the buffer;
+  // undefined means no limit, which is the behaviour before this existed.
+  if (chaseMaxZoneWidths !== undefined && chaseMaxZoneWidths >= 0) {
+    const limit = zoneWidth * chaseMaxZoneWidths;
+    const past = leftAbove
+      ? currentPrice - (zoneHigh + buffer)
+      : (zoneLow - buffer) - currentPrice;
+    if (past > limit) return "left_favourable_far";
   }
-  return leftAbove ? "left_breach" : "left_favourable";
+  return "left_favourable";
 }
 
 // ─── Impulse Invalidation Check ──────────────────────────────────────────────

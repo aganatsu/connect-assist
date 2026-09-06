@@ -132,6 +132,7 @@ const DEFAULTS = {
   // RUNTIME_DEFAULTS or that detection silently misfires.
   zoneAnchoredStop: false,             // Stop beyond the zone edge, skip if over cap. OFF = current behaviour.
   zoneExitDirectionAware: false,       // A favourable exit from the zone does not reset the hunt. OFF = current behaviour.
+  zoneChaseMaxZoneWidths: 1,           // How far a favourable exit may travel, in zone widths, before it resets anyway.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -3130,9 +3131,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // reads the mapped global config rather than pairConfig.
           const zoneExitAware = (config as any).zoneExitDirectionAware === true;
           const zoneExit = (zoneLow > 0 && zoneHigh > 0)
-            ? classifyZoneExit(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")
+            ? classifyZoneExit(
+              currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short",
+              undefined, (config as any).zoneChaseMaxZoneWidths,
+            )
             : "inside";
-          const resetsHunt = zoneExitAware ? zoneExit === "left_breach" : zoneExit !== "inside";
+          // A favourable exit keeps the hunt alive only while price is still
+          // near the zone. Beyond zoneChaseMaxZoneWidths it resets like any
+          // other exit — filling at market that far away is a chase against a
+          // zone-derived stop, not the setup that was staged.
+          const resetsHunt = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
           if (zoneExit !== "inside" && !resetsHunt) {
             console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
           }
