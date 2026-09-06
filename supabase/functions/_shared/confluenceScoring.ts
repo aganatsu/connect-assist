@@ -2924,6 +2924,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     score, rawScore, normalizedScoring: true, enabledMax,
     strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
+    // ATR was computed above for SLTPInput but never returned, so every
+    // downstream `analysis.atrValue` read undefined. Five behaviours silently
+    // resolved to zero as a result — see the consumers in bot-scanner.
+    atrValue,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo, regime4HInfo,
     // Confluence stacking, sweep reclaim, pullback decay
