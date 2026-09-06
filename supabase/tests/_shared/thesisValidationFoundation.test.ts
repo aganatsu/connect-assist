@@ -178,7 +178,8 @@ Deno.test("the validator is handed the config the scanner uses", () => {
 Deno.test("the style-aware path costs one extra fetch, not three", () => {
   // Scalper needs 1H/15m/5m. 1H is already fetched for the legacy path and the
   // entry-TF series is already in hand, so only 15m is new.
-  const i = scanner.indexOf("if (thesisStyleAware) {");
+  const i = scanner.indexOf("if (thesisStyleAware || !opts?.isManagementOnly) {");
+  assert(i > -1, "the shadow-candles branch was not found");
   const block = scanner.slice(i, i + 800);
   assert(/cachedFetch\(pending\.symbol, "15m", "5d"\)/.test(block), "scalper adds 15m");
   assert(/confirm: pendingCandles/.test(block), "and reuses the candles already fetched");
@@ -192,4 +193,60 @@ Deno.test("observations reach scan detail", () => {
   const block = scanner.slice(i, i + 300);
   assert(/acted: !thesisResult\.valid/.test(block), "record whether it actually cancelled");
   assert(/checks: thesisResult\.checks/.test(block), "and every check's verdict");
+});
+
+// ── Engine disagreement, the number that decides fix-vs-delete ──────────────
+//
+// wouldInvalidate alone cannot settle it: the orders the check cancelled never
+// got outcomes, so a high count and a low count are both consistent with the
+// check being right or being noise. Disagreement between the two engines IS
+// decisive — agreement means it detects a real directional change, persistent
+// disagreement means it was measuring the mismatch between the engine that
+// created the order and the one that judged it.
+
+Deno.test("both engines are judged, and the loser is recorded as alternate", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/thesisValidator.ts", import.meta.url),
+  );
+  assert(/const styleJudged = judge\(runStyleAware\(\)\)/.test(src), "style-aware must always be judged");
+  assert(/const legacyJudged = judge\(runLegacy\(\)\)/.test(src), "legacy must always be judged");
+  assert(
+    /const primary = styleAware \? \(styleJudged \?\? legacyJudged\) : \(legacyJudged \?\? styleJudged\)/.test(src),
+    "the flag picks which one DECIDES",
+  );
+  assert(
+    /const other = styleAware \? legacyJudged : styleJudged/.test(src),
+    "and the other is kept for the record",
+  );
+});
+
+Deno.test("the alternate names which engine it came from", () => {
+  // Otherwise a disagreement count cannot be attributed to a direction.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/thesisValidator.ts", import.meta.url),
+  );
+  assert(/engine: \(styleAware \? "legacy" : "style_aware"\)/.test(src));
+  assert(/wouldInvalidate: other\.wouldInvalidate/.test(src), "its verdict must be comparable");
+});
+
+Deno.test("either engine's data is enough to attempt the check", () => {
+  // The first draft gated canRunDirection on whichever engine the flag chose,
+  // so with the flag off the style-aware verdict would never have been recorded
+  // and the disagreement rate would have stayed unmeasurable.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/thesisValidator.ts", import.meta.url),
+  );
+  assert(
+    /canRunDirection = enough\(opts\.dailyCandles\) \|\| enough\(opts\.h4Candles\)\s*\n\s*\|\| enough\(opts\.styleCandles\?\.bias\) \|\| enough\(opts\.styleCandles\?\.structure\)/.test(src),
+    "must attempt if EITHER engine has data",
+  );
+});
+
+Deno.test("the shadow engine is free on full scans, skipped on management runs", () => {
+  // The 15m series is already in scanCache after the pair loop. On a
+  // management-only cycle it is not, and that cycle runs every minute.
+  assert(
+    /if \(thesisStyleAware \|\| !opts\?\.isManagementOnly\) \{/.test(scanner),
+    "shadow candles on full scans, or whenever the flag genuinely needs them",
+  );
 });

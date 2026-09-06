@@ -42,6 +42,21 @@ export interface ThesisCheckObservation {
   /** Did it run at all, or was the data it needs missing? */
   ran: boolean;
   reason: string | null;
+  /**
+   * For direction_flip: what the OTHER engine concluded on the same order, when
+   * its candles were available. The check has always run the legacy
+   * Daily/4H/1H engine while the order was created by the style-aware one, so
+   * a "flip" may be engine disagreement rather than a change in the market.
+   * Recording both makes fix-vs-delete an observation instead of a judgement:
+   * agreement means the check sees something real, persistent disagreement
+   * means it is measuring the mismatch.
+   */
+  alternate?: {
+    engine: "legacy" | "style_aware";
+    direction: string | null;
+    confidence: number;
+    wouldInvalidate: boolean;
+  } | null;
 }
 
 export interface ThesisValidationResult {
@@ -182,8 +197,9 @@ export function validatePendingOrderThesis(
     wouldInvalidate: boolean,
     reason: string | null,
     cancelReason: string | null,
+    alternate?: ThesisCheckObservation["alternate"],
   ) => {
-    checks.push({ type, wouldInvalidate, enabled: isEnabled(type), ran, reason });
+    checks.push({ type, wouldInvalidate, enabled: isEnabled(type), ran, reason, alternate: alternate ?? null });
     if (wouldInvalidate && isEnabled(type) && !verdict) {
       verdict = { valid: false, reason, checkType: type, cancelReason, checks };
     }
@@ -275,24 +291,28 @@ export function validatePendingOrderThesis(
   const enough = (c: Candle[] | null | undefined) =>
     !!c && c.length >= MIN_CANDLES_FOR_DIRECTION;
 
-  const canRunDirection = styleAware
-    ? (enough(opts.styleCandles?.bias) || enough(opts.styleCandles?.structure))
-    : (enough(opts.dailyCandles) || enough(opts.h4Candles));
+  // Either engine's data is enough to attempt the check; which one DECIDES is
+  // styleAware, but both are judged and recorded when their candles are present.
+  const canRunDirection = enough(opts.dailyCandles) || enough(opts.h4Candles)
+    || enough(opts.styleCandles?.bias) || enough(opts.styleCandles?.structure);
 
   if (canRunDirection) {
     try {
-      let dirResult: DirectionResult;
-      if (styleAware) {
-        const labels = STYLE_TF_LABELS[opts.style ?? "day_trader"] ?? STYLE_TF_LABELS.day_trader;
+      const labels = STYLE_TF_LABELS[opts.style ?? "day_trader"] ?? STYLE_TF_LABELS.day_trader;
+
+      /** Run the style-aware engine on the style's own timeframes. */
+      const runStyleAware = (): DirectionResult | null => {
+        if (!opts.styleCandles) return null;
+        if (!enough(opts.styleCandles.bias) && !enough(opts.styleCandles.structure)) return null;
         const sr = determineDirectionStyleAware(
-          enough(opts.styleCandles?.bias) ? opts.styleCandles!.bias : null,
-          enough(opts.styleCandles?.structure) ? opts.styleCandles!.structure : null,
-          enough(opts.styleCandles?.confirm) ? opts.styleCandles!.confirm : null,
+          enough(opts.styleCandles.bias) ? opts.styleCandles.bias : null,
+          enough(opts.styleCandles.structure) ? opts.styleCandles.structure : null,
+          enough(opts.styleCandles.confirm) ? opts.styleCandles.confirm : null,
           { ...(opts.dirConfig ?? {}), ...labels } as never,
         );
-        // Same mapping bot-scanner uses when it feeds the style result
-        // downstream, so estimateDirectionConfidence sees equivalent fields.
-        dirResult = {
+        // Same mapping bot-scanner uses downstream, so estimateDirectionConfidence
+        // sees equivalent fields either way.
+        return {
           direction: sr.direction,
           bias: sr.bias,
           biasSource: sr.biasSource,
@@ -301,29 +321,56 @@ export function validatePendingOrderThesis(
           h1Confirmed: sr.confirmBOS,
           reason: `[${opts.style ?? "day_trader"}] ${sr.reason}`,
         } as DirectionResult;
-      } else {
-        dirResult = determineDirection(
+      };
+
+      /** Run the legacy Daily/4H/1H engine. */
+      const runLegacy = (): DirectionResult | null => {
+        if (!enough(opts.dailyCandles) && !enough(opts.h4Candles)) return null;
+        return determineDirection(
           enough(opts.dailyCandles) ? opts.dailyCandles : null,
           enough(opts.h4Candles) ? opts.h4Candles : null,
           enough(opts.h1Candles) ? opts.h1Candles : null,
           (opts.dirConfig ?? undefined) as never,
         );
-      }
+      };
 
-      const opposed = dirResult.direction !== null && dirResult.direction !== pending.direction;
-      const confidence = opposed ? estimateDirectionConfidence(dirResult) : 0;
-      const wouldInvalidate = opposed && confidence >= dirFlipMinConf;
-      record(
-        "direction_flip", true, wouldInvalidate,
-        wouldInvalidate
-          ? `Direction flip: structure now indicates ${dirResult.direction} (confidence ${(confidence * 100).toFixed(0)}%) — opposes ${pending.direction} order. ${dirResult.reason}`
-          : opposed
-          ? `opposed but confidence ${(confidence * 100).toFixed(0)}% below ${(dirFlipMinConf * 100).toFixed(0)}%`
-          : null,
-        wouldInvalidate
-          ? `thesis_invalid:direction_flip:${dirResult.direction}:${(confidence * 100).toFixed(0)}`
-          : null,
-      );
+      /** Reduce a direction result to the cancel decision for this order. */
+      const judge = (r: DirectionResult | null) => {
+        if (!r) return null;
+        const opposed = r.direction !== null && r.direction !== pending.direction;
+        const confidence = opposed ? estimateDirectionConfidence(r) : 0;
+        return { r, opposed, confidence, wouldInvalidate: opposed && confidence >= dirFlipMinConf };
+      };
+
+      const styleJudged = judge(runStyleAware());
+      const legacyJudged = judge(runLegacy());
+      const primary = styleAware ? (styleJudged ?? legacyJudged) : (legacyJudged ?? styleJudged);
+      const other = styleAware ? legacyJudged : styleJudged;
+
+      if (!primary) {
+        record("direction_flip", false, false, "insufficient candles", null);
+      } else {
+        const alt = other
+          ? {
+            engine: (styleAware ? "legacy" : "style_aware") as "legacy" | "style_aware",
+            direction: other.r.direction,
+            confidence: other.confidence,
+            wouldInvalidate: other.wouldInvalidate,
+          }
+          : null;
+        record(
+          "direction_flip", true, primary.wouldInvalidate,
+          primary.wouldInvalidate
+            ? `Direction flip: structure now indicates ${primary.r.direction} (confidence ${(primary.confidence * 100).toFixed(0)}%) — opposes ${pending.direction} order. ${primary.r.reason}`
+            : primary.opposed
+            ? `opposed but confidence ${(primary.confidence * 100).toFixed(0)}% below ${(dirFlipMinConf * 100).toFixed(0)}%`
+            : null,
+          primary.wouldInvalidate
+            ? `thesis_invalid:direction_flip:${primary.r.direction}:${(primary.confidence * 100).toFixed(0)}`
+            : null,
+          alt,
+        );
+      }
     } catch (e) {
       // Fail-open: direction check errored, keep order alive
       console.warn(`[thesis-validator] Direction check error for ${pending.symbol}: ${(e as Error)?.message}`);

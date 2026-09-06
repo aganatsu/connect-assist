@@ -3016,8 +3016,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // timeframes that CREATED the order. Scalper needs 1H/15m/5m; 1H is
             // already fetched above and the entry-TF series is already in hand,
             // so this is one extra fetch, not three. Swing needs the weekly.
+            //
+            // Supplied even when the flag is OFF, so BOTH engines are judged and
+            // their disagreement is recorded. That disagreement rate is what
+            // decides whether direction_flip should be fixed or deleted: if the
+            // two engines agree, the check sees a real directional change; if
+            // they persistently disagree, it was measuring the mismatch between
+            // the engine that created the order and the one that judged it.
+            //
+            // Only on full scans. On management-only cycles the pair loop has
+            // not run, so the 15m series would be a genuine extra fetch every
+            // minute; on a full scan it is already in scanCache from the main
+            // loop and costs nothing.
             let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
-            if (thesisStyleAware) {
+            if (thesisStyleAware || !opts?.isManagementOnly) {
               if (resolvedStyle === "scalper") {
                 const tvM15 = await cachedFetch(pending.symbol, "15m", "5d");
                 thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
