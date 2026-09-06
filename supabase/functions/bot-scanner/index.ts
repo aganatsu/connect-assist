@@ -133,6 +133,7 @@ const DEFAULTS = {
   zoneAnchoredStop: false,             // Stop beyond the zone edge, skip if over cap. OFF = current behaviour.
   zoneExitDirectionAware: false,       // A favourable exit from the zone does not reset the hunt. OFF = current behaviour.
   zoneChaseMaxZoneWidths: 1,           // How far a favourable exit may travel, in zone widths, before it resets anyway.
+  atrDerivedFloorsEnabled: false,      // Consume analysis.atrValue. OFF = the zero everything saw while it was unpopulated.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -1572,7 +1573,11 @@ async function runSafetyGates(
   // Blocks trades when ATR is outside the configured min/max range.
   if (config.atrFilterEnabled) {
     const spec = SPECS[symbol] || SPECS["EUR/USD"];
-    const atrValue = analysis.atrValue ?? calculateATR(analysis._candles || [], 14);
+    // `analysis._candles` has never existed either, so this fell through to
+    // calculateATR([], 14), which returns 0 for any array shorter than 15 —
+    // meaning this gate blocked every trade whenever atrFilterMin was set.
+    const atrValue = (config as any).atrDerivedFloorsEnabled === true
+      ? (analysis.atrValue ?? 0) : 0;
     const atrPips = atrValue / spec.pipSize;
     const minPips = typeof config.atrFilterMin === "number" ? config.atrFilterMin : 0;
     const maxPips = typeof config.atrFilterMax === "number" ? config.atrFilterMax : 0;
@@ -4208,13 +4213,43 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
+
+    // ── ATR consumption (flag: atrDerivedFloorsEnabled, default OFF) ──
+    // `atrValue` was computed inside runConfluenceAnalysis but never returned,
+    // so every `analysis.atrValue` here was undefined and every `?? 0` fell to
+    // zero. That silently disabled the ATR stop floor, the regime TP
+    // adjustment, volatility-adjusted sizing and the ATR volatility gate — and
+    // it is why a 1354-point BTC zone got the bare 150-point static stop.
+    //
+    // The field is now populated, but consuming it turns four dormant
+    // behaviours on at once, including stop distance and position size. So the
+    // read goes through one gate: off means the same zero everything has been
+    // seeing, on means the floors actually apply.
+    const atrForConsumers = (pairConfig as any).atrDerivedFloorsEnabled === true
+      ? ((analysis as any).atrValue ?? 0)
+      : 0;
+    (analysis as any).atrConsumed = atrForConsumers;
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
 
     // ── Setup Classifier: determine scalp/day/swing from the actual setup structure (informational only) ──
     const setupClassification = classifySetupType(analysis);
 
+    // Shadow measurement: what the ATR floors WOULD demand, recorded whether
+    // or not they are consumed. `atrConsumed` is 0 while the flag is off, so
+    // without this there is nothing to judge the flag by before flipping it.
+    const atrSpec = SPECS[pair] || SPECS["EUR/USD"];
+    const atrMeasured = (analysis as any).atrValue ?? 0;
+
     const detail: any = {
+      atr: {
+        enabled: (pairConfig as any).atrDerivedFloorsEnabled === true,
+        measured: atrMeasured,
+        measuredPips: atrMeasured / atrSpec.pipSize,
+        floorPips: atrMeasured > 0
+          ? (atrMeasured * ATR_SL_FLOOR_MULTIPLIER) / atrSpec.pipSize : 0,
+        staticFloorPips: MIN_SL_PIPS[pair] ?? 15,
+      },
       pair,
       score: analysis.score,
       direction: analysis.direction,
@@ -4518,7 +4553,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Display only — feeds EntryStory.executable, never a gate.
         const zoneSpec = SPECS[pair] || SPECS["EUR/USD"];
         const zoneStaticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
-        const zoneAtrVal = (analysis as any).atrValue ?? 0;
+        const zoneAtrVal = atrForConsumers;
         const zoneAtrFloorPips = zoneAtrVal > 0
           ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
         const effectiveMinSlPipsForZone = Math.max(zoneStaticMinSlPips, zoneAtrFloorPips);
@@ -5838,7 +5873,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Layer 1: Per-instrument static floor (MIN_SL_PIPS)
         const staticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
         // Layer 2: Dynamic ATR-based floor (adapts to current volatility)
-        const atrVal = (analysis as any).atrValue ?? 0;
+        const atrVal = atrForConsumers;
         const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
         // Use whichever floor is larger
         const effectiveMinSlPips = Math.max(staticMinSlPips, atrFloorPips);
@@ -6052,7 +6087,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               stopLoss: sl,
               direction: analysis.direction as "long" | "short",
               regimeInfo: analysis.regimeInfo,
-              atrValue: (analysis as any).atrValue ?? 0,
+              atrValue: atrForConsumers,
               trendingRRMultiplier: config.trendingRRMultiplier ?? 1.5,
               rangingRRMultiplier: config.rangingRRMultiplier ?? 0.75,
             });
@@ -6142,7 +6177,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pair,
             method: (pairConfig as any).positionSizingMethod || "percent_risk",
             fixedLotSize: (pairConfig as any).fixedLotSize,
-            atrValue: (analysis as any).atrValue,
+            atrValue: atrForConsumers,
             atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
             rateMap,
             commissionPerLot: avgCommissionPerLot,
@@ -6331,7 +6366,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               symbol: pair,
               method: (pairConfig as any).positionSizingMethod || "percent_risk",
               fixedLotSize: (pairConfig as any).fixedLotSize,
-              atrValue: (analysis as any).atrValue,
+              atrValue: atrForConsumers,
               atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
               rateMap,
               commissionPerLot: avgCommissionPerLot,
@@ -6862,7 +6897,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                          symbol: pair,
                          method: (pairConfig as any).positionSizingMethod || "percent_risk",
                          fixedLotSize: (pairConfig as any).fixedLotSize,
-                         atrValue: (analysis as any).atrValue,
+                         atrValue: atrForConsumers,
                          atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
                          rateMap,
                          commissionPerLot: connCommRT,

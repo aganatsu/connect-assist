@@ -173,6 +173,9 @@ export const RUNTIME_DEFAULTS = {
   // confirmation hunt alive, in zone widths. Only read when
   // zoneExitDirectionAware is on.
   zoneChaseMaxZoneWidths: 1,
+  // Consume analysis.atrValue. OFF = the zero every consumer saw while the
+  // field went unpopulated. Turning it on changes stops and position size.
+  atrDerivedFloorsEnabled: false,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -449,6 +452,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,
+    atrDerivedFloorsEnabled: strategy.atrDerivedFloorsEnabled ?? raw.atrDerivedFloorsEnabled ?? RUNTIME_DEFAULTS.atrDerivedFloorsEnabled,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,
