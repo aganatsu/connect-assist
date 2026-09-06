@@ -180,6 +180,15 @@ export const RUNTIME_DEFAULTS = {
   // the near edge. 0 = first touch, 0.5 = midpoint, 1 = far edge (previous
   // behaviour). Moves entry, risk, R:R and therefore trade selection.
   zoneEntryDepth: 1,
+  // Thesis validation for pending orders. The master switch was READ by
+  // bot-scanner but never mapped, so it resolved to undefined forever and the
+  // gate could not be turned off. Per-check switches added because the three
+  // checks are not equal quality — see thesisValidator.ts.
+  thesisValidationEnabled: true,
+  thesisCheckDirectionFlip: true,
+  thesisCheckFotsiVeto: true,
+  thesisCheckGpBiasReversal: true,
+  thesisDirectionStyleAware: false,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -458,6 +467,11 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,
     atrDerivedFloorsEnabled: strategy.atrDerivedFloorsEnabled ?? raw.atrDerivedFloorsEnabled ?? RUNTIME_DEFAULTS.atrDerivedFloorsEnabled,
     zoneEntryDepth: strategy.zoneEntryDepth ?? raw.zoneEntryDepth ?? RUNTIME_DEFAULTS.zoneEntryDepth,
+    thesisValidationEnabled: strategy.thesisValidationEnabled ?? raw.thesisValidationEnabled ?? RUNTIME_DEFAULTS.thesisValidationEnabled,
+    thesisCheckDirectionFlip: strategy.thesisCheckDirectionFlip ?? raw.thesisCheckDirectionFlip ?? RUNTIME_DEFAULTS.thesisCheckDirectionFlip,
+    thesisCheckFotsiVeto: strategy.thesisCheckFotsiVeto ?? raw.thesisCheckFotsiVeto ?? RUNTIME_DEFAULTS.thesisCheckFotsiVeto,
+    thesisCheckGpBiasReversal: strategy.thesisCheckGpBiasReversal ?? raw.thesisCheckGpBiasReversal ?? RUNTIME_DEFAULTS.thesisCheckGpBiasReversal,
+    thesisDirectionStyleAware: strategy.thesisDirectionStyleAware ?? raw.thesisDirectionStyleAware ?? RUNTIME_DEFAULTS.thesisDirectionStyleAware,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,

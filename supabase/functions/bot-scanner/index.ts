@@ -135,6 +135,11 @@ const DEFAULTS = {
   zoneChaseMaxZoneWidths: 1,           // How far a favourable exit may travel, in zone widths, before it resets anyway.
   atrDerivedFloorsEnabled: false,      // Consume analysis.atrValue. OFF = the zero everything saw while it was unpopulated.
   zoneEntryDepth: 1,                   // Entry depth into the zone from the near edge. 1 = far edge, the previous behaviour.
+  thesisValidationEnabled: true,       // Master switch. Was read but never mapped, so it could not be turned off.
+  thesisCheckDirectionFlip: true,      // Cancel a pending order when direction opposes it. 101 cancels in 60 days.
+  thesisCheckFotsiVeto: true,          // Cancel on currency exhaustion.
+  thesisCheckGpBiasReversal: true,     // Cancel when the game plan bias opposes. 101 cancels in 60 days.
+  thesisDirectionStyleAware: false,    // Validate with the engine that CREATED the order. OFF = legacy D1/4H/1H, no config.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -2880,13 +2885,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
   if ((config as any).thesisValidationEnabled !== false) {
     try {
+      // This used to fetch the last 20 scan_logs rows and look for a game plan
+      // among them. Plans regenerate roughly every 4 hours; scans write a row
+      // every cycle — so the plan was visible only briefly after it was written
+      // and absent the rest of the time. The gp_bias_reversal check therefore
+      // fired on scan timing rather than on bias reversing, and still cancelled
+      // 101 orders in 60 days. Filter by type the way the game-plan reader 700
+      // lines below already does.
       const { data: recentGPLogs } = await supabase
         .from("scan_logs")
         .select("details_json")
         .eq("user_id", userId)
         .eq("bot_id", BOT_ID)
+        .contains("details_json", { type: "game_plan" })
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(1);
       const gpLog = (recentGPLogs || []).find((log: any) => log.details_json?.type === "game_plan");
       if (gpLog?.details_json) {
         const cached = gpLog.details_json;
@@ -2914,6 +2927,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     .eq("user_id", userId).eq("bot_id", BOT_ID).in("status", ["pending", "awaiting_confirmation"])
     .order("placed_at", { ascending: true });
   let pendingConfirmationHunting = 0;  // orders currently in confirmation hunt mode
+  const thesisObservations: any[] = [];
 
   if (activePendingOrders && activePendingOrders.length > 0) {
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
@@ -2990,12 +3004,42 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // ═══════════════════════════════════════════════════════════════════
         if ((config as any).thesisValidationEnabled !== false) {
           try {
+            const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
               cachedFetch(pending.symbol, "1d", "1y"),
               cachedFetch(pending.symbol, "4h", "1mo"),
               cachedFetch(pending.symbol, "1h", "5d"),
             ]);
+
+            // Under styleAwareDirection the validator uses the same engine and
+            // timeframes that CREATED the order. Scalper needs 1H/15m/5m; 1H is
+            // already fetched above and the entry-TF series is already in hand,
+            // so this is one extra fetch, not three. Swing needs the weekly.
+            //
+            // Supplied even when the flag is OFF, so BOTH engines are judged and
+            // their disagreement is recorded. That disagreement rate is what
+            // decides whether direction_flip should be fixed or deleted: if the
+            // two engines agree, the check sees a real directional change; if
+            // they persistently disagree, it was measuring the mismatch between
+            // the engine that created the order and the one that judged it.
+            //
+            // Only on full scans. On management-only cycles the pair loop has
+            // not run, so the 15m series would be a genuine extra fetch every
+            // minute; on a full scan it is already in scanCache from the main
+            // loop and costs nothing.
+            let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
+            if (thesisStyleAware || !opts?.isManagementOnly) {
+              if (resolvedStyle === "scalper") {
+                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d");
+                thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
+              } else if (resolvedStyle === "swing_trader") {
+                const tvW = await cachedFetch(pending.symbol, "1w", "2y");
+                thesisStyleCandles = { bias: tvW, structure: tvDaily, confirm: tvH4 };
+              } else {
+                thesisStyleCandles = { bias: tvDaily, structure: tvH4, confirm: tvH1 };
+              }
+            }
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -3010,8 +3054,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 dailyCandles: tvDaily.length >= 20 ? tvDaily : null,
                 h4Candles: tvH4.length >= 20 ? tvH4 : null,
                 h1Candles: tvH1.length >= 20 ? tvH1 : null,
+                enabledChecks: {
+                  direction_flip: (config as any).thesisCheckDirectionFlip !== false,
+                  fotsi_veto: (config as any).thesisCheckFotsiVeto !== false,
+                  gp_bias_reversal: (config as any).thesisCheckGpBiasReversal !== false,
+                },
+                styleAwareDirection: thesisStyleAware,
+                style: resolvedStyle,
+                styleCandles: thesisStyleCandles,
+                // The same DirectionConfig the scanner builds, so flags such as
+                // priceAwareStructureBlocks are honoured. Passing nothing is
+                // what let this validator cancel using the blocking behaviour
+                // that flag exists to switch off.
+                // The pending loop runs outside the per-pair scope, so this reads
+                // the mapped global config rather than pairConfig.
+                dirConfig: {
+                  structureLookback: (config as any).structureLookback,
+                  priceAwareStructureBlocks: (config as any).priceAwareStructureBlocks === true,
+                },
               },
             );
+
+            // Recorded whether or not a check is allowed to act, so the firing
+            // rate of each is answerable from scan_logs.
+            thesisObservations.push({
+              symbol: pending.symbol,
+              direction: pending.direction,
+              acted: !thesisResult.valid,
+              checks: thesisResult.checks,
+            });
             if (!thesisResult.valid) {
               await supabase.from("pending_orders").update({
                 status: "cancelled",
@@ -7453,6 +7524,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
+      thesisObservations,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
     },
     ...scanDetails,
