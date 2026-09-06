@@ -2925,8 +2925,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Fetch current price to check if limit order should fill
-        const pendingCandles = await cachedFetch(pending.symbol, config.entryTimeframe || "15min", "5d");
-        if (pendingCandles.length === 0) continue;
+        // Normalise the timeframe the same way every other call site does.
+        // This passed `config.entryTimeframe` raw while the scan loop passes it
+        // through getEntryInterval(). For the default and day_trader styles that
+        // is "15min" here versus "15m" there, and dataCache keys on the raw
+        // string (`${symbol}|${interval}`, no canonicalisation) — so the same
+        // candles were fetched and cached twice per cycle, once per spelling.
+        // Every pending order therefore forced a second provider call it did not
+        // need, on a budget that is already refusing fetches.
+        const pendingInterval = getEntryInterval(config.entryTimeframe || "15min");
+        const pendingRange = getEntryRange(config.entryTimeframe || "15min");
+        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange);
+        if (pendingCandles.length === 0) {
+          // dataCache caches the empty result for the rest of the cycle, so a
+          // single refused fetch silently skips this order until the next run.
+          // Say so — this used to be a bare `continue` and looked like nothing
+          // happened.
+          console.warn(`[pending] ${pending.symbol} — no ${pendingInterval} candles this cycle; touch detection skipped (order still ${pending.status})`);
+          continue;
+        }
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
         const lastCandle = pendingCandles[pendingCandles.length - 1];
 
