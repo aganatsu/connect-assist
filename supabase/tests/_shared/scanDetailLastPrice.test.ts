@@ -24,10 +24,15 @@ Deno.test("scan detail records the price it was evaluating", () => {
 Deno.test("it sits on the detail object, not nested in a sub-object", () => {
   // Nested under analysis_snapshot or similar it would be far harder to reach
   // from the jsonb_array_elements queries these logs are read with.
+  // Structural, not a byte window: lastPrice must sit between the opening of
+  // the detail object and a stable sibling on the same level. A fixed offset
+  // breaks whenever another field is added above it.
   const i = scanner.indexOf("const detail: any = {");
   assert(i > -1, "the detail object was not found");
-  const j = scanner.indexOf("lastPrice: analysis.lastPrice,", i);
-  assert(j > i && j - i < 900, "must be a top-level field on detail");
+  const j = scanner.indexOf("      lastPrice: analysis.lastPrice,", i);
+  const sibling = scanner.indexOf("      score: analysis.score,", i);
+  assert(j > i, "lastPrice must appear inside the detail object");
+  assert(sibling > j, "and at the same level, before its known sibling");
 });
 
 Deno.test("it is the analysis price, not a re-derived one", () => {

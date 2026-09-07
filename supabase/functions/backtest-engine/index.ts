@@ -1294,6 +1294,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
     // Diagnostic counters
     const diagnostics = {
+      // Set when a live-only analysis mode had to be disabled here because the
+      // backtester lacks the data to reproduce it. A backtest with this true is
+      // NOT modelling the live configuration.
+      structureTfDisabledForParity: false,
       totalCandlesFetched: 0,
       totalCandlesEvaluated: 0,
       skippedUnsupportedSymbol: 0,
@@ -1777,6 +1781,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Run Confluence Analysis ──
+        //
+        // PARITY: structureTfAnalysis makes the live scanner derive levels from
+        // the STRUCTURE timeframe, fed in as `_structureCandles`. The
+        // backtester has entry / 1H / Daily series and no structure series, so
+        // it cannot reproduce that. Left alone, runConfluenceAnalysis would
+        // fall back to the entry timeframe here while live used the structure
+        // one, and the backtester would quietly be modelling a different system
+        // than the one trading. Force it off and say so in diagnostics rather
+        // than diverge silently.
+        if ((pairConfig as any).structureTfAnalysis === true) {
+          (pairConfig as any).structureTfAnalysis = false;
+          diagnostics.structureTfDisabledForParity = true;
+        }
         let analysis: any;
         try {
           analysis = runConfluenceAnalysis(analysisCandles, relevantDaily, pairConfig, relevantH1, candleMs);

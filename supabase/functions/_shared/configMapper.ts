@@ -189,6 +189,11 @@ export const RUNTIME_DEFAULTS = {
   thesisCheckFotsiVeto: true,
   thesisCheckGpBiasReversal: true,
   thesisDirectionStyleAware: false,
+  // Derive levels (order blocks, FVGs, premium/discount, liquidity, Fib, and
+  // the ATR that floors the stop) from the STRUCTURE timeframe rather than the
+  // entry one. OFF reproduces today's behaviour, where a scalper computes every
+  // SMC concept on 5-minute candles.
+  structureTfAnalysis: false,
   // Game Plan bias gate. OFF/soft keep current behaviour.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
@@ -472,6 +477,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     thesisCheckFotsiVeto: strategy.thesisCheckFotsiVeto ?? raw.thesisCheckFotsiVeto ?? RUNTIME_DEFAULTS.thesisCheckFotsiVeto,
     thesisCheckGpBiasReversal: strategy.thesisCheckGpBiasReversal ?? raw.thesisCheckGpBiasReversal ?? RUNTIME_DEFAULTS.thesisCheckGpBiasReversal,
     thesisDirectionStyleAware: strategy.thesisDirectionStyleAware ?? raw.thesisDirectionStyleAware ?? RUNTIME_DEFAULTS.thesisDirectionStyleAware,
+    structureTfAnalysis: strategy.structureTfAnalysis ?? raw.structureTfAnalysis ?? RUNTIME_DEFAULTS.structureTfAnalysis,
     gamePlanGateMode: (strategy.gamePlanGateMode ?? raw.gamePlanGateMode ?? RUNTIME_DEFAULTS.gamePlanGateMode) as "off" | "soft" | "hard",
     gamePlanGateMinConfidence: strategy.gamePlanGateMinConfidence ?? raw.gamePlanGateMinConfidence ?? RUNTIME_DEFAULTS.gamePlanGateMinConfidence,
     confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? RUNTIME_DEFAULTS.confirmedTrendFibFactor,
