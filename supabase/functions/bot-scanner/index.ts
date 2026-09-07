@@ -140,6 +140,7 @@ const DEFAULTS = {
   thesisCheckFotsiVeto: true,          // Cancel on currency exhaustion.
   thesisCheckGpBiasReversal: true,     // Cancel when the game plan bias opposes. 101 cancels in 60 days.
   thesisDirectionStyleAware: false,    // Validate with the engine that CREATED the order. OFF = legacy D1/4H/1H, no config.
+  structureTfAnalysis: false,          // Derive levels from the STRUCTURE timeframe, not the entry one. OFF = today's everything-on-5m.
   gamePlanGateMode: "soft" as "off" | "soft" | "hard",
   gamePlanGateMinConfidence: 50,
   // ── SL/TP Method Defaults ──
@@ -4037,6 +4038,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Inject 4H candles for multi-TF regime classification
     (pairConfig as any)._h4Candles = h4Candles.length >= 20 ? h4Candles : null;
 
+    // ── Structure-timeframe series for confluence analysis ──
+    // runConfluenceAnalysis derived every SMC concept from the ENTRY candles,
+    // which on scalper is 5m — so order blocks, FVGs, premium/discount,
+    // liquidity and the ATR that floors the stop were all 5-minute features.
+    // The style model is bias/structure/confirm and determineDirectionStyleAware
+    // already honours it; this hands the same structure series to the
+    // confluence engine.
+    //
+    // Pinned to STYLE_TF_LABELS, the mapping the direction engine trusts.
+    // STYLE_OVERRIDES.entryTimeframe disagrees with STYLE_TF_LABELS.confirm for
+    // day_trader ("15min" vs 1H) and swing_trader ("1h" vs 4H); scalper is the
+    // only style where the two agree. Rather than silently pick a winner the
+    // structure slot comes from STYLE_TF_LABELS, and the mismatch is left for a
+    // separate decision.
+    const structureSeries: Candle[] | null =
+      resolvedStyle === "scalper"
+        ? (m15Candles.length >= 20 ? m15Candles : null)
+        : resolvedStyle === "swing_trader"
+        ? (dailyCandles.length >= 20 ? dailyCandles : null)
+        : (h4Candles.length >= 20 ? h4Candles : null);
+    (pairConfig as any)._structureCandles = structureSeries;
+    if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
+      // Falling back silently would look like the flag was on and doing
+      // nothing — the failure mode this whole session kept running into.
+      console.warn(`[${pair}] structureTfAnalysis ON but no ${STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? "structure"} candles — using the entry timeframe`);
+    }
+
     // ── HTF POI Detection (Phase 1: FVGs, OBs, Breakers on 4H + 1H) ──
     // Run structure detection on HTF candles and inject results for scoring boost.
     console.log(`[scan ${scanCycleId}] ${pair} HTF candles: 4H=${h4Candles.length}, 1H=${hourlyCandles.length}`);
@@ -4313,7 +4341,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const atrSpec = SPECS[pair] || SPECS["EUR/USD"];
     const atrMeasured = (analysis as any).atrValue ?? 0;
 
+    // Shadow: premium/discount and ATR read off BOTH timeframes, so the effect
+    // of moving structural analysis is visible before the flag moves. P/D is
+    // the one to watch — 103 of 103 premium/discount rejections lost, and it
+    // was being measured across a 5-minute range.
+    const _sSeries = (pairConfig as any)._structureCandles as Candle[] | null;
+    const _sSpec = SPECS[pair] || SPECS["EUR/USD"];
+    const _structPd = _sSeries ? calculatePremiumDiscount(_sSeries) : null;
+
     const detail: any = {
+      structureTf: {
+        enabled: (pairConfig as any).structureTfAnalysis === true,
+        structureLabel: STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? null,
+        structureBars: _sSeries?.length ?? 0,
+        entryZone: analysis.pd?.currentZone ?? null,
+        entryZonePercent: analysis.pd?.zonePercent ?? null,
+        structZone: _structPd?.currentZone ?? null,
+        structZonePercent: _structPd?.zonePercent ?? null,
+        zonesDisagree: !!_structPd && !!analysis.pd
+          && _structPd.currentZone !== analysis.pd.currentZone,
+        entryAtrPips: calculateATR(candles, 14) / _sSpec.pipSize,
+        structAtrPips: _sSeries ? calculateATR(_sSeries, 14) / _sSpec.pipSize : null,
+      },
       atr: {
         enabled: (pairConfig as any).atrDerivedFloorsEnabled === true,
         measured: atrMeasured,

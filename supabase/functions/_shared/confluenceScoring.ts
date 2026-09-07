@@ -271,16 +271,45 @@ function gamePlanBiasAdjustment(
 }
 
 export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[], atMs?: number) {
+  // ── Structural series (flag: structureTfAnalysis, default OFF) ──
+  //
+  // Every SMC concept below was derived from `candles`, the ENTRY timeframe.
+  // On a scalper config that is 5m, so order blocks, FVGs, premium/discount,
+  // liquidity pools and the ATR that floors the stop were all 5-minute
+  // features. The style model is bias 1H / structure 15m / confirm 5m, and
+  // determineDirectionStyleAware implements it — this function never did.
+  //
+  // The dividing rule: anything that identifies a LEVEL price should return to
+  // uses the structure timeframe. Anything that identifies a MOMENT to act
+  // stays on the entry timeframe.
+  //
+  //   structure : structure breaks, swings, order blocks, FVGs, breakers,
+  //               liquidity pools, premium/discount, ZigZag/Fib, displacement,
+  //               and every ATR used as a level tolerance or for SL sizing
+  //   entry     : lastPrice, reversal candle, Judas swing, opening-range sweep,
+  //               VWAP, volume profile, AMD phase, spread-vs-volatility
+  //
+  // Displacement is on the structural side because tagDisplacementQuality
+  // matches displacement candle indices against order-block and FVG indices —
+  // splitting them would compare 15m indices to 5m ones.
+  //
+  // Falls back to `candles` when the series is absent or too short, so callers
+  // that do not inject it (backtest-engine) are unaffected.
+  const _injectedStructure: Candle[] | null = (config as any)._structureCandles || null;
+  const structTfOn = (config as any).structureTfAnalysis === true
+    && !!_injectedStructure && _injectedStructure.length >= 20;
+  const sc: Candle[] = structTfOn ? _injectedStructure! : candles;
+
   // P1: structure lookback — limit candles fed into structure analysis (config-driven, default 50)
   const structureLookback = (typeof config.structureLookback === "number" && config.structureLookback > 0)
     ? config.structureLookback
     : 50;
-  const structureCandles = candles.length > structureLookback ? candles.slice(-structureLookback) : candles;
+  const structureCandles = sc.length > structureLookback ? sc.slice(-structureLookback) : sc;
   const structure = analyzeMarketStructure(structureCandles);
   const structureBreaks = [...structure.bos, ...structure.choch];
   // P1: OB lookback — pass config-driven recency window
-  let orderBlocks = detectOrderBlocks(candles, structureBreaks, config.obLookbackCandles);
-  const fvgs = detectFVGs(candles, structureBreaks);
+  let orderBlocks = detectOrderBlocks(sc, structureBreaks, config.obLookbackCandles);
+  const fvgs = detectFVGs(sc, structureBreaks);
 
   // FVG adjacency bonus: tag OBs that have an FVG within 5 candles
   // This doesn't filter them out, but boosts quality for Factor 2 detail
@@ -292,24 +321,24 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // equalHighsLowsSensitivity (1-5) maps to ATR multiplier: 1=0.10, 2=0.15, 3=0.20, 4=0.25, 5=0.30
   const _liqSens = Math.min(Math.max(config.equalHighsLowsSensitivity ?? 3, 1), 5);
   const _liqTol = [0.10, 0.15, 0.20, 0.25, 0.30][_liqSens - 1];
-  const liquidityPools = detectLiquidityPools(candles, _liqTol, config.liquidityPoolMinTouches);
+  const liquidityPools = detectLiquidityPools(sc, _liqTol, config.liquidityPoolMinTouches);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
-  const pd = calculatePremiumDiscount(candles);
+  const pd = calculatePremiumDiscount(sc);
   const session = detectSession(atMs);
   const pdLevels = dailyCandles ? calculatePDLevels(dailyCandles) : null;
 
   // ── ZigZag-based Fibonacci anchoring ──
   // Uses deviation-based pivot detection (TradingView-style) for clean Fib levels.
   // Falls back to the old 5-swing envelope if ZigZag doesn't find 2 pivots.
-  const zigzagResult = detectZigZagPivots(candles, config.fibDevMultiplier || 3, config.fibDepth || 10);
+  const zigzagResult = detectZigZagPivots(sc, config.fibDevMultiplier || 3, config.fibDepth || 10);
   let fibLevels: FibLevels | null = null;
   if (zigzagResult.lastTwo) {
     fibLevels = computeFibLevels(zigzagResult.lastTwo[0], zigzagResult.lastTwo[1]);
   }
   // Fallback: if ZigZag didn't produce 2 pivots, build from detectSwingPoints envelope
   if (!fibLevels) {
-    const fallbackSwings = detectSwingPoints(candles);
+    const fallbackSwings = detectSwingPoints(sc);
     const fbHighs = fallbackSwings.filter(s => s.type === "high").slice(-5);
     const fbLows = fallbackSwings.filter(s => s.type === "low").slice(-5);
     if (fbHighs.length > 0 && fbLows.length > 0) {
@@ -395,7 +424,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       // If price is near an active (unbroken) BOS-derived S/R level, that's a high-quality reaction zone
       const derivedSR = structure.derivedSR;
       if (derivedSR && derivedSR.active.length > 0 && typeof lastPrice === "number") {
-        const atr = calculateATR(candles);
+        const atr = calculateATR(sc);
         const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(lastPrice - sr.price) < atr * 0.5);
         if (nearActiveSR) {
           structurePts += 0.2;
@@ -437,11 +466,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   }
 
   // Displacement detection (used by OB/FVG bonus + new factor below)
-  const displacement = detectDisplacement(candles);
+  const displacement = detectDisplacement(sc);
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
   // Breaker Blocks + Unicorn Setups (computed early, scored after direction)
-  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles, structureBreaks) : [];
+  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, sc, structureBreaks) : [];
   const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
 
   // ── Factor 2: Order Block (max 2.0) ──
@@ -688,7 +717,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
 
         // Recency bonus: FVGs closer to current price action are more relevant
         const recencyIdx = insideFVG.index || 0;
-        const isRecent = recencyIdx >= candles.length - 15;
+        const isRecent = recencyIdx >= sc.length - 15;
         if (!isRecent && pts > 0.5) {
           pts *= 0.75; // Decay older FVGs
           detail += " [older FVG, reduced]";
@@ -1082,7 +1111,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     // Append recent CHoCH context to the detail string when available
     if (structure.choch.length > 0 && reversalCandle.detected) {
       const lastChoch = structure.choch[structure.choch.length - 1];
-      const recency = candles.length - 1 - lastChoch.index;
+      const recency = sc.length - 1 - lastChoch.index;
       if (recency <= 5) {
         detail += ` + CHoCH (${lastChoch.type}, ${recency} bar${recency !== 1 ? "s" : ""} ago${lastChoch.closeBased ? ", close-based" : ""})`;
       }
@@ -1118,7 +1147,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       // A sweep in the direction of the trade is not neutral — it means the
       // liquidity that would have fuelled the move has already been taken — but
       // it is excluded rather than penalised here, which is the minimal fix.
-      const atrLiq = calculateATR(candles, 14);
+      const atrLiq = calculateATR(sc, 14);
       const maxSweepATR = typeof config.liquiditySweepMaxATR === "number"
         ? config.liquiditySweepMaxATR
         : 2.0;
@@ -1143,7 +1172,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const best = sorted[0];
       if (best) {
         // Recency check: sweep should be within last 20 candles for full score
-        const isRecent = best.sweptAtIndex != null && best.sweptAtIndex >= candles.length - 20;
+        const isRecent = best.sweptAtIndex != null && best.sweptAtIndex >= sc.length - 20;
         if (best.rejectionConfirmed) {
           // Sweep + rejection = high-quality signal
           pts = isRecent ? 1.5 : 1.0;
@@ -1321,7 +1350,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     if (config.useBreakerBlocks !== false && direction && breakerBlocks.length > 0) {
       const wantType = direction === "long" ? "bullish_breaker" : "bearish_breaker";
       // Use ATR for proximity — 2× ATR is a reasonable "near" threshold
-      const breakerATR = calculateATR(candles, 14);
+      const breakerATR = calculateATR(sc, 14);
       const atrThreshold = breakerATR * 2;
       // Find the closest aligned breaker
       // Lifecycle-aware: exclude broken breakers from scoring
@@ -1678,7 +1707,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     let pts = 0;
     let detail = "";
     confluenceStacks = computeConfluenceStacking(
-      orderBlocks, fvgs, structure.swingPoints, candles, direction, fibLevels
+      orderBlocks, fvgs, structure.swingPoints, sc, direction, fibLevels
     );
     if (confluenceStacks.length > 0) {
       const best = confluenceStacks[0]; // Already sorted by layerCount desc + alignment
@@ -1741,7 +1770,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       sweptLevel: s.sweptLevel,
       wickDepth: s.wickDepth,
     }));
-    sweepReclaims = detectSweepReclaim(candles, structureSweeps, fvgs);
+    sweepReclaims = detectSweepReclaim(sc, structureSweeps, fvgs);
 
     // Enhance Factor 9 (Liquidity Sweep) detail with reclaim info if available
     const sweepFactor = factors.find(f => f.name === "Liquidity Sweep");
@@ -1903,7 +1932,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const htfPDData: { h4: { currentZone: string; zonePercent: number; oteZone: boolean } | null; h1: { currentZone: string; zonePercent: number; oteZone: boolean } | null } | null = (config as any)._htfPD || null;
     const htfLiqData: { h4: LiquidityPool[]; h1: LiquidityPool[] } | null = (config as any)._htfLiquidityPools || null;
 
-    const atrForTolerance = calculateATR(candles, 14);
+    const atrForTolerance = calculateATR(sc, 14);
     const fibTolerance = atrForTolerance * 0.3; // Price must be within 0.3×ATR of Fib level
     const matchDetails: string[] = [];
 
@@ -2075,7 +2104,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const gpCtx = (config as any)._gamePlanContext;
 
     if (gpCtx && gpCtx.keyLevels && gpCtx.keyLevels.length > 0) {
-      const atrForTolerance = calculateATR(candles, 14);
+      const atrForTolerance = calculateATR(sc, 14);
       // Tolerance: price must be within 0.5× ATR of a key level
       const tolerance = atrForTolerance * 0.5;
 
@@ -2696,7 +2725,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (!_skipHTFPromotion) {
     const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] | null = (config as any)._htfPOIs || null;
     const htfFibDataForGate: { h4: FibLevels | null; h1: FibLevels | null } | null = (config as any)._htfFibLevels || null;
-    const atrForGate = calculateATR(candles, 14);
+    const atrForGate = calculateATR(sc, 14);
     const fibToleranceGate = atrForGate * 0.3;
 
     // Helper: check if two zones overlap (LTF zone is inside or partially inside HTF zone)
@@ -2876,7 +2905,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const swings = structure.swingPoints;
 
   // Compute ATR for ATR-based methods (use entry candles)
-  const atrValue = calculateATR(candles, config.slATRPeriod || 14);
+  const atrValue = calculateATR(sc, config.slATRPeriod || 14);
 
   // Extract DOL targets from game plan context (Layer 2 → Layer 3)
   // Gated by dolTPExtensionEnabled toggle (default: ON for backward compat)

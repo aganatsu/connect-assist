@@ -132,9 +132,12 @@ Deno.test("the floor the flag WOULD impose is recorded while it is off", () => {
   // atrConsumed is 0 when the flag is off, so on its own it says nothing about
   // whether turning the flag on is safe. The unconsumed measurement is what
   // makes that decision answerable from data.
-  const i = scanner.indexOf("const atrMeasured =");
-  assert(i > -1, "the raw measurement must be taken");
-  const block = scanner.slice(i, i + 700);
+  // Anchored on the `atr: {` object rather than a byte window — an offset
+  // window breaks every time a sibling field is added above it.
+  assert(scanner.includes("const atrMeasured ="), "the raw measurement must be taken");
+  const start = scanner.indexOf("      atr: {");
+  assert(start > -1, "the atr detail object was not found");
+  const block = scanner.slice(start, scanner.indexOf("      },", start));
   for (const field of ["measured", "measuredPips", "floorPips", "staticFloorPips", "enabled"]) {
     assert(new RegExp(`${field}:`).test(block), `scan detail must carry ${field}`);
   }
@@ -147,8 +150,8 @@ Deno.test("the floor the flag WOULD impose is recorded while it is off", () => {
 Deno.test("the recorded floor is comparable against the static floor", () => {
   // The question the data has to answer is 'would the ATR floor have been
   // BINDING?' — that needs both numbers side by side.
-  const i = scanner.indexOf("const atrMeasured =");
-  const block = scanner.slice(i, i + 700);
+  const start = scanner.indexOf("      atr: {");
+  const block = scanner.slice(start, scanner.indexOf("      },", start));
   assert(/ATR_SL_FLOOR_MULTIPLIER/.test(block), "must use the same multiplier the floor uses");
   assert(/MIN_SL_PIPS\[pair\]/.test(block), "must record the static floor it competes with");
 });
