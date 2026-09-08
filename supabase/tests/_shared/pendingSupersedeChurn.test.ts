@@ -78,8 +78,10 @@ Deno.test("comparison is numeric, not string", () => {
 });
 
 Deno.test("the refresh extends expires_at, so lifetime is unchanged", () => {
+  // Bounded to the refresh branch's own update call. A fixed byte window
+  // reached into the movedOrders branch below, which legitimately cancels.
   const i = scanner.indexOf("if (samePriceOrders.length > 0) {");
-  const block = scanner.slice(i, i + 600);
+  const block = scanner.slice(i, scanner.indexOf('.in("order_id", samePriceOrders', i));
   assert(/expires_at: expiresAt/.test(block), "a reinsert would have set a fresh TTL; so must this");
   assert(/signal_score: analysis\.score/.test(block), "the newer score should win");
   assert(!/status:/.test(block), "the refresh must not touch status");
