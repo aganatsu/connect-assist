@@ -3082,6 +3082,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                   fotsi_veto: (config as any).thesisCheckFotsiVeto !== false,
                   gp_bias_reversal: (config as any).thesisCheckGpBiasReversal !== false,
                 },
+                // The same setting the entry gate applies at :6010, so one
+                // policy governs the game-plan bias end to end.
+                gamePlanGateMode: (config as any).gamePlanGateMode ?? "soft",
                 styleAwareDirection: thesisStyleAware,
                 style: resolvedStyle,
                 styleCandles: thesisStyleCandles,

@@ -217,9 +217,12 @@ Deno.test("GP bias reversal: bearish bias with high confidence blocks long", () 
     bias: "bearish",
     biasConfidence: 75, // Above default threshold of 60
   }]);
+  // Requires gamePlanGateMode "hard". This check used to cancel regardless of
+  // that setting, while the entry gate at bot-scanner:6010 honoured it — so a
+  // trade allowed on "soft" was cancelled a minute later on the same game plan.
   const result = validatePendingOrderThesis(
     makePendingOrder({ direction: "long", symbol: "EUR/USD" }),
-    makeDefaultOpts({ lastGamePlan: gp }),
+    makeDefaultOpts({ lastGamePlan: gp, gamePlanGateMode: "hard" }),
   );
   assertEquals(result.valid, false);
   assertEquals(result.checkType, "gp_bias_reversal");
@@ -235,11 +238,29 @@ Deno.test("GP bias reversal: bullish bias with high confidence blocks short", ()
   }]);
   const result = validatePendingOrderThesis(
     makePendingOrder({ direction: "short", symbol: "GBP/USD" }),
-    makeDefaultOpts({ lastGamePlan: gp }),
+    makeDefaultOpts({ lastGamePlan: gp, gamePlanGateMode: "hard" }),
   );
   assertEquals(result.valid, false);
   assertEquals(result.checkType, "gp_bias_reversal");
   assert(result.reason!.includes("bullish"));
+});
+
+Deno.test("GP bias reversal: soft mode observes, it does not cancel", () => {
+  // The entry gate allows an opposing-bias trade on "soft". Cancelling it here
+  // is the same information reaching the opposite conclusion sixty seconds
+  // later — observed 2026-09-08 as XAU/USD arming and cancelling in a loop.
+  const gp = makeGamePlan([{ symbol: "EUR/USD", bias: "bearish", biasConfidence: 75 }]);
+  for (const mode of ["soft", "off", undefined]) {
+    const result = validatePendingOrderThesis(
+      makePendingOrder({ direction: "long", symbol: "EUR/USD" }),
+      makeDefaultOpts({ lastGamePlan: gp, gamePlanGateMode: mode as never }),
+    );
+    assertEquals(result.valid, true, `mode ${mode} must not cancel`);
+    const gpCheck = result.checks.find(c => c.type === "gp_bias_reversal")!;
+    assertEquals(gpCheck.ran, true, "it must still run");
+    assertEquals(gpCheck.wouldInvalidate, false, "and report that it did not act");
+    assert(gpCheck.reason!.includes("observed only"), "and say why");
+  }
 });
 
 Deno.test("GP bias reversal: low confidence → valid (no cancel)", () => {
