@@ -210,6 +210,21 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
   const [holdHours, setHoldHours] = useState(String(existing?.maxHoldHours ?? defaults.maxHoldHours ?? 48));
 
   // Reset local state when position changes
+  // Depend on the position's IDENTITY and its persisted overrides, not on the
+  // object reference.
+  //
+  // react-query polls paper_positions, so `position` is a fresh object on every
+  // refetch even when nothing changed. With `[position]` as the dependency this
+  // effect re-ran on each poll and reset every toggle to the server value — so
+  // flipping a switch worked for a second and then flicked back, which is what
+  // it looked like from the outside.
+  //
+  // trade_overrides arrives as a string from some paths and as jsonb from
+  // others, so it is normalised to a string to compare by value either way.
+  const overridesKey = typeof position?.trade_overrides === "string"
+    ? position.trade_overrides
+    : JSON.stringify(position?.trade_overrides ?? null);
+
   useEffect(() => {
     const ov = parseOverrides(position);
     const def = getGlobalDefaults(position);
@@ -223,7 +238,8 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
     setPtpLevel(String(ov?.partialTPLevel ?? def.partialTPLevel ?? 1.5));
     setHoldEnabled(ov?.maxHoldEnabled ?? def.maxHoldEnabled ?? false);
     setHoldHours(String(ov?.maxHoldHours ?? def.maxHoldHours ?? 48));
-  }, [position]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position?.position_id, overridesKey]);
 
   // Build the overrides payload — only include fields that differ from global defaults
   const buildPayload = (): TradeOverrides => {
