@@ -1,3 +1,4 @@
+import { resolveExitSettings } from "@/lib/exitSettings";
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
@@ -680,6 +681,7 @@ export default function BotView() {
                   <div className="divide-y divide-border/40">
                     {botPositions.map((p: any) => (
                       <MobilePositionCard
+                        botConfig={botConfig}
                         key={p.id}
                         position={p}
                         isExpanded={expandedPosition === p.id}
@@ -726,17 +728,22 @@ export default function BotView() {
                         const profitPips = p.direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;
                         const rMult = riskPips > 0 ? profitPips / riskPips : 0;
                         // BE status
-                        const beEnabled = ef.breakEvenEnabled ?? ef.breakEven ?? false;
-                        const beFired = ef.breakEvenActivated === true;
-                        const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, (ef.breakEvenPips || 0) / riskPips)) : 1.0;
+                        // Resolved override > live config > frozen snapshot, the
+                        // same precedence scannerManagement and paper-trading use.
+                        // Reading exitFlags alone showed "—" on a position whose
+                        // stop had already moved to break-even.
+                        const resolved = resolveExitSettings(p, ef, botConfig);
+                        const beEnabled = resolved.breakEvenEnabled;
+                        const beFired = resolved.breakEvenActivated;
+                        const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, (resolved.breakEvenPips || 0) / riskPips)) : 1.0;
                         // Trail status
-                        const trailEnabled = ef.trailingStopEnabled ?? ef.trailingStop ?? false;
-                        const trailFired = ef.trailingStopActivated === true;
+                        const trailEnabled = resolved.trailingStopEnabled;
+                        const trailFired = resolved.trailingStopActivated;
                         const trailActivationR = ef.trailingActivationR || 1.0;
                         const trailLevel = ef.currentTrailLevel ? parseFloat(ef.currentTrailLevel) : null;
                         // Hold time — live config override: if user toggled maxHold off globally, show Off
-                        const liveMaxHoldOff = botConfig?.exit?.maxHoldEnabled === false || botConfig?.exit?.timeBasedExitEnabled === false;
-                        const holdEnabled = !liveMaxHoldOff && ef.maxHoldEnabled !== false && ef.maxHoldHours && ef.maxHoldHours > 0;
+                        const holdEnabled = resolved.maxHoldEnabled
+                          && botConfig?.exit?.timeBasedExitEnabled !== false;
                         const openMs = new Date(p.openTime).getTime();
                         const holdHours = (Date.now() - openMs) / 3600000;
                         const holdPct = holdEnabled ? holdHours / ef.maxHoldHours : 0;
