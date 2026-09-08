@@ -1,4 +1,5 @@
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
+import { resolveExitSettings } from "@/lib/exitSettings";
 import { OverrideBadge } from "@/components/TradeOverrideEditor";
 import { ChevronRight } from "lucide-react";
 
@@ -7,9 +8,12 @@ interface MobilePositionCardProps {
   isExpanded: boolean;
   onToggle: () => void;
   onClose: (id: string) => void;
+  /** Live bot config. Without it this card falls back to the entry-time
+   *  snapshot and shows management as off after it has already fired. */
+  botConfig?: any;
 }
 
-export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose }: MobilePositionCardProps) {
+export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose, botConfig }: MobilePositionCardProps) {
   const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
   const pipSize = inst?.pipSize || 0.0001;
   const entry = parseFloat(p.entryPrice);
@@ -28,11 +32,13 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
   const rMult = riskPips > 0 ? profitPips / riskPips : 0;
 
   // Management status
-  const beEnabled = ef.breakEvenEnabled ?? ef.breakEven ?? false;
-  const beFired = ef.breakEvenActivated === true;
-  const trailEnabled = ef.trailingStopEnabled ?? ef.trailingStop ?? false;
-  const trailFired = ef.trailingStopActivated === true;
-  const holdEnabled = ef.maxHoldEnabled !== false && ef.maxHoldHours && ef.maxHoldHours > 0;
+  // Same resolver the desktop table uses — override > live config > snapshot.
+  const resolved = resolveExitSettings(p, ef, botConfig);
+  const beEnabled = resolved.breakEvenEnabled;
+  const beFired = resolved.breakEvenActivated;
+  const trailEnabled = resolved.trailingStopEnabled;
+  const trailFired = resolved.trailingStopActivated;
+  const holdEnabled = resolved.maxHoldEnabled;
   const openMs = new Date(p.openTime).getTime();
   const holdHours = (Date.now() - openMs) / 3600000;
 
