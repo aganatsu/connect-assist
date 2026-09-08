@@ -6031,6 +6031,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const effectiveMinSlPips = Math.max(staticMinSlPips, atrFloorPips);
         const minSlDistance = effectiveMinSlPips * spec.pipSize;
         const actualSlDistance = Math.abs(analysis.lastPrice - sl);
+        // Provenance for the floor decision. GBP/USD 2026-09-07 opened with a
+        // 12.3-pip stop against a 25-pip MIN_SL_PIPS and lost 493. Static
+        // reading eliminated every mechanism: management never acted (its
+        // exitFlags recorded trailing/BE disabled and unactivated), pipSize is
+        // 0.0001, MIN_SL_PIPS is not shadowed, all six `sl` reassignments
+        // either widen or are floor-guarded, and analysis.lastPrice is never
+        // mutated. Record the inputs so the next occurrence answers it instead
+        // of being re-derived from the outcome.
+        const slFloorTrace = {
+          slBeforeFloor: sl,
+          lastPrice: analysis.lastPrice,
+          pipSize: spec.pipSize,
+          staticMinSlPips,
+          atrFloorPips,
+          effectiveMinSlPips,
+          actualSlPips: actualSlDistance / spec.pipSize,
+          widened: actualSlDistance < minSlDistance,
+        };
         if (actualSlDistance < minSlDistance) {
           const floorSource = atrFloorPips > staticMinSlPips ? `ATR(${atrFloorPips.toFixed(1)}p)` : `static(${staticMinSlPips}p)`;
           console.log(`[${pair}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${effectiveMinSlPips.toFixed(1)} pips [${floorSource}]. Widening SL.`);
@@ -6227,6 +6245,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             (detail as any).zoneAnchoredStop.slPips = anchoredRisk / spec.pipSize;
           }
         }
+
+        (detail as any).slFloor = slFloorTrace;
 
         // ── Regime-Adaptive TP Adjustment ──
         // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
@@ -6708,6 +6728,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // 2. Limit orders disabled and no zone entry found (legacy fallback)
         // Market orders ALWAYS fill at current price (analysis.lastPrice).
         const marketEntryPrice = analysis.lastPrice;
+        // What the position will actually carry, after every override. If this
+        // disagrees with slFloor.effectiveMinSlPips the violation is provable
+        // rather than inferred, and the overrides that ran are already recorded
+        // alongside it in the same detail object.
+        (detail as any).slAtEntry = {
+          entry: marketEntryPrice,
+          sl,
+          tp,
+          slPips: Math.abs(marketEntryPrice - sl) / spec.pipSize,
+          floorPips: (detail as any).slFloor?.effectiveMinSlPips ?? null,
+          belowFloor: Math.abs(marketEntryPrice - sl) / spec.pipSize
+            < (((detail as any).slFloor?.effectiveMinSlPips ?? 0) - 0.01),
+        };
         if (useMarketFillAtZone) {
           console.log(`[scan ${scanCycleId}] 🎯 ${pair}: MARKET FILL AT ZONE — price ${marketEntryPrice.toFixed(5)} is at validated impulse zone [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]. No CHoCH wait.`);
         }
