@@ -81,12 +81,19 @@ Deno.test("every status the code writes is a status the table accepts", () => {
   }
 });
 
-Deno.test("the original five are all still permitted", () => {
-  // Widening must not narrow. Dropping and recreating a constraint is exactly
-  // where a value gets lost.
+Deno.test("no status the live schema had is dropped by the rewrite", () => {
+  // Widening must not narrow. The first version of this migration DID narrow:
+  // it was written from the migrations folder, which is not the schema, and
+  // silently removed reconciliation_required and broker_rejected — values the
+  // live database had and the repo had no record of, because the 2026-09-01
+  // revert deleted the migration files that added them.
   const allowed = allowedStatuses();
-  for (const s of ["pending", "filled", "expired", "cancelled", "invalidated"]) {
-    assert(allowed.includes(s), `${s} was dropped by the rewrite`);
+  const liveBefore = [
+    "pending", "awaiting_confirmation", "filled", "reconciliation_required",
+    "broker_rejected", "invalidated", "expired", "cancelled",
+  ];
+  for (const s of liveBefore) {
+    assert(allowed.includes(s), `${s} existed in the live constraint and was dropped`);
   }
 });
 
@@ -101,5 +108,9 @@ Deno.test("the migration drops the old constraint before adding the new one", ()
 Deno.test("the lifecycle is documented on the column itself", () => {
   // So the next person adding a state sees the constraint before the outage.
   assert(/COMMENT ON COLUMN public\.pending_orders\.status/.test(migrations));
-  assertEquals(/awaiting_confirmation was absent from the CHECK/.test(migrations), true);
+  // The comment must warn off the two values that were dropped once already.
+  assertEquals(
+    /reconciliation_required and broker_rejected come from the broker sync path/.test(migrations),
+    true,
+  );
 });

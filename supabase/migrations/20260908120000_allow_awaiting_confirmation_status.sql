@@ -1,29 +1,25 @@
--- pending_orders.status has been missing 'awaiting_confirmation' since the
--- table was created (20260424100000). The zone-confirmation feature landed a
--- month later (20260522150000_add_confirmation_columns_to_pending_orders) and
--- added zone_touch_time and confirmation_attempts, but never widened the
--- CHECK constraint that gates the state it needs.
+-- CORRECTION to the first version of this migration.
 --
--- So every zone touch has been rejected by the database:
+-- The first version was written from the migrations folder, which is NOT the
+-- schema. The 2026-09-01 revert deleted 1,247 commits including migration
+-- files, but the database kept every change those migrations had applied. The
+-- live constraint already permitted awaiting_confirmation:
 --
---   bot-scanner:3169
---     update pending_orders set
---       status = 'awaiting_confirmation',   -- violates pending_orders_status_check
---       zone_touch_time = now(),
---       confirmation_attempts = 0
+--   CHECK (status = ANY (ARRAY['pending','awaiting_confirmation','filled',
+--     'reconciliation_required','broker_rejected','invalidated','expired',
+--     'cancelled']))
 --
--- The whole statement fails, so the order stays 'pending' AND zone_touch_time
--- never persists. zone-confirmation-scanner selects
--- `status = 'awaiting_confirmation'` and therefore always finds nothing.
+-- So the premise was wrong — zone touches were never blocked by this
+-- constraint — and worse, rewriting it DROPPED 'reconciliation_required' and
+-- 'broker_rejected', which the live schema had and the repo did not know
+-- about.
 --
--- Measured 2026-09-07: 31 pending orders over 48 hours, 0 filled, and
--- confirmation_attempts = 0 on every single one. Price reaches the zones —
--- 110 evaluations had price inside a zone that day — but the transition that
--- starts the confirmation hunt cannot be written.
+-- This restores those two and keeps the union. 'triggered' is retained because
+-- the zone engine and staged_setups use that vocabulary.
 --
--- 'triggered' is included as well: staged_setups and the zone engine both use
--- that vocabulary, and leaving one legal state out of a CHECK is the mistake
--- being fixed here.
+-- The lesson, which is the reason this file still exists rather than being
+-- deleted: query pg_constraint before writing a constraint migration in this
+-- project. The migrations folder is an incomplete record of the schema.
 
 ALTER TABLE public.pending_orders
   DROP CONSTRAINT IF EXISTS pending_orders_status_check;
@@ -37,10 +33,12 @@ ALTER TABLE public.pending_orders
     'filled',
     'expired',
     'cancelled',
-    'invalidated'
+    'invalidated',
+    'reconciliation_required',
+    'broker_rejected'
   ));
 
 COMMENT ON COLUMN public.pending_orders.status IS
   'pending -> awaiting_confirmation (zone touched) -> filled | cancelled | expired | invalidated. '
-  'awaiting_confirmation was absent from the CHECK constraint from table creation until 2026-09-08, '
-  'which silently blocked every zone touch.';
+  'reconciliation_required and broker_rejected come from the broker sync path and exist in the '
+  'live schema without a surviving migration file — do not drop them.';
