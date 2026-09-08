@@ -2900,15 +2900,29 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // fired on scan timing rather than on bias reversing, and still cancelled
       // 101 orders in 60 days. Filter by type the way the game-plan reader 700
       // lines below already does.
+      //
+      // Bounded by AGE. Filtering by type alone finds the most recent plan even
+      // if it is days old, so a stale bias could cancel a live setup — the
+      // 20-row window used to bound that accidentally, and removing it removed
+      // the bound with it. A plan is treated as live for twice its refresh
+      // interval; beyond that gp_bias_reversal simply does not run, which is
+      // the fail-open behaviour the validator documents.
+      const gpRefreshHours = Number((config as any).gamePlanRefreshHours) || 4;
+      const gpMaxAgeMs = gpRefreshHours * 2 * 60 * 60 * 1000;
+      const gpCutoff = new Date(Date.now() - gpMaxAgeMs).toISOString();
       const { data: recentGPLogs } = await supabase
         .from("scan_logs")
-        .select("details_json")
+        .select("details_json, created_at")
         .eq("user_id", userId)
         .eq("bot_id", BOT_ID)
         .contains("details_json", { type: "game_plan" })
+        .gte("created_at", gpCutoff)
         .order("created_at", { ascending: false })
         .limit(1);
       const gpLog = (recentGPLogs || []).find((log: any) => log.details_json?.type === "game_plan");
+      if (!gpLog) {
+        console.log(`[scan ${scanCycleId}] Thesis validation: no game plan within ${gpRefreshHours * 2}h — gp_bias_reversal will not run`);
+      }
       if (gpLog?.details_json) {
         const cached = gpLog.details_json;
         _lastGamePlanForValidation = {
@@ -6582,10 +6596,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             Number(s.entry_price) !== Number(limitEntry.price)
           );
           if (samePriceOrders.length > 0) {
+            // Refresh the RISK LEVELS too, not just the score and TTL. The
+            // first version of this updated signal_score/expires_at/
+            // current_price only, so an order refreshed for hours kept the
+            // stop, target and size computed on the scan that first armed it —
+            // and could then fill against volatility that had moved on. The
+            // entry price is unchanged by definition here (that is what makes
+            // it a same-level refresh), so re-writing SL/TP/size is a strict
+            // improvement over carrying stale ones.
             await supabase.from("pending_orders").update({
               signal_score: analysis.score,
               expires_at: expiresAt,
               current_price: analysis.lastPrice,
+              stop_loss: limitSL,
+              take_profit: limitTP,
+              size: limitSize,
             }).in("order_id", samePriceOrders.map((s: any) => s.order_id)).eq("user_id", userId);
             console.log(`[pending] ${pair} ${analysis.direction} — setup re-detected at the same level ${limitEntry.price}; refreshed ${samePriceOrders.length} order(s) in place instead of replacing`);
           }
