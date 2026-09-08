@@ -2950,6 +2950,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     .order("placed_at", { ascending: true });
   let pendingConfirmationHunting = 0;  // orders currently in confirmation hunt mode
   const thesisObservations: any[] = [];
+  const touchChecks: any[] = [];
 
   if (activePendingOrders && activePendingOrders.length > 0) {
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
@@ -3162,14 +3163,64 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ? lastCandle.low <= entryPrice
             : lastCandle.high >= entryPrice;
 
+          // ── Touch-detection provenance ──
+          // Measured 2026-09-07: 31 pending orders over 48 hours, 0 filled, and
+          // confirmation_attempts 0 on EVERY one — while 110 evaluations that
+          // day had price inside a zone. So orders never reach zone touch, and
+          // four theories for why have now been wrong: the zone-exit reset (2
+          // orders in 60 days), supersession (the level did not move), credit
+          // starvation (refusals retry; only gaveUp abandons), and a CHECK
+          // constraint (the live schema already allowed the value).
+          //
+          // The comparison itself has never been observed. It reads ONE bar —
+          // the last of the entry-timeframe series — so it fails silently if
+          // that bar is stale, if the series lags, or if price dipped through
+          // the level and recovered inside a bar this loop did not see.
+          // Record the inputs rather than infer from the outcome again.
+          const tdBarTimeMs = lastCandle.datetime ? Date.parse(lastCandle.datetime) : NaN;
+          const tdStalenessMin = Number.isFinite(tdBarTimeMs)
+            ? (Date.now() - tdBarTimeMs) / 60000 : null;
+          // The pending loop runs outside the per-pair scope, so `spec` is not
+          // in scope here — resolve it from the order's own symbol.
+          const tdSpec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+          const tdDistancePips = (pending.direction === "long"
+            ? lastCandle.low - entryPrice
+            : entryPrice - lastCandle.high) / tdSpec.pipSize;
+          touchChecks.push({
+            symbol: pending.symbol,
+            direction: pending.direction,
+            orderId: pending.order_id,
+            entryPrice,
+            barLow: lastCandle.low,
+            barHigh: lastCandle.high,
+            barClose: lastCandle.close,
+            barTime: lastCandle.datetime ?? null,
+            barStalenessMin: tdStalenessMin,
+            interval: pendingInterval,
+            barsInSeries: pendingCandles.length,
+            // How far the bar was from triggering, in pips. Negative means it
+            // DID reach the level, so a negative value here with filled=false
+            // would mean the comparison itself is wrong rather than the data.
+            distancePips: tdDistancePips,
+            filled,
+          });
+
           if (filled) {
             // Price touched the zone! Transition to confirmation hunting mode.
             const nowStr = new Date().toISOString();
-            await supabase.from("pending_orders").update({
+            const { error: touchErr } = await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
               zone_touch_time: nowStr,
               confirmation_attempts: 0,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
+            if (touchErr) {
+              // This write has never been checked. If the database rejects it
+              // the order silently stays 'pending' and the confirmation hunt
+              // never starts — indistinguishable from price never arriving,
+              // which is the shape of every dead end so far.
+              console.error(`[pending] ZONE TOUCH WRITE FAILED for ${pending.symbol} ${pending.direction}: ${touchErr.message}`);
+              (touchChecks[touchChecks.length - 1] as any).writeError = touchErr.message;
+            }
             pendingConfirmationHunting++;
             console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
 
@@ -7640,6 +7691,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
       thesisObservations,
+      touchChecks,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
     },
     ...scanDetails,
