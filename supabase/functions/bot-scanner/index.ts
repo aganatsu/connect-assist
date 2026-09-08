@@ -1190,7 +1190,14 @@ async function runSafetyGates(
     //
     // rawPercent is surfaced when price has left the range entirely, because
     // zonePercent is clamped to 0-100 and "100.0%" hides how far outside it is.
-    const tfLabel = (config as any).entryTimeframe ?? "entry TF";
+    // Label from the series the numbers actually came from. This read
+    // entryTimeframe unconditionally, so once structureTfAnalysis moved
+    // premium/discount onto the structure series the reason printed "5m" over a
+    // 15m range — a message written to end exactly this kind of ambiguity,
+    // quietly reintroducing it.
+    const tfLabel = (analysis as any).structuralSeriesUsed === true
+      ? ((config as any)._structureTfLabel ?? "structure TF")
+      : ((config as any).entryTimeframe ?? "entry TF");
     const sHigh = (analysis.pd as any).swingHigh;
     const sLow = (analysis.pd as any).swingLow;
     const rangeStr = (typeof sHigh === "number" && typeof sLow === "number")
@@ -4059,6 +4066,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         ? (dailyCandles.length >= 20 ? dailyCandles : null)
         : (h4Candles.length >= 20 ? h4Candles : null);
     (pairConfig as any)._structureCandles = structureSeries;
+    (pairConfig as any)._structureTfLabel = STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? null;
     if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
       // Falling back silently would look like the flag was on and doing
       // nothing — the failure mode this whole session kept running into.
