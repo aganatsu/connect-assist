@@ -2953,6 +2953,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     score, rawScore, normalizedScoring: true, enabledMax,
     strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
+    // Which series the LEVELS came from. The premium/discount gate prints the
+    // timeframe in its rejection reason, and that reason existed precisely
+    // because the four different P/D definitions were impossible to tell apart
+    // on screen — so it must not be allowed to name the wrong one.
+    structuralSeriesUsed: structTfOn,
     // ATR was computed above for SLTPInput but never returned, so every
     // downstream `analysis.atrValue` read undefined. Five behaviours silently
     // resolved to zero as a result — see the consumers in bot-scanner.
