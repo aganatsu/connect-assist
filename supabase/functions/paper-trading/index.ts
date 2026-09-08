@@ -1310,6 +1310,12 @@ Deno.serve(async (req) => {
           openTime: p.open_time, signalReason: p.signal_reason || "",
           signalScore: parseFloat(p.signal_score || "0"), orderId: p.order_id,
           botId: p.bot_id || "smc",
+          // Per-trade management overrides. Omitted until 2026-09-08, which
+          // meant the UI could not see settings the user had saved: the BE
+          // column showed "—" on NZD/USD while its stop sat at 0.58805, the
+          // break-even level, because the only source the UI could reach was
+          // the entry-time snapshot in signal_reason.
+          tradeOverrides: p.trade_overrides ?? null,
           mirroredConnectionIds: mirroredIds,
           mirrorStatus,
         };
