@@ -207,6 +207,54 @@ function OpenPositionsContent({
     onError: (err: any) => toast.error(`Close failed: ${err.message}`),
   });
 
+  // Shared by the desktop table and the mobile cards. The save path carries
+  // the drift protection added when the editor was found writing a stale stop
+  // back to the broker; duplicating it per layout is how that protection would
+  // rot on one of them.
+  const beginEdit = useCallback((pos: any) => {
+    const sl0 = pos.stopLoss?.toString() || "";
+    const tp0 = pos.takeProfit?.toString() || "";
+    setEditingId(pos.id);
+    setEditSL(sl0);
+    setEditTP(tp0);
+    setSeedSL(sl0);
+    setSeedTP(tp0);
+  }, []);
+
+  const saveEdits = useCallback((pos: any) => {
+    // Send only what the USER changed. Sending both every time meant a
+    // take-profit edit rewrote the stop with whatever it showed when the editor
+    // opened — undoing a trail that had moved in between and silently removing
+    // locked-in protection.
+    const liveSL = pos.stopLoss?.toString() || "";
+    const liveTP = pos.takeProfit?.toString() || "";
+    const slEdited = editSL !== seedSL;
+    const tpEdited = editTP !== seedTP;
+    if (!slEdited && !tpEdited) {
+      toast.info("Nothing changed");
+      setEditingId(null);
+      return;
+    }
+    // The position moved underneath the editor on a field the user is also
+    // changing — their value would overwrite the newer one, so make that
+    // explicit rather than silent.
+    const clobbers: string[] = [];
+    if (slEdited && liveSL !== seedSL) {
+      clobbers.push(`stop moved to ${formatPrice(pos.stopLoss, pos.symbol)} while you were editing (you opened at ${seedSL || "none"})`);
+    }
+    if (tpEdited && liveTP !== seedTP) {
+      clobbers.push(`target moved to ${formatPrice(pos.takeProfit, pos.symbol)} while you were editing (you opened at ${seedTP || "none"})`);
+    }
+    if (clobbers.length > 0 &&
+      !window.confirm(`${clobbers.join("\n")}\n\nOverwrite with your values?`)) {
+      return;
+    }
+    const updates: any = { symbol: pos.symbol };
+    if (slEdited) updates.stopLoss = parseFloat(editSL);
+    if (tpEdited) updates.takeProfit = parseFloat(editTP);
+    modifyMut.mutate({ tradeId: pos.id, updates });
+  }, [editSL, editTP, seedSL, seedTP]);
+
   const modifyMut = useMutation({
     mutationFn: ({ tradeId, updates }: { tradeId: string; updates: any }) =>
       brokerExecApi.modifyTrade(connectionId, tradeId, updates),
@@ -263,10 +311,90 @@ function OpenPositionsContent({
               <span>Now: {formatPrice(pos.currentPrice, pos.symbol)}</span>
               <span>Lots: {parseFloat(pos.volume ?? pos.currentUnits ?? 0).toFixed(2)}</span>
             </div>
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, pos.symbol)}</span>
-              <span className="text-success/80">TP: {formatPrice(pos.takeProfit, pos.symbol)}</span>
-            </div>
+            {/* Mobile SL/TP editing and close. Previously this card was
+                read-only, so on a phone a trader could see a position moving
+                against them and had no way to move the stop or get out. Uses
+                the same handlers as the desktop table, including the
+                stale-write protection. */}
+            {editingId === pos.id ? (
+              <div className="space-y-1.5 pt-1 border-t border-border/50">
+                <div className="flex items-center gap-1.5">
+                  <label className="text-[9px] text-destructive/80 w-6 shrink-0">SL</label>
+                  <input
+                    type="number" step="any" inputMode="decimal"
+                    value={editSL}
+                    onChange={(e) => setEditSL(e.target.value)}
+                    className={`flex-1 min-w-0 bg-background border rounded px-2 py-1.5 text-[12px] font-mono ${
+                      (pos.stopLoss?.toString() || "") !== seedSL ? "border-warn text-warn" : "border-border"
+                    }`}
+                  />
+                </div>
+                {(pos.stopLoss?.toString() || "") !== seedSL && (
+                  <p className="text-[9px] text-warn">
+                    Bot moved the stop to {formatPrice(pos.stopLoss, pos.symbol)} while this was open.
+                  </p>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <label className="text-[9px] text-success/80 w-6 shrink-0">TP</label>
+                  <input
+                    type="number" step="any" inputMode="decimal"
+                    value={editTP}
+                    onChange={(e) => setEditTP(e.target.value)}
+                    className={`flex-1 min-w-0 bg-background border rounded px-2 py-1.5 text-[12px] font-mono ${
+                      (pos.takeProfit?.toString() || "") !== seedTP ? "border-warn text-warn" : "border-border"
+                    }`}
+                  />
+                </div>
+                {(pos.takeProfit?.toString() || "") !== seedTP && (
+                  <p className="text-[9px] text-warn">
+                    Bot moved the target to {formatPrice(pos.takeProfit, pos.symbol)} while this was open.
+                  </p>
+                )}
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => saveEdits(pos)}
+                    disabled={modifyMut.isPending}
+                    className="flex-1 flex items-center justify-center gap-1 bg-success/15 text-success border border-success/30 rounded py-2 text-[11px] font-bold active:bg-success/25"
+                  >
+                    {modifyMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingId(null)}
+                    className="flex-1 flex items-center justify-center gap-1 bg-muted/30 text-muted-foreground border border-border rounded py-2 text-[11px] active:bg-muted/50"
+                  >
+                    <X className="h-3 w-3" /> Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, pos.symbol)}</span>
+                  <span className="text-success/80">TP: {formatPrice(pos.takeProfit, pos.symbol)}</span>
+                </div>
+                <div className="flex gap-1.5 pt-1">
+                  <button
+                    onClick={() => beginEdit(pos)}
+                    className="flex-1 flex items-center justify-center gap-1 bg-muted/30 border border-border rounded py-2 text-[11px] active:bg-muted/50"
+                  >
+                    <Edit3 className="h-3 w-3" /> Edit SL/TP
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Close ${pos.symbol} ${isLong ? "BUY" : "SELL"} position on broker?`)) {
+                        closeMut.mutate(pos.id);
+                      }
+                    }}
+                    disabled={closeMut.isPending}
+                    className="flex-1 flex items-center justify-center gap-1 bg-destructive/15 text-destructive border border-destructive/30 rounded py-2 text-[11px] font-bold active:bg-destructive/25"
+                  >
+                    {closeMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         );
       })}
@@ -377,41 +505,7 @@ function OpenPositionsContent({
                     {isEditing ? (
                       <>
                         <button
-                          onClick={() => {
-                            // Send only what the USER changed. Previously both
-                            // fields went every time, so a take-profit edit
-                            // rewrote the stop with whatever it showed when the
-                            // editor opened — undoing a trail that had moved in
-                            // between and silently removing locked-in protection.
-                            const liveSL = pos.stopLoss?.toString() || "";
-                            const liveTP = pos.takeProfit?.toString() || "";
-                            const slEdited = editSL !== seedSL;
-                            const tpEdited = editTP !== seedTP;
-                            if (!slEdited && !tpEdited) {
-                              toast.info("Nothing changed");
-                              setEditingId(null);
-                              return;
-                            }
-                            // The position moved underneath the editor on a
-                            // field the user is also changing — their value
-                            // would overwrite the newer one, so make that
-                            // explicit rather than silent.
-                            const clobbers: string[] = [];
-                            if (slEdited && liveSL !== seedSL) {
-                              clobbers.push(`stop moved to ${formatPrice(pos.stopLoss, pos.symbol)} while you were editing (you opened at ${seedSL || "none"})`);
-                            }
-                            if (tpEdited && liveTP !== seedTP) {
-                              clobbers.push(`target moved to ${formatPrice(pos.takeProfit, pos.symbol)} while you were editing (you opened at ${seedTP || "none"})`);
-                            }
-                            if (clobbers.length > 0 &&
-                              !window.confirm(`${clobbers.join("\n")}\n\nOverwrite with your values?`)) {
-                              return;
-                            }
-                            const updates: any = { symbol: pos.symbol };
-                            if (slEdited) updates.stopLoss = parseFloat(editSL);
-                            if (tpEdited) updates.takeProfit = parseFloat(editTP);
-                            modifyMut.mutate({ tradeId: pos.id, updates });
-                          }}
+                          onClick={() => saveEdits(pos)}
                           className="text-success hover:bg-success/10 p-0.5 rounded transition-colors"
                           disabled={modifyMut.isPending}
                         >
@@ -424,15 +518,7 @@ function OpenPositionsContent({
                     ) : (
                       <>
                         <button
-                          onClick={() => {
-                            const sl0 = pos.stopLoss?.toString() || "";
-                            const tp0 = pos.takeProfit?.toString() || "";
-                            setEditingId(pos.id);
-                            setEditSL(sl0);
-                            setEditTP(tp0);
-                            setSeedSL(sl0);
-                            setSeedTP(tp0);
-                          }}
+                          onClick={() => beginEdit(pos)}
                           className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors"
                           title="Edit SL/TP"
                         >
