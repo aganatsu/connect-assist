@@ -90,9 +90,12 @@ Deno.test("a disabled check still runs and records, it just cannot cancel", () =
     plans: [{ symbol: "EUR/USD", bias: "bearish", biasConfidence: 90 }],
   } as never;
 
+  // gamePlanGateMode "hard" so the check has something to disable — on the
+  // default "soft" it observes rather than cancels, matching the entry gate.
   const acting = validatePendingOrderThesis(order, {
     fotsiResult: null, lastGamePlan: plan,
     dailyCandles: null, h4Candles: null, h1Candles: null,
+    gamePlanGateMode: "hard",
   });
   assertEquals(acting.valid, false);
   assertEquals(acting.checkType, "gp_bias_reversal");
@@ -100,6 +103,7 @@ Deno.test("a disabled check still runs and records, it just cannot cancel", () =
   const observing = validatePendingOrderThesis(order, {
     fotsiResult: null, lastGamePlan: plan,
     dailyCandles: null, h4Candles: null, h1Candles: null,
+    gamePlanGateMode: "hard",
     enabledChecks: { gp_bias_reversal: false },
   });
   assertEquals(observing.valid, true, "disabled must not cancel");
@@ -249,4 +253,49 @@ Deno.test("the shadow engine is free on full scans, skipped on management runs",
     /if \(thesisStyleAware \|\| !opts\?\.isManagementOnly\) \{/.test(scanner),
     "shadow candles on full scans, or whenever the flag genuinely needs them",
   );
+});
+
+// ── One policy for the game plan bias ───────────────────────────────────────
+
+Deno.test("gp_bias_reversal honours the entry gate's mode", () => {
+  // bot-scanner:6010 reads gamePlanGateMode and on "soft" deliberately ALLOWS
+  // a trade opposing the plan, recording it as advisory. The validator never
+  // read that setting and cancelled the same trade a minute later. Observed
+  // 2026-09-08: XAU/USD long armed and cancelled in a loop, "New York session
+  // bias is bearish (confidence 64%)", with the entry gate in soft mode.
+  assert(
+    /const gateMode = opts\.gamePlanGateMode \?\? "soft";/.test(
+      Deno.readTextFileSync(new URL("../../functions/_shared/thesisValidator.ts", import.meta.url)),
+    ),
+    "the validator must read the entry gate's mode",
+  );
+  assert(
+    /gamePlanGateMode: \(config as any\)\.gamePlanGateMode \?\? "soft",/.test(scanner),
+    "and the scanner must pass the same value it gates entry with",
+  );
+});
+
+Deno.test("only hard cancels; off and soft observe", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/thesisValidator.ts", import.meta.url),
+  );
+  assert(/const mayCancel = gateMode === "hard";/.test(src));
+  assert(/opposes && mayCancel/.test(src), "the verdict must require both");
+});
+
+Deno.test("an observed-only opposition says so in its reason", () => {
+  // Otherwise the reason reads like a cancellation that never happened, which
+  // is how the Telegram message came to describe a decision the entry gate had
+  // already made the other way.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/thesisValidator.ts", import.meta.url),
+  );
+  assert(/gamePlanGateMode=\$\{gateMode\}, observed only/.test(src));
+});
+
+Deno.test("the two gates read the same config key", () => {
+  // The whole defect was two gates on one input with separate settings.
+  const entry = scanner.indexOf('const gpGateMode = (pairConfig as any).gamePlanGateMode');
+  const thesis = scanner.indexOf('gamePlanGateMode: (config as any).gamePlanGateMode');
+  assert(entry > -1 && thesis > -1, "both call sites must exist");
 });

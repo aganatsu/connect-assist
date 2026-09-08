@@ -97,6 +97,19 @@ export interface ThesisValidationOpts {
   /** Minimum GP bias confidence to trigger cancel (default: 60) */
   gpBiasMinConfidence?: number;
   /**
+   * The SAME setting the entry gate uses for the game plan bias.
+   *
+   * bot-scanner:6010 reads gamePlanGateMode and on "soft" deliberately ALLOWS
+   * a trade whose direction opposes the plan, recording it as advisory. This
+   * validator never read it, and cancelled that trade a minute later — two
+   * gates, one input, opposite conclusions. Observed 2026-09-08: XAU/USD long
+   * armed and cancelled repeatedly, "New York session bias is bearish
+   * (confidence 64%)", while the entry gate was in soft mode.
+   *
+   * Only "hard" may cancel. "off" and "soft" observe, matching entry.
+   */
+  gamePlanGateMode?: "off" | "soft" | "hard" | string | null;
+  /**
    * Per-check switches. A disabled check still RUNS and is still recorded — it
    * simply cannot cancel. Default is all enabled, which is the behaviour that
    * has always been in place.
@@ -257,12 +270,17 @@ export function validatePendingOrderThesis(
         );
       } else {
         const opposes = biasOpposesDirection(pairPlan.bias, pending.direction);
+        // Honour the entry gate's policy. In "off" or "soft" the opposition is
+        // recorded but must not cancel, because entry already decided to allow
+        // it on exactly this information.
+        const gateMode = opts.gamePlanGateMode ?? "soft";
+        const mayCancel = gateMode === "hard";
         record(
-          "gp_bias_reversal", true, opposes,
+          "gp_bias_reversal", true, opposes && mayCancel,
           opposes
-            ? `Game plan bias reversal: ${opts.lastGamePlan.session} session bias is ${pairPlan.bias} (confidence ${pairPlan.biasConfidence}%) — opposes ${pending.direction} order`
+            ? `Game plan bias reversal: ${opts.lastGamePlan.session} session bias is ${pairPlan.bias} (confidence ${pairPlan.biasConfidence}%) — opposes ${pending.direction} order${mayCancel ? "" : ` [gamePlanGateMode=${gateMode}, observed only]`}`
             : null,
-          opposes
+          opposes && mayCancel
             ? `thesis_invalid:gp_bias_reversal:${opts.lastGamePlan.session}:${pairPlan.bias}:${pairPlan.biasConfidence}`
             : null,
         );
