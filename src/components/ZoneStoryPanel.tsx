@@ -417,9 +417,27 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                     Reward: {fmtPips(unifiedData.entry.executable?.rewardPips ?? unifiedData.entry.rewardPips, { absolute: true })}
                   </span>
                 )}
-                {(unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio) && (
-                  <span className={(unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio!) >= 3 ? "text-green-400 font-bold" : (unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio!) >= 2 ? "text-cyan-400" : "text-orange-400"}>
-                    R:R {unifiedData.entry.executable?.rrRatio ?? unifiedData.entry.rrRatio}:1
+                {/* The EXECUTABLE R:R is `tpRatio` verbatim — the target is
+                    computed as entry ± risk × tpRatio, so the ratio is a config
+                    constant, identical on every setup. Colour-coding it by
+                    threshold made a fixed 2:1 read as a measured quality
+                    signal. Shown plainly and labelled instead.
+                    The STRUCTURAL ratio (reward to the BOS level over the
+                    zone-derived risk) does vary by setup, so it keeps its
+                    grading — it just is not what trades. */}
+                {unifiedData.entry.executable?.rrRatio != null ? (
+                  <span className="text-zinc-400" title="Execution recomputes the target as entry ± risk × tpRatio, so this ratio is your configured tpRatio and is the same on every setup. It is not a measure of this setup's quality.">
+                    R:R {unifiedData.entry.executable.rrRatio}:1 (configured)
+                  </span>
+                ) : unifiedData.entry.rrRatio != null ? (
+                  <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
+                    R:R {unifiedData.entry.rrRatio}:1
+                  </span>
+                ) : null}
+                {unifiedData.entry.executable?.rrRatio != null && unifiedData.entry.rrRatio != null
+                  && unifiedData.entry.rrRatio !== unifiedData.entry.executable.rrRatio && (
+                  <span className="text-zinc-500" title="Reward to the impulse BOS level over the zone-derived risk. This one does vary by setup — but execution does not trade it.">
+                    structural {unifiedData.entry.rrRatio}:1
                   </span>
                 )}
                 {unifiedData.entry.executable?.slWidenedToFloor && (
