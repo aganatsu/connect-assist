@@ -917,6 +917,10 @@ Deno.serve(async (req) => {
           liveConfig = cfgRow?.config_json || {};
         } catch {}
         const liveExit = liveConfig.exit || {};
+        // BotConfigModal writes the management toggles at the TOP LEVEL of
+        // config_json; older shapes nest them under `exit`. Read both rather
+        // than guess which one this account has.
+        const liveFlag = (k: string) => liveExit[k] ?? liveConfig[k];
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
@@ -982,16 +986,44 @@ Deno.serve(async (req) => {
           // Supports both new fields (breakEvenEnabled/breakEvenActivated) and legacy (breakEven boolean).
           // New positions: scannerManagement handles R-based activation and sets breakEvenActivated.
           // Legacy positions: this code handles the old fixed-pip trigger as fallback.
-          const beEnabled = exitFlags.breakEvenEnabled ?? exitFlags.breakEven ?? false;
+          // ── Resolve the management toggles the way scannerManagement does ──
+          //
+          // These were read from `exitFlags` — the snapshot frozen into
+          // signal_reason when the position OPENED. scannerManagement reads
+          // live config, overridden per-position by trade_overrides. So the two
+          // engines managing the same position disagreed about whether
+          // break-even and trailing were on, and which answer applied depended
+          // on which one ran first.
+          //
+          // Observed 2026-09-08: toggling break-even reported "changes take
+          // effect in the next cycle" — true for scannerManagement, false here,
+          // while positions sat at +1.35R on their original stops. Note this
+          // function already read live config for maxHold at :970 and not for
+          // these two, in the same loop.
+          //
+          // Precedence: per-trade override > live config > frozen snapshot.
+          // The snapshot stays last so legacy positions predating live config
+          // still behave as they did.
+          let posOverrides: any = {};
+          try {
+            posOverrides = pos.trade_overrides
+              ? (typeof pos.trade_overrides === "string" ? JSON.parse(pos.trade_overrides) : pos.trade_overrides)
+              : {};
+          } catch { posOverrides = {}; }
+          const resolveFlag = (k: string, legacyKey?: string) =>
+            posOverrides[k] ?? liveFlag(k) ?? exitFlags[k] ?? (legacyKey ? exitFlags[legacyKey] : undefined);
+
+          const beEnabled = resolveFlag("breakEvenEnabled", "breakEven") ?? false;
+          const bePips = posOverrides.breakEvenPips ?? liveFlag("breakEvenPips") ?? exitFlags.breakEvenPips;
           const beAlreadyActivated = exitFlags.breakEvenActivated === true;
-          if (!closeReason && beEnabled && !beAlreadyActivated && exitFlags.breakEvenPips > 0 && sl !== null) {
+          if (!closeReason && beEnabled && !beAlreadyActivated && bePips > 0 && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const profitPips = pos.direction === "long"
               ? (currentPrice - entryPrice) / spec.pipSize
               : (entryPrice - currentPrice) / spec.pipSize;
             // R-based trigger (same logic as scannerManagement): at least 1R, or pip equivalent
             const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
-            const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, exitFlags.breakEvenPips / riskPips)) : 1.0;
+            const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, bePips / riskPips)) : 1.0;
             const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
             if (rMultiple >= beActivationR) {
               // Move SL to entry ± offset (default 3 pips) to absorb spread+commission
@@ -1021,7 +1053,8 @@ Deno.serve(async (req) => {
           // For new positions, scannerManagement sets trailingStopActivated on first activation.
           // This engine then handles the fast-tick ratcheting (every ~30s vs scanner's 5-15 min).
           // For legacy positions, falls back to the old pip-based activation.
-          const trailEnabled = exitFlags.trailingStopEnabled ?? exitFlags.trailingStop ?? false;
+          const trailEnabled = resolveFlag("trailingStopEnabled", "trailingStop") ?? false;
+          const trailPips = posOverrides.trailingStopPips ?? liveFlag("trailingStopPips") ?? exitFlags.trailingStopPips;
           const trailAlreadyActivated = exitFlags.trailingStopActivated === true;
           if (!closeReason && trailEnabled && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
@@ -1034,8 +1067,8 @@ Deno.serve(async (req) => {
               // ── FAST RATCHET: Trail is already active, just tighten ──
               // Use the proportional trail distance stored by scannerManagement,
               // or fall back to max(configPips, 0.5 x riskPips)
-              const effectiveTrailPips = exitFlags.trailingStopPips
-                ? Math.max(exitFlags.trailingStopPips, riskPips * 0.5)
+              const effectiveTrailPips = trailPips
+                ? Math.max(trailPips, riskPips * 0.5)
                 : riskPips * 0.5;
               const trailDistance = effectiveTrailPips * spec.pipSize;
               const newSL = pos.direction === "long"
@@ -1049,7 +1082,7 @@ Deno.serve(async (req) => {
                 const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
                 console.log(`Trail ratchet [${pos.position_id}]: SL→${newSL.toFixed(5)} (${effectiveTrailPips.toFixed(1)}p behind) | broker: ${trailModifyResults.join("; ")}`);
               }
-            } else if (exitFlags.trailingStopPips > 0) {
+            } else if (trailPips > 0) {
               // ── LEGACY ACTIVATION: Old positions without *Activated field ──
               // Use R-based activation matching scannerManagement logic
               const activationR = exitFlags.trailingStopActivation === "after_0.5r" ? 0.5
@@ -1063,7 +1096,7 @@ Deno.serve(async (req) => {
               const partialTPBlocksTrailing = (exitFlags.partialTPEnabled ?? exitFlags.partialTP ?? false)
                 && !(exitFlags.partialTPActivated === true || pos.partial_tp_fired);
               if (rMultiple >= activationR && !partialTPBlocksTrailing) {
-                const proportionalTrailPips = Math.max(exitFlags.trailingStopPips, riskPips * 0.5);
+                const proportionalTrailPips = Math.max(trailPips, riskPips * 0.5);
                 const trailDistance = proportionalTrailPips * spec.pipSize;
                 const newSL = pos.direction === "long"
                   ? currentPrice - trailDistance
