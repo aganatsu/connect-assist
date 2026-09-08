@@ -154,6 +154,9 @@ function getCachedCandles(symbol: string, interval: string): CacheEntry | null {
 }
 
 function setCachedCandles(symbol: string, interval: string, candles: Candle[], source: string): void {
+  // Every live fetch passes through here and cache hits do not, so this is the
+  // one place a persistent timezone fault is loud without spamming reads.
+  warnOnFutureBars(candles, `${symbol}[${source}]`, interval);
   const key = getCacheKey(symbol, interval);
   _candleCache.set(key, { candles, source, timestamp: Date.now() });
 }
@@ -524,6 +527,9 @@ async function persistSymbolOverride(conn: BrokerConn, canonical: string, broker
 
 // ─── Twelve Data ──────────────────────────────────────────────────────
 function mapTwelveDataValues(values: any[]): Candle[] {
+  // Appending "Z" is only correct because the request asks for timezone=UTC.
+  // If that parameter is ever dropped this silently mislabels every bar, so the
+  // two belong together — see the URL above.
   return values.map((v: any) => ({
     datetime: typeof v.datetime === "string" && v.datetime.length === 10
       ? `${v.datetime}T00:00:00Z`
@@ -554,7 +560,12 @@ async function twelveDataCandles(
   if (!hasSlot) return []; // Skip to Polygon fallback
 
   const interval = twelveDataInterval(canon);
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
+  // `timezone=UTC` is REQUIRED, not optional. TwelveData defaults to the
+  // exchange timezone, and mapTwelveDataValues appends "Z" to whatever comes
+  // back — asserting a UTC that was never requested. Observed 2026-09-08: a
+  // GBP/JPY 5m bar carried datetime 2026-09-08T20:05:00Z on a scan that ran at
+  // 10:11:13 UTC, i.e. stamped 9h54m in the future.
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC&timezone=UTC`;
   try {
     let res = await fetch(url);
     if (res.status === 429) {
@@ -705,6 +716,35 @@ export function endScanSourceTally(): SourceTally {
   ];
   entries.sort((a, b) => b[1] - a[1]);
   return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
+}
+
+/**
+ * A bar stamped in the future means its timezone was mislabelled somewhere —
+ * the failure that hid a TwelveData exchange-time offset behind an appended
+ * "Z". It is cheap to notice and expensive to miss: zoneTouchIdx is derived by
+ * finding the last candle whose time is <= the zone-touch time, so future-dated
+ * bars make that search return nothing and the CHoCH hunt silently scans the
+ * whole series instead of the window since the touch.
+ */
+export function warnOnFutureBars(candles: Candle[], symbol: string, interval: string): number {
+  if (candles.length === 0) return 0;
+  const last = candles[candles.length - 1];
+  if (!last?.datetime) return 0;
+  const t = Date.parse(last.datetime);
+  if (!Number.isFinite(t)) {
+    console.warn(`[candleSource] ${symbol} ${interval}: unparseable bar datetime "${last.datetime}"`);
+    return 0;
+  }
+  // One interval of slack: a forming bar is legitimately stamped at its open,
+  // and providers differ on whether that is the start or the end of the period.
+  const aheadMin = (t - Date.now()) / 60000;
+  if (aheadMin > 90) {
+    console.warn(
+      `[candleSource] ${symbol} ${interval}: last bar is ${aheadMin.toFixed(1)} min in the FUTURE ` +
+      `(${last.datetime}) — a timezone is being mislabelled, not a clock skew`,
+    );
+  }
+  return aheadMin;
 }
 
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
