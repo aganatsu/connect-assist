@@ -191,6 +191,11 @@ function OpenPositionsContent({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSL, setEditSL] = useState("");
   const [editTP, setEditTP] = useState("");
+  // What the position showed when the editor was opened. `positions` refreshes
+  // underneath an open editor, so this is the only way to tell a value the USER
+  // changed from one the BOT moved — and to notice when both happened.
+  const [seedSL, setSeedSL] = useState("");
+  const [seedTP, setSeedTP] = useState("");
 
   const closeMut = useMutation({
     mutationFn: (tradeId: string) => brokerExecApi.closeTrade(connectionId, tradeId),
@@ -314,7 +319,13 @@ function OpenPositionsContent({
                       step="any"
                       value={editSL}
                       onChange={(e) => setEditSL(e.target.value)}
-                      className="w-20 bg-background border border-border rounded px-1 py-0.5 text-[10px] font-mono"
+                      className={`w-20 bg-background border rounded px-1 py-0.5 text-[10px] font-mono ${
+                        (pos.stopLoss?.toString() || "") !== seedSL
+                          ? "border-warn text-warn" : "border-border"
+                      }`}
+                      title={(pos.stopLoss?.toString() || "") !== seedSL
+                        ? `The bot moved this stop to ${formatPrice(pos.stopLoss, pos.symbol)} while the editor was open. Saving your value will overwrite it.`
+                        : undefined}
                     />
                   ) : (
                     <span className={pos.stopLoss ? "text-destructive/80" : "text-muted-foreground/40"}>
@@ -329,7 +340,13 @@ function OpenPositionsContent({
                       step="any"
                       value={editTP}
                       onChange={(e) => setEditTP(e.target.value)}
-                      className="w-20 bg-background border border-border rounded px-1 py-0.5 text-[10px] font-mono"
+                      className={`w-20 bg-background border rounded px-1 py-0.5 text-[10px] font-mono ${
+                        (pos.takeProfit?.toString() || "") !== seedTP
+                          ? "border-warn text-warn" : "border-border"
+                      }`}
+                      title={(pos.takeProfit?.toString() || "") !== seedTP
+                        ? `The bot moved this target to ${formatPrice(pos.takeProfit, pos.symbol)} while the editor was open. Saving your value will overwrite it.`
+                        : undefined}
                     />
                   ) : (
                     <span className={pos.takeProfit ? "text-success/80" : "text-muted-foreground/40"}>
@@ -361,10 +378,38 @@ function OpenPositionsContent({
                       <>
                         <button
                           onClick={() => {
-                            const updates: any = {};
-                            if (editSL) updates.stopLoss = parseFloat(editSL);
-                            if (editTP) updates.takeProfit = parseFloat(editTP);
-                            updates.symbol = pos.symbol;
+                            // Send only what the USER changed. Previously both
+                            // fields went every time, so a take-profit edit
+                            // rewrote the stop with whatever it showed when the
+                            // editor opened — undoing a trail that had moved in
+                            // between and silently removing locked-in protection.
+                            const liveSL = pos.stopLoss?.toString() || "";
+                            const liveTP = pos.takeProfit?.toString() || "";
+                            const slEdited = editSL !== seedSL;
+                            const tpEdited = editTP !== seedTP;
+                            if (!slEdited && !tpEdited) {
+                              toast.info("Nothing changed");
+                              setEditingId(null);
+                              return;
+                            }
+                            // The position moved underneath the editor on a
+                            // field the user is also changing — their value
+                            // would overwrite the newer one, so make that
+                            // explicit rather than silent.
+                            const clobbers: string[] = [];
+                            if (slEdited && liveSL !== seedSL) {
+                              clobbers.push(`stop moved to ${formatPrice(pos.stopLoss, pos.symbol)} while you were editing (you opened at ${seedSL || "none"})`);
+                            }
+                            if (tpEdited && liveTP !== seedTP) {
+                              clobbers.push(`target moved to ${formatPrice(pos.takeProfit, pos.symbol)} while you were editing (you opened at ${seedTP || "none"})`);
+                            }
+                            if (clobbers.length > 0 &&
+                              !window.confirm(`${clobbers.join("\n")}\n\nOverwrite with your values?`)) {
+                              return;
+                            }
+                            const updates: any = { symbol: pos.symbol };
+                            if (slEdited) updates.stopLoss = parseFloat(editSL);
+                            if (tpEdited) updates.takeProfit = parseFloat(editTP);
                             modifyMut.mutate({ tradeId: pos.id, updates });
                           }}
                           className="text-success hover:bg-success/10 p-0.5 rounded transition-colors"
@@ -380,9 +425,13 @@ function OpenPositionsContent({
                       <>
                         <button
                           onClick={() => {
+                            const sl0 = pos.stopLoss?.toString() || "";
+                            const tp0 = pos.takeProfit?.toString() || "";
                             setEditingId(pos.id);
-                            setEditSL(pos.stopLoss?.toString() || "");
-                            setEditTP(pos.takeProfit?.toString() || "");
+                            setEditSL(sl0);
+                            setEditTP(tp0);
+                            setSeedSL(sl0);
+                            setSeedTP(tp0);
                           }}
                           className="text-muted-foreground hover:text-foreground hover:bg-muted/30 p-0.5 rounded transition-colors"
                           title="Edit SL/TP"
