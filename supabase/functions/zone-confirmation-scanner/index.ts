@@ -329,7 +329,8 @@ Deno.serve(async (req) => {
             status: "cancelled",
             cancel_reason: `[fast-confirm] Impulse broken — price ${currentPrice} exceeded origin`,
             resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
           cancelled++;
           console.log(`[zone-confirm] CANCELLED ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
           continue;
@@ -358,11 +359,19 @@ Deno.serve(async (req) => {
         }
         if (resetsHunt) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
+          // Guarded on the order still being in the state this function
+          // selected it in. bot-scanner runs the same lifecycle every minute,
+          // and without this guard a reset writes "pending" straight over a
+          // cancellation it made in between — observed 2026-09-08 on GBP/JPY
+          // order 1044a680, which carried cancel_reason "Price 208.96946
+          // breached SL 208.96602" and resolved_at 11:58:07 while sitting at
+          // status "pending", back in the live pool.
           await supabase.from("pending_orders").update({
             status: "pending",
             zone_touch_time: null,
             confirmation_attempts: attempts,
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
           resetToPending++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
           continue;
@@ -383,7 +392,8 @@ Deno.serve(async (req) => {
               status: "cancelled",
               cancel_reason: `[zone-confirm] Refined zone failed — ${confirmTF} close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
-            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            }).eq("order_id", pending.order_id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
             cancelled++;
             console.log(`[zone-confirm] CANCELLED ${pending.symbol} ${pending.direction} — refined zone failed (close: ${lastCandle.close}, zone: ${rawRefinedLow}-${rawRefinedHigh})`);
             continue;
@@ -443,7 +453,8 @@ Deno.serve(async (req) => {
             status: "cancelled",
             cancel_reason: `[fast-confirm] Max open positions reached (${currentOpenCount}/${maxOpenPositions})`,
             resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+          .eq("status", "awaiting_confirmation");
           cancelled++;
           console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max positions (${currentOpenCount}/${maxOpenPositions})`);
           continue;
@@ -453,7 +464,8 @@ Deno.serve(async (req) => {
             status: "cancelled",
             cancel_reason: `[fast-confirm] Max per symbol reached (${currentSymbolCount}/${maxPerSymbol})`,
             resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+          .eq("status", "awaiting_confirmation");
           cancelled++;
           console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max per symbol (${currentSymbolCount}/${maxPerSymbol})`);
           continue;
@@ -541,7 +553,8 @@ Deno.serve(async (req) => {
           fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
           filled_at: nowStr,
           resolved_at: nowStr,
-        }).eq("order_id", pending.order_id).eq("user_id", userId);
+        }).eq("order_id", pending.order_id).eq("user_id", userId)
+        .eq("status", "awaiting_confirmation");
 
         confirmed++;
 
