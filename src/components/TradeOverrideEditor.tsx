@@ -299,7 +299,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
       // If no overrides differ from defaults, send null to clear
       const payload = Object.keys(overrides).length === 0 ? null : overrides;
       await paperApi.updatePosition(position.id, { tradeOverrides: payload });
-      toast.success(payload ? "Trade overrides saved — takes effect next scan cycle" : "Overrides cleared — using global config");
+      toast.success(payload ? "Trade overrides saved — applies within ~1 min" : "Overrides cleared — using global config, applies within ~1 min");
       onSaved();
       if (!payload) setIsOpen(false);
     } catch (e: any) {
@@ -365,7 +365,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-[280px]">
                 <p className="text-[10px]">
-                  Override the global bot config for this specific trade. Changes take effect on the next scan cycle (~15 min).
+                  Override the global bot config for this specific trade. Applies on the next management cycle, which runs every minute.
                   Fields not overridden will continue using the global config.
                 </p>
               </TooltipContent>
@@ -535,7 +535,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
 
       {/* Info footer */}
       <p className="text-[10px] text-muted-foreground/60 italic">
-        Changes take effect on the next bot scan cycle (~15 min). Only overridden fields are saved — everything else uses your global bot config.
+        Applies on the next management cycle, which runs every minute. Only overridden fields are saved; everything else uses your global bot config.
       </p>
     </div>
   );
