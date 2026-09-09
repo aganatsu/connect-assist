@@ -2891,37 +2891,43 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const tier1Qualifiers = `Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${
     factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""
   }`;
-  // ── Composition requirement: tier1RequirePOI (default OFF) ──
+  // ── Positional requirement: tier1RequireAtPOI (default OFF) ──
   //
-  // The count alone does not describe the setup. Measured over the 30 days to
-  // 2026-09-09, across 71 closed trades:
+  // AT the point of interest, not merely NEAR the zone containing it.
   //
-  //   has OB or FVG    22 trades   45.5% win   +$1,234.83
-  //   MS + P/D only    49 trades   32.7% win   -$3,008.10
+  // This is easy to misread as "require an OB or FVG to exist", and the
+  // impulse-zone hard gate ALREADY guarantees that — every zone it returns is
+  // typed "fvg" or "ob" (impulseZoneEngine), and no zone means the pair is
+  // skipped outright. The Tier 1 OB/FVG factors ask a stricter and different
+  // question: the Order Block factor scores only when price is INSIDE the
+  // block, and otherwise reports "N OBs nearby ... — not at level".
   //
-  // Break-even at 2:1 is 33.3%, so the bucket carrying an institutional entry
-  // trigger clears it and the bucket without sits below. Market Structure +
-  // Premium/Discount is "a trend exists and price is in a discount" — true
-  // most of the time on most instruments, which is why 49 of 71 trades cleared
-  // a threshold of 2 on exactly that pair. Order Block and Fair Value Gap
-  // carry weight 2 against Market Structure's 1 precisely because they are the
-  // evidence; the count gate never required either.
+  // So the split below is positional. Measured over the 30 days to 2026-09-09,
+  // across 71 closed trades:
+  //
+  //   price inside the POI   22 trades   45.5% win   +$1,234.83
+  //   near the zone only     49 trades   32.7% win   -$3,008.10
+  //
+  // Break-even at 2:1 is 33.3%, so being at the level clears it and being near
+  // it does not. That matches the shadow data from 2026-09-06, where
+  // priceAtZone read true 124 times while price was genuinely inside a zone
+  // 30 times — the same 4:1 loose-versus-strict gap, now visible in P&L.
   //
   // Honest limits: 10/22 against 16/49 is z ~ 1.0, p ~ 0.31 — the win-rate gap
-  // is NOT statistically established. What is solid is that the MS+P/D-only
+  // is NOT statistically established. What is solid is that the near-only
   // bucket is 69% of all trading and is down $3,008. Enabling this would have
   // blocked those 49 trades, so it changes the size of the book, not just its
   // quality. Off until rejected_setups has graded refusals at this threshold.
   //
-  // Unicorn Model is deliberately NOT counted as a POI here even when promoted
-  // to Tier 1: it was not part of the split above, so including it would widen
+  // Unicorn Model is deliberately NOT counted here even when promoted to
+  // Tier 1: it was not part of the split above, so including it would widen
   // the rule past what was measured.
   //
   // Impulse-zone credits need no special case. That block only ever credits
-  // Order Block or Fair Value Gap, so a credited setup satisfies this by
-  // construction — which is consistent, since the credited route was the
-  // best-performing of the three (7 trades, 57.1%, +$1,100.70).
-  const _requirePOI = (config as any).tier1RequirePOI === true;
+  // Order Block or Fair Value Gap, and it credits them on zone membership
+  // rather than position — which is consistent, since the credited route was
+  // the best-performing of the three (7 trades, 57.1%, +$1,100.70).
+  const _requirePOI = (config as any).tier1RequireAtPOI === true;
   const _hasPOI = ["Order Block", "Fair Value Gap"].some(n => {
     const f = factors.find(ff => ff.name === n);
     return !!f && f.present && f.weight > 0 && (f as any).tier === 1;
@@ -2931,7 +2937,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})${htfNestedNote}`
     : !tier1CountPassed
     ? `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: ${tier1Qualifiers}${htfNestedNote}`
-    : `Tier 1 gate FAILED: ${tier1Count} core factors (${tier1PresentNames.join(", ")}) but no Order Block or Fair Value Gap — tier1RequirePOI requires an institutional entry trigger${htfNestedNote}`;
+    : `Tier 1 gate FAILED: ${tier1Count} core factors (${tier1PresentNames.join(", ")}) but price is not inside an Order Block or Fair Value Gap — tier1RequireAtPOI requires price AT the POI, not merely near the zone${htfNestedNote}`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;

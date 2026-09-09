@@ -138,12 +138,13 @@ export const RUNTIME_DEFAULTS = {
   // ── Tier 1 Gate ──
   tier1GateEnabled: true,
   minTier1Factors: 3,
-  // Require an institutional entry trigger (Order Block or Fair Value Gap)
-  // alongside the count, not just any N core factors. Default OFF — enabling
-  // it would have blocked 49 of 71 trades over the 30 days to 2026-09-09, so
-  // this changes the size of the book, not only its quality. See
-  // confluenceScoring for the measurement.
-  tier1RequirePOI: false,
+  // Require price to be INSIDE the Order Block / Fair Value Gap, not merely
+  // near the zone containing it. The impulse-zone hard gate already guarantees
+  // a POI exists — every zone is typed "fvg" or "ob" — so this is a
+  // positional requirement, not an existence one. Default OFF: it would have
+  // blocked 49 of 71 trades over the 30 days to 2026-09-09, changing the size
+  // of the book and not only its quality. See confluenceScoring.
+  tier1RequireAtPOI: false,
   // ── Impulse Zone Scoring ──
   impulseZoneEnabled: true,
   impulseZonePenalty: 2.0,
@@ -454,7 +455,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── Tier 1 Gate ──
     tier1GateEnabled: strategy.tier1GateEnabled ?? raw.tier1GateEnabled ?? RUNTIME_DEFAULTS.tier1GateEnabled,
     minTier1Factors: strategy.minTier1Factors ?? raw.minTier1Factors ?? RUNTIME_DEFAULTS.minTier1Factors,
-    tier1RequirePOI: strategy.tier1RequirePOI ?? raw.tier1RequirePOI ?? RUNTIME_DEFAULTS.tier1RequirePOI,
+    tier1RequireAtPOI: strategy.tier1RequireAtPOI ?? raw.tier1RequireAtPOI ?? RUNTIME_DEFAULTS.tier1RequireAtPOI,
     // ── Impulse Zone ──
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? RUNTIME_DEFAULTS.impulseZoneEnabled,
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? RUNTIME_DEFAULTS.impulseZonePenalty,
