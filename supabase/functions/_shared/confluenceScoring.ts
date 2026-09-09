@@ -2863,7 +2863,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Market Structure + Premium/Discount (directional bias without
   // an institutional entry trigger like OB or FVG).
   const _minTier1 = typeof config.minTier1Factors === "number" ? Math.max(1, Math.min(config.minTier1Factors, 5)) : 3;
-  const tier1GatePassed = tier1Count >= _minTier1;
+  const tier1CountPassed = tier1Count >= _minTier1;
   // Build display list: include Unicorn when it was promoted to Tier 1, and HTF-promoted slots
   const tier1DisplayNames = ["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib", "Unicorn Model"];
   const tier1PresentNames = tier1DisplayNames.filter(n => {
@@ -2891,9 +2891,47 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const tier1Qualifiers = `Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${
     factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""
   }`;
+  // ── Composition requirement: tier1RequirePOI (default OFF) ──
+  //
+  // The count alone does not describe the setup. Measured over the 30 days to
+  // 2026-09-09, across 71 closed trades:
+  //
+  //   has OB or FVG    22 trades   45.5% win   +$1,234.83
+  //   MS + P/D only    49 trades   32.7% win   -$3,008.10
+  //
+  // Break-even at 2:1 is 33.3%, so the bucket carrying an institutional entry
+  // trigger clears it and the bucket without sits below. Market Structure +
+  // Premium/Discount is "a trend exists and price is in a discount" — true
+  // most of the time on most instruments, which is why 49 of 71 trades cleared
+  // a threshold of 2 on exactly that pair. Order Block and Fair Value Gap
+  // carry weight 2 against Market Structure's 1 precisely because they are the
+  // evidence; the count gate never required either.
+  //
+  // Honest limits: 10/22 against 16/49 is z ~ 1.0, p ~ 0.31 — the win-rate gap
+  // is NOT statistically established. What is solid is that the MS+P/D-only
+  // bucket is 69% of all trading and is down $3,008. Enabling this would have
+  // blocked those 49 trades, so it changes the size of the book, not just its
+  // quality. Off until rejected_setups has graded refusals at this threshold.
+  //
+  // Unicorn Model is deliberately NOT counted as a POI here even when promoted
+  // to Tier 1: it was not part of the split above, so including it would widen
+  // the rule past what was measured.
+  //
+  // Impulse-zone credits need no special case. That block only ever credits
+  // Order Block or Fair Value Gap, so a credited setup satisfies this by
+  // construction — which is consistent, since the credited route was the
+  // best-performing of the three (7 trades, 57.1%, +$1,100.70).
+  const _requirePOI = (config as any).tier1RequirePOI === true;
+  const _hasPOI = ["Order Block", "Fair Value Gap"].some(n => {
+    const f = factors.find(ff => ff.name === n);
+    return !!f && f.present && f.weight > 0 && (f as any).tier === 1;
+  });
+  const tier1GatePassed = tier1CountPassed && (!_requirePOI || _hasPOI);
   const tier1GateReason = tier1GatePassed
     ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})${htfNestedNote}`
-    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: ${tier1Qualifiers}${htfNestedNote}`;
+    : !tier1CountPassed
+    ? `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: ${tier1Qualifiers}${htfNestedNote}`
+    : `Tier 1 gate FAILED: ${tier1Count} core factors (${tier1PresentNames.join(", ")}) but no Order Block or Fair Value Gap — tier1RequirePOI requires an institutional entry trigger${htfNestedNote}`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;
