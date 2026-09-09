@@ -755,17 +755,16 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 /**
  * Record a setup a gate refused, so outcome-tracker can grade it.
  *
- * rejected_setups, its outcome_status of would_have_won / would_have_lost, the
- * outcome-tracker cron and three consumers all exist. Nothing has written to
- * the table since the 2026-09-01 revert deleted the producer — every reference
- * across the codebase is a read or a grade-update. So gate effectiveness has
- * been unmeasurable: the machinery to answer "was this rejection right?" is
- * intact and has no input.
+ * The two producers at the tier/confluence gates below have fed this table
+ * since 2026-08-10 — 1,527 graded setups by 2026-09-09, and the answer they
+ * give is that rejected setups win 18.4% against a 33.3% break-even at 2:1.
+ * The gate stack is collectively correct; every gate family in that sample is
+ * net-negative to take.
  *
- * Measured 2026-09-09: the zone-score gate alone refused 54 distinct zones in 7
- * days, 21 of which price then entered, and 10 of those missed the threshold by
- * half a point. Whether refusing them was correct is exactly what this table
- * was built to answer.
+ * The zone-score gate was the one refusal with no producer. It alone refused 54
+ * distinct zones in 7 days, 21 of which price then entered, and 10 of those
+ * missed the threshold by half a point — so whether minZoneScore is set right
+ * was the one question the table could not answer. This call closes that gap.
  *
  * Fails open and silently — a diagnostic must never cost a scan.
  */
