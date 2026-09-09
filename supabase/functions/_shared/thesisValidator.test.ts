@@ -330,7 +330,10 @@ Deno.test("estimateDirectionConfidence: null direction → 0", () => {
   assertEquals(result, 0);
 });
 
-Deno.test("estimateDirectionConfidence: all signals aligned → 1.0", () => {
+Deno.test("estimateDirectionConfidence: confirmed and unopposed → 0.8", () => {
+  // The ceiling is 0.8, not 1.0, because h4Retrace no longer scores and the
+  // absence of a counter-CHoCH is no longer a bonus. 0.8 keeps the threshold
+  // tunable above the 0.6 default instead of making the check binary.
   const result = estimateDirectionConfidence({
     direction: "long",
     reason: "Strong bullish",
@@ -338,18 +341,51 @@ Deno.test("estimateDirectionConfidence: all signals aligned → 1.0", () => {
     h4Retrace: true,
     h4ChochAgainst: false,
   } as any);
-  assertEquals(result, 1.0);
+  assertEquals(result, 0.8);
 });
 
-Deno.test("estimateDirectionConfidence: direction only → 0.5", () => {
+Deno.test("estimateDirectionConfidence: the retrace is ignored entirely", () => {
+  // h4Retrace maps from structureRetrace — the pullback a pending order is
+  // WAITING for. Scoring it as counter-evidence killed 15 orders in 7 days,
+  // every one within a minute of arming.
+  const base = { direction: "long", reason: "r", h1Confirmed: false, h4ChochAgainst: false };
+  assertEquals(
+    estimateDirectionConfidence({ ...base, h4Retrace: true } as any),
+    estimateDirectionConfidence({ ...base, h4Retrace: false } as any),
+  );
+});
+
+Deno.test("estimateDirectionConfidence: an unconfirmed flip cannot reach the 0.6 default", () => {
+  // This is the whole point. Every one of those 15 cancels had h1Confirmed
+  // false and scored 0.7 against a 0.6 threshold. The ceiling without a
+  // confirmed BOS is now 0.3.
+  for (const h4Retrace of [true, false]) {
+    for (const h4ChochAgainst of [true, false]) {
+      const c = estimateDirectionConfidence({
+        direction: "long", reason: "r", h1Confirmed: false, h4Retrace, h4ChochAgainst,
+      } as any);
+      assert(c < 0.6, `unconfirmed scored ${c} with retrace=${h4Retrace} choch=${h4ChochAgainst}`);
+    }
+  }
+});
+
+Deno.test("estimateDirectionConfidence: a counter-CHoCH is a penalty, not a missing bonus", () => {
+  const confirmed = { direction: "long", reason: "r", h1Confirmed: true, h4Retrace: false };
+  assertEquals(estimateDirectionConfidence({ ...confirmed, h4ChochAgainst: false } as any), 0.8);
+  assertEquals(estimateDirectionConfidence({ ...confirmed, h4ChochAgainst: true } as any), 0.6);
+});
+
+Deno.test("estimateDirectionConfidence: unconfirmed with a counter-CHoCH is the floor", () => {
   const result = estimateDirectionConfidence({
     direction: "short",
     reason: "Bearish",
     h1Confirmed: false,
     h4Retrace: false,
-    h4ChochAgainst: true, // CHoCH against = -0.2
+    h4ChochAgainst: true,
   } as any);
-  assertEquals(result, 0.3); // base 0.3 only
+  // 0.3 base - 0.2 penalty. Rounded, because 0.3 - 0.2 is 0.09999999999999998
+  // in binary float and would print as "10%" in the cancel reason.
+  assertEquals(result, 0.1);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
