@@ -151,21 +151,52 @@ const MIN_CANDLES_FOR_DIRECTION = 20;
 // ── Helpers ──
 
 /**
- * Determine a "confidence" score for the direction result.
- * The direction engine doesn't return a numeric confidence, so we derive one
- * from the structural signals:
- *   - h1Confirmed = +0.3
- *   - h4Retrace = +0.2 (structure intact, pulling back)
- *   - !h4ChochAgainst = +0.2 (no counter-CHoCH)
- *   - direction != null = +0.3 (base confidence)
+ * Confidence that `result.direction` is real, used only to decide whether a
+ * direction flip may cancel a pending order. The direction engine returns no
+ * numeric confidence, so this derives one — and nothing else in the codebase
+ * calls it, which is why the arming path has no matching number to agree with.
+ *
+ * The old formula was:
+ *
+ *   0.3 base + 0.3 h1Confirmed + 0.2 h4Retrace + 0.2 !h4ChochAgainst
+ *
+ * Measured 2026-09-09: 15 of the 45 pending orders in 7 days were cancelled by
+ * direction_flip, every one at exactly **70%** against the 60% threshold, and
+ * every one within 0-1 minute of arming. 0.7 has a single decomposition under
+ * that formula — 0.3 + 0.2 + 0.2, with `h1Confirmed` FALSE. So the direction
+ * was never confirmed by anything; two terms carried it over the line, and
+ * both were scoring non-evidence:
+ *
+ * - **h4Retrace is the setup, not evidence against it.** It maps from
+ *   `structureRetrace`. A short waits for price to rally into a premium zone —
+ *   that rally IS the retrace. Crediting it toward "the direction is now long"
+ *   cancels the order for doing precisely what it was armed to wait for, which
+ *   is why all 15 were shorts flipped to long inside one management cycle.
+ * - **!h4ChochAgainst credited the ABSENCE of contrary evidence.** An
+ *   unsupported and unopposed read started at 0.5 on nothing at all.
+ *
+ * Both are gone. `h4ChochAgainst` becomes a penalty, which is what a
+ * counter-CHoCH actually is, and confirmation carries the weight:
+ *
+ *   confirmed, clean         0.8
+ *   confirmed, CHoCH against 0.6
+ *   unconfirmed, clean       0.3
+ *   unconfirmed, CHoCH       0.1
+ *
+ * At the 0.6 default a cancel now requires a real BOS on the confirm
+ * timeframe — a *confirmed* reversal rather than an inferred one — while 0.8
+ * stays reachable so the threshold is still worth tuning.
+ *
+ * `h4Retrace` is deliberately not read. Do not reintroduce it.
  */
 export function estimateDirectionConfidence(result: DirectionResult): number {
   if (!result.direction) return 0;
-  let confidence = 0.3; // base: direction was determined
-  if (result.h1Confirmed) confidence += 0.3;
-  if (result.h4Retrace) confidence += 0.2;
-  if (!result.h4ChochAgainst) confidence += 0.2;
-  return confidence;
+  let confidence = 0.3; // base: a direction was determined at all
+  if (result.h1Confirmed) confidence += 0.5; // BOS on the confirm timeframe
+  if (result.h4ChochAgainst) confidence -= 0.2; // counter-CHoCH argues against it
+  // Every term is a tenth, so round away binary float noise — 0.3 - 0.2 is
+  // 0.09999999999999998, which reaches the cancel reason string as "10%".
+  return Math.max(0, Math.min(1, Math.round(confidence * 10) / 10));
 }
 
 /**

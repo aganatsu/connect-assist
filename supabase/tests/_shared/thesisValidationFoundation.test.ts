@@ -56,17 +56,29 @@ function opposingShort(): DirectionResult {
   } as DirectionResult;
 }
 
-Deno.test("the confidence score is four weights, and h1Confirmed alone cancels", () => {
-  // 0.3 base + 0.3 h1Confirmed + 0.2 h4Retrace + 0.2 !h4ChochAgainst, threshold 0.6.
-  // Documenting it because nothing calibrates these against outcomes, and the
-  // absence of a counter-CHoCH counting as positive evidence is a choice, not
-  // a measurement.
-  const only = { direction: "short", h4Retrace: false, h4ChochAgainst: true, h1Confirmed: true } as DirectionResult;
-  assertEquals(Math.round(estimateDirectionConfidence(only) * 100) / 100, 0.6);
-  assert(estimateDirectionConfidence(only) >= 0.6, "lands exactly on the cancel threshold");
+Deno.test("only a CONFIRMED flip can cancel — the retrace and the missing CHoCH cannot", () => {
+  // This test used to document 0.3 base + 0.3 h1Confirmed + 0.2 h4Retrace +
+  // 0.2 !h4ChochAgainst, and noted that crediting the absence of a
+  // counter-CHoCH was "a choice, not a measurement". It has since been
+  // measured: 15 of 45 pending orders in 7 days died here, every one at
+  // exactly 70% — the single decomposition of 0.3 + 0.2 + 0.2 — and every one
+  // inside a minute of arming, because h4Retrace maps from structureRetrace,
+  // which is the pullback the order was waiting for.
+  //
+  // Now 0.3 base + 0.5 h1Confirmed - 0.2 h4ChochAgainst.
+  const conf = (h1Confirmed: boolean, h4ChochAgainst: boolean, h4Retrace = false) =>
+    estimateDirectionConfidence({ direction: "short", h4Retrace, h4ChochAgainst, h1Confirmed } as DirectionResult);
 
-  const noneOf = { direction: "short", h4Retrace: false, h4ChochAgainst: true, h1Confirmed: false } as DirectionResult;
-  assertEquals(Math.round(estimateDirectionConfidence(noneOf) * 100) / 100, 0.3);
+  // A confirmed BOS still cancels even with a counter-CHoCH — exactly on the
+  // threshold, as before.
+  assertEquals(conf(true, true), 0.6);
+  assert(conf(true, true) >= 0.6, "lands exactly on the cancel threshold");
+  assertEquals(conf(true, false), 0.8, "and 0.8 stays reachable so 0.6 is still tunable");
+
+  // Without confirmation nothing reaches it, whatever the other two say.
+  assertEquals(conf(false, true), 0.1);
+  assertEquals(conf(false, false), 0.3);
+  assertEquals(conf(false, false, true), 0.3, "the retrace scores nothing at all");
 });
 
 Deno.test("every check is recorded, including ones that are switched off", () => {
