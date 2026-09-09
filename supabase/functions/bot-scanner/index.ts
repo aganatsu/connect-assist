@@ -752,6 +752,92 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 // are now imported from ../_shared/smcAnalysis.ts (single source of truth)
 
 // ─── Load user config ───────────────────────────────────────────────
+/**
+ * Record a setup a gate refused, so outcome-tracker can grade it.
+ *
+ * rejected_setups, its outcome_status of would_have_won / would_have_lost, the
+ * outcome-tracker cron and three consumers all exist. Nothing has written to
+ * the table since the 2026-09-01 revert deleted the producer — every reference
+ * across the codebase is a read or a grade-update. So gate effectiveness has
+ * been unmeasurable: the machinery to answer "was this rejection right?" is
+ * intact and has no input.
+ *
+ * Measured 2026-09-09: the zone-score gate alone refused 54 distinct zones in 7
+ * days, 21 of which price then entered, and 10 of those missed the threshold by
+ * half a point. Whether refusing them was correct is exactly what this table
+ * was built to answer.
+ *
+ * Fails open and silently — a diagnostic must never cost a scan.
+ */
+async function recordRejectedSetup(
+  supabase: any,
+  userId: string,
+  pair: string,
+  analysis: any,
+  opts: {
+    rejectionType: "gate_blocked" | "below_threshold_strong_t1";
+    failedGates: string[];
+    zoneLow?: number | null;
+    zoneHigh?: number | null;
+    zoneScore?: number | null;
+    zoneType?: string | null;
+  },
+): Promise<void> {
+  try {
+    if (!analysis?.direction || typeof analysis.lastPrice !== "number") return;
+
+    // Dedup. The same zone is re-evaluated every cycle — 54 distinct zones
+    // produced 421 rejection events over the same week — and grading the same
+    // setup seven times would bias every statistic drawn from this table.
+    const { data: dupe } = await supabase
+      .from("rejected_setups")
+      .select("id")
+      .eq("user_id", userId).eq("bot_id", BOT_ID)
+      .eq("symbol", pair).eq("direction", analysis.direction)
+      .eq("outcome_status", "pending")
+      .gte("rejected_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+      .limit(1);
+    if (dupe && dupe.length > 0) return;
+
+    const t1 = (analysis.factors ?? []).filter((f: any) => f?.tier === 1 && f?.present);
+    const sl = typeof analysis.stopLoss === "number" ? analysis.stopLoss : null;
+    const tp = typeof analysis.takeProfit === "number" ? analysis.takeProfit : null;
+    const risk = sl != null ? Math.abs(analysis.lastPrice - sl) : null;
+    const reward = tp != null ? Math.abs(tp - analysis.lastPrice) : null;
+
+    await supabase.from("rejected_setups").insert({
+      user_id: userId,
+      bot_id: BOT_ID,
+      symbol: pair,
+      direction: analysis.direction,
+      rejection_type: opts.rejectionType,
+      failed_gates: opts.failedGates,
+      confluence_score: Number(analysis.score ?? 0),
+      tier1_count: analysis.tieredScoring?.tier1Count ?? t1.length,
+      tier1_factors: t1.map((f: any) => f.name),
+      // What a market entry would have used at this moment. The executable
+      // stop is computed much later in the pair loop, so analysis.stopLoss is
+      // the honest answer here rather than a guess at the floored one.
+      entry_price: analysis.lastPrice,
+      stop_loss: sl,
+      take_profit: tp,
+      rr_ratio: risk && risk > 0 && reward ? Math.round((reward / risk) * 100) / 100 : null,
+      session_name: analysis.session?.name ?? null,
+      regime: analysis.regimeInfo?.regime ?? null,
+      price_at_rejection: analysis.lastPrice,
+      raw_detail: {
+        zoneLow: opts.zoneLow ?? null,
+        zoneHigh: opts.zoneHigh ?? null,
+        zoneScore: opts.zoneScore ?? null,
+        zoneType: opts.zoneType ?? null,
+        tieredScoring: analysis.tieredScoring ?? null,
+      },
+    });
+  } catch (e: any) {
+    console.warn(`[rejected-setups] insert failed for ${pair}: ${e?.message}`);
+  }
+}
+
 async function loadConfig(supabase: any, userId: string, connectionId?: string) {
   let data: any = null;
   // Try connection-specific config first
@@ -5553,6 +5639,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         detail.status = "skipped_weak_zone";
         detail.skipReason = `Zone Score Gate: zone score ${izData.bestZone.totalScore.toFixed(1)}/9 < minimum ${minZoneScore} — low-conviction zone rejected`;
         console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE SCORE GATE — score ${izData.bestZone.totalScore.toFixed(1)}/9 < ${minZoneScore}. Skipping.`);
+        await recordRejectedSetup(supabase, userId, pair, analysis, {
+          rejectionType: "gate_blocked",
+          failedGates: [`zone_score_gate:${izData.bestZone.totalScore.toFixed(1)}/${minZoneScore}`],
+          zoneLow: izData.bestZone.low,
+          zoneHigh: izData.bestZone.high,
+          zoneScore: izData.bestZone.totalScore,
+          zoneType: izData.bestZone.zone?.poi?.type ?? null,
+        });
         scanDetails.push(detail);
         continue;
       }
