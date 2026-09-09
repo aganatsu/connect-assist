@@ -126,6 +126,13 @@ interface ImpulseGateData {
 interface Props {
   unifiedData: ZoneStoryData | null | undefined;
   gateData?: ImpulseGateData | null | undefined;
+  /**
+   * The Zone Score Gate threshold this zone is judged against. Without it the
+   * badge shows a bare "3.0/9" and colours it by hardcoded bands of 5 and 3 —
+   * neither of which is the real gate — so a 3.5 rendered the same cyan as a
+   * passing 4.5 while being rejected. Defaults to the config default.
+   */
+  minZoneScore?: number;
   /** When true, live-action badges ("Hunting 5m CHoCH") are shown. */
   isLiveContext?: boolean;
   /** Trading symbol (e.g. "EUR/USD", "ETH/USD") — used for asset-aware pip/$/pts labels. */
@@ -152,7 +159,7 @@ const STATE_LABELS: Record<string, string> = {
   error: "⚠ Error",
 };
 
-export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol }: Props) {
+export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol, minZoneScore = 4 }: Props) {
   if (!unifiedData) return null;
 
   // Asset-aware formatter — falls back to plain "X pips" if no symbol provided
@@ -308,12 +315,28 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {/* Gate scoring badge from impulse zone data */}
               {gateData?.bestZone && (
                 <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                  <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                    gateData.bestZone.totalScore >= 5 ? "bg-green-500/15 text-green-400"
-                    : gateData.bestZone.totalScore >= 3 ? "bg-cyan-500/15 text-cyan-400"
-                    : "bg-zinc-500/15 text-zinc-500"
-                  }`}>
+                  {/* Coloured by the ACTUAL gate, and it states the threshold.
+                      The old bands were 5 and 3, so a 3.5 rendered the same
+                      cyan as a passing 4.5 — a score half a point from fatal
+                      looked healthy, and nothing on screen named the minimum.
+                      Measured 2026-09-09: 54 zones refused in 7 days, 10 of
+                      them at 3.5. */}
+                  <span
+                    className={`text-[10px] font-mono px-1 py-0.5 rounded ${
+                      gateData.bestZone.totalScore < minZoneScore
+                        ? "bg-red-500/15 text-red-400"
+                        : gateData.bestZone.totalScore >= minZoneScore + 1
+                        ? "bg-green-500/15 text-green-400"
+                        : "bg-cyan-500/15 text-cyan-400"
+                    }`}
+                    title={gateData.bestZone.totalScore < minZoneScore
+                      ? `Below the Zone Score Gate minimum of ${minZoneScore}/9 — this zone is rejected before any entry is considered, whatever the confluence score says.`
+                      : `Zone Score Gate minimum is ${minZoneScore}/9. Score is fibScore + HTF confluence + S/R confirmation (+1) + LTF refinement (+1).`}
+                  >
                     Gate Score {gateData.bestZone.totalScore.toFixed(1)}/9
+                    {gateData.bestZone.totalScore < minZoneScore
+                      ? ` — below min ${minZoneScore}, REJECTED`
+                      : ` (min ${minZoneScore})`}
                   </span>
                   {gateData.bestZone.ltfRefined && (
                     <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-green-500/15 text-green-400">
