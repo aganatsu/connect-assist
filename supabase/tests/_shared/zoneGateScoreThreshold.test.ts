@@ -66,6 +66,32 @@ Deno.test("the tooltip explains the consequence, not just the number", () => {
     "and say what the score is made of, since S/R is usually the missing point");
 });
 
+Deno.test("the setting is findable in the config search", () => {
+  // It has always been a slider in the Strategy tab, but it was absent from the
+  // searchable index — so "zone score" found nothing and you had to know where
+  // to scroll. That is half of why the gate went unnoticed.
+  const modal = Deno.readTextFileSync(
+    new URL("../../../src/components/BotConfigModal.tsx", import.meta.url),
+  );
+  const line = modal.match(/\{ tab: "strategy", label: "Min Zone Score", keywords: \[([^\]]*)\] \}/);
+  assert(line, "missing from the searchable settings index");
+  for (const kw of ['"zone"', '"score"', '"gate"', '"threshold"']) {
+    assert(line[1].includes(kw), `keyword ${kw} missing`);
+  }
+});
+
+Deno.test("the slider can express the measured near-miss band", () => {
+  // 10 of the 54 rejected zones scored exactly 3.5, so a step coarser than 0.5
+  // would make that band untestable.
+  const modal = Deno.readTextFileSync(
+    new URL("../../../src/components/BotConfigModal.tsx", import.meta.url),
+  );
+  const i = modal.indexOf("minZoneScore");
+  const block = modal.slice(i - 200, i + 300);
+  assert(/step=\{0\.5\}/.test(block), "step must allow half points");
+  assert(/min=\{0\}/.test(block) && /max=\{9\}/.test(block), "range must span the 0-9 score");
+});
+
 Deno.test("the threshold comes from config, not a literal", () => {
   assert(/^  minZoneScore: 4,/m.test(mapper), "the default must exist in the mapper");
   assertEquals((botView.match(/minZoneScore=\{botConfig\?\.strategy\?\.minZoneScore \?\? 4\}/g) ?? []).length, 3,
