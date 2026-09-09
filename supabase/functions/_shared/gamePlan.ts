@@ -61,13 +61,31 @@ export interface Scenario {
   invalidation?: string;
 }
 
+/**
+ * The raw tally behind a bias, carried so a decision made on `biasConfidence`
+ * stays auditable. Without it the number is lossy: 7-0 and 7-4 are different
+ * market reads and every consumer only ever saw the scalar.
+ */
+export interface BiasVotes {
+  bullish: number;
+  bearish: number;
+  /** Total weight available, 11 = 3 (D1) + 2 (4H) + 2 (PD) + 2 (AMD) + 1 (DOL) + 1 (regime). */
+  max: number;
+}
+
 export interface InstrumentGamePlan {
   symbol: string;
   session: SessionName;
   /** Overall directional bias for this session */
   bias: BiasDirection;
-  /** Confidence in the bias (0-100) */
+  /**
+   * Confidence in the bias (0-100), as the vote MARGIN over the maximum
+   * possible — `|bullish - bearish| / 11`. Not the winner's raw weight; see
+   * determineBias for why that distinction cost 9 pending orders in a day.
+   */
   biasConfidence: number;
+  /** The tally `biasConfidence` was derived from. */
+  biasVotes?: BiasVotes;
   /** Reasoning for the bias determination */
   biasReasoning: string[];
   /** Draw on Liquidity — where price is likely heading */
@@ -268,7 +286,7 @@ function identifyDOL(
  * - DOL direction
  * - Regime classification
  */
-function determineBias(
+export function determineBias(
   dailyTrend: string,
   h4Trend: string,
   zone: string,
@@ -276,7 +294,7 @@ function determineBias(
   amd: { phase: string; bias: string | null },
   dol: DOLTarget | null,
   regime: { regime: string; directionalBias: string; confidence: number },
-): { bias: BiasDirection; confidence: number; reasoning: string[] } {
+): { bias: BiasDirection; confidence: number; reasoning: string[]; votes: BiasVotes } {
   let bullishVotes = 0;
   let bearishVotes = 0;
   const reasoning: string[] = [];
@@ -347,28 +365,44 @@ function determineBias(
     reasoning.push(`Regime: ${regime.regime} (neutral)`);
   }
 
-  // Calculate final bias
-  const totalVotes = bullishVotes + bearishVotes;
+  // ── Final bias: confidence is the MARGIN, not the winner's raw weight ──
+  //
+  // This used to be `winner / maxPossible`, which does not mention the losing
+  // side at all. So 7 bearish against 0 bullish and 7 bearish against 4 bullish
+  // both reported 64% — one unanimous, the other very nearly a coin flip.
+  // Measured 2026-09-09: 9 of the 15 pending orders placed since 09-08 were
+  // cancelled by gp_bias_reversal, every one citing exactly that 64%, and the
+  // number could not say which of the two situations it came from.
+  //
+  // The margin can. It is the net weight of evidence in the winning direction
+  // over the most that could ever point one way, which is what a vote-derived
+  // confidence should mean:
+  //
+  //   bearish 7, bullish 0  ->  64%   (unchanged — clean reads keep their value)
+  //   bearish 7, bullish 4  ->  27%
+  //   bearish 3, bullish 0  ->  27%   (thin but unopposed, equally weak grounds)
+  //   bearish 6, bullish 5  ->   9%
+  //
+  // A tie is 0 rather than the old half-credit. Neutral bias never opposes a
+  // direction, so nothing gated changes; the number just stops implying
+  // confidence in a verdict that has none.
+  //
+  // NOTE this materially loosens both consumers, which is the point — the entry
+  // gate blocks at >=50 and gp_bias_reversal cancels at >=60, so both now need
+  // a net 6 and 7 votes respectively instead of a contested raw tally.
   const maxPossible = 11; // 3+2+2+2+1+1
-  let bias: BiasDirection;
-  let confidence: number;
+  const margin = Math.abs(bullishVotes - bearishVotes);
+  const confidence = Math.round((margin / maxPossible) * 100);
+  const bias: BiasDirection = bullishVotes > bearishVotes
+    ? "bullish"
+    : bearishVotes > bullishVotes
+    ? "bearish"
+    : "neutral";
 
-  if (totalVotes === 0) {
-    bias = "neutral";
-    confidence = 0;
-  } else if (bullishVotes > bearishVotes) {
-    bias = "bullish";
-    confidence = Math.round((bullishVotes / maxPossible) * 100);
-  } else if (bearishVotes > bullishVotes) {
-    bias = "bearish";
-    confidence = Math.round((bearishVotes / maxPossible) * 100);
-  } else {
-    // Tie — neutral
-    bias = "neutral";
-    confidence = Math.round(((bullishVotes + bearishVotes) / maxPossible) * 50);
-  }
-
-  return { bias, confidence, reasoning };
+  // Carry the tally. The old figure is `winner / maxPossible`, so recording the
+  // votes keeps every historical comparison recomputable without storing a
+  // second number that would immediately start drifting from this one.
+  return { bias, confidence, reasoning, votes: { bullish: bullishVotes, bearish: bearishVotes, max: maxPossible } };
 }
 
 // ─── Key Level Extraction ───────────────────────────────────────────────────
@@ -662,7 +696,7 @@ export function generateInstrumentGamePlan(
   );
 
   // ── Bias Determination ──
-  const { bias, confidence, reasoning } = determineBias(
+  const { bias, confidence, reasoning, votes } = determineBias(
     htfTrend,
     h4Trend,
     pd.currentZone,
@@ -723,6 +757,7 @@ export function generateInstrumentGamePlan(
     session,
     bias,
     biasConfidence: confidence,
+    biasVotes: votes,
     biasReasoning: reasoning,
     dol,
     keyLevels,
