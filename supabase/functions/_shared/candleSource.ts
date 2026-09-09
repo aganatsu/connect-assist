@@ -747,6 +747,48 @@ export function warnOnFutureBars(candles: Candle[], symbol: string, interval: st
   return aheadMin;
 }
 
+/** Minutes per bar, keyed by the interval strings the scanners request. */
+export const INTERVAL_MINUTES: Record<string, number> = {
+  "1m": 1, "5m": 5, "15m": 15, "15min": 15, "30m": 30,
+  "1h": 60, "4h": 240, "1d": 1440, "1day": 1440,
+};
+
+/**
+ * The most recent bar that has finished forming.
+ *
+ * Providers return the in-progress bar as the last element of the series, so
+ * `candles[length - 1].close` is spot price, not a close. Any rule phrased as
+ * "price closed beyond X" that reads it is really testing "price ticked beyond
+ * X at some point in the current bar" — a different and far noisier question.
+ *
+ * Measured 2026-09-09: this cost 4 of the 15 pending orders placed since 09-08,
+ * every one on a marginal breach (BTC 24 points past its stop, 0.03%; GBP/JPY
+ * 3.4 pips). A pending order holds no position, so invalidating it late costs
+ * only a setup already being waited on, while invalidating it early costs the
+ * setup outright.
+ *
+ * Returns null when the only bar available is still forming — callers must skip
+ * the decision rather than fall back to spot, which is the behaviour this
+ * exists to remove.
+ */
+export function lastClosedCandle(
+  candles: Candle[],
+  interval: string,
+): { candle: Candle; skippedForming: boolean } | null {
+  if (candles.length === 0) return null;
+  const mins = INTERVAL_MINUTES[interval];
+  const last = candles[candles.length - 1];
+  const startMs = last?.datetime ? Date.parse(last.datetime) : NaN;
+  // Unknown interval or unparseable stamp: treat the bar as closed. Stalling
+  // the check forever on a data-shape change would be the worse failure, and
+  // warnOnFutureBars above already reports mislabelled timestamps.
+  const forming = mins != null && Number.isFinite(startMs) &&
+    Date.now() < startMs + mins * 60_000;
+  if (!forming) return { candle: last, skippedForming: false };
+  if (candles.length < 2) return null;
+  return { candle: candles[candles.length - 2], skippedForming: true };
+}
+
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);

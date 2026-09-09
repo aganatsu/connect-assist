@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
-import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { stylePendingExpiryMinutes, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
@@ -531,6 +531,7 @@ function getEntryRange(entryTf: string): string {
   };
   return map[entryTf] || "5d";
 }
+
 
 /**
  * Premium/discount readings across every timeframe we compute, for the
@@ -3082,26 +3083,59 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const entryPrice = parseFloat(pending.entry_price);
         const slLevel = parseFloat(pending.stop_loss);
 
-        // Check SL invalidation: if price has blown past the SL, cancel the order
-        if (pending.direction === "long" && currentPrice < slLevel) {
+        // ── SL invalidation ──
+        //
+        // Measured 2026-09-09: 4 of the 15 orders placed since 09-08 died here,
+        // and every breach was marginal — BTC 79076.1 against SL 79051.99 (24
+        // points, 0.03%), GBP/JPY 208.99985 against 208.96602 (3.4 pips). That
+        // is intrabar noise, because `currentPrice` is the close of the LAST
+        // bar in the series and providers return the in-progress bar there. The
+        // rule read as "a bar closed beyond the stop" and behaved as "price
+        // ticked beyond the stop at some point in the last five minutes".
+        //
+        // A pending order holds no position, so invalidating it late costs
+        // nothing but a setup we were already waiting on; invalidating it early
+        // costs the setup outright. Decide on a bar that has actually closed.
+        const closedBar = lastClosedCandle(pendingCandles, pendingInterval);
+        const slPrice = closedBar?.candle.close;
+        const slBreached = slPrice != null &&
+          (pending.direction === "long" ? slPrice < slLevel : slPrice > slLevel);
+
+        // Shadow the old rule so the change is measurable without a second
+        // deploy: these are the orders that used to die here and now survive.
+        const spotBreached = pending.direction === "long"
+          ? currentPrice < slLevel
+          : currentPrice > slLevel;
+        if (spotBreached && !slBreached) {
+          console.log(`[pending] ${pending.symbol} ${pending.direction} — spot ${currentPrice} is past SL ${slLevel} but the last closed bar (${closedBar?.candle.datetime ?? "none"}) is not; order kept`);
+        }
+
+        if (slBreached) {
+          // Whether price reached the zone before the setup died is the single
+          // measurement this loop keeps losing. The touch test below runs ~170
+          // lines later and never executes on this path, so three of those four
+          // cancels recorded zone_touch_time as null on orders price had in
+          // fact reached. Stamp it here — nothing selects cancelled orders for
+          // the confirmation hunt, so this is a record, not a state change.
+          const reachedEntry = pending.direction === "long"
+            ? lastCandle.low <= entryPrice
+            : lastCandle.high >= entryPrice;
+          const stampTouch = pending.status === "pending" && reachedEntry &&
+            !pending.zone_touch_time;
           await supabase.from("pending_orders").update({
             status: "cancelled",
-            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
+            cancel_reason: `Price ${slPrice} breached SL ${slLevel}${reachedEntry ? " (entry reached first)" : ""}`,
             resolved_at: new Date().toISOString(),
+            ...(stampTouch ? { zone_touch_time: new Date().toISOString() } : {}),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pendingCancelled++;
-          console.log(`[pending] Cancelled ${pending.symbol} long — price ${currentPrice} below SL ${slLevel}`);
+          console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — closed bar ${slPrice} past SL ${slLevel}${reachedEntry ? " (had reached entry)" : ""}`);
           continue;
         }
-        if (pending.direction === "short" && currentPrice > slLevel) {
-          await supabase.from("pending_orders").update({
-            status: "cancelled",
-            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
-            resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
-          pendingCancelled++;
-          console.log(`[pending] Cancelled ${pending.symbol} short — price ${currentPrice} above SL ${slLevel}`);
-          continue;
+        if (!closedBar) {
+          // Only a forming bar available. Fail open — falling back to spot is
+          // exactly the behaviour being removed.
+          console.warn(`[pending] ${pending.symbol} — no closed ${pendingInterval} bar; SL invalidation skipped this cycle`);
         }
 
         // ═══════════════════════════════════════════════════════════════════
