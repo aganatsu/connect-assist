@@ -1468,7 +1468,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       {hasRichData ? (
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
-                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} />
+                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
                           {/* ── Direction Verdict ── */}
                           {sr.directionVerdict && !sr.directionVerdict.error && (
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1772,7 +1772,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1964,7 +1964,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
-      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">
