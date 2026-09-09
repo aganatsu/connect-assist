@@ -4082,7 +4082,34 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const ictHTFActive = pairConfig.ictHTFEnabled !== false;
 
     if (candles.length < 30) {
-      scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
+      // "Insufficient data" alone cannot tell a credit refusal from a provider
+      // error from a genuinely thin series, and the three need different
+      // responses. Observed 2026-09-08: XAU/USD showed a zone setup on one scan
+      // and this on the next — transient, so the instrument is fine and the
+      // fetch is not.
+      //
+      // Recording every series separates them: if they are ALL short the fetch
+      // layer failed for this pair, if only the entry timeframe is short the
+      // provider is missing that interval, and dataCache caches an empty result
+      // for the rest of the cycle either way so one failure silences the pair.
+      const seriesCounts = {
+        entry: candles.length,
+        entryInterval,
+        daily: dailyCandles.length,
+        hourly: hourlyCandles.length,
+        h4: h4Candles.length,
+        m15: m15Candles.length,
+        weekly: weeklyCandles?.length ?? null,
+      };
+      const allShort = candles.length < 30 && dailyCandles.length < 30 && hourlyCandles.length < 30;
+      const reason = allShort
+        ? `Insufficient data — EVERY series short for ${pair} (entry ${entryInterval}: ${candles.length}, 1d: ${dailyCandles.length}, 1h: ${hourlyCandles.length}). The fetch layer failed for this pair, not the instrument.`
+        : `Insufficient data — only the ${entryInterval} series is short (${candles.length}/30); other timeframes fetched fine (1d: ${dailyCandles.length}, 1h: ${hourlyCandles.length}).`;
+      console.warn(`[scan ${scanCycleId}] ${pair}: ${reason}`);
+      scanDetails.push({
+        pair, status: "skipped", reason,
+        insufficientData: { ...seriesCounts, allSeriesShort: allShort },
+      });
       continue;
     }
 
