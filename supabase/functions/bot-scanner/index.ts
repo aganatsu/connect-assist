@@ -5747,6 +5747,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (izTier1Credits.length > 0) {
           const _minT1 = pairConfig.minTier1Factors ?? 3;
           const newTier1Count = ts.tier1Count + izTier1Credits.length;
+          // No tier1RequirePOI term here on purpose: this block only ever
+          // credits Order Block or Fair Value Gap, so reaching it means a POI
+          // is present by construction and the count is the only open question.
           const newPassed = newTier1Count >= _minT1;
           const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
           const allPresent = [...existingFactors, ...izTier1Credits];
