@@ -94,7 +94,16 @@ Deno.test("the slider can express the measured near-miss band", () => {
 
 Deno.test("the threshold comes from config, not a literal", () => {
   assert(/^  minZoneScore: 4,/m.test(mapper), "the default must exist in the mapper");
-  assertEquals((botView.match(/minZoneScore=\{botConfig\?\.strategy\?\.minZoneScore \?\? 4\}/g) ?? []).length, 3,
-    "all three call sites must pass it");
+  // Assert every render threads it rather than counting occurrences — a fixed
+  // count says nothing about which consumer was missed, and went stale the
+  // moment a fourth call site was added.
+  const renders = botView.match(/<(TradeHistoryTable|ScanDetailInline)\b[\s\S]*?\/>/g) ?? [];
+  assert(renders.length > 0, "the consumers must actually be rendered somewhere");
+  for (const r of renders) {
+    assert(
+      /minZoneScore=\{botConfig\?\.strategy\?\.minZoneScore \?\? 4\}/.test(r),
+      `left on its own default: ${r.replace(/\s+/g, " ").slice(0, 90)}`,
+    );
+  }
   assert(/minZoneScore = 4 \}: Props/.test(panel), "with a default matching the mapper");
 });
