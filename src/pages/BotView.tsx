@@ -801,10 +801,10 @@ export default function BotView() {
                 )}
               </TabsContent>
               <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={closedToday} />
+                <TradeHistoryTable trades={closedToday} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
               </TabsContent>
               <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <TradeHistoryTable trades={botTradeHistory} />
+                <TradeHistoryTable trades={botTradeHistory} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
                 <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
@@ -1217,7 +1217,7 @@ export default function BotView() {
                     if (!selected) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                     }
-                    return <ScanDetailInline signal={selected} />;
+                    return <ScanDetailInline signal={selected} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />;
                   })()}
               </div>
             </div>
@@ -1350,7 +1350,7 @@ export default function BotView() {
               {(() => {
                 const selected = latestDetailsClean[selectedPairIdx];
                 if (!selected) return <p className="text-xs text-muted-foreground text-center py-8">No pair selected</p>;
-                return <ScanDetailInline signal={selected} />;
+                return <ScanDetailInline signal={selected} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />;
               })()}
             </div>
           </SheetContent>
@@ -1360,7 +1360,7 @@ export default function BotView() {
   );
 }
 
-function TradeHistoryTable({ trades }: { trades: any[] }) {
+function TradeHistoryTable({ trades, minZoneScore = 4 }: { trades: any[]; minZoneScore?: number }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const pageSize = 20;
@@ -1468,7 +1468,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       {hasRichData ? (
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
-                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
+                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} minZoneScore={minZoneScore} />
                           {/* ── Direction Verdict ── */}
                           {sr.directionVerdict && !sr.directionVerdict.error && (
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1750,7 +1750,7 @@ function ScanLogLine({ log }: { log: any }) {
   );
 }
 
-function ScanSignalDetail({ signal: d }: { signal: any }) {
+function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZoneScore?: number }) {
   const [expanded, setExpanded] = useState(false);
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
@@ -1772,7 +1772,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1924,7 +1924,7 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
   );
 }
 
-function ScanDetailInline({ signal: d }: { signal: any }) {
+function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZoneScore?: number }) {
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
@@ -1964,7 +1964,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
-      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={botConfig?.strategy?.minZoneScore ?? 4} />
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">
