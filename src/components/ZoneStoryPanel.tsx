@@ -245,7 +245,18 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
         </div>
         <div className="flex items-center gap-1.5">
           {/* Live action indicator */}
-          {isLiveContext && gateData?.bestZone && (gateData.bestZone.priceInsideZone || gateData.bestZone.priceAtZoneStrict) && (
+          {/* Only while it is ACTUALLY hunting.
+              This rendered on price position alone — priceInsideZone ||
+              priceAtZoneStrict — with no reference to whether a CHoCH had been
+              found or whether the setup had already triggered. Observed
+              2026-09-08 on a BTC/USD short that displayed "⏳ Hunting CHoCH"
+              and "⚡ TRIGGERED" together, with "Confirmation: LTF CHoCH
+              (bearish) @ index 237" populated and the trade already placed. It
+              was hunting for something it had found. */}
+          {isLiveContext && gateData?.bestZone
+            && (gateData.bestZone.priceInsideZone || gateData.bestZone.priceAtZoneStrict)
+            && unifiedData.state !== "triggered"
+            && !unifiedData.confirmation?.entryReady && (
             <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-300 animate-pulse">
               ⏳ Hunting CHoCH
             </span>
