@@ -864,7 +864,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </p>
                     </FieldGroup>
                     <ToggleField label="Tier 1 Gate Enabled" description="When OFF, the Tier 1 core factors gate (Gate 19) is completely disabled — setups will pass regardless of how many core factors they have. Use this to let your score threshold and R:R gates handle quality filtering instead." checked={config.strategy?.tier1GateEnabled ?? true} onChange={v => updateField('strategy', 'tier1GateEnabled', v)} />
-                    {(config.strategy?.tier1GateEnabled ?? true) && (
+                    {(config.strategy?.tier1GateEnabled ?? true) && (<>
                     <FieldGroup label="Min Tier 1 Core Factors" description="Minimum number of Tier 1 factors (Market Structure, OB, FVG, Premium/Discount & Fib, Unicorn, HTF FVG/OB/Fib) required to pass Gate 19. Lower = more trades, higher = stricter quality filter.">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.strategy?.minTier1Factors ?? 3]} onValueChange={v => updateField('strategy', 'minTier1Factors', v[0])} min={1} max={5} step={1} className="flex-1" />
@@ -874,8 +874,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Default: 3. Set to 2 for more aggressive trading, 4–5 for ultra-conservative (fewer signals).
                       </p>
                     </FieldGroup>
-                    )}
-                    <ToggleField label="Require Order Block or FVG" description="On top of the count, demand an institutional entry trigger — Market Structure + Premium/Discount alone will not pass. Measured over 30 days to 2026-09-09: setups carrying an OB or FVG won 45.5% (+$1,235) against 32.7% (−$3,008) without one, where break-even at 2:1 is 33.3%. Note this would have blocked 49 of 71 trades, so it shrinks the book as well as filtering it." checked={config.strategy?.tier1RequirePOI ?? false} onChange={v => updateField('strategy', 'tier1RequirePOI', v)} />
+                    <ToggleField label="Require Price Inside the OB/FVG" description="Positional, not existential — the impulse zone gate already guarantees an OB or FVG exists. This demands price be INSIDE it rather than merely near the zone. Measured over 30 days to 2026-09-09: trades taken with price at the POI won 45.5% (+$1,235) against 32.7% (−$3,008) for those only near the zone, where break-even at 2:1 is 33.3%. Note this would have blocked 49 of 71 trades, so it shrinks the book as well as filtering it." checked={config.strategy?.tier1RequireAtPOI ?? false} onChange={v => updateField('strategy', 'tier1RequireAtPOI', v)} />
+                    </>)}
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     {/* ── Impulse Zone Gate Mode ── */}
