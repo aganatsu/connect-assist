@@ -517,6 +517,22 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   },
 };
 
+/**
+ * The static stop floor for a pair, honouring a per-pair `minStopPips`
+ * override before falling back to the MIN_SL_PIPS constant.
+ *
+ * Kept in one place because four call sites read this — the market entry
+ * floor, the zone-route floor, the impulse SL cap derived from it, and the
+ * shadow instrumentation. The cap moving with the floor is deliberate: it is
+ * expressed as a multiple of the floor, so a pair whose floor is raised
+ * should get proportionally more room before its stop is rejected as too wide.
+ */
+function resolveStaticFloorPips(cfg: any, pair: string): number {
+  const override = cfg?.minStopPips;
+  if (typeof override === "number" && Number.isFinite(override) && override > 0) return override;
+  return MIN_SL_PIPS[pair] ?? 15;
+}
+
 function getEntryInterval(entryTf: string): string {
   const map: Record<string, string> = {
     "1m": "1m", "5m": "5m", "15m": "15m", "15min": "15m",
@@ -4591,7 +4607,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         measuredPips: atrMeasured / atrSpec.pipSize,
         floorPips: atrMeasured > 0
           ? (atrMeasured * ATR_SL_FLOOR_MULTIPLIER) / atrSpec.pipSize : 0,
-        staticFloorPips: MIN_SL_PIPS[pair] ?? 15,
+        staticFloorPips: resolveStaticFloorPips(pairConfig, pair),
       },
       pair,
       // Scan detail carried no price at all, so nothing about where price sat
@@ -4901,7 +4917,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // only on the entry path, while this is needed for every evaluation.
         // Display only — feeds EntryStory.executable, never a gate.
         const zoneSpec = SPECS[pair] || SPECS["EUR/USD"];
-        const zoneStaticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
+        const zoneStaticMinSlPips = resolveStaticFloorPips(pairConfig, pair);
         const zoneAtrVal = atrForConsumers;
         const zoneAtrFloorPips = zoneAtrVal > 0
           ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
@@ -4980,7 +4996,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // Same cap the Unified Zone SL Override enforces at :5838. A zone
             // stop above it is discarded and execution uses its own structural
             // stop instead, so the engine needs the bound to report that.
-            maxSlPips: (MIN_SL_PIPS[pair] ?? 15) * (pairConfig.impulseSlCapMultiplier ?? 4),
+            maxSlPips: resolveStaticFloorPips(pairConfig, pair) * (pairConfig.impulseSlCapMultiplier ?? 4),
             tpRatio: config.tpRatio,
             entryDepth: (pairConfig as any).zoneEntryDepth,
           },
@@ -6247,8 +6263,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // ── Enforce minimum SL distance (two-layer floor) ──
-        // Layer 1: Per-instrument static floor (MIN_SL_PIPS)
-        const staticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
+        // Layer 1: Per-instrument static floor, overridable per pair so tuning
+        // it does not need a deploy. MIN_SL_PIPS is a code constant, which is
+        // how gold sat at 50 pips (0.011% of price) until 2026-09-03.
+        const staticMinSlPips = resolveStaticFloorPips(pairConfig, pair);
         // Layer 2: Dynamic ATR-based floor (adapts to current volatility)
         const atrVal = atrForConsumers;
         const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
@@ -6872,7 +6890,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -7101,7 +7119,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",

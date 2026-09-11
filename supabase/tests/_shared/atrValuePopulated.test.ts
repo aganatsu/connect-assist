@@ -153,5 +153,11 @@ Deno.test("the recorded floor is comparable against the static floor", () => {
   const start = scanner.indexOf("      atr: {");
   const block = scanner.slice(start, scanner.indexOf("      },", start));
   assert(/ATR_SL_FLOOR_MULTIPLIER/.test(block), "must use the same multiplier the floor uses");
-  assert(/MIN_SL_PIPS\[pair\]/.test(block), "must record the static floor it competes with");
+  // Resolved rather than the raw constant since 2026-09-10: the static floor
+  // is per-pair overridable, and recording the constant would make the shadow
+  // comparison lie for any pair that has been tuned.
+  assert(
+    /resolveStaticFloorPips\(pairConfig, pair\)/.test(block),
+    "must record the EFFECTIVE static floor it competes with, override included",
+  );
 });

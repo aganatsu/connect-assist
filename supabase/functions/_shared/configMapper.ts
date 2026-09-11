@@ -356,6 +356,21 @@ export interface PairGateOverride {
   protectionMaxDailyLossDollar?: number;
   /** Max consecutive losses before cooldown (Gate 14). Default: global maxConsecutiveLosses */
   maxConsecutiveLosses?: number;
+  /**
+   * Static minimum stop distance in pips, overriding MIN_SL_PIPS[symbol].
+   *
+   * The static floor is a code constant, so tuning it has always needed a
+   * deploy — which is why the gold floor sat at 50 (0.011% of price) for
+   * months before 2026-09-03. Per-pair and config-driven makes it reversible
+   * in seconds and measurable against slFloor on each trade.
+   *
+   * BTC/USD is the live case: 19 trades in Era C at 26.3% against a 33.3%
+   * break-even, -$2,194, and its stop sits on the 150-pip floor because the
+   * ATR layer is computed on the 5m entry timeframe and never binds (1.5x 5m
+   * ATR measured 118.6 against the 150 static). The 15m equivalent measured
+   * ~194. Unset here: raising it is a judgement this has not yet earned.
+   */
+  minStopPips?: number;
 }
 
 // Export the type for consumers
@@ -715,6 +730,7 @@ export function applyPairOverrides<T extends RuntimeConfig>(config: T, symbol: s
   if (overrides.minTier1Factors !== undefined) (config as any).minTier1Factors = overrides.minTier1Factors;
   if (overrides.allowSameDirectionStacking !== undefined) config.allowSameDirectionStacking = overrides.allowSameDirectionStacking;
   if (overrides.maxPerSymbol !== undefined) config.maxPerSymbol = overrides.maxPerSymbol;
+  if (overrides.minStopPips !== undefined) (config as any).minStopPips = overrides.minStopPips;
   if (overrides.minConfluence !== undefined) config.minConfluence = overrides.minConfluence;
   if (overrides.protectionMaxDailyLossDollar !== undefined) (config as any).protectionMaxDailyLossDollar = overrides.protectionMaxDailyLossDollar;
   if (overrides.maxConsecutiveLosses !== undefined) (config as any).maxConsecutiveLosses = overrides.maxConsecutiveLosses;
