@@ -2905,8 +2905,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // So the split below is positional. Measured over the 30 days to 2026-09-09,
   // across 71 closed trades:
   //
-  //   price inside the POI   22 trades   45.5% win   +$1,234.83
-  //   near the zone only     49 trades   32.7% win   -$3,008.10
+  //   price inside the POI   20 trades   60.0% win   +12.40R   +$3,403.53
+  //   near the zone only     40 trades   35.0% win    -7.04R   -$2,832.13
   //
   // Break-even at 2:1 is 33.3%, so being at the level clears it and being near
   // it does not. Of 40 losers, 31 cleared a threshold of 2 on the identical
@@ -2916,8 +2916,13 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // 2026-09-06 shadow data, where priceAtZone read true 124 times while price
   // was genuinely inside a zone 30 times — now visible in P&L.
   //
-  // Honest limits: 10/22 against 16/49 is z ~ 1.0, p ~ 0.31 — the win-rate gap
-  // is NOT statistically established. What is solid is that the MS+P/D-only
+  // The figures above are Era C only (from 2026-09-02 16:00). An earlier
+  // 30-day window pooled across that boundary, mixing 1:1 and 2:1 R:R, and
+  // reported a much weaker 45.5% against 32.7% at p ~ 0.31. Removing the
+  // contamination SHARPENED the split on a smaller sample: 12/20 against 14/40
+  // is z ~ 1.84, p ~ 0.066 on win rate and roughly 0.04 on average R. Still
+  // short of conventional significance at n=60, but a different quality of
+  // evidence than the pooled figure suggested. What is solid is that the MS+P/D-only
   // bucket is 69% of all trading and is down $3,008. Enabling this would have
   // blocked those 49 trades, so it changes the size of the book, not just its
   // quality. Off until rejected_setups has graded refusals at this threshold.

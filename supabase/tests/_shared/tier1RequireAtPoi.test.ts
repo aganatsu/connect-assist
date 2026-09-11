@@ -12,8 +12,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
  *
  * So the measured split is positional. 30 days to 2026-09-09, 71 closed trades:
  *
- *   price inside the POI   22 trades   45.5% win   +$1,234.83
- *   near the zone only     49 trades   32.7% win   -$3,008.10
+ *   price inside the POI   20 trades   60.0% win   +12.40R   +$3,403.53
+ *   near the zone only     40 trades   35.0% win    -7.04R   -$2,832.13
  *
  * Break-even at 2:1 is 33.3%. Of 40 losers, 31 cleared a threshold of 2 on the
  * identical pair — Market Structure + Premium/Discount & Fib.
@@ -22,7 +22,12 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
  * priceAtZone read true 124 times while price was genuinely inside a zone 30
  * times. Here it is visible in P&L.
  *
- * NOT statistically established: 10/22 against 16/49 is z ~ 1.0, p ~ 0.31.
+ * Era C only. An earlier 30-day window pooled across the 2026-09-02 16:00
+ * boundary, mixing 1:1 and 2:1 R:R, and reported a weaker 45.5% vs 32.7% at
+ * p ~ 0.31. Removing that contamination SHARPENED the split on a SMALLER
+ * sample: 12/20 vs 14/40 is z ~ 1.84, p ~ 0.066 on win rate and ~0.04 on
+ * average R — short of significance at n=60, but not the coin flip the pooled
+ * figure implied.
  * Shipped OFF for that reason. What is solid is that the near-only bucket is
  * 69% of all trading and is down $3,008, and that enabling this would have
  * blocked those 49 trades — a smaller book, not just a cleaner one.
@@ -129,12 +134,12 @@ Deno.test("the toggle is in the UI and hidden when the gate itself is off", () =
 });
 
 Deno.test("the toggle says positional, and states the cost as well as the benefit", () => {
-  // 49 of 71 blocked is a different strategy, not a tuning nudge, and the
+  // 40 of 60 blocked is a different strategy, not a tuning nudge, and the
   // measurement behind it is not significant. Both belong in front of anyone
   // about to flip it.
   const i = modal.indexOf("Require Price Inside the OB/FVG");
   const block = modal.slice(i, i + 700);
   assert(/Positional, not existential/.test(block), "must not read as an existence requirement");
-  assert(/49 of 71/.test(block), "say how many trades it removes");
-  assert(/45\.5%/.test(block) && /32\.7%/.test(block), "and the split it rests on");
+  assert(/40 of 60/.test(block), "say how many trades it removes");
+  assert(/60\.0%/.test(block) && /35\.0%/.test(block), "and the split it rests on");
 });
