@@ -6656,13 +6656,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Measured 2026-09-10 over Era C, splitting trades by whether price was
         // inside the OB/FVG:
         //
-        //   price inside the POI   20 trades  +0.62R avg  +12.40R  $274.57 per R
-        //   near the zone only     40 trades  -0.18R avg   -7.04R  $402.51 per R
+        //   price inside the POI   20 trades  +0.62R avg  +12.40R
+        //   near the zone only     40 trades  -0.18R avg   -7.04R
         //
-        // The bucket with the better edge carries 32% LESS money per unit of
-        // risk — the system under-bets its best setups, worth about $1,588 on
-        // that sample alone. Which multiplier does it was unanswerable because
-        // none of this survived the scan.
+        // Per-trade risk turned out to be UNIFORM across those buckets —
+        // $366.96 against $379.49, on a standard deviation of ~135, with
+        // matching lot sizes and matching stop distance as a percentage of
+        // price. An earlier reading of `sum(pnl) / sum(R)` suggested a 32% gap;
+        // that ratio is not an average when R changes sign, and the difference
+        // vanished once risk was computed per trade. Worth remembering before
+        // anyone reaches for it again.
+        //
+        // So this record is not chasing a known sizing bug. It exists because
+        // four multipliers silently cut every position and none of them
+        // survived the scan, which is why establishing that uniformity took a
+        // detour through a statistic that could not support it.
         const sizingProvenance = {
           signalSource: (detail as any).signalSource ?? null,
           riskPercent: pairConfig.riskPerTrade,
