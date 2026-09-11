@@ -78,6 +78,22 @@ Deno.test("null and undefined are absence, not a value", () => {
   assertEquals(isExplicitlySet({ exit: "not an object" }, "breakEvenEnabled"), false);
 });
 
+Deno.test("every protected field has declared sources", () => {
+  // isExplicitlySet FAILS CLOSED on an unknown key — it returns false, so the
+  // style overwrites regardless. Adding a name to userProtectedFields without
+  // declaring its source paths therefore does nothing, silently. This is the
+  // guard for that: the two lists must agree.
+  const declared = new Set(Object.keys(STYLE_PROTECTED_SOURCES));
+  const block = scanner.slice(
+    scanner.indexOf("const userProtectedFields = new Set(["),
+    scanner.indexOf("]);", scanner.indexOf("const userProtectedFields = new Set([")),
+  );
+  const protectedNames = [...block.matchAll(/"(\w+)"/g)].map((m) => m[1]);
+  assert(protectedNames.length > 0, "should have found the protected list");
+  const missing = protectedNames.filter((n) => !declared.has(n));
+  assertEquals(missing, [], "protected fields with no source paths — protection is a no-op for these");
+});
+
 Deno.test("an unknown key is never treated as set", () => {
   // Fail closed: a field with no declared sources must not silently defeat the
   // style just because someone added it to userProtectedFields.
