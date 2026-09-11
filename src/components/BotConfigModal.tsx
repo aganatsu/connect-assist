@@ -851,6 +851,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     <FieldGroup label="Confluence Threshold" description="Minimum percentage (0-100%) of enabled factor max required to trigger a trade">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.strategy?.confluenceThreshold ?? 55]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={20} max={90} step={5} className="flex-1" />
+                        <StyleControlled style={config.tradingStyle?.mode} value={STYLE_FORCED[config.tradingStyle?.mode ?? 'day_trader']?.scanIntervalMinutes ?? '—'} />
                         <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
                       </div>
                     </FieldGroup>
@@ -1215,6 +1216,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       {(config.risk?.positionSizingMethod !== "fixed_lot") && (
                         <FieldGroup label="Risk per Trade (%)" description="Percentage of balance risked per trade">
                           <Input type="number" value={config.risk?.riskPerTrade ?? 1} onChange={e => updateField('risk', 'riskPerTrade', parseFloat(e.target.value) || 0)} step={0.1} className="h-9 text-sm" />
+                          <StyleControlled style={config.tradingStyle?.mode} value={STYLE_FORCED[config.tradingStyle?.mode ?? 'day_trader']?.riskPerTrade ?? '—'} />
                           <p className="text-[11px] text-muted-foreground mt-1 font-mono">
                             ≈ ${(((config.risk?.riskPerTrade ?? 1) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} per trade
                           </p>
@@ -1382,6 +1384,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </FieldGroup>
                       <FieldGroup label="SL Buffer (pips)" description="Extra pips added beyond structure/OB for stop loss placement">
                         <Input type="number" value={config.entry?.slBufferPips ?? 2} onChange={e => updateField('entry', 'slBufferPips', parseFloat(e.target.value) || 0)} step={0.5} min={0} max={20} className="h-9 text-sm" />
+                        <StyleControlled style={config.tradingStyle?.mode} value={STYLE_FORCED[config.tradingStyle?.mode ?? 'day_trader']?.slBufferPips ?? '—'} />
                       </FieldGroup>
                       <ToggleField label="Close on Reverse Signal" description="Auto-close position when an opposite signal appears" checked={config.entry?.closeOnReverse ?? false} onChange={v => updateField('entry', 'closeOnReverse', v)} />
                     </div>
@@ -1616,6 +1619,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       {/* ── Time-Based Exit ── */}
                       <div className="border border-border/60 p-3 space-y-3">
                         <ToggleField label="Time-Based Exit" description="Auto-tighten SL or close after a maximum hold duration" checked={(config.exit?.maxHoldEnabled ?? config.exit?.timeBasedExitEnabled ?? (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0)} onChange={v => { updateField('exit', 'maxHoldEnabled', v); updateField('exit', 'timeBasedExitEnabled', v); if (!v) { updateField('exit', 'timeExitHours', 0); updateField('exit', 'maxHoldHours', 0); } }} />
+                        {(config.tradingStyle?.mode ?? 'day_trader') === 'scalper' && (
+                          <p className="text-[9px] text-amber-300/90 mt-1">Overridden by trading style — <strong>Scalper</strong> forces this <strong>on</strong>, so the switch is ignored. The hours below ARE yours once set. Note this moves the stop to breakeven rather than closing the position, unless break-even is off.</p>
+                        )}
                         {(config.exit?.maxHoldEnabled || config.exit?.timeBasedExitEnabled || (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0) && (
                           <div className="pl-4 border-l-2 border-primary/20 space-y-3">
                             <FieldGroup label="Max Hold Time (hours)" description="After this duration, SL moves to breakeven if in profit, or position is flagged for review">
@@ -2247,6 +2253,28 @@ function ToggleField({ label, description, checked, onChange }: { label: string;
 // ─── Per-Pair Gate Overrides Tab ──────────────────────────────────────────────
 // Allows per-symbol overrides for key gate thresholds. Overrides are stored in
 // config.pairGateOverrides[symbol] and applied by applyPairOverrides() in the scanner.
+
+const STYLE_FORCED: Record<string, Record<string, string>> = {
+  scalper:      { riskPerTrade: '0.5%', scanIntervalMinutes: '5 min', slBufferPips: '1 pip', maxHoldEnabled: 'on, 4h max' },
+  day_trader:   { riskPerTrade: '1%',   scanIntervalMinutes: '15 min', slBufferPips: '2 pips' },
+  swing_trader: { riskPerTrade: '1.5%', scanIntervalMinutes: '60 min', slBufferPips: '5 pips' },
+};
+
+/**
+ * Marks a field that STYLE_OVERRIDES in bot-scanner sets unconditionally for
+ * the active style. These are not in userProtectedFields, so whatever is shown
+ * in the input is discarded at scan time — riskPerTrade typed as 1 runs as 0.5
+ * on a scalper. Showing an editable control for a value the engine ignores is
+ * the thing this exists to stop.
+ */
+function StyleControlled({ style, value }: { style?: string; value: string }) {
+  const label = style === 'scalper' ? 'Scalper' : style === 'swing_trader' ? 'Swing' : 'Day trader';
+  return (
+    <p className="text-[9px] text-amber-300/90 mt-1">
+      Overridden by trading style — <strong>{label}</strong> forces <strong>{value}</strong>, so this input is ignored.
+    </p>
+  );
+}
 
 const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
   'EUR/JPY': { minTier1Factors: 1, allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },

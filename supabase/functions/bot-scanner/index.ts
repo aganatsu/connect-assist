@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
+import { mapNestedToFlat, applyPairOverrides, isExplicitlySet } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { stylePendingExpiryMinutes, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
@@ -869,6 +869,10 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
   // Delegate to shared mapper (single source of truth for field resolution)
   const flat = mapNestedToFlat(data?.config_json || null);
   if (data?.id) (flat as any).id = data.id;
+  // Carried so STYLE_OVERRIDES can ask whether the user WROTE a field rather
+  // than whether its value happens to differ from a default. A reference, not
+  // a copy, and read in exactly one place.
+  (flat as any).__rawConfigJson = data?.config_json ?? null;
   return flat;
 }
 
@@ -2113,9 +2117,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const userKept: string[] = [];
     for (const [key, val] of Object.entries(styleDefaults)) {
       if (userProtectedFields.has(key)) {
-        // Only apply style default if user didn't explicitly set this field
-        // (i.e., the value is still the global DEFAULTS fallback)
-        if ((config as any)[key] === (DEFAULTS as any)[key]) {
+        // Apply the style default only if the user never wrote this field.
+        //
+        // This compared the RESOLVED VALUE against DEFAULTS, which for a
+        // boolean leaves only two reachable outcomes — !DEFAULTS, or the
+        // style's value — and collapses them into one whenever the style wants
+        // the opposite of the default:
+        //
+        //   breakEvenEnabled    DEFAULTS true,  scalper false -> only false
+        //   partialTPEnabled    DEFAULTS true,  scalper false -> only false
+        //   trailingStopEnabled DEFAULTS false, scalper false -> both, so fine
+        //
+        // The break-even toggle therefore could not be switched on for a
+        // scalper at all. Measured over Era C: 2 activations in 59 trades while
+        // the stored config read `true`, and both came via per-position
+        // trade_overrides. Numbers had the milder version of the same problem —
+        // maxHoldHours deliberately set to 0 was indistinguishable from unset,
+        // so the style applied 4 while the config screen said "no limit".
+        //
+        // Presence in the stored JSON is the honest question.
+        if (!isExplicitlySet((config as any).__rawConfigJson, key)) {
           (config as any)[key] = val;
           styleApplied.push(`${key}=${val}`);
         } else {
