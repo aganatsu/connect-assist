@@ -2090,25 +2090,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Manual scans and management-only runs always bypass this gate.
   const intervalMinutes = config.scanIntervalMinutes || 15;
   if (!opts?.isManualScan && !opts?.isManagementOnly) {
-    const { data: lastScan } = await supabase
+    // IMPORTANT: management-only cycles (every 60s) and game-plan rows also write
+    // scan_logs rows. If we take the newest row blindly, the elapsed time is always
+    // ~1 min and every cron scan is skipped forever — the bot then only ever scans
+    // when the user clicks "Scan Now". Only real scan rows count here.
+    const { data: recentLogs } = await supabase
       .from("scan_logs")
-      .select("created_at")
+      .select("created_at, details_json")
       .eq("user_id", userId)
       .eq("bot_id", BOT_ID)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(50);
+    const isRealScan = (row: any) => {
+      const d = row?.details_json;
+      const type = Array.isArray(d) ? d[0]?.type : d?.type;
+      return type !== "management_cycle" && type !== "game_plan";
+    };
+    const lastScan = (recentLogs || []).find(isRealScan);
     if (lastScan?.created_at) {
       const elapsedMs = Date.now() - new Date(lastScan.created_at).getTime();
       const elapsedMin = elapsedMs / 60_000;
       if (elapsedMin < intervalMinutes) {
-        console.log(`[scan-interval] Skipping — only ${elapsedMin.toFixed(1)}min since last scan (interval: ${intervalMinutes}min)`);
+        console.log(`[scan-interval] Skipping — only ${elapsedMin.toFixed(1)}min since last real scan (interval: ${intervalMinutes}min)`);
         // Release the scan lock before returning
         await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
         return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `interval (${Math.ceil(intervalMinutes - elapsedMin)}min remaining)`, scanCycleId };
       }
     }
   }
+
 
   // ── Resolve Trading Style ──
   const resolvedStyle = config.tradingStyle?.mode || "day_trader";
