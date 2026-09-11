@@ -722,6 +722,61 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
  * @param symbol - The trading pair symbol (e.g. "EUR/JPY")
  * @returns The same config object with overrides applied (for chaining)
  */
+/**
+ * Source paths for every field STYLE_OVERRIDES treats as user-protected.
+ *
+ * Kept adjacent to mapNestedToFlat because it MIRRORS the `??` chains there:
+ * styleOverridesRespectUser.test.ts parses that function and fails if any
+ * source listed in a mapping is missing here, so the two cannot drift apart.
+ *
+ * Why this exists: bot-scanner decided "did the user set this?" by comparing
+ * the resolved value against DEFAULTS. For a boolean that leaves only two
+ * reachable outcomes — !DEFAULTS, or the style's value — and when the style
+ * wants the opposite of the default they collapse into one.
+ *
+ *   breakEvenEnabled  DEFAULTS true,  scalper wants false -> only false reachable
+ *   partialTPEnabled  DEFAULTS true,  scalper wants false -> only false reachable
+ *   trailingStopEnabled DEFAULTS false, scalper wants false -> both reachable
+ *
+ * So the break-even toggle could not be switched on for a scalper at all. It
+ * fired 2 times in 59 Era C trades while the config read `true`, and both of
+ * those came through per-position trade_overrides. Presence in the stored JSON
+ * is the honest test: the user either wrote the key or they did not.
+ */
+export const STYLE_PROTECTED_SOURCES: Record<string, string[]> = {
+  minConfluence: ["strategy.confluenceThreshold", "strategy.minConfluenceScore", "minConfluence"],
+  tpRatio: ["exit.tpRRRatio", "risk.defaultRR", "risk.minRiskReward", "tpRatio"],
+  trailingStopEnabled: ["exit.trailingStop", "exit.trailingStopEnabled", "trailingStopEnabled"],
+  trailingStopPips: ["exit.trailingStopPips", "trailingStopPips"],
+  trailingStopActivation: ["exit.trailingStopActivation", "trailingStopActivation"],
+  breakEvenEnabled: ["exit.breakEven", "exit.breakEvenEnabled", "breakEvenEnabled"],
+  breakEvenPips: ["exit.breakEvenTriggerPips", "exit.breakEvenPips", "breakEvenPips"],
+  breakEvenOffsetPips: ["exit.breakEvenOffsetPips", "exit.breakEvenPips", "breakEvenOffsetPips"],
+  partialTPEnabled: ["exit.partialTP", "exit.partialTPEnabled"],
+  partialTPPercent: ["exit.partialTPPercent", "partialTPPercent"],
+  partialTPLevel: ["exit.partialTPLevel", "partialTPLevel"],
+  maxHoldHours: ["exit.timeExitHours", "exit.maxHoldHours"],
+};
+
+/**
+ * Did the user actually write this field, at any of the paths the mapper reads?
+ *
+ * Presence, not value. A field deliberately set to the same number as the
+ * default is still set, and must survive the style.
+ */
+export function isExplicitlySet(rawConfigJson: any, key: string): boolean {
+  const paths = STYLE_PROTECTED_SOURCES[key];
+  if (!rawConfigJson || typeof rawConfigJson !== "object" || !paths) return false;
+  return paths.some((path) => {
+    let cur: any = rawConfigJson;
+    for (const part of path.split(".")) {
+      if (cur == null || typeof cur !== "object") return false;
+      cur = cur[part];
+    }
+    return cur !== undefined && cur !== null;
+  });
+}
+
 export function applyPairOverrides<T extends RuntimeConfig>(config: T, symbol: string): T {
   const overrides = config.pairGateOverrides?.[symbol];
   if (!overrides) return config;
