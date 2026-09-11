@@ -174,18 +174,45 @@ Deno.test("the backtester refuses to diverge silently", () => {
   );
 });
 
-Deno.test("both timeframes are measured while the flag is off", () => {
+Deno.test("both timeframes are measured whatever the flag is set to", () => {
   // P/D is the one to watch: 103 of 103 premium/discount rejections lost, and
   // it was being read across a 5-minute range.
   for (const field of [
     "entryZone", "structZone", "zonesDisagree", "entryAtrPips", "structAtrPips",
-    "structureLabel", "structureBars",
+    "structureLabel", "structureBars", "gateUsedSeries",
   ]) {
     assert(new RegExp(`${field}:`).test(scanner), `shadow field ${field} missing`);
   }
   assert(
-    /zonesDisagree: !!_structPd && !!analysis\.pd\s*\n\s*&& _structPd\.currentZone !== analysis\.pd\.currentZone/.test(scanner),
+    /zonesDisagree: !!_structPd && !!_entryPd\s*\n\s*&& _structPd\.currentZone !== _entryPd\.currentZone/.test(scanner),
     "disagreement must compare the two zone labels directly",
+  );
+});
+
+Deno.test("the shadow does not compare the structure series with itself", () => {
+  // This test used to be named "while the flag is off", and that was load-
+  // bearing. analysis.pd FOLLOWS structureTfAnalysis — confluenceScoring
+  // computes it from `sc`, the structure series, whenever the flag is on. So
+  // once the flag was switched on, entryZone was the structure zone under
+  // another name and zonesDisagree could only ever report false. The check
+  // built to decide whether this flag earns its place could not say yes.
+  assert(
+    /const _entryPd = calculatePremiumDiscount\(candles\);/.test(scanner),
+    "the entry side must be computed from the ENTRY series explicitly",
+  );
+  assert(
+    !/entryZone: analysis\.pd\?\.currentZone/.test(scanner),
+    "analysis.pd must not stand in for the entry series — it follows the flag",
+  );
+  assert(
+    /entryZone: _entryPd\?\.currentZone/.test(scanner),
+    "entryZone reads the entry series",
+  );
+  // And record which series the gate actually judged on, so a disagreement can
+  // be attributed rather than inferred from the flag's value at read time.
+  assert(
+    /gateUsedSeries: \(analysis as any\)\.structuralSeriesUsed === true \? "structure" : "entry"/.test(scanner),
+    "the gate's own series must be recorded alongside both measurements",
   );
 });
 
