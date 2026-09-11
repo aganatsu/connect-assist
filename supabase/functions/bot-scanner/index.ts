@@ -6549,13 +6549,48 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone) {
           const impulseData = izData.impulse;
           if (impulseData) {
+            // ── Buffer, and the cap, both relative to the LEG ──
+            //
+            // The buffer was `slBufferPips x assetProfile.slBufferMultiplier`
+            // (forex 1.0, commodity 2.0, crypto 2.0). With swing forcing
+            // slBufferPips = 5 that is a $0.10 stop-hunt allowance on gold —
+            // 0.0023% of price against 0.046% on EUR/USD, twenty times apart.
+            // The same unit bug that left gold's stop floor at 50 pips ($0.50)
+            // for months. A stop-hunt allowance is a property of the move, not
+            // of a pip count, so take it from the leg.
+            //
+            // legBufferPct defaults to 2%, which produces roughly 10-15 pips on
+            // an ordinary FX leg and scales correctly everywhere else. The pip
+            // buffer remains the floor, so nothing gets a smaller allowance
+            // than it had.
+            const impulseRange = Math.abs(impulseData.high - impulseData.low);
+            const legBufferPct = typeof (pairConfig as any).legStopBufferPct === "number"
+              ? Math.max(0, Math.min(0.2, (pairConfig as any).legStopBufferPct))
+              : 0.02;
+            const pipBuffer = adjustedSlBuffer * spec.pipSize;
+            const slBuffer = Math.max(pipBuffer, impulseRange * legBufferPct);
             const impulseSL = analysis.direction === "long"
-              ? impulseData.low - (adjustedSlBuffer * spec.pipSize)
-              : impulseData.high + (adjustedSlBuffer * spec.pipSize);
+              ? impulseData.low - slBuffer
+              : impulseData.high + slBuffer;
             const impulseSlDistance = Math.abs(analysis.lastPrice - impulseSL);
-            // Only override if impulse SL is wider than current SL (more protective)
-            // and within reasonable bounds (not absurdly wide)
-            const maxImpulseSlPips = (staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4)); // Configurable cap (default 4x)
+            // The cap was staticFloor x impulseSlCapMultiplier — an absolute pip
+            // count unrelated to the move being traded. On swing (6x) that is
+            // 120 pips on EUR/USD and $42 on gold, while a Daily impulse leg is
+            // routinely wider. The origin stop was therefore rejected as
+            // "absurdly wide" on most Daily structure and the setup silently
+            // fell back to a swing stop — not the rule at all.
+            //
+            // A stop at the origin of a valid leg is by definition the right
+            // width. Cap it against the LEG so genuine absurdity is still
+            // caught (a leg mis-measured across two moves) without rejecting
+            // normal structure. The floor-based cap is kept as a lower bound so
+            // small legs on wide-floor instruments are not squeezed.
+            const legCapMultiple = typeof (pairConfig as any).legStopCapMultiple === "number"
+              ? Math.max(1.0, Math.min(3.0, (pairConfig as any).legStopCapMultiple))
+              : 1.2;
+            const floorCapPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
+            const legCapPips = (impulseRange * legCapMultiple) / spec.pipSize;
+            const maxImpulseSlPips = Math.max(floorCapPips, legCapPips);
             const impulseSlPips = impulseSlDistance / spec.pipSize;
             if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
@@ -6569,6 +6604,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 originalSL: actualSlDistance / spec.pipSize,
                 impulseSL: impulseSlPips,
                 impulseOrigin: analysis.direction === "long" ? impulseData.low : impulseData.high,
+                // Which term decided the buffer and the cap. Without this a
+                // stop that looks wrong is indistinguishable from a leg that
+                // was measured wrong.
+                legRangePips: impulseRange / spec.pipSize,
+                bufferPips: slBuffer / spec.pipSize,
+                bufferSource: (impulseRange * legBufferPct) > pipBuffer ? "leg" : "pips",
+                capPips: maxImpulseSlPips,
+                capSource: legCapPips > floorCapPips ? "leg" : "floor",
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
