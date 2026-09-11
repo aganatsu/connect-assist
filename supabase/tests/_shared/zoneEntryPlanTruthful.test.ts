@@ -221,9 +221,12 @@ Deno.test("the panel surfaces a rejected stop prominently", () => {
 });
 
 Deno.test("the scanner passes the same cap the override enforces", () => {
+  // The floor became per-pair overridable on 2026-09-10, and the cap is a
+  // MULTIPLE of it — so it has to read the resolved floor. Leaving it on the
+  // constant would hand a pair a wider stop and then reject it for being wide.
   assert(
-    /maxSlPips: \(MIN_SL_PIPS\[pair\] \?\? 15\) \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/.test(scanner),
-    "the cap must match maxUnifiedSlPips in the override guard",
+    /maxSlPips: resolveStaticFloorPips\(pairConfig, pair\) \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/.test(scanner),
+    "the cap must match maxUnifiedSlPips in the override guard, and scale with the floor",
   );
 });
 

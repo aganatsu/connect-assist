@@ -2261,6 +2261,7 @@ const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
 const OVERRIDE_FIELDS = [
   { key: 'minRiskReward', label: 'Min R:R', type: 'number', min: 0.1, max: 5, step: 0.1, description: 'Effective R:R threshold (after spread/commission)' },
   { key: 'minTier1Factors', label: 'Min Tier 1', type: 'number', min: 1, max: 5, step: 1, description: 'Minimum core factors (MS, OB, FVG, P/D, HTF)' },
+  { key: 'minStopPips', label: 'Min Stop (pips)', type: 'number', min: 1, max: 2000, step: 1, description: 'Static stop floor for this pair, overriding the built-in MIN_SL_PIPS. BTC/USD defaults to 150 and its 1.5x ATR floor never binds (5m ATR measured 118.6); the 15m equivalent measured ~194.' },
   { key: 'minConfluence', label: 'Min Confluence %', type: 'number', min: 10, max: 80, step: 5, description: 'Score threshold for this pair' },
   { key: 'maxPerSymbol', label: 'Max Per Symbol', type: 'number', min: 1, max: 5, step: 1, description: 'Max concurrent positions for this pair' },
   { key: 'allowSameDirectionStacking', label: 'Allow Stacking', type: 'toggle', description: 'Allow same-direction stacking' },
