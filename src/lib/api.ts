@@ -412,13 +412,27 @@ export const backtestApi = {
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   logs: async () => {
+    // Over-fetch, then drop management-cycle rows before slicing to 100.
+    //
+    // bot-scanner writes a scan_logs row from management-only cycles to carry
+    // pending-order diagnostics (the confirmation hunt is invisible otherwise).
+    // Those are not scans: pairs_scanned 0, no per-pair detail, and they arrive
+    // every minute rather than every scanIntervalMinutes. Rendering them in the
+    // scan viewer made it look like the scan interval had dropped to 60s, with
+    // blank panels and "undefined/10".
+    //
+    // Filtered client-side rather than with a jsonb PostgREST filter because
+    // `neq` on a missing path excludes the row instead of keeping it, which
+    // would silently drop older scans whose details_json is not an array.
     const { data, error } = await (supabase as any)
       .from("scan_logs")
       .select("*")
       .order("scanned_at", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (error) throw new Error(error.message);
-    return data || [];
+    const scans = (data || []).filter((r: any) =>
+      !(Array.isArray(r.details_json) && r.details_json[0]?.type === "management_cycle"));
+    return scans.slice(0, 100);
   },
   // Setup Staging / Watchlist
   activeStaged: async (): Promise<StagedSetup[]> => {

@@ -91,15 +91,37 @@ Deno.test("management-only cycles now persist their observations", () => {
   assert(/managementActions: activeActions,/.test(block), "must carry the filtered actions");
 });
 
-Deno.test("it writes only when there is something to say", () => {
-  // Management runs every minute. An unguarded insert is 1,440 rows a day.
+Deno.test("it writes only for pending-order diagnostics, not management actions", () => {
+  // Management runs every minute, so an unguarded insert is 1,440 rows a day.
+  //
+  // `activeActions.length` was in this guard and it is the wrong trigger: with
+  // trailing enabled and a position open the trail ratchets every cycle, so
+  // every minute produced an action and therefore a row. Those rows surfaced in
+  // the scan viewer as 60-second "scans" with 0 pairs and blank detail.
   const ret = scanner.indexOf("if (opts?.isManagementOnly) {");
   const block = scanner.slice(ret, ret + 3000);
   assert(
-    /if \(thesisObservations\.length \|\| touchChecks\.length \|\| confirmationHunt\.length \|\| activeActions\.length\)/
+    /if \(thesisObservations\.length \|\| touchChecks\.length \|\| confirmationHunt\.length\)/
       .test(block),
-    "guarded on having content",
+    "guarded on the three pending-order collectors",
   );
+  assert(
+    !/confirmationHunt\.length \|\| activeActions\.length\)/.test(block),
+    "management actions must NOT trigger a diagnostic row",
+  );
+});
+
+Deno.test("the scan viewer does not render diagnostic rows as scans", () => {
+  const api = Deno.readTextFileSync(
+    new URL("../../../src/lib/api.ts", import.meta.url),
+  );
+  const i = api.indexOf("logs: async () => {");
+  assert(i > -1, "the scan list fetch");
+  const block = api.slice(i, i + 1600);
+  assert(/details_json\[0\]\?\.type === "management_cycle"/.test(block), "filter them out");
+  assert(/Array\.isArray\(r\.details_json\)/.test(block), "guarding older non-array details_json");
+  assert(/\.limit\(300\)/.test(block) && /slice\(0, 100\)/.test(block),
+    "over-fetch then slice, so 100 real scans still reach the viewer");
 });
 
 Deno.test("a failed write cannot break the management cycle", () => {
