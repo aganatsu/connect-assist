@@ -756,6 +756,8 @@ export const STYLE_PROTECTED_SOURCES: Record<string, string[]> = {
   partialTPPercent: ["exit.partialTPPercent", "partialTPPercent"],
   partialTPLevel: ["exit.partialTPLevel", "partialTPLevel"],
   maxHoldHours: ["exit.timeExitHours", "exit.maxHoldHours"],
+  riskPerTrade: ["risk.riskPerTrade", "riskPerTrade"],
+  slBufferPips: ["entry.slBufferPips", "slBufferPips"],
 };
 
 /**

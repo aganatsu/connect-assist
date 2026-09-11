@@ -3,7 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides, isExplicitlySet } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-import { stylePendingExpiryMinutes, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
+import { stylePendingExpiryMinutes, styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
 // Attribute this isolate's TwelveData credits. Several functions reach the
 // provider through candleSource; without this they are indistinguishable in
@@ -2139,6 +2139,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       "breakEvenEnabled", "breakEvenPips", "breakEvenOffsetPips",
       "partialTPEnabled", "partialTPPercent", "partialTPLevel",
       "maxHoldHours",
+      // Added 2026-09-11. Both are risk inputs the user states explicitly in a
+      // written strategy, and both were being silently discarded: swing forces
+      // riskPerTrade 1.5 and slBufferPips 5, so "1% risk, 10-15 pip buffer"
+      // never reached the engine. An audit of all 124 UI config keys found
+      // these among four fields whose inputs were decorative — the value shown
+      // in the form was not the value traded.
+      "riskPerTrade", "slBufferPips",
     ]);
     // I1 Fix: Track provenance of each config field for debugging and transparency.
     const styleApplied: string[] = [];
@@ -3516,12 +3523,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
 
           // Fetch 5m candles for CHoCH detection
-          const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
-          if (confirm5mCandles.length < 10) {
-            console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
+          // ── Confirmation timeframe: the style's, not a literal 5m ──
+          //
+          // This read "5m" unconditionally while zone-confirmation-scanner —
+          // the other half of the same lifecycle — resolved it per style at
+          // :304. Harmless for a scalper, whose confirmation TF IS 5m. For a
+          // swing trader it meant a Weekly-bias, Daily-structure, 4H/1H zone
+          // being adjudicated by five-minute candles: "a setup decided on noise
+          // the style deliberately ignores", in the words of the module that
+          // defines the mapping.
+          //
+          // bot-scanner already IMPORTED STYLE_CONFIRMATION_TIMEFRAME and used
+          // it in exactly one place — a console.log at :2174 announcing the
+          // right timeframe before hunting on the wrong one.
+          const confirmTF = styleConfirmationTimeframe(resolvedStyle);
+          const confirmRange = getEntryRange(confirmTF);
+          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange);
+          if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
+            console.log(`[pending] ${pending.symbol} — insufficient ${confirmTF} candles for confirmation (${confirmCandles.length})`);
             confirmationHunt.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
-              outcome: "insufficient_candles", candles: confirm5mCandles.length,
+              outcome: "insufficient_candles", candles: confirmCandles.length, confirmTF,
             });
             continue;
           }
@@ -3530,15 +3552,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           let zoneTouchIdx: number | undefined;
           if (pending.zone_touch_time) {
             const touchTime = new Date(pending.zone_touch_time).getTime();
-            for (let i = confirm5mCandles.length - 1; i >= 0; i--) {
-              const candleTime = new Date(confirm5mCandles[i].datetime).getTime();
+            for (let i = confirmCandles.length - 1; i >= 0; i--) {
+              const candleTime = new Date(confirmCandles[i].datetime).getTime();
               if (candleTime <= touchTime) { zoneTouchIdx = i; break; }
             }
           }
 
           // Run zone confirmation detection (delegates to confirmationHierarchy first, falls back to legacy tiers)
           const confirmationSignal = detectZoneConfirmation(
-            confirm5mCandles,
+            confirmCandles,
             pending.direction as "long" | "short",
             DEFAULT_ZONE_CONFIRMATION_CONFIG,
             zoneTouchIdx,
@@ -3556,8 +3578,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "no_tier_passed", hasRefZone,
               zoneTouchIdxFound: zoneTouchIdx !== undefined,
-              candlesSinceTouch: zoneTouchIdx !== undefined ? confirm5mCandles.length - 1 - zoneTouchIdx : null,
-              candles: confirm5mCandles.length,
+              candlesSinceTouch: zoneTouchIdx !== undefined ? confirmCandles.length - 1 - zoneTouchIdx : null,
+              candles: confirmCandles.length, confirmTF,
             });
             continue;
           }
