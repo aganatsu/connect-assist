@@ -2088,7 +2088,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Scan Interval Gate ──
   // Skip this scan if not enough time has elapsed since the last scan.
   // Manual scans and management-only runs always bypass this gate.
-  const intervalMinutes = config.scanIntervalMinutes || 15;
+  // ── Scan interval, resolved the way STYLE_OVERRIDES will resolve it ──
+  //
+  // This read `config.scanIntervalMinutes` directly, and STYLE_OVERRIDES runs
+  // forty lines BELOW — so the gate saw the pre-style value every time.
+  // swing_trader declares 60 and got 15 (the mapper default), scanning four
+  // times more often than the style intends, against Daily structure that
+  // changes far more slowly. It also multiplies provider calls on a credit
+  // budget that has been observed refusing 200-440 fetches per cycle.
+  //
+  // scanIntervalMinutes is NOT in userProtectedFields, so the style value
+  // always wins in the loop below. Resolve it the same way here rather than
+  // reordering a block that other things depend on.
+  const _intervalStyle = config.tradingStyle?.mode || "day_trader";
+  const intervalMinutes = (STYLE_OVERRIDES as any)[_intervalStyle]?.scanIntervalMinutes
+    ?? config.scanIntervalMinutes ?? 15;
   if (!opts?.isManualScan && !opts?.isManagementOnly) {
     // IMPORTANT: management-only cycles (every 60s) and game-plan rows also write
     // scan_logs rows. If we take the newest row blindly, the elapsed time is always
