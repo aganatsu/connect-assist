@@ -789,12 +789,29 @@ export async function manageOpenPositions(
         // Use filterKey directly from session result (canonical: asian, london, newyork, offhours)
         const normalizedCurrentSession = currentSession.filterKey || currentSession.name.toLowerCase().replace(/[\s-]/g, "");
 
-        if (normalizedCurrentSession === "offhours" || normalizedCurrentSession === "off-hours") {
+        // Guarded on having already run, like every other trigger here.
+        //
+        // Without it this block re-fires every management cycle for the life of
+        // the position. `shouldMove` compares against an UNROUNDED beSL while
+        // the write stores roundPrice(beSL) — so whenever that rounds away from
+        // the stop, the comparison never converges and the condition stays true
+        // forever. Measured 2026-09-10: 197 session_close attributions across
+        // 2 positions, ~98 each, one per minute. It costs no money but writes
+        // the row every cycle and buries the genuine attributions under
+        // duplicates, which is what made the exit analysis unreadable.
+        //
+        // Once is correct: beSL is a fixed level (entry +/- offset), so a
+        // second application could never move the stop further anyway.
+        const sessionBEApplied = exitFlags.sessionCloseBEApplied === true;
+        if (!sessionBEApplied
+          && (normalizedCurrentSession === "offhours" || normalizedCurrentSession === "off-hours")) {
           const beSL = pos.direction === "long"
             ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
             : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
           const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
           if (shouldMove) {
+            updatedFlags.sessionCloseBEApplied = true;
+            exitFlagsUpdated = true;
             const attribution = makeAttribution(
               "session_close",
               `Session ended (now ${normalizedCurrentSession}) at ${rMultiple.toFixed(2)}R — SL moved to breakeven at ${beSL.toFixed(5)}`,

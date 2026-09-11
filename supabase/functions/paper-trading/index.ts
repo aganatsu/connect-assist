@@ -941,10 +941,30 @@ Deno.serve(async (req) => {
           // Check SL hit
           // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
           // If price gaps through SL, use the gap price. Then add simulated slippage.
-          // close_reason on paper_positions is reused as a "sl state" tag:
-          //   null/"" = original SL, "be" = moved to break-even, "trail" = trailing stop active
+          // Which layer last moved the stop, so the close is labelled honestly.
+          //
+          // This read ONLY pos.close_reason, a "sl state" tag paper-trading
+          // sets when it moves a stop itself (:1039, :1079). But
+          // _shared/scannerManagement.ts is the manager that actually runs —
+          // every minute via manage-positions-1min — and it never writes that
+          // marker. So every server-managed exit was labelled "sl_hit".
+          //
+          // Measured 2026-09-10 over Era C: 43 sl_hit rows, 10 of them
+          // PROFITABLE with a maximum of +1.12R — impossible unless the stop
+          // had moved — while trail_hit and be_hit had never been recorded at
+          // all. The exit behaviour was invisible for as long as the data
+          // existed.
+          //
+          // exitFlags is the record BOTH managers keep, so read that first and
+          // keep the tag as a fallback for paper-trading's own path. Trailing
+          // wins over break-even: it activates after BE and then ratchets, so
+          // if both fired the stop is sitting at the trail level.
           const slState: string = (pos.close_reason || "").toString();
-          const slHitReason = slState === "trail" ? "trail_hit" : slState === "be" ? "be_hit" : "sl_hit";
+          const slHitReason = (exitFlags.trailingStopActivated === true || slState === "trail")
+            ? "trail_hit"
+            : (exitFlags.breakEvenActivated === true || slState === "be")
+            ? "be_hit"
+            : "sl_hit";
           const slippagePips = exitFlags.slippagePips ?? 0.5; // default 0.5 pips slippage on SL
           if (sl !== null) {
             if (pos.direction === "long" && currentPrice <= sl) {
