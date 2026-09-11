@@ -842,6 +842,15 @@ async function recordRejectedSetup(
       regime: analysis.regimeInfo?.regime ?? null,
       price_at_rejection: analysis.lastPrice,
       raw_detail: {
+        // Both premium/discount measures, so the comparison accumulates on the
+        // REFUSED side too — the side where the trailing-box gate has its
+        // strongest evidence (0 wins in 26 sole-gate refusals) and where the
+        // leg figure was previously impossible to reconstruct.
+        legPd: analysis.legPd ?? null,
+        boxPd: analysis.pd
+          ? { percent: analysis.pd.zonePercent, zone: analysis.pd.currentZone,
+              high: analysis.pd.swingHigh, low: analysis.pd.swingLow }
+          : null,
         zoneLow: opts.zoneLow ?? null,
         zoneHigh: opts.zoneHigh ?? null,
         zoneScore: opts.zoneScore ?? null,
@@ -1306,19 +1315,28 @@ async function runSafetyGates(
       : ((config as any).entryTimeframe ?? "entry TF");
     const sHigh = (analysis.pd as any).swingHigh;
     const sLow = (analysis.pd as any).swingLow;
+    // "swing range" borrowed ICT's dealing-range meaning without its substance.
+    // This is the bounding box of the last 5 swing highs and 5 swing lows, in
+    // no particular order and possibly from different moves. Name it for what
+    // it is so nobody reads a dealing range into it.
     const rangeStr = (typeof sHigh === "number" && typeof sLow === "number")
-      ? ` of the ${tfLabel} swing range ${fmtP(sLow)}–${fmtP(sHigh)}`
-      : ` of the ${tfLabel} swing range`;
+      ? ` of the ${tfLabel} 5-swing box ${fmtP(sLow)}–${fmtP(sHigh)}`
+      : ` of the ${tfLabel} 5-swing box`;
+    // The leg-relative figure, shown for comparison. Advisory — it gates nothing.
+    const _legPd = (analysis as any).legPd;
+    const legStr = _legPd && typeof _legPd.percent === "number"
+      ? ` [impulse leg ${_legPd.percent.toFixed(1)}% of ${fmtP(_legPd.low)}–${fmtP(_legPd.high)}]`
+      : "";
     const rawStr = (analysis.pd as any).outOfRange === true
       ? ` — price is OUTSIDE that range (raw ${Number((analysis.pd as any).rawPercent).toFixed(1)}%)`
       : "";
 
     if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
-      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (premium > 55%, need discount < 45% to buy)${rawStr}` });
+      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (premium > 55%, need discount < 45% to buy)${rawStr}${legStr}` });
     } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
-      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (discount < 45%, need premium > 55% to sell)${rawStr}` });
+      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (discount < 45%, need premium > 55% to sell)${rawStr}${legStr}` });
     } else {
-      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%${rangeStr})${rawStr}` });
+      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%${rangeStr})${rawStr}${legStr}` });
     }
   }
 
@@ -6164,6 +6182,42 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const convictionCandles = resolvedStyle === "swing_trader"
         ? (h4Candles.length >= 20 ? h4Candles : null)
         : (hourlyCandles.length >= 20 ? hourlyCandles : null);
+      // ── Leg-relative premium/discount, recorded alongside the gate's own ──
+      //
+      // The P/D gate reads calculatePremiumDiscount, which is max of the last 5
+      // swing highs and min of the last 5 swing lows (smcAnalysis ~2213). Those
+      // two points need not be adjacent, need not belong to the same move, and
+      // have no order in time — it is a bounding box around recent pivots, not
+      // a dealing range. A bullish impulse and a bearish one covering the same
+      // prices give an identical box.
+      //
+      // The impulse zone engine already measures against the actual leg
+      // (impulseZoneEngine ~441, direction-aware), and the two can disagree —
+      // notably in a trend, where the box keeps stale highs and reads
+      // "discount" for the whole move, refusing every continuation short.
+      //
+      // Measured 2026-09-10 across 36 Era C trades where both were
+      // recoverable: they AGREE on 31 (86%). Of the 5 disagreements the leg
+      // looked better — it would have blocked 2 trades that lost $762 and
+      // allowed 3 that were flat at -$48 — but n=5 decides nothing, and the
+      // box gate's strongest evidence is on REJECTED setups (0 wins in 26
+      // sole-gate refusals) where the leg could not be reconstructed at all.
+      //
+      // So nothing changes behaviour here. This records the leg figure on
+      // scans, trades and rejected setups so the comparison accumulates on
+      // both sides and can eventually be decided rather than argued.
+      const _izImp = (detail as any).impulseZone?.impulse;
+      (analysis as any).legPd = (_izImp
+        && typeof _izImp.high === "number" && typeof _izImp.low === "number"
+        && _izImp.high !== _izImp.low && typeof analysis.lastPrice === "number")
+        ? {
+          percent: Math.round(((analysis.lastPrice - _izImp.low) / (_izImp.high - _izImp.low)) * 1000) / 10,
+          high: _izImp.high,
+          low: _izImp.low,
+          direction: _izImp.direction ?? null,
+        }
+        : null;
+
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
@@ -6511,6 +6565,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         (detail as any).slFloor = slFloorTrace;
+        (detail as any).legPd = (analysis as any).legPd ?? null;
 
         // ── Regime-Adaptive TP Adjustment ──
         // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
@@ -6942,7 +6997,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -7171,7 +7226,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",

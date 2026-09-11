@@ -46,8 +46,11 @@ Deno.test("the tag is read from the position, not invented", () => {
 });
 
 Deno.test("the P/D gate names the timeframe and the range", () => {
+  // Renamed 2026-09-10 from "swing range", which borrowed ICT's dealing-range
+  // meaning for what is actually the bounding box of the last 5 swing highs and
+  // 5 swing lows — no direction, possibly spanning different moves.
   assert(
-    /of the \$\{tfLabel\} swing range/.test(scanner),
+    /of the \$\{tfLabel\} 5-swing box/.test(scanner),
     'the gate reason must say which range the percentage is measured against',
   );
   assert(
