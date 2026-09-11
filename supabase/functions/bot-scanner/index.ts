@@ -3092,6 +3092,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let pendingConfirmationHunting = 0;  // orders currently in confirmation hunt mode
   const thesisObservations: any[] = [];
   const touchChecks: any[] = [];
+  /**
+   * Why the confirmation hunt ended, per order, per cycle.
+   *
+   * The hunt has produced ZERO fills in the system's history — every one of the
+   * 27 recorded fills came from routes that no longer exist (26 plain limit
+   * touches in May 2026, one nested_poi_market in August). Both live fill paths
+   * require status `awaiting_confirmation` plus a confirmation signal, and that
+   * pair has never once occurred.
+   *
+   * Five checks stand between a touch and a fill, each of which `continue`s,
+   * and none of them recorded anything durable: the branch logs to console on
+   * management cycles, and those return before the scan_logs insert. So which
+   * check kills the hunt has never been observable.
+   */
+  const confirmationHunt: any[] = [];
 
   if (activePendingOrders && activePendingOrders.length > 0) {
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
@@ -3474,6 +3489,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (resetsHunt) {
             // Price left zone without confirming — reset to pending, wait for next approach
             const attempts = (pending.confirmation_attempts || 0) + 1;
+            // NOTE confirmation_attempts counts ABANDONMENTS, not hunts. Reading
+            // it as hunting activity inverts its meaning.
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "reset_zone_exit", zoneExit, currentPrice, zoneLow, zoneHigh, attempts,
+            });
             await supabase.from("pending_orders").update({
               status: "pending",
               zone_touch_time: null,
@@ -3488,6 +3509,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
           if (confirm5mCandles.length < 10) {
             console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "insufficient_candles", candles: confirm5mCandles.length,
+            });
             continue;
           }
 
@@ -3514,6 +3539,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (!confirmationSignal) {
             // No confirmation yet — keep hunting (all 3 tiers checked)
             console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no tier passed)`);
+            // zoneTouchIdx undefined means the hunt is scanning the WHOLE series
+            // rather than the window since the touch — the shape of the
+            // TwelveData timezone bug, worth seeing if it returns.
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "no_tier_passed", hasRefZone,
+              zoneTouchIdxFound: zoneTouchIdx !== undefined,
+              candlesSinceTouch: zoneTouchIdx !== undefined ? confirm5mCandles.length - 1 - zoneTouchIdx : null,
+              candles: confirm5mCandles.length,
+            });
             continue;
           }
 
@@ -3524,6 +3559,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // enough evidence that the level is holding.
           if (!hasRefZone && confirmationSignal.tier !== 1) {
             console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
+            // A confirmation WAS found and thrown away. If this is the common
+            // outcome, the Tier 1 requirement is the binding constraint rather
+            // than the market failing to confirm.
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "tier_rejected_no_refined_zone", tier: confirmationSignal.tier,
+              signalType: confirmationSignal.type, displacement: confirmationSignal.displacement,
+            });
             continue;
           }
 
@@ -3544,6 +3587,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
+            // A confirmed setup, killed at the last step. The most expensive
+            // outcome in the list: everything worked and the trade still did
+            // not happen.
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "blocked_max_open_positions", tier: confirmationSignal.tier,
+              openCount: currentOpenCount, cap: config.maxOpenPositions,
+            });
             continue;
           }
           if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
@@ -3554,6 +3605,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: "blocked_max_per_symbol", tier: confirmationSignal.tier,
+              symbolCount: currentSymbolCount, cap: config.maxPerSymbol,
+            });
             continue;
           }
           // Same-direction stacking, checked here as well as on the market path.
@@ -3661,6 +3717,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           pendingFilled++;
           tradesPlaced++;
+          confirmationHunt.push({
+            symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+            outcome: "FILLED", tier: confirmationSignal.tier, signalType: confirmationSignal.type,
+            displacement: confirmationSignal.displacement, hasRefZone,
+          });
 
           openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
 
@@ -3772,7 +3833,54 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // and pending order monitoring. Skip the full pair analysis loop.
   if (opts?.isManagementOnly) {
     const activeActions = managementActions.filter(a => a.action !== "no_change");
-    console.log(`[manage ${scanCycleId}] Management-only complete: ${activeActions.length} actions, ${pendingFilled} fills, ${pendingExpired} expired`);
+
+    // ── Persist observations from management-only cycles ──
+    //
+    // This function returned here without writing scan_logs, so everything the
+    // pending loop observed was discarded. Management runs every minute and
+    // full scans every scanIntervalMinutes, so at most 1 evaluation in 5 was
+    // recorded — and not a random 1 in 5. If a check wants to kill an order a
+    // management cycle gets there first, so by the next full scan the order is
+    // resolved and no longer in the pending set. The recorded sample could
+    // only ever contain orders nothing killed.
+    //
+    // Measured 2026-09-09: a 3-day query over thesisObservations returned a
+    // 0.0% firing rate for all three checks across 66 evaluations, while
+    // pending_orders showed 24 real thesis kills in the same window. The
+    // instrumentation was structurally incapable of observing the event it
+    // existed to observe.
+    //
+    // Guarded on having something to say, so this is a handful of rows a day
+    // rather than 1,440. Same details_json shape as a full scan — meta at
+    // index 0 — so existing queries read both without changing.
+    if (thesisObservations.length || touchChecks.length || confirmationHunt.length || activeActions.length) {
+      try {
+        await supabase.from("scan_logs").insert({
+          user_id: userId,
+          bot_id: BOT_ID,
+          pairs_scanned: 0,
+          signals_found: 0,
+          trades_placed: pendingFilled,
+          details_json: [{
+            type: "management_cycle",
+            scanCycleId,
+            thesisObservations,
+            touchChecks,
+            confirmationHunt,
+            managementActions: activeActions,
+            pendingOrders: {
+              filled: pendingFilled, expired: pendingExpired,
+              cancelled: pendingCancelled, awaitingConfirmation: pendingConfirmationHunting,
+            },
+          }],
+        });
+      } catch (e: any) {
+        // Never let a diagnostic break the management cycle.
+        console.warn(`[manage ${scanCycleId}] observation write failed (non-fatal): ${e?.message}`);
+      }
+    }
+
+    console.log(`[manage ${scanCycleId}] Management-only complete: ${activeActions.length} actions, ${pendingFilled} fills, ${pendingExpired} expired, ${confirmationHunt.length} hunt outcomes`);
     return {
       pairsScanned: 0,
       signalsFound: 0,
@@ -7977,6 +8085,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       rejectionSummary,
       thesisObservations,
       touchChecks,
+      confirmationHunt,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
     },
     ...scanDetails,
