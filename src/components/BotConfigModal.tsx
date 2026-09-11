@@ -1389,8 +1389,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* ── Zone Entry Setup ── */}
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Entry</p>
-                      <ToggleField label="Pending Zone Orders" description="When price is NOT at the zone yet, place a pending order and watch for price to arrive. Once price reaches the zone, hunts for LTF confirmation (CHoCH/BOS) before filling at live price." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
-                      {config.entry?.limitOrderEnabled && (
+                      <ToggleField label="Pending Zone Orders" description="When price is NOT at the zone yet, place a pending order and watch for price to arrive. Once price reaches the zone, hunts for LTF confirmation (CHoCH/BOS) before filling at live price. NOTE: an Impulse Zone Gate Mode of 'hard' auto-enables these regardless of this switch." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
+                      {!(config.entry?.limitOrderEnabled ?? false) && (config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' && (
+                        <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2.5 text-[10px] leading-relaxed text-amber-200">
+                          <strong className="text-amber-100">Switched off, but still running.</strong> Impulse Zone Gate Mode is <strong>hard</strong>, which auto-enables pending zone orders whatever this toggle says — in hard mode the alternative to a pending order is discarding the setup entirely, so the scanner arms one and waits. To actually stop them, set Impulse Zone Gate Mode to <strong>soft</strong> or <strong>off</strong>; that is a far larger change, because hard mode is what makes the bot wait for price to reach a zone at all.
+                        </div>
+                      )}
+                      {((config.entry?.limitOrderEnabled ?? false) || (config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard') && (
                         <div className="pl-4 border-l-2 border-primary/20 space-y-3">
                           <FieldGroup label="Zone Watch Expiry (minutes)" description="How long the bot watches for price to reach the zone before cancelling the setup">
                             <div className="flex items-center gap-4">
@@ -1398,7 +1403,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                               <span className="text-sm font-mono font-bold w-16 text-right">{config.entry?.limitOrderExpiryMinutes ?? 60}m</span>
                             </div>
                           </FieldGroup>
-                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for LTF confirmation (CHoCH, BOS, or sweep+CHoCH) before entering at live price. If impulse zone gate mode is "hard", pending zone orders are auto-enabled.</p>
+                          <p className="text-[9px] text-muted-foreground italic">The bot watches for price to reach the zone, then hunts for LTF confirmation (CHoCH, BOS, or sweep+CHoCH) before entering at live price. This expiry applies to auto-enabled orders too, which is why it stays visible while the toggle above is off. Scalper caps it at 60 minutes regardless of the value set here.</p>
                         </div>
                       )}
                     </div>
