@@ -92,6 +92,10 @@ Deno.test("the structure label is injected alongside the series", () => {
 });
 
 Deno.test("the reason still prints the bounds it is judging against", () => {
-  assert(/of the \$\{tfLabel\} swing range \$\{fmtP\(sLow\)\}–\$\{fmtP\(sHigh\)\}/.test(scanner),
+  assert(/of the \$\{tfLabel\} 5-swing box \$\{fmtP\(sLow\)\}–\$\{fmtP\(sHigh\)\}/.test(scanner),
     "timeframe AND bounds — the point of the message");
+  // And since 2026-09-10 the leg-relative figure alongside it, so the two
+  // measures can be compared from the reason string itself.
+  assert(/impulse leg \$\{_legPd\.percent\.toFixed\(1\)\}%/.test(scanner),
+    "the impulse-leg percentage is printed beside the box percentage");
 });
