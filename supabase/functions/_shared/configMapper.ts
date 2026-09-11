@@ -156,6 +156,15 @@ export const RUNTIME_DEFAULTS = {
   originOBRetest: false,
   /** Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify. Default 0.786. */
   fibMaxRetracement: 0.786,
+  // Stop-hunt allowance beyond the impulse origin, as a fraction of the leg.
+  // Replaces a pip count that meant 0.046% of price on EUR/USD and 0.0023% on
+  // gold — the unit bug that left gold's stop floor at $0.50 for months. 2% of
+  // an ordinary FX leg is roughly 10-15 pips and scales correctly elsewhere.
+  legStopBufferPct: 0.02,
+  // Ceiling on an origin-based stop, as a multiple of the leg. The old ceiling
+  // was staticFloor x impulseSlCapMultiplier — an absolute pip count unrelated
+  // to the move — which on swing rejected the origin stop on most Daily legs.
+  legStopCapMultiple: 1.2,
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
@@ -480,6 +489,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
     fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
+    legStopBufferPct: strategy.legStopBufferPct ?? raw.legStopBufferPct ?? RUNTIME_DEFAULTS.legStopBufferPct,
+    legStopCapMultiple: strategy.legStopCapMultiple ?? raw.legStopCapMultiple ?? RUNTIME_DEFAULTS.legStopCapMultiple,
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
