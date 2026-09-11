@@ -4751,18 +4751,31 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const _sSeries = (pairConfig as any)._structureCandles as Candle[] | null;
     const _sSpec = SPECS[pair] || SPECS["EUR/USD"];
     const _structPd = _sSeries ? calculatePremiumDiscount(_sSeries) : null;
+    // analysis.pd FOLLOWS structureTfAnalysis — confluenceScoring:327 computes
+    // it from `sc`, which is the structure series whenever the flag is on. So
+    // comparing analysis.pd against _structPd compared the structure series
+    // with itself: entryZone was mislabelled and zonesDisagree could only ever
+    // report false. The one measurement that decides whether this flag earns
+    // its place was structurally incapable of saying yes.
+    //
+    // Compute the entry series explicitly so the two sides are genuinely
+    // different series.
+    const _entryPd = calculatePremiumDiscount(candles);
 
     const detail: any = {
       structureTf: {
         enabled: (pairConfig as any).structureTfAnalysis === true,
         structureLabel: STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? null,
         structureBars: _sSeries?.length ?? 0,
-        entryZone: analysis.pd?.currentZone ?? null,
-        entryZonePercent: analysis.pd?.zonePercent ?? null,
+        entryZone: _entryPd?.currentZone ?? null,
+        entryZonePercent: _entryPd?.zonePercent ?? null,
         structZone: _structPd?.currentZone ?? null,
         structZonePercent: _structPd?.zonePercent ?? null,
-        zonesDisagree: !!_structPd && !!analysis.pd
-          && _structPd.currentZone !== analysis.pd.currentZone,
+        zonesDisagree: !!_structPd && !!_entryPd
+          && _structPd.currentZone !== _entryPd.currentZone,
+        // Which series the P/D gate actually judged on, so a disagreement can
+        // be attributed rather than inferred from the flag.
+        gateUsedSeries: (analysis as any).structuralSeriesUsed === true ? "structure" : "entry",
         entryAtrPips: calculateATR(candles, 14) / _sSpec.pipSize,
         structAtrPips: _sSeries ? calculateATR(_sSeries, 14) / _sSpec.pipSize : null,
       },
