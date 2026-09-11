@@ -3853,7 +3853,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Guarded on having something to say, so this is a handful of rows a day
     // rather than 1,440. Same details_json shape as a full scan — meta at
     // index 0 — so existing queries read both without changing.
-    if (thesisObservations.length || touchChecks.length || confirmationHunt.length || activeActions.length) {
+    // Guarded on PENDING-ORDER diagnostics only. `activeActions.length` was in
+    // this condition and it is the wrong trigger: with trailing enabled and a
+    // position open, the trail ratchets every cycle, so every minute produced
+    // an action and therefore a row. Those rows then appeared in the scan
+    // viewer as scans — same timestamp cadence, "0 pairs, 0 signals, 0 trades",
+    // empty detail — and looked like the scan interval had dropped to 60s.
+    // Management actions are already carried on the position's exitAttribution;
+    // this row exists for the confirmation hunt, which is invisible elsewhere.
+    if (thesisObservations.length || touchChecks.length || confirmationHunt.length) {
       try {
         await supabase.from("scan_logs").insert({
           user_id: userId,
