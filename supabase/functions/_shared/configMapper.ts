@@ -605,6 +605,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
           : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : RUNTIME_DEFAULTS.enabledSessions)
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
+    weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? RUNTIME_DEFAULTS.weekendCryptoEnabled,
 
     // ── Active Days ──
     enabledDays: sessions.activeDays
