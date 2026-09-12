@@ -1094,6 +1094,7 @@ function _legacyLoadConfigMapping(_raw: any) {
           : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : DEFAULTS.enabledSessions)
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
+    weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? true,
     // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
     // The UI only toggles sessions on/off via the filter array.
 
