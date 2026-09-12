@@ -49,6 +49,41 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
   const enabled = isCurrentSessionEnabled(now, sessions);
   const counts = countFromDetails(scanDetails);
 
+  // Weekend: FX shut Fri 17:00 ET → Sun 17:00 ET. Bot switches to crypto-only when enabled.
+  const nyParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const nyWeekday = nyParts.find((p) => p.type === "weekday")?.value ?? "";
+  const nyHour = Number(nyParts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const fxClosed =
+    nyWeekday === "Sat" ||
+    (nyWeekday === "Sun" && nyHour < 17) ||
+    (nyWeekday === "Fri" && nyHour >= 17);
+  const weekendCryptoOn = (sessions as any)?.weekendCryptoEnabled ?? true;
+
+  if (fxClosed) {
+    return weekendCryptoOn ? (
+      <span
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-success/10 text-success border border-success/30 overflow-hidden whitespace-nowrap ${className}`}
+        title="FX market is closed — bot is scanning BTC/USD and ETH/USD only"
+      >
+        <Activity className="h-2.5 w-2.5" />
+        <span className="min-w-0 truncate">Weekend · crypto only</span>
+      </span>
+    ) : (
+      <span
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border overflow-hidden whitespace-nowrap ${className}`}
+        title="FX market is closed and weekend crypto trading is off"
+      >
+        <Clock className="h-2.5 w-2.5" />
+        <span className="min-w-0 truncate">Weekend · market closed</span>
+      </span>
+    );
+  }
+
   // CASE 1: at least one pair scanned in latest log → green pill
   if (enabled || (counts && counts.scanned > 0)) {
     return (
