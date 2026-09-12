@@ -2217,9 +2217,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const isFxOpenSundayEvening = nyDay === 0 && nyHour >= 17;
   const isFxClosedFridayEvening = nyDay === 5 && nyHour >= 17;
   const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
+  // ── Weekend crypto mode ──
+  // FX is shut Fri 17:00 ET → Sun 17:00 ET. When enabled, keep scanning but only crypto.
+  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || isFxClosedFridayEvening;
+  let weekendCryptoMode = false;
+  if (fxMarketClosed && config.weekendCryptoEnabled !== false && !opts?.isManagementOnly) {
+    const weekendCryptoList = ["BTC/USD", "ETH/USD"].filter(
+      (s) => SPECS[s]?.type === "crypto" && SUPPORTED_SYMBOLS[s],
+    );
+    if (weekendCryptoList.length > 0) {
+      weekendCryptoMode = true;
+      config.instruments = weekendCryptoList;
+      console.log(`[scan ${scanCycleId}] Weekend crypto mode: FX closed — scanning [${weekendCryptoList.join(", ")}] only`);
+    }
+  }
+
   const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
   const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
-  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
+  if (!weekendCryptoMode && !config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
 
