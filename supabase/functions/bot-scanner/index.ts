@@ -8214,6 +8214,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       touchChecks,
       confirmationHunt,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
+      weekendCryptoMode,
     },
     ...scanDetails,
   ];
