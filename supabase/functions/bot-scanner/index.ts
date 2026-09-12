@@ -206,6 +206,7 @@ const DEFAULTS = {
   maxHoldHours: 0,
   // ── Sessions ──
   killZoneOnly: false,
+  weekendCryptoEnabled: true,
   // ── Protection ──
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
