@@ -105,6 +105,8 @@ export const RUNTIME_DEFAULTS = {
   enabledSessions: ["london", "newyork"] as string[],
   enabledDays: [1, 2, 3, 4, 5] as number[],
   killZoneOnly: false,
+  /** When FX is closed (Fri 17:00 ET → Sun 17:00 ET), keep scanning crypto only. */
+  weekendCryptoEnabled: true,
 
   // ── Instruments ──
   instruments: [
@@ -603,6 +605,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
           : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : RUNTIME_DEFAULTS.enabledSessions)
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
+    weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? RUNTIME_DEFAULTS.weekendCryptoEnabled,
 
     // ── Active Days ──
     enabledDays: sessions.activeDays
