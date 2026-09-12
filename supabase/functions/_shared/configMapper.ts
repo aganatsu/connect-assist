@@ -105,6 +105,8 @@ export const RUNTIME_DEFAULTS = {
   enabledSessions: ["london", "newyork"] as string[],
   enabledDays: [1, 2, 3, 4, 5] as number[],
   killZoneOnly: false,
+  /** When FX is closed (Fri 17:00 ET → Sun 17:00 ET), keep scanning crypto only. */
+  weekendCryptoEnabled: true,
 
   // ── Instruments ──
   instruments: [
