@@ -2353,7 +2353,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
   // Weekend guard: skip management for non-crypto positions when FX market is closed
   // FX closed: Saturday all day, Sunday before 17:00 ET, Friday after 17:00 ET
-  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
+  // (fxMarketClosed computed earlier in this scan cycle)
   const fxPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type !== "crypto");
   const cryptoPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type === "crypto");
   // Only manage crypto positions during FX closed hours; manage all when FX is open
