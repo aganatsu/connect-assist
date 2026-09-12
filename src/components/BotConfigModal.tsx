@@ -1882,6 +1882,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       })}
                     </div>
                     <ToggleField label="Kill Zone Only Trading" description="Only trade during high-volume kill zone windows (London 02-05 ET, NY 08:30-11 ET)" checked={config.sessions?.killZoneOnly ?? false} onChange={v => updateField('sessions', 'killZoneOnly', v)} />
+                    <ToggleField label="Trade Crypto on Weekends" description="When FX is closed (Fri 17:00 ET → Sun 17:00 ET), keep scanning BTC/USD and ETH/USD only" checked={config.sessions?.weekendCryptoEnabled ?? true} onChange={v => updateField('sessions', 'weekendCryptoEnabled', v)} />
                     {/* ── News Event Filter ── */}
                     <div className="border-t border-border pt-4 mt-4">
                       <SectionHeader title="News Event Filter" description="Pause trading around high-impact economic events (NFP, FOMC, CPI, etc.)" />
