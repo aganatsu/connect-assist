@@ -1883,10 +1883,6 @@ ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_eviden
 
 ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_check1 CHECK (((contract_version = (certificate ->> 'contractVersion'::text)) AND (generator_version = (certificate ->> 'generatorVersion'::text)) AND (feature_key = (certificate ->> 'featureKey'::text)) AND (variant_key = (certificate ->> 'variantKey'::text)) AND (status = (certificate #>> '{eligibility,status}'::text[]))));
 
-ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_check2 CHECK ((activation_scope_hash = strategy_activation_json_hash(activation_scope)));
-
-ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_check3 CHECK ((certificate_hash = strategy_activation_json_hash(certificate)));
-
 ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_coverage_percent_check CHECK (((coverage_percent >= (0)::numeric) AND (coverage_percent <= (100)::numeric)));
 
 ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_evidence_count_check CHECK ((evidence_count >= 0));
@@ -6890,6 +6886,21 @@ BEGIN
 END;
 $function$
 ;
+
+
+-- ========================================================================
+-- DEFERRED CONSTRAINTS  (2 statements)
+-- ========================================================================
+--
+-- These two CHECK constraints call strategy_activation_json_hash(), which is
+-- defined in the FUNCTIONS section above. They sat with the other constraints
+-- on strategy_evidence_certificates, ~124k characters before that function
+-- existed, and would have failed the whole migration with "function does not
+-- exist". A constraint that calls a function has to be applied after it.
+--
+ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_check2 CHECK ((activation_scope_hash = strategy_activation_json_hash(activation_scope)));
+
+ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_check3 CHECK ((certificate_hash = strategy_activation_json_hash(certificate)));
 
 
 -- ========================================================================
