@@ -1,0 +1,54 @@
+name: Deploy Edge Functions
+
+# Deploys every function under supabase/functions/ on push to main.
+#
+# Requires two repository secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_ACCESS_TOKEN  a personal access token from supabase.com/dashboard/account/tokens
+#   SUPABASE_PROJECT_REF   rvouzhacxqlbetwcttoe
+#
+# Deploys are idempotent, so re-running is safe.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/deploy-functions.yml'
+  workflow_dispatch:        # lets you trigger it by hand from the Actions tab
+
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false   # never interrupt a half-finished deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # One deploy per function directory. Looping rather than using a
+          # single bulk command so a failure names the function that broke.
+          for dir in supabase/functions/*/; do
+            name=$(basename "$dir")
+            # _shared holds imported modules, not a deployable function.
+            [ "$name" = "_shared" ] && continue
+            [ -f "$dir/index.ts" ] || { echo "skip $name (no index.ts)"; continue; }
+            echo "::group::deploy $name"
+            # No --no-verify-jwt. Nothing in supabase/config.toml sets
+            # verify_jwt, so Supabase's default (ON) is the only thing keeping
+            # these 21 functions from being publicly callable. Cron satisfies it
+            # with Authorization: Bearer <service_role_key>; the frontend uses
+            # the signed-in user's JWT. Passing the flag would open all of them.
+            supabase functions deploy "$name" \
+              --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+            echo "::endgroup::"
+          done

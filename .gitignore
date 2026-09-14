@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 supabase/functions/bot-scanner/index.ts.bak
 .env.local
+
+# Local environment — never commit
+.env
+.env.*
+!.env.example
+local-runner/.env.local
