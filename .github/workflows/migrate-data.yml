@@ -1,0 +1,153 @@
+name: Migrate Data (one-off)
+
+# Copies row data from the old Lovable-managed Supabase project into the new
+# one. Schema is NOT touched — it is already built by
+# supabase/migrations/20260914000000_baseline_schema.sql.
+#
+# Manual trigger only. This is a one-off; delete this workflow and both secrets
+# once the data has landed.
+#
+# Requires two repository secrets:
+#   OLD_DB_URL   connection string for the OLD project
+#   NEW_DB_URL   connection string for the NEW project
+#
+# Use the SESSION POOLER string (port 5432), not "Direct connection". GitHub
+# runners are IPv4-only and Supabase's direct host is IPv6-only, so a direct
+# string fails with "Network is unreachable" before it ever authenticates.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dump and report sizes without writing to the new project'
+        type: boolean
+        default: true
+
+concurrency:
+  group: migrate-data
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install postgresql-client 17
+        run: |
+          set -euo pipefail
+          # The runner ships an older client. pg_dump refuses to dump a server
+          # newer than itself, and Supabase projects are on 15/17.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Check connectivity to both projects
+        env:
+          OLD_DB_URL: ${{ secrets.OLD_DB_URL }}
+          NEW_DB_URL: ${{ secrets.NEW_DB_URL }}
+        run: |
+          set -euo pipefail
+          for n in OLD NEW; do
+            url=$(eval echo \$${n}_DB_URL)
+            if [ -z "$url" ]; then echo "::error::${n}_DB_URL secret is empty"; exit 1; fi
+            v=$(psql "$url" -tAc 'select version()' 2>&1 | head -1) \
+              || { echo "::error::cannot connect to $n: $v"; exit 1; }
+            echo "$n ok: $v"
+          done
+          # The new project must already have the schema and must be empty, or
+          # this is not the situation this workflow was written for.
+          t=$(psql "$NEW_DB_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")
+          echo "new project tables: $t"
+          [ "$t" -ge 55 ] || { echo "::error::new project has $t tables, expected 59 — run the baseline migration first"; exit 1; }
+
+      - name: Verify FK checks can be suspended
+        env:
+          NEW_DB_URL: ${{ secrets.NEW_DB_URL }}
+        run: |
+          set -euo pipefail
+          # pending_orders and staged_setups reference each other, so neither
+          # can be loaded first. Without this the restore cannot succeed in any
+          # ordering, so fail loudly here rather than half way through.
+          psql "$NEW_DB_URL" -v ON_ERROR_STOP=1 -c \
+            'begin; set local session_replication_role = replica; rollback;' \
+            || { echo "::error::cannot set session_replication_role — tell Claude, a nulled-FK fallback is needed"; exit 1; }
+          echo "ok — foreign keys can be deferred during load"
+
+      - name: Dump data from the old project
+        env:
+          OLD_DB_URL: ${{ secrets.OLD_DB_URL }}
+        run: |
+          set -euo pipefail
+          # The auth user must exist before any public row that references it.
+          # Every user-scoped table has a user_id FK to auth.users.
+          pg_dump "$OLD_DB_URL" --data-only --no-owner --no-privileges \
+            --table=auth.users --table=auth.identities > auth.sql
+
+          # Whole public schema minus caches and telemetry. Dumping by
+          # exclusion rather than by an explicit list, because pg_stat_user_tables
+          # understates several tables (it reported broker_connections as empty
+          # when it has a row) and a missed table is silent.
+          pg_dump "$OLD_DB_URL" --data-only --no-owner --no-privileges \
+            --schema=public \
+            --exclude-table=public.scan_candle_snapshots \
+            --exclude-table=public.scanner_operation_runs \
+            --exclude-table=public.kv_cache \
+            > public.sql
+
+          echo "### Dump sizes" >> $GITHUB_STEP_SUMMARY
+          ls -lh auth.sql public.sql | awk '{print "- "$9" "$5}' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Rows per table in the dump" >> $GITHUB_STEP_SUMMARY
+          grep -c '^COPY' public.sql | xargs echo "- COPY blocks:" >> $GITHUB_STEP_SUMMARY
+          awk '/^COPY /{t=$2} /^\\\.$/{if(t){print n" "t; t="";n=0}} {if(t&&$0!~/^COPY /)n++}' \
+            public.sql | sort -rn | head -40 | awk '{print "- "$2" "$1}' >> $GITHUB_STEP_SUMMARY
+
+      - name: Restore into the new project
+        if: ${{ inputs.dry_run == false }}
+        env:
+          NEW_DB_URL: ${{ secrets.NEW_DB_URL }}
+        run: |
+          set -euo pipefail
+          # One transaction: either all the data lands or none of it does, so a
+          # failure leaves nothing to clean up before the retry.
+          {
+            echo "begin;"
+            echo "set local session_replication_role = replica;"
+            cat auth.sql
+            cat public.sql
+            echo "commit;"
+          } > restore.sql
+          psql "$NEW_DB_URL" -v ON_ERROR_STOP=1 -f restore.sql
+
+      - name: Verify row counts match
+        if: ${{ inputs.dry_run == false }}
+        env:
+          OLD_DB_URL: ${{ secrets.OLD_DB_URL }}
+          NEW_DB_URL: ${{ secrets.NEW_DB_URL }}
+        run: |
+          set -euo pipefail
+          # Exact counts on both sides, not pg_stat estimates.
+          q="select table_name from information_schema.tables
+             where table_schema='public' and table_type='BASE TABLE'
+             and table_name not in ('scan_candle_snapshots','scanner_operation_runs','kv_cache')
+             order by table_name"
+          echo "### Row counts: old vs new" >> $GITHUB_STEP_SUMMARY
+          echo "| table | old | new | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---:|---:|---|" >> $GITHUB_STEP_SUMMARY
+          bad=0
+          for t in $(psql "$OLD_DB_URL" -tAc "$q"); do
+            o=$(psql "$OLD_DB_URL" -tAc "select count(*) from public.\"$t\"")
+            n=$(psql "$NEW_DB_URL" -tAc "select count(*) from public.\"$t\"")
+            if [ "$o" = "$n" ]; then mark="ok"; else mark="**MISMATCH**"; bad=$((bad+1)); fi
+            [ "$o" = "0" ] && [ "$n" = "0" ] || echo "| $t | $o | $n | $mark |" >> $GITHUB_STEP_SUMMARY
+          done
+          au_o=$(psql "$OLD_DB_URL" -tAc "select count(*) from auth.users")
+          au_n=$(psql "$NEW_DB_URL" -tAc "select count(*) from auth.users")
+          echo "| auth.users | $au_o | $au_n | $([ "$au_o" = "$au_n" ] && echo ok || echo '**MISMATCH**') |" >> $GITHUB_STEP_SUMMARY
+          [ "$bad" -eq 0 ] || { echo "::error::$bad tables did not match"; exit 1; }
+          echo "all tables match"
