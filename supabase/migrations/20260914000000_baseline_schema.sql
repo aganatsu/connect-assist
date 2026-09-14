@@ -6912,8 +6912,19 @@ ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_eviden
 
 
 -- ========================================================================
--- TRIGGERS  (59 statements)
+-- TRIGGERS  (55 statements)
 -- ========================================================================
+--
+-- Supabase owns the storage schema and ships its own triggers on
+-- storage.buckets and storage.objects. The extraction pulled all four in,
+-- and the migration died at statement 610 with "trigger
+-- enforce_bucket_name_length_trigger for relation buckets already exists".
+-- They are not ours to create; removed.
+--
+-- on_auth_user_created_profile on auth.users IS ours and is kept. It is the
+-- first trigger in this section and applied cleanly on that run, which
+-- settles the open question about writing to auth.users.
+--
 
 CREATE TRIGGER on_auth_user_created_profile AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user_profile();
 
@@ -7024,14 +7035,6 @@ CREATE TRIGGER protect_zone_shadow_observation_evidence BEFORE UPDATE ON public.
 CREATE TRIGGER protect_zone_shadow_replay_provenance BEFORE UPDATE ON public.zone_candidate_shadow_observations FOR EACH ROW EXECUTE FUNCTION protect_zone_shadow_replay_provenance();
 
 CREATE TRIGGER protect_zone_timeframe_evidence_trg BEFORE UPDATE ON public.zone_timeframe_evidence FOR EACH ROW EXECUTE FUNCTION protect_zone_timeframe_evidence();
-
-CREATE TRIGGER enforce_bucket_name_length_trigger BEFORE INSERT OR UPDATE OF name ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.enforce_bucket_name_length();
-
-CREATE TRIGGER protect_buckets_delete BEFORE DELETE ON storage.buckets FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
-
-CREATE TRIGGER protect_objects_delete BEFORE DELETE ON storage.objects FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
-
-CREATE TRIGGER update_objects_updated_at BEFORE UPDATE ON storage.objects FOR EACH ROW EXECUTE FUNCTION storage.update_updated_at_column();
 
 
 -- ========================================================================
