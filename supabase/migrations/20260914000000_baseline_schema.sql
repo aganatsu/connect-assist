@@ -1433,22 +1433,177 @@ ALTER SEQUENCE public.api_credit_usage_id_seq OWNED BY public.api_credit_usage.i
 -- ========================================================================
 -- CONSTRAINTS  (275 statements)
 -- ========================================================================
+-- Ordered by kind, not by table name. A FOREIGN KEY needs the referenced
+-- table's PRIMARY KEY or UNIQUE constraint to already exist, and one
+-- alphabetical block does not guarantee that: active_direction_verdicts
+-- sorts before active_game_plans, so its FK was created first and failed
+-- with "no unique constraint matching given keys".
 
 ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_pkey PRIMARY KEY (id);
 
-ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
+ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_pkey PRIMARY KEY (id);
 
-ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.api_credit_usage ADD CONSTRAINT api_credit_usage_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.backtest_runs ADD CONSTRAINT backtest_runs_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.bot_config_change_log ADD CONSTRAINT bot_config_change_log_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.bot_recommendations ADD CONSTRAINT bot_recommendations_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.broker_connections ADD CONSTRAINT broker_connections_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.close_audit_log ADD CONSTRAINT close_audit_log_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.config_backups ADD CONSTRAINT config_backups_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.config_presets ADD CONSTRAINT config_presets_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.game_plan_refresh_status ADD CONSTRAINT game_plan_refresh_status_pkey PRIMARY KEY (user_id, bot_id);
+
+ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_observations_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycles_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement_certificates_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.kv_cache ADD CONSTRAINT kv_cache_pkey PRIMARY KEY (key);
+
+ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.optimizer_runs ADD CONSTRAINT optimizer_runs_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.paper_accounts ADD CONSTRAINT paper_accounts_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.paper_trade_history ADD CONSTRAINT paper_trade_history_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.paper_trade_history_duplicate_audit ADD CONSTRAINT paper_trade_history_duplicate_audit_pkey PRIMARY KEY (duplicate_history_id);
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.profiles ADD CONSTRAINT profiles_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scan_history ADD CONSTRAINT scan_history_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scan_logs ADD CONSTRAINT scan_logs_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scanner_authorization_failures ADD CONSTRAINT scanner_authorization_failures_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scanner_health_monitor_state ADD CONSTRAINT scanner_health_monitor_state_pkey PRIMARY KEY (user_id, bot_id);
+
+ALTER TABLE public.scanner_operation_runs ADD CONSTRAINT scanner_operation_runs_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scanner_operational_alerts ADD CONSTRAINT scanner_operational_alerts_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.scanner_runtime_locks ADD CONSTRAINT scanner_runtime_locks_pkey PRIMARY KEY (user_id, bot_id, lock_scope);
+
+ALTER TABLE public.scheduled_tasks ADD CONSTRAINT scheduled_tasks_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.telegram_notification_claims ADD CONSTRAINT telegram_notification_claims_pkey PRIMARY KEY (claim_key);
+
+ALTER TABLE public.trade_archive ADD CONSTRAINT trade_archive_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.trade_post_mortems ADD CONSTRAINT trade_post_mortems_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.trade_reasonings ADD CONSTRAINT trade_reasonings_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.trades ADD CONSTRAINT trades_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.user_settings ADD CONSTRAINT user_settings_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.zone_confirmation_evidence_counters ADD CONSTRAINT zone_confirmation_evidence_counters_pkey PRIMARY KEY (user_id, bot_id, pending_order_id);
+
+ALTER TABLE public.zone_timeframe_evidence ADD CONSTRAINT zone_timeframe_evidence_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.zone_timeframe_evidence_summary ADD CONSTRAINT zone_timeframe_evidence_summary_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_storage_path_key UNIQUE (storage_path);
+
+ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_user_connection_unique UNIQUE (user_id, connection_id);
+
+ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_user_id_key UNIQUE (user_id);
+
+ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_unique UNIQUE (user_id, bot_id, position_id, broker_connection_id, action);
+
+ALTER TABLE public.config_backups ADD CONSTRAINT config_backups_backup_id_key UNIQUE (backup_id);
+
+ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_one_family_per_scan UNIQUE (user_id, bot_id, scan_cycle_id, symbol, setup_family);
+
+ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_one_structure_opportunity UNIQUE (user_id, bot_id, setup_family, opportunity_key);
+
+ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_lifecycle_replay_unique UNIQUE (lifecycle_id, snapshot_id, evidence_source);
+
+ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_transition_revision_unique UNIQUE (lifecycle_id, to_revision);
+
+ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycle_setup_unique UNIQUE (user_id, bot_id, setup_id);
+
+ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement__user_id_bot_id_evidence_hash_key UNIQUE (user_id, bot_id, evidence_hash);
+
+ALTER TABLE public.paper_accounts ADD CONSTRAINT paper_accounts_user_id_key UNIQUE (user_id);
+
+ALTER TABLE public.profiles ADD CONSTRAINT profiles_user_id_key UNIQUE (user_id);
+
+ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_user_id_bot_id_key UNIQUE (user_id, bot_id);
+
+ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_config_id_trading_day_key UNIQUE (config_id, trading_day);
+
+ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_user_id_bot_id_scan_cycle_id_symbol_t_key UNIQUE (user_id, bot_id, scan_cycle_id, symbol, timeframe);
+
+ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_user_id_bot_id_candidate_id_contra_key UNIQUE (user_id, bot_id, candidate_id, contract_version);
+
+ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_user_id_position_id_key UNIQUE (user_id, position_id);
+
+ALTER TABLE public.user_settings ADD CONSTRAINT user_settings_user_id_key UNIQUE (user_id);
+
+ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_shadow_one_candidate_per_scan UNIQUE (user_id, bot_id, scan_cycle_id, symbol, candidate_id);
+
+ALTER TABLE public.zone_timeframe_evidence_summary ADD CONSTRAINT zone_timeframe_evidence_summary_evidence_id_key UNIQUE (evidence_id);
 
 ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_agreement_check CHECK (((agreement >= (0)::numeric) AND (agreement <= (1)::numeric)));
 
 ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (100)::numeric)));
 
 ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_verdict_check CHECK ((verdict = ANY (ARRAY['long'::text, 'short'::text, 'neutral'::text])));
-
-ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_bias_check CHECK ((bias = ANY (ARRAY['bullish'::text, 'bearish'::text, 'neutral'::text])));
 
@@ -1460,14 +1615,6 @@ ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_session_ch
 
 ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_state_check CHECK ((state = ANY (ARRAY['tradeable'::text, 'wait'::text, 'skip'::text])));
 
-ALTER TABLE public.api_credit_usage ADD CONSTRAINT api_credit_usage_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_storage_path_key UNIQUE (storage_path);
-
-ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_base_timeframe_check CHECK ((base_timeframe = '1m'::text));
 
 ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_candle_count_check CHECK ((candle_count > 0));
@@ -1476,25 +1623,7 @@ ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_dat
 
 ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_source_check CHECK ((source = ANY (ARRAY['mt4'::text, 'mt5'::text])));
 
-ALTER TABLE public.backtest_runs ADD CONSTRAINT backtest_runs_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.bot_config_change_log ADD CONSTRAINT bot_config_change_log_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.bot_config_change_log ADD CONSTRAINT bot_config_change_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.bot_config_change_log ADD CONSTRAINT bot_config_change_log_change_type_check CHECK ((change_type = ANY (ARRAY['insert'::text, 'update'::text, 'delete'::text])));
-
-ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_user_connection_unique UNIQUE (user_id, connection_id);
-
-ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_user_id_key UNIQUE (user_id);
-
-ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES broker_connections(id) ON DELETE CASCADE;
-
-ALTER TABLE public.bot_recommendations ADD CONSTRAINT bot_recommendations_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.broker_connections ADD CONSTRAINT broker_connections_pkey PRIMARY KEY (id);
 
 ALTER TABLE public.broker_connections ADD CONSTRAINT broker_connections_broker_type_check CHECK ((broker_type = ANY (ARRAY['oanda'::text, 'metaapi'::text])));
 
@@ -1502,39 +1631,13 @@ ALTER TABLE public.broker_connections ADD CONSTRAINT broker_connections_commissi
 
 ALTER TABLE public.broker_connections ADD CONSTRAINT broker_connections_manual_commission_check CHECK (((commission_mode <> 'manual'::text) OR (commission_per_lot > (0)::numeric)));
 
-ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_unique UNIQUE (user_id, bot_id, position_id, broker_connection_id, action);
-
-ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_broker_connection_id_fkey FOREIGN KEY (broker_connection_id) REFERENCES broker_connections(id) ON DELETE CASCADE;
-
-ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_action_check CHECK ((action = ANY (ARRAY['open'::text, 'close'::text, 'modify'::text])));
 
 ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_attempt_count_check CHECK ((attempt_count > 0));
 
 ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_status_check CHECK ((status = ANY (ARRAY['attempting'::text, 'succeeded'::text, 'rejected'::text, 'uncertain'::text])));
 
-ALTER TABLE public.close_audit_log ADD CONSTRAINT close_audit_log_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.config_backups ADD CONSTRAINT config_backups_backup_id_key UNIQUE (backup_id);
-
-ALTER TABLE public.config_backups ADD CONSTRAINT config_backups_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.config_presets ADD CONSTRAINT config_presets_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.game_plan_refresh_status ADD CONSTRAINT game_plan_refresh_status_pkey PRIMARY KEY (user_id, bot_id);
-
 ALTER TABLE public.game_plan_refresh_status ADD CONSTRAINT game_plan_refresh_status_status_check CHECK ((status = ANY (ARRAY['idle'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'skipped'::text])));
-
-ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_one_family_per_scan UNIQUE (user_id, bot_id, scan_cycle_id, symbol, setup_family);
-
-ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_one_structure_opportunity UNIQUE (user_id, bot_id, setup_family, opportunity_key);
-
-ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_observations_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_bounds_valid CHECK ((authority_zone_low < authority_zone_high));
 
@@ -1556,41 +1659,17 @@ ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entr
 
 ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_setup_family_check CHECK ((setup_family = ANY (ARRAY['impulse'::text, 'structure_poi'::text])));
 
-ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_lifecycle_replay_unique UNIQUE (lifecycle_id, snapshot_id, evidence_source);
-
-ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_lifecycle_id_fkey FOREIGN KEY (lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE CASCADE;
-
-ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES scan_candle_snapshots(id) ON DELETE CASCADE;
-
-ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_evidence_source_check CHECK ((evidence_source = ANY (ARRAY['forward_observation'::text, 'retrospective_replay'::text, 'backtest'::text])));
 
 ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_outcome_check CHECK ((outcome = ANY (ARRAY['won'::text, 'lost'::text, 'inconclusive'::text, 'no_entry'::text])));
 
 ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_lifecycle_replay_contract CHECK (((result ->> 'contractVersion'::text) = 'impulse-lifecycle-replay.v1'::text));
 
-ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_transition_revision_unique UNIQUE (lifecycle_id, to_revision);
-
-ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_lifecycle_id_fkey FOREIGN KEY (lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE CASCADE;
-
-ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_check CHECK ((to_revision = (from_revision + 1)));
 
 ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_event_type_check CHECK ((event_type = ANY (ARRAY['created'::text, 'zone_touched'::text, 'entry_trigger_touched'::text, 'candidate_failed'::text, 'trigger_revised'::text, 'trigger_locked'::text, 'confirmation_passed'::text, 'impulse_invalidated'::text, 'expired'::text, 'setup_resolved'::text])));
 
 ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_transition_snapshot_valid CHECK ((((lifecycle_snapshot ->> 'contractVersion'::text) = 'impulse-entry-lifecycle.v1'::text) AND (((lifecycle_snapshot ->> 'revision'::text))::integer = to_revision)));
-
-ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycle_setup_unique UNIQUE (user_id, bot_id, setup_id);
-
-ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycles_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycle_contract_valid CHECK ((((lifecycle ->> 'contractVersion'::text) = 'impulse-entry-lifecycle.v1'::text) AND ((lifecycle ->> 'mode'::text) = mode) AND ((lifecycle #>> '{impulse,id}'::text[]) = impulse_id) AND ((lifecycle #>> '{impulse,direction}'::text[]) = direction) AND ((lifecycle #>> '{impulse,timeframe}'::text[]) = impulse_timeframe) AND ((lifecycle ->> 'status'::text) = status) AND (((lifecycle ->> 'revision'::text))::integer = revision) AND (COALESCE((lifecycle ->> 'activeCandidateId'::text), ''::text) = COALESCE(active_candidate_id, ''::text))));
 
@@ -1602,19 +1681,7 @@ ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecyc
 
 ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycles_status_check CHECK ((status = ANY (ARRAY['active'::text, 'entered'::text, 'invalidated'::text, 'expired'::text, 'exhausted'::text])));
 
-ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement__user_id_bot_id_evidence_hash_key UNIQUE (user_id, bot_id, evidence_hash);
-
-ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement_certificates_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement_certificates_status_check CHECK ((status = ANY (ARRAY['collecting'::text, 'eligible'::text, 'rejected'::text])));
-
-ALTER TABLE public.kv_cache ADD CONSTRAINT kv_cache_pkey PRIMARY KEY (key);
-
-ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_check CHECK ((high > low));
 
@@ -1624,23 +1691,7 @@ ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_status_check C
 
 ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_timeframe_check CHECK ((timeframe = ANY (ARRAY['D'::text, '4H'::text, '1H'::text])));
 
-ALTER TABLE public.optimizer_runs ADD CONSTRAINT optimizer_runs_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.paper_accounts ADD CONSTRAINT paper_accounts_user_id_key UNIQUE (user_id);
-
-ALTER TABLE public.paper_accounts ADD CONSTRAINT paper_accounts_pkey PRIMARY KEY (id);
-
 ALTER TABLE public.paper_accounts ADD CONSTRAINT paper_accounts_execution_mode_check CHECK ((execution_mode = ANY (ARRAY['paper'::text, 'live'::text])));
-
-ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id);
-
-ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
-
-ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
-
-ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
 
 ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_broker_close_state_check CHECK ((broker_close_state = ANY (ARRAY['none'::text, 'pending'::text, 'confirmed'::text, 'reconciliation_required'::text])));
 
@@ -1660,25 +1711,7 @@ ALTER TABLE public.paper_positions ADD CONSTRAINT position_frozen_strategy_hash_
 
 ALTER TABLE public.paper_positions ADD CONSTRAINT position_impulse_entry_lifecycle_valid CHECK (((impulse_entry_lifecycle IS NULL) OR ((impulse_entry_lifecycle ->> 'contractVersion'::text) = 'impulse-entry-lifecycle.v1'::text)));
 
-ALTER TABLE public.paper_trade_history ADD CONSTRAINT paper_trade_history_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.paper_trade_history ADD CONSTRAINT paper_trade_history_source_pending_order_id_fkey FOREIGN KEY (source_pending_order_id) REFERENCES pending_orders(id) ON DELETE SET NULL;
-
 ALTER TABLE public.paper_trade_history ADD CONSTRAINT paper_trade_history_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
-
-ALTER TABLE public.paper_trade_history_duplicate_audit ADD CONSTRAINT paper_trade_history_duplicate_audit_pkey PRIMARY KEY (duplicate_history_id);
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id);
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
-
-ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.pending_orders ADD CONSTRAINT pending_cross_tf_entry_authority_valid CHECK (((cross_tf_entry_authority IS NULL) OR (((cross_tf_entry_authority ->> 'contractVersion'::text) = 'cross-tf-entry-authority.v1'::text) AND (cross_tf_effective_mode = ANY (ARRAY['observe'::text, 'soft'::text, 'hard'::text])) AND (cross_tf_entry_allowed IS NOT NULL))));
 
@@ -1702,37 +1735,13 @@ ALTER TABLE public.pending_orders ADD CONSTRAINT pending_post_confirmation_entry
 
 ALTER TABLE public.pending_orders ADD CONSTRAINT pending_watchlist_identity_required CHECK (((NOT from_watchlist) OR ((staged_setup_id IS NOT NULL) AND (candidate_id IS NOT NULL)))) NOT VALID;
 
-ALTER TABLE public.profiles ADD CONSTRAINT profiles_user_id_key UNIQUE (user_id);
-
-ALTER TABLE public.profiles ADD CONSTRAINT profiles_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_user_id_bot_id_key UNIQUE (user_id, bot_id);
-
-ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_account_stage_check CHECK ((account_stage = ANY (ARRAY['challenge'::text, 'verification'::text, 'funded'::text])));
 
 ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_firm_type_check CHECK ((firm_type = ANY (ARRAY['ftmo_2step'::text, 'ftmo_1step'::text, 'generic'::text])));
 
-ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_config_id_trading_day_key UNIQUE (config_id, trading_day);
-
-ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_config_id_fkey FOREIGN KEY (config_id) REFERENCES prop_firm_config(id) ON DELETE CASCADE;
-
-ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_config_id_fkey FOREIGN KEY (config_id) REFERENCES prop_firm_config(id) ON DELETE CASCADE;
-
 ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_event_type_check CHECK ((event_type = ANY (ARRAY['daily_warning'::text, 'daily_soft_lock'::text, 'daily_hard_lock'::text, 'drawdown_warning'::text, 'drawdown_breach'::text, 'target_reached'::text, 'target_warning'::text, 'emergency_close'::text, 'size_reduction'::text, 'day_reset'::text, 'best_day_warning'::text])));
 
 ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_severity_check CHECK ((severity = ANY (ARRAY['info'::text, 'warning'::text, 'critical'::text])));
-
-ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
 
@@ -1740,23 +1749,9 @@ ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_outcome_status
 
 ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_rejection_type_check CHECK ((rejection_type = ANY (ARRAY['gate_blocked'::text, 'below_threshold_strong_t1'::text])));
 
-ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_user_id_bot_id_scan_cycle_id_symbol_t_key UNIQUE (user_id, bot_id, scan_cycle_id, symbol, timeframe);
-
-ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_pkey PRIMARY KEY (id);
-
 ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_candles_chk CHECK ((jsonb_typeof(candles) = 'array'::text));
 
 ALTER TABLE public.scan_candle_snapshots ADD CONSTRAINT scan_candle_snapshots_count_chk CHECK (((candle_count >= 0) AND (candle_count <= 500)));
-
-ALTER TABLE public.scan_history ADD CONSTRAINT scan_history_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.scan_logs ADD CONSTRAINT scan_logs_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.scanner_authorization_failures ADD CONSTRAINT scanner_authorization_failures_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.scanner_health_monitor_state ADD CONSTRAINT scanner_health_monitor_state_pkey PRIMARY KEY (user_id, bot_id);
-
-ALTER TABLE public.scanner_operation_runs ADD CONSTRAINT scanner_operation_runs_pkey PRIMARY KEY (id);
 
 ALTER TABLE public.scanner_operation_runs ADD CONSTRAINT scanner_operation_runs_operation_check CHECK ((operation = ANY (ARRAY['scan'::text, 'manage'::text, 'zone_confirmation'::text])));
 
@@ -1764,43 +1759,13 @@ ALTER TABLE public.scanner_operation_runs ADD CONSTRAINT scanner_operation_runs_
 
 ALTER TABLE public.scanner_operation_runs ADD CONSTRAINT scanner_operation_runs_trigger_source_check CHECK ((trigger_source = ANY (ARRAY['cron'::text, 'manual'::text])));
 
-ALTER TABLE public.scanner_operational_alerts ADD CONSTRAINT scanner_operational_alerts_pkey PRIMARY KEY (id);
-
 ALTER TABLE public.scanner_operational_alerts ADD CONSTRAINT scanner_operational_alerts_alert_type_check CHECK ((alert_type = ANY (ARRAY['scanner_heartbeat_missing'::text, 'scan_incomplete'::text, 'metaapi_certificate_failure'::text, 'metaapi_connection_failure'::text, 'candle_source_exhaustion'::text, 'stuck_confirmation_order'::text, 'authorization_error'::text, 'migration_drift'::text])));
 
 ALTER TABLE public.scanner_operational_alerts ADD CONSTRAINT scanner_operational_alerts_severity_check CHECK ((severity = ANY (ARRAY['info'::text, 'warning'::text, 'critical'::text])));
 
 ALTER TABLE public.scanner_operational_alerts ADD CONSTRAINT scanner_operational_alerts_status_check CHECK ((status = ANY (ARRAY['active'::text, 'resolved'::text])));
 
-ALTER TABLE public.scanner_runtime_locks ADD CONSTRAINT scanner_runtime_locks_pkey PRIMARY KEY (user_id, bot_id, lock_scope);
-
-ALTER TABLE public.scheduled_tasks ADD CONSTRAINT scheduled_tasks_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.scheduled_tasks ADD CONSTRAINT scheduled_tasks_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-
-ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE CASCADE;
-
-ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_observation_parent_id_fkey FOREIGN KEY (observation_parent_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_pending_order_id_fkey FOREIGN KEY (pending_order_id) REFERENCES pending_orders(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_position_id_fkey FOREIGN KEY (position_id) REFERENCES paper_positions(id) ON DELETE SET NULL;
-
-ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.staged_setups ADD CONSTRAINT staged_cross_tf_entry_authority_valid CHECK (((cross_tf_entry_authority IS NULL) OR (((cross_tf_entry_authority ->> 'contractVersion'::text) = 'cross-tf-entry-authority.v1'::text) AND (cross_tf_effective_mode = ANY (ARRAY['observe'::text, 'soft'::text, 'hard'::text])) AND (cross_tf_entry_allowed IS NOT NULL))));
 
@@ -1822,12 +1787,6 @@ ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_lifecycle_phase_ch
 
 ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_status_check CHECK ((status = ANY (ARRAY['watching'::text, 'qualified'::text, 'pending'::text, 'awaiting_confirmation'::text, 'filled'::text, 'blocked_after_qualification'::text, 'invalidated'::text, 'expired'::text, 'cancelled'::text, 'promoted'::text])));
 
-ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_user_id_bot_id_candidate_id_contra_key UNIQUE (user_id, bot_id, candidate_id, contract_version);
-
-ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
 
 ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_execution_floor_source_check CHECK ((execution_floor_source = ANY (ARRAY['spread_proxy'::text, 'broker_snapshot'::text])));
@@ -1837,20 +1796,6 @@ ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observati
 ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_positive_prices CHECK (((entry_price > (0)::numeric) AND (structural_invalidation > (0)::numeric) AND (confirmation_atr >= (0)::numeric) AND (pip_size > (0)::numeric) AND (execution_floor_quote_distance >= (0)::numeric)));
 
 ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_spread_source_check CHECK ((spread_source = ANY (ARRAY['spec_proxy'::text, 'live'::text])));
-
-ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_activation_id_fkey FOREIGN KEY (activation_id) REFERENCES strategy_activation_registry(id) ON DELETE CASCADE;
-
-ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-
-ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
-ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-
-ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_authority_stage_check CHECK ((authority_stage = ANY (ARRAY['shadow'::text, 'log_only'::text, 'soft_adjustment'::text, 'hard_block'::text])));
 
@@ -1865,10 +1810,6 @@ ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activati
 ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_runtime_scope_check CHECK ((runtime_scope = ANY (ARRAY['observation'::text, 'paper'::text, 'live_canary'::text, 'live'::text])));
 
 ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_variant_key_check CHECK (((length(variant_key) >= 1) AND (length(variant_key) <= 100)));
-
-ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificat_good_trade_retention_percent_check CHECK (((good_trade_retention_percent >= (0)::numeric) AND (good_trade_retention_percent <= (100)::numeric)));
 
@@ -1894,53 +1835,17 @@ ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_eviden
 
 ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_variant_key_check CHECK (((length(variant_key) >= 1) AND (length(variant_key) <= 100)));
 
-ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_comparable_check CHECK ((comparable >= 0));
 
 ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_minimum_comparable_check CHECK ((minimum_comparable >= 100));
 
-ALTER TABLE public.telegram_notification_claims ADD CONSTRAINT telegram_notification_claims_pkey PRIMARY KEY (claim_key);
-
-ALTER TABLE public.trade_archive ADD CONSTRAINT trade_archive_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.trade_post_mortems ADD CONSTRAINT trade_post_mortems_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.trade_post_mortems ADD CONSTRAINT trade_post_mortems_trade_id_fkey FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL;
-
-ALTER TABLE public.trade_reasonings ADD CONSTRAINT trade_reasonings_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.trade_reasonings ADD CONSTRAINT trade_reasonings_trade_id_fkey FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL;
-
 ALTER TABLE public.trade_reasonings ADD CONSTRAINT trade_reasonings_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
 
-ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_user_id_position_id_key UNIQUE (user_id, position_id);
-
-ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
 ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_review_status_check CHECK ((review_status = ANY (ARRAY['pending'::text, 'reviewed'::text])));
-
-ALTER TABLE public.trades ADD CONSTRAINT trades_pkey PRIMARY KEY (id);
 
 ALTER TABLE public.trades ADD CONSTRAINT trades_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
 
 ALTER TABLE public.trades ADD CONSTRAINT trades_status_check CHECK ((status = ANY (ARRAY['open'::text, 'closed'::text, 'cancelled'::text])));
-
-ALTER TABLE public.user_settings ADD CONSTRAINT user_settings_user_id_key UNIQUE (user_id);
-
-ALTER TABLE public.user_settings ADD CONSTRAINT user_settings_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_shadow_one_candidate_per_scan UNIQUE (user_id, bot_id, scan_cycle_id, symbol, candidate_id);
-
-ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_pkey PRIMARY KEY (id);
-
-ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_replay_run_id_fkey FOREIGN KEY (replay_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE;
-
-ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_direction_check CHECK ((direction = ANY (ARRAY['long'::text, 'short'::text])));
 
@@ -1966,19 +1871,119 @@ ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_shadow
 
 ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_shadow_timeframe_relationship_valid CHECK (((timeframe_relationship IS NULL) OR (timeframe_relationship = ANY (ARRAY['qualified_nested'::text, 'context_only'::text, 'standalone_lower_tf'::text, 'timeframe_conflict'::text, 'no_parent_context'::text]))));
 
-ALTER TABLE public.zone_confirmation_evidence_counters ADD CONSTRAINT zone_confirmation_evidence_counters_pkey PRIMARY KEY (user_id, bot_id, pending_order_id);
-
-ALTER TABLE public.zone_timeframe_evidence ADD CONSTRAINT zone_timeframe_evidence_pkey PRIMARY KEY (id);
-
 ALTER TABLE public.zone_timeframe_evidence ADD CONSTRAINT zone_tf_evidence_direction_chk CHECK ((direction = ANY (ARRAY['bullish'::text, 'bearish'::text, 'long'::text, 'short'::text])));
 
 ALTER TABLE public.zone_timeframe_evidence ADD CONSTRAINT zone_tf_evidence_provenance_chk CHECK (((replay_provenance IS NULL) OR (replay_provenance = ANY (ARRAY['exact_input'::text, 'historically_refetched'::text, 'approximate_config'::text, 'unreplayable'::text]))));
 
 ALTER TABLE public.zone_timeframe_evidence ADD CONSTRAINT zone_tf_evidence_source_chk CHECK ((evidence_source = ANY (ARRAY['live_scan'::text, 'confirmation'::text, 'replay'::text, 'backtest'::text])));
 
-ALTER TABLE public.zone_timeframe_evidence_summary ADD CONSTRAINT zone_timeframe_evidence_summary_evidence_id_key UNIQUE (evidence_id);
+ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
 
-ALTER TABLE public.zone_timeframe_evidence_summary ADD CONSTRAINT zone_timeframe_evidence_summary_pkey PRIMARY KEY (id);
+ALTER TABLE public.active_direction_verdicts ADD CONSTRAINT active_direction_verdicts_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.active_game_plans ADD CONSTRAINT active_game_plans_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.backtest_history_datasets ADD CONSTRAINT backtest_history_datasets_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.bot_config_change_log ADD CONSTRAINT bot_config_change_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.bot_configs ADD CONSTRAINT bot_configs_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES broker_connections(id) ON DELETE CASCADE;
+
+ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_broker_connection_id_fkey FOREIGN KEY (broker_connection_id) REFERENCES broker_connections(id) ON DELETE CASCADE;
+
+ALTER TABLE public.broker_execution_ledger ADD CONSTRAINT broker_execution_ledger_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.ict_entry_zone_authority_observations ADD CONSTRAINT ict_entry_zone_authority_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_lifecycle_id_fkey FOREIGN KEY (lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES scan_candle_snapshots(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycle_replays ADD CONSTRAINT impulse_entry_lifecycle_replays_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_lifecycle_id_fkey FOREIGN KEY (lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycle_transitions ADD CONSTRAINT impulse_entry_lifecycle_transitions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_entry_lifecycles ADD CONSTRAINT impulse_entry_lifecycles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.impulse_lifecycle_enforcement_certificates ADD CONSTRAINT impulse_lifecycle_enforcement_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.manual_impulses ADD CONSTRAINT manual_impulses_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id);
+
+ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
+
+ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
+
+ALTER TABLE public.paper_positions ADD CONSTRAINT paper_positions_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
+
+ALTER TABLE public.paper_trade_history ADD CONSTRAINT paper_trade_history_source_pending_order_id_fkey FOREIGN KEY (source_pending_order_id) REFERENCES pending_orders(id) ON DELETE SET NULL;
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id);
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id);
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
+
+ALTER TABLE public.pending_orders ADD CONSTRAINT pending_orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.prop_firm_config ADD CONSTRAINT prop_firm_config_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.prop_firm_daily_state ADD CONSTRAINT prop_firm_daily_state_config_id_fkey FOREIGN KEY (config_id) REFERENCES prop_firm_config(id) ON DELETE CASCADE;
+
+ALTER TABLE public.prop_firm_events ADD CONSTRAINT prop_firm_events_config_id_fkey FOREIGN KEY (config_id) REFERENCES prop_firm_config(id) ON DELETE CASCADE;
+
+ALTER TABLE public.rejected_setups ADD CONSTRAINT rejected_setups_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.scheduled_tasks ADD CONSTRAINT scheduled_tasks_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+
+ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_staged_setup_id_fkey FOREIGN KEY (staged_setup_id) REFERENCES staged_setups(id) ON DELETE CASCADE;
+
+ALTER TABLE public.setup_lifecycle_events ADD CONSTRAINT setup_lifecycle_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_direction_verdict_id_fkey FOREIGN KEY (direction_verdict_id) REFERENCES active_direction_verdicts(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_game_plan_id_fkey FOREIGN KEY (game_plan_id) REFERENCES active_game_plans(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_impulse_entry_lifecycle_id_fkey FOREIGN KEY (impulse_entry_lifecycle_id) REFERENCES impulse_entry_lifecycles(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_observation_parent_id_fkey FOREIGN KEY (observation_parent_id) REFERENCES staged_setups(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_pending_order_id_fkey FOREIGN KEY (pending_order_id) REFERENCES pending_orders(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_position_id_fkey FOREIGN KEY (position_id) REFERENCES paper_positions(id) ON DELETE SET NULL;
+
+ALTER TABLE public.staged_setups ADD CONSTRAINT staged_setups_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.stop_policy_observations ADD CONSTRAINT stop_policy_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_activation_id_fkey FOREIGN KEY (activation_id) REFERENCES strategy_activation_registry(id) ON DELETE CASCADE;
+
+ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.strategy_activation_events ADD CONSTRAINT strategy_activation_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+ALTER TABLE public.strategy_activation_registry ADD CONSTRAINT strategy_activation_registry_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.strategy_evidence_certificates ADD CONSTRAINT strategy_evidence_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.streamlined_decision_certificates ADD CONSTRAINT streamlined_decision_certificates_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.trade_post_mortems ADD CONSTRAINT trade_post_mortems_trade_id_fkey FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL;
+
+ALTER TABLE public.trade_reasonings ADD CONSTRAINT trade_reasonings_trade_id_fkey FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL;
+
+ALTER TABLE public.trade_review_notes ADD CONSTRAINT trade_review_notes_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_replay_run_id_fkey FOREIGN KEY (replay_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE;
+
+ALTER TABLE public.zone_candidate_shadow_observations ADD CONSTRAINT zone_candidate_shadow_observations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 
 -- ========================================================================
