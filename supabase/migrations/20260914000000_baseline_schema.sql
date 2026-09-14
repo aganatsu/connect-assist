@@ -523,30 +523,29 @@ CREATE TABLE IF NOT EXISTS public.paper_positions (
   frozen_strategy_context jsonb,
   frozen_strategy_hash text,
   policy_frozen_at timestamp with time zone,
-  cross_tf_context_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[]),
-  cross_tf_timeframe_evidence_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[]),
-  cross_tf_relationship text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[]),
-  cross_tf_entry_authority jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[]),
-  cross_tf_effective_mode text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[]),
-  cross_tf_entry_allowed boolean DEFAULT 
-CASE
+  cross_tf_context_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[])) STORED,
+  cross_tf_timeframe_evidence_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[])) STORED,
+  cross_tf_relationship text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[])) STORED,
+  cross_tf_entry_authority jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[])) STORED,
+  cross_tf_effective_mode text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[])) STORED,
+  cross_tf_entry_allowed boolean GENERATED ALWAYS AS (CASE
     WHEN ((frozen_strategy_context #> '{crossTimeframeContext,authority,allowed}'::text[]) IS NULL) THEN NULL::boolean
     ELSE ((frozen_strategy_context #>> '{crossTimeframeContext,authority,allowed}'::text[]))::boolean
-END,
+END) STORED,
   streamlined_decision_origin jsonb,
   streamlined_decision_latest jsonb,
   streamlined_decision_frozen_at timestamp with time zone,
-  canonical_dealing_range jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[]),
-  canonical_dealing_range_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[]),
-  canonical_dealing_range_impulse_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[]),
-  canonical_dealing_range_timeframe text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[]),
+  canonical_dealing_range jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[])) STORED,
+  canonical_dealing_range_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[])) STORED,
+  canonical_dealing_range_impulse_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[])) STORED,
+  canonical_dealing_range_timeframe text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[])) STORED,
   broker_execution_state text DEFAULT 'paper'::text NOT NULL,
   broker_execution_error text,
   broker_execution_updated_at timestamp with time zone,
   broker_close_state text DEFAULT 'none'::text NOT NULL,
   broker_close_error text,
   impulse_entry_lifecycle_id uuid,
-  impulse_entry_lifecycle jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[])
+  impulse_entry_lifecycle jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[])) STORED
 );
 
 CREATE TABLE IF NOT EXISTS public.paper_trade_history (
@@ -654,25 +653,24 @@ CREATE TABLE IF NOT EXISTS public.pending_orders (
   frozen_strategy_context jsonb,
   frozen_strategy_hash text,
   policy_frozen_at timestamp with time zone,
-  cross_tf_context_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[]),
-  cross_tf_timeframe_evidence_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[]),
-  cross_tf_relationship text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[]),
-  cross_tf_entry_authority jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[]),
-  cross_tf_effective_mode text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[]),
-  cross_tf_entry_allowed boolean DEFAULT 
-CASE
+  cross_tf_context_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[])) STORED,
+  cross_tf_timeframe_evidence_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[])) STORED,
+  cross_tf_relationship text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[])) STORED,
+  cross_tf_entry_authority jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[])) STORED,
+  cross_tf_effective_mode text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[])) STORED,
+  cross_tf_entry_allowed boolean GENERATED ALWAYS AS (CASE
     WHEN ((frozen_strategy_context #> '{crossTimeframeContext,authority,allowed}'::text[]) IS NULL) THEN NULL::boolean
     ELSE ((frozen_strategy_context #>> '{crossTimeframeContext,authority,allowed}'::text[]))::boolean
-END,
+END) STORED,
   streamlined_decision_origin jsonb,
   streamlined_decision_latest jsonb,
   streamlined_decision_frozen_at timestamp with time zone,
-  canonical_dealing_range jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[]),
-  canonical_dealing_range_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[]),
-  canonical_dealing_range_impulse_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[]),
-  canonical_dealing_range_timeframe text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[]),
+  canonical_dealing_range jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[])) STORED,
+  canonical_dealing_range_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[])) STORED,
+  canonical_dealing_range_impulse_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[])) STORED,
+  canonical_dealing_range_timeframe text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[])) STORED,
   impulse_entry_lifecycle_id uuid,
-  impulse_entry_lifecycle jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[]),
+  impulse_entry_lifecycle jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[])) STORED,
   post_confirmation_entry jsonb,
   post_confirmation_observation jsonb,
   superseded_candidate_id text,
@@ -1001,28 +999,27 @@ CREATE TABLE IF NOT EXISTS public.staged_setups (
   execution_eligible boolean DEFAULT true NOT NULL,
   observation_parent_id uuid,
   observation_reason text,
-  cross_tf_context_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[]),
-  cross_tf_timeframe_evidence_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[]),
-  cross_tf_relationship text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[]),
-  cross_tf_entry_authority jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[]),
-  cross_tf_effective_mode text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[]),
-  cross_tf_entry_allowed boolean DEFAULT 
-CASE
+  cross_tf_context_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,contractVersion}'::text[])) STORED,
+  cross_tf_timeframe_evidence_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,timeframeEvidenceId}'::text[])) STORED,
+  cross_tf_relationship text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,relationship,classification}'::text[])) STORED,
+  cross_tf_entry_authority jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,authority}'::text[])) STORED,
+  cross_tf_effective_mode text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,authority,effectiveMode}'::text[])) STORED,
+  cross_tf_entry_allowed boolean GENERATED ALWAYS AS (CASE
     WHEN ((frozen_strategy_context #> '{crossTimeframeContext,authority,allowed}'::text[]) IS NULL) THEN NULL::boolean
     ELSE ((frozen_strategy_context #>> '{crossTimeframeContext,authority,allowed}'::text[]))::boolean
-END,
+END) STORED,
   lifecycle_reason_code text,
   lifecycle_evidence jsonb DEFAULT '{}'::jsonb NOT NULL,
   lifecycle_phase text,
   streamlined_decision_origin jsonb,
   streamlined_decision_latest jsonb,
   streamlined_decision_frozen_at timestamp with time zone,
-  canonical_dealing_range jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[]),
-  canonical_dealing_range_version text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[]),
-  canonical_dealing_range_impulse_id text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[]),
-  canonical_dealing_range_timeframe text DEFAULT (frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[]),
+  canonical_dealing_range jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,canonicalDealingRange}'::text[])) STORED,
+  canonical_dealing_range_version text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,contractVersion}'::text[])) STORED,
+  canonical_dealing_range_impulse_id text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,impulseId}'::text[])) STORED,
+  canonical_dealing_range_timeframe text GENERATED ALWAYS AS ((frozen_strategy_context #>> '{crossTimeframeContext,canonicalDealingRange,range,timeframe}'::text[])) STORED,
   impulse_entry_lifecycle_id uuid,
-  impulse_entry_lifecycle jsonb DEFAULT (frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[]),
+  impulse_entry_lifecycle jsonb GENERATED ALWAYS AS ((frozen_strategy_context #> '{crossTimeframeContext,impulseEntryLifecycle}'::text[])) STORED,
   liquidity_confirmation_observation jsonb
 );
 
@@ -2766,44 +2763,6 @@ AS $function$
       THEN lower(btrim(COALESCE(p_account_id, '')))
     ELSE btrim(COALESCE(p_account_id, ''))
   END;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION public.broker_connection_has_unresolved_managed_exposure(p_connection_id uuid, p_user_id uuid)
- RETURNS boolean
- LANGUAGE sql
- STABLE SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.paper_positions position
-    CROSS JOIN LATERAL public.paper_position_broker_close_requirements(
-      position.user_id,
-      position.bot_id,
-      position.position_id
-    ) requirements
-    WHERE position.user_id = p_user_id
-      AND position.position_status IN ('open', 'pending')
-      AND p_connection_id = ANY(
-        requirements.missing_close_connection_ids
-      )
-  ) OR EXISTS (
-    SELECT 1
-    FROM (
-      SELECT DISTINCT open_ledger.bot_id
-      FROM public.broker_execution_ledger open_ledger
-      WHERE open_ledger.user_id = p_user_id
-        AND open_ledger.broker_connection_id = p_connection_id
-        AND open_ledger.action = 'open'
-    ) bot_scope
-    CROSS JOIN LATERAL public.list_unresolved_broker_open_orphans(
-      p_user_id,
-      bot_scope.bot_id,
-      2147483647
-    ) orphan
-    WHERE orphan.broker_connection_id = p_connection_id
-  );
 $function$
 ;
 
@@ -4921,44 +4880,6 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.paper_account_has_unresolved_managed_exposure(p_user_id uuid, p_bot_id text)
- RETURNS boolean
- LANGUAGE sql
- STABLE SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.paper_positions position
-    CROSS JOIN LATERAL public.paper_position_broker_close_requirements(
-      position.user_id,
-      position.bot_id,
-      position.position_id
-    ) requirements
-    WHERE position.user_id = p_user_id
-      AND position.bot_id = COALESCE(NULLIF(p_bot_id, ''), 'smc')
-      AND position.position_status IN ('open', 'pending')
-      AND (
-        cardinality(requirements.missing_close_connection_ids) > 0
-        OR (
-          cardinality(requirements.required_connection_ids) = 0
-          AND lower(COALESCE(
-            position.broker_execution_state,
-            'unknown'
-          )) NOT IN ('paper', 'rejected')
-        )
-      )
-  ) OR EXISTS (
-    SELECT 1
-    FROM public.list_unresolved_broker_open_orphans(
-      p_user_id,
-      COALESCE(NULLIF(p_bot_id, ''), 'smc'),
-      1
-    )
-  );
-$function$
-;
-
 CREATE OR REPLACE FUNCTION public.paper_position_broker_close_requirements(p_user_id uuid, p_bot_id text, p_position_id text)
  RETURNS TABLE(position_found boolean, required_connection_ids uuid[], missing_close_connection_ids uuid[], unknown_identity_connection_ids uuid[], broker_position_ids jsonb)
  LANGUAGE sql
@@ -6884,6 +6805,88 @@ BEGIN
 
   RETURN alert_id;
 END;
+$function$
+;
+
+
+-- Moved to the end of this section: these two are LANGUAGE sql, whose
+-- bodies Postgres validates at CREATE time, and they call functions that
+-- were defined below them. plpgsql bodies are not checked, which is why
+-- only these three call sites mattered.
+
+CREATE OR REPLACE FUNCTION public.paper_account_has_unresolved_managed_exposure(p_user_id uuid, p_bot_id text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.paper_positions position
+    CROSS JOIN LATERAL public.paper_position_broker_close_requirements(
+      position.user_id,
+      position.bot_id,
+      position.position_id
+    ) requirements
+    WHERE position.user_id = p_user_id
+      AND position.bot_id = COALESCE(NULLIF(p_bot_id, ''), 'smc')
+      AND position.position_status IN ('open', 'pending')
+      AND (
+        cardinality(requirements.missing_close_connection_ids) > 0
+        OR (
+          cardinality(requirements.required_connection_ids) = 0
+          AND lower(COALESCE(
+            position.broker_execution_state,
+            'unknown'
+          )) NOT IN ('paper', 'rejected')
+        )
+      )
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.list_unresolved_broker_open_orphans(
+      p_user_id,
+      COALESCE(NULLIF(p_bot_id, ''), 'smc'),
+      1
+    )
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.broker_connection_has_unresolved_managed_exposure(p_connection_id uuid, p_user_id uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.paper_positions position
+    CROSS JOIN LATERAL public.paper_position_broker_close_requirements(
+      position.user_id,
+      position.bot_id,
+      position.position_id
+    ) requirements
+    WHERE position.user_id = p_user_id
+      AND position.position_status IN ('open', 'pending')
+      AND p_connection_id = ANY(
+        requirements.missing_close_connection_ids
+      )
+  ) OR EXISTS (
+    SELECT 1
+    FROM (
+      SELECT DISTINCT open_ledger.bot_id
+      FROM public.broker_execution_ledger open_ledger
+      WHERE open_ledger.user_id = p_user_id
+        AND open_ledger.broker_connection_id = p_connection_id
+        AND open_ledger.action = 'open'
+    ) bot_scope
+    CROSS JOIN LATERAL public.list_unresolved_broker_open_orphans(
+      p_user_id,
+      bot_scope.bot_id,
+      2147483647
+    ) orphan
+    WHERE orphan.broker_connection_id = p_connection_id
+  );
 $function$
 ;
 
