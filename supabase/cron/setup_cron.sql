@@ -12,31 +12,26 @@
 --                           CRON_SECRET env var on your edge functions
 --
 -- Verify afterwards with:  select jobname, schedule, active from cron.job;
+--
+-- REMOVED 2026-09-14, four jobs that called functions which do not exist in
+-- this repo. They were deployed to the old project through Lovable's console
+-- and were never committed, the same way most of the schema was:
+--
+--   advisor-daily, advisor-weekly          -> functions/v1/advisor
+--   game-plan-authority-refresh-15min      -> functions/v1/game-plan-refresh
+--   impulse-lifecycle-shadow-monitor-5min  -> functions/v1/impulse-lifecycle-replay
+--
+-- Scheduling them would have produced a 404 every 5 to 15 minutes forever.
+--
+-- Nothing important is lost. bot-scanner generates the Game Plan itself
+-- (index.ts around 4105-4167: regenerates on session change or after
+-- gamePlanRefreshHours, default 4), so game-plan-refresh was a second path to
+-- the same result. The lifecycle monitor was observational. The advisors are
+-- bot-daily-review and bot-weekly-advisor in this repo, both of which still
+-- require LOVABLE_API_KEY — re-add them here once that dependency is replaced.
+--
 
 
-select cron.schedule('advisor-daily', '0 22 * * *', '
-  SELECT net.http_post(
-    url := ''https://rvouzhacxqlbetwcttoe.supabase.co/functions/v1/advisor'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := ''{"mode": "daily"}''::jsonb
-  );
-  ');
-
-select cron.schedule('advisor-weekly', '0 23 * * 0', '
-  SELECT net.http_post(
-    url := ''https://rvouzhacxqlbetwcttoe.supabase.co/functions/v1/advisor'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := ''{"mode": "weekly"}''::jsonb
-  );
-  ');
 
 select cron.schedule('bot-scanner-every-5min', '*/5 * * * *', '
   SELECT net.http_post(
@@ -59,37 +54,6 @@ select cron.schedule('daily-cleanup', '0 3 * * *', '
       ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
     ),
     body := concat(''{"time": "'', now(), ''"}'')::jsonb
-  );
-  ');
-
-select cron.schedule('game-plan-authority-refresh-15min', '*/15 * * * *', '
-  SELECT net.http_post(
-    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''supabase_url'') || ''/functions/v1/game-plan-refresh'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := jsonb_build_object(
-      ''action'', ''refresh'',
-      ''source'', ''scheduled'',
-      ''userId'', account.user_id
-    )
-  )
-  FROM public.paper_accounts account
-  WHERE account.bot_id = ''smc''
-    AND account.is_running = true;
-  ');
-
-select cron.schedule('impulse-lifecycle-shadow-monitor-5min', '*/5 * * * *', '
-  SELECT net.http_post(
-    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''supabase_url'') || ''/functions/v1/impulse-lifecycle-replay'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := ''{"action":"monitor"}''::jsonb
   );
   ');
 
