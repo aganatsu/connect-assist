@@ -212,6 +212,21 @@ export interface DirectionResult {
   h4ChochAgainst: boolean;                  // true = 4H CHoCH against bias → hard block
   h1Confirmed: boolean;                     // true = 1H BOS in bias direction
   reason: string;                           // human-readable explanation
+  /**
+   * Set when a setup was blocked by "structure TF trend opposes bias" while the
+   * retracement check said it was a healthy pullback.
+   *
+   * Those two readings contradict each other, and the blunter one wins unless
+   * priceAwareStructureBlocks is on — which it is not by default. A 1H bearish
+   * bias with a bullish 15m is also exactly what a retracement into a sell zone
+   * looks like, so this block may be refusing the core setup rather than
+   * protecting against a reversal.
+   *
+   * Recorded, not acted on: flipping the flag changes which trades happen, and
+   * the Era C freeze rules that out until ~40 trades. This makes the question
+   * answerable from data instead of argued from theory.
+   */
+  blockedRetracement?: boolean;
 }
 
 // ── Configuration ──
@@ -609,8 +624,9 @@ export function determineDirection(
   if (!skipLegacyTrendBlock && h4TrendForBlock !== "ranging" && h4TrendForBlock !== bias) {
     return {
       direction: null, bias: bias!, biasSource: biasSource!,
-      h4Retrace: false, h4ChochAgainst: true, h1Confirmed: false,
-      reason: `${biasSource} ${bias} bias BUT 4H trend is ${h4TrendForBlock} (opposes bias)${priceAwareLegacy ? " [confirmedTrend]" : ""} → BLOCKED`,
+      h4Retrace: h4Check.retracing, h4ChochAgainst: true, h1Confirmed: false,
+      blockedRetracement: h4Check.retracing,
+      reason: `${biasSource} ${bias} bias BUT 4H trend is ${h4TrendForBlock} (opposes bias)${priceAwareLegacy ? " [confirmedTrend]" : ""}${h4Check.retracing ? " [RETRACEMENT — would pass with priceAwareStructureBlocks]" : ""} → BLOCKED`,
     };
   }
 
@@ -718,6 +734,9 @@ export interface StyleDirectionResult {
   structureChochAgainst: boolean;      // structure TF CHoCH against bias → hard block
   confirmBOS: boolean;                 // confirmation TF BOS in bias direction
   reason: string;
+  /** See DirectionResult.blockedRetracement — blocked by the trend gate while
+   *  the retracement check called it a healthy pullback. Recorded, not acted on. */
+  blockedRetracement?: boolean;
 }
 
 /**
@@ -881,10 +900,14 @@ export function determineDirectionStyleAware(
     : structStructure.trend;
   const skipTrendBlock = priceAware && structCheck.retracing;
   if (!skipTrendBlock && structTrendForBlock !== "ranging" && structTrendForBlock !== bias) {
+    // structCheck.retracing was previously overwritten with false here, so the
+    // record could not distinguish "blocked a reversal" from "blocked a
+    // pullback" — the two cases this gate most needs to tell apart.
     return {
       direction: null, bias: bias!, biasSource: biasSource!,
-      structureRetrace: false, structureChochAgainst: true, confirmBOS: false,
-      reason: `${biasSource} ${bias} bias BUT ${structureTF} trend is ${structTrendForBlock} (opposes bias)${priceAware ? " [confirmedTrend]" : ""} → BLOCKED`,
+      structureRetrace: structCheck.retracing, structureChochAgainst: true, confirmBOS: false,
+      blockedRetracement: structCheck.retracing,
+      reason: `${biasSource} ${bias} bias BUT ${structureTF} trend is ${structTrendForBlock} (opposes bias)${priceAware ? " [confirmedTrend]" : ""}${structCheck.retracing ? " [RETRACEMENT — would pass with priceAwareStructureBlocks]" : ""} → BLOCKED`,
     };
   }
 

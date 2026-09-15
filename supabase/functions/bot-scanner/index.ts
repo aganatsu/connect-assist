@@ -5340,6 +5340,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           h4Retrace: simpleDirectionResult.h4Retrace,
           h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
           h1Confirmed: simpleDirectionResult.h1Confirmed,
+          // True when the trend gate refused a setup the retracement check
+          // called a healthy pullback — i.e. possibly the core setup rather
+          // than a reversal. Counted, not acted on.
+          blockedRetracement: (simpleDirectionResult as any).blockedRetracement ?? false,
         } : null,
       };
     }
