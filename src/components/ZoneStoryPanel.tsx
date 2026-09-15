@@ -35,6 +35,11 @@ interface ZoneStoryData {
     endDate: string | null;
     spanBars: number;
     bosPrice: number;
+    startTime?: string | null;
+    endTime?: string | null;
+    origin?: number;
+    terminus?: number;
+    fibLevels?: Array<{ level: number; label: string; price: number }>;
     displacement?: {
       avgBodyRatio: number;
       maxRangeMultiple: number;
@@ -290,14 +295,22 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
               </span>
               <span className="text-zinc-200 ml-2">
-                {fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}
+                {/* Travel order, not numeric order. A bearish leg runs high -> low;
+                    printing low -> high described the move backwards. */}
+                {fmt(unifiedData.impulse.origin ?? (unifiedData.impulse.direction === "bullish"
+                  ? unifiedData.impulse.low : unifiedData.impulse.high))}
+                {" → "}
+                {fmt(unifiedData.impulse.terminus ?? (unifiedData.impulse.direction === "bullish"
+                  ? unifiedData.impulse.high : unifiedData.impulse.low))}
               </span>
               <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
               <div className="text-zinc-300 mt-0.5">
                 BOS: {fmt(unifiedData.impulse.bosPrice)}
                 {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
                   <span className="ml-2">
-                    {unifiedData.impulse.startDate} → {unifiedData.impulse.endDate}
+                    {(unifiedData.impulse.startTime ?? unifiedData.impulse.startDate)}
+                    {" → "}
+                    {(unifiedData.impulse.endTime ?? unifiedData.impulse.endDate)}
                     <span className="text-zinc-400 ml-1">({unifiedData.impulse.spanBars} bars)</span>
                   </span>
                 )}
@@ -306,6 +319,17 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   swing-origin -> BOS, which a three-week grind satisfies just as
                   well as a two-candle expansion. Shown so the two are
                   distinguishable; nothing gates on it. */}
+              {unifiedData.impulse.fibLevels && unifiedData.impulse.fibLevels.length > 0 && (
+                <div className="text-zinc-400 mt-0.5 font-mono text-[10px] leading-relaxed">
+                  {unifiedData.impulse.fibLevels.map(f => (
+                    <span key={f.level} className="mr-2 whitespace-nowrap">
+                      <span className={f.level === 0.618 || f.level === 0.705 ? "text-cyan-400" : "text-zinc-500"}>
+                        {f.label}
+                      </span>{" "}{fmt(f.price)}
+                    </span>
+                  ))}
+                </div>
+              )}
               {unifiedData.impulse.displacement && (
                 <div className="text-zinc-300 mt-0.5">
                   Displacement:{" "}

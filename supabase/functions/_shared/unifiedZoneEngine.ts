@@ -26,7 +26,7 @@ import {
   type RankedPOI,
   type BestZone,
   type TFSlotLabels,
-  DEFAULT_TF_LABELS, type ImpulseDisplacement } from "./impulseZoneEngine.ts";
+  DEFAULT_TF_LABELS, type ImpulseDisplacement , type ImpulseFibLevel } from "./impulseZoneEngine.ts";
 import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
 
@@ -97,6 +97,15 @@ export interface ImpulseStory {
   bosPrice: number;
   /** How forcefully the leg moved. Observational — nothing gates on it. */
   displacement?: ImpulseDisplacement;
+  /** Full candle datetimes — a date alone cannot locate an intraday bar. */
+  startTime?: string | null;
+  endTime?: string | null;
+  /** Retracement grid, ready to plot. */
+  fibLevels?: ImpulseFibLevel[];
+  /** Where the move began and ended, in travel order. Bearish legs run
+   *  high -> low, so high/low alone do not say which way price went. */
+  origin: number;
+  terminus: number;
 }
 
 export interface ZoneStory {
@@ -300,6 +309,11 @@ export function findUnifiedZone(
     spanBars: impulse.spanBars ?? 0,
     bosPrice: impulse.bosPrice,
     displacement: impulse.displacement,
+    startTime: impulse.startTime ?? null,
+    endTime: impulse.endTime ?? null,
+    fibLevels: impulse.fibLevels,
+    origin: impulse.direction === "bullish" ? impulse.low : impulse.high,
+    terminus: impulse.direction === "bullish" ? impulse.high : impulse.low,
   };
 
   // ── Step 3: Build zone story ──
