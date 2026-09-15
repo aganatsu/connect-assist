@@ -1,4 +1,4 @@
-import { assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 /**
  * "1H bearish bias BUT 15m trend is bullish (opposes bias) → BLOCKED"
@@ -91,4 +91,31 @@ Deno.test("nothing acts on it", () => {
   // Recording only. Turning the waiver on is the strategy change.
   assert(!/if \([^)]*blockedRetracement[^)]*\)\s*\{[^}]*continue/.test(scanner),
     "the scanner must not branch on it");
+});
+
+Deno.test("the style-aware mapping carries the flag through", () => {
+  // bot-scanner remaps StyleDirectionResult onto the legacy DirectionResult
+  // shape FIELD BY FIELD. Anything not listed is silently dropped, and that is
+  // what happened: blockedRetracement was set correctly at the block, mapped
+  // away before the scan log, and read as 0 of 148 trend-gate blocks — which
+  // looks exactly like "the gate never refuses a pullback".
+  //
+  // Both style branches must copy it. The day_trader branch calls
+  // determineDirection directly and returns a DirectionResult, so it is
+  // unaffected.
+  const mappings = [...scanner.matchAll(
+    /simpleDirectionResult = \{[\s\S]{0,900}?reason: `\[(scalper|swing)\]/g,
+  )];
+  assertEquals(mappings.length, 2, "both style branches remap");
+  for (const m of mappings) {
+    assert(/blockedRetracement: styleDirectionResult\.blockedRetracement,/.test(m[0]),
+      `the ${m[1]} mapping must carry blockedRetracement`);
+  }
+});
+
+Deno.test("the annotation survives in the reason, as a second route to the truth", () => {
+  // reason IS copied by the mapping, so the "[RETRACEMENT — ...]" marker
+  // reaches scan_logs even when a structured field does not. Worth keeping:
+  // it is how the dropped flag was detectable at all.
+  assert(/\$\{styleDirectionResult\.reason\}/.test(scanner), "reason is passed through verbatim");
 });

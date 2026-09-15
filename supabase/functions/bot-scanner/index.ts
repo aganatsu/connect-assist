@@ -4710,6 +4710,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             h4Retrace: styleDirectionResult.structureRetrace,
             h4ChochAgainst: styleDirectionResult.structureChochAgainst,
             h1Confirmed: styleDirectionResult.confirmBOS,
+            // Copied explicitly. This remap is field-by-field, so anything added
+            // to StyleDirectionResult is silently dropped here unless listed —
+            // which is what happened to blockedRetracement: it was recorded at
+            // the block, mapped away before the scan log, and read as 0 of 148.
+            blockedRetracement: styleDirectionResult.blockedRetracement,
             reason: `[scalper] ${styleDirectionResult.reason}`,
           };
         } else if (resolvedStyle === "swing_trader") {
@@ -4729,6 +4734,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             h4Retrace: styleDirectionResult.structureRetrace,
             h4ChochAgainst: styleDirectionResult.structureChochAgainst,
             h1Confirmed: styleDirectionResult.confirmBOS,
+            // Copied explicitly. This remap is field-by-field, so anything added
+            // to StyleDirectionResult is silently dropped here unless listed —
+            // which is what happened to blockedRetracement: it was recorded at
+            // the block, mapped away before the scan log, and read as 0 of 148.
+            blockedRetracement: styleDirectionResult.blockedRetracement,
             reason: `[swing] ${styleDirectionResult.reason}`,
           };
         } else {
