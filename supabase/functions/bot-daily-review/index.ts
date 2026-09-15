@@ -402,6 +402,15 @@ function computeSLAnalysis(trades: TradeRecord[]): SLAnalysis {
 
 // ─── LLM Integration ────────────────────────────────────────
 
+/** The model actually used, recorded on the stored recommendation. Was a
+ *  hardcoded "gemini-2.5-flash" literal, which would have lied about every
+ *  recommendation once FORGE_MODEL pointed somewhere else. */
+function llmModelUsed(): string {
+  return Deno.env.get("LOVABLE_API_KEY")
+    ? "google/gemini-2.5-flash"
+    : (Deno.env.get("FORGE_MODEL") || "gemini-2.5-flash");
+}
+
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<LLMDiagnosis | null> {
   const lovableKey = Deno.env.get("LOVABLE_API_KEY");
   const forgeApiUrl = Deno.env.get("FORGE_API_URL") || Deno.env.get("BUILT_IN_FORGE_API_URL");
@@ -415,7 +424,15 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<LLMDia
       ? `${forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
       : "";
   const apiKey = useLovable ? lovableKey : forgeApiKey;
-  const model = useLovable ? "google/gemini-2.5-flash" : "gemini-2.5-flash";
+  // Model is configurable so any OpenAI-compatible provider works without a
+  // code change. FORGE_API_URL has "/v1/chat/completions" appended, so the
+  // base must stop short of /v1 — Groq is "https://api.groq.com/openai",
+  // OpenRouter is "https://openrouter.ai/api". Google's own Gemini endpoint
+  // does NOT fit: its OpenAI-compatible path is /v1beta/openai/chat/completions
+  // with no /v1 segment.
+  const model = useLovable
+    ? "google/gemini-2.5-flash"
+    : (Deno.env.get("FORGE_MODEL") || "gemini-2.5-flash");
 
   if (!url || !apiKey) {
     console.error("LLM API credentials not configured. Set LOVABLE_API_KEY in Supabase secrets.");
@@ -1093,7 +1110,7 @@ Deno.serve(async (req) => {
           feature_gaps: diagnosis.feature_gaps || [],
           status: "pending",
           overall_assessment: diagnosis.overall_assessment,
-          llm_model: "gemini-2.5-flash",
+          llm_model: llmModelUsed(),
         });
 
       if (insertErr) {
