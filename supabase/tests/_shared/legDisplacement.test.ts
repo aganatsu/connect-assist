@@ -129,3 +129,41 @@ Deno.test("nothing gates on it", () => {
     "the scanner must not reject on leg displacement");
   assert(/OBSERVATIONAL ONLY/.test(engine), "say so where it is defined");
 });
+
+Deno.test("the measurement is persisted, not just displayed", () => {
+  // PR #530 showed displacement in the Zone Story but wrote it nowhere, so the
+  // panel could display a number that no query could ever group trades by.
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(
+    /leg_displacement: \(detail as any\)\.unifiedZone\?\.impulse\?\.displacement \?\? null,/.test(scanner),
+    "written onto trade_reasonings at the entry path",
+  );
+  // It must NOT go into factors_json: that column is an array and
+  // bot-weekly-advisor iterates it, so an object nested there breaks silently.
+  const advisor = Deno.readTextFileSync(
+    new URL("../../functions/bot-weekly-advisor/index.ts", import.meta.url),
+  );
+  assert(/for \(const f of r\.factors_json\)/.test(advisor),
+    "the advisor still iterates factors_json as an array");
+  assert(!/factors_json: \{/.test(scanner), "factors_json must stay an array");
+});
+
+Deno.test("the column exists and the join key is on both tables", () => {
+  const mig = Deno.readTextFileSync(
+    new URL("../../migrations/20260915060000_trade_reasonings_leg_displacement.sql", import.meta.url),
+  );
+  assert(/ADD COLUMN IF NOT EXISTS leg_displacement jsonb/.test(mig));
+  const base = Deno.readTextFileSync(
+    new URL("../../migrations/20260914000000_baseline_schema.sql", import.meta.url),
+  );
+  // The analysis query joins on position_id, so both tables must carry it.
+  for (const t of ["trade_reasonings", "paper_trade_history"]) {
+    const block = base.slice(
+      base.indexOf(`CREATE TABLE IF NOT EXISTS public.${t} (`),
+      base.indexOf(");", base.indexOf(`CREATE TABLE IF NOT EXISTS public.${t} (`)),
+    );
+    assert(/position_id text NOT NULL/.test(block), `${t}.position_id must exist for the join`);
+  }
+});

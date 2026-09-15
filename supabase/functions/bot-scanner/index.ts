@@ -7480,6 +7480,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           session: analysis.session.name,
           timeframe: pairConfig.entryTimeframe,
           factors_json: analysis.factors,
+          // How forcefully the impulse leg moved. Kept out of factors_json
+          // because that column is an array and bot-weekly-advisor iterates it.
+          // Joins to paper_trade_history on position_id, so trades can be
+          // grouped by leg quality after the fact.
+          leg_displacement: (detail as any).unifiedZone?.impulse?.displacement ?? null,
         });
 
         tradesPlaced++;
