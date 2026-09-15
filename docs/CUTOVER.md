@@ -1,13 +1,23 @@
 # Cutover: moving live trading to the new Supabase project
 
-The new project (`rvouzhacxqlbetwcttoe`) has the schema, the functions, market
-data, the frontend and a copy of the data. It is **not trading**, because no
-cron jobs exist. The old Lovable project (`istpcfaokubxlualybhp`) still is.
+> **Done — 2026-09-15.** `rvouzhacxqlbetwcttoe` is the live project. It has the
+> cron jobs and it is the one trading. The old Lovable project
+> (`istpcfaokubxlualybhp`) is **not live** and is kept only as the historical
+> record of everything before the cutover.
+>
+> Two consequences worth holding on to:
+>
+> - **Analysis queries go to the new project.** Anything about current
+>   behaviour, live config or recent scans is there. The old one answers
+>   questions about pre-cutover history and nothing else.
+> - **Merging to `main` now reaches production.** `deploy-functions.yml` targets
+>   the live project, so a merged function change is live within a minute. It is
+>   no longer a staging deploy.
+>
+> The rest of this file is the procedure as it was run, kept for the record and
+> in case any part has to be repeated.
 
-This is the sequence that swaps them. The whole risk is in one sentence: for as
-long as both have cron, **both bots scan the same symbols and place the same
-trades against two copies of the same account**. So the old one must stop before
-the new one starts, in one sitting.
+---
 
 ## When
 
