@@ -26,10 +26,17 @@ const scanner = await Deno.readTextFile(
 );
 
 Deno.test("provenance is recorded on both entry routes", () => {
-  assertEquals(
-    (scanner.match(/sizing: sizingProvenance,/g) ?? []).length, 2,
-    "the pending order and the market entry",
-  );
+  // Was an exact count of 2. The frozen decision record now feeds from the same
+  // variable, so a whole-file tally stopped measuring coverage.
+  //
+  // Not asserted positionally either: the first paper_positions insert is the
+  // confirmation FILL route, which correctly has no sizingProvenance of its own
+  // — it inherits the pending order's frozen context, because the decision was
+  // made at placement.
+  assert((scanner.match(/sizing: sizingProvenance,/g) ?? []).length >= 2,
+    "the two routes that actually size a trade");
+  assert(/route: "pending-order"/.test(scanner) && /route: "market-entry"/.test(scanner),
+    "and both appear as frozen-decision routes");
 });
 
 Deno.test("every multiplier that can cut the size is captured", () => {

@@ -90,6 +90,7 @@ import { updateConviction, buildConvictionKey, saveConvictionState, loadConvicti
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
+import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
@@ -2844,6 +2845,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
           signal_score: pos.signal_score || "0",
           signal_reason: pos.signal_reason || "",
+          // The decision as frozen at entry, carried onto the closed trade so
+          // outcomes can be grouped by it without joining back to a position
+          // row that may have been deleted.
+          streamlined_decision_origin: (pos as any).frozen_strategy_context ?? null,
+          streamlined_decision_frozen_at: (pos as any).frozen_strategy_context ? new Date().toISOString() : null,
           bot_id: BOT_ID,
           stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
         });
@@ -3745,6 +3751,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             size: pending.size.toString(),
+            // Inherited, not rebuilt. The decision was made when the order was
+            // placed; rebuilding here would record the market at fill time and
+            // quietly answer a different question.
+            frozen_strategy_context: (pending as any).frozen_strategy_context ?? null,
             entry_price: actualFillPrice.toString(),  // L1: use actual fill price, not limit price
             current_price: currentPrice.toString(),
             stop_loss: pending.stop_loss.toString(),
@@ -7214,6 +7224,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
+          // A pending order's decision is made HERE, at placement — not when it
+          // later fills. The fill routes copy this rather than recomputing, so
+          // the record describes the setup that was judged, not the market at
+          // the moment of execution.
+          const pendingFrozenDecision = buildFrozenDecision({
+            route: "pending-order",
+            balanceAtEntry: balance,
+            riskPercent: pairConfig.riskPerTrade,
+            sizeLots: limitSize,
+            entryPrice: limitEntry.price,
+            stopAtEntry: limitSL,
+            pipSize: spec.pipSize,
+            slFloor: slFloorTrace,
+            sizing: sizingProvenance,
+            tradingStyle: config.tradingStyle?.mode ?? null,
+            leg: (detail as any).unifiedZone?.impulse
+              ? {
+                  displacement: (detail as any).unifiedZone.impulse.displacement ?? null,
+                  candleQuality: (detail as any).unifiedZone.impulse.candleQuality ?? null,
+                  sequence: (detail as any).unifiedZone.impulse.sequence ?? null,
+                }
+              : null,
+          });
+
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
@@ -7222,6 +7256,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             direction: analysis.direction,
             order_type: "limit",
             entry_price: limitEntry.price,
+            frozen_strategy_context: pendingFrozenDecision,
             current_price: analysis.lastPrice,
             stop_loss: limitSL,
             take_profit: limitTP,
@@ -7454,6 +7489,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
           openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
         }
+        // The decision, frozen. stop_loss below will be overwritten by trailing;
+        // this keeps what was actually placed. See docs/FROZEN_DECISION_RECORD.md.
+        const frozenDecision = buildFrozenDecision({
+          route: "market-entry",
+          balanceAtEntry: balance,
+          riskPercent: pairConfig.riskPerTrade,
+          sizeLots: size,
+          entryPrice: marketEntryPrice,
+          stopAtEntry: sl,
+          pipSize: spec.pipSize,
+          slFloor: slFloorTrace,
+          sizing: sizingProvenance,
+          tradingStyle: config.tradingStyle?.mode ?? null,
+          leg: (detail as any).unifiedZone?.impulse
+            ? {
+                displacement: (detail as any).unifiedZone.impulse.displacement ?? null,
+                candleQuality: (detail as any).unifiedZone.impulse.candleQuality ?? null,
+                sequence: (detail as any).unifiedZone.impulse.sequence ?? null,
+              }
+            : null,
+        });
+
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -7461,6 +7518,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           direction: analysis.direction,
           size: size.toString(),
           entry_price: marketEntryPrice.toString(),
+          frozen_strategy_context: frozenDecision,
           current_price: analysis.lastPrice.toString(),
           stop_loss: sl.toString(),
           take_profit: tp.toString(),

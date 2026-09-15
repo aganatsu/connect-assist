@@ -94,10 +94,14 @@ Deno.test("the floor decision is recorded on the trade, not only the scan", () =
   // slFloorTrace existed but only reached detail.slFloor, which lands in
   // scan_logs. There was no way to join a trade to whether its stop was
   // floor-bound — the exact question BTC raises.
-  assertEquals(
-    (scanner.match(/slFloor: slFloorTrace,/g) ?? []).length, 2,
-    "both entry routes: the pending order and the market entry",
-  );
+  // Was an exact count of 2. The frozen decision record now feeds from the same
+  // variable, so a whole-file tally stopped measuring coverage — assert the
+  // routes instead.
+  assert((scanner.match(/slFloor: slFloorTrace,/g) ?? []).length >= 2,
+    "both entry routes: the pending order and the market entry");
+  for (const route of ["pending_orders", "paper_positions"]) {
+    assert(scanner.includes(`from("${route}").insert({`), `${route} insert exists`);
+  }
   const i = scanner.indexOf("const slFloorTrace = {");
   const block = scanner.slice(i, i + 500);
   for (const f of ["staticMinSlPips", "atrFloorPips", "effectiveMinSlPips", "actualSlPips", "widened"]) {
