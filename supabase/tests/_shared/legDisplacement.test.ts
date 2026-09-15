@@ -167,3 +167,56 @@ Deno.test("the column exists and the join key is on both tables", () => {
     assert(/position_id text NOT NULL/.test(block), `${t}.position_id must exist for the join`);
   }
 });
+
+// ─── Plotting detail ─────────────────────────────────────────────────────────
+
+import { impulseFibLevels } from "../../functions/_shared/impulseZoneEngine.ts";
+
+Deno.test("bearish fib levels sit above the low, bullish below the high", () => {
+  // A retracement travels back toward the leg's origin. Computing both
+  // directions the same way would put every bearish level on the wrong side of
+  // the leg — below the low, where price has already been.
+  const bull = impulseFibLevels(1.35058, 1.34647, "bullish");
+  const bear = impulseFibLevels(1.35058, 1.34647, "bearish");
+
+  const f618bull = bull.find(f => f.level === 0.618)!;
+  const f618bear = bear.find(f => f.level === 0.618)!;
+
+  assert(f618bull.price < 1.35058 && f618bull.price > 1.34647,
+    "bullish 61.8% retraces down from the high");
+  assert(f618bear.price > 1.34647 && f618bear.price < 1.35058,
+    "bearish 61.8% retraces up from the low");
+  // They are mirror images about the midpoint.
+  const mid = (1.35058 + 1.34647) / 2;
+  assert(Math.abs((f618bull.price - mid) + (f618bear.price - mid)) < 1e-9,
+    "the two directions mirror each other");
+});
+
+Deno.test("a zero-range leg yields no levels rather than a flat grid", () => {
+  assertEquals(impulseFibLevels(1.5, 1.5, "bullish"), []);
+  assertEquals(impulseFibLevels(1.0, 1.5, "bearish"), [], "inverted high/low");
+});
+
+Deno.test("the full candle time is kept, not truncated to a date", () => {
+  // .slice(0, 10) threw the time away, so a 1H leg spanning two dates could not
+  // be located on a chart — which is the whole point of plotting it.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  assert(/impulse\.startTime = startCandle\.datetime;/.test(src), "start time kept whole");
+  assert(/impulse\.endTime = endCandle\.datetime;/.test(src), "end time kept whole");
+  assert(/impulse\.startDate = startCandle\.datetime\.slice\(0, 10\);/.test(src),
+    "the date is still populated for anything already reading it");
+});
+
+Deno.test("the panel describes the move in travel order", () => {
+  // It printed low -> high for every leg, so a bearish impulse read backwards:
+  // 1.34647 -> 1.35058 when price actually went 1.35058 -> 1.34647.
+  const panel = Deno.readTextFileSync(
+    new URL("../../../src/components/ZoneStoryPanel.tsx", import.meta.url),
+  );
+  assert(!/\{fmt\(unifiedData\.impulse\.low\)\} → \{fmt\(unifiedData\.impulse\.high\)\}/.test(panel),
+    "the unconditional low -> high render must be gone");
+  assert(/unifiedData\.impulse\.origin/.test(panel) && /unifiedData\.impulse\.terminus/.test(panel),
+    "renders origin -> terminus");
+});

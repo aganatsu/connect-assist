@@ -32,8 +32,46 @@ export interface ImpulseLeg {
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
   endDate?: string;     // ISO date of the BOS candle
+  /** Full candle datetime, not truncated. A 1H leg spanning two dates cannot be
+   *  located on a chart from a date alone. */
+  startTime?: string;
+  endTime?: string;
   spanBars?: number;    // Number of candles in the impulse leg
   displacement?: ImpulseDisplacement;  // How impulsive the leg actually was
+  /** Retracement grid for the leg, ready to plot. */
+  fibLevels?: ImpulseFibLevel[];
+}
+
+export interface ImpulseFibLevel {
+  /** 0.236, 0.382, 0.5, 0.618, 0.705, 0.79 */
+  level: number;
+  label: string;
+  price: number;
+}
+
+/**
+ * Standard retracement grid, measured from where the leg ENDED back toward
+ * where it started — which is the direction price has to travel to return to
+ * the zone.
+ *
+ * Bullish leg runs low -> high, so a retracement comes DOWN from the high.
+ * Bearish leg runs high -> low, so a retracement goes UP from the low.
+ * Computing both the same way would put every bearish level on the wrong side
+ * of the leg.
+ */
+export function impulseFibLevels(
+  high: number,
+  low: number,
+  direction: "bullish" | "bearish",
+): ImpulseFibLevel[] {
+  const range = high - low;
+  if (!(range > 0)) return [];
+  const levels = [0.236, 0.382, 0.5, 0.618, 0.705, 0.79];
+  return levels.map((level) => ({
+    level,
+    label: `${(level * 100).toFixed(1)}%`,
+    price: direction === "bullish" ? high - range * level : low + range * level,
+  }));
 }
 
 /**
@@ -190,11 +228,14 @@ export function findImpulseLeg(
       const endCandle = candles[impulse.endIndex];
       if (startCandle?.datetime) {
         impulse.startDate = startCandle.datetime.slice(0, 10);
+        impulse.startTime = startCandle.datetime;   // keep the time; a 1H leg needs it
       }
       if (endCandle?.datetime) {
         impulse.endDate = endCandle.datetime.slice(0, 10);
+        impulse.endTime = endCandle.datetime;
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
+      impulse.fibLevels = impulseFibLevels(impulse.high, impulse.low, impulse.direction);
       return impulse;
     }
   }
