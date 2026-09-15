@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:deno": "deno test --no-check --allow-read --allow-net --allow-env supabase/tests/ supabase/functions/",
+    "test:types": "for f in supabase/functions/*/index.ts; do deno check \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
