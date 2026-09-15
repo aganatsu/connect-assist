@@ -520,6 +520,9 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           direction: pending.direction,
           size: pending.size.toString(),
+          // Inherited from the pending order — the decision was made at
+          // placement. See docs/FROZEN_DECISION_RECORD.md.
+          frozen_strategy_context: (pending as any).frozen_strategy_context ?? null,
           entry_price: actualFillPrice.toString(),
           current_price: currentPrice.toString(),
           stop_loss: pending.stop_loss.toString(),

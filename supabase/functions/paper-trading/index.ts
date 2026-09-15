@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
+import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -1466,8 +1467,19 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Manual placement: no analysis behind it, so most of the record is null.
+      // Recorded anyway — a manual trade with no context must be distinguishable
+      // from an automated one whose context failed to write.
+      const manualFrozenDecision = buildFrozenDecision({
+        route: "manual",
+        entryPrice,
+        stopAtEntry: adjustedSL ?? null,
+        sizeLots: size,
+      });
+
       await supabase.from("paper_positions").insert({
         user_id: user.id, position_id: positionId, symbol, direction, size: size.toString(),
+        frozen_strategy_context: manualFrozenDecision,
         entry_price: entryPrice.toString(), current_price: entryPrice.toString(),
         stop_loss: adjustedSL?.toString() || null, take_profit: adjustedTP?.toString() || null,
         open_time: now, signal_reason: signalReason || "", signal_score: (signalScore || 0).toString(),

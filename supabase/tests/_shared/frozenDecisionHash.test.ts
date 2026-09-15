@@ -81,17 +81,21 @@ Deno.test("it is re-runnable", () => {
   assertEquals((mig.match(/DROP TRIGGER IF EXISTS/g) ?? []).length, TABLES.length);
 });
 
-Deno.test("nothing writes a context yet, so this changes no behaviour", () => {
-  // Step 1 is deliberately inert. If a writer appears before the trigger
-  // migration has been applied, inserts start failing the CHECK.
+Deno.test("writers exist, and none of them sets the hash", () => {
+  // This asserted "nothing writes a context yet" while step 1 stood alone.
+  // Step 2 landed, so the useful invariant flipped: writers must exist, and
+  // none may set frozen_strategy_hash — the trigger owns it, because the value
+  // is md5 of Postgres's own normalisation and cannot be produced client-side.
   const fns = ["bot-scanner", "paper-trading", "zone-confirmation-scanner"];
+  let writers = 0;
   for (const f of fns) {
     const src = Deno.readTextFileSync(
       new URL(`../../functions/${f}/index.ts`, import.meta.url),
     );
-    assert(!/frozen_strategy_context:/.test(src),
-      `${f} must not write a context until step 2`);
+    writers += (src.match(/frozen_strategy_context:/g) ?? []).length;
+    assert(!/frozen_strategy_hash:/.test(src), `${f} must leave the hash to the trigger`);
   }
+  assert(writers >= 4, `expected every position route to write one, found ${writers}`);
 });
 
 Deno.test("the cross-timeframe subtree is deliberately left alone", () => {
