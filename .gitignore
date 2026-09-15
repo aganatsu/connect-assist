@@ -30,3 +30,6 @@ supabase/functions/bot-scanner/index.ts.bak
 .env.*
 !.env.example
 local-runner/.env.local
+
+# Vercel CLI
+.vercel
