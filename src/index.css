@@ -187,6 +187,43 @@
   .border-tier2 { border-color: hsl(var(--tier2)); }
   .border-tier3 { border-color: hsl(var(--tier3)); }
 
+  /* ── Typography tokens ─────────────────────────────────────────────────
+   * Measured baseline, see docs/TYPOGRAPHY_AUDIT.md. The application had 14
+   * distinct font sizes, with arbitrary px values outnumbering the Tailwind
+   * scale 1,081 to 699, and two spellings of the same size (text-[12px] and
+   * text-xs). These name the patterns that already dominate rather than
+   * introducing new ones.
+   *
+   * Density is deliberate. This is a trading terminal — an operator wants
+   * eight panels visible at once. 9-11px body text is the existing convention
+   * and is preserved; this is not a move to 14px SaaS body copy.
+   */
+
+  /* Plurality of headings is text-xl font-bold (7 of 19). The others render
+   * the same element at text-sm, three sizes smaller. */
+  .ts-page-title    { @apply text-xl font-bold text-foreground; }
+  .ts-section-title { @apply text-sm font-bold text-foreground; }
+  .ts-card-title    { @apply text-xs font-bold uppercase tracking-wider text-foreground; }
+
+  /* The one strong existing convention: 191 uppercase, 161 tracking-wider,
+   * almost always with text-[10px] and text-muted-foreground. Named, not
+   * changed. */
+  .ts-label         { @apply text-[10px] font-bold uppercase tracking-wider text-muted-foreground; }
+
+  .ts-body          { @apply text-[11px] text-foreground; }
+  .ts-body-sm       { @apply text-[10px] text-foreground; }
+  .ts-body-muted    { @apply text-[11px] text-muted-foreground; }
+  .ts-caption       { @apply text-[9px] text-muted-foreground; }
+  .ts-helper        { @apply text-[9px] text-muted-foreground; }
+
+  .ts-table-header  { @apply text-[10px] font-bold uppercase tracking-wider text-muted-foreground; }
+  .ts-table-cell    { @apply text-[11px] text-foreground; }
+
+  /* Numerics use the mono face so columns of prices align. */
+  .ts-kpi-value     { @apply font-mono text-lg font-bold text-foreground; }
+  .ts-kpi-label     { @apply text-[10px] uppercase tracking-wider text-muted-foreground; }
+  .ts-numeric       { @apply font-mono tabular-nums; }
+
   /* Brutalist panel with thick border */
   .panel {
     @apply bg-card border-4 border-border;

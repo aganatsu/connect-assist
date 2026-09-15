@@ -165,13 +165,13 @@ interface Props {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  triggered: "text-green-400",
+  triggered: "text-success",
   confirmed: "text-cyan-400",
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
-  no_zone: "text-zinc-400",
-  no_impulse: "text-zinc-400",
-  error: "text-red-400",
+  no_zone: "text-muted-foreground",
+  no_impulse: "text-muted-foreground",
+  error: "text-destructive",
 };
 
 const STATE_LABELS: Record<string, string> = {
@@ -227,7 +227,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
     return `${v.toFixed(d)} pips`;
   };
 
-  const stateColor = STATE_COLORS[unifiedData.state] ?? "text-zinc-400";
+  const stateColor = STATE_COLORS[unifiedData.state] ?? "text-muted-foreground";
   const stateLabel = STATE_LABELS[unifiedData.state] ?? unifiedData.state;
 
   // Error state
@@ -236,9 +236,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-red-900/50">
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
-          <span className="text-xs font-bold text-red-400">⚠ Error</span>
+          <span className="text-xs font-bold text-destructive">⚠ Error</span>
         </div>
-        <p className="text-[10px] text-red-400">{unifiedData.reason}</p>
+        <p className="text-[10px] text-destructive">{unifiedData.reason}</p>
       </div>
     );
   }
@@ -257,23 +257,23 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
             <div className="flex items-center gap-1 flex-wrap">
               {gateData.directionDetail.bias && (
                 <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                  gateData.directionDetail.bias === "bullish" ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"
+                  gateData.directionDetail.bias === "bullish" ? "bg-green-500/15 text-success" : "bg-red-500/15 text-destructive"
                 }`}>
                   {gateData.directionDetail.biasSource?.toUpperCase()} {gateData.directionDetail.bias === "bullish" ? "↑ BULL" : "↓ BEAR"}
                 </span>
               )}
               {!gateData.directionDetail.bias && (
-                <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-zinc-500/15 text-zinc-500">
+                <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-zinc-500/15 text-muted-foreground">
                   NO BIAS
                 </span>
               )}
               <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                gateData.directionDetail.h4Retrace ? "bg-yellow-500/15 text-yellow-400" : "bg-zinc-500/10 text-zinc-500"
+                gateData.directionDetail.h4Retrace ? "bg-yellow-500/15 text-yellow-400" : "bg-zinc-500/10 text-muted-foreground"
               }`}>
                 4H {gateData.directionDetail.h4ChochAgainst ? "✗ CHoCH AGAINST" : gateData.directionDetail.h4Retrace ? "↩ RETRACE" : "— intact"}
               </span>
               <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                gateData.directionDetail.h1Confirmed ? "bg-green-500/15 text-green-400" : "bg-zinc-500/10 text-zinc-500"
+                gateData.directionDetail.h1Confirmed ? "bg-green-500/15 text-success" : "bg-zinc-500/10 text-muted-foreground"
               }`}>
                 1H {gateData.directionDetail.h1Confirmed ? "✓ CONFIRMED" : "✗ waiting"}
               </span>
@@ -332,7 +332,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
         <StoryBullet filled={!!unifiedData.impulse} label={`${unifiedData.impulse?.timeframe ?? ""} Impulse`}>
           {unifiedData.impulse ? (
             <div className="text-zinc-200 mt-0.5">
-              <span className={unifiedData.impulse.direction === "bullish" ? "text-green-400" : "text-red-400"}>
+              <span className={unifiedData.impulse.direction === "bullish" ? "text-success" : "text-destructive"}>
                 {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
               </span>
               <span className="text-zinc-200 ml-2">
@@ -361,9 +361,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                       sameDay(unifiedData.impulse.startTime, unifiedData.impulse.endTime),
                     )}
                     {unifiedData.impulse.startTime?.includes("T") && (
-                      <span className="text-zinc-500 ml-1">UTC</span>
+                      <span className="text-muted-foreground ml-1">UTC</span>
                     )}
-                    <span className="text-zinc-400 ml-1">({unifiedData.impulse.spanBars} bars)</span>
+                    <span className="text-muted-foreground ml-1">({unifiedData.impulse.spanBars} bars)</span>
                   </span>
                 )}
               </div>
@@ -378,9 +378,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 <div className="text-zinc-300 mt-0.5">
                   Sequence:{" "}
                   <span className={
-                    unifiedData.impulse.sequence.position === "continuation" ? "text-green-400"
+                    unifiedData.impulse.sequence.position === "continuation" ? "text-success"
                       : unifiedData.impulse.sequence.position === "first-after-opposing" ? "text-yellow-400"
-                        : "text-zinc-400"
+                        : "text-muted-foreground"
                   }>
                     {unifiedData.impulse.sequence.position === "first-after-opposing"
                       ? "first after opposing break"
@@ -391,7 +391,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   {unifiedData.impulse.sequence.displacementTrend && (
                     <span className={
                       unifiedData.impulse.sequence.displacementTrend === "weakening"
-                        ? "text-red-400 ml-2" : "text-zinc-400 ml-2"
+                        ? "text-destructive ml-2" : "text-muted-foreground ml-2"
                     }>
                       · {unifiedData.impulse.sequence.displacementTrend}
                       {unifiedData.impulse.sequence.priorStrength &&
@@ -399,7 +399,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                     </span>
                   )}
                   {unifiedData.impulse.sequence.priorLegsRejected > 0 && (
-                    <span className="text-zinc-500 ml-2">
+                    <span className="text-muted-foreground ml-2">
                       · {unifiedData.impulse.sequence.priorLegsRejected} older leg
                       {unifiedData.impulse.sequence.priorLegsRejected === 1 ? "" : "s"} invalidated
                     </span>
@@ -412,31 +412,31 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {unifiedData.impulse.candleQuality && (
                 <div className="text-zinc-300 mt-0.5">
                   Closes:{" "}
-                  <span className="text-zinc-400">origin</span>{" "}
+                  <span className="text-muted-foreground">origin</span>{" "}
                   <span className={unifiedData.impulse.candleQuality.originCloseStrength >= 0.6
-                    ? "text-green-400" : unifiedData.impulse.candleQuality.originCloseStrength >= 0.4
-                      ? "text-yellow-400" : "text-red-400"}>
+                    ? "text-success" : unifiedData.impulse.candleQuality.originCloseStrength >= 0.4
+                      ? "text-yellow-400" : "text-destructive"}>
                     {(unifiedData.impulse.candleQuality.originCloseStrength * 100).toFixed(0)}%
                   </span>
                   {" · "}
-                  <span className="text-zinc-400">BOS</span>{" "}
+                  <span className="text-muted-foreground">BOS</span>{" "}
                   <span className={unifiedData.impulse.candleQuality.bosCloseStrength >= 0.6
-                    ? "text-green-400" : unifiedData.impulse.candleQuality.bosCloseStrength >= 0.4
-                      ? "text-yellow-400" : "text-red-400"}>
+                    ? "text-success" : unifiedData.impulse.candleQuality.bosCloseStrength >= 0.4
+                      ? "text-yellow-400" : "text-destructive"}>
                     {(unifiedData.impulse.candleQuality.bosCloseStrength * 100).toFixed(0)}%
                   </span>
                   {unifiedData.impulse.candleQuality.bosRejectionWick >= 0.3 && (
-                    <span className="text-red-400 ml-2">
+                    <span className="text-destructive ml-2">
                       ⚠ {(unifiedData.impulse.candleQuality.bosRejectionWick * 100).toFixed(0)}% rejection wick
                     </span>
                   )}
                 </div>
               )}
               {unifiedData.impulse.fibLevels && unifiedData.impulse.fibLevels.length > 0 && (
-                <div className="text-zinc-400 mt-0.5 font-mono text-[10px] leading-relaxed">
+                <div className="text-muted-foreground mt-0.5 font-mono text-[10px] leading-relaxed">
                   {unifiedData.impulse.fibLevels.map(f => (
                     <span key={f.level} className="mr-2 whitespace-nowrap">
-                      <span className={f.level === 0.618 || f.level === 0.705 ? "text-cyan-400" : "text-zinc-500"}>
+                      <span className={f.level === 0.618 || f.level === 0.705 ? "text-cyan-400" : "text-muted-foreground"}>
                         {f.label}
                       </span>{" "}{fmt(f.price)}
                     </span>
@@ -447,13 +447,13 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 <div className="text-zinc-300 mt-0.5">
                   Displacement:{" "}
                   <span className={
-                    unifiedData.impulse.displacement.strength === "strong" ? "text-green-400"
+                    unifiedData.impulse.displacement.strength === "strong" ? "text-success"
                       : unifiedData.impulse.displacement.strength === "moderate" ? "text-yellow-400"
-                        : "text-zinc-400"
+                        : "text-muted-foreground"
                   }>
                     {unifiedData.impulse.displacement.strength}
                   </span>
-                  <span className="text-zinc-400 ml-2">
+                  <span className="text-muted-foreground ml-2">
                     body {(unifiedData.impulse.displacement.avgBodyRatio * 100).toFixed(0)}%
                     {" · "}max {unifiedData.impulse.displacement.maxRangeMultiple.toFixed(1)}× avg range
                     {" · "}{unifiedData.impulse.displacement.displacementCandles}/{unifiedData.impulse.spanBars} displacement bars
@@ -462,7 +462,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               )}
             </div>
           ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
+            <span className="text-muted-foreground ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -471,7 +471,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           {unifiedData.zone ? (
             <div className="text-zinc-200">
               <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
-              <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
+              <span className={unifiedData.zone.srConfirmed ? "text-success ml-1" : "text-muted-foreground ml-1"}>
                 (S/R {unifiedData.zone.srConfirmed ? "✓" : "✗"})
               </span>
               <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
@@ -490,9 +490,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   <span
                     className={`text-[10px] font-mono px-1 py-0.5 rounded ${
                       gateData.bestZone.totalScore < minZoneScore
-                        ? "bg-red-500/15 text-red-400"
+                        ? "bg-red-500/15 text-destructive"
                         : gateData.bestZone.totalScore >= minZoneScore + 1
-                        ? "bg-green-500/15 text-green-400"
+                        ? "bg-green-500/15 text-success"
                         : "bg-cyan-500/15 text-cyan-400"
                     }`}
                     title={gateData.bestZone.totalScore < minZoneScore
@@ -505,17 +505,17 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                       : ` (min ${minZoneScore})`}
                   </span>
                   {gateData.bestZone.ltfRefined && (
-                    <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-green-500/15 text-green-400">
+                    <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-green-500/15 text-success">
                       LTF ✓ {gateData.bestZone.ltfType?.toUpperCase() || ""}
                     </span>
                   )}
                   {gateData.bestZone.refinedEntry && (
-                    <span className="text-[10px] font-mono text-zinc-400">
+                    <span className="text-[10px] font-mono text-muted-foreground">
                       Entry: {fmt(gateData.bestZone.refinedEntry)}
                     </span>
                   )}
                   {gateData.bestZone.refinedSL && (
-                    <span className="text-[10px] font-mono text-zinc-400">
+                    <span className="text-[10px] font-mono text-muted-foreground">
                       SL: {fmt(gateData.bestZone.refinedSL)}
                     </span>
                   )}
@@ -523,7 +523,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               )}
             </div>
           ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
+            <span className="text-muted-foreground ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -531,9 +531,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
         <StoryBullet filled={unifiedData.price.atZone || unifiedData.price.insideZone} label="Price">
           <span className="text-zinc-200">
             {unifiedData.price.insideZone ? (
-              <span className="text-green-400">Inside zone</span>
+              <span className="text-success">Inside zone</span>
             ) : unifiedData.price.atZone ? (
-              <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
+              <span className="text-success">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
             ) : (
               <span className="text-orange-400">{fmtPips(unifiedData.price.distancePips, { absolute: true })} away</span>
             )}
@@ -546,14 +546,14 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
             <span className="text-zinc-200">
               {unifiedData.liquidity.summary}
               {unifiedData.liquidity.sweepEvent && (
-                <span className={unifiedData.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
+                <span className={unifiedData.liquidity.sweepEvent.rejected ? "text-success ml-1" : "text-yellow-400 ml-1"}>
                   [{unifiedData.liquidity.sweepEvent.type} swept{unifiedData.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
                 </span>
               )}
               <span className="text-zinc-300 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
             </span>
           ) : (
-            <span className="text-zinc-400">No significant pools near zone</span>
+            <span className="text-muted-foreground">No significant pools near zone</span>
           )}
         </StoryBullet>
 
@@ -573,7 +573,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {unifiedData.confirmation.detail} (partial — not entry-ready)
             </span>
           ) : (
-            <span className="text-zinc-400">
+            <span className="text-muted-foreground">
               Waiting for CHoCH/displacement in {unifiedData.impulse?.direction ?? "—"} direction
             </span>
           )}
@@ -583,7 +583,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
         <StoryBullet filled={!!unifiedData.entry} label="Entry">
           {unifiedData.entry ? (
             <div className="text-zinc-200 mt-0.5">
-              <span className={unifiedData.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+              <span className={unifiedData.entry.direction === "long" ? "text-success font-bold" : "text-destructive font-bold"}>
                 {unifiedData.entry.direction.toUpperCase()}
               </span>
               {/* Show what execution would actually place. The zone-derived
@@ -600,11 +600,11 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   was X". So this level is where you want price to come to, never
                   the price you get. BTC 2026-09-04: level 79000, filled 79637.76. */}
               <span className="font-mono ml-2">target {fmt(unifiedData.entry.entryPrice)}</span>
-              <span className="text-red-400 font-mono ml-2">
+              <span className="text-destructive font-mono ml-2">
                 SL: {fmt(unifiedData.entry.executable?.slPrice ?? unifiedData.entry.slPrice)}
               </span>
               {(unifiedData.entry.executable?.tpPrice ?? unifiedData.entry.tpPrice) && (
-                <span className="text-green-400 font-mono ml-2">
+                <span className="text-success font-mono ml-2">
                   TP: {fmt(unifiedData.entry.executable?.tpPrice ?? unifiedData.entry.tpPrice)}
                 </span>
               )}
@@ -626,17 +626,17 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                     zone-derived risk) does vary by setup, so it keeps its
                     grading — it just is not what trades. */}
                 {unifiedData.entry.executable?.rrRatio != null ? (
-                  <span className="text-zinc-400" title="Execution recomputes the target as entry ± risk × tpRatio, so this ratio is your configured tpRatio and is the same on every setup. It is not a measure of this setup's quality.">
+                  <span className="text-muted-foreground" title="Execution recomputes the target as entry ± risk × tpRatio, so this ratio is your configured tpRatio and is the same on every setup. It is not a measure of this setup's quality.">
                     R:R {unifiedData.entry.executable.rrRatio}:1 (configured)
                   </span>
                 ) : unifiedData.entry.rrRatio != null ? (
-                  <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
+                  <span className={unifiedData.entry.rrRatio >= 3 ? "text-success font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
                     R:R {unifiedData.entry.rrRatio}:1
                   </span>
                 ) : null}
                 {unifiedData.entry.executable?.rrRatio != null && unifiedData.entry.rrRatio != null
                   && unifiedData.entry.rrRatio !== unifiedData.entry.executable.rrRatio && (
-                  <span className="text-zinc-500" title="Reward to the impulse BOS level over the zone-derived risk. This one does vary by setup — but execution does not trade it.">
+                  <span className="text-muted-foreground" title="Reward to the impulse BOS level over the zone-derived risk. This one does vary by setup — but execution does not trade it.">
                     structural {unifiedData.entry.rrRatio}:1
                   </span>
                 )}
@@ -646,18 +646,18 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   </span>
                 )}
                 {unifiedData.entry.slDisposition === "rejected_too_wide" && (
-                  <span className="text-red-400 font-bold" title="The zone stop exceeds the SL-override cap (MIN_SL_PIPS x impulseSlCapMultiplier), so execution discards it and uses its own structural stop instead.">
+                  <span className="text-destructive font-bold" title="The zone stop exceeds the SL-override cap (MIN_SL_PIPS x impulseSlCapMultiplier), so execution discards it and uses its own structural stop instead.">
                     SL too wide — execution uses structural stop
                   </span>
                 )}
                 {unifiedData.entry.fillsAtMarket && (
-                  <span className="text-zinc-500" title="Both entry routes fill at live price; this plan assumes a fill at the target level.">
+                  <span className="text-muted-foreground" title="Both entry routes fill at live price; this plan assumes a fill at the target level.">
                     fills at market
                   </span>
                 )}
               </div>
               {unifiedData.entry.tpPrice && unifiedData.entry.executable && (
-                <div className="text-[9px] text-zinc-500 mt-0.5">
+                <div className="text-[9px] text-muted-foreground mt-0.5">
                   Structural target (BOS): {fmt(unifiedData.entry.tpPrice)} — not traded
                 </div>
               )}
@@ -665,7 +665,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
             <span className="text-orange-400">R:R below minimum — no entry</span>
           ) : (
-            <span className="text-zinc-400">Not yet</span>
+            <span className="text-muted-foreground">Not yet</span>
           )}
         </StoryBullet>
       </div>
@@ -687,10 +687,10 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           {gateData?.scoringEnabled && (
             <span className={`font-mono font-bold px-1 py-0.5 rounded ${
               gateData.bestZone?.priceAtZone
-                ? "bg-green-500/15 text-green-400"
+                ? "bg-green-500/15 text-success"
                 : !gateData.hasZone
-                  ? "bg-red-500/15 text-red-400"
-                  : "bg-zinc-500/10 text-zinc-500"
+                  ? "bg-red-500/15 text-destructive"
+                  : "bg-zinc-500/10 text-muted-foreground"
             }`}>
               {gateData.bestZone?.priceAtZone ? "+bonus" : !gateData.hasZone ? "−penalty" : "neutral"}
             </span>
@@ -725,7 +725,7 @@ function StoryBullet({
   label: string;
   children: React.ReactNode;
 }) {
-  const bulletColor = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
+  const bulletColor = filled ? "text-success" : partial ? "text-yellow-400" : "text-muted-foreground";
   const bullet = filled ? "●" : partial ? "◐" : "○";
 
   return (

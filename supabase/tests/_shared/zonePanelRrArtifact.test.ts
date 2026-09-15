@@ -39,8 +39,12 @@ Deno.test("a constant is not colour-graded like a measurement", () => {
   const i = panel.indexOf("R:R {unifiedData.entry.executable.rrRatio}:1 (configured)");
   assert(i > -1, "the executable ratio must be labelled as configured");
   const block = panel.slice(Math.max(0, i - 400), i);
-  assert(!/text-green-400 font-bold/.test(block), "no quality grading on a constant");
-  assert(/text-zinc-400/.test(block), "render it neutrally");
+  // Class names updated by the semantic-colour conversion (see
+  // docs/TYPOGRAPHY_AUDIT.md): text-green-400 -> text-success,
+  // text-zinc-400 -> text-muted-foreground. The assertion is unchanged in
+  // substance — a constant must not be graded like a measurement.
+  assert(!/text-success font-bold/.test(block), "no quality grading on a constant");
+  assert(/text-muted-foreground/.test(block), "render it neutrally");
 });
 
 Deno.test("the structural ratio keeps its grading", () => {
@@ -48,7 +52,7 @@ Deno.test("the structural ratio keeps its grading", () => {
   const i = panel.indexOf("R:R {unifiedData.entry.rrRatio}:1");
   assert(i > -1, "the structural fallback must still render");
   const block = panel.slice(Math.max(0, i - 300), i);
-  assert(/text-green-400 font-bold/.test(block), "grading is appropriate here");
+  assert(/text-success font-bold/.test(block), "grading is appropriate here");
 });
 
 Deno.test("both are shown when they differ", () => {

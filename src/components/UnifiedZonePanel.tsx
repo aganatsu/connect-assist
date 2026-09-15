@@ -86,13 +86,13 @@ interface Props {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  triggered: "text-green-400",
+  triggered: "text-success",
   confirmed: "text-cyan-400",
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
-  no_zone: "text-zinc-400",
-  no_impulse: "text-zinc-400",
-  error: "text-red-400",
+  no_zone: "text-muted-foreground",
+  no_impulse: "text-muted-foreground",
+  error: "text-destructive",
 };
 
 const STATE_LABELS: Record<string, string> = {
@@ -108,7 +108,7 @@ const STATE_LABELS: Record<string, string> = {
 export function UnifiedZonePanel({ data }: Props) {
   if (!data) return null;
 
-  const stateColor = STATE_COLORS[data.state] ?? "text-zinc-400";
+  const stateColor = STATE_COLORS[data.state] ?? "text-muted-foreground";
   const stateLabel = STATE_LABELS[data.state] ?? data.state;
 
   // Error state
@@ -117,9 +117,9 @@ export function UnifiedZonePanel({ data }: Props) {
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-red-900/50">
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Unified Zone</span>
-          <span className="text-xs font-bold text-red-400">⚠ Error</span>
+          <span className="text-xs font-bold text-destructive">⚠ Error</span>
         </div>
-        <p className="text-[10px] text-red-400">{data.reason}</p>
+        <p className="text-[10px] text-destructive">{data.reason}</p>
       </div>
     );
   }
@@ -166,7 +166,7 @@ export function UnifiedZonePanel({ data }: Props) {
         >
           {data.impulse ? (
             <div className="text-zinc-200 mt-0.5">
-              <span className={data.impulse.direction === "bullish" ? "text-green-400" : "text-red-400"}>
+              <span className={data.impulse.direction === "bullish" ? "text-success" : "text-destructive"}>
                 {data.impulse.direction === "bullish" ? "↑" : "↓"} {data.impulse.direction.toUpperCase()}
               </span>
               <span className="text-zinc-200 ml-2">
@@ -178,13 +178,13 @@ export function UnifiedZonePanel({ data }: Props) {
                 {data.impulse.startDate && data.impulse.endDate && (
                   <span className="ml-2">
                     {data.impulse.startDate} → {data.impulse.endDate}
-                    <span className="text-zinc-400 ml-1">({data.impulse.spanBars} bars)</span>
+                    <span className="text-muted-foreground ml-1">({data.impulse.spanBars} bars)</span>
                   </span>
                 )}
               </div>
             </div>
           ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
+            <span className="text-muted-foreground ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -193,15 +193,15 @@ export function UnifiedZonePanel({ data }: Props) {
           {data.zone ? (
             <span className="text-zinc-200">
               {data.zone.type} @ Fib {data.zone.fibLabel}
-              {data.zone.srConfirmed && <span className="text-green-400 ml-1">(S/R ✓)</span>}
-              {!data.zone.srConfirmed && <span className="text-zinc-400 ml-1">(S/R ✗)</span>}
+              {data.zone.srConfirmed && <span className="text-success ml-1">(S/R ✓)</span>}
+              {!data.zone.srConfirmed && <span className="text-muted-foreground ml-1">(S/R ✗)</span>}
               <span className="text-zinc-300 ml-1">[{data.zone.low.toFixed(5)}–{data.zone.high.toFixed(5)}]</span>
               {data.zone.htfLayers.length > 0 && (
                 <span className="text-blue-400 ml-1">[HTF: {data.zone.htfLayers.join("+")}]</span>
               )}
             </span>
           ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
+            <span className="text-muted-foreground ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -212,9 +212,9 @@ export function UnifiedZonePanel({ data }: Props) {
         >
           <span className="text-zinc-200">
             {data.price.insideZone ? (
-              <span className="text-green-400">Inside zone</span>
+              <span className="text-success">Inside zone</span>
             ) : data.price.atZone ? (
-              <span className="text-green-400">At zone{!data.price.sideOk && " (wrong side)"}</span>
+              <span className="text-success">At zone{!data.price.sideOk && " (wrong side)"}</span>
             ) : (
               <span className="text-orange-400">{data.price.distancePips.toFixed(1)} pips away</span>
             )}
@@ -230,14 +230,14 @@ export function UnifiedZonePanel({ data }: Props) {
             <span className="text-zinc-200">
               {data.liquidity.summary}
               {data.liquidity.sweepEvent && (
-                <span className={data.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
+                <span className={data.liquidity.sweepEvent.rejected ? "text-success ml-1" : "text-yellow-400 ml-1"}>
                   [{data.liquidity.sweepEvent.type} swept{data.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
                 </span>
               )}
               <span className="text-zinc-300 ml-1">({data.liquidity.nearbyPools} pools)</span>
             </span>
           ) : (
-            <span className="text-zinc-400">No significant pools near zone</span>
+            <span className="text-muted-foreground">No significant pools near zone</span>
           )}
         </StoryBullet>
 
@@ -257,7 +257,7 @@ export function UnifiedZonePanel({ data }: Props) {
               {data.confirmation.detail} (partial — not entry-ready)
             </span>
           ) : (
-            <span className="text-zinc-400">
+            <span className="text-muted-foreground">
               Waiting for CHoCH/displacement in {data.impulse?.direction ?? "—"} direction
             </span>
           )}
@@ -267,19 +267,19 @@ export function UnifiedZonePanel({ data }: Props) {
         <StoryBullet filled={!!data.entry} label="Entry">
           {data.entry ? (
             <div className="text-zinc-200 mt-0.5">
-              <span className={data.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+              <span className={data.entry.direction === "long" ? "text-success font-bold" : "text-destructive font-bold"}>
                 {data.entry.direction.toUpperCase()}
               </span>
               <span className="font-mono ml-2">@ {data.entry.entryPrice.toFixed(5)}</span>
-              <span className="text-red-400 font-mono ml-2">SL: {data.entry.slPrice.toFixed(5)}</span>
+              <span className="text-destructive font-mono ml-2">SL: {data.entry.slPrice.toFixed(5)}</span>
               {data.entry.tpPrice && (
-                <span className="text-green-400 font-mono ml-2">TP: {data.entry.tpPrice.toFixed(5)}</span>
+                <span className="text-success font-mono ml-2">TP: {data.entry.tpPrice.toFixed(5)}</span>
               )}
               <div className="flex gap-2 mt-0.5 text-[10px]">
                 <span className="text-zinc-300">Risk: {data.entry.riskPips.toFixed(1)} pips</span>
                 {data.entry.rewardPips && <span className="text-zinc-300">Reward: {data.entry.rewardPips.toFixed(1)} pips</span>}
                 {data.entry.rrRatio && (
-                  <span className={data.entry.rrRatio >= 3 ? "text-green-400 font-bold" : data.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
+                  <span className={data.entry.rrRatio >= 3 ? "text-success font-bold" : data.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
                     R:R {data.entry.rrRatio}:1
                   </span>
                 )}
@@ -288,7 +288,7 @@ export function UnifiedZonePanel({ data }: Props) {
           ) : data.state === "confirmed" || data.state === "triggered" ? (
             <span className="text-orange-400">R:R below minimum — no entry</span>
           ) : (
-            <span className="text-zinc-400">Not yet</span>
+            <span className="text-muted-foreground">Not yet</span>
           )}
         </StoryBullet>
       </div>
@@ -328,7 +328,7 @@ function StoryBullet({
   label: string;
   children: React.ReactNode;
 }) {
-  const bulletColor = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
+  const bulletColor = filled ? "text-success" : partial ? "text-yellow-400" : "text-muted-foreground";
   const bullet = filled ? "●" : partial ? "◐" : "○";
 
   return (
