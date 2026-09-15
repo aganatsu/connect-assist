@@ -42,6 +42,37 @@ export interface ImpulseLeg {
   fibLevels?: ImpulseFibLevel[];
   /** How the two candles that define the leg actually closed. */
   candleQuality?: LegCandleQuality;
+  /** What happened before this leg. */
+  sequence?: LegSequence;
+}
+
+/**
+ * What preceded this impulse.
+ *
+ * findImpulseLeg returns the most recent structurally valid leg and stops, so a
+ * first impulse after a reversal and a fourth in an established trend produce
+ * the same object, the same zone and the same score. It also filters breaks to
+ * the trade's own direction before looking at anything, which removes the very
+ * CHoCH that killed the previous leg from the input.
+ *
+ * The loop already computes most of this — it tries older breaks and rejects
+ * them — then discards it to return one leg.
+ *
+ * OBSERVATIONAL. Nothing gates on it.
+ */
+export interface LegSequence {
+  /** Same-direction legs tried and rejected before this one, because their
+   *  origin had already been broken. */
+  priorLegsRejected: number;
+  /** An opposite-direction structure break sits between the previous
+   *  same-direction break and this one — the prior leg was contradicted. */
+  opposingBreakBetween: boolean;
+  /** Where this leg sits in the sequence. */
+  position: "first-after-opposing" | "continuation" | "only";
+  /** Displacement strength of the previous valid same-direction leg. */
+  priorStrength: "strong" | "moderate" | "weak" | null;
+  /** Successive impulses weakening is textbook exhaustion. */
+  displacementTrend: "strengthening" | "weakening" | "flat" | null;
 }
 
 /**
@@ -272,16 +303,53 @@ export function findImpulseLeg(
   if (candles.length < 20) return null;
 
   const structure = analyzeMarketStructure(candles);
-  const allBreaks = [...structure.bos, ...structure.choch]
+  const everyBreak = [...structure.bos, ...structure.choch];
+  // Opposite-direction breaks are excluded from SELECTION, as before — but kept
+  // here, because a break against the trade is exactly what says the previous
+  // leg was contradicted, and filtering it out first made that unknowable.
+  const opposingBreaks = everyBreak.filter(b => b.type !== direction);
+  const allBreaks = everyBreak
     .filter(b => b.type === direction)
     .sort((a, b) => b.index - a.index); // Most recent first
 
   if (allBreaks.length === 0) return null;
 
   // Try each BOS from most recent to oldest
-  for (const bos of allBreaks) {
+  let rejectedBefore = 0;
+  for (const [attempt, bos] of allBreaks.entries()) {
     const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+    if (!impulse || !impulse.isValid) { rejectedBefore++; continue; }
     if (impulse && impulse.isValid) {
+      // ── Sequence: what preceded this leg ──────────────────────────────
+      // The next older same-direction break, validated the same way. Cheap:
+      // one extra call, and the loop was going to reach it anyway if this one
+      // had failed.
+      const priorBos = allBreaks[attempt + 1];
+      const priorLeg = priorBos
+        ? validateImpulseFromBOS(candles, priorBos, direction, structure.swingPoints)
+        : null;
+      const priorDisp = priorLeg
+        ? measureLegDisplacement(candles, priorLeg.startIndex, priorLeg.endIndex)
+        : undefined;
+      const thisDisp = measureLegDisplacement(candles, impulse.startIndex, impulse.endIndex);
+
+      const opposingBetween = priorBos
+        ? opposingBreaks.some(b => b.index > priorBos.index && b.index < bos.index)
+        : false;
+
+      const rank = (x?: string | null) =>
+        x === "strong" ? 3 : x === "moderate" ? 2 : x === "weak" ? 1 : 0;
+      const a = rank(priorDisp?.strength), b = rank(thisDisp?.strength);
+      impulse.sequence = {
+        priorLegsRejected: rejectedBefore,
+        opposingBreakBetween: opposingBetween,
+        position: !priorBos ? "only" : opposingBetween ? "first-after-opposing" : "continuation",
+        priorStrength: priorDisp?.strength ?? null,
+        displacementTrend: (a === 0 || b === 0)
+          ? null
+          : b > a ? "strengthening" : b < a ? "weakening" : "flat",
+      };
+
       // Enrich with timeframe metadata if provided
       if (timeframe) {
         impulse.timeframe = timeframe;

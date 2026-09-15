@@ -293,3 +293,73 @@ Deno.test("it is honest about being a proxy, and gates nothing", () => {
   assert(!/candleQuality[^;]*(?:continue|rejected)/.test(scanner),
     "the scanner must not reject on it");
 });
+
+// ─── Leg sequence ────────────────────────────────────────────────────────────
+
+Deno.test("selection behaviour is unchanged — only observation was added", () => {
+  // The risk in touching this loop is silently changing WHICH leg is chosen.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  // Still the most recent valid same-direction break, first hit wins.
+  assert(/\.filter\(b => b\.type === direction\)/.test(src), "selection still direction-filtered");
+  assert(/\.sort\(\(a, b\) => b\.index - a\.index\)/.test(src), "still most-recent-first");
+  assert(/if \(!impulse \|\| !impulse\.isValid\) \{ rejectedBefore\+\+; continue; \}/.test(src),
+    "invalid legs still skipped, now counted");
+});
+
+Deno.test("opposing breaks are kept for observation but excluded from selection", () => {
+  // Filtering them out before anything looked was why "the prior leg was
+  // contradicted" could not be known. They must inform the sequence without
+  // becoming selectable.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  assert(/const opposingBreaks = everyBreak\.filter\(b => b\.type !== direction\);/.test(src));
+  assert(!/for \(const \[attempt, bos\] of opposingBreaks/.test(src),
+    "opposing breaks must never be iterated as candidates");
+});
+
+Deno.test("position distinguishes continuation from first-after-reversal", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  // An opposing break BETWEEN the prior same-direction break and this one is
+  // what makes this leg a fresh start rather than a continuation.
+  assert(/b\.index > priorBos\.index && b\.index < bos\.index/.test(src),
+    "the window is between the two same-direction breaks, not all of history");
+  assert(/!priorBos \? "only"/.test(src), "no prior leg is its own case, not a continuation");
+});
+
+Deno.test("displacement trend is null rather than guessed when either side is unmeasurable", () => {
+  // measureLegDisplacement returns undefined on thin history. Ranking that as
+  // 0 and calling it "weakening" would invent a signal.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  assert(/\(a === 0 \|\| b === 0\)\s*\n?\s*\? null/.test(src.replace(/\s+/g, m => m.includes("\n") ? "\n" : " ")) ||
+         /a === 0 \|\| b === 0/.test(src), "unmeasurable means null");
+});
+
+Deno.test("it appears in the What's Active tab as observational", () => {
+  // The whole point of that tab is that measured-but-unused things are visible
+  // as such. A new measurement that skips it recreates the problem.
+  const panel = Deno.readTextFileSync(
+    new URL("../../../src/components/SignalStatusPanel.tsx", import.meta.url),
+  );
+  assert(/Impulse leg sequence/.test(panel), "listed");
+  const entry = panel.slice(panel.indexOf("Impulse leg sequence"), panel.indexOf("Blocked retracements"));
+  assert(/observationalOnly: true/.test(entry), "and marked observational");
+  assert(/waitingFor:/.test(entry), "with what would settle it");
+});
+
+Deno.test("nothing gates on the sequence", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(!/if \([^)]*sequence\.(position|displacementTrend)/.test(src));
+  assert(!/sequence[^;]*(?:continue;|rejected)/.test(scanner));
+});

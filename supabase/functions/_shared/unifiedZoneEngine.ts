@@ -26,7 +26,7 @@ import {
   type RankedPOI,
   type BestZone,
   type TFSlotLabels,
-  DEFAULT_TF_LABELS, type ImpulseDisplacement , type ImpulseFibLevel , type LegCandleQuality } from "./impulseZoneEngine.ts";
+  DEFAULT_TF_LABELS, type ImpulseDisplacement , type ImpulseFibLevel , type LegCandleQuality , type LegSequence } from "./impulseZoneEngine.ts";
 import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
 
@@ -104,6 +104,8 @@ export interface ImpulseStory {
   fibLevels?: ImpulseFibLevel[];
   /** How the origin and BOS candles closed — the HTF's view of LTF structure. */
   candleQuality?: LegCandleQuality;
+  /** What preceded this leg — continuation or first after a contradiction. */
+  sequence?: LegSequence;
   /** Where the move began and ended, in travel order. Bearish legs run
    *  high -> low, so high/low alone do not say which way price went. */
   origin: number;
@@ -315,6 +317,7 @@ export function findUnifiedZone(
     endTime: impulse.endTime ?? null,
     fibLevels: impulse.fibLevels,
     candleQuality: impulse.candleQuality,
+    sequence: impulse.sequence,
     origin: impulse.direction === "bullish" ? impulse.low : impulse.high,
     terminus: impulse.direction === "bullish" ? impulse.high : impulse.low,
   };
