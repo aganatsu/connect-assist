@@ -38,9 +38,24 @@ function makePosition(overrides: Partial<{
   };
 }
 
+/**
+ * NOTE on the offset key. These tests set `breakEvenPips` and expected a 1-pip
+ * break-even offset. scannerManagement:322 reads `breakEvenOffsetPips`, so the
+ * value never applied and the code's own fallback of 3 did — which is why the
+ * assertions drifted by ~2 pips once the offset became configurable.
+ *
+ * In production configMapper maps exit.breakEvenPips -> breakEvenOffsetPips, so
+ * the runtime is fine; only a raw config like this one misses it. Setting the
+ * real key keeps the original intent (broker entry vs paper entry) and makes
+ * the test exercise the field the code reads.
+ *
+ * Worth knowing separately: configMapper defaults breakEvenOffsetPips to 20
+ * while scannerManagement falls back to 3 — two defaults for one setting.
+ */
 function makeConfig(overrides: Partial<{
   breakEvenEnabled: boolean;
   breakEvenPips: number;
+  breakEvenOffsetPips: number;
   trailingStopEnabled: boolean;
   trailingStopPips: number;
   trailingStopActivation: string;
@@ -51,6 +66,8 @@ function makeConfig(overrides: Partial<{
   return {
     breakEvenEnabled: overrides.breakEvenEnabled ?? true,
     breakEvenPips: overrides.breakEvenPips ?? 10,
+    // The key scannerManagement actually reads.
+    breakEvenOffsetPips: overrides.breakEvenOffsetPips ?? 1,
     trailingStopEnabled: overrides.trailingStopEnabled ?? false,
     trailingStopPips: overrides.trailingStopPips ?? 15,
     trailingStopActivation: overrides.trailingStopActivation ?? "after_1r",

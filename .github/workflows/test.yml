@@ -1,0 +1,63 @@
+name: Tests
+
+# Runs the Deno suite on every pull request and push to main.
+#
+# WHY THIS EXISTS: 1,561 tests under supabase/functions/ had never run. The
+# documented command was `deno test supabase/tests/`, which covers 568 — so a
+# whole tranche three times larger was invisible. Nine had drifted red without
+# anyone knowing, including six on break-even stop placement.
+#
+# Both paths are listed explicitly rather than pointing at `supabase/`, so
+# adding a third location is a deliberate act rather than something that
+# silently does not run.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deno:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Tests — supabase/tests
+        run: deno test --no-check --allow-read --allow-net --allow-env supabase/tests/
+
+      - name: Tests — supabase/functions
+        run: deno test --no-check --allow-read --allow-net --allow-env supabase/functions/
+
+      - name: Type check every edge function
+        # --no-check above keeps the suite fast; this is the pass that would
+        # otherwise never happen. All 21 are clean as of 2026-09-15.
+        run: |
+          set -euo pipefail
+          for f in supabase/functions/*/index.ts; do
+            echo "::group::$(basename "$(dirname "$f")")"
+            deno check "$f"
+            echo "::endgroup::"
+          done
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        # The frontend has no test suite; a build failure is the signal.
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: build-only-placeholder
+        run: npm run build

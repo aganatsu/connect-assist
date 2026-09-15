@@ -95,6 +95,12 @@ function makePosition(opts: {
 const CONFIG_BE_AND_TRAILING = {
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  // scannerManagement:322 reads breakEvenOffsetPips, not breakEvenPips, and
+  // falls back to 3 when it is absent — which is why the assertions below,
+  // written against a 1-pip offset, drifted by exactly 2 pips. configMapper
+  // maps exit.breakEvenPips onto this key in production; a raw config must set
+  // it directly.
+  breakEvenOffsetPips: 1,
   trailingStopEnabled: true,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",

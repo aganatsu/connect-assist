@@ -13,6 +13,29 @@
 
 import { assertEquals, assertExists, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { Candle } from "./smcAnalysis.ts";
+
+/**
+ * Deterministic stand-in for Math.random.
+ *
+ * Six call sites used rnd() to give the consolidation phase some
+ * noise. That made these tests pass 11 times in 12: a real regression is then
+ * indistinguishable from the usual flake, and the first instinct on a red run
+ * is to re-run rather than to look. The fixtures only need *some* variation,
+ * not unpredictable variation.
+ *
+ * mulberry32 — small, fast, adequate for jitter.
+ */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rnd = seeded(20260915);
+
 import {
   findImpulseLeg,
   mapImpulsePOIs,
@@ -51,7 +74,7 @@ function generateBullishImpulseCandles(count = 50): Candle[] {
 
   // Phase 1: Consolidation (candles 0-9) — establishes a range
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rnd() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base + 0.0005, i));
   }
 
@@ -93,7 +116,7 @@ function generateBearishImpulseCandles(count = 50): Candle[] {
 
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rnd() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base - 0.0005, i));
   }
 
@@ -304,8 +327,8 @@ Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () =
 
   // First 50 candles: lots of closes near 1.0200 (establishing S/R)
   for (let i = 0; i < 50; i++) {
-    const base = 1.0200 + (Math.random() * 0.002 - 0.001);
-    candles.push(makeCandle(base - 0.001, base + 0.002, base - 0.002, 1.0200 + (Math.random() * 0.001 - 0.0005), i));
+    const base = 1.0200 + (rnd() * 0.002 - 0.001);
+    candles.push(makeCandle(base - 0.001, base + 0.002, base - 0.002, 1.0200 + (rnd() * 0.001 - 0.0005), i));
   }
 
   // Candles 50-70: impulse away from the level
@@ -855,7 +878,7 @@ Deno.test("findImpulseLeg — accepts impulse with deep internal pullbacks (wave
 
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rnd() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base - 0.0005, i));
   }
 
@@ -922,7 +945,7 @@ Deno.test("findImpulseLeg — rejects impulse when origin is broken", () => {
 
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rnd() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base + 0.0005, i));
   }
 
