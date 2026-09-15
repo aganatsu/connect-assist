@@ -40,6 +40,69 @@ export interface ImpulseLeg {
   displacement?: ImpulseDisplacement;  // How impulsive the leg actually was
   /** Retracement grid for the leg, ready to plot. */
   fibLevels?: ImpulseFibLevel[];
+  /** How the two candles that define the leg actually closed. */
+  candleQuality?: LegCandleQuality;
+}
+
+/**
+ * Where the origin and BOS candles closed within their own range.
+ *
+ * This is the higher timeframe's view of lower timeframe structure. A candle
+ * that pushes to a high and closes near its low IS a distribution on the
+ * timeframe below — the HTF cannot show you the CHoCH inside it, but it can
+ * show you that the body finished nowhere near the extreme.
+ *
+ * It is a PROXY, not a real LTF read. findImpulseLeg only receives its own
+ * timeframe's candles, so an actual lower timeframe analysis would mean
+ * threading LTF series through every caller. This gets most of the signal for
+ * none of that.
+ *
+ * Normalised by direction so 1 always means "closed hard in the direction the
+ * leg travelled" and 0 means "fully rejected", without the reader having to
+ * remember which way a bearish leg runs.
+ *
+ * OBSERVATIONAL. Nothing gates on it.
+ */
+export interface LegCandleQuality {
+  /** Close strength of the candle the leg started from, 0-1. */
+  originCloseStrength: number;
+  /** Close strength of the BOS candle, 0-1. A low number is a break that got
+   *  rejected within its own bar. */
+  bosCloseStrength: number;
+  /** Fraction of the BOS candle's range left as wick beyond the close, in the
+   *  direction of travel. High means price went there and did not stay. */
+  bosRejectionWick: number;
+}
+
+/** Close strength of one candle, normalised so 1 = closed with the direction. */
+function closeStrength(c: Candle, direction: "bullish" | "bearish"): number {
+  const range = c.high - c.low;
+  if (!(range > 0)) return 0.5;          // doji/flat: neither strong nor rejected
+  const pos = (c.close - c.low) / range;
+  return direction === "bullish" ? pos : 1 - pos;
+}
+
+export function measureLegCandles(
+  candles: Candle[],
+  startIndex: number,
+  endIndex: number,
+  direction: "bullish" | "bearish",
+): LegCandleQuality | undefined {
+  const origin = candles[startIndex];
+  const bos = candles[endIndex];
+  if (!origin || !bos) return undefined;
+
+  const bosRange = bos.high - bos.low;
+  // Wick left beyond the close in the travel direction: for a bullish break
+  // that is high - close, for a bearish break it is close - low.
+  const beyond = direction === "bullish" ? bos.high - bos.close : bos.close - bos.low;
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+
+  return {
+    originCloseStrength: round(closeStrength(origin, direction)),
+    bosCloseStrength: round(closeStrength(bos, direction)),
+    bosRejectionWick: bosRange > 0 ? round(beyond / bosRange) : 0,
+  };
 }
 
 export interface ImpulseFibLevel {
@@ -236,6 +299,9 @@ export function findImpulseLeg(
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
       impulse.fibLevels = impulseFibLevels(impulse.high, impulse.low, impulse.direction);
+      impulse.candleQuality = measureLegCandles(
+        candles, impulse.startIndex, impulse.endIndex, impulse.direction,
+      );
       return impulse;
     }
   }
