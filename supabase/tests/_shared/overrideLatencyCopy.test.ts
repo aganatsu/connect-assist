@@ -21,7 +21,9 @@ const mgmt = await Deno.readTextFile(
   new URL("../../functions/_shared/scannerManagement.ts", import.meta.url),
 );
 const cron = await Deno.readTextFile(
-  new URL("../../migrations/20260501100000_add_management_cron.sql", import.meta.url),
+  // Cron is no longer a migration: it embeds the project ref and needs
+// pg_cron, pg_net and three Vault secrets, so it is run by hand once.
+  new URL("../../cron/setup_cron.sql", import.meta.url),
 );
 
 Deno.test("the management cron really is every minute", () => {

@@ -202,7 +202,11 @@ Deno.test("candleSource: a refused reservation returns false so the caller falls
 // Located by suffix, not by full name: migrations carry a timestamp prefix that
 // has to be re-dated whenever this lands after a later migration, and the test
 // should not break every time it is.
-const migrationDir = new URL("../../migrations/", import.meta.url);
+// Archived to docs/legacy-migrations/ on 2026-09-14: supabase/migrations/
+// now holds only the baseline, because the 46 originals described 22 of 64
+// tables and can never be replayed. The history is still the right place to
+// assert this migration's own content.
+const migrationDir = new URL("../../../docs/legacy-migrations/", import.meta.url);
 const migrationName = [...Deno.readDirSync(migrationDir)]
   .map((e) => e.name)
   .filter((n) => n.endsWith("_add_api_credit_budget.sql"))

@@ -21,7 +21,9 @@ const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 const migration = await Deno.readTextFile(
-  new URL("../../migrations/20260523100000_create_rejected_setups.sql", import.meta.url),
+  // The baseline is the schema of record; the original CREATE migration is
+// archived under docs/legacy-migrations/ and is not replayed.
+  new URL("../../migrations/20260914000000_baseline_schema.sql", import.meta.url),
 );
 
 Deno.test("every NOT NULL column is supplied", () => {
@@ -41,8 +43,11 @@ Deno.test("every NOT NULL column is supplied", () => {
 Deno.test("rejection_type is one the CHECK constraint allows", () => {
   // The constraint text appears more than once in the migration (table plus a
   // comment), so dedupe rather than assuming a single match.
+  // The baseline is extracted from the catalog, which spells `IN (...)` as
+  // `= ANY (ARRAY[...])`. Accept either so the guard survives the move.
   const allowed = [...new Set(
-    [...migration.matchAll(/rejection_type IN \(([^)]*)\)/g)]
+    [...migration.matchAll(/rejection_type IN \(([^)]*)\)/g),
+     ...migration.matchAll(/rejection_type = ANY \(ARRAY\[([^\]]*)\]\)/g)]
       .flatMap(m => [...m[1].matchAll(/'([a-z0-9_]+)'/g)].map(x => x[1])),
   )].sort();
   assertEquals(allowed, ["below_threshold_strong_t1", "gate_blocked"]);

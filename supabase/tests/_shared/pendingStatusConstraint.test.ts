@@ -38,6 +38,10 @@ async function readAll(dir: URL): Promise<string> {
 }
 const migrations = await readAll(migrationsDir);
 
+// The 46 pre-baseline migrations, archived 2026-09-14. They are history and are
+// never replayed, but they are still where migration MECHANICS are provable.
+const legacy = await readAll(new URL("../../../docs/legacy-migrations/", import.meta.url));
+
 const fnFiles = [
   "bot-scanner/index.ts",
   "zone-confirmation-scanner/index.ts",
@@ -52,6 +56,16 @@ for (const f of fnFiles) {
 
 /** The last CHECK applied to pending_orders.status wins. */
 function allowedStatuses(): string[] {
+  // The baseline extracts constraints from the catalog, which renders
+  // `IN (...)` as `= ANY (ARRAY[...])`. Same constraint, different spelling —
+  // match both so this guard survives the move to a baseline schema.
+  const anyArray = [...migrations.matchAll(
+    /pending_orders_status_check CHECK \(\(status = ANY \(ARRAY\[([\s\S]*?)\]\)\)\)/g,
+  )];
+  if (anyArray.length > 0) {
+    const src = anyArray[anyArray.length - 1][1];
+    return [...src.matchAll(/'([a-z_]+)'/g)].map(m => m[1]);
+  }
   const matches = [...migrations.matchAll(
     /pending_orders_status_check\s*\n?\s*CHECK \(status IN \(([\s\S]*?)\)\)/g,
   )];
@@ -97,10 +111,13 @@ Deno.test("no status the live schema had is dropped by the rewrite", () => {
   }
 });
 
-Deno.test("the migration drops the old constraint before adding the new one", () => {
-  // ADD CONSTRAINT alone would fail on an existing database.
-  const i = migrations.indexOf("DROP CONSTRAINT IF EXISTS pending_orders_status_check");
-  const j = migrations.indexOf("ADD CONSTRAINT pending_orders_status_check");
+Deno.test("the historical migration dropped the old constraint before adding the new one", () => {
+  // ADD CONSTRAINT alone would have failed on the existing database. This is a
+  // property of the 2026-09-08 incremental migration, not of the baseline —
+  // a baseline builds an empty database and has nothing to drop — so it is
+  // asserted against the archived history.
+  const i = legacy.indexOf("DROP CONSTRAINT IF EXISTS pending_orders_status_check");
+  const j = legacy.indexOf("ADD CONSTRAINT pending_orders_status_check");
   assert(i > -1, "missing DROP");
   assert(j > i, "DROP must precede ADD");
 });
