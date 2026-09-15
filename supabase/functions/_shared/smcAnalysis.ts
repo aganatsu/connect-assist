@@ -1923,48 +1923,116 @@ export function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairVal
   return unicorns;
 }
 
+/**
+ * SMT window, in bars. The recent half is compared against the prior half, on
+ * both instruments, over the SAME timestamps.
+ */
+const SMT_WINDOW_BARS = 20;
+
+/** Minimum share of the window that must exist on BOTH series to compare. */
+const SMT_MIN_OVERLAP = 0.7;
+
+/**
+ * Smart Money Technique divergence — one instrument sweeps a level its
+ * correlated partner refuses to.
+ *
+ * REWRITTEN 2026-09-15. The previous version compared each series' Nth-from-last
+ * swing:
+ *
+ *   const thisLatestLow = thisLows[thisLows.length - 1].price;
+ *   const corrLatestLow = corrLows[corrLows.length - 1].price;
+ *
+ * "Last" was counted independently per instrument, and SwingPoint.datetime and
+ * .index were both unused. When both pairs printed the same number of swings it
+ * was right; when one was choppier — precisely when divergence is interesting —
+ * those two indices pointed at different moments and the comparison meant
+ * nothing. It fed a HARD veto (bot-scanner Gate 9b), so a misaligned read did
+ * not merely mis-score, it refused the trade.
+ *
+ * Now anchored on time rather than on swing ordinals: over one window of bars,
+ * did this instrument take out the low of the preceding window while its
+ * partner did not? That is what SMT means, and it does not care how many swings
+ * each side printed — which also removes the "how many bars apart may two
+ * swings be" tolerance that an ordinal fix would have needed.
+ *
+ * Bars are matched by DATETIME, not by array position: the two series come from
+ * separate fetches and may differ in length or have gaps.
+ *
+ * Signature and SMTResult are unchanged — bot-scanner:4500 and
+ * backtest-engine:1777 both call this.
+ */
 export function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
   const corrPair = SMT_PAIRS[symbol] || null;
   if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
-  if (candles.length < 30 || correlatedCandles.length < 30) {
+
+  const need = SMT_WINDOW_BARS * 2;
+  // The primary series defines the window, so it must cover it. The partner is
+  // only required to have enough bars to clear the overlap floor below — a
+  // provider gap or a shorter history should not silence the signal, and
+  // demanding equal length rejected an 85%-aligned partner as "insufficient".
+  if (candles.length < need) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${symbol} data` };
+  }
+  if (correlatedCandles.length < Math.ceil(need * SMT_MIN_OVERLAP)) {
     return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
   }
-  const thisSwings = detectSwingPoints(candles, 3);
-  const corrSwings = detectSwingPoints(correlatedCandles, 3);
-  const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
-  const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
-  const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
-  const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
 
-  if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
-    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
+  // Align by timestamp. Array position is not safe: the series are fetched
+  // separately and a provider gap on one side shifts every index after it.
+  const corrByTime = new Map<string, Candle>();
+  for (const c of correlatedCandles) corrByTime.set(c.datetime, c);
+
+  const window = candles.slice(-need);
+  const priorBars = window.slice(0, SMT_WINDOW_BARS);
+  const recentBars = window.slice(SMT_WINDOW_BARS);
+
+  const paired = (bars: Candle[]) => {
+    const out: { a: Candle; b: Candle }[] = [];
+    for (const a of bars) {
+      const b = corrByTime.get(a.datetime);
+      if (b) out.push({ a, b });
+    }
+    return out;
+  };
+  const prior = paired(priorBars);
+  const recent = paired(recentBars);
+
+  // Below this, the two series barely overlap and any verdict is an artefact of
+  // whichever bars happened to match. "Cannot tell" must read as not-detected,
+  // because Gate 9b treats anything else as a reason to refuse the trade.
+  const overlap = (prior.length + recent.length) / need;
+  if (overlap < SMT_MIN_OVERLAP || prior.length === 0 || recent.length === 0) {
+    return {
+      detected: false, type: null, correlatedPair: corrPair,
+      detail: `Only ${Math.round(overlap * 100)}% of the window overlaps ${corrPair} — cannot compare`,
+    };
   }
 
-  const thisLatestLow = thisLows[thisLows.length - 1].price;
-  const thisPriorLow  = thisLows[thisLows.length - 2].price;
-  const corrLatestLow = corrLows[corrLows.length - 1].price;
-  const corrPriorLow  = corrLows[corrLows.length - 2].price;
+  const lo = (xs: { a: Candle; b: Candle }[], side: "a" | "b") => Math.min(...xs.map(x => x[side].low));
+  const hi = (xs: { a: Candle; b: Candle }[], side: "a" | "b") => Math.max(...xs.map(x => x[side].high));
 
-  if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
+  const thisPriorLow = lo(prior, "a"), thisRecentLow = lo(recent, "a");
+  const corrPriorLow = lo(prior, "b"), corrRecentLow = lo(recent, "b");
+
+  // This one swept the prior low, the partner held → bullish SMT.
+  if (thisRecentLow < thisPriorLow && corrRecentLow >= corrPriorLow) {
     return {
       detected: true, type: "bullish", correlatedPair: corrPair,
-      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held — bullish SMT`,
+      detail: `${symbol} took out its ${SMT_WINDOW_BARS}-bar low (${thisRecentLow.toFixed(5)} < ${thisPriorLow.toFixed(5)}), ${corrPair} held — bullish SMT`,
     };
   }
 
-  const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
-  const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
-  const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
-  const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
+  const thisPriorHigh = hi(prior, "a"), thisRecentHigh = hi(recent, "a");
+  const corrPriorHigh = hi(prior, "b"), corrRecentHigh = hi(recent, "b");
 
-  if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
+  if (thisRecentHigh > thisPriorHigh && corrRecentHigh <= corrPriorHigh) {
     return {
       detected: true, type: "bearish", correlatedPair: corrPair,
-      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held — bearish SMT`,
+      detail: `${symbol} took out its ${SMT_WINDOW_BARS}-bar high (${thisRecentHigh.toFixed(5)} > ${thisPriorHigh.toFixed(5)}), ${corrPair} held — bearish SMT`,
     };
   }
 
-  return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
+  return { detected: false, type: null, correlatedPair: corrPair, detail: `No SMT divergence vs ${corrPair} over ${SMT_WINDOW_BARS} bars` };
 }
 
 export function detectJudasSwing(candles: Candle[], atMs?: number): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
