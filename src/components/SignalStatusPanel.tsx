@@ -19,6 +19,9 @@
  * silently reporting a stale truth.
  */
 
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+
 interface Props {
   config: Record<string, any> | null | undefined;
 }
@@ -131,7 +134,7 @@ export const SIGNALS: Signal[] = [
       "How forcefully the leg moved rather than how far — body ratio, range multiple, " +
       "and how many bars qualified as displacement.",
     observationalOnly: true,
-    waitingFor: "Whether low-displacement legs underperform, after ~40 trades.",
+    waitingFor: "Whether low-displacement legs underperform.",
   },
   {
     label: "Origin / BOS candle closes",
@@ -210,6 +213,22 @@ const GROUPS: { status: Status; title: string; blurb: string; tone: string }[] =
 export function SignalStatusPanel({ config }: Props) {
   const byStatus = (st: Status) => SIGNALS.filter(s => signalStatus(s, config) === st);
 
+  // How many trades actually carry the measurement. The copy used to say
+  // "after ~40 trades", borrowed from the Era C freeze — which has since ended
+  // at 65 trades, none of which carry it, because measurement began later.
+  // A tab built to expose unchecked claims should not make one.
+  const { data: measuredTrades } = useQuery({
+    queryKey: ["leg-displacement-sample"],
+    queryFn: async () => {
+      const { count } = await supabase
+        .from("trade_reasonings")
+        .select("id", { count: "exact", head: true })
+        .not("leg_displacement", "is", null);
+      return count ?? 0;
+    },
+    staleTime: 60_000,
+  });
+
   return (
     <div className="p-2 space-y-4 text-[11px]">
       <p className="text-zinc-400 leading-relaxed">
@@ -219,6 +238,16 @@ export function SignalStatusPanel({ config }: Props) {
         those appear under{" "}
         <span className="text-orange-400">Runs, then the result is thrown away</span>.
       </p>
+
+      {measuredTrades !== undefined && (
+        <p className="text-zinc-500 leading-relaxed">
+          Trades carrying the leg measurements so far:{" "}
+          <span className={measuredTrades === 0 ? "text-zinc-400" : "text-cyan-400"}>
+            {measuredTrades}
+          </span>
+          {measuredTrades === 0 && " — recording began after the last trade closed, so nothing is answerable yet."}
+        </p>
+      )}
 
       {GROUPS.map(g => {
         const items = byStatus(g.status);

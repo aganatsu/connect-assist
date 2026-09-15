@@ -93,3 +93,20 @@ Deno.test("priceAwareStructureBlocks is described by what it costs", () => {
   assert(/refused the same way a/.test(panel) && /reversal is\./.test(panel),
     "explains the consequence of it being off");
 });
+
+Deno.test("the tab does not assert a trade threshold it never checked", () => {
+  // "after ~40 trades" was borrowed from the Era C freeze, which ended at 65
+  // trades — none of which carry the measurement, because recording began
+  // later. A tab built to expose unchecked claims must not make one.
+  // Executable source only — the comment explaining this fix necessarily
+  // mentions the numbers it removed.
+  const code = panel
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n").filter(l => !l.trim().startsWith("//")).join("\n");
+  assert(!/~?\d+\s*trades/.test(code),
+    "no hardcoded sample threshold in the copy");
+  assert(/leg-displacement-sample/.test(panel),
+    "the sample size is queried, not asserted");
+  assert(/\.not\("leg_displacement", "is", null\)/.test(panel),
+    "counts trades that actually carry the measurement");
+});
