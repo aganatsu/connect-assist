@@ -865,6 +865,119 @@ async function recordRejectedSetup(
   }
 }
 
+/**
+ * Record a setup the DIRECTION engine refused, so outcome-tracker can grade it.
+ *
+ * recordRejectedSetup above cannot do this. It opens with
+ *
+ *   if (!analysis?.direction || typeof analysis.lastPrice !== "number") return;
+ *
+ * and a direction block sets _overrideDirection = null, so analysis.direction
+ * is null by construction. Every direction block has therefore been invisible
+ * to the rejection table since it was built. The 1,527 graded setups behind
+ * "refused setups win 18.4% against a 33.3% break-even" exclude this gate
+ * entirely — not sampled out, structurally absent.
+ *
+ * That matters because 82 of 148 trend-gate blocks were retracements
+ * (2026-09-15), and nothing in the system could say whether taking them would
+ * have made money. This closes that gap so priceAwareStructureBlocks can be
+ * decided on a win rate rather than on 55% sounding like a lot.
+ *
+ * THE LEVELS ARE SYNTHETIC, and this is the one thing to remember about these
+ * rows. No setup was scored, so there is no structural stop to record. A 1.5x
+ * ATR stop and a 2R target are used instead: the same ATR multiple the real
+ * stop floor uses and the current era's target, applied identically to every
+ * row so they are comparable with EACH OTHER. They are NOT comparable with
+ * gate_blocked rows, whose levels came from scoring. Filter by rejection_type.
+ *
+ * Observational only. It inserts a row and changes no trade.
+ *
+ * Fails open and silently — a diagnostic must never cost a scan.
+ */
+const DIRECTION_BLOCK_R = 2;
+
+async function recordDirectionBlock(
+  supabase: any,
+  userId: string,
+  pair: string,
+  analysis: any,
+  dir: any,
+): Promise<void> {
+  try {
+    // The bias is what the trade WOULD have been. Without one there is no
+    // hypothesis to grade — that is a no-bias case, not a refused setup.
+    const bias = dir?.bias;
+    if (bias !== "bullish" && bias !== "bearish") return;
+    // Only genuine blocks. If a direction resolved, the normal recorder owns it.
+    if (analysis?.direction) return;
+
+    const entry = analysis?.lastPrice;
+    if (typeof entry !== "number" || !Number.isFinite(entry) || entry <= 0) return;
+
+    // Grading needs BOTH levels. outcome-tracker only reaches would_have_won or
+    // would_have_lost when a candle crosses one of them, so a row with nulls
+    // grades "inconclusive" forever — a table that fills up and answers
+    // nothing, which is the exact failure this is meant to fix. No ATR, no row.
+    const atr = Number((analysis as any).atrValue ?? 0);
+    if (!Number.isFinite(atr) || atr <= 0) return;
+
+    const direction = bias === "bullish" ? "long" : "short";
+    const sign = direction === "long" ? 1 : -1;
+    const stopDistance = atr * ATR_SL_FLOOR_MULTIPLIER;
+    const sl = entry - sign * stopDistance;
+    const tp = entry + sign * stopDistance * DIRECTION_BLOCK_R;
+    if (!Number.isFinite(sl) || !Number.isFinite(tp) || sl <= 0) return;
+
+    // Same dedup as the confluence producers. A blocked pair is re-evaluated
+    // every 5 minutes and would otherwise write ~12 identical rows an hour,
+    // which would swamp every statistic drawn from the table.
+    const { data: dupe } = await supabase
+      .from("rejected_setups")
+      .select("id")
+      .eq("user_id", userId).eq("bot_id", BOT_ID)
+      .eq("symbol", pair).eq("direction", direction)
+      .eq("rejection_type", "direction_blocked")
+      .eq("outcome_status", "pending")
+      .gte("rejected_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+      .limit(1);
+    if (dupe && dupe.length > 0) return;
+
+    await supabase.from("rejected_setups").insert({
+      user_id: userId,
+      bot_id: BOT_ID,
+      symbol: pair,
+      direction,
+      rejection_type: "direction_blocked",
+      failed_gates: ["direction_engine"],
+      // Scoring ran but produced no setup, so there is no meaningful confluence
+      // figure. 0 would read as "scored zero"; these were never scored.
+      confluence_score: 0,
+      tier1_count: 0,
+      tier1_factors: [],
+      entry_price: entry,
+      stop_loss: sl,
+      take_profit: tp,
+      rr_ratio: DIRECTION_BLOCK_R,
+      session_name: analysis.session?.name ?? null,
+      regime: analysis.regimeInfo?.regime ?? null,
+      price_at_rejection: entry,
+      raw_detail: {
+        syntheticLevels: true,
+        levelBasis: { atr, atrMultiple: ATR_SL_FLOOR_MULTIPLIER, targetR: DIRECTION_BLOCK_R },
+        bias,
+        biasSource: dir?.biasSource ?? null,
+        // The question this table now exists to answer. True means the gate
+        // refused a pullback within the bias direction, which is the case
+        // priceAwareStructureBlocks would let through.
+        blockedRetracement: dir?.blockedRetracement === true,
+        reason: typeof dir?.reason === "string" ? dir.reason.slice(0, 500) : null,
+      },
+    });
+  } catch (e: any) {
+    console.warn(`[direction-blocks] insert failed for ${pair}: ${e?.message}`);
+  }
+}
+
 async function loadConfig(supabase: any, userId: string, connectionId?: string) {
   let data: any = null;
   // Try connection-specific config first
@@ -5352,6 +5465,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const dirReason = !analysis.direction && simpleDirectionResult?.reason
         ? `No direction: ${simpleDirectionResult.reason}`
         : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
+
+      // Grade what the direction engine refused. The confluence recorder cannot
+      // see these — it returns early on a null direction — so without this the
+      // gate's own victims are the one population never measured. Insert only;
+      // it changes no trade. Guards inside handle the "Insufficient 1H candles"
+      // case, where analysis.direction is set and this is not a block at all.
+      await recordDirectionBlock(supabase, userId, pair, analysis, simpleDirectionResult);
+
       (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: dirReason };
       (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
         directionDetail: simpleDirectionResult ? {
