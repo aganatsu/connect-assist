@@ -67,8 +67,11 @@ export default function Dashboard() {
   });
 
   const balance = botStatus?.balance ?? 10000;
-  const profit = balance - 10000;
-  const profitPct = ((profit / 10000) * 100).toFixed(1);
+  // Baseline comes from the account config, not a literal. It was hardcoded to
+  // 10000, so a manually set balance of $100,000 reported +900%.
+  const startingBalance = botStatus?.startingBalance || 10000;
+  const profit = balance - startingBalance;
+  const profitPct = ((profit / startingBalance) * 100).toFixed(1);
   const dailyPnl = botStatus?.dailyPnl ?? 0;
   const positions = botStatus?.positions ?? [];
   const winRate = botStatus?.winRate ?? 0;
