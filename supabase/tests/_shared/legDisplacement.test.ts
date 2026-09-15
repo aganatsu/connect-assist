@@ -220,3 +220,20 @@ Deno.test("the panel describes the move in travel order", () => {
   assert(/unifiedData\.impulse\.origin/.test(panel) && /unifiedData\.impulse\.terminus/.test(panel),
     "renders origin -> terminus");
 });
+
+Deno.test("bar timestamps are formatted without being moved", () => {
+  // new Date(iso).toLocaleString() renders in the BROWSER's timezone, so the
+  // same bar would read differently depending on where the dashboard is open.
+  // That is the shape of the TwelveData bug — a "Z" that was never UTC — and
+  // the panel exists to tell the truth about a setup.
+  const panel = Deno.readTextFileSync(
+    new URL("../../../src/components/ZoneStoryPanel.tsx", import.meta.url),
+  );
+  const fmt = panel.slice(panel.indexOf("function fmtBarTime"), panel.indexOf("function sameDay"));
+  assert(!/new Date\(/.test(fmt), "must not construct a Date — that converts to local time");
+  assert(!/toLocaleString|toLocaleDateString|toLocaleTimeString/.test(fmt),
+    "must not use locale formatting");
+  assert(/UTC/.test(panel), "the timezone is stated rather than implied");
+  assert(/Daily and Weekly bars are stamped 00:00/.test(panel),
+    "explains why D/W drop the time");
+});

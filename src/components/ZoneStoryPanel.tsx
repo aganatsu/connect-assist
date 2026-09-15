@@ -172,6 +172,35 @@ const STATE_LABELS: Record<string, string> = {
   error: "⚠ Error",
 };
 
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/**
+ * Format a candle timestamp for reading, without moving it.
+ *
+ * Deliberately parses the string rather than going through Date:
+ * new Date(iso).toLocaleString() renders in the BROWSER's timezone, so the same
+ * bar reads differently depending on where you open the dashboard. That is the
+ * shape of the TwelveData bug — a "Z" that was never UTC — and it is not worth
+ * reintroducing in the panel that exists to tell the truth about a setup.
+ *
+ * Daily and Weekly bars are stamped 00:00, so the time is noise there.
+ */
+function fmtBarTime(iso: string | null | undefined, timeframe?: string, omitDate = false): string {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(iso);
+  if (!m) return iso;
+  const [, , mo, d, hh, mi] = m;
+  const dateOnly = /^(d|1d|1day|daily|w|1w|1week|weekly)$/i.test(timeframe ?? "");
+  const day = `${Number(d)} ${MONTHS[Number(mo) - 1] ?? mo}`;
+  if (dateOnly || !hh) return day;
+  return omitDate ? `${hh}:${mi}` : `${day} ${hh}:${mi}`;
+}
+
+/** True when both stamps fall on the same calendar day. */
+function sameDay(a?: string | null, b?: string | null): boolean {
+  return !!a && !!b && a.slice(0, 10) === b.slice(0, 10);
+}
+
 export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol, minZoneScore = 4 }: Props) {
   if (!unifiedData) return null;
 
@@ -308,9 +337,20 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 BOS: {fmt(unifiedData.impulse.bosPrice)}
                 {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
                   <span className="ml-2">
-                    {(unifiedData.impulse.startTime ?? unifiedData.impulse.startDate)}
+                    {fmtBarTime(
+                      unifiedData.impulse.startTime ?? unifiedData.impulse.startDate,
+                      unifiedData.impulse.timeframe,
+                    )}
                     {" → "}
-                    {(unifiedData.impulse.endTime ?? unifiedData.impulse.endDate)}
+                    {/* Same day: drop the repeated date, keep the time. */}
+                    {fmtBarTime(
+                      unifiedData.impulse.endTime ?? unifiedData.impulse.endDate,
+                      unifiedData.impulse.timeframe,
+                      sameDay(unifiedData.impulse.startTime, unifiedData.impulse.endTime),
+                    )}
+                    {unifiedData.impulse.startTime?.includes("T") && (
+                      <span className="text-zinc-500 ml-1">UTC</span>
+                    )}
                     <span className="text-zinc-400 ml-1">({unifiedData.impulse.spanBars} bars)</span>
                   </span>
                 )}
