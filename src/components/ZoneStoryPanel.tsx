@@ -40,6 +40,11 @@ interface ZoneStoryData {
     origin?: number;
     terminus?: number;
     fibLevels?: Array<{ level: number; label: string; price: number }>;
+    candleQuality?: {
+      originCloseStrength: number;
+      bosCloseStrength: number;
+      bosRejectionWick: number;
+    };
     displacement?: {
       avgBodyRatio: number;
       maxRangeMultiple: number;
@@ -359,6 +364,32 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   swing-origin -> BOS, which a three-week grind satisfies just as
                   well as a two-candle expansion. Shown so the two are
                   distinguishable; nothing gates on it. */}
+              {/* How the two defining candles closed. A BOS candle that pushed
+                  through and closed back near its open is, on the timeframe
+                  below, a break that already failed. */}
+              {unifiedData.impulse.candleQuality && (
+                <div className="text-zinc-300 mt-0.5">
+                  Closes:{" "}
+                  <span className="text-zinc-400">origin</span>{" "}
+                  <span className={unifiedData.impulse.candleQuality.originCloseStrength >= 0.6
+                    ? "text-green-400" : unifiedData.impulse.candleQuality.originCloseStrength >= 0.4
+                      ? "text-yellow-400" : "text-red-400"}>
+                    {(unifiedData.impulse.candleQuality.originCloseStrength * 100).toFixed(0)}%
+                  </span>
+                  {" · "}
+                  <span className="text-zinc-400">BOS</span>{" "}
+                  <span className={unifiedData.impulse.candleQuality.bosCloseStrength >= 0.6
+                    ? "text-green-400" : unifiedData.impulse.candleQuality.bosCloseStrength >= 0.4
+                      ? "text-yellow-400" : "text-red-400"}>
+                    {(unifiedData.impulse.candleQuality.bosCloseStrength * 100).toFixed(0)}%
+                  </span>
+                  {unifiedData.impulse.candleQuality.bosRejectionWick >= 0.3 && (
+                    <span className="text-red-400 ml-2">
+                      ⚠ {(unifiedData.impulse.candleQuality.bosRejectionWick * 100).toFixed(0)}% rejection wick
+                    </span>
+                  )}
+                </div>
+              )}
               {unifiedData.impulse.fibLevels && unifiedData.impulse.fibLevels.length > 0 && (
                 <div className="text-zinc-400 mt-0.5 font-mono text-[10px] leading-relaxed">
                   {unifiedData.impulse.fibLevels.map(f => (

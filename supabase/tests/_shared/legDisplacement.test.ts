@@ -237,3 +237,59 @@ Deno.test("bar timestamps are formatted without being moved", () => {
   assert(/Daily and Weekly bars are stamped 00:00/.test(panel),
     "explains why D/W drop the time");
 });
+
+// ─── Origin / BOS candle closes ──────────────────────────────────────────────
+
+import { measureLegCandles } from "../../functions/_shared/impulseZoneEngine.ts";
+
+Deno.test("close strength is normalised by direction", () => {
+  // A bullish break closing at its high and a bearish break closing at its low
+  // are equally strong. Reporting raw close position would call one 1.0 and the
+  // other 0.0 for identical conviction.
+  const strongBull = [{ open: 10, high: 12, low: 10, close: 12 }];
+  const strongBear = [{ open: 12, high: 12, low: 10, close: 10 }];
+  assertEquals(measureLegCandles(strongBull, 0, 0, "bullish")!.bosCloseStrength, 1);
+  assertEquals(measureLegCandles(strongBear, 0, 0, "bearish")!.bosCloseStrength, 1);
+});
+
+Deno.test("a break that closed back where it started reads as rejected", () => {
+  // Pushed to 12, closed at 10.2 — on the timeframe below this is a break that
+  // already failed. It is the case the HTF close hides.
+  const rejected = [{ open: 10, high: 12, low: 10, close: 10.2 }];
+  const q = measureLegCandles(rejected, 0, 0, "bullish")!;
+  assert(q.bosCloseStrength < 0.15, `expected weak close, got ${q.bosCloseStrength}`);
+  assert(q.bosRejectionWick > 0.8, `expected a large rejection wick, got ${q.bosRejectionWick}`);
+});
+
+Deno.test("a doji is neither strong nor rejected", () => {
+  const flat = [{ open: 10, high: 10, low: 10, close: 10 }];
+  assertEquals(measureLegCandles(flat, 0, 0, "bullish")!.bosCloseStrength, 0.5);
+  assertEquals(measureLegCandles(flat, 0, 0, "bullish")!.bosRejectionWick, 0);
+});
+
+Deno.test("origin and BOS are measured separately", () => {
+  // The leg can start from a decisive candle and end on a weak one, or vice
+  // versa, and those mean different things.
+  const c = [
+    { open: 10, high: 12, low: 10, close: 12 },   // origin: decisive
+    { open: 12, high: 12, low: 11, close: 11.9 },
+    { open: 12, high: 14, low: 12, close: 12.2 }, // BOS: rejected
+  ];
+  const q = measureLegCandles(c, 0, 2, "bullish")!;
+  assertEquals(q.originCloseStrength, 1);
+  assert(q.bosCloseStrength < 0.2, "the BOS candle was rejected");
+});
+
+Deno.test("it is honest about being a proxy, and gates nothing", () => {
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  assert(/It is a PROXY, not a real LTF read/.test(src),
+    "the limitation is stated where it is defined");
+  assert(/OBSERVATIONAL\. Nothing gates on it\./.test(src));
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(!/candleQuality[^;]*(?:continue|rejected)/.test(scanner),
+    "the scanner must not reject on it");
+});
