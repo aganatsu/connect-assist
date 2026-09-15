@@ -142,6 +142,15 @@ export const SIGNALS: Signal[] = [
     waitingFor: "Whether rejected break candles predict failure.",
   },
   {
+    label: "Impulse leg sequence",
+    what:
+      "Whether this leg continues the prior one or is the first after an opposing " +
+      "break, how many older legs were already invalidated, and whether displacement " +
+      "is decaying across successive legs.",
+    observationalOnly: true,
+    waitingFor: "Whether first-after-reversal legs underperform continuations.",
+  },
+  {
     label: "Blocked retracements",
     what:
       "Counts setups the trend gate refused while the retracement check called them a " +

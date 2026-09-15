@@ -45,6 +45,13 @@ interface ZoneStoryData {
       bosCloseStrength: number;
       bosRejectionWick: number;
     };
+    sequence?: {
+      priorLegsRejected: number;
+      opposingBreakBetween: boolean;
+      position: "first-after-opposing" | "continuation" | "only";
+      priorStrength: "strong" | "moderate" | "weak" | null;
+      displacementTrend: "strengthening" | "weakening" | "flat" | null;
+    };
     displacement?: {
       avgBodyRatio: number;
       maxRangeMultiple: number;
@@ -364,6 +371,41 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   swing-origin -> BOS, which a three-week grind satisfies just as
                   well as a two-candle expansion. Shown so the two are
                   distinguishable; nothing gates on it. */}
+              {/* Continuation or first-after-contradiction. The selector returns
+                  the most recent valid leg and stops, so without this a fourth
+                  leg in a trend and a first after a reversal look identical. */}
+              {unifiedData.impulse.sequence && (
+                <div className="text-zinc-300 mt-0.5">
+                  Sequence:{" "}
+                  <span className={
+                    unifiedData.impulse.sequence.position === "continuation" ? "text-green-400"
+                      : unifiedData.impulse.sequence.position === "first-after-opposing" ? "text-yellow-400"
+                        : "text-zinc-400"
+                  }>
+                    {unifiedData.impulse.sequence.position === "first-after-opposing"
+                      ? "first after opposing break"
+                      : unifiedData.impulse.sequence.position === "continuation"
+                        ? "continuation"
+                        : "no prior leg"}
+                  </span>
+                  {unifiedData.impulse.sequence.displacementTrend && (
+                    <span className={
+                      unifiedData.impulse.sequence.displacementTrend === "weakening"
+                        ? "text-red-400 ml-2" : "text-zinc-400 ml-2"
+                    }>
+                      · {unifiedData.impulse.sequence.displacementTrend}
+                      {unifiedData.impulse.sequence.priorStrength &&
+                        ` (prior: ${unifiedData.impulse.sequence.priorStrength})`}
+                    </span>
+                  )}
+                  {unifiedData.impulse.sequence.priorLegsRejected > 0 && (
+                    <span className="text-zinc-500 ml-2">
+                      · {unifiedData.impulse.sequence.priorLegsRejected} older leg
+                      {unifiedData.impulse.sequence.priorLegsRejected === 1 ? "" : "s"} invalidated
+                    </span>
+                  )}
+                </div>
+              )}
               {/* How the two defining candles closed. A BOS candle that pushed
                   through and closed back near its open is, on the timeframe
                   below, a break that already failed. */}
