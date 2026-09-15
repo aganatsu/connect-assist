@@ -240,9 +240,9 @@ export function SignalStatusPanel({ config }: Props) {
       </p>
 
       {measuredTrades !== undefined && (
-        <p className="text-zinc-500 leading-relaxed">
+        <p className="text-muted-foreground leading-relaxed">
           Trades carrying the leg measurements so far:{" "}
-          <span className={measuredTrades === 0 ? "text-zinc-400" : "text-cyan-400"}>
+          <span className={measuredTrades === 0 ? "text-muted-foreground" : "text-cyan-400"}>
             {measuredTrades}
           </span>
           {measuredTrades === 0 && " — recording began after the last trade closed, so nothing is answerable yet."}
