@@ -26,8 +26,7 @@ import {
   type RankedPOI,
   type BestZone,
   type TFSlotLabels,
-  DEFAULT_TF_LABELS,
-} from "./impulseZoneEngine.ts";
+  DEFAULT_TF_LABELS, type ImpulseDisplacement } from "./impulseZoneEngine.ts";
 import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
 
@@ -96,6 +95,8 @@ export interface ImpulseStory {
   endDate: string | null;
   spanBars: number;
   bosPrice: number;
+  /** How forcefully the leg moved. Observational — nothing gates on it. */
+  displacement?: ImpulseDisplacement;
 }
 
 export interface ZoneStory {
@@ -298,6 +299,7 @@ export function findUnifiedZone(
     endDate: impulse.endDate ?? null,
     spanBars: impulse.spanBars ?? 0,
     bosPrice: impulse.bosPrice,
+    displacement: impulse.displacement,
   };
 
   // ── Step 3: Build zone story ──
