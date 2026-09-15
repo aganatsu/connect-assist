@@ -1,0 +1,169 @@
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { measureLegDisplacement } from "../../functions/_shared/impulseZoneEngine.ts";
+
+/**
+ * impulseZoneEngine defines an impulse structurally — swing origin to BOS — and
+ * contains ZERO references to displacement. So a three-week grind that clips a
+ * swing high produces the same leg, the same dealing range, the same Fib levels
+ * and the same zone score as a two-candle expansion.
+ *
+ * That is strange in a system that already prices displacement twice:
+ *   confluenceScoring:490   order block with displacement 2.0 pts, without 0.75
+ *   confluenceScoring:2355  FVG without displacement demoted out of Tier 1,
+ *                           "without displacement, an FVG is just a random gap"
+ *
+ * This measures the leg so the two cases are distinguishable. It is
+ * OBSERVATIONAL — nothing gates on it. The point is to be able to answer "do
+ * low-displacement legs underperform?" from recorded data instead of assuming
+ * it from theory, which is what the confirmation hunt taught: it was
+ * theoretically sound and produced zero fills in the system's history.
+ */
+
+type C = { open: number; high: number; low: number; close: number; time?: string };
+
+/** Quiet candles: small bodies, wide-ish wicks — the baseline to measure against. */
+function calm(n: number, price = 100): C[] {
+  return Array.from({ length: n }, (_, i) => ({
+    open: price + (i % 2 ? 0.02 : -0.02),
+    close: price + (i % 2 ? -0.02 : 0.02),
+    high: price + 0.15,
+    low: price - 0.15,
+  }));
+}
+
+/** Big full-bodied candles in one direction. */
+function expansion(n: number, from: number, step: number): C[] {
+  return Array.from({ length: n }, (_, i) => {
+    const o = from + i * step;
+    const c = o + step;
+    return { open: o, close: c, high: c + 0.01, low: o - 0.01 };
+  });
+}
+
+/** Same total distance, spread over many small candles. */
+function grind(n: number, from: number, total: number): C[] {
+  const step = total / n;
+  return Array.from({ length: n }, (_, i) => {
+    const o = from + i * step;
+    const c = o + step;
+    return { open: o, close: c, high: c + 0.12, low: o - 0.12 };
+  });
+}
+
+Deno.test("an expansion leg and a grind of equal size are told apart", () => {
+  const base = calm(20);
+  const fast = [...base, ...expansion(4, 100, 1.5)];
+  const slow = [...base, ...grind(40, 100, 6)];
+
+  const f = measureLegDisplacement(fast, 20, fast.length - 1)!;
+  const s = measureLegDisplacement(slow, 20, slow.length - 1)!;
+
+  assert(f, "expansion measured");
+  assert(s, "grind measured");
+  // Both cover 6.0 of price. Only one did it with force.
+  assert(f.maxRangeMultiple > s.maxRangeMultiple,
+    `expansion ${f.maxRangeMultiple} should exceed grind ${s.maxRangeMultiple}`);
+  assert(f.avgBodyRatio > s.avgBodyRatio,
+    `expansion bodies ${f.avgBodyRatio} should exceed grind ${s.avgBodyRatio}`);
+  assert(f.rangePerBar > s.rangePerBar, "expansion covers more ground per bar");
+  assertEquals(f.strength, "strong");
+  assertEquals(s.strength, "weak");
+});
+
+Deno.test("the baseline excludes the leg itself", () => {
+  // A trailing window containing the leg lets a big move raise the average it
+  // is compared against, so the more violent the displacement the more ordinary
+  // it looks. The baseline must be the candles BEFORE the leg.
+  const base = calm(20);
+  const short = [...base, ...expansion(3, 100, 1.5)];
+  const long = [...base, ...expansion(30, 100, 1.5)];
+
+  const a = measureLegDisplacement(short, 20, short.length - 1)!;
+  const b = measureLegDisplacement(long, 20, long.length - 1)!;
+  // Same candle shape in both; a longer run of them must not dilute the reading.
+  assertEquals(a.strength, b.strength);
+  assert(Math.abs(a.maxRangeMultiple - b.maxRangeMultiple) < 0.5,
+    `range multiple should not drift with leg length: ${a.maxRangeMultiple} vs ${b.maxRangeMultiple}`);
+});
+
+Deno.test("returns undefined rather than a misleading zero when history is thin", () => {
+  // Fewer than 5 prior candles is not a baseline. Reporting 0% body ratio would
+  // read as "no displacement" when the truth is "not measurable".
+  const c = [...calm(3), ...expansion(4, 100, 1.5)];
+  assertEquals(measureLegDisplacement(c, 3, c.length - 1), undefined);
+  assertEquals(measureLegDisplacement(calm(30), 25, 20), undefined, "inverted range");
+});
+
+Deno.test("flat candles cannot produce a divide-by-zero", () => {
+  const flat: C[] = Array.from({ length: 30 }, () => ({ open: 100, high: 100, low: 100, close: 100 }));
+  assertEquals(measureLegDisplacement(flat, 20, 29), undefined, "zero-range baseline");
+});
+
+Deno.test("displacement bar counting matches smcAnalysis's definition", () => {
+  // Both detectors must agree on what a displacement candle is, or the zone
+  // score and the leg reading will contradict each other on the same chart.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  const smc = Deno.readTextFileSync(
+    new URL("../../functions/_shared/smcAnalysis.ts", import.meta.url),
+  );
+  const cond = /bodyMultiple >= 2\.0 && bodyRatio >= 0\.7 && rangeMultiple >= 1\.5/;
+  assert(cond.test(smc.replace(/\s+/g, " ")), "smcAnalysis thresholds unchanged");
+  assert(/body \/ avgBody >= 2\.0 && bodyRatio >= 0\.7 && rangeMultiple >= 1\.5/
+    .test(src.replace(/\s+/g, " ")), "leg measurement uses the same bar");
+});
+
+Deno.test("nothing gates on it", () => {
+  // The moment this becomes a filter it changes which trades happen, and the
+  // Era C freeze says execution plumbing only until ~40 trades.
+  const engine = Deno.readTextFileSync(
+    new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url),
+  );
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(!/if \([^)]*displacement\.strength/.test(engine),
+    "the engine must not branch on leg displacement");
+  assert(!/impulse\.displacement[^;]*(?:continue|rejected|return null)/.test(scanner),
+    "the scanner must not reject on leg displacement");
+  assert(/OBSERVATIONAL ONLY/.test(engine), "say so where it is defined");
+});
+
+Deno.test("the measurement is persisted, not just displayed", () => {
+  // PR #530 showed displacement in the Zone Story but wrote it nowhere, so the
+  // panel could display a number that no query could ever group trades by.
+  const scanner = Deno.readTextFileSync(
+    new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  );
+  assert(
+    /leg_displacement: \(detail as any\)\.unifiedZone\?\.impulse\?\.displacement \?\? null,/.test(scanner),
+    "written onto trade_reasonings at the entry path",
+  );
+  // It must NOT go into factors_json: that column is an array and
+  // bot-weekly-advisor iterates it, so an object nested there breaks silently.
+  const advisor = Deno.readTextFileSync(
+    new URL("../../functions/bot-weekly-advisor/index.ts", import.meta.url),
+  );
+  assert(/for \(const f of r\.factors_json\)/.test(advisor),
+    "the advisor still iterates factors_json as an array");
+  assert(!/factors_json: \{/.test(scanner), "factors_json must stay an array");
+});
+
+Deno.test("the column exists and the join key is on both tables", () => {
+  const mig = Deno.readTextFileSync(
+    new URL("../../migrations/20260915060000_trade_reasonings_leg_displacement.sql", import.meta.url),
+  );
+  assert(/ADD COLUMN IF NOT EXISTS leg_displacement jsonb/.test(mig));
+  const base = Deno.readTextFileSync(
+    new URL("../../migrations/20260914000000_baseline_schema.sql", import.meta.url),
+  );
+  // The analysis query joins on position_id, so both tables must carry it.
+  for (const t of ["trade_reasonings", "paper_trade_history"]) {
+    const block = base.slice(
+      base.indexOf(`CREATE TABLE IF NOT EXISTS public.${t} (`),
+      base.indexOf(");", base.indexOf(`CREATE TABLE IF NOT EXISTS public.${t} (`)),
+    );
+    assert(/position_id text NOT NULL/.test(block), `${t}.position_id must exist for the join`);
+  }
+});

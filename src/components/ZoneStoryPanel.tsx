@@ -35,6 +35,14 @@ interface ZoneStoryData {
     endDate: string | null;
     spanBars: number;
     bosPrice: number;
+    displacement?: {
+      avgBodyRatio: number;
+      maxRangeMultiple: number;
+      displacementCandles: number;
+      displacementRatio: number;
+      rangePerBar: number;
+      strength: "strong" | "moderate" | "weak";
+    };
   } | null;
   zone: {
     type: "OB" | "FVG";
@@ -294,6 +302,27 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   </span>
                 )}
               </div>
+              {/* How forcefully it moved, not just how far. The leg is found by
+                  swing-origin -> BOS, which a three-week grind satisfies just as
+                  well as a two-candle expansion. Shown so the two are
+                  distinguishable; nothing gates on it. */}
+              {unifiedData.impulse.displacement && (
+                <div className="text-zinc-300 mt-0.5">
+                  Displacement:{" "}
+                  <span className={
+                    unifiedData.impulse.displacement.strength === "strong" ? "text-green-400"
+                      : unifiedData.impulse.displacement.strength === "moderate" ? "text-yellow-400"
+                        : "text-zinc-400"
+                  }>
+                    {unifiedData.impulse.displacement.strength}
+                  </span>
+                  <span className="text-zinc-400 ml-2">
+                    body {(unifiedData.impulse.displacement.avgBodyRatio * 100).toFixed(0)}%
+                    {" · "}max {unifiedData.impulse.displacement.maxRangeMultiple.toFixed(1)}× avg range
+                    {" · "}{unifiedData.impulse.displacement.displacementCandles}/{unifiedData.impulse.spanBars} displacement bars
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             <span className="text-zinc-400 ml-1">None found</span>

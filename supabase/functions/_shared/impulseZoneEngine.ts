@@ -33,6 +33,35 @@ export interface ImpulseLeg {
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
   endDate?: string;     // ISO date of the BOS candle
   spanBars?: number;    // Number of candles in the impulse leg
+  displacement?: ImpulseDisplacement;  // How impulsive the leg actually was
+}
+
+/**
+ * How forcefully the leg moved, as opposed to how far.
+ *
+ * An impulse here is defined structurally — swing origin to BOS — and nothing
+ * checked whether price got there violently or ground there over weeks. Both
+ * produce the same zone at the same Fib levels with the same gate score, which
+ * is odd in a system that already penalises a non-displacement order block
+ * 2.0 -> 0.75 and demotes a non-displacement FVG out of Tier 1.
+ *
+ * OBSERVATIONAL ONLY. Nothing gates on these numbers. They exist so the
+ * question "do low-displacement legs underperform?" can be answered from
+ * recorded data rather than assumed from theory.
+ */
+export interface ImpulseDisplacement {
+  /** Mean body/range across the leg's candles. 1.0 = all body, no wick. */
+  avgBodyRatio: number;
+  /** Largest single candle range in the leg, as a multiple of the pre-leg average. */
+  maxRangeMultiple: number;
+  /** Candles in the leg clearing the same bar detectDisplacement() uses. */
+  displacementCandles: number;
+  /** displacementCandles / spanBars. */
+  displacementRatio: number;
+  /** Leg range in price units per bar — separates a fast leg from a slow one of equal size. */
+  rangePerBar: number;
+  /** Descriptive label. Provisional thresholds; not used for any decision. */
+  strength: "strong" | "moderate" | "weak";
 }
 
 export interface ImpulsePOI {
@@ -177,6 +206,76 @@ export function findImpulseLeg(
  * Given a BOS, trace back to find the swing origin and validate that the
  * origin has not been broken by subsequent price action (after the BOS).
  */
+/**
+ * Measure how impulsive a leg was, relative to what preceded it.
+ *
+ * The baseline is the 20 candles BEFORE the leg, never the leg itself. Using a
+ * trailing window that includes the leg would let a long move dilute its own
+ * baseline and report as unremarkable — the bigger the displacement, the more
+ * it raises the average it is being compared against.
+ *
+ * Candle-level thresholds mirror detectDisplacement() in smcAnalysis.ts so the
+ * two detectors agree on what "a displacement candle" means.
+ */
+export function measureLegDisplacement(
+  candles: Candle[],
+  startIndex: number,
+  endIndex: number,
+): ImpulseDisplacement | undefined {
+  const legStart = Math.max(0, startIndex);
+  const legEnd = Math.min(candles.length - 1, endIndex);
+  const span = legEnd - legStart + 1;
+  if (span < 1) return undefined;
+
+  const baseFrom = Math.max(0, legStart - 20);
+  const baseline = candles.slice(baseFrom, legStart);
+  if (baseline.length < 5) return undefined;   // too little history to compare against
+
+  let bSum = 0, rSum = 0;
+  for (const c of baseline) {
+    bSum += Math.abs(c.close - c.open);
+    rSum += (c.high - c.low);
+  }
+  const avgBody = bSum / baseline.length;
+  const avgRange = rSum / baseline.length;
+  if (avgBody <= 0 || avgRange <= 0) return undefined;
+
+  let ratioSum = 0, maxRangeMultiple = 0, dispCandles = 0, counted = 0;
+  for (let i = legStart; i <= legEnd; i++) {
+    const c = candles[i];
+    const range = c.high - c.low;
+    if (range <= 0) continue;
+    const body = Math.abs(c.close - c.open);
+    const bodyRatio = body / range;
+    const rangeMultiple = range / avgRange;
+    ratioSum += bodyRatio;
+    counted++;
+    if (rangeMultiple > maxRangeMultiple) maxRangeMultiple = rangeMultiple;
+    if (body / avgBody >= 2.0 && bodyRatio >= 0.7 && rangeMultiple >= 1.5) dispCandles++;
+  }
+  if (counted === 0) return undefined;
+
+  const displacementRatio = dispCandles / counted;
+  const legRange = Math.abs(candles[legEnd].close - candles[legStart].open);
+
+  // Provisional, and deliberately generous at the low end: the point is to
+  // separate legs for later analysis, not to declare a winner.
+  const strength: "strong" | "moderate" | "weak" =
+    (displacementRatio >= 0.25 || maxRangeMultiple >= 3.0) ? "strong"
+      : (displacementRatio >= 0.10 || maxRangeMultiple >= 2.0) ? "moderate"
+        : "weak";
+
+  const round = (n: number, dp = 3) => Math.round(n * 10 ** dp) / 10 ** dp;
+  return {
+    avgBodyRatio: round(ratioSum / counted),
+    maxRangeMultiple: round(maxRangeMultiple, 2),
+    displacementCandles: dispCandles,
+    displacementRatio: round(displacementRatio),
+    rangePerBar: round(legRange / span, 6),
+    strength,
+  };
+}
+
 function validateImpulseFromBOS(
   candles: Candle[],
   bos: StructureBreak,
@@ -240,6 +339,7 @@ function validateImpulseFromBOS(
         endIndex: endIdx,
         isValid: true,
         bosPrice: bos.price,
+        displacement: measureLegDisplacement(candles, startIdx, endIdx),
       };
     }
   }
