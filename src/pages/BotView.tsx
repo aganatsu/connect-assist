@@ -863,7 +863,8 @@ export default function BotView() {
               const bestPos = positions.length > 0 ? positions.reduce((best: any, p: any) => (p.pnl || 0) > (best.pnl || 0) ? p : best, positions[0]) : null;
               const worstPos = positions.length > 0 ? positions.reduce((worst: any, p: any) => (p.pnl || 0) < (worst.pnl || 0) ? p : worst, positions[0]) : null;
               const equity = parseFloat(d.balance) + unrealizedPnl;
-              const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
+              const startBal = Number(d.startingBalance) || 10000;
+                const profitPct = (((parseFloat(d.balance) - startBal) / startBal) * 100);
               const history = botTradeHistory;
               const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
               const grossProfit = history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
@@ -1252,7 +1253,8 @@ export default function BotView() {
                 const longCount = positions.filter((p: any) => p.direction === "long").length;
                 const shortCount = positions.filter((p: any) => p.direction === "short").length;
                 const equity = parseFloat(d.balance) + unrealizedPnl;
-                const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
+                const startBal = Number(d.startingBalance) || 10000;
+                const profitPct = (((parseFloat(d.balance) - startBal) / startBal) * 100);
                 const history = botTradeHistory;
                 const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
                 const grossProfit = history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);

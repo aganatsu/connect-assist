@@ -1376,8 +1376,14 @@ Deno.serve(async (req) => {
         }
       }
 
+      // The UI hardcoded 10000 as the baseline for "Total Return", so after a
+      // manual Set Balance it read $100,000 as +900%. Return the configured
+      // bankroll so the percentage means something.
+      const configuredStart = parseFloat(await getConfiguredStartingBalance());
+
       return respond({
-        balance, equity: balance + unrealizedPnl, unrealizedPnl,
+        balance, startingBalance: configuredStart,
+        equity: balance + unrealizedPnl, unrealizedPnl,
         positions: posArr, pendingOrders: pending || [],
         tradeHistory: histArr, isRunning: account?.is_running || false,
         isPaused: account?.is_paused || false,
