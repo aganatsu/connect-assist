@@ -182,7 +182,7 @@ export function signalStatus(s: Signal, config: Props["config"]): Status {
 
 const GROUPS: { status: Status; title: string; blurb: string; tone: string }[] = [
   {
-    status: "rejects", title: "Can refuse a trade", tone: "text-red-400",
+    status: "rejects", title: "Can refuse a trade", tone: "text-destructive",
     blurb: "A setup failing any of these is rejected outright.",
   },
   {
@@ -198,7 +198,7 @@ const GROUPS: { status: Status; title: string; blurb: string; tone: string }[] =
     blurb: "Recorded so a decision can be made from data instead of theory.",
   },
   {
-    status: "off", title: "Switched off", tone: "text-zinc-500",
+    status: "off", title: "Switched off", tone: "text-muted-foreground",
     blurb: "Not computed at all.",
   },
   {
@@ -212,7 +212,7 @@ export function SignalStatusPanel({ config }: Props) {
 
   return (
     <div className="p-2 space-y-4 text-[11px]">
-      <p className="text-zinc-400 leading-relaxed">
+      <p className="text-muted-foreground leading-relaxed">
         Grouped by what each signal actually does to a trade, read from the live bot
         config — not from a list of claims. A feature can be{" "}
         <span className="text-zinc-200">enabled</span> and still have its result ignored;
@@ -231,14 +231,14 @@ export function SignalStatusPanel({ config }: Props) {
               </span>
               <span className="text-zinc-600">{items.length}</span>
             </div>
-            <p className="text-zinc-500 mb-2 leading-relaxed">{g.blurb}</p>
+            <p className="text-muted-foreground mb-2 leading-relaxed">{g.blurb}</p>
             <div className="space-y-2">
               {items.map(s => (
                 <div key={s.label} className="pl-2 border-l border-zinc-800">
                   <div className="text-zinc-200 font-medium">{s.label}</div>
-                  <div className="text-zinc-400 leading-relaxed">{s.what}</div>
+                  <div className="text-muted-foreground leading-relaxed">{s.what}</div>
                   {s.waitingFor && (
-                    <div className="text-zinc-500 mt-0.5">
+                    <div className="text-muted-foreground mt-0.5">
                       <span className="text-zinc-600">Waiting on: </span>{s.waitingFor}
                     </div>
                   )}
