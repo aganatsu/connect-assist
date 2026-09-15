@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SignalStatusPanel } from "@/components/SignalStatusPanel";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
@@ -639,6 +640,7 @@ export default function BotView() {
                   ["watchlist", "Watchlist"],
                   ["pending-orders", "Zone Setups"],
                   ["game-plan", "Game Plan"],
+                  ["signals", "What's Active"],
                 ];
                 return (
                   <>
@@ -834,6 +836,9 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="game-plan" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <GamePlanPanel />
+              </TabsContent>
+              <TabsContent value="signals" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
+                <SignalStatusPanel config={botConfig?.config ?? botConfig} />
               </TabsContent>
             </Tabs>
           </div>
