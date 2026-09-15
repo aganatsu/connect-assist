@@ -112,7 +112,7 @@ Deno.test("the migration allows the new type", () => {
   // The CHECK permitted exactly two values; an insert would have failed on
   // every blocked pair, silently, because the recorder swallows errors.
   const mig = Deno.readTextFileSync(
-    new URL("../../migrations/20260915120000_direction_blocked_rejection_type.sql", import.meta.url),
+    new URL("../../migrations/20260915130000_direction_blocked_rejection_type.sql", import.meta.url),
   );
   assert(/DROP CONSTRAINT IF EXISTS rejected_setups_rejection_type_check/.test(mig));
   for (const t of ["gate_blocked", "below_threshold_strong_t1", "direction_blocked"]) {

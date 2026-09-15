@@ -1,5 +1,12 @@
 -- Grade the setups the DIRECTION engine refused.
 --
+-- Renamed from 20260915120000, which collided with
+-- 20260915120000_frozen_decision_hash_trigger.sql. Supabase keys
+-- schema_migrations on the VERSION alone, so it saw that version already
+-- applied and skipped this file without logging anything. The constraint was
+-- applied by hand on 2026-09-15; this re-applies cleanly because the DROP is
+-- IF EXISTS.
+--
 -- Measured 2026-09-15: 148 trend-gate blocks in the sample, 82 of them
 -- retracements. Whether letting those through is a good idea is unanswerable,
 -- because a direction block never reached this table: recordRejectedSetup
