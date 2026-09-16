@@ -2955,7 +2955,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           .eq("position_id", pos.position_id).eq("user_id", userId);
 
         // 2. Insert into paper_trade_history (matches close-on-reverse field set)
-        await supabase.from("paper_trade_history").insert({
+        //
+        // The error is CHECKED. The position row is deleted above, so a silent
+        // failure here loses the trade outright — which is what happened when
+        // streamlined_decision_origin carried a foreign contract: the insert
+        // RAISEd, this line ignored it, and step 3 updated the balance anyway.
+        const { error: historyErr } = await supabase.from("paper_trade_history").insert({
           user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
           symbol: pos.symbol, direction: pos.direction, size: pos.size,
           entry_price: pos.entry_price, exit_price: hitPrice.toString(),
@@ -2963,15 +2968,31 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           close_reason: closeReason,
           pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
           signal_score: pos.signal_score || "0",
-          signal_reason: pos.signal_reason || "",
-          // The decision as frozen at entry, carried onto the closed trade so
-          // outcomes can be grouped by it without joining back to a position
-          // row that may have been deleted.
-          streamlined_decision_origin: (pos as any).frozen_strategy_context ?? null,
-          streamlined_decision_frozen_at: (pos as any).frozen_strategy_context ? new Date().toISOString() : null,
+          // NOT streamlined_decision_origin. That column belongs to the
+          // streamlined-decision-lifecycle.v1 contract and its trigger refuses
+          // anything else, so writing the position's frozen-decision.v1 blob
+          // there discarded the whole trade. The decision rides in
+          // signal_reason instead, alongside sizing and slFloor.
+          signal_reason: (() => {
+            const fc = (pos as any).frozen_strategy_context;
+            if (!fc) return pos.signal_reason || "";
+            try {
+              const base = typeof pos.signal_reason === "string" && pos.signal_reason
+                ? JSON.parse(pos.signal_reason)
+                : (pos.signal_reason ?? {});
+              return JSON.stringify({ ...base, frozenDecision: fc });
+            } catch {
+              return pos.signal_reason || "";
+            }
+          })(),
           bot_id: BOT_ID,
           stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
         });
+        if (historyErr) {
+          // Loud. The position is already gone, so this is an unrecoverable
+          // trade record and must never be swallowed again.
+          console.error(`[close] HISTORY INSERT FAILED for ${pos.symbol} ${pos.position_id} — TRADE RECORD LOST: ${historyErr.message}`);
+        }
 
         // 3. Update paper_accounts balance + peak_balance (scoped to bot)
         const balQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", userId);
