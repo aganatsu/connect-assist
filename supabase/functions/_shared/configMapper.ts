@@ -368,6 +368,20 @@ export interface PairGateOverride {
   /** Max consecutive losses before cooldown (Gate 14). Default: global maxConsecutiveLosses */
   maxConsecutiveLosses?: number;
   /**
+   * How far into the zone the resting entry sits, as a fraction of zone width
+   * from the NEAR edge. 1 = far edge (the global default). Default: global
+   * zoneEntryDepth.
+   *
+   * Per-pair because no single value is right. Measured 2026-09-06: GBP/USD
+   * entered its zone 13 times, reached half depth 6 times and the far edge 0
+   * times — every one of those was a fill lost to entry placement, not to
+   * reachability. AUD/USD's penetration median is 1.16, so price routinely
+   * goes clean THROUGH the far edge and a shallower entry there fills worse
+   * with more risk. A global 0.5 would gain ~6 on GBP/USD, cost AUD/USD on 15,
+   * and do nothing on four pairs.
+   */
+  zoneEntryDepth?: number;
+  /**
    * Static minimum stop distance in pips, overriding MIN_SL_PIPS[symbol].
    *
    * The static floor is a code constant, so tuning it has always needed a
@@ -805,6 +819,14 @@ export function applyPairOverrides<T extends RuntimeConfig>(config: T, symbol: s
   if (overrides.minConfluence !== undefined) config.minConfluence = overrides.minConfluence;
   if (overrides.protectionMaxDailyLossDollar !== undefined) (config as any).protectionMaxDailyLossDollar = overrides.protectionMaxDailyLossDollar;
   if (overrides.maxConsecutiveLosses !== undefined) (config as any).maxConsecutiveLosses = overrides.maxConsecutiveLosses;
+  // Clamped. A depth above 1 sits outside the zone entirely and a depth of 0
+  // fills on the first tick of contact, so a typo here would change entry
+  // behaviour silently rather than error. Non-finite values fall through to
+  // the global default.
+  if (overrides.zoneEntryDepth !== undefined) {
+    const d = Number(overrides.zoneEntryDepth);
+    if (Number.isFinite(d) && d > 0 && d <= 1) (config as any).zoneEntryDepth = d;
+  }
 
   return config;
 }
