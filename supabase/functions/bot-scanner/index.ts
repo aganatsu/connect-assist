@@ -2950,9 +2950,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const pnlPips = diff / spec.pipSize;
         const nowClose = new Date().toISOString();
 
-        // 1. Delete from paper_positions
-        await supabase.from("paper_positions").delete()
-          .eq("position_id", pos.position_id).eq("user_id", userId);
+        // 1. Delete from paper_positions — and TREAT THE DELETE AS THE CLAIM.
+        //
+        // Two scan cycles can select the same breach candidate and both close
+        // it. Measured 2026-09-16: four positions closed twice, 0.7s apart,
+        // and the balance update below ran for each — USD/JPY credited
+        // 1742.38 for an 871.19 win, XAU 1138.92 for 569.46. Net +361 of
+        // profit that never happened, the same mechanism behind the phantom
+        // partial-TP inflation in the account history.
+        //
+        // DELETE ... RETURNING is atomic, so exactly one cycle gets the row
+        // back. Whoever gets nothing has lost the race and must not touch the
+        // balance.
+        const { data: claimed } = await supabase.from("paper_positions").delete()
+          .eq("position_id", pos.position_id).eq("user_id", userId)
+          .select("position_id");
+        if (!claimed || claimed.length === 0) {
+          console.log(`[close] ${pos.symbol} ${pos.position_id} — already closed by another cycle, skipping`);
+          continue;
+        }
 
         // 2. Insert into paper_trade_history (matches close-on-reverse field set)
         //
