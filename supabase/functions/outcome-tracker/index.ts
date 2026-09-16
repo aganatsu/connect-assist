@@ -331,6 +331,12 @@ Deno.serve(async (req: Request) => {
       const { data: recentResolved, error: alertErr } = await supabase
         .from("rejected_setups")
         .select("outcome_status, user_id")
+        // Confluence rejections ONLY. direction_blocked rows carry synthetic
+        // levels — a 1.5x ATR stop and a 2R target, because no setup was ever
+        // scored — so their win rate measures a different thing and cannot be
+        // averaged with these. Pooling them would drive this alert with a
+        // population it was never calibrated on.
+        .in("rejection_type", ["gate_blocked", "below_threshold_strong_t1"])
         .neq("outcome_status", "pending")
         .neq("outcome_status", "inconclusive")
         .gte("rejected_at", sevenDaysAgo);
