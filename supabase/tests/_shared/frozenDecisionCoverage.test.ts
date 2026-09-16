@@ -65,13 +65,21 @@ Deno.test("no route sets the hash itself", () => {
   }
 });
 
-Deno.test("the closed trade carries the decision", () => {
+Deno.test("the closed trade carries the decision, via signal_reason", () => {
   // So outcomes can be grouped by it without joining to a position row that
   // may no longer exist.
+  //
+  // This test previously REQUIRED the write to go to
+  // streamlined_decision_origin, and that is what made the bug permanent: that
+  // column belongs to the streamlined-decision-lifecycle.v1 contract and its
+  // trigger RAISEs on anything else. The close path deletes the position
+  // first and did not check the insert error, so every close discarded the
+  // trade while still moving the balance. A test can pin a bug as firmly as
+  // it pins a fix.
   const scanner = FN("bot-scanner");
-  assert(/streamlined_decision_origin: \(pos as any\)\.frozen_strategy_context \?\? null,/
-    .test(scanner));
-  assert(/streamlined_decision_frozen_at:/.test(scanner));
+  assert(!/streamlined_decision_origin: \(pos as any\)\.frozen_strategy_context/.test(scanner),
+    "must not write a foreign contract to the streamlined column");
+  assert(/frozenDecision: fc/.test(scanner), "the decision rides in signal_reason");
 });
 
 Deno.test("crossTimeframeContext is never invented", () => {
