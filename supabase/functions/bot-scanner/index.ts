@@ -2336,8 +2336,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || isFxClosedFridayEvening;
   let weekendCryptoMode = false;
   if (fxMarketClosed && config.weekendCryptoEnabled !== false && !opts?.isManagementOnly) {
+    // INTERSECTED with the configured instruments, not substituted for them.
+    // This list used to be assigned over config.instruments wholesale, so
+    // disabling an instrument held Monday to Friday and silently lapsed every
+    // weekend — the config said one thing and the scanner did another for 48
+    // hours at a time. Anything disabled stays disabled.
     const weekendCryptoList = ["BTC/USD", "ETH/USD"].filter(
-      (s) => SPECS[s]?.type === "crypto" && SUPPORTED_SYMBOLS[s],
+      (s) => SPECS[s]?.type === "crypto" && SUPPORTED_SYMBOLS[s] &&
+        config.instruments.includes(s),
     );
     if (weekendCryptoList.length > 0) {
       weekendCryptoMode = true;
