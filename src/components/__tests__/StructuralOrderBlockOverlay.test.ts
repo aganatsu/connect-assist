@@ -110,3 +110,34 @@ describe("V2 overlay", () => {
     }
   });
 });
+
+describe("V2 in the Detail Breakdown", () => {
+  const botView = readFileSync("src/pages/BotView.tsx", "utf8");
+
+  it("renders the blocks with their numbers", () => {
+    // The chart shows where the zones are; this panel is where the values are
+    // checkable — proximal, distal, sweep, base size. Half the validation is
+    // numeric and the overlay cannot carry it.
+    expect(botView).toContain("structuralOrderBlocksV2");
+    const i = botView.indexOf("OB v2");
+    const section = botView.slice(i - 500, i + 3000);
+    expect(section).toMatch(/b\.proximal/);
+    expect(section).toMatch(/b\.distal/);
+    expect(section).toMatch(/b\.sweepLevel/);
+    expect(section).toMatch(/b\.baseCandles/);
+  });
+
+  it("says it is observational, every time it is shown", () => {
+    // A panel of zones that looks like the live one is exactly how an
+    // observation gets mistaken for a decision.
+    const i = botView.indexOf("OB v2");
+    const section = botView.slice(i, i + 1200);
+    expect(section.toLowerCase()).toContain("nothing trades on these");
+  });
+
+  it("hides invalidated blocks here too", () => {
+    const i = botView.indexOf("OB v2");
+    const section = botView.slice(i, i + 2000);
+    expect(section).toMatch(/status !== "INVALIDATED"/);
+  });
+});

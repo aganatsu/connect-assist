@@ -1972,6 +1972,59 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
       <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
+      {/* V2 structural order blocks — SHADOW MODE, numbers only */}
+      {Array.isArray(d.structuralOrderBlocksV2) && d.structuralOrderBlocksV2.length > 0 && (
+        <div className="border border-violet-500/25 rounded-sm">
+          <div className="flex items-center gap-1.5 px-1.5 py-0.5 bg-violet-500/10 border-b border-violet-500/20">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-violet-300">OB v2</span>
+            <span className="text-[9px] text-muted-foreground">
+              {d.structuralOrderBlocksV2.length} block{d.structuralOrderBlocksV2.length === 1 ? "" : "s"}
+            </span>
+            {/* Said every time it is shown. A panel full of zones that looks
+                like the live one is exactly how an observation gets mistaken
+                for a decision. */}
+            <span className="text-[9px] text-muted-foreground ml-auto">observational — nothing trades on these</span>
+          </div>
+          <div className="divide-y divide-border/40">
+            {d.structuralOrderBlocksV2
+              .filter((b: any) => b.status !== "INVALIDATED")
+              .slice(0, 8)
+              .map((b: any) => (
+                <div key={b.id} className="flex items-center gap-1.5 px-1.5 py-0.5 flex-wrap">
+                  <span className={`text-[9px] font-bold px-1 rounded-sm ${
+                    b.tf === "D" ? "bg-violet-500/25 text-violet-200" : "bg-violet-500/10 text-violet-300"
+                  }`}>{b.tf}</span>
+                  <span className={`text-[9px] font-bold ${b.dir === "bullish" ? "text-success" : "text-destructive"}`}>
+                    {b.dir === "bullish" ? "↑" : "↓"}
+                  </span>
+                  <span className="text-[10px] font-mono">
+                    {b.proximal} <span className="text-muted-foreground">→</span> {b.distal}
+                  </span>
+                  {/* The wick extreme sits OUTSIDE the zone: a wick through it
+                      is a sweep, a body close through distal is invalidation. */}
+                  {b.sweepLevel != null && b.sweepLevel !== b.distal && (
+                    <span className="text-[9px] font-mono text-muted-foreground">sweep {b.sweepLevel}</span>
+                  )}
+                  <span className="text-[9px] text-muted-foreground">{b.status}</span>
+                  {b.significance && (
+                    <span className="text-[9px] text-muted-foreground">{b.significance === "external" ? "ext" : "int"}</span>
+                  )}
+                  <span className="text-[9px] font-mono text-muted-foreground">{b.baseCandles}c</span>
+                  {b.touches > 0 && (
+                    <span className="text-[9px] text-muted-foreground">
+                      {b.touches}× {Math.round(b.penetration)}%
+                    </span>
+                  )}
+                  <span className="text-[9px] font-mono text-violet-300 ml-auto">{b.score}</span>
+                  <span className="text-[9px] text-muted-foreground w-full">
+                    base {b.originTime?.slice(0, 16)}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">
