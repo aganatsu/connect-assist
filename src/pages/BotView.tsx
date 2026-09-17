@@ -37,7 +37,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
-import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
+import { ZoneStoryPanel, fmtBarTime } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -1974,8 +1974,11 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
       <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
       {/* V2 structural order blocks — SHADOW MODE, numbers only */}
       {Array.isArray(d.structuralOrderBlocksV2) && d.structuralOrderBlocksV2.length > 0 && (
-        <div className="border border-violet-500/25 rounded-sm">
-          <div className="flex items-center gap-1.5 px-1.5 py-0.5 bg-violet-500/10 border-b border-violet-500/20">
+        // <details> rather than component state: this panel re-renders on every
+        // scan and a useState toggle would snap back open each cycle.
+        <details className="border border-violet-500/25 rounded-sm group">
+          <summary className="flex items-center gap-1.5 px-1.5 py-0.5 bg-violet-500/10 border-b border-violet-500/20 cursor-pointer list-none">
+            <span className="text-[9px] text-violet-300 transition-transform group-open:rotate-90">▶</span>
             <span className="text-[9px] font-bold uppercase tracking-wider text-violet-300">OB v2</span>
             <span className="text-[9px] text-muted-foreground">
               {d.structuralOrderBlocksV2.length} block{d.structuralOrderBlocksV2.length === 1 ? "" : "s"}
@@ -1984,7 +1987,7 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
                 like the live one is exactly how an observation gets mistaken
                 for a decision. */}
             <span className="text-[9px] text-muted-foreground ml-auto">observational — nothing trades on these</span>
-          </div>
+          </summary>
           <div className="divide-y divide-border/40">
             {d.structuralOrderBlocksV2
               .filter((b: any) => b.status !== "INVALIDATED")
@@ -2017,12 +2020,16 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
                   )}
                   <span className="text-[9px] font-mono text-violet-300 ml-auto">{b.score}</span>
                   <span className="text-[9px] text-muted-foreground w-full">
-                    base {b.originTime?.slice(0, 16)}
+                    {/* Same formatter the Zone Story uses: parses the string
+                        instead of going through Date, so the bar does not shift
+                        with the browser's timezone, and drops the 00:00 that
+                        every Daily bar carries. */}
+                    base {fmtBarTime(b.originTime, b.tf)}
                   </span>
                 </div>
               ))}
           </div>
-        </div>
+        </details>
       )}
 
       {/* Direction Verdict */}
