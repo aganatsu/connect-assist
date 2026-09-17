@@ -759,11 +759,36 @@ function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zon
 // Tries: MetaAPI (broker feed) → Twelve Data → Polygon.io
 // Module-scoped reference set per-scan so the loop below can stay terse.
 let _scanBrokerConn: BrokerConn | null = null;
+/**
+ * Per-interval candle depth.
+ *
+ * The `range` argument threaded through cachedFetch is DECORATIVE — it has
+ * always been ignored here, and every timeframe got 300 bars regardless. So
+ * "4h"/"1mo" was never a month; it was 300 bars, about 70 calendar days.
+ *
+ * 4H is deepened to ~6 months for the V2 order-block engine, which is required
+ * to preserve structural zones for weeks or months. The reference NASDAQ chart
+ * has live H4 blocks 86 days old — beyond the old window, so the detector would
+ * have looked wrong when the real limit was missing candles.
+ *
+ * Providers bill per REQUEST, not per row, so this costs no extra API credit —
+ * which matters, because the scanner is already refusing 200-440 fetches a
+ * cycle.
+ *
+ * LEGACY CONSUMERS MUST NOT SEE THE EXTRA HISTORY. More candles changes swing
+ * and structure detection, which changes which trades fire — and V2 is supposed
+ * to change nothing. Every pre-existing 4H call site slices back to
+ * LEGACY_H4_WINDOW; only V2 reads the full series.
+ */
+const CANDLE_LIMITS: Record<string, number> = { "4h": 800 };
+const DEFAULT_CANDLE_LIMIT = 300;
+export const LEGACY_H4_WINDOW = 300;
+
 async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Promise<Candle[]> {
   const result = await fetchCandlesWithFallback({
     symbol,
     interval,
-    limit: 300,
+    limit: CANDLE_LIMITS[interval] ?? DEFAULT_CANDLE_LIMIT,
     brokerConn: _scanBrokerConn,
     skipBroker: true,
   });
@@ -3433,7 +3458,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
               cachedFetch(pending.symbol, "1d", "1y"),
-              cachedFetch(pending.symbol, "4h", "1mo"),
+              cachedFetch(pending.symbol, "4h", "1mo").then(c => c.slice(-LEGACY_H4_WINDOW)),
               cachedFetch(pending.symbol, "1h", "5d"),
             ]);
 
@@ -4349,7 +4374,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
             const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
               cachedFetch(sym, "1d", "1y"),
-              cachedFetch(sym, "4h", "1mo"),
+              cachedFetch(sym, "4h", "1mo").then(c => c.slice(-LEGACY_H4_WINDOW)),
               cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
               cachedFetch(sym, "1h", "5d"),
             ]);
@@ -4590,7 +4615,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
-    const h4Candles: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
+    // Full 4H history (~6 months) — read ONLY by the V2 order-block engine.
+    const h4Full: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
+    // The window every pre-existing consumer has always had. Slicing here keeps
+    // swing/structure detection byte-identical, so deepening the fetch cannot
+    // change which trades fire.
+    const h4Candles: Candle[] = h4Full.slice(-LEGACY_H4_WINDOW);
     const h4Offset = multiTFRegimeEnabled ? 1 : 0;
     // 1H candles always fetched (index = 2 + h4Offset)
     const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
@@ -5312,8 +5342,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const v2Blocks = runStructuralOrderBlocks(pair, [
         ...(dailyCandles && dailyCandles.length >= 20
           ? [{ timeframe: "D" as const, candles: dailyCandles }] : []),
-        ...(h4Candles && h4Candles.length >= 20
-          ? [{ timeframe: "4H" as const, candles: h4Candles }] : []),
+        ...(h4Full && h4Full.length >= 20
+          ? [{ timeframe: "4H" as const, candles: h4Full }] : []),
       ]);
       (detail as any).structuralOrderBlocksV2 = sobToScanDetail(v2Blocks);
       if (v2Blocks.length > 0) {
