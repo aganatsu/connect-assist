@@ -129,6 +129,19 @@ export const SIGNALS: Signal[] = [
   },
   // ── Measured in code, wired to nothing ──
   {
+    label: "Structural order blocks (V2)",
+    what:
+      "A second order-block detector running beside the live one. Finds the BASE that " +
+      "produced a validated impulse instead of the last opposite-coloured candle, draws " +
+      "the zone on candle BODIES with the wick extreme kept separately as a sweep level, " +
+      "and preserves old zones until price accepts through them. Daily and 4H, both " +
+      "directions. Visible on the chart under the OB2 layer; nothing trades on it.",
+    observationalOnly: true,
+    waitingFor:
+      "Visual agreement with hand-drawn reference charts, then whether its zones hold " +
+      "better than the live detector's.",
+  },
+  {
     label: "Impulse leg displacement",
     what:
       "How forcefully the leg moved rather than how far — body ratio, range multiple, " +
