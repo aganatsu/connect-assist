@@ -22,11 +22,49 @@ describe("V2 overlay", () => {
 
   it("is a different colour from the legacy blocks", () => {
     // Comparing two detectors by eye only works if they don't look identical.
-    const v2 = chart.match(/v2Bull:\s*"([^"]+)"/)?.[1];
     const legacy = chart.match(/bullOB:\s*"([^"]+)"/)?.[1];
-    expect(v2).toBeTruthy();
     expect(legacy).toBeTruthy();
-    expect(v2).not.toBe(legacy);
+    for (const key of ["v2BullD", "v2BearD", "v2Bull4H", "v2Bear4H"]) {
+      const v2 = chart.match(new RegExp(`${key}:\\s*"([^"]+)"`))?.[1];
+      expect(v2, `${key} is defined`).toBeTruthy();
+      expect(v2, `${key} must not match the legacy OB colour`).not.toBe(legacy);
+    }
+  });
+
+  it("draws bounded segments, not full-width price lines", () => {
+    // createPriceLine spans the whole chart. A dozen blocks drawn that way is
+    // an unreadable thicket, and it hides the one thing worth seeing: where
+    // the zone was created.
+    const block = chart.slice(chart.indexOf('visibleLayers.has("obV2")'));
+    const body = block.slice(0, block.indexOf("─── FVGs"));
+    expect(body).toContain("addSegmentLine");
+    expect(body).not.toContain("addLine(");
+  });
+
+  it("each segment starts at its own origin candle", () => {
+    const block = chart.slice(chart.indexOf('visibleLayers.has("obV2")'));
+    const body = block.slice(0, block.indexOf("─── FVGs"));
+    expect(body).toMatch(/idxAtOrAfter\(tsOf\(b\.originTime\)\)/);
+    // A Daily zone older than the visible window must clamp to the left edge
+    // rather than disappear — it is still real on a lower-timeframe chart.
+    expect(body).toMatch(/if \(ts <= first\) return 0;/);
+  });
+
+  it("the label carries the origin date", () => {
+    const block = chart.slice(chart.indexOf('visibleLayers.has("obV2")'));
+    const body = block.slice(0, block.indexOf("─── FVGs"));
+    expect(body).toMatch(/shortDate\(b\.originTime\)/);
+    expect(body).toMatch(/\$\{when\}/);
+  });
+
+  it("Daily and 4H are visually distinct", () => {
+    // A stack of zones has to be readable by timeframe, not one violet blur.
+    for (const k of ["v2BullD", "v2BearD", "v2Bull4H", "v2Bear4H"]) {
+      expect(chart).toContain(`${k}:`);
+    }
+    const d = chart.match(/v2BullD:\s*"([^"]+)"/)?.[1];
+    const h4 = chart.match(/v2Bull4H:\s*"([^"]+)"/)?.[1];
+    expect(d).not.toBe(h4);
   });
 
   it("draws the sweep level outside the zone, dotted", () => {
