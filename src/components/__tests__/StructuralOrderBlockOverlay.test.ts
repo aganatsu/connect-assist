@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 
 const chart = readFileSync("src/components/SMCChart.tsx", "utf8");
 const page = readFileSync("src/pages/Chart.tsx", "utf8");
+const hud = readFileSync("src/components/ChartOverlayHUD.tsx", "utf8");
 
 describe("V2 overlay", () => {
   it("is its own toggleable layer, separate from the legacy OB layer", () => {
@@ -45,6 +46,21 @@ describe("V2 overlay", () => {
     // The detector runs inside bot-scanner on Daily/4H candles. Sourcing it
     // from the live smc-analysis call would silently show something else.
     expect(page).toMatch(/sig\?\.structuralOrderBlocksV2/);
+  });
+
+  it("is actually reachable from the UI", () => {
+    // The layer existed, the data reached the chart, and NOTHING DREW — the
+    // controlled-mode mapping in Chart.tsx never added 'obV2', so the whole
+    // overlay was unreachable. Built and not wired, the exact failure this
+    // repo keeps producing. Three links, all required.
+    expect(hud).toMatch(/obV2: boolean/);                       // in the model
+    expect(hud).toMatch(/key: 'obV2', label: 'OB2'/);           // a chip exists
+    expect(page).toMatch(/overlayVisibility\.obV2\) s\.add\('obV2'\)/); // mapped through
+  });
+
+  it("is off by default — it is a debug overlay, not furniture", () => {
+    const defaults = hud.slice(hud.indexOf("DEFAULT_VISIBILITY"), hud.indexOf("DEFAULT_VISIBILITY") + 400);
+    expect(defaults).toMatch(/obV2:\s*false/);
   });
 
   it("the overlay cannot place or modify a trade", () => {

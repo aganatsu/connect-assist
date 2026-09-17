@@ -12,6 +12,8 @@ export type OverlayLayer = 'iz' | 'ob' | 'fvg' | 'sp' | 'liq' | 'fib' | 'sr' | '
 export interface OverlayVisibility {
   iz: boolean;
   ob: boolean;
+  /** V2 structural order blocks — shadow mode, OFF by default. */
+  obV2: boolean;
   fvg: boolean;
   sp: boolean;
   liq: boolean;
@@ -35,6 +37,7 @@ interface LayerInfo {
 const LAYERS: LayerInfo[] = [
   { key: 'iz', label: 'IZ', color: 'border-cyan-500/40 text-cyan-400', activeColor: 'bg-cyan-500/20 border-cyan-400 text-cyan-300', tooltip: 'Impulse Zone — full impulse leg + entry POI' },
   { key: 'ob', label: 'OB', color: 'border-orange-500/40 text-warn', activeColor: 'bg-badge-warn border-orange-400 text-warn', tooltip: 'Order Blocks — institutional supply/demand zones' },
+  { key: 'obV2', label: 'OB2', color: 'border-violet-500/40 text-violet-400', activeColor: 'bg-violet-500/20 border-violet-400 text-violet-300', tooltip: 'V2 structural order blocks (shadow) — body-based zones, Daily + 4H. Display only; nothing trades on these.' },
   { key: 'fvg', label: 'FVG', color: 'border-purple-500/40 text-tier3', activeColor: 'bg-purple-500/20 border-purple-400 text-tier3', tooltip: 'Fair Value Gaps — imbalance zones' },
   { key: 'sp', label: 'SP', color: 'border-yellow-500/40 text-highlight', activeColor: 'bg-badge-warn border-yellow-400 text-highlight', tooltip: 'Swing Points — HH/HL/LH/LL structure' },
   { key: 'liq', label: 'LIQ', color: 'border-destructive/40 text-loss', activeColor: 'bg-badge-loss border-red-400 text-loss', tooltip: 'Liquidity Pools — equal highs/lows' },
@@ -120,6 +123,9 @@ export function ChartOverlayHUD({ visibility, onToggle, confluenceScore, directi
 export const DEFAULT_VISIBILITY: OverlayVisibility = {
   iz: true,
   ob: true,
+  // Off by default: V2 is a debug overlay for comparing against the reference
+  // charts, not something to leave cluttering the chart.
+  obV2: false,
   fvg: true,
   sp: true,
   liq: true,
