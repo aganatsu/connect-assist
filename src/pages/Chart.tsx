@@ -242,7 +242,7 @@ export default function Chart() {
         id: b.id, tf: b.tf, dir: b.dir,
         proximal: b.proximal, distal: b.distal, sweepLevel: b.sweepLevel,
         status: b.status, significance: b.significance,
-        score: b.score, touches: b.touches, band: b.band,
+        score: b.score, touches: b.touches, band: b.band, originTime: b.originTime,
       })),
       fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
         high: f.high, low: f.low, datetime: f.datetime, direction: f.type,

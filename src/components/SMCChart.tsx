@@ -171,6 +171,8 @@ export interface ChartStructuralOB {
   score?: number;
   touches?: number;
   band?: string;
+  /** Datetime of the base's first candle — where the segment starts. */
+  originTime?: string;
 }
 
 export interface SMCOverlays {
@@ -246,9 +248,13 @@ const COLORS = {
   bullOBFill: "rgba(6,182,212,0.12)",
   // V2 shadow blocks — violet, deliberately unlike the cyan legacy OB so the
   // two can be told apart at a glance when comparing against the charts.
-  v2Bull: "rgba(167,139,250,0.75)",
-  v2Bear: "rgba(244,114,182,0.75)",
-  v2Sweep: "rgba(148,163,184,0.55)",
+  // Daily is the heavier colour, 4H the lighter one, so a stack of zones can be
+  // read by timeframe at a glance instead of becoming one violet thicket.
+  v2BullD: "rgba(139,92,246,0.95)",
+  v2BearD: "rgba(236,72,153,0.95)",
+  v2Bull4H: "rgba(167,139,250,0.55)",
+  v2Bear4H: "rgba(244,114,182,0.55)",
+  v2Sweep: "rgba(148,163,184,0.45)",
   bearOBFill: "rgba(239,68,68,0.12)",
   // FVGs
   bullFVG: "rgba(34,197,94,0.45)",
@@ -687,43 +693,65 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     }
 
     // ─── V2 structural order blocks (SHADOW MODE) ─────────────────────
-    // Display only. These are drawn so their boxes can be compared against the
-    // reference charts and against the legacy OB layer; nothing in the system
-    // trades on them. Proximal and distal are BODY boundaries; the sweep level
-    // is the base's wick extreme and is drawn dotted, OUTSIDE the zone, because
-    // a wick through it is a sweep rather than an invalidation.
-    if (visibleLayers.has("obV2") && overlays.structuralOrderBlocksV2?.length) {
+    // Drawn as BOUNDED SEGMENTS from each block's origin candle to the right
+    // edge, not as full-width price lines. A dozen blocks rendered edge-to-edge
+    // is an unreadable thicket, and it also hides the one thing worth seeing:
+    // WHERE a zone was created.
+    //
+    // Daily uses the heavier colour, 4H the lighter, so a stack can be read by
+    // timeframe at a glance. The sweep level is dotted and sits OUTSIDE the
+    // zone — a wick through it is a sweep, not an invalidation.
+    if (visibleLayers.has("obV2") && overlays.structuralOrderBlocksV2?.length && chartData.length > 1) {
+      const tsOf = (dt?: string) => {
+        if (!dt) return NaN;
+        return Math.floor(new Date(dt.replace(" ", "T") + (dt.endsWith("Z") ? "" : "Z")).getTime() / 1000);
+      };
+      /** First bar at or after a timestamp. Blocks older than the visible
+       *  window clamp to the left edge rather than vanishing — a Daily zone
+       *  from months back is still real on a 1H chart. */
+      const idxAtOrAfter = (ts: number) => {
+        if (!Number.isFinite(ts)) return 0;
+        const first = chartData[0].time as number;
+        const last = chartData[chartData.length - 1].time as number;
+        if (ts <= first) return 0;
+        if (ts >= last) return chartData.length - 1;
+        let lo = 0, hi = chartData.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if ((chartData[mid].time as number) < ts) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+      };
+      const shortDate = (dt?: string) => {
+        if (!dt) return "";
+        const d = new Date(dt.replace(" ", "T") + (dt.endsWith("Z") ? "" : "Z"));
+        return isNaN(d.getTime())
+          ? ""
+          : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+      };
+
+      const lastIdx = chartData.length - 1;
       const shown = overlays.structuralOrderBlocksV2
         .filter((b) => b.status !== "INVALIDATED")
         .slice(0, 12);
+
       for (const b of shown) {
-        const color = b.dir === "bullish" ? COLORS.v2Bull : COLORS.v2Bear;
+        const isD = b.tf === "D";
+        const color = b.dir === "bullish"
+          ? (isD ? COLORS.v2BullD : COLORS.v2Bull4H)
+          : (isD ? COLORS.v2BearD : COLORS.v2Bear4H);
+        const from = idxAtOrAfter(tsOf(b.originTime));
+        if (from >= lastIdx) continue;
+
         const sig = b.significance === "external" ? "E" : "i";
-        addLine({
-          price: b.proximal,
-          color,
-          lineWidth: 2,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: false,
-          title: `V2 ${b.tf} ${b.status}${b.score != null ? ` ${b.score}` : ""} ${sig}`,
-        });
-        addLine({
-          price: b.distal,
-          color,
-          lineWidth: 1,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: false,
-          title: "",
-        });
+        const when = shortDate(b.originTime);
+        addSegmentLine(
+          b.proximal, from, lastIdx, color, 2, LineStyle.Solid,
+          `V2 ${b.tf} ${b.status}${b.score != null ? ` ${b.score}` : ""} ${sig}${when ? ` · ${when}` : ""}`,
+        );
+        addSegmentLine(b.distal, from, lastIdx, color, 1, LineStyle.Solid);
         if (typeof b.sweepLevel === "number" && b.sweepLevel !== b.distal) {
-          addLine({
-            price: b.sweepLevel,
-            color: COLORS.v2Sweep,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: false,
-            title: "sweep",
-          });
+          addSegmentLine(b.sweepLevel, from, lastIdx, COLORS.v2Sweep, 1, LineStyle.Dotted);
         }
       }
     }
