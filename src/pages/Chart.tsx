@@ -42,6 +42,7 @@ export default function Chart() {
     const s = new Set<SMCOverlayLayer>();
     if (overlayVisibility.iz) s.add('impulseZone');
     if (overlayVisibility.ob) s.add('orderBlocks');
+    if (overlayVisibility.obV2) s.add('obV2');
     if (overlayVisibility.fvg) s.add('fvgs');
     if (overlayVisibility.sp) s.add('swingPoints');
     if (overlayVisibility.liq) s.add('liquidity');
