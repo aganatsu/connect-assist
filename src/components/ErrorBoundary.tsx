@@ -45,7 +45,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       }
 
       return (
-        <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="min-h-app flex items-center justify-center bg-background p-4">
           <div className="max-w-md w-full bg-card border border-border rounded-lg p-6 text-center shadow-lg">
             <div className="text-4xl mb-4">⚠️</div>
             <h2 className="text-xl font-semibold text-foreground mb-2">

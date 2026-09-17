@@ -19,7 +19,7 @@ export function AppShell({ children }: AppShellProps) {
 
   if (isMobile) {
     return (
-      <div className="h-screen flex flex-col max-w-full overflow-hidden">
+      <div className="h-app flex flex-col max-w-full overflow-hidden">
         {/* Mobile search overlay */}
         {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} mobile />}
         <MobileTopBar />
@@ -32,7 +32,7 @@ export function AppShell({ children }: AppShellProps) {
   }
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-app flex flex-col">
       <div className="flex-1 flex min-h-0">
         <IconRail onSearchToggle={toggleSearch} />
         {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} />}

@@ -91,7 +91,7 @@ const ResetPassword = () => {
 
   if (phase === "checking") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-app flex items-center justify-center bg-background">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
@@ -99,7 +99,7 @@ const ResetPassword = () => {
 
   if (phase === "request") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="min-h-app flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md border-border/50">
           <CardHeader>
             <CardTitle>Reset your password</CardTitle>
@@ -133,7 +133,7 @@ const ResetPassword = () => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <div className="min-h-app flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md border-border/50">
         <CardHeader>
           <CardTitle>Set new password</CardTitle>

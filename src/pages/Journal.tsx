@@ -147,7 +147,7 @@ export default function JournalView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col md:flex-row h-page">
         {/* Main content */}
         <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
           <div className="flex items-center justify-between">

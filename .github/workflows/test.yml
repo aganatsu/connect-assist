@@ -55,8 +55,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Vitest
+        # The frontend DOES have a suite — 22 tests — and this comment used to
+        # say it did not, so none of them ran on any PR. Same shape as the
+        # 1,561 Deno tests that sat unrun under supabase/functions until
+        # 2026-09-15.
+        run: npm run test
       - name: Build
-        # The frontend has no test suite; a build failure is the signal.
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
           VITE_SUPABASE_PUBLISHABLE_KEY: build-only-placeholder

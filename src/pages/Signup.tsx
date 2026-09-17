@@ -39,7 +39,7 @@ const Signup = () => {
 
   if (submitted) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="min-h-app flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md border-border/50">
           <CardHeader className="text-center space-y-2">
             <CardTitle className="text-xl">Check your email</CardTitle>
@@ -58,7 +58,7 @@ const Signup = () => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <div className="min-h-app flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md border-border/50">
         <CardHeader className="text-center space-y-2">
           <div className="flex items-center justify-center gap-2 mb-2">

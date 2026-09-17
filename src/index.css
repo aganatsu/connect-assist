@@ -300,6 +300,29 @@ html, body, #root {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ── Viewport height on iOS ─────────────────────────────────────────────
+ * 100vh on iOS Safari is the TOOLBAR-COLLAPSED height, so with the toolbar
+ * visible the bottom of the layout sits behind it. The mobile shell is
+ * overflow-hidden and MobileNav is fixed bottom-0, so that area cannot be
+ * scrolled to — the navigation ends up behind the browser chrome.
+ *
+ * Two declarations, deliberately: browsers without dvh (iOS < 15.4) ignore the
+ * second and keep the vh behaviour, which is the current behaviour rather than
+ * a broken one. A bare `h-[100dvh]` would collapse to height:auto there.
+ */
+.h-app      { height: 100vh; height: 100dvh; }
+.min-h-app  { min-height: 100vh; min-height: 100dvh; }
+
+/* Full height minus the top bar. 3.5rem mobile, 4.5rem from md — the pattern
+ * repeated across Chart, BotView, IctAnalysis and Journal. */
+.h-page     { height: calc(100vh - 3.5rem); height: calc(100dvh - 3.5rem); }
+@media (min-width: 768px) {
+  .h-page   { height: calc(100vh - 4.5rem); height: calc(100dvh - 4.5rem); }
+}
+.min-h-page-tall {
+  min-height: calc(100vh - 7rem); min-height: calc(100dvh - 7rem);
+}
+
 /* Mobile touch optimizations */
 @media (max-width: 767px) {
   html, body, #root {
@@ -322,9 +345,19 @@ html, body, #root {
   input, select, textarea {
     font-size: 16px;
   }
-  /* Min tap targets */
+  /* Min tap targets.
+   *
+   * 44px is Apple's HIG floor and the size a fingertip actually resolves; 36px
+   * was 8px under it on every button in the app except MobileNav, which is
+   * already 56px. Height only — a min-width would break the inline controls in
+   * the dense panels, and those are wide enough already. */
   button, a[role="button"], [role="tab"] {
-    min-height: 36px;
+    min-height: 44px;
+  }
+  /* Opt-out for controls that sit inside a fixed-height row, where a 44px
+   * floor would burst the container rather than enlarge the target. */
+  .tap-exempt, .tap-exempt button {
+    min-height: 0;
   }
   /* Recharts often render wider than viewport — clip */
   .recharts-wrapper, .recharts-surface {

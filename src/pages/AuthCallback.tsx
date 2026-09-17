@@ -73,7 +73,7 @@ const AuthCallback = () => {
 
   if (error) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-4">
+      <main className="flex min-h-app items-center justify-center bg-background p-4">
         <div className="w-full max-w-sm space-y-4 text-center">
           <h1 className="text-xl font-semibold text-foreground">Sign-in could not be completed</h1>
           <p className="text-sm text-muted-foreground">{error}</p>
@@ -84,7 +84,7 @@ const AuthCallback = () => {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background" aria-live="polite">
+    <main className="flex min-h-app items-center justify-center bg-background" aria-live="polite">
       <div className="space-y-3 text-center">
         <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-muted border-b-primary" />
         <p className="text-sm text-muted-foreground">Completing Google sign-in…</p>
