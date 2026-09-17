@@ -197,7 +197,7 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
  *
  * Daily and Weekly bars are stamped 00:00, so the time is noise there.
  */
-function fmtBarTime(iso: string | null | undefined, timeframe?: string, omitDate = false): string {
+export function fmtBarTime(iso: string | null | undefined, timeframe?: string, omitDate = false): string {
   if (!iso) return "—";
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(iso);
   if (!m) return iso;
