@@ -2024,7 +2024,7 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
                         instead of going through Date, so the bar does not shift
                         with the browser's timezone, and drops the 00:00 that
                         every Daily bar carries. */}
-                    base {fmtBarTime(b.originTime, b.tf)}
+                    base {fmtBarTime(b.originTime, b.tf, false, true)}
                   </span>
                 </div>
               ))}

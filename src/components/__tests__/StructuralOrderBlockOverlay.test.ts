@@ -157,7 +157,7 @@ describe("V2 in the Detail Breakdown", () => {
     expect(botView).toMatch(/import \{[^}]*fmtBarTime[^}]*\} from "@\/components\/ZoneStoryPanel"/);
     const i = botView.indexOf("OB v2");
     const section = botView.slice(i, i + 3000);
-    expect(section).toMatch(/fmtBarTime\(b\.originTime, b\.tf\)/);
+    expect(section).toMatch(/fmtBarTime\(b\.originTime, b\.tf/);
     expect(section).not.toMatch(/originTime\?\.slice/);
   });
 
