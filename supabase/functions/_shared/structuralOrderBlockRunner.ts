@@ -15,7 +15,7 @@
 
 import type { Candle } from "./smcAnalysis.ts";
 import { detectSwingPoints } from "./smcAnalysis.ts";
-import { findImpulseLeg } from "./impulseZoneEngine.ts";
+import { enumerateImpulseLegs } from "./impulseZoneEngine.ts";
 import type { ImpulseLeg } from "./impulseZoneEngine.ts";
 import {
   detectStructuralOrderBlocks,
@@ -28,22 +28,26 @@ export interface SeriesInput {
 }
 
 /**
- * Both directions are searched on every timeframe.
+ * EVERY valid leg in the window, both directions, on every timeframe.
+ *
+ * This used to call findImpulseLeg() twice, which returns only the most recent
+ * valid leg per direction. That capped the whole engine at
+ * symbols x directions x timeframes = 32 blocks, and it measured 28 — the
+ * ceiling, not a finding. A 4H chart with six stacked historical zones could
+ * never be reproduced, however deep the candles went.
  *
  * Deliberately NOT gated on the trade direction the scanner settled on: a
  * supply block above price is exactly as real as a demand block below it, and
  * inheriting the direction gate here would make the engine blind to half the
- * chart — the same way the gate already hides retracements from measurement.
+ * chart — the same way that gate already hides retracements from measurement.
  */
 function legsFor(candles: Candle[], timeframe: "D" | "4H" | "1H"): ImpulseLeg[] {
-  const legs: ImpulseLeg[] = [];
-  for (const dir of ["bullish", "bearish"] as const) {
-    try {
-      const leg = findImpulseLeg(candles, dir, timeframe);
-      if (leg && leg.startIndex != null && leg.endIndex != null) legs.push(leg);
-    } catch { /* a bad series must not cost the scan */ }
+  try {
+    return enumerateImpulseLegs(candles, timeframe)
+      .filter(l => l.startIndex != null && l.endIndex != null);
+  } catch {
+    return [];   // a bad series must not cost the scan
   }
-  return legs;
 }
 
 export function runStructuralOrderBlocks(

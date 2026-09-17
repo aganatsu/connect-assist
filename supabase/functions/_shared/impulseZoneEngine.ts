@@ -378,6 +378,88 @@ export function findImpulseLeg(
 }
 
 /**
+ * Every valid impulse leg in the window, not just the newest one.
+ *
+ * findImpulseLeg() returns the most recent valid leg per direction AND STOPS.
+ * That is right for "what is the current setup", and wrong for anything that
+ * needs the history: with one bullish and one bearish leg per timeframe, the
+ * V2 order-block engine could produce at most
+ *
+ *   symbols x directions x timeframes  =  8 x 2 x 2  =  32
+ *
+ * blocks in total, and it measured 28 — the ceiling, not a finding. A reference
+ * 4H chart carrying six stacked zones from six different historical impulses
+ * was structurally unreproducible, no matter how deep the candle window went.
+ *
+ * This walks every BOS and CHoCH instead. Same validation, same leg shape, same
+ * enrichment — the only difference is that older legs are kept rather than
+ * discarded once a newer one is found.
+ *
+ * Deliberately NOT one leg per break. Several breaks commonly belong to the
+ * same impulse (a leg that breaks structure three times on its way up), and
+ * they all trace back to the same swing origin. Those collapse to one leg,
+ * keeping the furthest-developed break, because they describe one base.
+ */
+export function enumerateImpulseLegs(
+  candles: Candle[],
+  timeframe?: "D" | "4H" | "1H",
+  opts?: { maxPerDirection?: number },
+): ImpulseLeg[] {
+  if (candles.length < 20) return [];
+  const maxPerDirection = opts?.maxPerDirection ?? 20;
+
+  const structure = analyzeMarketStructure(candles);
+  const everyBreak = [...structure.bos, ...structure.choch];
+  const out: ImpulseLeg[] = [];
+
+  for (const direction of ["bullish", "bearish"] as const) {
+    const breaks = everyBreak
+      .filter(b => b.type === direction)
+      .sort((a, b) => b.index - a.index);   // newest first, so caps drop the oldest
+
+    // Same origin = same base = the same order block. Keep the break that
+    // developed furthest, which is the one that best describes the move.
+    const byOrigin = new Map<number, ImpulseLeg>();
+    for (const bos of breaks) {
+      const leg = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+      if (!leg || !leg.isValid) continue;
+      const existing = byOrigin.get(leg.startIndex);
+      if (!existing || leg.endIndex > existing.endIndex) byOrigin.set(leg.startIndex, leg);
+    }
+
+    const legs = [...byOrigin.values()].sort((a, b) => b.endIndex - a.endIndex);
+    if (legs.length > maxPerDirection) {
+      // Never cap silently: a truncated list reads as "this is all there was".
+      console.log(`[enumerateImpulseLegs] ${timeframe ?? "?"} ${direction}: ` +
+        `capped ${legs.length} legs to ${maxPerDirection}`);
+    }
+    out.push(...legs.slice(0, maxPerDirection));
+  }
+
+  // Same enrichment findImpulseLeg applies, minus `sequence` — that describes
+  // what preceded the CURRENT setup and costs an extra validation per leg.
+  for (const leg of out) {
+    if (timeframe) leg.timeframe = timeframe;
+    const startCandle = candles[leg.startIndex];
+    const endCandle = candles[leg.endIndex];
+    if (startCandle?.datetime) {
+      leg.startDate = startCandle.datetime.slice(0, 10);
+      leg.startTime = startCandle.datetime;
+    }
+    if (endCandle?.datetime) {
+      leg.endDate = endCandle.datetime.slice(0, 10);
+      leg.endTime = endCandle.datetime;
+    }
+    leg.spanBars = leg.endIndex - leg.startIndex;
+    leg.fibLevels = impulseFibLevels(leg.high, leg.low, leg.direction);
+    leg.candleQuality = measureLegCandles(candles, leg.startIndex, leg.endIndex, leg.direction);
+  }
+
+  // Chronological, oldest first — the order the zones were created in.
+  return out.sort((a, b) => a.endIndex - b.endIndex);
+}
+
+/**
  * Given a BOS, trace back to find the swing origin and validate that the
  * origin has not been broken by subsequent price action (after the BOS).
  */
