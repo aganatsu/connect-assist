@@ -421,10 +421,21 @@ export function enumerateImpulseLegs(
     // developed furthest, which is the one that best describes the move.
     const byOrigin = new Map<number, ImpulseLeg>();
     for (const bos of breaks) {
-      const leg = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
-      if (!leg || !leg.isValid) continue;
-      const existing = byOrigin.get(leg.startIndex);
-      if (!existing || leg.endIndex > existing.endIndex) byOrigin.set(leg.startIndex, leg);
+      // Isolated PER BREAK, not per timeframe. The caller wraps this whole
+      // function in one try/catch, so without this a single malformed
+      // historical break would throw past every remaining leg and erase all
+      // blocks for the symbol on that timeframe — turning one bad bar into a
+      // chart with nothing on it.
+      try {
+        const leg = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+        if (!leg || !leg.isValid) continue;
+        const existing = byOrigin.get(leg.startIndex);
+        if (!existing || leg.endIndex > existing.endIndex) byOrigin.set(leg.startIndex, leg);
+      } catch (err) {
+        console.warn(`[enumerateImpulseLegs] ${timeframe ?? "?"} ${direction}: ` +
+          `break @${bos.index} failed validation, skipped — ${(err as Error)?.message}`);
+        continue;
+      }
     }
 
     const legs = [...byOrigin.values()].sort((a, b) => b.endIndex - a.endIndex);

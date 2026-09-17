@@ -88,16 +88,60 @@ Deno.test("every leg carries the inputs scoring needs", () => {
   }
 });
 
-Deno.test("the per-direction cap is enforced and logged, never silent", () => {
+Deno.test("the per-direction cap is enforced and logged AT RUNTIME", () => {
+  // The first version of this test grepped the source for the log string,
+  // which proves only that a console.log is written somewhere — not that the
+  // cap path reaches it. Stub the console and assert the message was actually
+  // emitted.
   const candles = zigzag(12);
-  const capped = enumerateImpulseLegs(candles, "D", { maxPerDirection: 2 });
-  for (const dir of ["bullish", "bearish"] as const) {
-    assert(capped.filter(l => l.direction === dir).length <= 2);
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  let capped;
+  try {
+    capped = enumerateImpulseLegs(candles, "D", { maxPerDirection: 2 });
+  } finally {
+    console.log = original;
   }
+  for (const dir of ["bullish", "bearish"] as const) {
+    assert(capped!.filter(l => l.direction === dir).length <= 2);
+  }
+  const capLines = lines.filter(l => l.includes("capped") && l.includes("legs to 2"));
+  assert(capLines.length > 0,
+    `the cap must announce itself — silence reads as "this is all there was". Captured: ${JSON.stringify(lines)}`);
+});
+
+Deno.test("a failing break is isolated to that break", () => {
+  // The runner wraps this whole function in ONE try/catch, so an unhandled
+  // throw on any historical break would take out every block for that symbol
+  // and timeframe — one bad bar emptying the chart.
+  //
+  // This is a structural assertion, deliberately. There is no seam to inject a
+  // throwing break through: validateImpulseFromBOS is module-private, and
+  // poisoning a candle throws inside analyzeMarketStructure first, which runs
+  // before the loop and is a different failure entirely. So the check is that
+  // the try/catch sits INSIDE the for-loop and continues, rather than around
+  // it.
   const src = Deno.readTextFileSync(
     new URL("../../functions/_shared/impulseZoneEngine.ts", import.meta.url));
-  assert(/capped \$\{legs\.length\} legs to/.test(src),
-    "a truncated list must say so — silence reads as 'this is all there was'");
+  const fn = src.slice(src.indexOf("export function enumerateImpulseLegs"));
+  const loop = fn.slice(fn.indexOf("for (const bos of breaks)"), fn.indexOf("const legs ="));
+  assert(loop.length > 0, "found the break loop");
+  assert(/^\s*try \{/m.test(loop), "the loop body opens a try");
+  assert(/catch \(err\)[\s\S]*continue;/.test(loop),
+    "and continues to the next break rather than aborting the timeframe");
+  assert(loop.indexOf("try {") < loop.indexOf("validateImpulseFromBOS"),
+    "the guard wraps the validation, not the other way round");
+});
+
+Deno.test("legs still accumulate when some breaks simply do not validate", () => {
+  // The ordinary case the isolation has to survive: plenty of breaks fail
+  // validateImpulseFromBOS by returning null or isValid:false. Those must be
+  // skipped without losing the ones that passed.
+  const legs = enumerateImpulseLegs(zigzag(6));
+  assert(legs.length >= 3,
+    `expected several surviving legs, got ${legs.length}`);
+  assert(legs.every(l => l.isValid), "only valid legs are returned");
 });
 
 Deno.test("the cap keeps the newest legs", () => {
