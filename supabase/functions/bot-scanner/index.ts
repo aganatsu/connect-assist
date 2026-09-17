@@ -73,6 +73,9 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
+// V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
+// gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
+import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { observeStructureLag } from "../_shared/structureLagObserver.ts";
@@ -5293,6 +5296,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         } : null,
       },
     };
+
+    // ── V2 structural order blocks (SHADOW MODE) ──────────────────────────
+    // Structure-first detection: the base that produced a validated impulse,
+    // with BODY boundaries and the wick extreme kept separately as a sweep
+    // marker. Runs on Daily and 4H, both directions, independent of the
+    // direction the scanner settled on — a supply block above price is as real
+    // as a demand block below it, and inheriting the direction gate here would
+    // blind the engine to half the chart.
+    //
+    // Nothing consumes this. Displaying it is allowed; acting on it is not,
+    // until its zones have been checked against the reference charts. Wrapped
+    // so a detector fault can never cost a scan.
+    try {
+      const v2Blocks = runStructuralOrderBlocks(pair, [
+        ...(dailyCandles && dailyCandles.length >= 20
+          ? [{ timeframe: "D" as const, candles: dailyCandles }] : []),
+        ...(h4Candles && h4Candles.length >= 20
+          ? [{ timeframe: "4H" as const, candles: h4Candles }] : []),
+      ]);
+      (detail as any).structuralOrderBlocksV2 = sobToScanDetail(v2Blocks);
+      if (v2Blocks.length > 0) {
+        // first_seen_at is deliberately absent from the row, so an upsert
+        // refreshes the lifecycle columns while preserving when the block was
+        // first observed.
+        const { error: sobErr } = await supabase
+          .from("structural_order_blocks_v2")
+          .upsert(v2Blocks.map(b => sobToRow(b, userId, BOT_ID)), { onConflict: "id" });
+        if (sobErr) console.warn(`[sob-v2] ${pair} upsert failed: ${sobErr.message}`);
+      }
+    } catch (e: any) {
+      console.warn(`[sob-v2] ${pair} detection failed: ${e?.message}`);
+    }
+
 
     // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
     const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
