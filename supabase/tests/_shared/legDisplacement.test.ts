@@ -230,9 +230,16 @@ Deno.test("bar timestamps are formatted without being moved", () => {
     new URL("../../../src/components/ZoneStoryPanel.tsx", import.meta.url),
   );
   const fmt = panel.slice(panel.indexOf("function fmtBarTime"), panel.indexOf("function sameDay"));
-  assert(!/new Date\(/.test(fmt), "must not construct a Date — that converts to local time");
+  // The invariant is that the BAR is never converted, not that Date is never
+  // touched. `new Date()` with no argument reads today's year — used to decide
+  // whether to show the year on a block from a previous one — and cannot move
+  // a timestamp. Any Date built FROM the string can, so that stays forbidden.
+  assert(!/new Date\([^)]/.test(fmt),
+    "must not construct a Date from the timestamp — that converts to local time");
   assert(!/toLocaleString|toLocaleDateString|toLocaleTimeString/.test(fmt),
     "must not use locale formatting");
+  assert(/getFullYear\(\)/.test(fmt) === /yearIfOld/.test(fmt),
+    "the only zero-arg Date use is the current-year check");
   assert(/UTC/.test(panel), "the timezone is stated rather than implied");
   assert(/Daily and Weekly bars are stamped 00:00/.test(panel),
     "explains why D/W drop the time");

@@ -196,14 +196,25 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
  * reintroducing in the panel that exists to tell the truth about a setup.
  *
  * Daily and Weekly bars are stamped 00:00, so the time is noise there.
+ *
+ * `yearIfOld` appends the year when the bar is not from the current one. Off by
+ * default, because a Zone Story only ever shows recent bars and the year would
+ * be clutter. Order blocks are the opposite case: they persist for months and
+ * routinely cross the new year, where a bare "15 Nov" is genuinely ambiguous.
  */
-export function fmtBarTime(iso: string | null | undefined, timeframe?: string, omitDate = false): string {
+export function fmtBarTime(
+  iso: string | null | undefined,
+  timeframe?: string,
+  omitDate = false,
+  yearIfOld = false,
+): string {
   if (!iso) return "—";
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(iso);
   if (!m) return iso;
-  const [, , mo, d, hh, mi] = m;
+  const [, yr, mo, d, hh, mi] = m;
   const dateOnly = /^(d|1d|1day|daily|w|1w|1week|weekly)$/i.test(timeframe ?? "");
-  const day = `${Number(d)} ${MONTHS[Number(mo) - 1] ?? mo}`;
+  const suffix = yearIfOld && Number(yr) !== new Date().getFullYear() ? ` ${yr}` : "";
+  const day = `${Number(d)} ${MONTHS[Number(mo) - 1] ?? mo}${suffix}`;
   if (dateOnly || !hh) return day;
   return omitDate ? `${hh}:${mi}` : `${day} ${hh}:${mi}`;
 }

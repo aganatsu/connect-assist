@@ -722,12 +722,19 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
         }
         return lo;
       };
+      /** Parses the string rather than going through Date: toLocaleDateString
+       *  renders in the browser's timezone, which can shift a bar across a day
+       *  boundary. The year is appended only when the block is not from the
+       *  current one — these persist for months and cross the new year, where
+       *  a bare "15 Nov" is ambiguous. */
       const shortDate = (dt?: string) => {
         if (!dt) return "";
-        const d = new Date(dt.replace(" ", "T") + (dt.endsWith("Z") ? "" : "Z"));
-        return isNaN(d.getTime())
-          ? ""
-          : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dt);
+        if (!m) return "";
+        const [, yr, mo, d] = m;
+        const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const suffix = Number(yr) !== new Date().getFullYear() ? ` ${yr}` : "";
+        return `${Number(d)} ${months[Number(mo) - 1] ?? mo}${suffix}`;
       };
 
       const lastIdx = chartData.length - 1;
