@@ -32,7 +32,7 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row gap-4 md:gap-6 min-h-[calc(100vh-7rem)]">
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 min-h-page-tall">
         <div className="w-full md:w-56 shrink-0">
           <h1 className="hidden md:flex text-lg font-bold mb-4 items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
           <div className="md:space-y-1 flex md:flex-col gap-1 overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 md:overflow-visible pb-2 md:pb-0">
