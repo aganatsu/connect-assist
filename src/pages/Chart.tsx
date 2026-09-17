@@ -234,6 +234,15 @@ export default function Chart() {
       orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
         high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
       })) : [],
+      // V2 shadow blocks come from the scan record, not from the live analysis
+      // call — the detector runs inside bot-scanner on Daily/4H. Display only;
+      // toggled by the OB2 layer button, off unless asked for.
+      structuralOrderBlocksV2: (sig?.structuralOrderBlocksV2 || []).map((b: any) => ({
+        id: b.id, tf: b.tf, dir: b.dir,
+        proximal: b.proximal, distal: b.distal, sweepLevel: b.sweepLevel,
+        status: b.status, significance: b.significance,
+        score: b.score, touches: b.touches, band: b.band,
+      })),
       fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
         high: f.high, low: f.low, datetime: f.datetime, direction: f.type,
       })) : [],

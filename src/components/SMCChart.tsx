@@ -151,8 +151,32 @@ export interface ChartJudasSwing {
   description: string;
 }
 
+/**
+ * V2 structural order block, SHADOW MODE.
+ *
+ * proximal/distal are BODY boundaries; sweepLevel is the base's wick extreme
+ * and sits OUTSIDE the zone. Drawn separately from the legacy OB layer and in
+ * a different colour on purpose — the point of this overlay is to let the two
+ * detectors be compared by eye against the reference charts.
+ */
+export interface ChartStructuralOB {
+  id: string;
+  tf: string;
+  dir: "bullish" | "bearish";
+  proximal: number;
+  distal: number;
+  sweepLevel?: number;
+  status: string;
+  significance?: string;
+  score?: number;
+  touches?: number;
+  band?: string;
+}
+
 export interface SMCOverlays {
   orderBlocks?: ChartOrderBlock[];
+  /** V2 shadow-mode blocks. Display only; nothing trades on these. */
+  structuralOrderBlocksV2?: ChartStructuralOB[];
   fvgs?: ChartFVG[];
   breakerBlocks?: ChartBreakerBlock[];
   swingPoints?: ChartSwingPoint[];
@@ -174,6 +198,7 @@ export interface SMCOverlays {
 export type OverlayLayer =
   | "impulseZone"
   | "orderBlocks"
+  | "obV2"
   | "fvgs"
   | "breakers"
   | "swingPoints"
@@ -219,6 +244,11 @@ const COLORS = {
   bullOB: "rgba(6,182,212,0.5)",
   bearOB: "rgba(239,68,68,0.5)",
   bullOBFill: "rgba(6,182,212,0.12)",
+  // V2 shadow blocks — violet, deliberately unlike the cyan legacy OB so the
+  // two can be told apart at a glance when comparing against the charts.
+  v2Bull: "rgba(167,139,250,0.75)",
+  v2Bear: "rgba(244,114,182,0.75)",
+  v2Sweep: "rgba(148,163,184,0.55)",
   bearOBFill: "rgba(239,68,68,0.12)",
   // FVGs
   bullFVG: "rgba(34,197,94,0.45)",
@@ -264,6 +294,7 @@ const COLORS = {
 const LAYER_DEFS: { id: OverlayLayer; label: string; color: string }[] = [
   { id: "impulseZone", label: "IZ", color: "#06b6d4" },
   { id: "orderBlocks", label: "OB", color: "#06b6d4" },
+  { id: "obV2", label: "OB2", color: "#a78bfa" },
   { id: "fvgs", label: "FVG", color: "#22c55e" },
   { id: "breakers", label: "BRK", color: "#ec4899" },
   { id: "swingPoints", label: "SP", color: "#f59e0b" },
@@ -652,6 +683,48 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           axisLabelVisible: false,
           title: "",
         });
+      }
+    }
+
+    // ─── V2 structural order blocks (SHADOW MODE) ─────────────────────
+    // Display only. These are drawn so their boxes can be compared against the
+    // reference charts and against the legacy OB layer; nothing in the system
+    // trades on them. Proximal and distal are BODY boundaries; the sweep level
+    // is the base's wick extreme and is drawn dotted, OUTSIDE the zone, because
+    // a wick through it is a sweep rather than an invalidation.
+    if (visibleLayers.has("obV2") && overlays.structuralOrderBlocksV2?.length) {
+      const shown = overlays.structuralOrderBlocksV2
+        .filter((b) => b.status !== "INVALIDATED")
+        .slice(0, 12);
+      for (const b of shown) {
+        const color = b.dir === "bullish" ? COLORS.v2Bull : COLORS.v2Bear;
+        const sig = b.significance === "external" ? "E" : "i";
+        addLine({
+          price: b.proximal,
+          color,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: false,
+          title: `V2 ${b.tf} ${b.status}${b.score != null ? ` ${b.score}` : ""} ${sig}`,
+        });
+        addLine({
+          price: b.distal,
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: false,
+          title: "",
+        });
+        if (typeof b.sweepLevel === "number" && b.sweepLevel !== b.distal) {
+          addLine({
+            price: b.sweepLevel,
+            color: COLORS.v2Sweep,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: false,
+            title: "sweep",
+          });
+        }
       }
     }
 
