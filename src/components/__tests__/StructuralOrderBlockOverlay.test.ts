@@ -135,6 +135,32 @@ describe("V2 in the Detail Breakdown", () => {
     expect(section.toLowerCase()).toContain("nothing trades on these");
   });
 
+  it("is collapsible, and stays that way across re-renders", () => {
+    // <details> rather than component state: this panel re-renders on every
+    // scan, and a useState toggle would snap back open each cycle.
+    // Anchored on the element, not a fixed byte window — the comment above it
+    // is long enough that a 400-char lookback missed the opening tag.
+    const i = botView.indexOf("OB v2");
+    const open = botView.lastIndexOf("<details", i);
+    expect(open, "an enclosing <details> exists").toBeGreaterThan(-1);
+    const section = botView.slice(open, i + 200);
+    expect(section).toContain("<summary");
+    // And it must actually close as one.
+    expect(botView.slice(i, i + 4000)).toContain("</details>");
+  });
+
+  it("formats times with the shared Zone Story helper", () => {
+    // Not a second date format, and not raw ISO. fmtBarTime parses the string
+    // instead of going through Date — new Date(iso).toLocaleString() renders
+    // in the BROWSER's timezone, which is the shape of the TwelveData bug — and
+    // it drops the 00:00 every Daily bar carries.
+    expect(botView).toMatch(/import \{[^}]*fmtBarTime[^}]*\} from "@\/components\/ZoneStoryPanel"/);
+    const i = botView.indexOf("OB v2");
+    const section = botView.slice(i, i + 3000);
+    expect(section).toMatch(/fmtBarTime\(b\.originTime, b\.tf\)/);
+    expect(section).not.toMatch(/originTime\?\.slice/);
+  });
+
   it("hides invalidated blocks here too", () => {
     const i = botView.indexOf("OB v2");
     const section = botView.slice(i, i + 2000);
