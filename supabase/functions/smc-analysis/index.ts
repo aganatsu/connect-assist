@@ -450,30 +450,47 @@ Deno.serve(async (req) => {
     // died.
     //
     // Origin and continuation candidates are reported under separate roles and
-    // must NOT be assumed to share a rule.
-    // ── displacement_qualification ───────────────────────────────────────
-    // Candidate selection WITHOUT requiring an enumerated impulse leg.
+    // must NOT be assumed to share a rule.    // ── displacement_qualification ───────────────────────────────────────
+    // Candidate features WITHOUT requiring an enumerated impulse leg.
     //
-    // The leg-first premise is disproved: two of seven known-good blocks
-    // (GBP/AUD 26 Mar and 14 May) launched expansions of ~2.3 ATR without price
-    // reaching the swing a break would need, so no leg exists and none ever
-    // will. What that proves is narrow — a formal BOS/CHoCH is NOT NECESSARY.
-    // It does NOT prove that any large displacement makes an order block, and
-    // nothing here assumes it does.
+    // Labelling, corrected 2026-09-18. Windows around the seven confirmed
+    // blocks overlap, so a confirmed block appears inside a neighbour's window.
+    // Three labels, not two:
     //
-    // So: enumerate EVERY same-side candle in a window around each known-good
-    // one, mark one, leave the rest unmarked, and report features for all of
-    // them. No filtering by break, FVG, ATR rank or displacement. The unmarked
-    // distribution is the point — four marked samples clustering near 2.2 ATR
-    // means nothing until it is known how many unmarked ones sit there too.
+    //   reference       this window's target
+    //   known_positive  matches one of the seven confirmed OBs, but is not
+    //                   THIS window's target — must never be pooled as a
+    //                   negative just because it turned up here
+    //   comparison      everything else
+    //
+    // "comparison", deliberately, NOT "negative". We know the seven recorded
+    // boxes are positives. We have NOT established that the reference method
+    // rejected every other candle in these windows — it was never asked about
+    // them. Treating unexamined candles as proven negatives would invent a
+    // label the evidence does not support.
+    //
+    // Windows are kept overlapping on purpose; de-overlapping would discard
+    // real context. The labels, not the geometry, resolve the double-counting.
     //
     //   demand candidate = a DOWN candle   (precedes an up move)
     //   supply candidate = an UP candle    (precedes a down move)
+    //
+    // No filtering and no thresholds anywhere in here.
     if (action === "displacement_qualification") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const WINDOW = Number(body?.window ?? 15);
       const HORIZONS = [1, 2, 3, 5, 8, 10, 15];
       const out: any[] = [];
+      const forensic: any[] = [];
+
+      // Every confirmed block across all targets, so a candidate can be
+      // recognised as a positive in a window that is not its own.
+      const positiveKey = new Set<string>();
+      for (const t of targets) {
+        for (const m of (t.marked ?? [])) {
+          positiveKey.add(`${t.symbol}|${m.side}|${String(m.anchorTime).slice(0, 10)}`);
+        }
+      }
 
       for (const tgt of targets) {
         const sym = String(tgt.symbol);
@@ -486,7 +503,6 @@ Deno.serve(async (req) => {
         const struct = analyzeMarketStructure(series);
         const allBreaks = [...struct.bos.map((b: any) => ({ ...b, kind: "BOS" })),
                            ...struct.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
-        const fvgs = detectFVGs(series, allBreaks as any) ?? [];
 
         const idxAt = (iso: string) => {
           const want = Date.parse(String(iso).endsWith("Z") ? String(iso) : String(iso) + "Z");
@@ -503,6 +519,37 @@ Deno.serve(async (req) => {
           return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
         };
         const r = (x: number | null, d = 2) => x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+
+        // ── FVGs, computed on a LOCAL SLICE ──────────────────────────────
+        // detectFVGs() hard-caps itself at the last 50 candles
+        // (FVG_RECENCY = 50, startIdx = length - 50). Passing the full 800-bar
+        // series returned [] for every historical candidate on the previous
+        // run — 0 of 105 — which read as "no FVG here" when in truth the
+        // scanner never looked. See the 2026-09-18 finding.
+        //
+        // So: slice a <=50-bar neighbourhood so startIdx collapses to 2 and the
+        // whole slice is scanned. detectFVGs indexes the MIDDLE candle of the
+        // three and carries its datetime, so results are matched back by
+        // DATETIME rather than by arithmetic on a slice offset.
+        //
+        // Structure-break indices are full-series and MUST be rebased before
+        // being handed to a sliced call; an unremapped index would score
+        // quality against the wrong candle.
+        const fvgNear = (i: number) => {
+          const s0 = Math.max(0, i - 5);
+          const s1 = Math.min(series.length, i + 21);   // <= 26 bars
+          const slice = series.slice(s0, s1);
+          if (slice.length < 3) return [];
+          const rebased = allBreaks
+            .filter((b: any) => b.index >= s0 && b.index < s1)
+            .map((b: any) => ({ index: b.index - s0, type: String(b.type) }));
+          const found = detectFVGs(slice, rebased) ?? [];
+          // Back to absolute bars by datetime, never by offset arithmetic.
+          return found.map((f: any) => {
+            const abs = series.findIndex((c: Candle) => c.datetime === f.datetime);
+            return { ...f, absIndex: abs };
+          }).filter((f: any) => f.absIndex >= 0);
+        };
 
         for (const mk of (tgt.marked ?? [])) {
           const markIdx = idxAt(mk.anchorTime);
@@ -522,6 +569,7 @@ Deno.serve(async (req) => {
 
             const atr = atrAt(i);
             const anchorPx = favDown ? c.low : c.high;
+            const range = c.high - c.low;
 
             // Favourable excursion at each horizon.
             const byHorizon: Record<string, number | null> = {};
@@ -539,9 +587,6 @@ Deno.serve(async (req) => {
             }
             const maxDisp = Number.isFinite(best) ? Math.abs(best - anchorPx) : 0;
 
-            // Adverse excursion BEFORE the expansion: how far price went the
-            // wrong way first. A candle that had to be sat through is a
-            // different proposition from one that worked immediately.
             let adverse = 0;
             if (bestBar != null) {
               for (let j = i + 1; j <= bestBar; j++) {
@@ -551,17 +596,78 @@ Deno.serve(async (req) => {
               }
             }
 
-            // Consecutive same-side run.
+            // Consecutive same-side run, both ends.
             let runStart = i;
             while (runStart - 1 >= 0) {
               const p2 = series[runStart - 1];
               if ((p2.close >= p2.open) !== up) break;
               runStart--;
             }
+            let runEnd = i;
+            while (runEnd + 1 < series.length) {
+              const n2 = series[runEnd + 1];
+              if ((n2.close >= n2.open) !== up) break;
+              runEnd++;
+            }
             const nxt = series[i + 1];
             const isLastOfRun = nxt ? ((nxt.close >= nxt.open) !== up) : false;
 
-            // Nearest prior swing the favourable move would have to clear.
+            // ── Turning-point context ───────────────────────────────────
+            // The side that matters is the one price turns from: the HIGH of
+            // a supply candle, the LOW of a demand candle.
+            const ext = (j: number) => favDown ? series[j].high : series[j].low;
+            const better = (a: number, b: number) => favDown ? a > b : a < b;
+            const extOver = (a: number, b: number) => {
+              let v = ext(Math.max(0, a));
+              for (let j = Math.max(0, a); j <= Math.min(series.length - 1, b); j++) {
+                if (better(ext(j), v)) v = ext(j);
+              }
+              return v;
+            };
+            const mine = ext(i);
+            const localBoth = (n: number) => !better(extOver(i - n, i + n), mine);
+            const localPast = (n: number) => !better(extOver(i - n, i), mine);
+            const prior10 = i - 1 >= 0 ? extOver(i - 10, i - 1) : null;
+            // Distance from the local extreme of the two-sided window: 0 means
+            // this candle IS the turn.
+            const dist10 = atr > 0 ? Math.abs(extOver(i - 10, i + 10) - mine) / atr : null;
+
+            // Liquidity sweep: took out the prior extreme intrabar, then closed
+            // back inside it.
+            const tookPrior = prior10 != null && better(mine, prior10);
+            const closedBack = prior10 != null && tookPrior &&
+              (favDown ? c.close < prior10 : c.close > prior10);
+
+            const prev = series[i - 1];
+            const outsideBar = prev ? (c.high > prev.high && c.low < prev.low) : null;
+            const insideBar = prev ? (c.high <= prev.high && c.low >= prev.low) : null;
+            const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+            const pBodyHi = prev ? Math.max(prev.open, prev.close) : 0;
+            const pBodyLo = prev ? Math.min(prev.open, prev.close) : 0;
+            const engulfing = prev
+              ? (bodyHi >= pBodyHi && bodyLo <= pBodyLo && ((prev.close >= prev.open) !== up))
+              : null;
+
+            // Previous same-side candle, and whether this one extended past it.
+            let prevSame = -1;
+            for (let j = i - 1; j >= Math.max(0, i - 20); j--) {
+              if ((series[j].close >= series[j].open) === up) { prevSame = j; break; }
+            }
+            const extendedPrevSame = prevSame >= 0 ? better(mine, ext(prevSame)) : null;
+
+            // Extreme OF ITS OWN RUN.
+            let runExtreme = true;
+            for (let j = runStart; j <= runEnd; j++) if (j !== i && better(ext(j), mine)) runExtreme = false;
+
+            // FVGs from the local slice, matched by datetime.
+            const near = fvgNear(i);
+            const wantDir = favDown ? "bearish" : "bullish";
+            const dirFvgs = near.filter((f: any) => f.type === wantDir);
+            const selfFvg = dirFvgs.find((f: any) => f.absIndex === i);
+            const within = (n: number) => dirFvgs.find((f: any) => f.absIndex > i && f.absIndex <= i + n);
+            const firstAfter = dirFvgs.filter((f: any) => f.absIndex >= i)
+              .sort((a: any, b: any) => a.absIndex - b.absIndex)[0];
+
             const needType = favDown ? "low" : "high";
             const sw = struct.swingPoints.filter((sp: any) => sp.type === needType && sp.index < i)
               .sort((a: any, b: any) => b.index - a.index)[0];
@@ -574,48 +680,117 @@ Deno.serve(async (req) => {
                 if (favDown ? b2.close < sw.price : b2.close > sw.price) closeCleared = true;
               }
             }
-            const wantDir = favDown ? "bearish" : "bullish";
             const brk = allBreaks.filter((b: any) => b.type === wantDir && b.index > i && b.index <= i + 15);
-            const fvg = fvgs.find((f: any) => f.type === wantDir && f.index >= i && f.index <= i + 3);
+
+            const dayKey = `${sym}|${side}|${c.datetime.slice(0, 10)}`;
+            const isPositive = positiveKey.has(dayKey);
 
             cands.push({
-              marked: i === markIdx, side, t: c.datetime,
+              // ── labels ──
+              label: i === markIdx ? "reference" : (isPositive ? "known_positive" : "comparison"),
+              referenceMarked: i === markIdx,
+              knownPositive: isPositive,
+              dedupeKey: dayKey,          // symbol|side|date — for aggregate dedup
+              side, t: c.datetime,
+              // ── candle ──
               o: c.open, h: c.high, l: c.low, c: c.close,
               atr: r(atr, 6),
-              rangeAtr: atr > 0 ? r((c.high - c.low) / atr) : null,
+              rangeAtr: atr > 0 ? r(range / atr) : null,
               bodyAtr: atr > 0 ? r(Math.abs(c.close - c.open) / atr) : null,
-              bodyRangeRatio: (c.high - c.low) > 0 ? r(Math.abs(c.close - c.open) / (c.high - c.low)) : null,
-              isLastOfRun, runLength: i - runStart + 1,
+              bodyRangeRatio: range > 0 ? r(Math.abs(c.close - c.open) / range) : null,
+              upperWickRatio: range > 0 ? r((c.high - bodyHi) / range) : null,
+              lowerWickRatio: range > 0 ? r((bodyLo - c.low) / range) : null,
+              // ── run ──
+              isLastOfRun, runLength: i - runStart + 1, runTotal: runEnd - runStart + 1,
+              isRunExtreme: runExtreme,
+              extendedPrevSameSide: extendedPrevSame,
+              // ── displacement ──
               disp: byHorizon,
               maxDispAtr: atr > 0 ? r(maxDisp / atr) : null,
               barsToMaxDisp: bestBar != null ? bestBar - i : null,
               adverseAtr: atr > 0 ? r(adverse / atr) : null,
-              fvgCreated: !!fvg,
-              fvgAtr: fvg && atr > 0 ? r((fvg.high - fvg.low) / atr) : null,
+              // ── turning point ──
+              isLocalExtreme5: localBoth(5), isLocalExtreme10: localBoth(10),
+              isLocalExtremePast10: localPast(10),
+              distFromLocalExtremeAtr: r(dist10),
+              sweptPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
+              outsideBar, insideBar, engulfing,
+              // ── next bars ──
+              nextOpposite: nxt ? ((nxt.close >= nxt.open) !== up) : null,
+              reversalNextBar: nxt ? (((nxt.close >= nxt.open) !== up) &&
+                (favDown ? nxt.close < c.low : nxt.close > c.high)) : null,
+              // ── FVG (local slice) ──
+              fvgSelf: !!selfFvg,
+              fvgIn1: !!within(1), fvgIn2: !!within(2), fvgIn3: !!within(3),
+              fvgFirstOffset: firstAfter ? firstAfter.absIndex - i : null,
+              fvgAtr: firstAfter && atr > 0 ? r((firstAfter.high - firstAfter.low) / atr) : null,
+              // ── structure ──
               swingClearedByWick: sw ? wickCleared : null,
               swingClearedByClose: sw ? closeCleared : null,
-              breakEmitted: brk.length > 0,
-              breakKind: brk[0]?.kind ?? null,
+              breakEmitted: brk.length > 0, breakKind: brk[0]?.kind ?? null,
             });
           }
 
           const ranked = [...cands].filter(x => x.maxDispAtr != null)
             .sort((a, b) => b.maxDispAtr - a.maxDispAtr);
+          // Window-specific by nature: rank only means anything inside its own
+          // window, so it must not be deduplicated away with the rest.
           cands.forEach(x => { x.maxDispRank = x.maxDispAtr == null ? null : ranked.indexOf(x) + 1; });
 
           out.push({
             symbol: sym, interval: tf, side,
             markedBar: series[markIdx]?.datetime,
             windowBars: WINDOW, candidateCount: cands.length,
-            markedFound: cands.some((x: any) => x.marked),
+            markedFound: cands.some((x: any) => x.referenceMarked),
             candidates: cands,
           });
         }
+
+        // ── forensic: raw bars around named dates ────────────────────────
+        for (const fgroup of (body?.forensic ?? [])) {
+          if (String(fgroup.symbol) !== sym) continue;
+          for (const ds of (fgroup.dates ?? [])) {
+            const i = idxAt(ds);
+            if (i < 0) continue;
+            const bars: any[] = [];
+            for (let j = Math.max(0, i - 5); j <= Math.min(series.length - 1, i + 8); j++) {
+              const b2 = series[j], rg = b2.high - b2.low;
+              const bh = Math.max(b2.open, b2.close), bl = Math.min(b2.open, b2.close);
+              bars.push({
+                offset: j - i, t: b2.datetime,
+                o: b2.open, h: b2.high, l: b2.low, c: b2.close,
+                dir: b2.close >= b2.open ? "up" : "down",
+                rangeAtr: r((rg) / (atrAt(j) || 1)),
+                upperWickRatio: rg > 0 ? r((b2.high - bh) / rg) : null,
+                lowerWickRatio: rg > 0 ? r((bl - b2.low) / rg) : null,
+                bodyRangeRatio: rg > 0 ? r(Math.abs(b2.close - b2.open) / rg) : null,
+              });
+            }
+            forensic.push({
+              symbol: sym, date: String(ds).slice(0, 10), anchorIndex: i,
+              atr: r(atrAt(i), 6),
+              fvgs: fvgNear(i).map((f: any) => ({
+                t: f.datetime, offset: f.absIndex - i, type: f.type,
+                high: f.high, low: f.low,
+                sizeAtr: r((f.high - f.low) / (atrAt(i) || 1)),
+              })),
+              swings: struct.swingPoints
+                .filter((sp: any) => sp.index >= i - 20 && sp.index <= i + 10)
+                .map((sp: any) => ({ offset: sp.index - i, type: sp.type, price: sp.price })),
+              breaks: allBreaks
+                .filter((b: any) => b.index >= i - 10 && b.index <= i + 15)
+                .map((b: any) => ({ offset: b.index - i, kind: b.kind, type: b.type, level: b.level })),
+              bars,
+            });
+          }
+        }
       }
       return respond({
-        note: "read-only; no filtering by break, FVG, displacement or rank. " +
-              "Unmarked distribution is the point — do not read a threshold off the marked ones alone.",
-        horizons: HORIZONS, out,
+        note: "read-only. Labels: reference | known_positive | comparison. " +
+              "'comparison' is NOT a proven negative — the reference method was " +
+              "never asked about those candles. Dedupe aggregates on dedupeKey; " +
+              "maxDispRank is window-specific and must not be deduped.",
+        horizons: HORIZONS, out, forensic,
       });
     }
 
