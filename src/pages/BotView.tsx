@@ -2003,10 +2003,12 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
                   <span className="text-[10px] font-mono">
                     {b.proximal} <span className="text-muted-foreground">→</span> {b.distal}
                   </span>
-                  {/* The wick extreme sits OUTSIDE the zone: a wick through it
-                      is a sweep, a body close through distal is invalidation. */}
-                  {b.sweepLevel != null && b.sweepLevel !== b.distal && (
-                    <span className="text-[9px] font-mono text-muted-foreground">sweep {b.sweepLevel}</span>
+                  {/* extent = the far wick extreme, and the INVALIDATION level:
+                      two body closes beyond it kill the block. NOT distal — that
+                      is the 50% midpoint, and closing past it is deep mitigation.
+                      Shown separately so the two are never conflated. */}
+                  {b.extent != null && b.extent !== b.distal && (
+                    <span className="text-[9px] font-mono text-muted-foreground">ext {b.extent}</span>
                   )}
                   <span className="text-[9px] text-muted-foreground">{b.status}</span>
                   {b.significance && (

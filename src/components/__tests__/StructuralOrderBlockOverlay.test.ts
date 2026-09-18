@@ -67,9 +67,10 @@ describe("V2 overlay", () => {
     expect(d).not.toBe(h4);
   });
 
-  it("draws the sweep level outside the zone, dotted", () => {
-    // sweepLevel is the base's wick extreme and is NOT a boundary. Drawing it
-    // like one would undo the distinction the whole engine rests on.
+  it("draws the extent outside the tradeable zone, dotted", () => {
+    // `extent` is the far wick extreme and the INVALIDATION level, not part of
+    // the tradeable zone. Drawing it as a zone edge would misstate where the
+    // block actually dies.
     const block = chart.slice(chart.indexOf('visibleLayers.has("obV2")'));
     expect(block).toContain("COLORS.v2Sweep");
     expect(block).toMatch(/lineStyle:\s*LineStyle\.Dotted/);
@@ -123,7 +124,7 @@ describe("V2 in the Detail Breakdown", () => {
     const section = botView.slice(i - 500, i + 3000);
     expect(section).toMatch(/b\.proximal/);
     expect(section).toMatch(/b\.distal/);
-    expect(section).toMatch(/b\.sweepLevel/);
+    expect(section).toMatch(/b\.extent/);
     expect(section).toMatch(/b\.baseCandles/);
   });
 
@@ -155,8 +156,13 @@ describe("V2 in the Detail Breakdown", () => {
     // in the BROWSER's timezone, which is the shape of the TwelveData bug — and
     // it drops the 00:00 every Daily bar carries.
     expect(botView).toMatch(/import \{[^}]*fmtBarTime[^}]*\} from "@\/components\/ZoneStoryPanel"/);
+    // Bounded by the element, not a byte count. A fixed 3000-char window broke
+    // the moment a comment inside the section grew — the assertion started
+    // failing against correct code, which is the wrong kind of test failure.
     const i = botView.indexOf("OB v2");
-    const section = botView.slice(i, i + 3000);
+    const end = botView.indexOf("</details>", i);
+    expect(end, "found the end of the V2 section").toBeGreaterThan(i);
+    const section = botView.slice(i, end);
     expect(section).toMatch(/fmtBarTime\(b\.originTime, b\.tf/);
     expect(section).not.toMatch(/originTime\?\.slice/);
   });

@@ -50,12 +50,13 @@ export interface StructuralOrderBlock {
   timeframe: "D" | "4H" | "1H";
   direction: "bullish" | "bearish";
 
-  /** Edge price meets first. Bullish = body high, bearish = body low. */
+  /** Edge price meets first. Bullish = wick high, bearish = wick low. */
   proximal: number;
-  /** Edge beyond which the block is wrong. */
+  /** Far edge of the tradeable zone: the 50% of the base's full wick range. */
   distal: number;
-  /** Wick extreme of the base. OUTSIDE the zone — a sweep marker, not a boundary. */
-  sweepLevel: number;
+  /** The far wick extreme. Price closing beyond THIS invalidates the block —
+   *  not beyond distal, which is only the midpoint. */
+  extent: number;
 
   baseStartIndex: number;
   baseEndIndex: number;
@@ -351,6 +352,11 @@ function replayLifecycle(
     }
 
     // Touch = price reached the proximal edge.
+    //
+    // Penetration is measured across the TRADEABLE HALF (proximal -> distal),
+    // so it clamps at 100% once price passes the midpoint even though extent
+    // may still be some way off. 100% now means "reached the 50% refinement",
+    // NOT "traversed the whole base". The bands below inherit that meaning.
     const reached = bullish ? c.low <= ob.proximal : c.high >= ob.proximal;
     if (reached) {
       const deepest = bullish ? c.low : c.high;
@@ -361,8 +367,11 @@ function replayLifecycle(
       ob.lastTouchIndex = i;
     }
 
-    // Acceptance beyond distal — bodies only.
-    const closedBeyond = bullish ? c.close < ob.distal : c.close > ob.distal;
+    // Acceptance beyond EXTENT — the far edge of the whole candle, not the
+    // midpoint. distal is the far edge of the tradeable half; closing past it
+    // is deep mitigation, which the bands already record. Bodies only: a wick
+    // through extent is the sweep the zone exists to absorb.
+    const closedBeyond = bullish ? c.close < ob.extent : c.close > ob.extent;
     if (closedBeyond) {
       consecutive++;
       if (consecutive >= requiredCloses) {
@@ -449,9 +458,9 @@ export function detectStructuralOrderBlocks(
       timeframe: opts.timeframe,
       direction: impulse.direction,
 
-      proximal: bullish ? base.bodyHigh : base.bodyLow,
-      distal: bullish ? base.bodyLow : base.bodyHigh,
-      sweepLevel: bullish ? base.wickLow : base.wickHigh,
+      proximal: bullish ? base.wickHigh : base.wickLow,
+      distal: (base.wickHigh + base.wickLow) / 2,
+      extent: bullish ? base.wickLow : base.wickHigh,
 
       baseStartIndex: base.startIndex,
       baseEndIndex: base.endIndex,
