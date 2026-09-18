@@ -490,11 +490,34 @@ Deno.serve(async (req) => {
           const { i: markIdx, gapHours } = idxAt(mk.anchorTime);
           if (markIdx < 0) { results.push({ symbol: sym, anchorTime: mk.anchorTime, error: "no bar" }); continue; }
 
-          const leg = legs.find((l: any) => markIdx >= l.startIndex && markIdx <= l.endIndex)
-                   ?? legs.find((l: any) => Math.abs(markIdx - l.startIndex) <= 2);
+          // AN ORDER BLOCK IS DEFINED BY THE MOVE IT PRECEDES, not the move it
+          // sits inside.
+          //
+          //   supply = an UP candle before a DOWN move    -> bearish leg
+          //   demand = a DOWN candle before an UP move    -> bullish leg
+          //
+          // The first version of this paired each candle with whatever leg
+          // contained it and then filtered for "opposite colour to that leg".
+          // A supply block is an up candle, so when it sat inside a BULLISH leg
+          // it was filtered out as going with the move. Five of seven known-good
+          // candles vanished that way — and the two that survived did so only
+          // because their containing leg happened to oppose them.
+          const markBar = series[markIdx];
+          const markIsUp = markBar.close >= markBar.open;
+          const side = mk.side ?? (markIsUp ? "supply" : "demand");
+          const wantDir = side === "supply" ? "bearish" : "bullish";
+
+          // Prefer a leg that STARTS at this candle (it is the origin), else one
+          // that contains it (a continuation).
+          const opposing = legs.filter((l: any) => l.direction === wantDir);
+          const leg = opposing.find((l: any) => Math.abs(l.startIndex - markIdx) <= 1)
+                   ?? opposing.find((l: any) => markIdx >= l.startIndex && markIdx <= l.endIndex)
+                   ?? opposing.filter((l: any) => l.startIndex >= markIdx)
+                        .sort((a: any, b: any) => a.startIndex - b.startIndex)[0];
           if (!leg) {
             results.push({ symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
-                           error: "marked candle sits in no enumerated leg" });
+                           side, requiredLegDirection: wantDir,
+                           error: `no ${wantDir} leg starts at or contains this candle` });
             continue;
           }
 
@@ -502,13 +525,19 @@ Deno.serve(async (req) => {
           const legRange = Math.abs(leg.high - leg.low);
           const cands: any[] = [];
 
-          for (let i = leg.startIndex; i <= Math.min(leg.endIndex, series.length - 1); i++) {
+          // Start one bar early when the marked candle sits immediately before
+          // the leg it launches — it IS the origin block, and excluding it
+          // would reproduce the bug this fix exists for.
+          const scanFrom = Math.min(leg.startIndex, markIdx);
+          for (let i = scanFrom; i <= Math.min(leg.endIndex, series.length - 1); i++) {
             const c = series[i];
             const isUp = c.close >= c.open;
             const opposes = legDir === "bullish" ? !isUp : isUp;
             // The origin candle counts even when it goes WITH the leg — it is
             // the base V2 already builds from, and must appear for comparison.
-            if (!opposes && i !== leg.startIndex) continue;
+            // The leg's own origin is kept even when it goes with the move —
+            // it is the base V2 already builds from and the comparison needs it.
+            if (!opposes && i !== leg.startIndex && i !== markIdx) continue;
 
             const atr = atrAt(i);
             const LOOK = 5;
@@ -543,7 +572,7 @@ Deno.serve(async (req) => {
             cands.push({
               t: c.datetime,
               marked: i === markIdx,
-              role: i === leg.startIndex ? "origin" : "continuation",
+              role: Math.abs(i - leg.startIndex) <= 1 ? "origin" : "continuation",
               o: c.open, h: c.high, l: c.low, c: c.close,
               dir: isUp ? "up" : "down",
               // ── pullback shape ──
@@ -588,7 +617,21 @@ Deno.serve(async (req) => {
           });
         }
       }
-      return respond({ note: "read-only; no thresholds, no selection logic", results });
+      // Verification first. Feature analysis is meaningless until every
+      // known-good candle actually appears in its own candidate set.
+      const found = results.filter((r: any) => r.markedRole && r.markedRole !== "NOT AMONG CANDIDATES").length;
+      return respond({
+        note: "read-only; no thresholds, no selection logic",
+        verification: {
+          markedTotal: results.length,
+          markedFound: found,
+          markedMissing: results.length - found,
+          missing: results.filter((r: any) => !r.markedRole || r.markedRole === "NOT AMONG CANDIDATES")
+            .map((r: any) => ({ symbol: r.symbol, bar: r.markedBar ?? r.anchorTime, side: r.side, error: r.error ?? null })),
+          readyForFeatureAnalysis: found === results.length,
+        },
+        results,
+      });
     }
 
     if (action === "impulse_debug") {
