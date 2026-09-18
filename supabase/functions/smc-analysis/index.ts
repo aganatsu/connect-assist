@@ -752,6 +752,167 @@ Deno.serve(async (req) => {
             }
             const brk = allBreaks.filter((b: any) => b.type === wantDir && b.index > i && b.index <= i + 15);
 
+            // ── Archetype features ──────────────────────────────────────
+            // The seven positives split into two shapes that should not be
+            // pooled: TURN (the candle IS the reversal point) and CONTINUATION
+            // (the candle is part of a pullback that the prevailing move then
+            // resumes through). Both feature sets are computed for EVERY
+            // candidate so the comparison pool can be judged under each, and
+            // so it is visible when a turn feature fires on a continuation
+            // candle or the reverse.
+            //
+            // CAUSALITY. Everything here is computed from bars at or before
+            // the candidate, except fields explicitly named as outcomes
+            // (next*, reversal*, closedBack*, expansion*), which describe what
+            // happened AFTER and are outcomes, never inputs.
+            //
+            // isLocalExtreme5/10 and distFromLocalExtremeAtr above use bars on
+            // BOTH sides of the candidate. They are LOOKAHEAD and must not be
+            // used as production evidence; the past-only counterparts are
+            // newPast5Extreme / newPast10Extreme / distanceFromPastNExtremeAtr.
+            //
+            // breakEmitted / breakKind are reported but must NOT decide
+            // anything yet: #580 proved analyzeMarketStructure can miss a real
+            // close through an external swing, so their absence is not
+            // evidence of absence.
+
+            // Highest high (supply) / lowest low (demand) over the N bars
+            // BEFORE the candidate — strictly past.
+            const pastExt = (n: number): number | null => {
+              let v: number | null = null;
+              for (let j = Math.max(0, i - n); j <= i - 1; j++) {
+                const e = ext(j);
+                if (v === null || better(e, v)) v = e;
+              }
+              return v;
+            };
+            // Signed: POSITIVE means the candidate extended beyond the prior
+            // extreme, negative means it fell short of it.
+            const signedBeyond = (past: number | null) =>
+              past === null || atr <= 0 ? null : r((favDown ? mine - past : past - mine) / atr);
+            const past5 = pastExt(5), past10 = pastExt(10);
+            const d5 = signedBeyond(past5), d10 = signedBeyond(past10);
+
+            const mid = (c.high + c.low) / 2;
+            let midBar: number | null = null;
+            for (let j = i + 1; j <= Math.min(i + 5, series.length - 1); j++) {
+              if (favDown ? series[j].close < mid : series[j].close > mid) { midBar = j - i; break; }
+            }
+            // First bar of opposite colour — for a TURN candidate this is the
+            // reversal bar itself.
+            let foIdx = -1;
+            for (let j = i + 1; j <= Math.min(i + 5, series.length - 1); j++) {
+              if ((series[j].close >= series[j].open) !== up) { foIdx = j; break; }
+            }
+            const fo = foIdx >= 0 ? series[foIdx] : null;
+            const foRange = fo ? fo.high - fo.low : 0;
+            // Close-to-close move in the favourable direction; positive means
+            // price reversed away from the candidate.
+            const revStrength = (n: number) => {
+              const j = Math.min(i + n, series.length - 1);
+              if (j <= i || atr <= 0) return null;
+              return r((favDown ? c.close - series[j].close : series[j].close - c.close) / atr);
+            };
+
+            const turn = {
+              distanceFromPast5ExtremeAtr: d5,
+              distanceFromPast10ExtremeAtr: d10,
+              newPast5Extreme: d5 == null ? null : d5 > 0,
+              newPast10Extreme: d10 == null ? null : d10 > 0,
+              amountExtendedPastPriorExtremeAtr: d10 == null ? null : r(Math.max(0, d10)),
+              runExtreme: runExtreme,
+              runPosition: i - runStart + 1,
+              runTotal: runEnd - runStart + 1,
+              runPositionPct: r((i - runStart + 1) / (runEnd - runStart + 1)),
+              prevSameSideExtremeDistAtr: prevSame >= 0 && atr > 0
+                ? r((favDown ? mine - ext(prevSame) : ext(prevSame) - mine) / atr) : null,
+              prevOppositeBar: prev && ((prev.close >= prev.open) !== up) ? {
+                dir: prev.close >= prev.open ? "up" : "down",
+                rangeAtr: atr > 0 ? r((prev.high - prev.low) / atr) : null,
+                bodyRangeRatio: (prev.high - prev.low) > 0
+                  ? r(Math.abs(prev.close - prev.open) / (prev.high - prev.low)) : null,
+                engulfedByCandidate: bodyHi >= pBodyHi && bodyLo <= pBodyLo,
+              } : null,
+              reversalStrength1: revStrength(1),
+              reversalStrength2: revStrength(2),
+              reversalStrength3: revStrength(3),
+              closedBackThroughMidWithin5: midBar != null,
+              closedBackThroughMidBars: midBar,
+              firstOppositeBarOffset: foIdx >= 0 ? foIdx - i : null,
+              firstOppositeBarRangeAtr: fo && atr > 0 ? r(foRange / atr) : null,
+              firstOppositeBarBodyRangeRatio: fo && foRange > 0
+                ? r(Math.abs(fo.close - fo.open) / foRange) : null,
+              firstOppositeBarBodyAtr: fo && atr > 0 ? r(Math.abs(fo.close - fo.open) / atr) : null,
+            };
+
+            // ── CONTINUATION: the pullback the candidate sits in ─────────
+            // A continuation candidate is a counter-trend candle, so the
+            // pullback IS its own colour-run. The prevailing move is the
+            // opposite-colour run immediately preceding it.
+            let pbPriorStart = runStart - 1;
+            if (pbPriorStart >= 0) {
+              const priorUp = series[pbPriorStart].close >= series[pbPriorStart].open;
+              while (pbPriorStart - 1 >= 0 &&
+                     ((series[pbPriorStart - 1].close >= series[pbPriorStart - 1].open) === priorUp)) {
+                pbPriorStart--;
+              }
+            }
+            // Price the pullback retraced FROM: the extreme of the prevailing
+            // move, in the prevailing direction.
+            let refPx: number | null = null, moveOrigin: number | null = null;
+            if (runStart - 1 >= 0) {
+              for (let j = pbPriorStart; j <= runStart - 1; j++) {
+                const v = favDown ? series[j].low : series[j].high;     // prevailing-direction extreme
+                if (refPx === null || (favDown ? v < refPx : v > refPx)) refPx = v;
+                const w = favDown ? series[j].high : series[j].low;     // where that move began
+                if (moveOrigin === null || (favDown ? w > moveOrigin : w < moveOrigin)) moveOrigin = w;
+              }
+            }
+            let pbExtreme: number | null = null;
+            for (let j = runStart; j <= runEnd; j++) {
+              const v = ext(j);
+              if (pbExtreme === null || better(v, pbExtreme)) pbExtreme = v;
+            }
+            const precedingMoveAtr = refPx != null && moveOrigin != null && atr > 0
+              ? r(Math.abs(moveOrigin - refPx) / atr) : null;
+            const pbDepthAtr = refPx != null && pbExtreme != null && atr > 0
+              ? r(Math.abs(pbExtreme - refPx) / atr) : null;
+            const depthAtCandAtr = refPx != null && atr > 0 ? r(Math.abs(mine - refPx) / atr) : null;
+            const nd = runEnd + 1 < series.length ? series[runEnd + 1] : null;
+            // Internal extreme of the pullback in the PREVAILING direction —
+            // the micro swing a resumption has to clear first.
+            let microPx: number | null = null;
+            for (let j = runStart; j <= Math.min(runEnd, i); j++) {
+              const v = favDown ? series[j].low : series[j].high;
+              if (microPx === null || (favDown ? v < microPx : v > microPx)) microPx = v;
+            }
+            let microCleared = false;
+            if (microPx != null) {
+              for (let j = i + 1; j <= Math.min(i + 5, series.length - 1); j++) {
+                if (favDown ? series[j].close < microPx : series[j].close > microPx) { microCleared = true; break; }
+              }
+            }
+            const cont = {
+              pullbackRunLength: runEnd - runStart + 1,
+              positionInPullback: i - runStart + 1,
+              positionInPullbackPct: r((i - runStart + 1) / (runEnd - runStart + 1)),
+              isLastOfRun,
+              isPullbackExtreme: runExtreme,
+              cumulativePullbackDepthAtr: pbDepthAtr,
+              depthAtCandidateAtr: depthAtCandAtr,
+              precedingMoveAtr,
+              pullbackDepthRatio: pbDepthAtr != null && precedingMoveAtr
+                ? r(pbDepthAtr / precedingMoveAtr) : null,
+              nextDirectionalOffset: nd ? runEnd + 1 - i : null,
+              nextDirClosesBeyondCandidate: nd
+                ? (favDown ? nd.close < c.low : nd.close > c.high) : null,
+              nextDirClosesBeyondPullbackOrigin: nd && refPx != null
+                ? (favDown ? nd.close < refPx : nd.close > refPx) : null,
+              expansion1: exProx.disp["h1"], expansion2: exProx.disp["h2"], expansion3: exProx.disp["h3"],
+              fvgIn1: !!within(1), fvgIn2: !!within(2), fvgIn3: !!within(3),
+              microSwingClearedByClose: microCleared,
+            };
+
             const dayKey = `${sym}|${side}|${c.datetime.slice(0, 10)}`;
             const isPositive = positiveKey.has(dayKey);
 
@@ -761,6 +922,9 @@ Deno.serve(async (req) => {
               referenceMarked: i === markIdx,
               knownPositive: isPositive,
               dedupeKey: dayKey,          // symbol|side|date — for aggregate dedup
+              archetype: i === markIdx ? (mk.archetype ?? null) : null,
+              turn,
+              cont,
               side, t: c.datetime,
               // ── candle ──
               o: c.open, h: c.high, l: c.low, c: c.close,
@@ -797,7 +961,11 @@ Deno.serve(async (req) => {
               isLocalExtreme5: localBoth(5), isLocalExtreme10: localBoth(10),
               isLocalExtremePast10: localPast(10),
               distFromLocalExtremeAtr: r(dist10),
-              sweptPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
+              // Renamed from sweptPriorExtreme: it only means the candidate
+              // EXCEEDED the prior extreme. sweptAndClosedBack is the actual
+              // sweep/rejection concept, and none of the seven positives
+              // satisfy it (0/7) — so a sweep is not what defines these.
+              extendedPastPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
               outsideBar, insideBar, engulfing,
               // ── next bars ──
               nextOpposite: nxt ? ((nxt.close >= nxt.open) !== up) : null,
