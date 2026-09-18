@@ -141,6 +141,50 @@ export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tM
   return toNYTime(new Date(utcMs));
 }
 
+// ─── FX Market Hours ─────────────────────────────────────────────────
+
+/**
+ * Is the FX market shut at this instant?
+ *
+ * Fri 17:00 ET through Sun 17:00 ET. DST-aware via toNYTimeAt, so the boundary
+ * is 21:00 UTC in summer and 22:00 UTC in winter rather than a fixed hour.
+ *
+ * Exists because NOTHING filtered weekend bars out of the candle series.
+ * Measured 2026-09-17 across the V2 order blocks: 26% of 4H bases and 19% of
+ * Daily bases originated on bars that cannot exist — Saturday 17:00, Sunday
+ * 09:00, Daily bars stamped Saturday. A base formed on a bar the market was
+ * closed for is not a base, and every swing point, structure break and order
+ * block computed on FX has been reading them.
+ *
+ * The same rule is computed inline in bot-scanner for weekend crypto mode.
+ * This is the shared version.
+ */
+export function isFxClosedAt(utcMs: number): boolean {
+  const { nyDay, h } = toNYTimeAt(utcMs);
+  if (nyDay === 6) return true;                 // Saturday, all day
+  if (nyDay === 0 && h < 17) return true;       // Sunday before the open
+  if (nyDay === 5 && h >= 17) return true;      // Friday after the close
+  return false;
+}
+
+/**
+ * Drop bars the FX market was shut for.
+ *
+ * Applied ONLY to forex. Crypto trades continuously and index futures keep
+ * their own calendar, so filtering either against FX hours would delete real
+ * bars.
+ */
+export function dropFxClosedBars<T extends { datetime: string }>(
+  bars: T[],
+  isForex: boolean,
+): T[] {
+  if (!isForex || !bars?.length) return bars;
+  return bars.filter((b) => {
+    const ms = Date.parse(b.datetime.endsWith("Z") ? b.datetime : b.datetime.replace(" ", "T") + "Z");
+    return Number.isFinite(ms) ? !isFxClosedAt(ms) : true;   // unparseable stays
+  });
+}
+
 // ─── Window Matching ─────────────────────────────────────────────────
 
 /** Check if decimal hour `t` falls within (start, end), handling midnight wrap. */

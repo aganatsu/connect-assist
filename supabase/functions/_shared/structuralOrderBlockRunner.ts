@@ -14,7 +14,8 @@
  */
 
 import type { Candle } from "./smcAnalysis.ts";
-import { detectSwingPoints } from "./smcAnalysis.ts";
+import { detectSwingPoints, SPECS } from "./smcAnalysis.ts";
+import { dropFxClosedBars } from "./sessions.ts";
 import { enumerateImpulseLegs } from "./impulseZoneEngine.ts";
 import type { ImpulseLeg } from "./impulseZoneEngine.ts";
 import {
@@ -61,11 +62,22 @@ export function runStructuralOrderBlocks(
   const all: StructuralOrderBlock[] = [];
   const htfSoFar: StructuralOrderBlock[] = [];
 
+  // Weekend bars are not real price. Measured 2026-09-17: 26% of 4H bases and
+  // 19% of Daily bases originated on bars the FX market was shut for —
+  // Saturday 17:00, Sunday 09:00, Daily bars stamped Saturday. Nothing in the
+  // candle path filters them, so they reached structure detection intact.
+  //
+  // Dropped for V2 only, for now. Every legacy engine reads the same
+  // contaminated series, and fixing that changes which trades fire — a
+  // separate decision, not something to slip in behind a shadow-mode feature.
+  const isForex = (SPECS as any)[symbol]?.type === "forex";
+
   for (const s of sorted) {
-    if (!s.candles || s.candles.length < 20) continue;
+    const candles = dropFxClosedBars(s.candles ?? [], isForex);
+    if (candles.length < 20) continue;
     try {
-      const swings = detectSwingPoints(s.candles, s.timeframe === "D" ? 3 : 5, 0);
-      const blocks = detectStructuralOrderBlocks(s.candles, legsFor(s.candles, s.timeframe), {
+      const swings = detectSwingPoints(candles, s.timeframe === "D" ? 3 : 5, 0);
+      const blocks = detectStructuralOrderBlocks(candles, legsFor(candles, s.timeframe), {
         symbol,
         timeframe: s.timeframe,
         swings,
