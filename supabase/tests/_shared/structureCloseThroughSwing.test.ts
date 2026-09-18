@@ -32,6 +32,36 @@ import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
  * the definition of done for the fix. It is written asserting CORRECT
  * behaviour rather than pinning the bug, because a test that encodes a defect
  * is worse than no test — this repo has already shipped one of those.
+ *
+ * ── Constraint on the eventual fix ───────────────────────────────────────────
+ * Do NOT fix this by scanning for closes from swing.index + 1.
+ *
+ * detectSwingPoints confirms a pivot using bars on BOTH sides of it, so a swing
+ * is not knowable at the moment it prints. Scanning from the pivot bar would
+ * retrospectively report breaks that no live trader could have seen — replacing
+ * a missed-break bug with a lookahead bug, which is worse because it flatters
+ * every backtest.
+ *
+ * The algorithm has to run chronologically:
+ *
+ *   a swing becomes ACTIVE only at swing.index + lookback
+ *     internal -> internalLookback
+ *     external -> externalLookback, using the external confirmation point when
+ *                 a swing is promoted
+ *   from that bar onward, the FIRST close through an active swing emits the
+ *     break ON THAT CANDLE
+ *   mark the swing broken; never emit the same swing twice
+ *
+ * A break on the confirmation candle itself counts, provided the information
+ * is available at that candle's close.
+ *
+ * When the fix lands, this file needs regression coverage for:
+ *   - the exact timestamp of the first close through
+ *   - no break emitted before pivot confirmation
+ *   - external swing close-through detected
+ *   - no duplicate break from the same swing
+ *
+ * GBP/CAD 08 May / 14 May remains the real-world reference case.
  */
 
 let t = 0;
@@ -88,19 +118,4 @@ Deno.test("the swing itself IS detected — the gap is in break reporting", () =
 
   const closeBar = candles[candles.length - 2];
   assert(closeBar.close < 1.84018, "and price genuinely closed below it");
-});
-
-Deno.test("break events are built swing-to-swing, which is the cause", () => {
-  // Pins the mechanism so the diagnosis is not lost. prevLevel comes from the
-  // PREVIOUS swing and index from the NEXT one, so the bar that actually
-  // closed through is never examined. If this shape changes, the fix has
-  // landed and the ignored test above should be enabled.
-  const src = Deno.readTextFileSync(
-    new URL("../../functions/_shared/smcAnalysis.ts", import.meta.url));
-  const block = src.slice(src.indexOf("const events: SwingEvent[] = []"),
-                          src.indexOf("events.sort"));
-  assert(/for \(let i = 1; i < lows\.length; i\+\+\)/.test(block),
-    "lows are paired consecutively");
-  assert(/index: lows\[i\]\.index/.test(block),
-    "and the break candle is the NEXT SWING, not the bar that closed through");
 });
