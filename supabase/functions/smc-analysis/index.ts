@@ -490,25 +490,82 @@ Deno.serve(async (req) => {
           const { i: markIdx, gapHours } = idxAt(mk.anchorTime);
           if (markIdx < 0) { results.push({ symbol: sym, anchorTime: mk.anchorTime, error: "no bar" }); continue; }
 
-          const leg = legs.find((l: any) => markIdx >= l.startIndex && markIdx <= l.endIndex)
-                   ?? legs.find((l: any) => Math.abs(markIdx - l.startIndex) <= 2);
+          // AN ORDER BLOCK IS DEFINED BY THE MOVE IT PRECEDES, not the move it
+          // sits inside.
+          //
+          //   supply = an UP candle before a DOWN move    -> bearish leg
+          //   demand = a DOWN candle before an UP move    -> bullish leg
+          //
+          // The first version of this paired each candle with whatever leg
+          // contained it and then filtered for "opposite colour to that leg".
+          // A supply block is an up candle, so when it sat inside a BULLISH leg
+          // it was filtered out as going with the move. Five of seven known-good
+          // candles vanished that way — and the two that survived did so only
+          // because their containing leg happened to oppose them.
+          const markBar = series[markIdx];
+          const markIsUp = markBar.close >= markBar.open;
+          const side = mk.side ?? (markIsUp ? "supply" : "demand");
+          const wantDir = side === "supply" ? "bearish" : "bullish";
+
+          // STRICT association. Three ways a candle can belong to a leg:
+          //
+          //   startsAt    the leg begins on this candle        (origin)
+          //   startsNext  the leg begins on the NEXT candle    (origin; it
+          //               launches the move without being counted in it)
+          //   contains    the candle sits inside the leg       (continuation)
+          //
+          // Deliberately NO "nearest future opposing leg" fallback. That would
+          // pair a candle with a leg weeks away and report a match, turning the
+          // 7/7 check into something that cannot fail — which is worse than a
+          // miss, because a miss is visible.
+          const opposing = legs.filter((l: any) => l.direction === wantDir);
+          let association: string | null = null;
+          let leg: any = opposing.find((l: any) => l.startIndex === markIdx);
+          if (leg) association = "startsAt";
           if (!leg) {
-            results.push({ symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
-                           error: "marked candle sits in no enumerated leg" });
+            leg = opposing.find((l: any) => l.startIndex === markIdx + 1);
+            if (leg) association = "startsNext";
+          }
+          if (!leg) {
+            leg = opposing.find((l: any) => markIdx > l.startIndex && markIdx <= l.endIndex);
+            if (leg) association = "contains";
+          }
+          if (!leg) {
+            const nearest = opposing
+              .map((l: any) => ({ l, d: l.startIndex - markIdx }))
+              .sort((a: any, b: any) => Math.abs(a.d) - Math.abs(b.d))[0];
+            results.push({
+              symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
+              side, requiredLegDirection: wantDir, association: null,
+              // Reported so a near-miss is distinguishable from no leg at all.
+              nearestOpposingLeg: nearest
+                ? { origin: series[nearest.l.startIndex]?.datetime,
+                    bos: series[nearest.l.endIndex]?.datetime,
+                    barsToLegStart: nearest.d }
+                : null,
+              error: `no ${wantDir} leg starts at, starts after, or contains this candle`,
+            });
             continue;
           }
+          const barsToLegStart = leg.startIndex - markIdx;
 
           const legDir = leg.direction;
           const legRange = Math.abs(leg.high - leg.low);
           const cands: any[] = [];
 
-          for (let i = leg.startIndex; i <= Math.min(leg.endIndex, series.length - 1); i++) {
+          // Start one bar early when the marked candle sits immediately before
+          // the leg it launches — it IS the origin block, and excluding it
+          // would reproduce the bug this fix exists for.
+          const scanFrom = Math.min(leg.startIndex, markIdx);
+          for (let i = scanFrom; i <= Math.min(leg.endIndex, series.length - 1); i++) {
             const c = series[i];
             const isUp = c.close >= c.open;
             const opposes = legDir === "bullish" ? !isUp : isUp;
             // The origin candle counts even when it goes WITH the leg — it is
             // the base V2 already builds from, and must appear for comparison.
-            if (!opposes && i !== leg.startIndex) continue;
+            // The leg's own origin is kept even when it goes with the move —
+            // it is the base V2 already builds from and the comparison needs it.
+            if (!opposes && i !== leg.startIndex && i !== markIdx) continue;
 
             const atr = atrAt(i);
             const LOOK = 5;
@@ -543,7 +600,10 @@ Deno.serve(async (req) => {
             cands.push({
               t: c.datetime,
               marked: i === markIdx,
-              role: i === leg.startIndex ? "origin" : "continuation",
+              // Directional. A candle AT or BEFORE the leg start launches it;
+              // anything after it is inside the move. abs(diff) <= 1 also
+              // labelled the bar AFTER the start as an origin, which it is not.
+              role: i <= leg.startIndex ? "origin" : "continuation",
               o: c.open, h: c.high, l: c.low, c: c.close,
               dir: isUp ? "up" : "down",
               // ── pullback shape ──
@@ -582,13 +642,28 @@ Deno.serve(async (req) => {
             leg: { direction: legDir, origin: series[leg.startIndex]?.datetime,
                    bos: series[leg.endIndex]?.datetime, bars: leg.endIndex - leg.startIndex,
                    originBroken: leg.originBroken === true },
+            association, barsToLegStart,
             markedRole: cands.find((x: any) => x.marked)?.role ?? "NOT AMONG CANDIDATES",
             candidateCount: cands.length,
             candidates: cands,
           });
         }
       }
-      return respond({ note: "read-only; no thresholds, no selection logic", results });
+      // Verification first. Feature analysis is meaningless until every
+      // known-good candle actually appears in its own candidate set.
+      const found = results.filter((r: any) => r.markedRole && r.markedRole !== "NOT AMONG CANDIDATES").length;
+      return respond({
+        note: "read-only; no thresholds, no selection logic",
+        verification: {
+          markedTotal: results.length,
+          markedFound: found,
+          markedMissing: results.length - found,
+          missing: results.filter((r: any) => !r.markedRole || r.markedRole === "NOT AMONG CANDIDATES")
+            .map((r: any) => ({ symbol: r.symbol, bar: r.markedBar ?? r.anchorTime, side: r.side, error: r.error ?? null })),
+          readyForFeatureAnalysis: found === results.length,
+        },
+        results,
+      });
     }
 
     if (action === "impulse_debug") {
