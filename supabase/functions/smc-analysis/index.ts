@@ -2,7 +2,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { enumerateImpulseLegs, mapImpulsePOIs } from "../_shared/impulseZoneEngine.ts";
-import { findImpulseBase, detectStructuralOrderBlocks } from "../_shared/structuralOrderBlocks.ts";
+import { findImpulseBase, detectStructuralOrderBlocks, DEFAULT_MAX_BASE_CANDLES } from "../_shared/structuralOrderBlocks.ts";
 import { dropFxClosedBars } from "../_shared/sessions.ts";
 import {
   analyzeMarketStructure,
@@ -498,7 +498,11 @@ Deno.serve(async (req) => {
       const allLegsForBases = allLegs.filter((l: any) => {
         const o = series[l.startIndex]?.datetime, e = series[l.endIndex]?.datetime;
         const near = (dt?: string) => !!dt && (!from || dt >= String(from)) && (!to || dt <= String(to));
-        return near(o) || near(e) || near(series[Math.max(0, l.startIndex - 5)]?.datetime);
+        // Widened by the detector's own base limit, not a literal — a base
+        // can start that many bars before its leg's origin, and a hardcoded
+        // number here would drift the moment maxBaseCandles changed.
+        return near(o) || near(e) ||
+          near(series[Math.max(0, l.startIndex - DEFAULT_MAX_BASE_CANDLES)]?.datetime);
       });
       const target = allLegs.find((l: any) =>
         legBos ? series[l.endIndex]?.datetime?.startsWith(String(legBos)) : false)

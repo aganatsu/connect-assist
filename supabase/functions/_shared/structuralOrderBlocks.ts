@@ -112,8 +112,13 @@ export interface DetectOptions {
   emaSlow?: (number | undefined)[];
 }
 
+/** Exported so callers and diagnostics cannot drift from the detector's own
+ *  default. A debug path that widened its search by a hardcoded 5 would go
+ *  quietly wrong the moment this changed. */
+export const DEFAULT_MAX_BASE_CANDLES = 5;
+
 const DEFAULTS = {
-  maxBaseCandles: 5,
+  maxBaseCandles: DEFAULT_MAX_BASE_CANDLES,
   maxBaseAtr: 1.0,
   invalidationCloses: 2,
 };
