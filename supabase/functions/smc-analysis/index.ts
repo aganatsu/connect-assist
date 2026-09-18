@@ -496,6 +496,74 @@ Deno.serve(async (req) => {
       // ── Track A / Track B for one leg ───────────────────────────────────
       // Which leg: the one whose BOS date matches `legBos`, else the first
       // bearish leg in the window.
+      // ── Box matcher ──────────────────────────────────────────────────────
+      // Given hand-drawn rectangles as {proximal, distal}, find the single
+      // candle each one was drawn from, using the confirmed geometry:
+      //
+      //   distal = (high + low) / 2   =>   extent = 2*distal - proximal
+      //
+      // A demand box has proximal above distal, so proximal is the candle high
+      // and extent its low; supply is the mirror. Reported in POINTS of error
+      // so a match is arithmetic rather than eyeballed.
+      //
+      // The point is to test the geometry on an instrument it was NOT derived
+      // from. It was fitted to three AUD/USD daily boxes; if it reproduces
+      // NASDAQ 4H rectangles it is a rule, and if it does not it was a fit.
+      const boxMatches = Array.isArray(boxes) ? boxes.map((box: any) => {
+        const prox = Number(box.proximal), dist = Number(box.distal);
+        const ext = 2 * dist - prox;
+        const demand = prox > dist;              // price falls INTO it from above
+        const wantHigh = demand ? prox : ext;
+        const wantLow = demand ? ext : prox;
+        // Expected candle range. A drawn box is half the candle, so the candle
+        // spans twice the box.
+        const expectedRange = 2 * Math.abs(prox - dist);
+        const r2 = (x: number) => Math.round(x * 100) / 100;
+        const scored = series
+          .map((c: Candle, i: number) => ({ c, i }))
+          // Restricted to the requested window. Without this the best match
+          // could come from anywhere in 800 bars and look convincing.
+          .filter(({ c }: any) => inWin(c.datetime))
+          .map(({ c, i }: any) => {
+            const highOffset = c.high - wantHigh;
+            const lowOffset = c.low - wantLow;
+            return {
+              i, t: c.datetime, o: c.open, h: c.high, l: c.low, c: c.close,
+              dir: c.close >= c.open ? "up" : "down",
+              highOffset, lowOffset,
+              // FEED-OFFSET INVARIANT. The chart is CME futures; the bot reads
+              // cash from TwelveData or Polygon. A constant basis shifts high
+              // and low by the SAME amount, so shapeErr stays near zero even
+              // when the absolute offsets are tens of points. rangeErr says
+              // whether the candle is the right SIZE. Judge the geometry on
+              // these two, not on highOffset/lowOffset.
+              shapeErr: highOffset - lowOffset,
+              rangeErr: (c.high - c.low) - expectedRange,
+              total: Math.abs(highOffset - lowOffset) + Math.abs((c.high - c.low) - expectedRange),
+            };
+          })
+          .sort((a: any, b: any) => a.total - b.total).slice(0, 3);
+        return {
+          box: { proximal: prox, distal: dist },
+          side: demand ? "demand" : "supply",
+          predicted: { high: wantHigh, low: wantLow, extent: ext, expectedRange: r2(expectedRange) },
+          rankedBy: "shapeErr + rangeErr — both invariant to a constant feed offset",
+          bestMatches: scored.map((m: any) => ({
+            t: m.t, i: m.i, o: m.o, h: m.h, l: m.l, c: m.c, dir: m.dir,
+            highOffsetPoints: r2(m.highOffset), lowOffsetPoints: r2(m.lowOffset),
+            shapeErrPoints: r2(m.shapeErr), rangeErrPoints: r2(m.rangeErr),
+            candleRange: r2(m.h - m.l),
+            // So a rerun can target this candle's leg explicitly rather than
+            // relying on whatever the selector picked.
+            containingLegBos: null as string | null,
+            // What this candle would produce under the confirmed rule.
+            zoneIfChosen: demand
+              ? { proximal: m.h, distal: (m.h + m.l) / 2, extent: m.l }
+              : { proximal: m.l, distal: (m.h + m.l) / 2, extent: m.h },
+          })),
+        };
+      }) : null;
+
       const allLegs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true });
       // A base sits BEFORE its leg's origin, so a leg whose origin is just past
       // the window can still own the base being looked for. Widen by a few bars
@@ -509,9 +577,38 @@ Deno.serve(async (req) => {
         return near(o) || near(e) ||
           near(series[Math.max(0, l.startIndex - DEFAULT_MAX_BASE_CANDLES)]?.datetime);
       });
-      const target = allLegs.find((l: any) =>
-        legBos ? series[l.endIndex]?.datetime?.startsWith(String(legBos)) : false)
-        ?? allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
+      // Which leg the candidate enumeration runs on, chosen EXPLICITLY and
+      // reported. Falling back to "first bearish leg in the window" while boxes
+      // were supplied would enumerate a leg unrelated to them, and a clean list
+      // from the wrong leg reads as a confident negative.
+      const legContaining = (idx: number) =>
+        allLegs.find((l: any) => idx > l.startIndex && idx <= l.endIndex)
+        ?? allLegs.find((l: any) => idx === l.startIndex);
+      const firstBoxIdx = boxMatches?.[0]?.bestMatches?.[0]?.i;
+
+      // Now that the legs exist, tell each box which leg its candidate sits in.
+      for (const bm of (boxMatches ?? [])) {
+        for (const m of bm.bestMatches) {
+          const l = allLegs.find((x: any) => m.i > x.startIndex && m.i <= x.endIndex)
+                 ?? allLegs.find((x: any) => m.i === x.startIndex);
+          m.containingLegBos = l ? (series[l.endIndex]?.datetime ?? null) : null;
+        }
+      }
+
+      let targetSelection = "none";
+      let target: any = undefined;
+      if (legBos) {
+        target = allLegs.find((l: any) => series[l.endIndex]?.datetime?.startsWith(String(legBos)));
+        targetSelection = target ? "explicit legBos" : "legBos supplied but no leg matched";
+      } else if (typeof firstBoxIdx === "number") {
+        target = legContaining(firstBoxIdx);
+        targetSelection = target
+          ? `leg containing box 1's best candle (${series[firstBoxIdx]?.datetime})`
+          : `box 1's best candle (${series[firstBoxIdx]?.datetime}) is inside NO enumerated leg`;
+      } else {
+        target = allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
+        targetSelection = target ? "first bearish leg in window (no boxes supplied)" : "none";
+      }
 
       let trackA: any = { note: "no target leg found" };
       let trackB: any = { note: "no target leg found" };
@@ -631,47 +728,6 @@ Deno.serve(async (req) => {
         };
       });
 
-      // ── Box matcher ──────────────────────────────────────────────────────
-      // Given hand-drawn rectangles as {proximal, distal}, find the single
-      // candle each one was drawn from, using the confirmed geometry:
-      //
-      //   distal = (high + low) / 2   =>   extent = 2*distal - proximal
-      //
-      // A demand box has proximal above distal, so proximal is the candle high
-      // and extent its low; supply is the mirror. Reported in POINTS of error
-      // so a match is arithmetic rather than eyeballed.
-      //
-      // The point is to test the geometry on an instrument it was NOT derived
-      // from. It was fitted to three AUD/USD daily boxes; if it reproduces
-      // NASDAQ 4H rectangles it is a rule, and if it does not it was a fit.
-      const boxMatches = Array.isArray(boxes) ? boxes.map((box: any) => {
-        const prox = Number(box.proximal), dist = Number(box.distal);
-        const ext = 2 * dist - prox;
-        const demand = prox > dist;              // price falls INTO it from above
-        const wantHigh = demand ? prox : ext;
-        const wantLow = demand ? ext : prox;
-        const scored = series.map((c: Candle, i: number) => ({
-          i, t: c.datetime, o: c.open, h: c.high, l: c.low, c: c.close,
-          dir: c.close >= c.open ? "up" : "down",
-          highErr: Math.round((c.high - wantHigh) * 100) / 100,
-          lowErr: Math.round((c.low - wantLow) * 100) / 100,
-          total: Math.abs(c.high - wantHigh) + Math.abs(c.low - wantLow),
-        })).sort((a: any, b: any) => a.total - b.total).slice(0, 3);
-        return {
-          box: { proximal: prox, distal: dist },
-          side: demand ? "demand" : "supply",
-          predicted: { high: wantHigh, low: wantLow, extent: ext },
-          bestMatches: scored.map((m: any) => ({
-            t: m.t, i: m.i, o: m.o, h: m.h, l: m.l, c: m.c, dir: m.dir,
-            highErrPoints: m.highErr, lowErrPoints: m.lowErr,
-            // What this candle would produce under the confirmed rule.
-            zoneIfChosen: demand
-              ? { proximal: m.h, distal: (m.h + m.l) / 2, extent: m.l }
-              : { proximal: m.l, distal: (m.h + m.l) / 2, extent: m.h },
-          })),
-        };
-      }) : null;
-
       // ── Continuation candidates ──────────────────────────────────────────
       // Every opposite-colour candle INSIDE the target leg, with what happened
       // after it. Testing one hypothesis: a continuation block is the last
@@ -775,6 +831,7 @@ Deno.serve(async (req) => {
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
         referenceBox: REF,
         boxMatches,
+        targetSelection,
         continuationCandidates,
         allBases,
         barsInWindow,
