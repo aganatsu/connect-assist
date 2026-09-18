@@ -28,6 +28,10 @@ export interface ImpulseLeg {
   startIndex: number;   // Index of the swing that started the move
   endIndex: number;     // Index of the BOS candle
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
+  /** Price has since retraced past the impulse origin. The leg is no longer
+   *  tradeable, but any order block it produced still exists — a zone dies by
+   *  its own invalidation rule, not because its parent leg was undone. */
+  originBroken?: boolean;
   bosPrice: number;     // Price level of the structure break
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
@@ -403,7 +407,7 @@ export function findImpulseLeg(
 export function enumerateImpulseLegs(
   candles: Candle[],
   timeframe?: "D" | "4H" | "1H",
-  opts?: { maxPerDirection?: number },
+  opts?: { maxPerDirection?: number; includeBrokenOrigin?: boolean },
 ): ImpulseLeg[] {
   if (candles.length < 20) return [];
   const maxPerDirection = opts?.maxPerDirection ?? 20;
@@ -427,8 +431,12 @@ export function enumerateImpulseLegs(
       // blocks for the symbol on that timeframe — turning one bad bar into a
       // chart with nothing on it.
       try {
-        const leg = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
-        if (!leg || !leg.isValid) continue;
+        const leg = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints,
+          { allowBrokenOrigin: opts?.includeBrokenOrigin });
+        // isValid is the live-setup question. For an order-block inventory a
+        // leg whose origin was later broken is still the parent of a real zone.
+        if (!leg) continue;
+        if (!leg.isValid && !opts?.includeBrokenOrigin) continue;
         const existing = byOrigin.get(leg.startIndex);
         if (!existing || leg.endIndex > existing.endIndex) byOrigin.set(leg.startIndex, leg);
       } catch (err) {
@@ -549,6 +557,7 @@ function validateImpulseFromBOS(
   bos: StructureBreak,
   direction: "bullish" | "bearish",
   swingPoints: SwingPoint[],
+  opts?: { allowBrokenOrigin?: boolean },
 ): ImpulseLeg | null {
   const bosIdx = bos.index;
 
@@ -598,14 +607,21 @@ function validateImpulseFromBOS(
       }
     }
 
-    if (!originBroken) {
+    // A broken origin means "I would not trade this impulse now". It does NOT
+    // mean the order block it produced stopped existing — the reference charts
+    // carry zones for months after the move that created them has been undone.
+    // An OB dies when price accepts through the OB, not when its parent leg is
+    // invalidated. Callers that want the live-setup question keep the default;
+    // the order-block engine opts in and reads originBroken as metadata.
+    if (!originBroken || opts?.allowBrokenOrigin) {
       return {
         high: impulseHigh,
         low: impulseLow,
         direction,
         startIndex: startIdx,
         endIndex: endIdx,
-        isValid: true,
+        isValid: !originBroken,
+        originBroken,
         bosPrice: bos.price,
         displacement: measureLegDisplacement(candles, startIdx, endIdx),
       };
