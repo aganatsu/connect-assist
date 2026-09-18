@@ -240,7 +240,7 @@ export default function Chart() {
       // toggled by the OB2 layer button, off unless asked for.
       structuralOrderBlocksV2: (sig?.structuralOrderBlocksV2 || []).map((b: any) => ({
         id: b.id, tf: b.tf, dir: b.dir,
-        proximal: b.proximal, distal: b.distal, sweepLevel: b.sweepLevel,
+        proximal: b.proximal, distal: b.distal, extent: b.extent,
         status: b.status, significance: b.significance,
         score: b.score, touches: b.touches, band: b.band, originTime: b.originTime,
       })),

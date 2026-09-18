@@ -154,10 +154,14 @@ export interface ChartJudasSwing {
 /**
  * V2 structural order block, SHADOW MODE.
  *
- * proximal/distal are BODY boundaries; sweepLevel is the base's wick extreme
- * and sits OUTSIDE the zone. Drawn separately from the legacy OB layer and in
- * a different colour on purpose — the point of this overlay is to let the two
- * detectors be compared by eye against the reference charts.
+ * The zone is the PROXIMAL HALF of the base, wick to wick: proximal is the
+ * extreme price meets first, distal is the 50% of the full range. `extent` is
+ * the far wick extreme — price closing beyond it invalidates the block, so it
+ * is drawn dotted as a boundary rather than as part of the zone.
+ *
+ * Drawn separately from the legacy OB layer and in a different colour on
+ * purpose — the point of this overlay is to let the two detectors be compared
+ * by eye against the reference charts.
  */
 export interface ChartStructuralOB {
   id: string;
@@ -165,7 +169,7 @@ export interface ChartStructuralOB {
   dir: "bullish" | "bearish";
   proximal: number;
   distal: number;
-  sweepLevel?: number;
+  extent?: number;
   status: string;
   significance?: string;
   score?: number;
@@ -757,8 +761,8 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           `V2 ${b.tf} ${b.status}${b.score != null ? ` ${b.score}` : ""} ${sig}${when ? ` · ${when}` : ""}`,
         );
         addSegmentLine(b.distal, from, lastIdx, color, 1, LineStyle.Solid);
-        if (typeof b.sweepLevel === "number" && b.sweepLevel !== b.distal) {
-          addSegmentLine(b.sweepLevel, from, lastIdx, COLORS.v2Sweep, 1, LineStyle.Dotted);
+        if (typeof b.extent === "number" && b.extent !== b.distal) {
+          addSegmentLine(b.extent, from, lastIdx, COLORS.v2Sweep, 1, LineStyle.Dotted);
         }
       }
     }

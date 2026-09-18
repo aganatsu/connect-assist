@@ -68,8 +68,9 @@ describe("V2 overlay", () => {
   });
 
   it("draws the sweep level outside the zone, dotted", () => {
-    // sweepLevel is the base's wick extreme and is NOT a boundary. Drawing it
-    // like one would undo the distinction the whole engine rests on.
+    // `extent` is the far wick extreme and the INVALIDATION level, not part of
+    // the tradeable zone. Drawing it as a zone edge would misstate where the
+    // block actually dies.
     const block = chart.slice(chart.indexOf('visibleLayers.has("obV2")'));
     expect(block).toContain("COLORS.v2Sweep");
     expect(block).toMatch(/lineStyle:\s*LineStyle\.Dotted/);
@@ -123,7 +124,7 @@ describe("V2 in the Detail Breakdown", () => {
     const section = botView.slice(i - 500, i + 3000);
     expect(section).toMatch(/b\.proximal/);
     expect(section).toMatch(/b\.distal/);
-    expect(section).toMatch(/b\.sweepLevel/);
+    expect(section).toMatch(/b\.extent/);
     expect(section).toMatch(/b\.baseCandles/);
   });
 

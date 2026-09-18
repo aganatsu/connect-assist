@@ -2005,8 +2005,8 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
                   </span>
                   {/* The wick extreme sits OUTSIDE the zone: a wick through it
                       is a sweep, a body close through distal is invalidation. */}
-                  {b.sweepLevel != null && b.sweepLevel !== b.distal && (
-                    <span className="text-[9px] font-mono text-muted-foreground">sweep {b.sweepLevel}</span>
+                  {b.extent != null && b.extent !== b.distal && (
+                    <span className="text-[9px] font-mono text-muted-foreground">ext {b.extent}</span>
                   )}
                   <span className="text-[9px] text-muted-foreground">{b.status}</span>
                   {b.significance && (

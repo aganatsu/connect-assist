@@ -11,12 +11,21 @@ import type { ImpulseLeg } from "../../functions/_shared/impulseZoneEngine.ts";
 /**
  * V2 order blocks — structure-first detection.
  *
- * The rule under test that matters most is the GEOMETRY. Measured against a
- * zoomed AUD/USD daily chart: the drawn box stopped at the base bodies while
- * the wicks ran ~40% further, and that wick extreme was marked separately.
- * The legacy detector uses body + 50% of each wick, which sits about a third
- * deeper. If this file ever stops failing on that difference, the two
- * detectors have silently converged again.
+ * GEOMETRY: the zone is the PROXIMAL HALF of the base, measured wick to wick.
+ *
+ *   proximal  the wick extreme price meets first
+ *   distal    the 50% of the base's full wick range
+ *   extent    the far wick extreme — beyond this the block is invalidated
+ *
+ * Read off two hand-drawn AUD/USD daily boxes via TradingView's coordinates.
+ * Four edges, both directions, every one within 1.4 pips. The 30 March high
+ * was PREDICTED from the drawn box at 0.68761 and came back 0.68758 from the
+ * raw candle, so the rule was derived rather than fitted.
+ *
+ * These tests previously asserted a BODY-based rule, inferred from a single
+ * zoomed screenshot of one box on one side. That was wrong, and the tests
+ * encoding it were replaced rather than adjusted — an assertion pinning a
+ * disproved model is worse than no assertion.
  */
 
 let t = 0;
@@ -41,11 +50,11 @@ const OPTS = { symbol: "TEST/USD", timeframe: "D" as const };
 
 // ─── geometry ────────────────────────────────────────────────────────────────
 
-Deno.test("the zone is the base BODIES; wicks are excluded", () => {
+Deno.test("the zone is the PROXIMAL HALF of the base, wick to wick", () => {
   reset();
   const candles = [
     ...filler(),
-    // base: bodies 100→103, wicks down to 95
+    // base: bodies 100→103, wicks 95→104
     candle(100, 104, 95, 102),
     candle(101, 104, 96, 103),
     // impulse up
@@ -54,14 +63,16 @@ Deno.test("the zone is the base BODIES; wicks are excluded", () => {
   ];
   const [ob] = detectStructuralOrderBlocks(candles, [leg(21, 23, "bullish", 120, 95)], OPTS);
   assert(ob, "a block was produced");
-  assertEquals(ob.proximal, 103, "proximal = highest body in the base");
-  assertEquals(ob.distal, 100, "distal = lowest body — NOT the 95 wick");
-  assertEquals(ob.sweepLevel, 95, "the wick extreme is recorded separately");
+  assertEquals(ob.proximal, 104, "proximal = the wick HIGH, the edge price meets first");
+  assertEquals(ob.distal, 99.5, "distal = 50% of the 95–104 wick range");
+  assertEquals(ob.extent, 95, "extent = the far wick extreme");
 });
 
-Deno.test("it does NOT use the legacy body + 50% wick formula", () => {
-  // THE DISCRIMINATOR. smcAnalysis obZoneWithWicks() would put the low at
-  // bodyLow - lowerWick*0.5 = 100 - 2.5 = 97.5. The charts say 100.
+Deno.test("it uses neither bodies nor the legacy body+50%wick formula", () => {
+  // THE DISCRIMINATOR, against both rules this has been through.
+  //   legacy obZoneWithWicks:  bodyLow - lowerWick*0.5 = 100 - 2.5 = 97.5
+  //   the old V2 body rule:    bodyHigh/bodyLow        = 103 / 100
+  //   measured from the chart: wickHigh / 50%          = 104 / 99.5
   reset();
   const candles = [
     ...filler(),
@@ -70,8 +81,12 @@ Deno.test("it does NOT use the legacy body + 50% wick formula", () => {
     candle(111, 120, 110, 119),
   ];
   const [ob] = detectStructuralOrderBlocks(candles, [leg(20, 22, "bullish", 120, 95)], OPTS);
-  assertEquals(ob.distal, 100);
-  assert(ob.distal !== 97.5, "body+50%wick would be 97.5 — that is the legacy rule");
+  assertEquals(ob.proximal, 104);
+  assertEquals(ob.distal, 99.5);
+  for (const wrong of [97.5, 100, 103]) {
+    assert(ob.distal !== wrong && ob.proximal !== wrong,
+      `${wrong} belongs to a rule that was disproved`);
+  }
 });
 
 Deno.test("a bearish base inverts proximal and distal", () => {
@@ -84,9 +99,9 @@ Deno.test("a bearish base inverts proximal and distal", () => {
     candle(89, 90, 80, 81),
   ];
   const [ob] = detectStructuralOrderBlocks(candles, [leg(20, 22, "bearish", 108, 80)], OPTS);
-  assertEquals(ob.proximal, 100, "proximal = lowest body");
-  assertEquals(ob.distal, 103, "distal = highest body");
-  assertEquals(ob.sweepLevel, 108, "sweep marker is the wick high");
+  assertEquals(ob.proximal, 99, "proximal = the wick LOW — price rises into supply");
+  assertEquals(ob.distal, 103.5, "distal = 50% of the 99–108 wick range");
+  assertEquals(ob.extent, 108, "extent = the far wick extreme, the wick high");
 });
 
 // ─── base detection ──────────────────────────────────────────────────────────
@@ -159,14 +174,18 @@ Deno.test("a wick through distal that closes back inside is a SWEEP, not invalid
   assert(ob.touches > 0, "but it does count as a touch");
 });
 
-Deno.test("two consecutive closes beyond distal invalidate; one does not", () => {
+Deno.test("two consecutive closes beyond EXTENT invalidate; one does not", () => {
+  // Acceptance is measured against the far wick extreme, not distal. distal is
+  // the midpoint, and closing past it is deep mitigation — invalidating there
+  // would kill zones roughly twice as fast as the reference charts show.
   reset();
   const base = [
     ...filler(),
     candle(100, 104, 95, 103),
     candle(103, 112, 103, 111),
   ];
-  const one = [...base, candle(111, 112, 98, 99), candle(99, 106, 99, 105)];
+  // zone 104 → 99.5, extent 95
+  const one = [...base, candle(111, 112, 94, 94.5), candle(94.5, 106, 94, 105)];
   const [obOne] = detectStructuralOrderBlocks(one, [leg(20, 21, "bullish", 112, 95)], OPTS);
   assert(obOne.status !== "INVALIDATED", "a single close back below is not acceptance");
 
@@ -176,7 +195,7 @@ Deno.test("two consecutive closes beyond distal invalidate; one does not", () =>
     candle(100, 104, 95, 103),
     candle(103, 112, 103, 111),
   ];
-  const two = [...base2, candle(111, 112, 98, 99), candle(99, 99.5, 96, 97)];
+  const two = [...base2, candle(111, 112, 94, 94.5), candle(94.5, 95, 92, 93)];
   const [obTwo] = detectStructuralOrderBlocks(two, [leg(20, 21, "bullish", 112, 95)], OPTS);
   assertEquals(obTwo.status, "INVALIDATED");
   assertEquals(obTwo.invalidationCount, 2);
@@ -188,9 +207,9 @@ Deno.test("a close back inside resets the invalidation counter", () => {
     ...filler(),
     candle(100, 104, 95, 103),
     candle(103, 112, 103, 111),
-    candle(111, 112, 98, 99),    // one below
-    candle(99, 106, 99, 105),    // back inside — reset
-    candle(105, 106, 98, 99),    // one below again
+    candle(111, 112, 94, 94.5),  // one below extent
+    candle(94.5, 106, 94, 105),  // back inside — reset
+    candle(105, 106, 94, 94.5),  // one below again
   ];
   const [ob] = detectStructuralOrderBlocks(candles, [leg(20, 21, "bullish", 112, 95)], OPTS);
   assert(ob.status !== "INVALIDATED", "two non-consecutive closes must not invalidate");
@@ -202,9 +221,9 @@ Deno.test("penetration depth is banded, not a boolean", () => {
   reset();
   const candles = [
     ...filler(),
-    candle(100, 104, 95, 103),   // zone 100..103, height 3
+    candle(100, 104, 95, 103),    // zone 104 → 99.5, height 4.5
     candle(103, 112, 103, 111),
-    candle(111, 112, 101.4, 110), // dips to 101.4 → 53% of the way down
+    candle(111, 112, 101.6, 110), // dips to 101.6 → 53% of the way in
   ];
   const [ob] = detectStructuralOrderBlocks(candles, [leg(20, 21, "bullish", 112, 95)], OPTS);
   assertAlmostEquals(ob.maxPenetrationPercent, 53.3, 1);
@@ -302,4 +321,64 @@ Deno.test("nothing here decides a trade", () => {
   for (const forbidden of ["paper_positions", "pending_orders", "_overrideDirection", "takeProfit", "stopLoss"]) {
     assert(!src.includes(forbidden), `${forbidden} must not appear in a shadow-mode detector`);
   }
+});
+
+// ─── the reference charts, as regression anchors ─────────────────────────────
+
+/**
+ * The two AUD/USD daily boxes the geometry was derived from, using the real
+ * candle OHLC and the coordinates read out of TradingView.
+ *
+ * Synthetic fixtures prove the formula is implemented; these prove it is the
+ * RIGHT formula. If someone later "simplifies" the geometry, the synthetic
+ * tests can be made to pass by changing their expectations — these cannot,
+ * because the numbers came off a chart drawn by hand.
+ */
+function isolatedBase(c: Candle, dir: "bullish" | "bearish"): { candles: Candle[]; leg: ImpulseLeg } {
+  reset();
+  // Fillers parked far away so nothing joins the base: a body only merges when
+  // it overlaps the accumulating range.
+  const pad = Array.from({ length: 20 }, () => candle(0.5, 0.5025, 0.4975, 0.5));
+  const after = dir === "bullish"
+    ? [candle(c.close, c.close + 0.01, c.close, c.close + 0.009),
+       candle(c.close + 0.009, c.close + 0.02, c.close + 0.008, c.close + 0.019)]
+    : [candle(c.close, c.close, c.close - 0.01, c.close - 0.009),
+       candle(c.close - 0.009, c.close - 0.008, c.close - 0.02, c.close - 0.019)];
+  const candles = [...pad, c, ...after];
+  return { candles, leg: leg(20, 22, dir, c.high, c.low) };
+}
+
+Deno.test("AUD/USD 30 Mar demand reproduces the drawn box", () => {
+  // Raw candle from the provider. Box read from TradingView: 0.68549 → 0.68761.
+  const bar = candle(0.68705, 0.68758, 0.68347, 0.68488);
+  const { candles, leg: l } = isolatedBase(bar, "bullish");
+  const [ob] = detectStructuralOrderBlocks(candles, [l], OPTS);
+  assert(ob, "a block was produced");
+  assertAlmostEquals(ob.proximal, 0.68758, 1e-9, "proximal = the candle high");
+  assertAlmostEquals(ob.distal, 0.685525, 1e-9, "distal = 50% of 0.68347–0.68758");
+  // Against the hand-drawn box, in pips.
+  assert(Math.abs(ob.proximal - 0.68761) * 10000 < 1.5, "proximal within 1.5 pips of the box top");
+  assert(Math.abs(ob.distal - 0.68549) * 10000 < 1.5, "distal within 1.5 pips of the box bottom");
+});
+
+Deno.test("AUD/USD 19 Mar supply reproduces the drawn box", () => {
+  // Box read from TradingView: 0.70002 → 0.70534.
+  const bar = candle(0.70360, 0.71089, 0.70007, 0.70832);
+  const { candles, leg: l } = isolatedBase(bar, "bearish");
+  const [ob] = detectStructuralOrderBlocks(candles, [l], OPTS);
+  assert(ob, "a block was produced");
+  assertAlmostEquals(ob.proximal, 0.70007, 1e-9, "proximal = the candle low — price rises into supply");
+  assertAlmostEquals(ob.distal, 0.70548, 1e-9, "distal = 50% of 0.70007–0.71089");
+  assert(Math.abs(ob.proximal - 0.70002) * 10000 < 1.5, "proximal within 1.5 pips of the box bottom");
+  assert(Math.abs(ob.distal - 0.70534) * 10000 < 1.5, "distal within 1.5 pips of the box top");
+});
+
+Deno.test("the body rule would miss both boxes", () => {
+  // What the previous implementation produced, for the record. Both were close
+  // enough to look plausible on a chart and neither was the rule.
+  const demand = candle(0.68705, 0.68758, 0.68347, 0.68488);
+  assert(Math.abs(0.68705 - 0.68761) * 10000 > 5, "body high is >5 pips from the box top");
+  const supply = candle(0.70360, 0.71089, 0.70007, 0.70832);
+  assert(Math.abs(0.70360 - 0.70002) * 10000 > 30, "body low is >30 pips from the box bottom");
+  assert(demand.high !== demand.close && supply.low !== supply.open, "fixtures are the real bars");
 });
