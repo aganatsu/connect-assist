@@ -419,7 +419,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos } = await req.json();
+    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos, boxes } = await req.json();
 
     // ── impulse_debug ────────────────────────────────────────────────────
     // Answers one question and changes nothing: for a symbol/timeframe and a
@@ -440,7 +440,12 @@ Deno.serve(async (req) => {
       const raw = res.candles ?? [];
       // Same series V2 reads, so the answer reflects V2 rather than an
       // approximation of it.
-      const series = dropFxClosedBars(raw, /USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD/.test(sym) && !/BTC|ETH|XAU|XAG/.test(sym));
+      // Asset type from SPECS, not a regex over the symbol. A pattern that
+      // accidentally matched an index would silently delete its bars and the
+      // box matcher would then fail for a reason that has nothing to do with
+      // geometry — the same class of drift as a hardcoded lookback.
+      const isForexSym = (SPECS as any)[sym]?.type === "forex";
+      const series = dropFxClosedBars(raw, isForexSym);
       const inWin = (dt?: string) => !!dt && (!from || dt >= String(from)) && (!to || dt <= String(to));
 
       const structure = analyzeMarketStructure(series);
@@ -491,6 +496,130 @@ Deno.serve(async (req) => {
       // ── Track A / Track B for one leg ───────────────────────────────────
       // Which leg: the one whose BOS date matches `legBos`, else the first
       // bearish leg in the window.
+      // ── Box matcher ──────────────────────────────────────────────────────
+      // Given hand-drawn rectangles as {proximal, distal}, find the single
+      // candle each one was drawn from, using the confirmed geometry:
+      //
+      //   distal = (high + low) / 2   =>   extent = 2*distal - proximal
+      //
+      // A demand box has proximal above distal, so proximal is the candle high
+      // and extent its low; supply is the mirror. Reported in POINTS of error
+      // so a match is arithmetic rather than eyeballed.
+      //
+      // The point is to test the geometry on an instrument it was NOT derived
+      // from. It was fitted to three AUD/USD daily boxes; if it reproduces
+      // NASDAQ 4H rectangles it is a rule, and if it does not it was a fit.
+      const boxMatches = Array.isArray(boxes) ? boxes.map((box: any) => {
+        const prox = Number(box.proximal), dist = Number(box.distal);
+        const ext = 2 * dist - prox;
+        const demand = prox > dist;              // price falls INTO it from above
+        const wantHigh = demand ? prox : ext;
+        const wantLow = demand ? ext : prox;
+        // NOTE ON THE METRICS BELOW.
+        //
+        //   highOffset - lowOffset
+        //     = (high - wantHigh) - (low - wantLow)
+        //     = (high - low) - (wantHigh - wantLow)
+        //     = actualRange - expectedRange
+        //
+        // So "shapeErr" and "rangeErr" are ALGEBRAICALLY IDENTICAL. Ranking by
+        // both double-counts one quantity and dresses it up as two independent
+        // checks. Range agreement alone proves nothing either: any candle in
+        // the window with the right range scores perfectly.
+        //
+        // Range search is therefore DISCOVERY ONLY. Proof needs anchorTime.
+
+        // Expected candle range. A drawn box is half the candle, so the candle
+        // spans twice the box.
+        const expectedRange = 2 * Math.abs(prox - dist);
+        const r2 = (x: number) => Math.round(x * 100) / 100;
+        const scored = series
+          .map((c: Candle, i: number) => ({ c, i }))
+          // Restricted to the requested window. Without this the best match
+          // could come from anywhere in 800 bars and look convincing.
+          .filter(({ c }: any) => inWin(c.datetime))
+          .map(({ c, i }: any) => {
+            const highOffset = c.high - wantHigh;
+            const lowOffset = c.low - wantLow;
+            return {
+              i, t: c.datetime, o: c.open, h: c.high, l: c.low, c: c.close,
+              dir: c.close >= c.open ? "up" : "down",
+              highOffset, lowOffset,
+              // FEED-OFFSET INVARIANT. The chart is CME futures; the bot reads
+              // cash from TwelveData or Polygon. A constant basis shifts high
+              // and low by the SAME amount, so shapeErr stays near zero even
+              // when the absolute offsets are tens of points. rangeErr says
+              // whether the candle is the right SIZE. Judge the geometry on
+              // these two, not on highOffset/lowOffset.
+              rangeErr: (c.high - c.low) - expectedRange,
+              total: Math.abs((c.high - c.low) - expectedRange),
+            };
+          })
+          .sort((a: any, b: any) => a.total - b.total).slice(0, 3);
+        // ── Anchored match: the only evidence that counts ──────────────────
+        // Given the bar the box was drawn on, compare THAT candle rather than
+        // hunting for one with a convenient range. Feed differences still show
+        // up in highOffset/lowOffset, but they no longer decide which candle
+        // is being judged.
+        let anchored: any = null;
+        if (box.anchorTime) {
+          const want = Date.parse(String(box.anchorTime).endsWith("Z")
+            ? String(box.anchorTime)
+            : String(box.anchorTime).replace(" ", "T") + "Z");
+          let best: any = null;
+          for (let i = 0; i < series.length; i++) {
+            const t = Date.parse(series[i].datetime.endsWith("Z")
+              ? series[i].datetime : series[i].datetime + "Z");
+            const gap = Math.abs(t - want);
+            if (!best || gap < best.gap) best = { i, gap, c: series[i] };
+          }
+          if (best) {
+            const c = best.c;
+            const highOffset = c.high - wantHigh;
+            const lowOffset = c.low - wantLow;
+            anchored = {
+              anchorTime: box.anchorTime,
+              providerTime: c.datetime,
+              gapHours: r2(best.gap / 3600000),
+              actualHigh: c.high, actualLow: c.low,
+              actualRange: r2(c.high - c.low),
+              expectedRange: r2(expectedRange),
+              rangeErrPoints: r2((c.high - c.low) - expectedRange),
+              highOffset: r2(highOffset),
+              lowOffset: r2(lowOffset),
+              // Identical to rangeErr by construction; reported because it is
+              // what the review asked for and makes the identity visible.
+              offsetDifference: r2(highOffset - lowOffset),
+              dir: c.close >= c.open ? "up" : "down",
+              zoneIfChosen: demand
+                ? { proximal: c.high, distal: (c.high + c.low) / 2, extent: c.low }
+                : { proximal: c.low, distal: (c.high + c.low) / 2, extent: c.high },
+            };
+          }
+        }
+
+        return {
+          box: { proximal: prox, distal: dist, anchorTime: box.anchorTime ?? null },
+          side: demand ? "demand" : "supply",
+          anchored,
+          predicted: { high: wantHigh, low: wantLow, extent: ext, expectedRange: r2(expectedRange) },
+          rankedBy: "rangeErr only — DISCOVERY, not proof. See anchored below.",
+          bestMatches: scored.map((m: any) => ({
+            t: m.t, i: m.i, o: m.o, h: m.h, l: m.l, c: m.c, dir: m.dir,
+            highOffsetPoints: r2(m.highOffset), lowOffsetPoints: r2(m.lowOffset),
+            rangeErrPoints: r2(m.rangeErr),
+            candleRange: r2(m.h - m.l),
+            // So a rerun can target this candle's leg explicitly rather than
+            // relying on whatever the selector picked.
+            containingLegBos: null as string | null,
+            // What this candle would produce under the confirmed rule.
+            zoneIfChosen: demand
+              ? { proximal: m.h, distal: (m.h + m.l) / 2, extent: m.l }
+              : { proximal: m.l, distal: (m.h + m.l) / 2, extent: m.h },
+          })),
+        };
+      }) : null;
+
       const allLegs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true });
       // A base sits BEFORE its leg's origin, so a leg whose origin is just past
       // the window can still own the base being looked for. Widen by a few bars
@@ -504,9 +633,43 @@ Deno.serve(async (req) => {
         return near(o) || near(e) ||
           near(series[Math.max(0, l.startIndex - DEFAULT_MAX_BASE_CANDLES)]?.datetime);
       });
-      const target = allLegs.find((l: any) =>
-        legBos ? series[l.endIndex]?.datetime?.startsWith(String(legBos)) : false)
-        ?? allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
+      // Which leg the candidate enumeration runs on, chosen EXPLICITLY and
+      // reported. Falling back to "first bearish leg in the window" while boxes
+      // were supplied would enumerate a leg unrelated to them, and a clean list
+      // from the wrong leg reads as a confident negative.
+      const legContaining = (idx: number) =>
+        allLegs.find((l: any) => idx > l.startIndex && idx <= l.endIndex)
+        ?? allLegs.find((l: any) => idx === l.startIndex);
+      // Prefer the anchored candle. A range-search winner is discovery only,
+      // so selecting a leg from it would build on the weaker signal.
+      const firstAnchored = boxMatches?.find((b: any) => b.anchored)?.anchored;
+      const firstBoxIdx = firstAnchored
+        ? series.findIndex((c: Candle) => c.datetime === firstAnchored.providerTime)
+        : boxMatches?.[0]?.bestMatches?.[0]?.i;
+
+      // Now that the legs exist, tell each box which leg its candidate sits in.
+      for (const bm of (boxMatches ?? [])) {
+        for (const m of bm.bestMatches) {
+          const l = allLegs.find((x: any) => m.i > x.startIndex && m.i <= x.endIndex)
+                 ?? allLegs.find((x: any) => m.i === x.startIndex);
+          m.containingLegBos = l ? (series[l.endIndex]?.datetime ?? null) : null;
+        }
+      }
+
+      let targetSelection = "none";
+      let target: any = undefined;
+      if (legBos) {
+        target = allLegs.find((l: any) => series[l.endIndex]?.datetime?.startsWith(String(legBos)));
+        targetSelection = target ? "explicit legBos" : "legBos supplied but no leg matched";
+      } else if (typeof firstBoxIdx === "number") {
+        target = legContaining(firstBoxIdx);
+        targetSelection = target
+          ? `leg containing box 1's ${firstAnchored ? "ANCHORED" : "range-matched"} candle (${series[firstBoxIdx]?.datetime})`
+          : `box 1's best candle (${series[firstBoxIdx]?.datetime}) is inside NO enumerated leg`;
+      } else {
+        target = allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
+        targetSelection = target ? "first bearish leg in window (no boxes supplied)" : "none";
+      }
 
       let trackA: any = { note: "no target leg found" };
       let trackB: any = { note: "no target leg found" };
@@ -642,7 +805,12 @@ Deno.serve(async (req) => {
         const structAll = analyzeMarketStructure(series);
         const breaksAll = [...structAll.bos.map((b: any) => ({ ...b, kind: "BOS" })),
                            ...structAll.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+        // 4 bars is arbitrary and, on a daily leg, too short — the 3 April
+        // move ran nine bars to its CHoCH. Kept because lengthening it makes
+        // causedBreak useless rather than useful: every candidate precedes the
+        // same eventual break. Read displacement and rank, not causedBreak.
         const LOOKAHEAD = 4;
+        const fvgsAll = detectFVGs(series, breaksAll as any) ?? [];
         const out: any[] = [];
         for (let i = target.startIndex + 1; i < target.endIndex && i < series.length; i++) {
           const c = series[i];
@@ -678,9 +846,21 @@ Deno.serve(async (req) => {
           }).sort((a: any, b: any) => b.index - a.index).slice(0, 1)
             .map((sp: any) => ({ t: series[sp.index]?.datetime, price: sp.price, significance: sp.significance }));
 
+          // Last opposite candle of its run: the next bar goes with the leg.
+          const next = series[i + 1];
+          const nextWithLeg = next
+            ? (legDir === "bullish" ? next.close >= next.open : next.close < next.open)
+            : false;
+
+          // Did an FVG of the leg's direction form at or just after this bar?
+          const fvgNear = fvgsAll.some((f: any) =>
+            f.type === legDir && f.index >= i && f.index <= i + 3);
+
           out.push({
             t: c.datetime,
             o: c.open, h: c.high, l: c.low, c: c.close,
+            lastOppositeOfPullback: nextWithLeg,
+            fvgCreated: fvgNear,
             bodyPips: Math.round(Math.abs(c.close - c.open) * 100000) / 10,
             displacementPips: Math.round(displacement * 100000) / 10,
             atrMultiple: atr > 0 ? Math.round((displacement / atr) * 100) / 100 : null,
@@ -693,9 +873,16 @@ Deno.serve(async (req) => {
               : { proximal: c.low, distal: (c.high + c.low) / 2, extent: c.high },
           });
         }
+        // Rank by displacement within this leg — 1 is the strongest push after
+        // an opposite candle. A rank is comparable across instruments in a way
+        // a raw pip figure is not.
+        const byDisp = [...out].sort((a, b) => b.displacementPips - a.displacementPips);
+        out.forEach((o: any) => { o.displacementRank = byDisp.indexOf(o) + 1; });
+
         continuationCandidates = {
           leg: { direction: legDir, origin: series[target.startIndex]?.datetime, bos: series[target.endIndex]?.datetime },
           lookaheadBars: LOOKAHEAD,
+          candidateCount: out.length,
           candidates: out,
         };
       }
@@ -704,6 +891,8 @@ Deno.serve(async (req) => {
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
         referenceBox: REF,
+        boxMatches,
+        targetSelection,
         continuationCandidates,
         allBases,
         barsInWindow,
