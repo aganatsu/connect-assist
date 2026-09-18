@@ -1,7 +1,8 @@
 import { corsHeaders } from "../_shared/cors.ts";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
-import { enumerateImpulseLegs } from "../_shared/impulseZoneEngine.ts";
+import { enumerateImpulseLegs, mapImpulsePOIs } from "../_shared/impulseZoneEngine.ts";
+import { findImpulseBase, detectStructuralOrderBlocks } from "../_shared/structuralOrderBlocks.ts";
 import { dropFxClosedBars } from "../_shared/sessions.ts";
 import {
   analyzeMarketStructure,
@@ -418,7 +419,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to } = await req.json();
+    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos } = await req.json();
 
     // ── impulse_debug ────────────────────────────────────────────────────
     // Answers one question and changes nothing: for a symbol/timeframe and a
@@ -487,9 +488,82 @@ Deno.serve(async (req) => {
           isValid: l.isValid, originBroken: l.originBroken,
         }));
 
+      // ── Track A / Track B for one leg ───────────────────────────────────
+      // Which leg: the one whose BOS date matches `legBos`, else the first
+      // bearish leg in the window.
+      const allLegs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true });
+      const target = allLegs.find((l: any) =>
+        legBos ? series[l.endIndex]?.datetime?.startsWith(String(legBos)) : false)
+        ?? allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
+
+      let trackA: any = { note: "no target leg found" };
+      let trackB: any = { note: "no target leg found" };
+
+      if (target) {
+        // TRACK A — the origin block.
+        const base = findImpulseBase(series, target);
+        const alone = detectStructuralOrderBlocks(series, [target], { symbol: sym, timeframe: tf === "1d" ? "D" : "4H" });
+        const withAll = detectStructuralOrderBlocks(series, allLegs, { symbol: sym, timeframe: tf === "1d" ? "D" : "4H" });
+        const mine = withAll.filter((b: any) => b.baseEndIndex === target.startIndex);
+        trackA = {
+          leg: { origin: series[target.startIndex]?.datetime, bos: series[target.endIndex]?.datetime,
+                 direction: target.direction, originBroken: target.originBroken },
+          baseFound: !!base,
+          base: base ? {
+            startsAt: series[base.startIndex]?.datetime, endsAt: series[base.endIndex]?.datetime,
+            candles: base.endIndex - base.startIndex + 1,
+            bodyHigh: base.bodyHigh, bodyLow: base.bodyLow,
+            wickHigh: base.wickHigh, wickLow: base.wickLow,
+            compactnessAtr: Number(base.compactnessAtr?.toFixed(3)),
+          } : null,
+          blockWhenLegIsAlone: alone.map((b: any) => ({
+            proximal: b.proximal, distal: b.distal, status: b.status, score: b.score })),
+          survivesFullRun: mine.length > 0,
+          // If it exists alone but not in the full run, duplicate suppression
+          // took it — so report what could have beaten it.
+          overlappingKeptBlocks: alone.length && !mine.length
+            ? withAll.filter((b: any) =>
+                b.direction === target.direction &&
+                Math.min(b.proximal, b.distal) <= Math.max(alone[0].proximal, alone[0].distal) &&
+                Math.max(b.proximal, b.distal) >= Math.min(alone[0].proximal, alone[0].distal))
+               .map((b: any) => ({ proximal: b.proximal, distal: b.distal, score: b.score,
+                                   origin: b.originTime }))
+            : [],
+        };
+
+        // TRACK B — POIs created INSIDE the leg.
+        // mapImpulsePOIs opens with `if (!impulse.isValid) return []`, so a leg
+        // whose origin was later broken yields nothing — the same
+        // current-setup-vs-inventory rule again. Evaluated here as the leg
+        // stood at its BOS, by passing a copy with isValid forced true. The
+        // live function is not touched.
+        const asAtBos = { ...target, isValid: true };
+        const pois = mapImpulsePOIs(series, asAtBos as any);
+        const REF_HI = 0.70584, REF_LO = 0.70000;
+        trackB = {
+          poiCountWithGuard: mapImpulsePOIs(series, target as any).length,
+          poiCountAsAtBos: pois.length,
+          pois: pois.map((poi: any) => {
+            const c = series[poi.candleIndex];
+            const bh = c ? Math.max(c.open, c.close) : null;
+            const bl = c ? Math.min(c.open, c.close) : null;
+            return {
+              t: c?.datetime, type: poi.type, direction: poi.direction,
+              high: poi.high, low: poi.low, bodyHigh: bh, bodyLow: bl,
+              // Distance from the reference box, in pips, on bodies.
+              vsReferenceBoxPips: bh != null && bl != null
+                ? { top: Math.round((bh - REF_HI) * 100000) / 10,
+                    bottom: Math.round((bl - REF_LO) * 100000) / 10 }
+                : null,
+            };
+          }),
+        };
+      }
+
       return respond({
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
+        trackA, trackB,
         firstBar: series[0]?.datetime, lastBar: series[series.length - 1]?.datetime,
         swingsInWindow: swings.map((s: any) => ({ t: s.datetime, type: s.type, price: s.price, significance: s.significance })),
         breaksInWindow: breaks.map((b: any) => ({ t: b.datetime, kind: b.kind, type: b.type, price: b.price })),
