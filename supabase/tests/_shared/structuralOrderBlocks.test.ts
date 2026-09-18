@@ -382,3 +382,23 @@ Deno.test("the body rule would miss both boxes", () => {
   assert(Math.abs(0.70360 - 0.70002) * 10000 > 30, "body low is >30 pips from the box bottom");
   assert(demand.high !== demand.close && supply.low !== supply.open, "fixtures are the real bars");
 });
+
+Deno.test("the documentation describes the rule the code implements", () => {
+  // The body-rule doc block survived a geometry rewrite once: a script hit an
+  // assertion before writing the file, so the code changed and the comment
+  // above it did not. It then described a disproved model for two merges.
+  //
+  // Cheap to assert, and the failure mode is someone reading the comment and
+  // "correcting" the code back.
+  const src = Deno.readTextFileSync(
+    new URL("../../functions/_shared/structuralOrderBlocks.ts", import.meta.url));
+  const header = src.slice(0, src.indexOf("import "));
+  assert(!/sweepLevel/.test(header), "sweepLevel no longer exists");
+  assert(!/BASE BODIES|Zone boundaries are the/.test(header), "the body rule is gone");
+  assert(/PROXIMAL HALF/.test(header), "the header states the actual rule");
+  assert(/MEASURED vs MODELLED/.test(header),
+    "and keeps the geometry measurement apart from the lifecycle model");
+  // The code it describes.
+  assert(/distal: \(base\.wickHigh \+ base\.wickLow\) \/ 2/.test(src));
+  assert(/c\.close < ob\.extent : c\.close > ob\.extent/.test(src));
+});

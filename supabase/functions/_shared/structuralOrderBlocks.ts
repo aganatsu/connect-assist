@@ -9,19 +9,39 @@
  * Runs DOWNSTREAM of the impulse engine: it never decides whether a move
  * mattered, it only locates where a move that already qualified came from.
  *
- * ── Geometry, settled from the reference charts ──────────────────────────────
- * Zone boundaries are the BASE BODIES. Measured against a zoomed AUD/USD daily
- * screenshot: the drawn box stopped at the body lows of the base pair while
- * their wicks ran ~40% of the body height further down, and that wick low was
- * marked separately as a level. The existing detector uses body + 50% of each
- * wick, which places its demand zones roughly a third deeper than the charts.
+ * ── Geometry ─────────────────────────────────────────────────────────────────
+ * The zone is the PROXIMAL HALF of the base, measured wick to wick.
  *
- * So one base produces TWO outputs:
- *   zone       proximal → distal   (bodies)
- *   sweepLevel the wick extreme    (liquidity marker, OUTSIDE the zone)
+ *   proximal  the wick extreme price meets first
+ *   distal    the 50% of the base's full wick range
+ *   extent    the far wick extreme
  *
- * That split makes invalidation natural: a wick through sweepLevel that closes
- * back inside is a sweep; a body close beyond distal is acceptance.
+ * MEASURED vs MODELLED, and the difference matters.
+ *
+ *   measured   proximal and distal. Read off TradingView's coordinates for two
+ *              hand-drawn AUD/USD daily boxes — both directions, four edges,
+ *              every one within 1.4 pips:
+ *
+ *                supply 19 Mar  low  0.70007 / 50% 0.70548   box 0.70002 / 0.70534
+ *                demand 30 Mar  high 0.68758 / 50% 0.685525  box 0.68761 / 0.68549
+ *
+ *              The 30 March high was PREDICTED at 0.68761 from the drawn box
+ *              and came back 0.68758 from the raw candle, so the rule was
+ *              derived rather than fitted.
+ *
+ *   modelled   extent as the invalidation level, with two consecutive body
+ *              closes beyond it. This does NOT follow from those measurements.
+ *              distal is the midpoint, so closing past it is deep mitigation
+ *              rather than full-base failure — but where failure actually sits
+ *              is a lifecycle choice, still provisional, and it must not
+ *              inherit the confidence the geometry earned.
+ *
+ * This replaces a body-based rule inferred from a single zoomed screenshot of
+ * one box on one side, generalised past what that evidence supported.
+ *
+ * Base LOCATION is a separate, still-open question: V2 builds from candles at
+ * the swing origin, while the charts use the last opposing candle before
+ * displacement. Those coincided on the 30 March box and diverged on 19 March.
  *
  * ── Shadow mode ──────────────────────────────────────────────────────────────
  * Nothing consumes this. It detects, scores and stores. Displaying its output
