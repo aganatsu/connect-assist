@@ -921,7 +921,10 @@ Deno.serve(async (req) => {
               label: i === markIdx ? "reference" : (isPositive ? "known_positive" : "comparison"),
               referenceMarked: i === markIdx,
               knownPositive: isPositive,
-              dedupeKey: dayKey,          // symbol|side|date — for aggregate dedup\n              archetype: i === markIdx ? (mk.archetype ?? null) : null,\n              turn, cont,
+              dedupeKey: dayKey,          // symbol|side|date — for aggregate dedup
+              archetype: i === markIdx ? (mk.archetype ?? null) : null,
+              turn,
+              cont,
               side, t: c.datetime,
               // ── candle ──
               o: c.open, h: c.high, l: c.low, c: c.close,
@@ -958,7 +961,11 @@ Deno.serve(async (req) => {
               isLocalExtreme5: localBoth(5), isLocalExtreme10: localBoth(10),
               isLocalExtremePast10: localPast(10),
               distFromLocalExtremeAtr: r(dist10),
-              // Renamed from sweptPriorExtreme: it only means the candidate\n              // EXCEEDED the prior extreme. sweptAndClosedBack is the actual\n              // sweep/rejection concept, and none of the seven positives\n              // satisfy it (0/7) — so a sweep is not what defines these.\n              extendedPastPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
+              // Renamed from sweptPriorExtreme: it only means the candidate
+              // EXCEEDED the prior extreme. sweptAndClosedBack is the actual
+              // sweep/rejection concept, and none of the seven positives
+              // satisfy it (0/7) — so a sweep is not what defines these.
+              extendedPastPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
               outsideBar, insideBar, engulfing,
               // ── next bars ──
               nextOpposite: nxt ? ((nxt.close >= nxt.open) !== up) : null,
