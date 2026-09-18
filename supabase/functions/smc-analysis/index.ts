@@ -515,6 +515,20 @@ Deno.serve(async (req) => {
         const demand = prox > dist;              // price falls INTO it from above
         const wantHigh = demand ? prox : ext;
         const wantLow = demand ? ext : prox;
+        // NOTE ON THE METRICS BELOW.
+        //
+        //   highOffset - lowOffset
+        //     = (high - wantHigh) - (low - wantLow)
+        //     = (high - low) - (wantHigh - wantLow)
+        //     = actualRange - expectedRange
+        //
+        // So "shapeErr" and "rangeErr" are ALGEBRAICALLY IDENTICAL. Ranking by
+        // both double-counts one quantity and dresses it up as two independent
+        // checks. Range agreement alone proves nothing either: any candle in
+        // the window with the right range scores perfectly.
+        //
+        // Range search is therefore DISCOVERY ONLY. Proof needs anchorTime.
+
         // Expected candle range. A drawn box is half the candle, so the candle
         // spans twice the box.
         const expectedRange = 2 * Math.abs(prox - dist);
@@ -537,21 +551,63 @@ Deno.serve(async (req) => {
               // when the absolute offsets are tens of points. rangeErr says
               // whether the candle is the right SIZE. Judge the geometry on
               // these two, not on highOffset/lowOffset.
-              shapeErr: highOffset - lowOffset,
               rangeErr: (c.high - c.low) - expectedRange,
-              total: Math.abs(highOffset - lowOffset) + Math.abs((c.high - c.low) - expectedRange),
+              total: Math.abs((c.high - c.low) - expectedRange),
             };
           })
           .sort((a: any, b: any) => a.total - b.total).slice(0, 3);
+        // ── Anchored match: the only evidence that counts ──────────────────
+        // Given the bar the box was drawn on, compare THAT candle rather than
+        // hunting for one with a convenient range. Feed differences still show
+        // up in highOffset/lowOffset, but they no longer decide which candle
+        // is being judged.
+        let anchored: any = null;
+        if (box.anchorTime) {
+          const want = Date.parse(String(box.anchorTime).endsWith("Z")
+            ? String(box.anchorTime)
+            : String(box.anchorTime).replace(" ", "T") + "Z");
+          let best: any = null;
+          for (let i = 0; i < series.length; i++) {
+            const t = Date.parse(series[i].datetime.endsWith("Z")
+              ? series[i].datetime : series[i].datetime + "Z");
+            const gap = Math.abs(t - want);
+            if (!best || gap < best.gap) best = { i, gap, c: series[i] };
+          }
+          if (best) {
+            const c = best.c;
+            const highOffset = c.high - wantHigh;
+            const lowOffset = c.low - wantLow;
+            anchored = {
+              anchorTime: box.anchorTime,
+              providerTime: c.datetime,
+              gapHours: r2(best.gap / 3600000),
+              actualHigh: c.high, actualLow: c.low,
+              actualRange: r2(c.high - c.low),
+              expectedRange: r2(expectedRange),
+              rangeErrPoints: r2((c.high - c.low) - expectedRange),
+              highOffset: r2(highOffset),
+              lowOffset: r2(lowOffset),
+              // Identical to rangeErr by construction; reported because it is
+              // what the review asked for and makes the identity visible.
+              offsetDifference: r2(highOffset - lowOffset),
+              dir: c.close >= c.open ? "up" : "down",
+              zoneIfChosen: demand
+                ? { proximal: c.high, distal: (c.high + c.low) / 2, extent: c.low }
+                : { proximal: c.low, distal: (c.high + c.low) / 2, extent: c.high },
+            };
+          }
+        }
+
         return {
-          box: { proximal: prox, distal: dist },
+          box: { proximal: prox, distal: dist, anchorTime: box.anchorTime ?? null },
           side: demand ? "demand" : "supply",
+          anchored,
           predicted: { high: wantHigh, low: wantLow, extent: ext, expectedRange: r2(expectedRange) },
-          rankedBy: "shapeErr + rangeErr — both invariant to a constant feed offset",
+          rankedBy: "rangeErr only — DISCOVERY, not proof. See anchored below.",
           bestMatches: scored.map((m: any) => ({
             t: m.t, i: m.i, o: m.o, h: m.h, l: m.l, c: m.c, dir: m.dir,
             highOffsetPoints: r2(m.highOffset), lowOffsetPoints: r2(m.lowOffset),
-            shapeErrPoints: r2(m.shapeErr), rangeErrPoints: r2(m.rangeErr),
+            rangeErrPoints: r2(m.rangeErr),
             candleRange: r2(m.h - m.l),
             // So a rerun can target this candle's leg explicitly rather than
             // relying on whatever the selector picked.
@@ -584,7 +640,12 @@ Deno.serve(async (req) => {
       const legContaining = (idx: number) =>
         allLegs.find((l: any) => idx > l.startIndex && idx <= l.endIndex)
         ?? allLegs.find((l: any) => idx === l.startIndex);
-      const firstBoxIdx = boxMatches?.[0]?.bestMatches?.[0]?.i;
+      // Prefer the anchored candle. A range-search winner is discovery only,
+      // so selecting a leg from it would build on the weaker signal.
+      const firstAnchored = boxMatches?.find((b: any) => b.anchored)?.anchored;
+      const firstBoxIdx = firstAnchored
+        ? series.findIndex((c: Candle) => c.datetime === firstAnchored.providerTime)
+        : boxMatches?.[0]?.bestMatches?.[0]?.i;
 
       // Now that the legs exist, tell each box which leg its candidate sits in.
       for (const bm of (boxMatches ?? [])) {
@@ -603,7 +664,7 @@ Deno.serve(async (req) => {
       } else if (typeof firstBoxIdx === "number") {
         target = legContaining(firstBoxIdx);
         targetSelection = target
-          ? `leg containing box 1's best candle (${series[firstBoxIdx]?.datetime})`
+          ? `leg containing box 1's ${firstAnchored ? "ANCHORED" : "range-matched"} candle (${series[firstBoxIdx]?.datetime})`
           : `box 1's best candle (${series[firstBoxIdx]?.datetime}) is inside NO enumerated leg`;
       } else {
         target = allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
