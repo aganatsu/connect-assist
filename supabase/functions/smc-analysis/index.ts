@@ -1,4 +1,8 @@
 import { corsHeaders } from "../_shared/cors.ts";
+// Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
+import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { enumerateImpulseLegs } from "../_shared/impulseZoneEngine.ts";
+import { dropFxClosedBars } from "../_shared/sessions.ts";
 import {
   analyzeMarketStructure,
   detectOrderBlocks,
@@ -414,7 +418,86 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, candles, dailyCandles, pairData, data1, data2 } = await req.json();
+    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to } = await req.json();
+
+    // ── impulse_debug ────────────────────────────────────────────────────
+    // Answers one question and changes nothing: for a symbol/timeframe and a
+    // date window, what structure exists and which impulses does the engine
+    // build from it?
+    //
+    // Exists because the AUD/USD daily supply zone at 0.70000-0.70584 is on the
+    // reference chart and V2 has no bearish block with a March or April origin.
+    // Every other explanation has been eliminated — enumeration, candle depth,
+    // broken origins, weekend bars — so the remaining question is upstream:
+    // does Daily structure even see a bearish break there?
+    //
+    // Read-only. No table is written, no decision is taken.
+    if (action === "impulse_debug") {
+      const sym = String(symbol ?? "AUD/USD");
+      const tf = String(interval ?? "1d");
+      const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+      const raw = res.candles ?? [];
+      // Same series V2 reads, so the answer reflects V2 rather than an
+      // approximation of it.
+      const series = dropFxClosedBars(raw, /USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD/.test(sym) && !/BTC|ETH|XAU|XAG/.test(sym));
+      const inWin = (dt?: string) => !!dt && (!from || dt >= String(from)) && (!to || dt <= String(to));
+
+      const structure = analyzeMarketStructure(series);
+      const breaks = [...structure.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                      ...structure.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))]
+        .map((b: any) => ({ ...b, datetime: series[b.index]?.datetime }))
+        .filter((b: any) => inWin(b.datetime))
+        .sort((a: any, b: any) => a.index - b.index);
+
+      const swings = structure.swingPoints
+        .map((sp: any) => ({ ...sp, datetime: series[sp.index]?.datetime }))
+        .filter((sp: any) => inWin(sp.datetime));
+
+      // Why a bearish break in the window produced no leg. Mirrors the checks
+      // inside validateImpulseFromBOS, which is module-private.
+      const rejections = breaks.filter((b: any) => b.type === "bearish").map((b: any) => {
+        const candidates = structure.swingPoints
+          .filter((sp: any) => sp.type === "high" && sp.index < b.index)
+          .sort((a: any, c: any) => c.index - a.index)
+          .slice(0, 5);
+        if (candidates.length === 0) return { break: b.datetime, reason: "no swing-high candidate before the break" };
+        const tried = candidates.map((o: any) => {
+          const span = b.index - o.index;
+          if (span < 3) return { origin: series[o.index]?.datetime, reject: `leg too short (${span} bars, needs 3)` };
+          let hi = -Infinity, lo = Infinity;
+          for (let i = o.index; i <= Math.min(b.index, series.length - 1); i++) {
+            if (series[i].high > hi) hi = series[i].high;
+            if (series[i].low < lo) lo = series[i].low;
+          }
+          if (!(hi - lo > 0)) return { origin: series[o.index]?.datetime, reject: "zero range" };
+          let broken = false;
+          for (let j = b.index + 1; j < series.length; j++) {
+            if (series[j].close > hi) { broken = true; break; }
+          }
+          return { origin: series[o.index]?.datetime, accepted: true, originBroken: broken, high: hi, low: lo };
+        });
+        return { break: b.datetime, price: b.price, tried };
+      });
+
+      const legs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true })
+        .filter((l: any) => inWin(series[l.startIndex]?.datetime) || inWin(series[l.endIndex]?.datetime))
+        .map((l: any) => ({
+          direction: l.direction, origin: series[l.startIndex]?.datetime,
+          bos: series[l.endIndex]?.datetime, high: l.high, low: l.low,
+          isValid: l.isValid, originBroken: l.originBroken,
+        }));
+
+      return respond({
+        symbol: sym, interval: tf, window: { from, to },
+        source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
+        firstBar: series[0]?.datetime, lastBar: series[series.length - 1]?.datetime,
+        swingsInWindow: swings.map((s: any) => ({ t: s.datetime, type: s.type, price: s.price, significance: s.significance })),
+        breaksInWindow: breaks.map((b: any) => ({ t: b.datetime, kind: b.kind, type: b.type, price: b.price })),
+        bearishBreakDiagnosis: rejections,
+        legsTouchingWindow: legs,
+      });
+    }
+
 
     if (action === "full_analysis") return respond(runFullAnalysis(candles, dailyCandles));
     if (action === "currency_strength") return respond(calculateCurrencyStrength(pairData || {}));
