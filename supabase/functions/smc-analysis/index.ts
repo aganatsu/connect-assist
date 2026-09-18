@@ -580,8 +580,23 @@ Deno.serve(async (req) => {
                 }
               }
             }
-            const breakHere = breaks.filter((b: any) =>
+            // Match the break to THE SWING UNDER TEST, not merely to direction.
+            // Any bearish break in a 15-bar window would otherwise report
+            // "structure did emit" while the level we are actually asking about
+            // went untouched.
+            //
+            // StructureBreak.level is the swing that was broken, so the match is
+            // on level rather than on the break's own price.
+            const inWindow = breaks.filter((b: any) =>
               b.type === wantDir && b.index > markIdx && b.index <= wEnd);
+            const levelTol = Math.max(atrM * 0.1, 1e-5);
+            const breakHere = priorSwing
+              ? inWindow.filter((b: any) => Math.abs((b.level ?? b.price) - priorSwing.price) <= levelTol)
+              : [];
+            // Same-direction breaks at OTHER levels. Reported rather than
+            // dropped — a break elsewhere is information, it just is not
+            // evidence about this swing.
+            const otherBreaks = inWindow.filter((b: any) => !breakHere.includes(b));
 
             results.push({
               symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
@@ -604,20 +619,23 @@ Deno.serve(async (req) => {
               },
               breakItWouldNeed: priorSwing ? {
                 swingType: needType,
+                swingIndex: priorSwing.index,
                 swingTime: series[priorSwing.index]?.datetime,
                 swingPrice: priorSwing.price,
+                levelMatchTolerance: Math.round(levelTol * 100000) / 100000,
                 significance: priorSwing.significance,
                 wickCrossed,
                 closeCrossed,
                 firstCloseCrossBar: closeCrossBar,
               } : null,
               structureEmitted: breakItWouldNeedEmitted(breakHere, series),
+              otherSameDirectionBreaksInWindow: breakItWouldNeedEmitted(otherBreaks, series),
               // The discriminator, stated rather than left to be worked out.
               reading: !priorSwing ? "no prior swing to break — cannot classify"
                 : closeCrossed && breakHere.length === 0
-                  ? "A: price CLOSED through the level and structure emitted nothing"
+                  ? "A: price CLOSED through THIS level and structure emitted no break at it"
                   : closeCrossed && breakHere.length > 0
-                    ? "structure DID emit — the leg exists but association still failed"
+                    ? "structure DID emit at this level — the leg exists but association still failed"
                     : wickCrossed
                       ? "B: wick only, no close through — no break was due"
                       : "B: expansion never reached the level a break needs",
@@ -1241,8 +1259,14 @@ Deno.serve(async (req) => {
 });
 
 function breakItWouldNeedEmitted(brk: any[], series: any[]) {
+  // level is the swing that was broken; price is where the break was detected.
+  // closeBased says whether a BODY closed through, which is the same
+  // distinction the wick-vs-close test turns on.
   return brk.length === 0 ? null : brk.map((b: any) => ({
-    t: series[b.index]?.datetime, kind: b.kind, price: b.price }));
+    t: series[b.index]?.datetime, kind: b.kind,
+    level: b.level ?? null, price: b.price,
+    closeBased: b.closeBased ?? null, significance: b.significance ?? null,
+  }));
 }
 
 function respond(data: any) {
