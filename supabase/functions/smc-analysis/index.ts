@@ -492,6 +492,14 @@ Deno.serve(async (req) => {
       // Which leg: the one whose BOS date matches `legBos`, else the first
       // bearish leg in the window.
       const allLegs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true });
+      // A base sits BEFORE its leg's origin, so a leg whose origin is just past
+      // the window can still own the base being looked for. Widen by a few bars
+      // rather than miss it.
+      const allLegsForBases = allLegs.filter((l: any) => {
+        const o = series[l.startIndex]?.datetime, e = series[l.endIndex]?.datetime;
+        const near = (dt?: string) => !!dt && (!from || dt >= String(from)) && (!to || dt <= String(to));
+        return near(o) || near(e) || near(series[Math.max(0, l.startIndex - 5)]?.datetime);
+      });
       const target = allLegs.find((l: any) =>
         legBos ? series[l.endIndex]?.datetime?.startsWith(String(legBos)) : false)
         ?? allLegs.find((l: any) => l.direction === "bearish" && inWin(series[l.endIndex]?.datetime));
@@ -585,10 +593,40 @@ Deno.serve(async (req) => {
           };
         });
 
+      // findImpulseBase output for EVERY leg touching the window, with the
+      // aggregate-vs-body comparison the geometry decision turns on.
+      //
+      // The reference boxes resolve to: proximal = the extreme price meets
+      // first, distal = the 50% of the base's full wick range. Confirmed on
+      // four single-candle edges to within 1.4 pips. What is unsettled is
+      // whether a MULTI-candle base uses the aggregate wick range or one
+      // anchor candle inside it — so print both and let the numbers say.
+      const allBases = allLegsForBases.map((l: any) => {
+        const b = findImpulseBase(series, l);
+        if (!b) return { origin: series[l.startIndex]?.datetime, direction: l.direction, base: null };
+        const mid = (b.wickHigh + b.wickLow) / 2;
+        const bull = l.direction === "bullish";
+        return {
+          origin: series[l.startIndex]?.datetime,
+          bos: series[l.endIndex]?.datetime,
+          direction: l.direction,
+          baseStart: series[b.startIndex]?.datetime,
+          baseEnd: series[b.endIndex]?.datetime,
+          candles: b.endIndex - b.startIndex + 1,
+          wickHigh: b.wickHigh, wickLow: b.wickLow,
+          bodyHigh: b.bodyHigh, bodyLow: b.bodyLow,
+          // What the CURRENT rule produces.
+          currentZone: { proximal: bull ? b.bodyHigh : b.bodyLow, distal: bull ? b.bodyLow : b.bodyHigh },
+          // What the AGGREGATE wick-range-and-half rule would produce.
+          proposedZone: { proximal: bull ? b.wickHigh : b.wickLow, distal: mid },
+        };
+      });
+
       return respond({
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
         referenceBox: REF,
+        allBases,
         barsInWindow,
         trackA, trackB,
         firstBar: series[0]?.datetime, lastBar: series[series.length - 1]?.datetime,
