@@ -44,7 +44,12 @@ export interface SeriesInput {
  */
 function legsFor(candles: Candle[], timeframe: "D" | "4H" | "1H"): ImpulseLeg[] {
   try {
-    return enumerateImpulseLegs(candles, timeframe)
+    // includeBrokenOrigin: a leg whose origin price has since been exceeded is
+    // no longer tradeable, but the order block it created still exists. The
+    // reference charts carry zones for months after the move that made them was
+    // undone. A parent impulse must not retroactively delete its child zone —
+    // only the zone's own invalidation rule can.
+    return enumerateImpulseLegs(candles, timeframe, { includeBrokenOrigin: true })
       .filter(l => l.startIndex != null && l.endIndex != null);
   } catch {
     return [];   // a bad series must not cost the scan
@@ -114,6 +119,7 @@ export function toRow(ob: StructuralOrderBlock, userId: string, botId: string) {
     origin_time: ob.originTime,
     confirmed_time: ob.confirmedTime,
     significance: ob.significance,
+    parent_impulse_broken: ob.parentImpulseBroken,
     displacement_atr_multiple: ob.displacementAtrMultiple,
     directional_body_ratio: ob.directionalBodyRatio,
     directional_candle_ratio: ob.directionalCandleRatio,
@@ -148,6 +154,7 @@ export function toScanDetail(blocks: StructuralOrderBlock[]) {
     sweepLevel: b.sweepLevel,
     status: b.status,
     significance: b.significance,
+    parentBroken: b.parentImpulseBroken,
     score: b.score,
     touches: b.touches,
     penetration: b.maxPenetrationPercent,

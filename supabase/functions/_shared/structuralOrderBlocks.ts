@@ -66,6 +66,9 @@ export interface StructuralOrderBlock {
   confirmedTime: string;
 
   significance: "internal" | "external";
+  /** The impulse that created this block has since had its origin exceeded.
+   *  Recorded, not acted on: the block's own lifecycle decides when it dies. */
+  parentImpulseBroken: boolean;
 
   displacementAtrMultiple: number;
   directionalBodyRatio: number;
@@ -453,6 +456,7 @@ export function detectStructuralOrderBlocks(
       confirmedTime: confirmCandle.datetime,
 
       significance,
+      parentImpulseBroken: impulse.originBroken === true,
 
       displacementAtrMultiple: atr > 0 ? Math.abs(impulse.high - impulse.low) / atr : 0,
       directionalBodyRatio: ratios.directionalBodyRatio,
