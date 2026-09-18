@@ -560,9 +560,36 @@ Deno.serve(async (req) => {
         };
       }
 
+      // Raw bars for the window. The reference box on AUD/USD daily is
+      // 0.70002 -> 0.70534 anchored at 19 March, while V2's base is 17-18
+      // March at 0.70361 -> 0.71033 — one day apart and 35 pips lower. Which
+      // candle's body matches the drawn box is a question about the DATA, so
+      // print the data.
+      const REF = { hi: 0.70534, lo: 0.70002 };
+      const barsInWindow = series
+        .map((c: Candle, i: number) => ({ i, c }))
+        .filter(({ c }: any) => inWin(c.datetime))
+        .map(({ i, c }: any) => {
+          const bh = Math.max(c.open, c.close), bl = Math.min(c.open, c.close);
+          return {
+            i, t: c.datetime,
+            o: c.open, h: c.high, l: c.low, c: c.close,
+            bodyHigh: bh, bodyLow: bl,
+            dir: c.close >= c.open ? "up" : "down",
+            // Pips from the drawn box, on bodies then on wicks. Whichever pair
+            // reads ~0 is the rule being used.
+            bodyVsBox: { top: Math.round((bh - REF.hi) * 100000) / 10,
+                         bottom: Math.round((bl - REF.lo) * 100000) / 10 },
+            wickVsBox: { top: Math.round((c.high - REF.hi) * 100000) / 10,
+                         bottom: Math.round((c.low - REF.lo) * 100000) / 10 },
+          };
+        });
+
       return respond({
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
+        referenceBox: REF,
+        barsInWindow,
         trackA, trackB,
         firstBar: series[0]?.datetime, lastBar: series[series.length - 1]?.datetime,
         swingsInWindow: swings.map((s: any) => ({ t: s.datetime, type: s.type, price: s.price, significance: s.significance })),
