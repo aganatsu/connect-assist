@@ -451,6 +451,174 @@ Deno.serve(async (req) => {
     //
     // Origin and continuation candidates are reported under separate roles and
     // must NOT be assumed to share a rule.
+    // ── displacement_qualification ───────────────────────────────────────
+    // Candidate selection WITHOUT requiring an enumerated impulse leg.
+    //
+    // The leg-first premise is disproved: two of seven known-good blocks
+    // (GBP/AUD 26 Mar and 14 May) launched expansions of ~2.3 ATR without price
+    // reaching the swing a break would need, so no leg exists and none ever
+    // will. What that proves is narrow — a formal BOS/CHoCH is NOT NECESSARY.
+    // It does NOT prove that any large displacement makes an order block, and
+    // nothing here assumes it does.
+    //
+    // So: enumerate EVERY same-side candle in a window around each known-good
+    // one, mark one, leave the rest unmarked, and report features for all of
+    // them. No filtering by break, FVG, ATR rank or displacement. The unmarked
+    // distribution is the point — four marked samples clustering near 2.2 ATR
+    // means nothing until it is known how many unmarked ones sit there too.
+    //
+    //   demand candidate = a DOWN candle   (precedes an up move)
+    //   supply candidate = an UP candle    (precedes a down move)
+    if (action === "displacement_qualification") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const WINDOW = Number(body?.window ?? 15);
+      const HORIZONS = [1, 2, 3, 5, 8, 10, 15];
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const struct = analyzeMarketStructure(series);
+        const allBreaks = [...struct.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                           ...struct.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+        const fvgs = detectFVGs(series, allBreaks as any) ?? [];
+
+        const idxAt = (iso: string) => {
+          const want = Date.parse(String(iso).endsWith("Z") ? String(iso) : String(iso) + "Z");
+          let best = -1, gap = Infinity;
+          for (let i = 0; i < series.length; i++) {
+            const t = Date.parse(series[i].datetime.endsWith("Z") ? series[i].datetime : series[i].datetime + "Z");
+            const g = Math.abs(t - want);
+            if (g < gap) { gap = g; best = i; }
+          }
+          return best;
+        };
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const r = (x: number | null, d = 2) => x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+
+        for (const mk of (tgt.marked ?? [])) {
+          const markIdx = idxAt(mk.anchorTime);
+          if (markIdx < 0) { out.push({ symbol: sym, anchorTime: mk.anchorTime, error: "no bar" }); continue; }
+          const side = String(mk.side);
+          const up = side === "supply";            // supply blocks are UP candles
+          const favDown = side === "supply";        // and precede a DOWN move
+
+          const lo = Math.max(1, markIdx - WINDOW);
+          const hi = Math.min(series.length - 2, markIdx + WINDOW);
+          const cands: any[] = [];
+
+          for (let i = lo; i <= hi; i++) {
+            const c = series[i];
+            const isUp = c.close >= c.open;
+            if (isUp !== up) continue;              // same side only
+
+            const atr = atrAt(i);
+            const anchorPx = favDown ? c.low : c.high;
+
+            // Favourable excursion at each horizon.
+            const byHorizon: Record<string, number | null> = {};
+            let best = favDown ? Infinity : -Infinity, bestBar: number | null = null;
+            for (const h of HORIZONS) {
+              const end = Math.min(i + h, series.length - 1);
+              let ext = favDown ? Infinity : -Infinity;
+              for (let j = i + 1; j <= end; j++) {
+                const v = favDown ? series[j].low : series[j].high;
+                if (favDown ? v < ext : v > ext) ext = v;
+                if (favDown ? v < best : v > best) { best = v; bestBar = j; }
+              }
+              byHorizon["h" + h] = Number.isFinite(ext) && atr > 0
+                ? r(Math.abs(ext - anchorPx) / atr) : null;
+            }
+            const maxDisp = Number.isFinite(best) ? Math.abs(best - anchorPx) : 0;
+
+            // Adverse excursion BEFORE the expansion: how far price went the
+            // wrong way first. A candle that had to be sat through is a
+            // different proposition from one that worked immediately.
+            let adverse = 0;
+            if (bestBar != null) {
+              for (let j = i + 1; j <= bestBar; j++) {
+                const v = favDown ? series[j].high : series[j].low;
+                const a = favDown ? v - anchorPx : anchorPx - v;
+                if (a > adverse) adverse = a;
+              }
+            }
+
+            // Consecutive same-side run.
+            let runStart = i;
+            while (runStart - 1 >= 0) {
+              const p2 = series[runStart - 1];
+              if ((p2.close >= p2.open) !== up) break;
+              runStart--;
+            }
+            const nxt = series[i + 1];
+            const isLastOfRun = nxt ? ((nxt.close >= nxt.open) !== up) : false;
+
+            // Nearest prior swing the favourable move would have to clear.
+            const needType = favDown ? "low" : "high";
+            const sw = struct.swingPoints.filter((sp: any) => sp.type === needType && sp.index < i)
+              .sort((a: any, b: any) => b.index - a.index)[0];
+            let wickCleared = false, closeCleared = false;
+            if (sw) {
+              const end = Math.min(i + 15, series.length - 1);
+              for (let j = i + 1; j <= end; j++) {
+                const b2 = series[j];
+                if (favDown ? b2.low < sw.price : b2.high > sw.price) wickCleared = true;
+                if (favDown ? b2.close < sw.price : b2.close > sw.price) closeCleared = true;
+              }
+            }
+            const wantDir = favDown ? "bearish" : "bullish";
+            const brk = allBreaks.filter((b: any) => b.type === wantDir && b.index > i && b.index <= i + 15);
+            const fvg = fvgs.find((f: any) => f.type === wantDir && f.index >= i && f.index <= i + 3);
+
+            cands.push({
+              marked: i === markIdx, side, t: c.datetime,
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              atr: r(atr, 6),
+              rangeAtr: atr > 0 ? r((c.high - c.low) / atr) : null,
+              bodyAtr: atr > 0 ? r(Math.abs(c.close - c.open) / atr) : null,
+              bodyRangeRatio: (c.high - c.low) > 0 ? r(Math.abs(c.close - c.open) / (c.high - c.low)) : null,
+              isLastOfRun, runLength: i - runStart + 1,
+              disp: byHorizon,
+              maxDispAtr: atr > 0 ? r(maxDisp / atr) : null,
+              barsToMaxDisp: bestBar != null ? bestBar - i : null,
+              adverseAtr: atr > 0 ? r(adverse / atr) : null,
+              fvgCreated: !!fvg,
+              fvgAtr: fvg && atr > 0 ? r((fvg.high - fvg.low) / atr) : null,
+              swingClearedByWick: sw ? wickCleared : null,
+              swingClearedByClose: sw ? closeCleared : null,
+              breakEmitted: brk.length > 0,
+              breakKind: brk[0]?.kind ?? null,
+            });
+          }
+
+          const ranked = [...cands].filter(x => x.maxDispAtr != null)
+            .sort((a, b) => b.maxDispAtr - a.maxDispAtr);
+          cands.forEach(x => { x.maxDispRank = x.maxDispAtr == null ? null : ranked.indexOf(x) + 1; });
+
+          out.push({
+            symbol: sym, interval: tf, side,
+            markedBar: series[markIdx]?.datetime,
+            windowBars: WINDOW, candidateCount: cands.length,
+            markedFound: cands.some((x: any) => x.marked),
+            candidates: cands,
+          });
+        }
+      }
+      return respond({
+        note: "read-only; no filtering by break, FVG, displacement or rank. " +
+              "Unmarked distribution is the point — do not read a threshold off the marked ones alone.",
+        horizons: HORIZONS, out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
