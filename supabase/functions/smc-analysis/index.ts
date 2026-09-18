@@ -534,16 +534,95 @@ Deno.serve(async (req) => {
             const nearest = opposing
               .map((l: any) => ({ l, d: l.startIndex - markIdx }))
               .sort((a: any, b: any) => Math.abs(a.d) - Math.abs(b.d))[0];
+            // ── Forensics: structure miss, or an OB that never became a leg? ──
+            //
+            // Two explanations compete when no opposing leg exists:
+            //
+            //   A  the move DID break structure and analyzeMarketStructure
+            //      missed it
+            //   B  the reference method allows an OB wherever a qualifying
+            //      expansion launches, whether or not it ever becomes a formal
+            //      BOS/CHoCH leg
+            //
+            // These need different fixes, so measure rather than assume. The
+            // deciding question: did price objectively cross the level a break
+            // would require, and on a CLOSE?
+            const c0 = series[markIdx];
+            const WIN = 15;
+            const wEnd = Math.min(markIdx + WIN, series.length - 1);
+            const fwd = series.slice(markIdx + 1, wEnd + 1);
+
+            const atrM = (() => {
+              const sl = series.slice(Math.max(0, markIdx - 14), markIdx);
+              return sl.length ? sl.reduce((a: number, x: Candle) => a + (x.high - x.low), 0) / sl.length : 0;
+            })();
+
+            // Favourable = the direction the OB side implies.
+            const goesDown = wantDir === "bearish";
+            const anchorPx = goesDown ? c0.low : c0.high;
+            let ext = goesDown ? Infinity : -Infinity;
+            for (const b of fwd) ext = goesDown ? Math.min(ext, b.low) : Math.max(ext, b.high);
+            const maxDisp = Number.isFinite(ext) ? Math.abs(ext - anchorPx) : 0;
+
+            // The level a break would have to take out.
+            const needType = goesDown ? "low" : "high";
+            const priorSwing = struct.swingPoints
+              .filter((sp: any) => sp.type === needType && sp.index < markIdx)
+              .sort((a: any, b: any) => b.index - a.index)[0];
+
+            let wickCrossed = false, closeCrossed = false, closeCrossBar: string | null = null;
+            if (priorSwing) {
+              for (const b of fwd) {
+                if (goesDown ? b.low < priorSwing.price : b.high > priorSwing.price) wickCrossed = true;
+                if (goesDown ? b.close < priorSwing.price : b.close > priorSwing.price) {
+                  if (!closeCrossed) closeCrossBar = b.datetime;
+                  closeCrossed = true;
+                }
+              }
+            }
+            const breakHere = breaks.filter((b: any) =>
+              b.type === wantDir && b.index > markIdx && b.index <= wEnd);
+
             results.push({
               symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
               side, requiredLegDirection: wantDir, association: null,
+              error: `no ${wantDir} leg starts at, starts after, or contains this candle`,
+              markedCandle: { o: c0.open, h: c0.high, l: c0.low, c: c0.close,
+                              dir: c0.close >= c0.open ? "up" : "down" },
               // Reported so a near-miss is distinguishable from no leg at all.
               nearestOpposingLeg: nearest
                 ? { origin: series[nearest.l.startIndex]?.datetime,
                     bos: series[nearest.l.endIndex]?.datetime,
                     barsToLegStart: nearest.d }
                 : null,
-              error: `no ${wantDir} leg starts at, starts after, or contains this candle`,
+              expansionAfter: {
+                bars: fwd.length,
+                direction: goesDown ? "down" : "up",
+                maxDisplacement: Math.round(maxDisp * 100000) / 10,
+                displacementAtr: atrM > 0 ? Math.round((maxDisp / atrM) * 100) / 100 : null,
+                extremeReached: Number.isFinite(ext) ? ext : null,
+              },
+              breakItWouldNeed: priorSwing ? {
+                swingType: needType,
+                swingTime: series[priorSwing.index]?.datetime,
+                swingPrice: priorSwing.price,
+                significance: priorSwing.significance,
+                wickCrossed,
+                closeCrossed,
+                firstCloseCrossBar: closeCrossBar,
+              } : null,
+              structureEmitted: breakItWouldNeedEmitted(breakHere, series),
+              // The discriminator, stated rather than left to be worked out.
+              reading: !priorSwing ? "no prior swing to break — cannot classify"
+                : closeCrossed && breakHere.length === 0
+                  ? "A: price CLOSED through the level and structure emitted nothing"
+                  : closeCrossed && breakHere.length > 0
+                    ? "structure DID emit — the leg exists but association still failed"
+                    : wickCrossed
+                      ? "B: wick only, no close through — no break was due"
+                      : "B: expansion never reached the level a break needs",
+              nextBars: fwd.slice(0, WIN).map((b: Candle) => ({
+                t: b.datetime, o: b.open, h: b.high, l: b.low, c: b.close })),
             });
             continue;
           }
@@ -1160,6 +1239,11 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+function breakItWouldNeedEmitted(brk: any[], series: any[]) {
+  return brk.length === 0 ? null : brk.map((b: any) => ({
+    t: series[b.index]?.datetime, kind: b.kind, price: b.price }));
+}
 
 function respond(data: any) {
   return new Response(JSON.stringify(data), {
