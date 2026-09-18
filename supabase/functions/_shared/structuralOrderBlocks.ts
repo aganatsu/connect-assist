@@ -352,6 +352,11 @@ function replayLifecycle(
     }
 
     // Touch = price reached the proximal edge.
+    //
+    // Penetration is measured across the TRADEABLE HALF (proximal -> distal),
+    // so it clamps at 100% once price passes the midpoint even though extent
+    // may still be some way off. 100% now means "reached the 50% refinement",
+    // NOT "traversed the whole base". The bands below inherit that meaning.
     const reached = bullish ? c.low <= ob.proximal : c.high >= ob.proximal;
     if (reached) {
       const deepest = bullish ? c.low : c.high;

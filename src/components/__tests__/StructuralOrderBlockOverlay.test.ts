@@ -156,8 +156,13 @@ describe("V2 in the Detail Breakdown", () => {
     // in the BROWSER's timezone, which is the shape of the TwelveData bug — and
     // it drops the 00:00 every Daily bar carries.
     expect(botView).toMatch(/import \{[^}]*fmtBarTime[^}]*\} from "@\/components\/ZoneStoryPanel"/);
+    // Bounded by the element, not a byte count. A fixed 3000-char window broke
+    // the moment a comment inside the section grew — the assertion started
+    // failing against correct code, which is the wrong kind of test failure.
     const i = botView.indexOf("OB v2");
-    const section = botView.slice(i, i + 3000);
+    const end = botView.indexOf("</details>", i);
+    expect(end, "found the end of the V2 section").toBeGreaterThan(i);
+    const section = botView.slice(i, end);
     expect(section).toMatch(/fmtBarTime\(b\.originTime, b\.tf/);
     expect(section).not.toMatch(/originTime\?\.slice/);
   });

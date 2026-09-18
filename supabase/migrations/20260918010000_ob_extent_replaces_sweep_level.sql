@@ -44,4 +44,10 @@ COMMENT ON COLUMN public.structural_order_blocks_v2.proximal IS
 
 -- Blocks stored under the body rule describe a different shape at the same
 -- prices. Keeping them would silently mix two geometries in every comparison.
+--
+-- structural_order_block_trades.block_id is ON DELETE CASCADE, so the
+-- proximity-attribution rows go with them. That is correct rather than
+-- collateral: entry_inside_block and entry_distance_from_block were computed
+-- against boundaries that have just been disproved, so those measurements are
+-- wrong, not merely orphaned.
 DELETE FROM public.structural_order_blocks_v2;
