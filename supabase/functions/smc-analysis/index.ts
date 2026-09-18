@@ -596,6 +596,76 @@ Deno.serve(async (req) => {
               }
             }
 
+            // ── Three displacement anchors, reported SIDE BY SIDE ────────
+            // Terminology, corrected 2026-09-18 against the frozen geometry
+            // (structuralOrderBlocks.ts:481-483):
+            //
+            //   supply (bearish)   proximal = LOW    extent = HIGH
+            //   demand (bullish)   proximal = HIGH   extent = LOW
+            //
+            // proximal is the edge price meets FIRST. So the existing anchor
+            // above — supply->low, demand->high — was already proximal. An
+            // earlier note in this repo called moving to supply->high
+            // "proximal-anchored"; it is extent-anchored, and the two are
+            // opposites.
+            //
+            // Why extent must not quietly replace proximal: extent-anchored
+            // displacement mechanically adds the candidate's OWN RANGE to
+            // every reading. Measured on GBP/CAD:
+            //
+            //   08 May   4.90 - 2.69 = 2.21 ATR = its range exactly
+            //   11 May   4.21 - 2.91 = 1.30 ATR = its range exactly
+            //
+            // The difference IS the candle. Switching anchors would therefore
+            // hand a free bonus to large candles and manufacture a size bias
+            // dressed up as a displacement finding.
+            //
+            // So all three are reported and NONE overwrites maxDispAtr /
+            // adverseAtr, which stay exactly as they were. Which definition
+            // represents the qualification question is not yet decided.
+            //
+            // One difference from the legacy metric, deliberate: favourable
+            // excursion here is SIGNED, not absolute. abs() reports a positive
+            // displacement even when price never moved favourably at all —
+            // it turns adverse movement into apparent displacement. Negative
+            // values below mean exactly that: price never went the right way.
+            //
+            // Adverse is clamped at >= 0 as specified.
+            const excursion = (anchorPx2: number) => {
+              const byH: Record<string, number | null> = {};
+              let ext2 = favDown ? Infinity : -Infinity, extBar: number | null = null;
+              for (const h of HORIZONS) {
+                const end = Math.min(i + h, series.length - 1);
+                let sofar = favDown ? Infinity : -Infinity;
+                for (let j = i + 1; j <= end; j++) {
+                  const v = favDown ? series[j].low : series[j].high;
+                  if (favDown ? v < sofar : v > sofar) sofar = v;
+                  if (favDown ? v < ext2 : v > ext2) { ext2 = v; extBar = j; }
+                }
+                byH["h" + h] = Number.isFinite(sofar) && atr > 0
+                  ? r((favDown ? anchorPx2 - sofar : sofar - anchorPx2) / atr) : null;
+              }
+              let adv = 0;
+              const advEnd = extBar ?? Math.min(i + 15, series.length - 1);
+              for (let j = i + 1; j <= advEnd; j++) {
+                const v = favDown ? series[j].high : series[j].low;
+                const a = favDown ? v - anchorPx2 : anchorPx2 - v;
+                if (a > adv) adv = a;             // clamped at >= 0
+              }
+              return {
+                disp: byH,
+                maxDispAtr: Number.isFinite(ext2) && atr > 0
+                  ? r((favDown ? anchorPx2 - ext2 : ext2 - anchorPx2) / atr) : null,
+                barsToMax: extBar != null ? extBar - i : null,
+                adverseAtr: atr > 0 ? r(adv / atr) : null,
+              };
+            };
+            const proximalPx = favDown ? c.low : c.high;   // edge price meets first
+            const extentPx   = favDown ? c.high : c.low;   // far wick extreme
+            const exProx = excursion(proximalPx);
+            const exExt  = excursion(extentPx);
+            const exCls  = excursion(c.close);
+
             // Consecutive same-side run, both ends.
             let runStart = i;
             while (runStart - 1 >= 0) {
@@ -709,6 +779,20 @@ Deno.serve(async (req) => {
               maxDispAtr: atr > 0 ? r(maxDisp / atr) : null,
               barsToMaxDisp: bestBar != null ? bestBar - i : null,
               adverseAtr: atr > 0 ? r(adverse / atr) : null,
+              // Three anchors side by side. Legacy maxDispAtr/adverseAtr above
+              // are UNCHANGED and still absolute-valued; these are signed.
+              proximalDisp: exProx.disp,
+              proximalMaxDispAtr: exProx.maxDispAtr,
+              proximalBarsToMax: exProx.barsToMax,
+              proximalAdverseAtr: exProx.adverseAtr,
+              extentDisp: exExt.disp,
+              extentMaxDispAtr: exExt.maxDispAtr,
+              extentBarsToMax: exExt.barsToMax,
+              extentAdverseAtr: exExt.adverseAtr,
+              closeDisp: exCls.disp,
+              closeMaxDispAtr: exCls.maxDispAtr,
+              closeBarsToMax: exCls.barsToMax,
+              closeAdverseAtr: exCls.adverseAtr,
               // ── turning point ──
               isLocalExtreme5: localBoth(5), isLocalExtreme10: localBoth(10),
               isLocalExtremePast10: localPast(10),
@@ -789,7 +873,7 @@ Deno.serve(async (req) => {
         note: "read-only. Labels: reference | known_positive | comparison. " +
               "'comparison' is NOT a proven negative — the reference method was " +
               "never asked about those candles. Dedupe aggregates on dedupeKey; " +
-              "maxDispRank is window-specific and must not be deduped.",
+              "maxDispRank is window-specific and must not be deduped. Displacement is reported under THREE anchors (proximal/extent/close); legacy maxDispAtr is unchanged and absolute-valued, the three new families are signed and their adverse is clamped at >= 0.",
         horizons: HORIZONS, out, forensic,
       });
     }
