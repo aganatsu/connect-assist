@@ -507,19 +507,47 @@ Deno.serve(async (req) => {
           const side = mk.side ?? (markIsUp ? "supply" : "demand");
           const wantDir = side === "supply" ? "bearish" : "bullish";
 
-          // Prefer a leg that STARTS at this candle (it is the origin), else one
-          // that contains it (a continuation).
+          // STRICT association. Three ways a candle can belong to a leg:
+          //
+          //   startsAt    the leg begins on this candle        (origin)
+          //   startsNext  the leg begins on the NEXT candle    (origin; it
+          //               launches the move without being counted in it)
+          //   contains    the candle sits inside the leg       (continuation)
+          //
+          // Deliberately NO "nearest future opposing leg" fallback. That would
+          // pair a candle with a leg weeks away and report a match, turning the
+          // 7/7 check into something that cannot fail — which is worse than a
+          // miss, because a miss is visible.
           const opposing = legs.filter((l: any) => l.direction === wantDir);
-          const leg = opposing.find((l: any) => Math.abs(l.startIndex - markIdx) <= 1)
-                   ?? opposing.find((l: any) => markIdx >= l.startIndex && markIdx <= l.endIndex)
-                   ?? opposing.filter((l: any) => l.startIndex >= markIdx)
-                        .sort((a: any, b: any) => a.startIndex - b.startIndex)[0];
+          let association: string | null = null;
+          let leg: any = opposing.find((l: any) => l.startIndex === markIdx);
+          if (leg) association = "startsAt";
           if (!leg) {
-            results.push({ symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
-                           side, requiredLegDirection: wantDir,
-                           error: `no ${wantDir} leg starts at or contains this candle` });
+            leg = opposing.find((l: any) => l.startIndex === markIdx + 1);
+            if (leg) association = "startsNext";
+          }
+          if (!leg) {
+            leg = opposing.find((l: any) => markIdx > l.startIndex && markIdx <= l.endIndex);
+            if (leg) association = "contains";
+          }
+          if (!leg) {
+            const nearest = opposing
+              .map((l: any) => ({ l, d: l.startIndex - markIdx }))
+              .sort((a: any, b: any) => Math.abs(a.d) - Math.abs(b.d))[0];
+            results.push({
+              symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
+              side, requiredLegDirection: wantDir, association: null,
+              // Reported so a near-miss is distinguishable from no leg at all.
+              nearestOpposingLeg: nearest
+                ? { origin: series[nearest.l.startIndex]?.datetime,
+                    bos: series[nearest.l.endIndex]?.datetime,
+                    barsToLegStart: nearest.d }
+                : null,
+              error: `no ${wantDir} leg starts at, starts after, or contains this candle`,
+            });
             continue;
           }
+          const barsToLegStart = leg.startIndex - markIdx;
 
           const legDir = leg.direction;
           const legRange = Math.abs(leg.high - leg.low);
@@ -572,7 +600,10 @@ Deno.serve(async (req) => {
             cands.push({
               t: c.datetime,
               marked: i === markIdx,
-              role: Math.abs(i - leg.startIndex) <= 1 ? "origin" : "continuation",
+              // Directional. A candle AT or BEFORE the leg start launches it;
+              // anything after it is inside the move. abs(diff) <= 1 also
+              // labelled the bar AFTER the start as an origin, which it is not.
+              role: i <= leg.startIndex ? "origin" : "continuation",
               o: c.open, h: c.high, l: c.low, c: c.close,
               dir: isUp ? "up" : "down",
               // ── pullback shape ──
@@ -611,6 +642,7 @@ Deno.serve(async (req) => {
             leg: { direction: legDir, origin: series[leg.startIndex]?.datetime,
                    bos: series[leg.endIndex]?.datetime, bars: leg.endIndex - leg.startIndex,
                    originBroken: leg.originBroken === true },
+            association, barsToLegStart,
             markedRole: cands.find((x: any) => x.marked)?.role ?? "NOT AMONG CANDIDATES",
             candidateCount: cands.length,
             candidates: cands,
