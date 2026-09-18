@@ -626,10 +626,85 @@ Deno.serve(async (req) => {
         };
       });
 
+      // ── Continuation candidates ──────────────────────────────────────────
+      // Every opposite-colour candle INSIDE the target leg, with what happened
+      // after it. Testing one hypothesis: a continuation block is the last
+      // opposite candle before a displacement that has STRUCTURAL CONSEQUENCE,
+      // not merely before any push.
+      //
+      // The reference chart supplies both a positive and a negative on the same
+      // leg — 3 April is marked, 10 April is not, and both are down candles
+      // inside a bullish move. If 3 April produced a fresh break and 10 April
+      // did not, the rule holds.
+      let continuationCandidates: any = { note: "no target leg" };
+      if (target) {
+        const legDir = target.direction;
+        const structAll = analyzeMarketStructure(series);
+        const breaksAll = [...structAll.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                           ...structAll.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+        const LOOKAHEAD = 4;
+        const out: any[] = [];
+        for (let i = target.startIndex + 1; i < target.endIndex && i < series.length; i++) {
+          const c = series[i];
+          const isUp = c.close >= c.open;
+          const opposes = legDir === "bullish" ? !isUp : isUp;
+          if (!opposes) continue;
+
+          // ATR from the 14 bars before the candidate, never including the move
+          // it is being measured against.
+          const from14 = Math.max(0, i - 14);
+          const atrSlice = series.slice(from14, i);
+          const atr = atrSlice.length
+            ? atrSlice.reduce((a: number, x: Candle) => a + (x.high - x.low), 0) / atrSlice.length : 0;
+
+          // What the next few bars did in the leg's direction.
+          const end = Math.min(i + LOOKAHEAD, series.length - 1);
+          let ext = legDir === "bullish" ? -Infinity : Infinity;
+          for (let j = i + 1; j <= end; j++) {
+            ext = legDir === "bullish" ? Math.max(ext, series[j].high) : Math.min(ext, series[j].low);
+          }
+          const anchor = legDir === "bullish" ? c.high : c.low;
+          const displacement = Math.abs(ext - anchor);
+
+          // Did a break of the leg's direction land in that window?
+          const caused = breaksAll.filter((b: any) =>
+            b.type === legDir && b.index > i && b.index <= end);
+
+          // Which prior swing did the move clear?
+          const cleared = structAll.swingPoints.filter((sp: any) => {
+            if (sp.index >= i) return false;
+            return legDir === "bullish" ? sp.type === "high" && ext > sp.price
+                                        : sp.type === "low"  && ext < sp.price;
+          }).sort((a: any, b: any) => b.index - a.index).slice(0, 1)
+            .map((sp: any) => ({ t: series[sp.index]?.datetime, price: sp.price, significance: sp.significance }));
+
+          out.push({
+            t: c.datetime,
+            o: c.open, h: c.high, l: c.low, c: c.close,
+            bodyPips: Math.round(Math.abs(c.close - c.open) * 100000) / 10,
+            displacementPips: Math.round(displacement * 100000) / 10,
+            atrMultiple: atr > 0 ? Math.round((displacement / atr) * 100) / 100 : null,
+            causedBreak: caused.length > 0,
+            breaks: caused.map((b: any) => ({ t: series[b.index]?.datetime, kind: b.kind, price: b.price })),
+            clearedPriorSwing: cleared,
+            // Geometry this candle WOULD produce, for comparison with a drawn box.
+            zoneIfChosen: legDir === "bullish"
+              ? { proximal: c.high, distal: (c.high + c.low) / 2, extent: c.low }
+              : { proximal: c.low, distal: (c.high + c.low) / 2, extent: c.high },
+          });
+        }
+        continuationCandidates = {
+          leg: { direction: legDir, origin: series[target.startIndex]?.datetime, bos: series[target.endIndex]?.datetime },
+          lookaheadBars: LOOKAHEAD,
+          candidates: out,
+        };
+      }
+
       return respond({
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
         referenceBox: REF,
+        continuationCandidates,
         allBases,
         barsInWindow,
         trackA, trackB,
