@@ -67,7 +67,7 @@ describe("V2 overlay", () => {
     expect(d).not.toBe(h4);
   });
 
-  it("draws the sweep level outside the zone, dotted", () => {
+  it("draws the extent outside the tradeable zone, dotted", () => {
     // `extent` is the far wick extreme and the INVALIDATION level, not part of
     // the tradeable zone. Drawing it as a zone edge would misstate where the
     // block actually dies.

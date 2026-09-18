@@ -18,9 +18,16 @@
 --   before   sweep_level  a wick marker OUTSIDE a body-bounded zone
 --   after    extent       the far wick extreme, and the INVALIDATION level
 --
--- distal is now the midpoint, so closing past it is deep mitigation rather
--- than death. Invalidating there would kill zones roughly twice as fast as the
--- reference charts show, which is why acceptance is measured against extent.
+-- MEASURED vs MODELLED, and the distinction matters.
+--
+-- The four edges above establish proximal and distal. They establish NOTHING
+-- about invalidation.
+--
+-- Because distal is now the midpoint, a close beyond it represents deep
+-- mitigation rather than full-base failure. V2 therefore models invalidation
+-- at extent using consecutive body closes. That lifecycle rule is provisional,
+-- was not established by the geometry measurements, and needs validating on
+-- its own terms.
 --
 -- Existing rows carry body-rule geometry and cannot be converted — the wick
 -- extremes they would need were never stored. They are deleted rather than
