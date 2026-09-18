@@ -419,7 +419,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos, boxes } = await req.json();
+    const body = await req.json();
+    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos, boxes } = body;
 
     // ── impulse_debug ────────────────────────────────────────────────────
     // Answers one question and changes nothing: for a symbol/timeframe and a
@@ -433,6 +434,163 @@ Deno.serve(async (req) => {
     // does Daily structure even see a bearish break there?
     //
     // Read-only. No table is written, no decision is taken.
+    // ── qualification_debug ──────────────────────────────────────────────
+    // WHICH single candles qualify as order blocks. Read-only, no thresholds,
+    // no selection logic — this produces the evidence a rule would be built
+    // from, across every known-good candle at once.
+    //
+    // Geometry is FROZEN (#572) and is not re-litigated here. The open question
+    // is selection: V2 builds one block per leg at the origin, while the
+    // reference charts mark the origin AND rebases inside the leg.
+    //
+    // For each marked candle: find its leg, enumerate EVERY opposite-colour
+    // candle in that same leg, and label one marked and the rest not. A rule
+    // has to separate them across pairs and legs — a feature that only splits
+    // one AUD/USD example is a fit, which is how the causedBreak hypothesis
+    // died.
+    //
+    // Origin and continuation candidates are reported under separate roles and
+    // must NOT be assumed to share a rule.
+    if (action === "qualification_debug") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const results: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 30) { results.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const struct = analyzeMarketStructure(series);
+        const breaks = [...struct.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                        ...struct.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+        const fvgs = detectFVGs(series, breaks as any) ?? [];
+        const legs = enumerateImpulseLegs(series, tf === "1d" ? "D" : "4H", { includeBrokenOrigin: true });
+
+        const idxAt = (iso: string) => {
+          const want = Date.parse(String(iso).endsWith("Z") ? String(iso) : String(iso) + "Z");
+          let best = -1, gap = Infinity;
+          for (let i = 0; i < series.length; i++) {
+            const t = Date.parse(series[i].datetime.endsWith("Z") ? series[i].datetime : series[i].datetime + "Z");
+            const g = Math.abs(t - want);
+            if (g < gap) { gap = g; best = i; }
+          }
+          return { i: best, gapHours: Math.round((gap / 3600000) * 100) / 100 };
+        };
+
+        const atrAt = (i: number) => {
+          const from = Math.max(0, i - 14);
+          const sl = series.slice(from, i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+
+        for (const mk of (tgt.marked ?? [])) {
+          const { i: markIdx, gapHours } = idxAt(mk.anchorTime);
+          if (markIdx < 0) { results.push({ symbol: sym, anchorTime: mk.anchorTime, error: "no bar" }); continue; }
+
+          const leg = legs.find((l: any) => markIdx >= l.startIndex && markIdx <= l.endIndex)
+                   ?? legs.find((l: any) => Math.abs(markIdx - l.startIndex) <= 2);
+          if (!leg) {
+            results.push({ symbol: sym, anchorTime: mk.anchorTime, markedBar: series[markIdx]?.datetime,
+                           error: "marked candle sits in no enumerated leg" });
+            continue;
+          }
+
+          const legDir = leg.direction;
+          const legRange = Math.abs(leg.high - leg.low);
+          const cands: any[] = [];
+
+          for (let i = leg.startIndex; i <= Math.min(leg.endIndex, series.length - 1); i++) {
+            const c = series[i];
+            const isUp = c.close >= c.open;
+            const opposes = legDir === "bullish" ? !isUp : isUp;
+            // The origin candle counts even when it goes WITH the leg — it is
+            // the base V2 already builds from, and must appear for comparison.
+            if (!opposes && i !== leg.startIndex) continue;
+
+            const atr = atrAt(i);
+            const LOOK = 5;
+            const end = Math.min(i + LOOK, series.length - 1);
+            let ext = legDir === "bullish" ? -Infinity : Infinity;
+            for (let j = i + 1; j <= end; j++) {
+              ext = legDir === "bullish" ? Math.max(ext, series[j].high) : Math.min(ext, series[j].low);
+            }
+            const anchorPx = legDir === "bullish" ? c.high : c.low;
+            const disp = Number.isFinite(ext) ? Math.abs(ext - anchorPx) : 0;
+
+            // Consecutive opposite run this candle belongs to.
+            let runStart = i;
+            while (runStart - 1 >= leg.startIndex) {
+              const p = series[runStart - 1];
+              const pOpp = legDir === "bullish" ? p.close < p.open : p.close >= p.open;
+              if (!pOpp) break;
+              runStart--;
+            }
+            const next = series[i + 1];
+            const nextWithLeg = next ? (legDir === "bullish" ? next.close >= next.open : next.close < next.open) : false;
+
+            const brk = breaks.filter((b: any) => b.type === legDir && b.index > i && b.index <= end);
+            const clearedSwing = struct.swingPoints
+              .filter((sp: any) => sp.index < i &&
+                (legDir === "bullish" ? sp.type === "high" && ext > sp.price
+                                      : sp.type === "low" && ext < sp.price))
+              .sort((a: any, b: any) => b.index - a.index)[0];
+
+            const fvg = fvgs.find((f: any) => f.type === legDir && f.index >= i && f.index <= i + 3);
+
+            cands.push({
+              t: c.datetime,
+              marked: i === markIdx,
+              role: i === leg.startIndex ? "origin" : "continuation",
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              dir: isUp ? "up" : "down",
+              // ── pullback shape ──
+              runLength: i - runStart + 1,
+              isLastOfRun: nextWithLeg,
+              barsFromLegStart: i - leg.startIndex,
+              fractionThroughLeg: leg.endIndex > leg.startIndex
+                ? Math.round(((i - leg.startIndex) / (leg.endIndex - leg.startIndex)) * 100) / 100 : 0,
+              // ── ATR-normalised size ──
+              rangeAtr: atr > 0 ? Math.round(((c.high - c.low) / atr) * 100) / 100 : null,
+              bodyAtr: atr > 0 ? Math.round((Math.abs(c.close - c.open) / atr) * 100) / 100 : null,
+              // ── displacement after ──
+              dispAtr: atr > 0 ? Math.round((disp / atr) * 100) / 100 : null,
+              dispFracOfLeg: legRange > 0 ? Math.round((disp / legRange) * 100) / 100 : null,
+              // ── structure ──
+              causedBreak: brk.length > 0,
+              breakKind: brk[0]?.kind ?? null,
+              clearedSwing: clearedSwing
+                ? { t: series[clearedSwing.index]?.datetime, significance: clearedSwing.significance } : null,
+              fvgCreated: !!fvg,
+              fvgAtr: fvg && atr > 0 ? Math.round(((fvg.high - fvg.low) / atr) * 100) / 100 : null,
+            });
+          }
+
+          // Within-leg ranks. Rank 1 = largest. Comparable across pairs in a
+          // way raw pips are not.
+          const rank = (key: string) => {
+            const sorted = [...cands].filter(x => x[key] != null).sort((a, b) => b[key] - a[key]);
+            cands.forEach(x => { x[key + "Rank"] = x[key] == null ? null : sorted.indexOf(x) + 1; });
+          };
+          rank("dispAtr"); rank("rangeAtr"); rank("bodyAtr");
+
+          results.push({
+            symbol: sym, interval: tf,
+            markedBar: series[markIdx]?.datetime, gapHours, side: mk.side ?? null,
+            leg: { direction: legDir, origin: series[leg.startIndex]?.datetime,
+                   bos: series[leg.endIndex]?.datetime, bars: leg.endIndex - leg.startIndex,
+                   originBroken: leg.originBroken === true },
+            markedRole: cands.find((x: any) => x.marked)?.role ?? "NOT AMONG CANDIDATES",
+            candidateCount: cands.length,
+            candidates: cands,
+          });
+        }
+      }
+      return respond({ note: "read-only; no thresholds, no selection logic", results });
+    }
+
     if (action === "impulse_debug") {
       const sym = String(symbol ?? "AUD/USD");
       const tf = String(interval ?? "1d");
