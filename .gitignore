@@ -33,3 +33,7 @@ local-runner/.env.local
 
 # Vercel CLI
 .vercel
+
+# Track 1 diagnostic output, local only
+displacement-out.json
+run-displacement.sh
