@@ -419,7 +419,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos } = await req.json();
+    const { action, candles, dailyCandles, pairData, data1, data2, symbol, interval, from, to, legBos, boxes } = await req.json();
 
     // ── impulse_debug ────────────────────────────────────────────────────
     // Answers one question and changes nothing: for a symbol/timeframe and a
@@ -440,7 +440,12 @@ Deno.serve(async (req) => {
       const raw = res.candles ?? [];
       // Same series V2 reads, so the answer reflects V2 rather than an
       // approximation of it.
-      const series = dropFxClosedBars(raw, /USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD/.test(sym) && !/BTC|ETH|XAU|XAG/.test(sym));
+      // Asset type from SPECS, not a regex over the symbol. A pattern that
+      // accidentally matched an index would silently delete its bars and the
+      // box matcher would then fail for a reason that has nothing to do with
+      // geometry — the same class of drift as a hardcoded lookback.
+      const isForexSym = (SPECS as any)[sym]?.type === "forex";
+      const series = dropFxClosedBars(raw, isForexSym);
       const inWin = (dt?: string) => !!dt && (!from || dt >= String(from)) && (!to || dt <= String(to));
 
       const structure = analyzeMarketStructure(series);
@@ -626,6 +631,47 @@ Deno.serve(async (req) => {
         };
       });
 
+      // ── Box matcher ──────────────────────────────────────────────────────
+      // Given hand-drawn rectangles as {proximal, distal}, find the single
+      // candle each one was drawn from, using the confirmed geometry:
+      //
+      //   distal = (high + low) / 2   =>   extent = 2*distal - proximal
+      //
+      // A demand box has proximal above distal, so proximal is the candle high
+      // and extent its low; supply is the mirror. Reported in POINTS of error
+      // so a match is arithmetic rather than eyeballed.
+      //
+      // The point is to test the geometry on an instrument it was NOT derived
+      // from. It was fitted to three AUD/USD daily boxes; if it reproduces
+      // NASDAQ 4H rectangles it is a rule, and if it does not it was a fit.
+      const boxMatches = Array.isArray(boxes) ? boxes.map((box: any) => {
+        const prox = Number(box.proximal), dist = Number(box.distal);
+        const ext = 2 * dist - prox;
+        const demand = prox > dist;              // price falls INTO it from above
+        const wantHigh = demand ? prox : ext;
+        const wantLow = demand ? ext : prox;
+        const scored = series.map((c: Candle, i: number) => ({
+          i, t: c.datetime, o: c.open, h: c.high, l: c.low, c: c.close,
+          dir: c.close >= c.open ? "up" : "down",
+          highErr: Math.round((c.high - wantHigh) * 100) / 100,
+          lowErr: Math.round((c.low - wantLow) * 100) / 100,
+          total: Math.abs(c.high - wantHigh) + Math.abs(c.low - wantLow),
+        })).sort((a: any, b: any) => a.total - b.total).slice(0, 3);
+        return {
+          box: { proximal: prox, distal: dist },
+          side: demand ? "demand" : "supply",
+          predicted: { high: wantHigh, low: wantLow, extent: ext },
+          bestMatches: scored.map((m: any) => ({
+            t: m.t, i: m.i, o: m.o, h: m.h, l: m.l, c: m.c, dir: m.dir,
+            highErrPoints: m.highErr, lowErrPoints: m.lowErr,
+            // What this candle would produce under the confirmed rule.
+            zoneIfChosen: demand
+              ? { proximal: m.h, distal: (m.h + m.l) / 2, extent: m.l }
+              : { proximal: m.l, distal: (m.h + m.l) / 2, extent: m.h },
+          })),
+        };
+      }) : null;
+
       // ── Continuation candidates ──────────────────────────────────────────
       // Every opposite-colour candle INSIDE the target leg, with what happened
       // after it. Testing one hypothesis: a continuation block is the last
@@ -642,7 +688,12 @@ Deno.serve(async (req) => {
         const structAll = analyzeMarketStructure(series);
         const breaksAll = [...structAll.bos.map((b: any) => ({ ...b, kind: "BOS" })),
                            ...structAll.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+        // 4 bars is arbitrary and, on a daily leg, too short — the 3 April
+        // move ran nine bars to its CHoCH. Kept because lengthening it makes
+        // causedBreak useless rather than useful: every candidate precedes the
+        // same eventual break. Read displacement and rank, not causedBreak.
         const LOOKAHEAD = 4;
+        const fvgsAll = detectFVGs(series, breaksAll as any) ?? [];
         const out: any[] = [];
         for (let i = target.startIndex + 1; i < target.endIndex && i < series.length; i++) {
           const c = series[i];
@@ -678,9 +729,21 @@ Deno.serve(async (req) => {
           }).sort((a: any, b: any) => b.index - a.index).slice(0, 1)
             .map((sp: any) => ({ t: series[sp.index]?.datetime, price: sp.price, significance: sp.significance }));
 
+          // Last opposite candle of its run: the next bar goes with the leg.
+          const next = series[i + 1];
+          const nextWithLeg = next
+            ? (legDir === "bullish" ? next.close >= next.open : next.close < next.open)
+            : false;
+
+          // Did an FVG of the leg's direction form at or just after this bar?
+          const fvgNear = fvgsAll.some((f: any) =>
+            f.type === legDir && f.index >= i && f.index <= i + 3);
+
           out.push({
             t: c.datetime,
             o: c.open, h: c.high, l: c.low, c: c.close,
+            lastOppositeOfPullback: nextWithLeg,
+            fvgCreated: fvgNear,
             bodyPips: Math.round(Math.abs(c.close - c.open) * 100000) / 10,
             displacementPips: Math.round(displacement * 100000) / 10,
             atrMultiple: atr > 0 ? Math.round((displacement / atr) * 100) / 100 : null,
@@ -693,9 +756,16 @@ Deno.serve(async (req) => {
               : { proximal: c.low, distal: (c.high + c.low) / 2, extent: c.high },
           });
         }
+        // Rank by displacement within this leg — 1 is the strongest push after
+        // an opposite candle. A rank is comparable across instruments in a way
+        // a raw pip figure is not.
+        const byDisp = [...out].sort((a, b) => b.displacementPips - a.displacementPips);
+        out.forEach((o: any) => { o.displacementRank = byDisp.indexOf(o) + 1; });
+
         continuationCandidates = {
           leg: { direction: legDir, origin: series[target.startIndex]?.datetime, bos: series[target.endIndex]?.datetime },
           lookaheadBars: LOOKAHEAD,
+          candidateCount: out.length,
           candidates: out,
         };
       }
@@ -704,6 +774,7 @@ Deno.serve(async (req) => {
         symbol: sym, interval: tf, window: { from, to },
         source: res.source, rawBars: raw.length, barsAfterWeekendFilter: series.length,
         referenceBox: REF,
+        boxMatches,
         continuationCandidates,
         allBases,
         barsInWindow,
