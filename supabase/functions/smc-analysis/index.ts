@@ -3757,12 +3757,35 @@ Deno.serve(async (req) => {
     // progress can be tracked without contaminating the reserve.
     if (action === "ezzy_labels") {
       const sub = String(body?.sub ?? "stats");
+
+      // ── AUTH: identity comes from the JWT, never from the request body ──
+      // An earlier draft took userId from the body and queried with the
+      // service-role key, which bypasses RLS entirely — anyone holding the
+      // publishable key could have read or written another account's research
+      // data by naming their id. The publishable key is public by design, so
+      // that was a real hole, not a theoretical one.
+      //
+      // The client is built with the ANON key plus the caller's own
+      // Authorization header, so every query below is executed AS THAT USER and
+      // row-level security enforces ownership. Even if a user_id were somehow
+      // wrong in a payload, the RLS policy would reject the write.
+      const authHeader = req.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) {
+        return respond({ error: "Authorization: Bearer <jwt> required" });
+      }
+      const token = authHeader.slice("Bearer ".length);
       const supa = createClient(
         Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
       );
-      const userId = String(body?.userId ?? "");
-      if (!userId) return respond({ error: "userId required" });
+      const { data: claimsData, error: claimsErr } = await supa.auth.getClaims(token);
+      const userId = String(claimsData?.claims?.sub ?? "");
+      if (claimsErr || !userId) {
+        // The anon key is itself a valid JWT but carries no `sub`, so this also
+        // rejects an unauthenticated caller rather than silently using a blank id.
+        return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
+      }
 
       const TARGETS = {
         positives: 20, explicitNegatives: 15,

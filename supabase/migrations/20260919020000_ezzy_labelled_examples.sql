@@ -68,9 +68,20 @@ ALTER TABLE public.ezzy_labelled_examples
   ADD CONSTRAINT ele_negative_must_be_explicit
   CHECK (label <> 'NEGATIVE' OR label_basis = 'explicit');
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ele_unique_candle
-  ON public.ezzy_labelled_examples (user_id, symbol, timeframe, candle_datetime, side)
-  WHERE candle_datetime IS NOT NULL;
+-- Conflict target for upserts. It must be a NON-PARTIAL unique constraint:
+-- PostgREST infers on_conflict from the column list, and a partial index
+-- (WHERE candle_datetime IS NOT NULL) is not directly inferable, so the upsert
+-- would fail at runtime rather than at deploy.
+--
+-- NULLS NOT DISTINCT (PG15+, this project runs 17.6) is what makes nullable
+-- columns work here. Under the default NULLS DISTINCT, two rows with a null
+-- candle_datetime never collide, so an UNKNOWN example with no recoverable bar
+-- could be inserted unlimited times and the "unique" index would permit it
+-- silently. Nullable datetime and side are still fully supported — they simply
+-- now deduplicate like any other value.
+ALTER TABLE public.ezzy_labelled_examples
+  ADD CONSTRAINT ele_unique_example
+  UNIQUE NULLS NOT DISTINCT (user_id, symbol, timeframe, candle_datetime, side);
 CREATE INDEX IF NOT EXISTS idx_ele_label ON public.ezzy_labelled_examples (user_id, label, split);
 
 ALTER TABLE public.ezzy_labelled_examples ENABLE ROW LEVEL SECURITY;
