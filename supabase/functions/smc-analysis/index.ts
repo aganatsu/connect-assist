@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { detectIPOZones } from "../_shared/ipoZones.ts";
+import { detectIPOCandidates } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -3905,15 +3905,27 @@ Deno.serve(async (req) => {
         const series = dropFxClosedBars(res.candles ?? [], isFx);
         if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
 
-        const zones = detectIPOZones(series, { symbol: sym, timeframe: tf });
+        // Valid and rejected are reported separately. A candidate refused by
+        // interpretation is never counted as a known-box detection, but it stays
+        // visible so an interpretation failure is distinguishable from a
+        // detection failure.
+        const { valid: zones, rejected } = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
         const byDate = new Map(zones.map(z => [`${z.direction}|${z.candleDatetime.slice(0, 10)}`, z]));
+        const rejectedByDate = new Map(rejected.map(z => [`${z.direction}|${z.candleDatetime.slice(0, 10)}`, z]));
 
         // Score against whichever boxes the caller names. No tuning happens
         // here — the detector is not parameterised from this result.
         const known = (tgt.knownBoxes ?? []).map((k: any) => {
           const hit = byDate.get(`${k.side}|${k.date}`) ?? null;
+          const rej = rejectedByDate.get(`${k.side}|${k.date}`) ?? null;
           return {
             date: k.date, side: k.side, detected: !!hit,
+            rejectedCandidate: rej ? {
+              rejectionReason: rej.rejectionReason,
+              consolidation: rej.consolidation,
+              structure: rej.structure,
+              candleDatetime: rej.candleDatetime,
+            } : null,
             zone: hit ? {
               candleDatetime: hit.candleDatetime,
               geometry: hit.geometry,
@@ -3935,6 +3947,8 @@ Deno.serve(async (req) => {
         out.push({
           symbol: sym, interval: tf, bars: series.length,
           zonesDetected: zones.length,
+          zonesRejected: rejected.length,
+          rejectionBreakdown: { INSIDE_CONSOLIDATION: rejected.filter(z => z.rejectionReason === "INSIDE_CONSOLIDATION").length },
           zonesPerHundredBars: Math.round((zones.length / series.length) * 1000) / 10,
           knownBoxes: known,
           statusBreakdown: {

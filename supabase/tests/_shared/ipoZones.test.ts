@@ -7,8 +7,9 @@ import {
   selectIPOCandle,
   trackIPOLifecycle,
   assessConsolidation,
+  detectIPOCandidates,
 } from "../../functions/_shared/ipoZones.ts";
-import { calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
+import { analyzeMarketStructureCanonical, calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 /**
@@ -102,11 +103,12 @@ Deno.test("three bars inside the zone is ONE test, not three", () => {
   const ipo = candle(10, 12, 8, 9);          // demand zone [10, 12]
   const bars = [
     ipo,
-    candle(9, 9.5, 8.6, 9.2),                // outside (below the zone)
-    candle(9.2, 11, 9.1, 10.5),              // ENTERS
-    candle(10.5, 11.5, 10.2, 11),            // still inside  (bar 2 of the visit)
+    candle(9, 13.5, 8.9, 13.2),              // DEPARTS upward, fully above zone
+    candle(13.2, 14, 12.6, 13.6),            // still away (arms the zone)
+    candle(13.6, 13.8, 10.9, 11.2),          // RETURNS — enters the zone
+    candle(11.2, 11.5, 10.2, 11),            // still inside  (bar 2 of the visit)
     candle(11, 11.8, 10.4, 10.8),            // still inside  (bar 3)
-    candle(10.8, 9.9, 9.2, 9.5),             // exits
+    candle(10.8, 13.4, 12.5, 13.2),          // exits — FULLY above the zone
   ];
   const lc = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
   assertEquals(lc.testCount, 1, "three consecutive bars inside is a single visit");
@@ -119,11 +121,12 @@ Deno.test("leaving and re-entering counts a second distinct test", () => {
   const ipo = candle(10, 12, 8, 9);
   const bars = [
     ipo,
-    candle(9, 9.5, 8.6, 9.2),                // outside
-    candle(9.2, 11, 9.1, 10.5),              // visit 1 in
-    candle(10.5, 9.9, 9.0, 9.3),             // out
-    candle(9.3, 11.2, 9.2, 10.8),            // visit 2 in
-    candle(10.8, 9.8, 9.1, 9.4),             // out
+    candle(9, 13.5, 8.9, 13.2),              // rallies away
+    candle(13.2, 14, 12.6, 13.6),            // fully above -> ARMED
+    candle(13.6, 13.8, 10.9, 11.1),          // visit 1 in
+    candle(11.1, 13.4, 12.5, 13.2),          // out (fully above)
+    candle(13.2, 13.5, 10.8, 11.0),          // visit 2 in
+    candle(11.0, 13.3, 12.5, 13.1),          // out
   ];
   const lc = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
   assertEquals(lc.testCount, 2);
@@ -134,9 +137,11 @@ Deno.test("repeated tests do not invalidate the zone", () => {
   reset();
   const ipo = candle(10, 12, 8, 9);
   const bars: Candle[] = [ipo];
+  bars.push(candle(9, 13.5, 8.9, 13.2));        // rallies away
+  bars.push(candle(13.2, 14, 12.6, 13.6));      // fully above -> ARMED
   for (let k = 0; k < 5; k++) {
-    bars.push(candle(9, 9.5, 8.6, 9.2));     // outside
-    bars.push(candle(9.2, 11, 9.1, 10.5));   // inside
+    bars.push(candle(13.6, 13.8, 10.9, 11.1));  // inside
+    bars.push(candle(11.1, 13.4, 12.5, 13.2));  // back out, fully above
   }
   const lc = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
   assertEquals(lc.testCount, 5);
@@ -151,9 +156,10 @@ Deno.test("no flip retest is recorded before the zone is BROKEN", () => {
   const ipo = candle(10, 12, 8, 9);
   const bars = [
     ipo,
-    candle(9, 9.5, 8.6, 9.2),
-    candle(9.2, 11, 9.1, 10.5),              // a normal test, zone still valid
-    candle(10.5, 9.9, 9.0, 9.3),
+    candle(9, 13.5, 8.9, 13.2),              // rallies away
+    candle(13.2, 14, 12.6, 13.6),            // fully above -> ARMED
+    candle(13.6, 13.8, 10.9, 11.1),          // a normal test, zone still valid
+    candle(11.1, 13.4, 12.5, 13.2),
   ];
   const lc = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
   assertEquals(lc.flipRetestCount, 0, "a test of a live zone is not a flip retest");
@@ -338,7 +344,7 @@ Deno.test("consolidation uses buy-side/sell-side pools and is not always false",
   assert(pools.some((p) => p.type === "buy-side"), "buy-side pool exists");
   assert(pools.some((p) => p.type === "sell-side"), "sell-side pool exists");
 
-  const con = assessConsolidation(bars, i, pools);
+  const con = assessConsolidation(bars, i);
   assertEquals(con.insideConsolidation, true, "boxed in above and below");
   assert(con.rangeHigh !== null && con.rangeLow !== null);
   assert(con.rangeHigh! > con.rangeLow!);
@@ -430,4 +436,171 @@ Deno.test("ATR is true range and reacts to a gap that high-low ignores", () => {
   const atrGapped = calculateATR(gapped, 14);
   assert(atrGapped > atrFlat * 1.5,
     `true range must register the gap: flat=${atrFlat.toFixed(3)} gapped=${atrGapped.toFixed(3)}`);
+});
+
+// ─── final semantic corrections ──────────────────────────────────────────────
+
+Deno.test("consolidation is CAUSAL — future pools cannot change a past verdict", () => {
+  // Pools formed after the candidate must be invisible to it. The previous
+  // version passed the whole series to detectLiquidityPools, so a range that
+  // formed months later could classify a historical IPO.
+  reset();
+  const base = () => candle(100, 100.5, 99.5, 100);
+  const highSpike = () => candle(100, 102.0, 99.8, 100.4);
+  const lowSpike = () => candle(100, 100.2, 98.0, 99.6);
+  const prefix: Candle[] = [];
+  for (let k = 0; k < 6; k++) prefix.push(base());
+  for (let rep = 0; rep < 3; rep++) {
+    for (let k = 0; k < 3; k++) prefix.push(base());
+    prefix.push(highSpike());
+    for (let k = 0; k < 3; k++) prefix.push(base());
+    prefix.push(lowSpike());
+  }
+  for (let k = 0; k < 3; k++) prefix.push(base());
+  prefix.push(candle(99.8, 100.4, 99.2, 100.0));      // the candidate
+  const i = prefix.length - 1;
+
+  const verdictThen = assessConsolidation(prefix, i);
+
+  // Now append a lot of future structure that would create new pools.
+  const withFuture = [...prefix];
+  for (let rep = 0; rep < 4; rep++) {
+    for (let k = 0; k < 3; k++) withFuture.push(candle(110, 110.5, 109.5, 110));
+    withFuture.push(candle(110, 115.0, 109.8, 110.4));
+    for (let k = 0; k < 3; k++) withFuture.push(candle(110, 110.5, 109.5, 110));
+    withFuture.push(candle(110, 110.2, 105.0, 109.6));
+  }
+  const verdictNow = assessConsolidation(withFuture, i);
+
+  assertEquals(verdictNow.insideConsolidation, verdictThen.insideConsolidation);
+  assertEquals(verdictNow.rangeHigh, verdictThen.rangeHigh);
+  assertEquals(verdictNow.rangeLow, verdictThen.rangeLow);
+  assertEquals(verdictNow.equalHighPools, verdictThen.equalHighPools);
+});
+
+Deno.test("an inside-consolidation candidate is rejected, not detected — but stays inspectable", () => {
+  reset();
+  const c = candle(100, 101, 99, 99.5);
+  // Direct check of the contract the detector relies on.
+  const zone = {
+    valid: false, rejectionReason: "INSIDE_CONSOLIDATION" as const,
+    geometry: ipoGeometry(c, "demand"),
+  };
+  assertEquals(zone.valid, false);
+  assertEquals(zone.rejectionReason, "INSIDE_CONSOLIDATION");
+
+  // And through the real API: valid and rejected are disjoint, and every
+  // rejected candidate carries a reason. A rejected candidate must never be
+  // counted as a detection, but it must still be readable.
+  const series = trendingSeries();
+  const { valid, rejected } = detectIPOCandidates(series, { symbol: "T", timeframe: "1d" });
+  for (const z of valid) {
+    assertEquals(z.valid, true);
+    assertEquals(z.rejectionReason, null);
+    assertEquals(z.consolidation.insideConsolidation, false,
+      "a valid IPO can never be inside consolidation");
+  }
+  for (const z of rejected) {
+    assertEquals(z.valid, false);
+    assert(z.rejectionReason !== null, "every rejection carries a reason");
+    assert(z.candleDatetime.length > 0, "and remains fully inspectable");
+  }
+  const validKeys = new Set(valid.map((z) => z.id));
+  assert(!rejected.some((z) => validKeys.has(z.id)), "valid and rejected are disjoint");
+  // detectIPOZones exposes ONLY the valid ones.
+  assertEquals(detectIPOZones(series, { symbol: "T", timeframe: "1d" }).length, valid.length);
+});
+
+Deno.test("confirmation comes from the factual ledger, not only policy BOS/CHoCH", () => {
+  // The canonical policy view files 39-47% of factual close-throughs under
+  // alsoBrokenLevels rather than emitting an event. Gating on bos/choch would
+  // discard those. This asserts the detector evaluates ledger-only
+  // confirmations — zones whose structure has no matching policy event.
+  const series = trendingSeries();
+  const all = detectIPOCandidates(series, { symbol: "T", timeframe: "1d" });
+  const zones = [...all.valid, ...all.rejected];
+  if (!zones.length) return;
+
+  const canon = analyzeMarketStructureCanonical(series, {
+    policy: "latest_unbroken_structural", maxEventAgeBars: null,
+  });
+  const policyKeys = new Set(
+    [...canon.bos, ...canon.choch].map((e: any) => `${e.index}|${e.type}`),
+  );
+  const ledgerKeys = new Set(
+    (canon.swingLevelBreaks as any[]).map((l) => `${l.index}|${l.direction}`),
+  );
+  assert(ledgerKeys.size >= policyKeys.size,
+    "the ledger is a superset of the policy view, by construction");
+
+  for (const z of zones) {
+    const k = `${z.structure.confirmedByBreakIndex}|${z.structure.breakType}`;
+    assert(ledgerKeys.has(k), "every confirmation must exist in the factual ledger");
+    // hasPolicyEvent records enrichment, and must agree with the policy view
+    assertEquals(z.structure.hasPolicyEvent, policyKeys.has(k));
+    if (!z.structure.hasPolicyEvent) assertEquals(z.structure.kind, null);
+  }
+});
+
+Deno.test("the departure itself is not a test — testCount stays 0 until price leaves and returns", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);          // demand zone [10, 12]
+  const bars = [
+    ipo,
+    candle(9, 11.0, 8.9, 10.8),              // departure bar 1 — OVERLAPS the zone
+    candle(10.8, 11.6, 10.4, 11.4),          // departure bar 2 — still inside
+    candle(11.4, 11.9, 10.8, 11.8),          // departure bar 3 — still inside
+  ];
+  const during = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
+  assertEquals(during.testCount, 0,
+    "the move that created the zone must not test it — this was counted as test #1 before");
+  assertEquals(during.status, "UNARMED_FOR_RETEST");
+  assertEquals(during.armedForRetestAtIndex, null);
+
+  // Now let price clear the zone entirely, then come back.
+  const full = [
+    ...bars,
+    candle(11.8, 13.5, 12.4, 13.2),          // FULLY above -> armed
+    candle(13.2, 13.6, 10.9, 11.1),          // returns -> test #1
+    candle(11.1, 13.4, 12.5, 13.2),          // leaves again
+  ];
+  const after = trackIPOLifecycle(full, 0, "demand", ipoGeometry(ipo, "demand"));
+  assertEquals(after.armedForRetestAtIndex, 4);
+  assertEquals(after.testCount, 1, "only the RETURN counts");
+  assertEquals(after.status, "TESTED");
+});
+
+Deno.test("far-edge invalidation stays live while UNARMED", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);
+  const bars = [
+    ipo,
+    candle(9, 10.5, 8.9, 10.2),              // still overlapping, never armed
+    candle(10.2, 10.4, 7.1, 7.4),            // closes below extent 8
+  ];
+  const lc = trackIPOLifecycle(bars, 0, "demand", ipoGeometry(ipo, "demand"));
+  assertEquals(lc.armedForRetestAtIndex, null, "never armed");
+  assertEquals(lc.brokenAtIndex, 2, "but invalidation still applies");
+  assertEquals(lc.status, "BROKEN");
+});
+
+Deno.test("supply arms by leaving DOWNWARD, not upward", () => {
+  reset();
+  const ipo = candle(9, 12, 8, 11);          // supply: proximal 8, distal 10, zone [8,10]
+  const up = [ipo, candle(11, 11.5, 10.6, 11.2)];   // above the zone — wrong side
+  assertEquals(trackIPOLifecycle(up, 0, "supply", ipoGeometry(ipo, "supply")).armedForRetestAtIndex,
+    null, "leaving on the extent side must not arm a supply zone");
+
+  reset();
+  const ipo2 = candle(9, 12, 8, 11);
+  const down = [
+    ipo2,
+    candle(11, 11.2, 7.9, 8.1),              // pushing down through the zone
+    candle(8.1, 7.8, 6.5, 6.8),              // FULLY below -> armed
+    candle(6.8, 9.4, 6.7, 9.2),              // returns into [8,10] -> test #1
+    candle(9.2, 9.4, 6.6, 6.9),              // leaves again
+  ];
+  const lc = trackIPOLifecycle(down, 0, "supply", ipoGeometry(ipo2, "supply"));
+  assertEquals(lc.armedForRetestAtIndex, 2);
+  assertEquals(lc.testCount, 1);
 });

@@ -42,7 +42,12 @@ import {
 } from "./smcAnalysis.ts";
 
 export type IPODirection = "demand" | "supply";
-export type IPOStatus = "ACTIVE" | "TESTED" | "BROKEN" | "FLIPPED";
+export type IPOStatus =
+  /** Price has not yet left the zone on the departure side, so no retest can count. */
+  | "UNARMED_FOR_RETEST"
+  | "ACTIVE" | "TESTED" | "BROKEN" | "FLIPPED";
+
+export type IPORejectionReason = "INSIDE_CONSOLIDATION";
 
 export interface IPOGeometry {
   /** Edge price meets first: HIGH for demand, LOW for supply. */
@@ -77,7 +82,10 @@ export interface IPOZone {
   structure: {
     confirmedByBreakIndex: number;
     confirmedByBreakDatetime: string;
-    kind: string;
+    /** BOS | CHoCH when a policy event exists for this bar+direction, else null. */
+    kind: string | null;
+    /** false = the ledger has the close-through but no policy event was emitted. */
+    hasPolicyEvent: boolean;
     breakType: string;
     significance: string;
     level: number;
@@ -119,6 +127,8 @@ export interface IPOZone {
   };
   lifecycle: {
     status: IPOStatus;
+    /** Bar at which price first left the zone on the departure side. */
+    armedForRetestAtIndex: number | null;
     tests: IPOTest[];
     testCount: number;
     brokenAtIndex: number | null;
@@ -127,6 +137,15 @@ export interface IPOZone {
     flipRetestCount: number;
   };
   atrAtCandle: number;
+  /**
+   * An IPO formed inside consolidation is not a valid IPO. Invalid candidates
+   * are still RETURNED — as rejected, never as detections — so the shadow
+   * report can show that a known box was found structurally and then refused
+   * by the consolidation interpretation. Deleting them would make an
+   * interpretation failure indistinguishable from a detection failure.
+   */
+  valid: boolean;
+  rejectionReason: IPORejectionReason | null;
 }
 
 export const DEFAULTS = {
@@ -299,8 +318,12 @@ export function selectIPOCandle(
 export function assessConsolidation(
   candles: Candle[],
   i: number,
-  pools: LiquidityPool[],
 ): IPOZone["consolidation"] {
+  // CAUSAL. Pools are derived from candles[0..i] only. Passing the full series
+  // would classify a historical IPO using equal highs and lows that formed
+  // AFTER it — the candidate would be judged by information no one had at the
+  // time, which is the lookahead this whole engine exists to avoid.
+  const pools: LiquidityPool[] = detectLiquidityPools(candles.slice(0, i + 1));
   const c = candles[i];
   const a = atrAt(candles, i) || 1;
   // LiquidityPool.type is "buy-side" | "sell-side", NOT "high" | "low". The
@@ -366,8 +389,23 @@ export function trackIPOLifecycle(
   const flipRetests: IPOTest[] = [];
   let open: IPOTest | null = null;
   let brokenAt: number | null = null;
-  let status: IPOStatus = "ACTIVE";
+  let status: IPOStatus = "UNARMED_FOR_RETEST";
   const height = Math.abs(g.proximal - g.distal) || 1;
+
+  // A TEST IS A RETURN, NOT THE DEPARTURE. Replay begins at fromIndex + 1, and
+  // the first bars of the departure move routinely still overlap the zone; the
+  // previous version counted those as test #1, so a zone was "tested" by the
+  // very move that created it.
+  //
+  // The zone therefore starts UNARMED. It arms only once price has left
+  // entirely on the DEPARTURE side — fully above the zone for a demand IPO,
+  // fully below for a supply IPO. Leaving on the extent side does not arm it;
+  // that is price heading toward invalidation, not departing.
+  //
+  // Far-edge invalidation stays live throughout, armed or not.
+  let armedAt: number | null = null;
+  const leftOnDepartureSide = (b: Candle) =>
+    demand ? b.low > g.zoneHigh : b.high < g.zoneLow;
 
   const end = Math.min(candles.length - 1, fromIndex + horizon);
   for (let j = fromIndex + 1; j <= end; j++) {
@@ -384,6 +422,10 @@ export function trackIPOLifecycle(
         }
         brokenAt = j; status = "BROKEN";
         continue;
+      }
+      if (armedAt === null) {
+        if (leftOnDepartureSide(b)) { armedAt = j; status = "ACTIVE"; }
+        continue;                       // nothing before arming can be a test
       }
       const inside = barInRange(b, g.zoneLow, g.zoneHigh);
       if (inside && !open) {
@@ -431,6 +473,7 @@ export function trackIPOLifecycle(
 
   return {
     status,
+    armedForRetestAtIndex: armedAt,
     tests, testCount: tests.length,
     brokenAtIndex: brokenAt,
     brokenAtDatetime: brokenAt === null ? null : candles[brokenAt].datetime,
@@ -459,7 +502,29 @@ export interface DetectIPOOptions {
  * candidate confirmation, the departure move that caused it is located, and the
  * single opposite-coloured candle before that move is the IPO.
  */
+export interface IPOCandidates {
+  /** Passed every rule. These are the detections. */
+  valid: IPOZone[];
+  /** Found structurally, then refused by interpretation. NEVER a detection. */
+  rejected: IPOZone[];
+}
+
+/**
+ * Valid IPOs only. A candidate refused by interpretation — currently
+ * INSIDE_CONSOLIDATION — is not returned here and must never be counted as a
+ * detection. Use detectIPOCandidates() to inspect the refusals.
+ */
 export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): IPOZone[] {
+  return detectIPOCandidates(candles, opts).valid;
+}
+
+/** Valid and rejected candidates, kept separate. */
+export function detectIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOCandidates {
+  const all = detectAllIPOCandidates(candles, opts);
+  return { valid: all.filter((z) => z.valid), rejected: all.filter((z) => !z.valid) };
+}
+
+function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOZone[] {
   const symbol = opts.symbol ?? "?";
   const timeframe = opts.timeframe ?? "?";
   const W = opts.liquidityWindow ?? DEFAULTS.liquidityWindow;
@@ -471,20 +536,51 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
     maxEventAgeBars: opts.maxEventAgeBars === undefined
       ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
   });
-  const events = [
+  // FACTUAL LEDGER IS THE GATE, POLICY EVENTS ARE ENRICHMENT.
+  //
+  // The teaching requirement is an eventual candle-close break of structure.
+  // That fact lives in canon.swingLevelBreaks, which records EVERY confirmed
+  // swing level's causal first close-through. canon.bos / canon.choch are a
+  // POLICY VIEW of that ledger: the latest-pointer rule emits one event per
+  // direction per bar and files the rest under alsoBrokenLevels. Measured
+  // earlier, 39-47% of factual close-throughs produce no policy event at all.
+  //
+  // Gating on bos/choch would therefore have discarded roughly four in ten real
+  // close-throughs before the IPO rule ever saw them. The ledger decides
+  // whether the fact exists; BOS/CHoCH only classify it when a matching event
+  // happens to be present.
+  const policyEvents = [
     ...canon.bos.map((b: any) => ({ ...b, kind: "BOS" })),
     ...canon.choch.map((c: any) => ({ ...c, kind: "CHoCH" })),
-  ].sort((a, b) => a.index - b.index);
-  const pools = detectLiquidityPools(candles);
+  ];
+  const policyAt = new Map<string, any>();
+  for (const e of policyEvents) policyAt.set(`${e.index}|${e.type}`, e);
+
+  // Several swing levels can break on one candle. Keep one confirmation per
+  // (bar, direction), preferring EXTERNAL and then the most extreme level, so
+  // the same departure is not evaluated repeatedly under different levels.
+  const byBarDir = new Map<string, any>();
+  for (const lb of (canon.swingLevelBreaks as any[])) {
+    const k = `${lb.index}|${lb.direction}`;
+    const cur = byBarDir.get(k);
+    if (!cur) { byBarDir.set(k, lb); continue; }
+    const better =
+      (lb.significance === "external" && cur.significance !== "external") ||
+      (lb.significance === cur.significance &&
+        (lb.direction === "bullish" ? lb.level > cur.level : lb.level < cur.level));
+    if (better) byBarDir.set(k, lb);
+  }
+  const events = [...byBarDir.values()].sort((a, b) => a.index - b.index);
 
   const zones: IPOZone[] = [];
   const seen = new Set<string>();
 
   for (const ev of events) {
-    const bullish = ev.type === "bullish";
+    const bullish = ev.direction === "bullish";
+    const policy = policyAt.get(`${ev.index}|${ev.direction}`) ?? null;
     const direction: IPODirection = bullish ? "demand" : "supply";
     const j = ev.index;
-    const swingIdx = (ev as any).swingIndex ?? Math.max(0, j - 10);
+    const swingIdx = ev.swingIndex ?? Math.max(0, j - 10);
 
     // The departure move: from the extreme it began at, to the breaking bar.
     let originIdx = swingIdx;
@@ -545,6 +641,12 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
       .sort((x, y) => x.absIndex - y.absIndex);
     const fvg = nearFvgs[0] ?? null;
 
+    // An IPO formed inside consolidation is not a valid IPO. It is still built
+    // and returned as REJECTED so the evidence survives.
+    const con = assessConsolidation(candles, i);
+    const rejectionReason: IPORejectionReason | null =
+      con.insideConsolidation ? "INSIDE_CONSOLIDATION" : null;
+
     zones.push({
       id: `${symbol}|${timeframe}|${direction}|${c.datetime}`,
       symbol, timeframe, direction,
@@ -554,7 +656,11 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
       structure: {
         confirmedByBreakIndex: j,
         confirmedByBreakDatetime: ev.datetime,
-        kind: ev.kind, breakType: ev.type,
+        // null when the ledger recorded the close-through but the policy view
+        // filed it under alsoBrokenLevels instead of emitting an event.
+        kind: policy ? policy.kind : null,
+        hasPolicyEvent: !!policy,
+        breakType: ev.direction,
         significance: ev.significance, level: ev.level,
         barsFromCandleToBreak: j - i,
       },
@@ -574,9 +680,9 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
         wickOnly,
         extremeExcursionAtr: exc,
         closePenetrationAtr: pen,
-        poolsNearby: pools.length,
+        poolsNearby: con.equalHighPools + con.equalLowPools,
       },
-      consolidation: assessConsolidation(candles, i, pools),
+      consolidation: con,
       departureFvg: {
         exists: !!fvg,
         datetime: fvg?.datetime ?? null,
@@ -587,6 +693,8 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
       },
       lifecycle: trackIPOLifecycle(candles, i, direction, g, opts.lifecycleHorizon),
       atrAtCandle: Math.round(a * 1e5) / 1e5,
+      valid: rejectionReason === null,
+      rejectionReason,
     });
   }
   return zones;
