@@ -44,6 +44,7 @@ export type ShadowDisagreementReason =
   | "same"
   | "current_missing"
   | "current_late"
+  | "current_early"
   | "different_primary_level"
   | "different_BOS_CHoCH";
 
@@ -119,9 +120,17 @@ function classify(
   if (!can && cur) return "different_primary_level";  // current has one canonical does not
   const sameLevel = Math.abs((cur!.level ?? NaN) - (can!.level ?? NaN)) < LEVEL_TOL;
   if (!sameLevel) return "different_primary_level";
-  if (cur!.index !== can!.index) {
-    return cur!.index > can!.index ? "current_late" : "same";
-  }
+  // Exhaustive in BOTH directions. The earlier version returned "same" when
+  // the live engine reported the level EARLIER than canonical, which marked a
+  // genuine timing disagreement as agreement — the one outcome a comparison
+  // tool must never produce, because it hides the thing it exists to surface.
+  //
+  // current_early is not merely the mirror of current_late. Canonical emits on
+  // the first close through an already-confirmed swing, so the live engine
+  // beating it means one of them is reading the level or its confirmation
+  // differently, and that is worth seeing rather than smoothing over.
+  if (cur!.index > can!.index) return "current_late";
+  if (cur!.index < can!.index) return "current_early";
   return "same";
 }
 

@@ -203,3 +203,30 @@ Deno.test("the shadow never throws into the live path", () => {
     );
   });
 });
+
+Deno.test("timing comparison is exhaustive in both directions", () => {
+  // Regression. The classifier previously returned "same" whenever the live
+  // index was not GREATER than canonical's, so a live engine reporting the
+  // same level EARLIER was recorded as agreement. A comparison tool reporting
+  // agreement where the dates differ is worse than no tool, because the one
+  // thing it exists to surface is exactly what it would hide.
+  const candles = closeThroughExternalLow();
+  const lvl = 1.84018;
+  const mk = (index: number) => ({
+    index, datetime: candles[index]?.datetime, type: "bearish",
+    level: lvl, significance: "external", price: lvl, closeBased: true,
+  } as any);
+
+  withFlag("true", () => {
+    // live LATER than canonical -> current_late
+    const late = buildStructureShadowDiff(candles, { bos: [], choch: [mk(28)] }, "test");
+    assertEquals(late!.latestEvent.reason, "current_late");
+    assertEquals(late!.latestEvent.agrees, false);
+
+    // live EARLIER than canonical -> current_early, and NOT agreement
+    const early = buildStructureShadowDiff(candles, { bos: [], choch: [mk(20)] }, "test");
+    assertEquals(early!.latestEvent.reason, "current_early");
+    assertEquals(early!.latestEvent.agrees, false,
+      "an earlier live event is a disagreement, not a match");
+  });
+});
