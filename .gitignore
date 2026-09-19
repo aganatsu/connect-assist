@@ -41,3 +41,5 @@ structure-out.json
 run-structure.sh
 structure-canonical-out.json
 run-canonical.sh
+structure-policies-out.json
+run-policies.sh
