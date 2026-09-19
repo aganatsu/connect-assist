@@ -8,6 +8,8 @@ import {
   isCanonicalShadowEnabled,
   SHADOW_MAX_EVENT_AGE_BARS,
   SHADOW_POLICY,
+  recordStructureShadow,
+  shadowDisagrees,
 } from "../../functions/_shared/structureShadow.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
@@ -229,4 +231,115 @@ Deno.test("timing comparison is exhaustive in both directions", () => {
     assertEquals(early!.latestEvent.agrees, false,
       "an earlier live event is a disagreement, not a match");
   });
+});
+
+// ─── Telemetry ──────────────────────────────────────────────────────────────
+
+function fakeSupabase() {
+  const rows: any[] = [];
+  let failWith: string | null = null;
+  let thrown = false;
+  return {
+    rows,
+    failNext: (msg: string) => { failWith = msg; },
+    throwNext: () => { thrown = true; },
+    from(_t: string) {
+      return {
+        insert: (row: any) => {
+          if (thrown) { thrown = false; throw new Error("connection reset"); }
+          if (failWith) { const m = failWith; failWith = null; return Promise.resolve({ error: { message: m } }); }
+          rows.push(row);
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+}
+
+const diffWith = (over: Record<string, any>) => ({
+  site: "test", policy: SHADOW_POLICY, maxEventAgeBars: SHADOW_MAX_EVENT_AGE_BARS,
+  bars: 80, currentTrend: "bearish", canonicalTrend: "bearish", trendAgrees: true,
+  latestBOS: { current: null, canonical: null, agrees: true, reason: "same" },
+  latestCHoCH: { current: null, canonical: null, agrees: true, reason: "same" },
+  latestEvent: { current: null, canonical: null, agrees: true, reason: "same" },
+  counts: {
+    currentBOS: 1, currentCHoCH: 0, canonicalBOS: 1, canonicalCHoCH: 0,
+    canonicalLedgerEntries: 1, canonicalIneligibleByAge: 0,
+  },
+  ...over,
+}) as any;
+
+Deno.test("telemetry: agreements are not written", async () => {
+  // A scan produces one diff per symbol. Recording agreement would generate
+  // thousands of identical rows that say nothing and bury the disagreements.
+  const db = fakeSupabase();
+  const r = await recordStructureShadow(db, {
+    userId: "u", symbol: "GBP/CAD", diff: diffWith({}),
+  });
+  assertEquals(r, "skipped");
+  assertEquals(db.rows.length, 0);
+});
+
+Deno.test("telemetry: a null diff writes nothing", async () => {
+  const db = fakeSupabase();
+  assertEquals(await recordStructureShadow(db, { userId: "u", symbol: "X", diff: null }), "skipped");
+  assertEquals(db.rows.length, 0);
+});
+
+Deno.test("telemetry: each disagreement channel independently triggers a write", async () => {
+  for (const over of [
+    { trendAgrees: false, canonicalTrend: "bullish" },
+    { latestEvent: { current: null, canonical: null, agrees: false, reason: "current_missing" } },
+    { latestBOS: { current: null, canonical: null, agrees: false, reason: "current_late" } },
+    { latestCHoCH: { current: null, canonical: null, agrees: false, reason: "current_early" } },
+  ]) {
+    const db = fakeSupabase();
+    const r = await recordStructureShadow(db, { userId: "u", symbol: "GBP/CAD", diff: diffWith(over) });
+    assertEquals(r, "written", `expected a write for ${JSON.stringify(over).slice(0, 40)}`);
+    assertEquals(db.rows.length, 1);
+  }
+});
+
+Deno.test("telemetry: the row is compact and carries no candles or ledger", async () => {
+  const db = fakeSupabase();
+  await recordStructureShadow(db, {
+    userId: "u", botId: "bot1", symbol: "GBP/CAD", timeframe: "1d",
+    diff: diffWith({
+      trendAgrees: false, canonicalTrend: "bullish",
+      latestEvent: {
+        agrees: false, reason: "current_missing", current: null,
+        canonical: { index: 566, datetime: "2026-05-14T00:00:00Z", level: 1.84018,
+          significance: "external", type: "bearish", barsSinceConfirmation: 5 },
+      },
+    }),
+  });
+  const row = db.rows[0];
+  assertEquals(row.symbol, "GBP/CAD");
+  assertEquals(row.latest_event_reason, "current_missing");
+  assertEquals(row.canonical_level, 1.84018);
+  assertEquals(row.canonical_bars_since_confirmation, 5);
+  assertEquals(row.current_level, null, "absent event is null, not zero");
+  assertEquals(row.policy, SHADOW_POLICY);
+  assertEquals(row.max_event_age_bars, SHADOW_MAX_EVENT_AGE_BARS);
+  // A row is a verdict, not a snapshot.
+  for (const banned of ["candles", "swingLevelBreaks", "ledger", "swingPoints", "bos", "choch"]) {
+    assert(!(banned in row), `telemetry row must not carry ${banned}`);
+  }
+  assert(JSON.stringify(row).length < 900, "row stays compact");
+});
+
+Deno.test("telemetry: a DB error or throw never propagates to the caller", async () => {
+  // A telemetry write that can fail a scan is worse than no telemetry. This
+  // repo has already lost trades to a diagnostic insert being refused while
+  // the caller swallowed the error — here the swallow is deliberate and the
+  // outcome is reported back rather than hidden.
+  const bad = diffWith({ trendAgrees: false, canonicalTrend: "bullish" });
+
+  const db1 = fakeSupabase();
+  db1.failNext("new row violates row-level security policy");
+  assertEquals(await recordStructureShadow(db1, { userId: "u", symbol: "X", diff: bad }), "failed");
+
+  const db2 = fakeSupabase();
+  db2.throwNext();
+  assertEquals(await recordStructureShadow(db2, { userId: "u", symbol: "X", diff: bad }), "failed");
 });

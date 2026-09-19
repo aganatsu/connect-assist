@@ -68,6 +68,7 @@ import {
   resolveWeightScale,
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
+import { recordStructureShadow } from "../_shared/structureShadow.ts";
 import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
@@ -4978,6 +4979,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
+
+    // ── Structure shadow telemetry (flag: STRUCTURE_CANONICAL_SHADOW) ──
+    // analysis.structureShadow was already being COMPUTED here and thrown
+    // away: nothing in this file referenced it, and neither scan_logs insert
+    // touches the analysis object, so every diff the scanner produced was
+    // discarded. This persists the disagreements only.
+    //
+    // Fire-and-forget on purpose. It is awaited so the row lands before the
+    // function can be frozen between invocations, but recordStructureShadow
+    // never throws and returns "failed" instead — telemetry must not be able
+    // to fail a scan. Agreements are skipped, so the table counts
+    // disagreements, NOT scans.
+    //
+    // Nothing below reads the return value or the telemetry. `analysis` is
+    // untouched and every downstream decision sees exactly what it saw before.
+    await recordStructureShadow(supabase, {
+      userId, botId: BOT_ID, symbol: pair,
+      timeframe: pairConfig.entryTimeframe ?? null,
+      diff: (analysis as any).structureShadow ?? null,
+    });
 
     // ── ATR consumption (flag: atrDerivedFloorsEnabled, default OFF) ──
     // `atrValue` was computed inside runConfluenceAnalysis but never returned,
