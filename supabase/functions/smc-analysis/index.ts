@@ -1342,20 +1342,86 @@ Deno.serve(async (req) => {
             examples: deltas.slice(0, 10),
           },
           reclassified: { count: reclass.length, examples: reclass.slice(0, 10) },
-          // Required real-world case from #580.
+          // ── Duplicate-level integrity ───────────────────────────────
+          // breakTimingDelta matches current-vs-chronological events by LEVEL
+          // within 1e-8. If two same-type swings share a price to that
+          // tolerance, a match can attach to the wrong one and the timing
+          // delta for that level is meaningless.
+          //
+          // Diagnostic only: the matching logic is NOT changed here. The point
+          // is to make the ambiguity visible in the payload so the deltas are
+          // not trusted blind.
+          integrity: (() => {
+            const dupGroups: any[] = [];
+            for (const t of ["high", "low"] as const) {
+              const byType = swings.filter(s2 => s2.type === t)
+                .sort((a, b) => a.price - b.price);
+              let run: typeof byType = [];
+              const flush = () => {
+                if (run.length > 1) {
+                  dupGroups.push({
+                    type: t, level: run[0].price, count: run.length,
+                    swingIndexes: run.map(x => x.index),
+                    swingDates: run.map(x => series[x.index]?.datetime ?? null),
+                  });
+                }
+                run = [];
+              };
+              for (const sw of byType) {
+                if (run.length && Math.abs(sw.price - run[0].price) >= lvlTol) flush();
+                run.push(sw);
+              }
+              flush();
+            }
+            return {
+              duplicateSwingLevelCount: dupGroups.reduce((n, g) => n + g.count, 0),
+              duplicateSwingLevelGroups: dupGroups.length,
+              duplicateSwingLevelExamples: dupGroups.slice(0, 8),
+            };
+          })(),
+
+          // ── Required real-world case from #580 ──────────────────────
+          // The earlier version only asked whether the current implementation
+          // EVER emits a break at this level. That hides the defect, because
+          // the defect is lateness, not total absence — pairwise event
+          // construction reports the break once a new swing confirms on the
+          // far side, which can be many bars after the close that caused it.
+          //
+          // So the current implementation is NOT asserted to miss the level.
+          // It may well detect it later, and that lateness is the measurement.
           requiredCase: tgt.requiredCase ? (() => {
             const lvl = Number(tgt.requiredCase.level);
+            const tol = Number(tgt.requiredCase.tol ?? 1e-5);
             const want = String(tgt.requiredCase.closeDate);
-            const hit = [...cBos, ...cChoch].find(e =>
-              Math.abs(e.level - lvl) < Number(tgt.requiredCase.tol ?? 1e-5) &&
-              e.datetime.slice(0, 10) === want);
-            const curHit = curBreaks.find((b: any) =>
-              Math.abs(b.level - lvl) < Number(tgt.requiredCase.tol ?? 1e-5));
+            const atLevel = (L: number) => Math.abs(L - lvl) < tol;
+
+            const chronoAll = [...cBos, ...cChoch]
+              .filter(e => atLevel(e.level)).sort((a, b) => a.index - b.index);
+            const chronoOnDate = chronoAll.find(e => e.datetime.slice(0, 10) === want) ?? null;
+            const chronoFirst = chronoAll[0] ?? null;
+
+            const curAll = curBreaks.filter((b: any) => atLevel(b.level))
+              .sort((a: any, b: any) => a.index - b.index);
+            const curOnDate = curAll.find((b: any) => b.datetime.slice(0, 10) === want) ?? null;
+            const curFirst = curAll[0] ?? null;
+
+            // Late relative to the chronological detection on the expected
+            // date where there is one, otherwise the first chronological hit.
+            const baseline = chronoOnDate ?? chronoFirst;
             return {
               level: lvl, expectedCloseDate: want,
-              chronologicalDetects: !!hit, chronological: hit ?? null,
-              currentDetects: !!curHit,
-              current: curHit ? { index: curHit.index, datetime: curHit.datetime, kind: curHit.kind } : null,
+              chronologicalDetectsOnExpectedDate: !!chronoOnDate,
+              chronologicalIndex: baseline ? baseline.index : null,
+              chronologicalDate: baseline ? baseline.datetime : null,
+              chronologicalKind: chronoOnDate
+                ? (cChoch.includes(chronoOnDate) ? "CHoCH" : "BOS") : null,
+              chronologicalSignificance: chronoOnDate ? chronoOnDate.significance : null,
+              currentDetectsOnExpectedDate: !!curOnDate,
+              currentAnyDetection: !!curFirst,
+              currentDetectionDate: curFirst ? curFirst.datetime : null,
+              currentIndex: curFirst ? curFirst.index : null,
+              currentKind: curFirst ? curFirst.kind : null,
+              currentBarsLate: curFirst && baseline ? curFirst.index - baseline.index : null,
             };
           })() : null,
         });
