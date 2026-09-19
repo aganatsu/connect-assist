@@ -2916,6 +2916,302 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_phase_liquidity_audit ───────────────────────────────────────
+    // DESCRIPTIVE ONLY. Tests the phase hypothesis taken from the videos:
+    //
+    //   contraction/range -> liquidity clearance -> special candle -> expansion
+    //   -> later structure break
+    //
+    // Chooses nothing, ranks nothing, gates nothing, defines no IPO rule. The
+    // selector, TURN rule, continuation rule, body threshold, canonical engine,
+    // geometry and every production consumer are untouched. The BTC holdout
+    // stands at 0/3 and is not relabelled.
+    //
+    // NON-CIRCULAR CLEARANCE. A contraction window's own high IS its maximum,
+    // so asking "did price exceed the window high inside that window" is
+    // vacuous. For each window size W:
+    //
+    //   priorRange  bars [i-2W, i-W-1]   the reference boundary
+    //   contraction bars [i-W,   i-1]    reported in section 1
+    //   clearance   bars [i-W,   i]      tested AGAINST priorRange
+    //
+    // so a grab is always measured against a level established before it. The
+    // known candle is included in the clearance scan but is NOT required to be
+    // the bar that performs it.
+    //
+    // ZONE LIFECYCLE USES THE PROXIMAL HALF ONLY:
+    //   demand zone = [distal, proximal]   proximal = high, distal = midpoint
+    //   supply zone = [proximal, distal]   proximal = low,  distal = midpoint
+    // extent is the INVALIDATION level and is never a zone boundary. An earlier
+    // audit measured revisit against proximal..extent, which is the whole
+    // candle and reports a revisit almost immediately; that was wrong.
+    if (action === "ezzy_phase_liquidity_audit") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const WINDOWS: number[] = Array.isArray(body?.windows) ? body.windows : [3, 5, 7, 10, 15];
+      const HORIZON = Number(body?.horizon ?? 40);
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 80) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const canon = analyzeMarketStructureCanonical(series, {
+          policy: "latest_unbroken_structural", maxEventAgeBars: 50,
+        });
+        const evs = [...canon.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                     ...canon.choch.map((c: any) => ({ ...c, kind: "CHoCH" }))]
+                     .sort((a, b) => a.index - b.index);
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const dstr = (i: number) => series[i]?.datetime?.slice(0, 10) ?? null;
+        const hiLo = (a: number, b: number) => {
+          let hi = -Infinity, lo = Infinity, hiI = a, loI = a;
+          for (let j = Math.max(0, a); j <= Math.min(series.length - 1, b); j++) {
+            if (series[j].high > hi) { hi = series[j].high; hiI = j; }
+            if (series[j].low < lo) { lo = series[j].low; loI = j; }
+          }
+          return { hi, lo, hiI, loI };
+        };
+
+        const rows = (tgt.knownBoxes ?? []).map((k: any) => {
+          const i = series.findIndex(c => c.datetime.slice(0, 10) === String(k.date));
+          if (i < 0) return { date: k.date, side: k.side, error: "candle not in series" };
+          const c = series[i];
+          const demand = k.side === "demand";
+          const favUp = demand;
+          const a = atrAt(i) || 1;
+          const rng = c.high - c.low;
+          const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+
+          // Frozen geometry. Zone is the PROXIMAL HALF; extent is invalidation only.
+          const proximal = demand ? c.high : c.low;
+          const extent = demand ? c.low : c.high;
+          const distal = (c.high + c.low) / 2;
+          const zoneLo = demand ? distal : proximal;
+          const zoneHi = demand ? proximal : distal;
+
+          // ── 1/2. contraction windows + non-circular clearance ─────────
+          const windows = WINDOWS.map(W => {
+            const cS = i - W, cE = i - 1;
+            const pS = i - 2 * W, pE = i - W - 1;
+            if (pS < 0) return { window: W, insufficientHistory: true };
+            const con = hiLo(cS, cE), pri = hiLo(pS, pE);
+            let overlaps = 0;
+            for (let j = cS + 1; j <= cE; j++) {
+              if (series[j].low <= series[j - 1].high && series[j].high >= series[j - 1].low) overlaps++;
+            }
+            // clearance of the PRIOR range, scanned over contraction + candle
+            let aboveIdx = -1, belowIdx = -1, aboveClose = false, belowClose = false;
+            for (let j = cS; j <= i; j++) {
+              if (aboveIdx < 0 && series[j].high > pri.hi) { aboveIdx = j; aboveClose = series[j].close > pri.hi; }
+              if (belowIdx < 0 && series[j].low < pri.lo) { belowIdx = j; belowClose = series[j].close < pri.lo; }
+            }
+            const firstSide = aboveIdx < 0 && belowIdx < 0 ? null
+              : aboveIdx < 0 ? "low" : belowIdx < 0 ? "high"
+              : (aboveIdx <= belowIdx ? "high" : "low");
+            const lastGrabIdx = Math.max(aboveIdx, belowIdx);
+            return {
+              window: W,
+              contraction: {
+                from: dstr(cS), to: dstr(cE), high: r(con.hi, 5), low: r(con.lo, 5),
+                rangeAtr: r((con.hi - con.lo) / a), highDate: dstr(con.hiI), lowDate: dstr(con.loI),
+                adjacentOverlaps: overlaps, ofBars: W - 1,
+              },
+              priorRange: {
+                from: dstr(pS), to: dstr(pE), high: r(pri.hi, 5), low: r(pri.lo, 5),
+                rangeAtr: r((pri.hi - pri.lo) / a),
+              },
+              compressionRatio: (pri.hi - pri.lo) > 0 ? r((con.hi - con.lo) / (pri.hi - pri.lo)) : null,
+              clearance: {
+                tookAbovePriorHigh: aboveIdx >= 0, aboveDate: aboveIdx < 0 ? null : dstr(aboveIdx),
+                aboveBarsBeforeCandle: aboveIdx < 0 ? null : i - aboveIdx,
+                aboveWasCloseThrough: aboveIdx < 0 ? null : aboveClose,
+                tookBelowPriorLow: belowIdx >= 0, belowDate: belowIdx < 0 ? null : dstr(belowIdx),
+                belowBarsBeforeCandle: belowIdx < 0 ? null : i - belowIdx,
+                belowWasCloseThrough: belowIdx < 0 ? null : belowClose,
+                oneSideOnly: (aboveIdx >= 0) !== (belowIdx >= 0),
+                bothSides: aboveIdx >= 0 && belowIdx >= 0,
+                firstSideTaken: firstSide,
+                lastGrabDate: lastGrabIdx < 0 ? null : dstr(lastGrabIdx),
+                barsFromLastGrabToCandle: lastGrabIdx < 0 ? null : i - lastGrabIdx,
+                candleIsTheGrab: lastGrabIdx === i,
+              },
+              candleInsidePriorRange: c.high <= pri.hi && c.low >= pri.lo,
+              candleOutsidePriorRange: c.high > pri.hi || c.low < pri.lo,
+            };
+          });
+
+          // ── 5. forward expansion, structural (no ATR threshold) ───────
+          let expStart = -1, expEnd = -1;
+          for (let j = i + 1; j < Math.min(series.length, i + 1 + HORIZON); j++) {
+            const up = series[j].close >= series[j].open;
+            if (up === favUp) { if (expStart < 0) expStart = j; expEnd = j; }
+            else if (expStart >= 0) break;
+          }
+          let expDisp: number | null = null;
+          if (expStart >= 0) {
+            let e = favUp ? -Infinity : Infinity;
+            for (let j = expStart; j <= expEnd; j++) {
+              const v = favUp ? series[j].high : series[j].low;
+              if (favUp ? v > e : v < e) e = v;
+            }
+            expDisp = r(Math.abs(e - proximal) / a);
+          }
+          const mfeAt = (n: number) => {
+            let m = -Infinity;
+            for (let j = i + 1; j <= Math.min(series.length - 1, i + n); j++) {
+              const v = favUp ? series[j].high : series[j].low;
+              const dd = favUp ? v - proximal : proximal - v;
+              if (dd > m) m = dd;
+            }
+            return Number.isFinite(m) ? r(m / a) : null;
+          };
+
+          // ── 3. known candle relative to the sequence ──────────────────
+          const w10 = windows.find((x: any) => x.window === 10 && !x.insufficientHistory) as any;
+          const lastGrabBars = w10?.clearance?.barsFromLastGrabToCandle ?? null;
+          const grabIdx = lastGrabBars == null ? -1 : i - lastGrabBars;
+          const wantUp = !demand;      // supply candles are up candles
+          let firstOppAfterGrab = -1;
+          if (grabIdx >= 0) {
+            for (let j = grabIdx; j <= i + 5 && j < series.length; j++) {
+              if ((series[j].close >= series[j].open) === wantUp) { firstOppAfterGrab = j; break; }
+            }
+          }
+          let lastOppBeforeExp = -1;
+          if (expStart > 0) {
+            for (let j = expStart - 1; j >= Math.max(0, expStart - 10); j--) {
+              if ((series[j].close >= series[j].open) === wantUp) { lastOppBeforeExp = j; break; }
+            }
+          }
+
+          // ── 4. IPO evidence: the candle and +/-3 neighbours ───────────
+          const neighbours: any[] = [];
+          for (let j = Math.max(0, i - 3); j <= Math.min(series.length - 1, i + 3); j++) {
+            const n = series[j], nr = n.high - n.low, na = atrAt(j) || 1;
+            const nbHi = Math.max(n.open, n.close), nbLo = Math.min(n.open, n.close);
+            neighbours.push({
+              offset: j - i, date: dstr(j), colour: n.close >= n.open ? "up" : "down",
+              o: n.open, h: n.high, l: n.low, c: n.close,
+              rangeAtr: r(nr / na), bodyRangeRatio: nr > 0 ? r(Math.abs(n.close - n.open) / nr) : null,
+              upperWickRatio: nr > 0 ? r((n.high - nbHi) / nr) : null,
+              lowerWickRatio: nr > 0 ? r((nbLo - n.low) / nr) : null,
+              insidePriorRange10: w10 ? (n.high <= (w10.priorRange.high ?? Infinity) && n.low >= (w10.priorRange.low ?? -Infinity)) : null,
+              isLastGrabBar: grabIdx === j,
+              barsFromLastGrab: grabIdx < 0 ? null : j - grabIdx,
+              barsToExpansionStart: expStart < 0 ? null : expStart - j,
+              isKnownEzzyCandle: j === i,
+            });
+          }
+
+          // ── 6. DIRECTION-ALIGNED structure only ───────────────────────
+          const wantDir = favUp ? "bullish" : "bearish";
+          const aligned = evs.filter(e => e.index > i && e.index <= i + HORIZON && e.type === wantDir);
+          const pick = (f: (e: any) => boolean) => {
+            const e = aligned.find(f);
+            return e ? { date: dstr(e.index), barsAfter: e.index - i, kind: e.kind,
+                         level: e.level, significance: e.significance } : null;
+          };
+          const alignedLedger = (canon.swingLevelBreaks as any[])
+            .filter(x => x.index > i && x.index <= i + HORIZON && x.direction === wantDir)
+            .map(x => ({ date: String(x.datetime).slice(0, 10), barsAfter: x.index - i,
+                         level: x.level, significance: x.significance }));
+
+          // ── 7. zone lifecycle on the PROXIMAL HALF ────────────────────
+          let zoneRevisit = -1, invalidation = -1;
+          for (let j = i + 1; j < Math.min(series.length, i + 1 + HORIZON); j++) {
+            const b = series[j];
+            if (zoneRevisit < 0 && b.low <= zoneHi && b.high >= zoneLo) zoneRevisit = j;
+            if (invalidation < 0 && (demand ? b.close < extent : b.close > extent)) invalidation = j;
+          }
+          const stopAt = Math.min(zoneRevisit < 0 ? Infinity : zoneRevisit,
+                                  invalidation < 0 ? Infinity : invalidation, i + HORIZON);
+          let mfe = -Infinity;
+          for (let j = i + 1; j <= Math.min(series.length - 1, stopAt); j++) {
+            const v = favUp ? series[j].high : series[j].low;
+            const dd = favUp ? v - proximal : proximal - v;
+            if (dd > mfe) mfe = dd;
+          }
+          const firstIntA = pick(e => e.significance === "internal");
+          const firstExtA = pick(e => e.significance === "external");
+
+          return {
+            date: k.date, side: k.side, index: i,
+            candle: {
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              colour: c.close >= c.open ? "up" : "down",
+              rangeAtr: r(rng / a), bodyAtr: r(Math.abs(c.close - c.open) / a),
+              bodyRangeRatio: rng > 0 ? r(Math.abs(c.close - c.open) / rng) : null,
+              upperWickRatio: rng > 0 ? r((c.high - bodyHi) / rng) : null,
+              lowerWickRatio: rng > 0 ? r((bodyLo - c.low) / rng) : null,
+            },
+            box: { proximal: r(proximal, 5), distal: r(distal, 5), extent: r(extent, 5),
+                   zoneLow: r(zoneLo, 5), zoneHigh: r(zoneHi, 5) },
+            contractionWindows: windows,
+            positionInSequence: {
+              barsFromLastGrab_w10: lastGrabBars,
+              candleIsTheGrab_w10: w10?.clearance?.candleIsTheGrab ?? null,
+              isFirstOppositeColourAfterGrab: firstOppAfterGrab === i,
+              firstOppositeColourAfterGrabDate: firstOppAfterGrab < 0 ? null : dstr(firstOppAfterGrab),
+              isLastOppositeColourBeforeExpansion: lastOppBeforeExp === i,
+              lastOppositeColourBeforeExpansionDate: lastOppBeforeExp < 0 ? null : dstr(lastOppBeforeExp),
+            },
+            ipoNeighbourhood: neighbours,
+            expansion: {
+              firstRunStart: expStart < 0 ? null : dstr(expStart),
+              firstRunEnd: expStart < 0 ? null : dstr(expEnd),
+              barsAfterCandle: expStart < 0 ? null : expStart - i,
+              lengthBars: expStart < 0 ? null : expEnd - expStart + 1,
+              displacementAtr: expDisp,
+              mfe5: mfeAt(5), mfe10: mfeAt(10), mfe20: mfeAt(20), mfe40: mfeAt(40),
+            },
+            alignedStructure: {
+              direction: wantDir,
+              firstInternal: firstIntA, firstExternal: firstExtA,
+              firstBOS: pick(e => e.kind === "BOS"), firstCHoCH: pick(e => e.kind === "CHoCH"),
+              levelsClosedThroughCount: alignedLedger.length,
+              levelsClosedThrough: alignedLedger.slice(0, 10),
+            },
+            zoneLifecycle: {
+              firstZoneRevisitDate: zoneRevisit < 0 ? null : dstr(zoneRevisit),
+              firstZoneRevisitBars: zoneRevisit < 0 ? null : zoneRevisit - i,
+              firstInvalidationDate: invalidation < 0 ? null : dstr(invalidation),
+              firstInvalidationBars: invalidation < 0 ? null : invalidation - i,
+              mfeBeforeZoneRevisitOrInvalidationAtr: Number.isFinite(mfe) ? r(mfe / a) : null,
+              zoneRevisitBeforeAlignedInternal: firstIntA && zoneRevisit >= 0
+                ? (zoneRevisit - i) < firstIntA.barsAfter : null,
+              zoneRevisitBeforeAlignedExternal: firstExtA && zoneRevisit >= 0
+                ? (zoneRevisit - i) < firstExtA.barsAfter : null,
+            },
+          };
+        });
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          firstBar: series[0]?.datetime ?? null, lastBar: series[series.length - 1]?.datetime ?? null,
+          horizon: HORIZON, windows: WINDOWS, knownCandles: rows,
+        });
+      }
+      return respond({
+        note: "DESCRIPTIVE ONLY. No selection, no ranking, no thresholds, no IPO " +
+              "definition. Clearance is measured against a PRIOR range so it is " +
+              "never circular. Zone lifecycle uses the PROXIMAL HALF only — extent " +
+              "is invalidation, not a boundary. Selector, TURN/continuation rules, " +
+              "body threshold, canonical engine, geometry and production are " +
+              "untouched. BTC holdout remains 0/3 and is not relabelled.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
