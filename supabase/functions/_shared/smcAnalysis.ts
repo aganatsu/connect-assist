@@ -3922,6 +3922,7 @@ export function analyzeMarketStructureCanonical(
     // Measuring it proves whether that reasoning holds.
     replacementClosedBeyondOldLevel: boolean;
     replacementOnlyWickedBeyondOldLevel: boolean;
+    replacementDidNotReachBeyondOldLevel: boolean;
   }
   const supersessions: Supersession[] = [];
 
@@ -3935,6 +3936,16 @@ export function analyzeMarketStructureCanonical(
       const repBar = candles[s.index];
       const repClosed = !!repBar && (old.type === "high"
         ? repBar.close > old.price : repBar.close < old.price);
+      // Three outcomes, not two. !repClosed would lump "wicked beyond but the
+      // close held" together with "never reached the old level at all", and
+      // those mean opposite things. Under latest_unbroken_structural the
+      // replacement engulfs by definition, so it always reaches. Under
+      // latest_confirmed it does NOT: a pointer is retired purely because a
+      // newer one confirmed, and that newer swing may sit nowhere near the old
+      // level. Collapsing the third case would have reported those as
+      // wick-only and overstated the semantic mismatch.
+      const repWickedBeyond = !!repBar && (old.type === "high"
+        ? repBar.high > old.price : repBar.low < old.price);
       supersessions.push({
         type: old.type, significance: sig,
         supersededLevel: old.price,
@@ -3944,7 +3955,8 @@ export function analyzeMarketStructureCanonical(
         laterBroken: false, laterBreakDate: null, barsUntilLaterBreak: null,
         supersededSwingKey: old.key,
         replacementClosedBeyondOldLevel: repClosed,
-        replacementOnlyWickedBeyondOldLevel: !repClosed,
+        replacementOnlyWickedBeyondOldLevel: !repClosed && repWickedBeyond,
+        replacementDidNotReachBeyondOldLevel: !repClosed && !repWickedBeyond,
       });
     };
     if (policy === "latest_confirmed") {
@@ -4163,6 +4175,8 @@ export function analyzeMarketStructureCanonical(
         supersessions.filter(x => x.replacementClosedBeyondOldLevel).length,
       replacementOnlyWickedBeyondOldLevel:
         supersessions.filter(x => x.replacementOnlyWickedBeyondOldLevel).length,
+      replacementDidNotReachBeyondOldLevel:
+        supersessions.filter(x => x.replacementDidNotReachBeyondOldLevel).length,
       medianBarsUntilLaterBreak: (() => {
         const v = supersessions.filter(s => s.barsUntilLaterBreak != null)
           .map(s => s.barsUntilLaterBreak!).sort((a, b) => a - b);
