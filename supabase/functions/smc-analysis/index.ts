@@ -1,4 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { enumerateImpulseLegs, mapImpulsePOIs } from "../_shared/impulseZoneEngine.ts";
@@ -3730,6 +3731,160 @@ Deno.serve(async (req) => {
               "labelled negatives. Selector, geometry, canonical structure and " +
               "production are untouched. BTC holdout remains 0/3.",
         out,
+      });
+    }
+
+    // ── ezzy_labels ──────────────────────────────────────────────────────
+    // Scaffold for the labelled-example dataset. Research only: nothing here
+    // reads or writes trading state, and the selector, geometry, canonical
+    // structure and production consumers are untouched.
+    //
+    // THE POINT OF THE THREE CLASSES. Three candidate rules have been
+    // eliminated by the same mechanism — strong on ten labelled positives,
+    // collapsing against a holdout or a background population. The missing
+    // ingredient is explicit NEGATIVES: candles that were looked at and turned
+    // down. UNKNOWN is NOT a negative and the schema refuses to let it drift
+    // into one; an unboxed candle is unevaluated, not rejected.
+    //
+    // A NEGATIVE MUST BE EXPLICIT. The database enforces it too. An inferred
+    // rejection is an assumption about what someone would have said, which is
+    // the exact failure this dataset exists to prevent.
+    //
+    // VALIDATION IS SEALED. Rows marked split='validation' are never returned
+    // by `list` unless the caller passes the unseal phrase. The friction is
+    // deliberate: a holdout that can be glanced at during rule selection is not
+    // a holdout. `stats` reports validation COUNTS only, never content, so
+    // progress can be tracked without contaminating the reserve.
+    if (action === "ezzy_labels") {
+      const sub = String(body?.sub ?? "stats");
+
+      // ── AUTH: identity comes from the JWT, never from the request body ──
+      // An earlier draft took userId from the body and queried with the
+      // service-role key, which bypasses RLS entirely — anyone holding the
+      // publishable key could have read or written another account's research
+      // data by naming their id. The publishable key is public by design, so
+      // that was a real hole, not a theoretical one.
+      //
+      // The client is built with the ANON key plus the caller's own
+      // Authorization header, so every query below is executed AS THAT USER and
+      // row-level security enforces ownership. Even if a user_id were somehow
+      // wrong in a payload, the RLS policy would reject the write.
+      const authHeader = req.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) {
+        return respond({ error: "Authorization: Bearer <jwt> required" });
+      }
+      const token = authHeader.slice("Bearer ".length);
+      const supa = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: claimsData, error: claimsErr } = await supa.auth.getClaims(token);
+      const userId = String(claimsData?.claims?.sub ?? "");
+      if (claimsErr || !userId) {
+        // The anon key is itself a valid JWT but carries no `sub`, so this also
+        // rejects an unauthenticated caller rather than silently using a blank id.
+        return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
+      }
+
+      const TARGETS = {
+        positives: 20, explicitNegatives: 15,
+        validationPositives: 5, validationNegatives: 5,
+      };
+
+      if (sub === "add") {
+        const rows = Array.isArray(body?.examples) ? body.examples : [];
+        if (!rows.length) return respond({ error: "examples[] required" });
+        const bad: any[] = [];
+        const prepared = rows.map((e: any, n: number) => {
+          const label = String(e.label ?? "").toUpperCase();
+          const basis = String(e.labelBasis ?? "explicit");
+          if (!["POSITIVE", "NEGATIVE", "UNKNOWN"].includes(label)) bad.push({ n, why: "bad label" });
+          if (label === "NEGATIVE" && basis !== "explicit") {
+            bad.push({ n, why: "a NEGATIVE must be explicit — an inferred rejection is an assumption" });
+          }
+          if (label !== "UNKNOWN" && !e.side) bad.push({ n, why: "side required for POSITIVE/NEGATIVE" });
+          return {
+            user_id: userId,
+            source_video: e.sourceVideo ?? null,
+            source_timestamp: e.sourceTimestamp ?? null,
+            reference_url: e.referenceUrl ?? null,
+            symbol: e.symbol, timeframe: e.timeframe,
+            candle_datetime: e.candleDatetime ?? null,
+            side: e.side ?? null,
+            label, label_basis: basis,
+            reason: e.reason ?? null,
+            split: e.split ?? "development",
+            contaminated: !!e.contaminated,
+            notes: e.notes ?? null,
+          };
+        });
+        if (bad.length) return respond({ error: "validation failed", problems: bad });
+        const { data, error } = await supa.from("ezzy_labelled_examples")
+          .upsert(prepared, { onConflict: "user_id,symbol,timeframe,candle_datetime,side" })
+          .select("id");
+        if (error) return respond({ error: error.message });
+        return respond({ inserted: data?.length ?? 0 });
+      }
+
+      if (sub === "list") {
+        const unsealed = String(body?.unsealValidation ?? "") === "I_AM_VALIDATING_NOT_TUNING";
+        let qy = supa.from("ezzy_labelled_examples").select("*").eq("user_id", userId);
+        if (!unsealed) qy = qy.eq("split", "development");
+        if (body?.label) qy = qy.eq("label", String(body.label).toUpperCase());
+        const { data, error } = await qy.order("symbol").order("candle_datetime");
+        if (error) return respond({ error: error.message });
+        return respond({
+          validationIncluded: unsealed,
+          warning: unsealed
+            ? "VALIDATION ROWS INCLUDED. Do not use these while choosing rules."
+            : "development rows only; validation is sealed",
+          count: data?.length ?? 0, examples: data ?? [],
+        });
+      }
+
+      // stats — counts only, safe to call at any time
+      const { data, error } = await supa.from("ezzy_labelled_examples")
+        .select("label,label_basis,split,symbol,timeframe,contaminated").eq("user_id", userId);
+      if (error) return respond({ error: error.message });
+      const all = data ?? [];
+      const n = (f: (r: any) => boolean) => all.filter(f).length;
+      const dev = all.filter(r => r.split === "development");
+      const val = all.filter(r => r.split === "validation");
+      const explicitNeg = n(r => r.label === "NEGATIVE" && r.label_basis === "explicit");
+      return respond({
+        targets: TARGETS,
+        total: all.length,
+        byLabel: {
+          POSITIVE: n(r => r.label === "POSITIVE"),
+          NEGATIVE: n(r => r.label === "NEGATIVE"),
+          UNKNOWN: n(r => r.label === "UNKNOWN"),
+        },
+        explicitNegatives: explicitNeg,
+        development: {
+          total: dev.length,
+          POSITIVE: dev.filter(r => r.label === "POSITIVE").length,
+          NEGATIVE: dev.filter(r => r.label === "NEGATIVE").length,
+        },
+        validation: {
+          total: val.length,
+          POSITIVE: val.filter(r => r.label === "POSITIVE").length,
+          NEGATIVE: val.filter(r => r.label === "NEGATIVE").length,
+        },
+        contaminated: n(r => r.contaminated),
+        symbols: [...new Set(all.map(r => r.symbol))].sort(),
+        timeframes: [...new Set(all.map(r => r.timeframe))].sort(),
+        readyForFeatureWork:
+          n(r => r.label === "POSITIVE") >= TARGETS.positives &&
+          explicitNeg >= TARGETS.explicitNegatives &&
+          val.filter(r => r.label === "POSITIVE").length >= TARGETS.validationPositives &&
+          val.filter(r => r.label === "NEGATIVE").length >= TARGETS.validationNegatives,
+        gaps: {
+          positivesNeeded: Math.max(0, TARGETS.positives - n(r => r.label === "POSITIVE")),
+          explicitNegativesNeeded: Math.max(0, TARGETS.explicitNegatives - explicitNeg),
+          validationPositivesNeeded: Math.max(0, TARGETS.validationPositives - val.filter(r => r.label === "POSITIVE").length),
+          validationNegativesNeeded: Math.max(0, TARGETS.validationNegatives - val.filter(r => r.label === "NEGATIVE").length),
+        },
       });
     }
 
