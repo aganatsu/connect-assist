@@ -1636,12 +1636,19 @@ Deno.serve(async (req) => {
         const isAmbiguous = (L: number) => dupLevels.some(x => Math.abs(x - L) < lvlTol);
 
         const canonAll = [...canonBos, ...canonChoch].sort((a, b) => a.index - b.index);
-        const missed = canonAll.filter(e =>
-          !curBreaks.some((b: any) => Math.abs(b.level - e.level) < lvlTol));
+        // Level alone is NOT a sufficient match key. A swing high and a swing
+        // low can sit at the same price within tolerance, in which case a
+        // bullish break would match a bearish one and silently corrupt
+        // missedByCurrent, the timing deltas and the reclassification counts —
+        // a "reclassification" that is really two unrelated events. Direction
+        // is part of the identity, so match on (type, level).
+        const sameBreak = (b: any, e: any) =>
+          b.type === e.type && Math.abs(b.level - e.level) < lvlTol;
+        const missed = canonAll.filter(e => !curBreaks.some((b: any) => sameBreak(b, e)));
         const deltas: any[] = [], reclass: any[] = [];
         let ambiguousSkipped = 0;
         for (const e of canonAll) {
-          const m = curBreaks.find((b: any) => Math.abs(b.level - e.level) < lvlTol);
+          const m = curBreaks.find((b: any) => sameBreak(b, e));
           if (!m) continue;
           if (isAmbiguous(e.level)) { ambiguousSkipped++; continue; }
           deltas.push({ level: e.level, canonicalIndex: e.index, currentIndex: m.index,
@@ -1697,10 +1704,21 @@ Deno.serve(async (req) => {
             const at = (L: number) => Math.abs(L - lvl) < tol;
             const cEvt = canonAll.find(e => at(e.level) && e.datetime.slice(0, 10) === want) ?? null;
             const lEntry = ledger.find(x => at(x.level) && x.datetime.slice(0, 10) === want) ?? null;
-            const curHit = curBreaks.filter((b: any) => at(b.level))
+            // Same reasoning as sameBreak(): compare like with like. The
+            // expected direction comes from the request where given, else from
+            // whichever stream found it. If none of the three yields one the
+            // lookup degrades to level-only and says so, rather than quietly
+            // matching an opposite-direction break at the same price.
+            const wantDir: string | null =
+              (tgt.requiredCase.direction ? String(tgt.requiredCase.direction) : null)
+              ?? (cEvt ? cEvt.type : null) ?? (lEntry ? lEntry.direction : null);
+            const curHit = curBreaks
+              .filter((b: any) => at(b.level) && (wantDir === null || b.type === wantDir))
               .sort((a: any, b: any) => a.index - b.index)[0] ?? null;
             return {
               level: lvl, expectedCloseDate: want,
+              expectedDirection: wantDir,
+              directionCheckApplied: wantDir !== null,
               ledgerRecordsOnExpectedDate: !!lEntry,
               ledgerSignificance: lEntry ? lEntry.significance : null,
               canonicalEmitsOnExpectedDate: !!cEvt,
