@@ -60,3 +60,5 @@ audit-out.json
 run-audit.sh
 phase-out.json
 run-phase.sh
+segment-out.json
+run-segment.sh

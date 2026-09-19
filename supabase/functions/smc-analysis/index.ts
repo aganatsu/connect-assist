@@ -3212,6 +3212,171 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_exception_segment_audit ─────────────────────────────────────
+    // DESCRIPTIVE ONLY, and deliberately narrow. It answers one question:
+    //
+    //   what distinguishes the known Ezzy boxes that are NOT the final
+    //   opposite-colour candle before favourable expansion?
+    //
+    // It invents no rule. It does not read canonical structure, BOS/CHoCH,
+    // TURN or continuation labels, body-ratio thresholds, the past-10 extreme
+    // rule, contraction/compression filters, ranking or selector logic. It
+    // changes no geometry and no production consumer.
+    //
+    // Only three ingredients are used, all carried over unchanged:
+    //   1. the non-circular prior-range grab from the phase audit
+    //        priorRange  [i-2W, i-W-1]      contraction [i-W, i-1]
+    //        clearance scanned [i-W, i] AGAINST priorRange
+    //   2. the structural expansion definition — first maximal run of
+    //      favourable-direction candles, no ATR threshold
+    //   3. candle colour
+    //
+    // Opposite-colour means opposite to the expansion: a DOWN candle before an
+    // up move (demand), an UP candle before a down move (supply).
+    //
+    // Frozen findings this must not disturb: geometry solved; one-sided
+    // clearance 9/10; known candle is the grab bar 0/10; last opposite-colour
+    // before expansion 8/10; BTC holdout 0/3.
+    if (action === "ezzy_exception_segment_audit") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const W = Number(body?.window ?? 10);
+      const HORIZON = Number(body?.horizon ?? 40);
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 80) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const dstr = (i: number) => series[i]?.datetime?.slice(0, 10) ?? null;
+        const shape = (j: number) => {
+          const n = series[j], nr = n.high - n.low, na = atrAt(j) || 1;
+          const bh = Math.max(n.open, n.close), bl = Math.min(n.open, n.close);
+          return {
+            date: dstr(j), colour: n.close >= n.open ? "up" : "down",
+            o: n.open, h: n.high, l: n.low, c: n.close,
+            rangeAtr: r(nr / na),
+            bodyRangeRatio: nr > 0 ? r(Math.abs(n.close - n.open) / nr) : null,
+            upperWickRatio: nr > 0 ? r((n.high - bh) / nr) : null,
+            lowerWickRatio: nr > 0 ? r((bl - n.low) / nr) : null,
+          };
+        };
+
+        const rows = (tgt.knownBoxes ?? []).map((k: any) => {
+          const i = series.findIndex(c => c.datetime.slice(0, 10) === String(k.date));
+          if (i < 0) return { date: k.date, side: k.side, error: "candle not in series" };
+          const demand = k.side === "demand";
+          const favUp = demand;
+          const oppIsUp = !demand;          // supply boxes are up candles
+
+          // ── 1. most recent one-sided grab, non-circular ──────────────
+          const pS = i - 2 * W, pE = i - W - 1;
+          let pri: { hi: number; lo: number } | null = null;
+          if (pS >= 0) {
+            let hi = -Infinity, lo = Infinity;
+            for (let j = pS; j <= pE; j++) { if (series[j].high > hi) hi = series[j].high; if (series[j].low < lo) lo = series[j].low; }
+            pri = { hi, lo };
+          }
+          let aboveIdx = -1, belowIdx = -1;
+          if (pri) {
+            for (let j = i - W; j <= i; j++) {
+              if (j < 0) continue;
+              if (series[j].high > pri.hi) aboveIdx = j;      // LAST, not first
+              if (series[j].low < pri.lo) belowIdx = j;
+            }
+          }
+          const grabIdx = Math.max(aboveIdx, belowIdx);
+          const grabSide = grabIdx < 0 ? null : (grabIdx === aboveIdx ? "high" : "low");
+          const grabFound = grabIdx >= 0;
+          // No grab inside the window (BTC 2020-03-27). Fall back to the window
+          // start so a segment still exists, and SAY SO rather than silently
+          // producing a segment that looks equivalent.
+          const segStart = grabFound ? grabIdx : Math.max(0, i - W);
+
+          // ── 2. first favourable expansion after the known candle ─────
+          let expStart = -1, expEnd = -1;
+          for (let j = i + 1; j < Math.min(series.length, i + 1 + HORIZON); j++) {
+            const up = series[j].close >= series[j].open;
+            if (up === favUp) { if (expStart < 0) expStart = j; expEnd = j; }
+            else if (expStart >= 0) break;
+          }
+          const segEnd = expStart < 0 ? Math.min(series.length - 1, i + HORIZON) : expStart - 1;
+
+          // ── 3. every opposite-colour candle in the segment ───────────
+          const opp: any[] = [];
+          for (let j = segStart; j <= segEnd; j++) {
+            if ((series[j].close >= series[j].open) !== oppIsUp) continue;
+            opp.push({
+              ...shape(j), index: j,
+              barsFromGrab: grabFound ? j - grabIdx : null,
+              barsToExpansion: expStart < 0 ? null : expStart - j,
+              insidePriorRange: pri ? (series[j].high <= pri.hi && series[j].low >= pri.lo) : null,
+              isKnownEzzyCandle: j === i,
+            });
+          }
+          const pos = opp.findIndex(x => x.isKnownEzzyCandle);
+          const fromEnd = pos < 0 ? null : opp.length - pos;   // 1 = last
+
+          return {
+            date: k.date, side: k.side, index: i,
+            grab: {
+              found: grabFound, date: grabFound ? dstr(grabIdx) : null, side: grabSide,
+              barsFromGrabToKnownCandle: grabFound ? i - grabIdx : null,
+              priorRangeHigh: pri ? r(pri.hi, 5) : null, priorRangeLow: pri ? r(pri.lo, 5) : null,
+              segmentStartFallback: !grabFound,
+            },
+            expansion: {
+              startDate: expStart < 0 ? null : dstr(expStart),
+              endDate: expStart < 0 ? null : dstr(expEnd),
+              barsFromKnownCandle: expStart < 0 ? null : expStart - i,
+            },
+            segment: { from: dstr(segStart), to: dstr(segEnd), bars: segEnd - segStart + 1 },
+            oppositeColourCandidates: opp,
+            knownCandlePositionFromEnd: fromEnd,   // 1 = last, 2 = second-to-last, ...
+            knownCandleIsLastOpposite: fromEnd === 1,
+            oppositeColourCount: opp.length,
+            // Full bar-by-bar segment, every candle regardless of colour, so
+            // the exceptions can be read directly rather than inferred.
+            fullSegment: (() => {
+              const arr: any[] = [];
+              for (let j = segStart; j <= (expStart < 0 ? segEnd : expEnd); j++) {
+                arr.push({
+                  ...shape(j), index: j, offsetFromKnown: j - i,
+                  isGrabBar: grabFound && j === grabIdx,
+                  isKnownEzzyCandle: j === i,
+                  isExpansionBar: expStart >= 0 && j >= expStart && j <= expEnd,
+                  isOppositeColour: (series[j].close >= series[j].open) === oppIsUp,
+                });
+              }
+              return arr;
+            })(),
+          };
+        });
+
+        out.push({ symbol: sym, interval: tf, bars: series.length, window: W, knownCandles: rows });
+      }
+      return respond({
+        note: "DESCRIPTIVE ONLY. Uses only the non-circular prior-range grab, the " +
+              "structural expansion definition and candle colour. No canonical " +
+              "structure, BOS/CHoCH, TURN/continuation labels, body thresholds, " +
+              "past-10 rule, contraction filters, ranking, selector or geometry " +
+              "changes. No new rule is proposed. Frozen: geometry solved; " +
+              "one-sided clearance 9/10; candle is grab bar 0/10; last " +
+              "opposite-colour before expansion 8/10; BTC holdout 0/3.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
