@@ -3911,6 +3911,17 @@ export function analyzeMarketStructureCanonical(
     replacementLevel: number; replacementAt: string; replacementIndex: number;
     laterBroken: boolean; laterBreakDate: string | null; barsUntilLaterBreak: number | null;
     supersededSwingKey: string;
+    // SEMANTIC MISMATCH, measured not fixed. The engulfment rule compares swing
+    // PRICES — and a swing high's price is its wick extreme — while a break
+    // requires a CLOSE through. So a level can be retired on a wick that would
+    // never have been accepted as a break.
+    //
+    // By construction these should skew almost entirely to wick-only: if the
+    // replacement candle had CLOSED beyond the old level, the old level would
+    // have been marked broken on that bar and never reached retire() at all.
+    // Measuring it proves whether that reasoning holds.
+    replacementClosedBeyondOldLevel: boolean;
+    replacementOnlyWickedBeyondOldLevel: boolean;
   }
   const supersessions: Supersession[] = [];
 
@@ -3921,6 +3932,9 @@ export function analyzeMarketStructureCanonical(
     const retire = (old: CSwing) => {
       if (old.broken) return;
       old.supersededAt = j;
+      const repBar = candles[s.index];
+      const repClosed = !!repBar && (old.type === "high"
+        ? repBar.close > old.price : repBar.close < old.price);
       supersessions.push({
         type: old.type, significance: sig,
         supersededLevel: old.price,
@@ -3929,6 +3943,8 @@ export function analyzeMarketStructureCanonical(
         replacementAt: candles[s.index]?.datetime ?? "", replacementIndex: s.index,
         laterBroken: false, laterBreakDate: null, barsUntilLaterBreak: null,
         supersededSwingKey: old.key,
+        replacementClosedBeyondOldLevel: repClosed,
+        replacementOnlyWickedBeyondOldLevel: !repClosed,
       });
     };
     if (policy === "latest_confirmed") {
@@ -3998,6 +4014,36 @@ export function analyzeMarketStructureCanonical(
         };
         (entry as any).swingIndex = primary.index;
         (entry as any).barsFromConfirmation = j - activeAt(primary);
+        (entry as any).swingConfirmedAt = candles[activeAt(primary)]?.datetime ?? null;
+        (entry as any).swingConfirmedIndex = activeAt(primary);
+        (entry as any).eventAt = bar.datetime;
+        (entry as any).barsSinceConfirmation = j - activeAt(primary);
+        (entry as any).swingAgeBars = j - primary.index;
+        (entry as any).direction = dir;
+        (entry as any).kind = isChoch ? "CHoCH" : "BOS";
+        (entry as any).policy = policy;
+        // How the level behaved between confirmation and the break. An ancient
+        // level that was never touched is meaningful untouched structure; one
+        // that has been wicked repeatedly is old liquidity being worked.
+        (entry as any).interaction = (() => {
+          let touched = 0, wicked = 0;
+          for (let k = activeAt(primary); k < j; k++) {
+            const b2 = candles[k];
+            if (!b2) continue;
+            const reach = primary.type === "high"
+              ? b2.high >= primary.price : b2.low <= primary.price;
+            const beyond = primary.type === "high"
+              ? b2.high > primary.price : b2.low < primary.price;
+            if (reach) touched++;
+            if (beyond) wicked++;
+          }
+          return {
+            touchCount: touched, wickCount: wicked,
+            neverTouchedSinceConfirmation: touched === 0,
+            previouslyWickedThrough: wicked > 0,
+            touchedButNotWicked: touched > 0 && wicked === 0,
+          };
+        })();
         // Nothing is discarded: the other levels this bar crossed are kept as
         // metadata rather than dropped or emitted as separate events.
         (entry as any).alsoBrokenLevels = others.map(s => ({
@@ -4113,6 +4159,10 @@ export function analyzeMarketStructureCanonical(
       total: supersessions.length,
       laterBroken: supersessions.filter(s => s.laterBroken).length,
       neverBroken: supersessions.filter(s => !s.laterBroken).length,
+      replacementClosedBeyondOldLevel:
+        supersessions.filter(x => x.replacementClosedBeyondOldLevel).length,
+      replacementOnlyWickedBeyondOldLevel:
+        supersessions.filter(x => x.replacementOnlyWickedBeyondOldLevel).length,
       medianBarsUntilLaterBreak: (() => {
         const v = supersessions.filter(s => s.barsUntilLaterBreak != null)
           .map(s => s.barsUntilLaterBreak!).sort((a, b) => a - b);

@@ -1888,6 +1888,147 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── structure_event_ages ─────────────────────────────────────────────
+    // READ-ONLY. How OLD is the structural level at the moment an event fires,
+    // and specifically for events that exist under latest_unbroken_structural
+    // but not under latest_confirmed.
+    //
+    // No age cutoff is applied or proposed here. The point is to find out
+    // whether LUS-only events come from fresh structure or from levels that
+    // have been sitting unbroken for hundreds of bars, and whether those old
+    // levels were untouched (meaningful) or repeatedly wicked (worked
+    // liquidity). A threshold chosen before seeing that distribution would be
+    // the same mistake as reading a 2.2 ATR rule off four samples.
+    if (action === "structure_event_ages") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+
+      const pct = (xs: number[], q: number) =>
+        xs.length ? xs[Math.min(xs.length - 1, Math.floor(xs.length * q))] : null;
+      const buckets = (xs: number[]) => ({
+        "0-5": xs.filter(x => x <= 5).length,
+        "6-10": xs.filter(x => x >= 6 && x <= 10).length,
+        "11-20": xs.filter(x => x >= 11 && x <= 20).length,
+        "21-50": xs.filter(x => x >= 21 && x <= 50).length,
+        "51-100": xs.filter(x => x >= 51 && x <= 100).length,
+        "101-250": xs.filter(x => x >= 101 && x <= 250).length,
+        ">250": xs.filter(x => x > 250).length,
+      });
+      const spread = (evts: any[]) => {
+        const xs = evts.map(e => e.barsSinceConfirmation).sort((a, b) => a - b);
+        return {
+          count: xs.length, ageBuckets: buckets(xs),
+          median: pct(xs, 0.5), p75: pct(xs, 0.75), p90: pct(xs, 0.9),
+          max: xs.length ? xs[xs.length - 1] : null,
+        };
+      };
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const lc = analyzeMarketStructureCanonical(series, { policy: "latest_confirmed" });
+        const lus = analyzeMarketStructureCanonical(series, { policy: "latest_unbroken_structural" });
+        const evs = (st: any) => [...st.bos, ...st.choch].sort((a: any, b: any) => a.index - b.index);
+        // Identity is the SWING that broke plus the bar it broke on. Level
+        // alone is not enough — two policies can emit on the same bar for
+        // different swings, and a swing high and low can share a price.
+        const key = (e: any) => `${e.swingIndex}_${e.index}_${e.direction}`;
+        const lcE = evs(lc), lusE = evs(lus);
+        const lcKeys = new Set(lcE.map(key)), lusKeys = new Set(lusE.map(key));
+
+        const shared = lusE.filter((e: any) => lcKeys.has(key(e)));
+        const lcOnly = lcE.filter((e: any) => !lusKeys.has(key(e)));
+        const lusOnly = lusE.filter((e: any) => !lcKeys.has(key(e)));
+
+        const slim = (e: any) => ({
+          policy: e.policy, kind: e.kind, direction: e.direction,
+          significance: e.significance, level: e.level,
+          swingIndex: e.swingIndex, swingConfirmedAt: e.swingConfirmedAt,
+          eventAt: e.eventAt, barsSinceConfirmation: e.barsSinceConfirmation,
+          swingAgeBars: e.swingAgeBars, interaction: e.interaction,
+        });
+        const inter = (evts: any[]) => ({
+          neverTouchedSinceConfirmation: evts.filter(e => e.interaction?.neverTouchedSinceConfirmation).length,
+          previouslyWickedThrough: evts.filter(e => e.interaction?.previouslyWickedThrough).length,
+          touchedButNotWicked: evts.filter(e => e.interaction?.touchedButNotWicked).length,
+          medianWickCount: (() => {
+            const v = evts.map(e => e.interaction?.wickCount ?? 0).sort((a, b) => a - b);
+            return v.length ? v[Math.floor(v.length / 2)] : null;
+          })(),
+        });
+
+        out.push({
+          symbol: sym, bars: series.length,
+          counts: { sharedByBoth: shared.length, latestConfirmedOnly: lcOnly.length, latestUnbrokenOnly: lusOnly.length },
+          ages: {
+            sharedByBoth: spread(shared),
+            latestConfirmedOnly: spread(lcOnly),
+            latestUnbrokenOnly: spread(lusOnly),
+          },
+          latestUnbrokenOnlyBySignificance: {
+            internal: spread(lusOnly.filter((e: any) => e.significance === "internal")),
+            external: spread(lusOnly.filter((e: any) => e.significance === "external")),
+          },
+          latestUnbrokenOnlyByKind: {
+            BOS: spread(lusOnly.filter((e: any) => e.kind === "BOS")),
+            CHoCH: spread(lusOnly.filter((e: any) => e.kind === "CHoCH")),
+          },
+          latestUnbrokenOnlyInteraction: {
+            all: inter(lusOnly),
+            internal: inter(lusOnly.filter((e: any) => e.significance === "internal")),
+            external: inter(lusOnly.filter((e: any) => e.significance === "external")),
+            oldestQuartile: inter([...lusOnly]
+              .sort((a: any, b: any) => b.barsSinceConfirmation - a.barsSinceConfirmation)
+              .slice(0, Math.ceil(lusOnly.length / 4))),
+          },
+          sharedInteraction: inter(shared),
+          supersessionSemantics: {
+            latest_confirmed: lc.supersessionSummary,
+            latest_unbroken_structural: lus.supersessionSummary,
+          },
+          examples: {
+            oldestLatestUnbrokenOnly: [...lusOnly]
+              .sort((a: any, b: any) => b.barsSinceConfirmation - a.barsSinceConfirmation)
+              .slice(0, 5).map(slim),
+            youngestLatestUnbrokenOnly: [...lusOnly]
+              .sort((a: any, b: any) => a.barsSinceConfirmation - b.barsSinceConfirmation)
+              .slice(0, 3).map(slim),
+          },
+          requiredCase: tgt.requiredCase ? (() => {
+            const lvl = Number(tgt.requiredCase.level);
+            const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+            const want = String(tgt.requiredCase.closeDate);
+            const dir = tgt.requiredCase.direction ? String(tgt.requiredCase.direction) : null;
+            const find = (list: any[]) => list.find((e: any) =>
+              Math.abs(e.level - lvl) < tol && (e.eventAt ?? "").slice(0, 10) === want &&
+              (dir === null || e.direction === dir)) ?? null;
+            const a = find(lcE), b = find(lusE);
+            return {
+              latest_confirmed: a ? { kind: a.kind, significance: a.significance,
+                barsSinceConfirmation: a.barsSinceConfirmation, swingAgeBars: a.swingAgeBars } : null,
+              latest_unbroken_structural: b ? { kind: b.kind, significance: b.significance,
+                barsSinceConfirmation: b.barsSinceConfirmation, swingAgeBars: b.swingAgeBars } : null,
+              classification: a && b ? "sharedByBoth" : (a ? "latestConfirmedOnly" : (b ? "latestUnbrokenOnly" : "MISSING")),
+            };
+          })() : null,
+        });
+      }
+      return respond({
+        note: "READ-ONLY. No age cutoff applied or proposed. Event identity is " +
+              "(swingIndex, eventBar, direction) — level alone is insufficient. " +
+              "Supersession semantics: the LUS engulfment rule compares swing " +
+              "PRICES (wick extremes) while breaks require a CLOSE, and " +
+              "replacementClosedBeyondOldLevel vs replacementOnlyWickedBeyondOldLevel " +
+              "measures that mismatch rather than fixing it.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
