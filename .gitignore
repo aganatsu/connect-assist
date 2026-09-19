@@ -47,3 +47,8 @@ structure-ages-out.json
 run-ages.sh
 structure-recency-out.json
 run-recency.sh
+
+# Local forensic fixtures (not committed until promoted to tests)
+.fixtures-local/
+
+supabase/.temp/

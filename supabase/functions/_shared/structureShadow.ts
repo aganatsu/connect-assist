@@ -37,6 +37,31 @@ import {
   type StructureBreak,
 } from "./smcAnalysis.ts";
 
+// ── BLOCKER FOR ANY WHOLESALE STRUCTURE REPLACEMENT: derivedSR ──────────────
+//
+// analyzeMarketStructure returns a `derivedSR` object — auto support/resistance
+// derived from each BOS, with active/broken lists. analyzeMarketStructureCanonical
+// DOES NOT. Its return has no derivedSR field at all.
+//
+// Two live consumers would silently degrade if the canonical object were swapped
+// in wholesale:
+//
+//   confluenceScoring.ts:425  reads structure.derivedSR.active and awards +0.2 to
+//                             the Market Structure factor when price sits within
+//                             0.5 ATR of an unbroken BOS-derived level
+//   bot-scanner/index.ts:5226 serialises derivedSR.active / .broken into the
+//                             scan detail payload
+//
+// Neither would throw. `structure.derivedSR` would be undefined, the guard would
+// short-circuit, and the bonus would quietly stop being awarded — a silent
+// subtraction that type-checks, which is the exact failure shape that has cost
+// this repo a day before (the atrValue return that zeroed five consumers).
+//
+// So the canonical engine is NOT a drop-in replacement for the structure object
+// today, only for the BOS/CHoCH/trend parts of it. Closing this means either
+// porting the derived-S/R computation into the canonical engine or having
+// callers keep reading derivedSR from the live engine. Until then, do not
+// substitute the object.
 export const SHADOW_POLICY = "latest_unbroken_structural" as const;
 export const SHADOW_MAX_EVENT_AGE_BARS = 50;
 
@@ -62,8 +87,20 @@ export interface StructureShadowDiff {
   policy: string;
   maxEventAgeBars: number;
   bars: number;
+  /** Live engine's trend. SWING GEOMETRY — last 2 highs and last 2 lows. */
   currentTrend: string | null;
+  /**
+   * Canonical's own `trend`: the running direction of the last emitted event.
+   * A DIFFERENT CONCEPT from currentTrend — reported for information, never
+   * compared against it. See canonicalGeometricTrend.
+   */
   canonicalTrend: string | null;
+  /**
+   * Canonical's swing points run through the LIVE engine's trend rule, so the
+   * comparison is like-for-like. This is what trendAgrees uses.
+   */
+  canonicalGeometricTrend: string | null;
+  /** currentTrend vs canonicalGeometricTrend. Same definition, both sides. */
   trendAgrees: boolean;
   latestBOS: { current: ShadowEventSummary | null; canonical: ShadowEventSummary | null; agrees: boolean; reason: ShadowDisagreementReason };
   latestCHoCH: { current: ShadowEventSummary | null; canonical: ShadowEventSummary | null; agrees: boolean; reason: ShadowDisagreementReason };
@@ -102,6 +139,38 @@ const summarise = (b: StructureBreak | undefined | null): ShadowEventSummary | n
     : null;
 
 const LEVEL_TOL = 1e-8;
+
+/**
+ * The live engine's trend rule, applied to an arbitrary swing set.
+ *
+ * WHY THIS EXISTS. The two engines define `trend` from different inputs:
+ *
+ *   live      swing GEOMETRY — bullish only if the last two highs AND the last
+ *             two lows both rise; bearish only if both fall; else ranging. It
+ *             never reads BOS/CHoCH. (smcAnalysis.ts:1108-1114)
+ *   canonical the running direction of the last emitted structure EVENT.
+ *
+ * Comparing those two directly is apples-to-oranges, and the first version of
+ * this diff did exactly that: on 2026-09-19 it reported four BTC/USD "trend
+ * disagreements" where live said ranging and canonical said bearish. Both were
+ * correct under their own definition. The field was manufacturing findings.
+ *
+ * Mirroring the rule here lets canonical's swings be judged by the same
+ * standard, so a disagreement means the SWINGS differ — which is a real
+ * finding — rather than that the definitions differ, which is not.
+ */
+export function geometricTrendFromSwings(
+  swingPoints: Array<{ type: string; price: number; index: number }>,
+): "bullish" | "bearish" | "ranging" {
+  const ordered = [...swingPoints].sort((a, b) => a.index - b.index);
+  const highs = ordered.filter((s) => s.type === "high");
+  const lows = ordered.filter((s) => s.type === "low");
+  if (highs.length < 2 || lows.length < 2) return "ranging";
+  const rH = highs.slice(-2), rL = lows.slice(-2);
+  if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) return "bullish";
+  if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) return "bearish";
+  return "ranging";
+}
 
 /**
  * Classify one pair of latest-events.
@@ -144,7 +213,12 @@ function classify(
  */
 export function buildStructureShadowDiff(
   candles: Candle[],
-  current: { trend?: string; bos?: StructureBreak[]; choch?: StructureBreak[] },
+  current: {
+    trend?: string;
+    bos?: StructureBreak[];
+    choch?: StructureBreak[];
+    swingPoints?: Array<{ type: string; price: number; index: number }>;
+  },
   site: string,
 ): StructureShadowDiff | null {
   if (!isCanonicalShadowEnabled()) return null;
@@ -161,6 +235,8 @@ export function buildStructureShadowDiff(
     // engine throws, the caller gets null and production carries on unaware.
     return null;
   }
+
+  const canonicalGeometric = geometricTrendFromSwings(canonical.swingPoints ?? []);
 
   const last = <T extends { index: number }>(xs: T[] | undefined) =>
     xs && xs.length ? xs.reduce((a, b) => (b.index >= a.index ? b : a)) : null;
@@ -190,7 +266,10 @@ export function buildStructureShadowDiff(
     bars: candles.length,
     currentTrend: current.trend ?? null,
     canonicalTrend: canonical.trend ?? null,
-    trendAgrees: (current.trend ?? null) === (canonical.trend ?? null),
+    canonicalGeometricTrend: canonicalGeometric,
+    // Like-for-like. NOT current.trend vs canonical.trend — those are two
+    // different definitions and comparing them produced false disagreements.
+    trendAgrees: (current.trend ?? null) === canonicalGeometric,
     latestBOS: { current: curBos, canonical: canBos, agrees: classify(curBos, canBos) === "same", reason: classify(curBos, canBos) },
     latestCHoCH: { current: curCh, canonical: canCh, agrees: classify(curCh, canCh) === "same", reason: classify(curCh, canCh) },
     latestEvent: { current: curAny, canonical: canAny, agrees: anyReason === "same", reason: anyReason },
@@ -257,6 +336,7 @@ export async function recordStructureShadow(
       max_event_age_bars: d.maxEventAgeBars,
       current_trend: d.currentTrend,
       canonical_trend: d.canonicalTrend,
+      canonical_geometric_trend: d.canonicalGeometricTrend,
       trend_agrees: d.trendAgrees,
       latest_event_reason: d.latestEvent.reason,
       latest_bos_reason: d.latestBOS.reason,

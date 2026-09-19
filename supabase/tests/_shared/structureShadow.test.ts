@@ -10,6 +10,7 @@ import {
   SHADOW_POLICY,
   recordStructureShadow,
   shadowDisagrees,
+  geometricTrendFromSwings,
 } from "../../functions/_shared/structureShadow.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
@@ -342,4 +343,54 @@ Deno.test("telemetry: a DB error or throw never propagates to the caller", async
   const db2 = fakeSupabase();
   db2.throwNext();
   assertEquals(await recordStructureShadow(db2, { userId: "u", symbol: "X", diff: bad }), "failed");
+});
+
+// ─── trend comparison must be like-for-like ─────────────────────────────────
+
+Deno.test("trendAgrees compares the SAME definition on both sides", () => {
+  // Regression for the 2026-09-19 false positives. The live engine's trend is
+  // swing geometry; canonical's is the direction of its last event. Comparing
+  // them directly flagged four BTC/USD rows as disagreements when both engines
+  // were correct under their own definition.
+  //
+  // The BTC fixture is the exact case: live=ranging, canonical event=bearish.
+  // Under the fixed comparison the geometric trends match, so it is NOT a
+  // disagreement — while the level/timing disagreement is still reported.
+  const w: Candle[] = JSON.parse(
+    Deno.readTextFileSync("supabase/tests/fixtures/structure/btcusd-5m-20260919-0020-0425.json"),
+  );
+  const live = analyzeMarketStructure(w);
+  withFlag("true", () => {
+    const d = buildStructureShadowDiff(w, live, "test")!;
+    assertEquals(d.currentTrend, "ranging", "live trend unchanged");
+    assertEquals(d.canonicalTrend, "bearish", "canonical event trend still reported");
+    assertEquals(d.canonicalGeometricTrend, "ranging", "same rule on canonical swings");
+    assertEquals(d.trendAgrees, true, "no longer a false trend disagreement");
+    // The genuine disagreement is still surfaced.
+    assertEquals(d.latestEvent.reason, "different_primary_level");
+  });
+});
+
+Deno.test("geometricTrendFromSwings mirrors the live engine exactly", () => {
+  // If the live rule ever changes, this must fail rather than drift silently.
+  for (const f of ["btcusd", "ethusd"]) {
+    const w: Candle[] = JSON.parse(
+      Deno.readTextFileSync(`supabase/tests/fixtures/structure/${f}-5m-20260919-0020-0425.json`),
+    );
+    const live = analyzeMarketStructure(w);
+    assertEquals(
+      geometricTrendFromSwings(live.swingPoints as any),
+      live.trend,
+      `${f}: the mirrored rule must reproduce the live engine's own trend`,
+    );
+  }
+});
+
+Deno.test("geometricTrendFromSwings returns ranging when there is too little structure", () => {
+  assertEquals(geometricTrendFromSwings([]), "ranging");
+  assertEquals(
+    geometricTrendFromSwings([{ type: "high", price: 1, index: 0 }, { type: "low", price: 0, index: 1 }]),
+    "ranging",
+    "one high and one low is not enough to establish a sequence",
+  );
 });
