@@ -3377,6 +3377,147 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_recent_grab_phase ───────────────────────────────────────────
+    // DESCRIPTIVE ONLY. Re-derives the phase summary using the MOST RECENT
+    // liquidity grab, and nothing else.
+    //
+    // WHY IT IS BEING RE-DERIVED. The earlier phase audit recorded the FIRST
+    // occurrence of each side's clearance and reported "known candle is the
+    // grab bar: 0/10". That was measuring whether the candle was the later of
+    // two first-occurrences, which is a different question. Under the correct
+    // most-recent definition the answer is 6/10, and for those six the segment
+    // collapses to a single candidate, which also means the "last
+    // opposite-colour before expansion 8/10" was mostly vacuous — it is 2/4 on
+    // the non-trivial segments.
+    //
+    // Deliberately NOT used anywhere here: BOS/CHoCH, canonical structure
+    // events, TURN or continuation labels, body-ratio thresholds, the past-10
+    // extreme rule, contraction/compression filters, and any ranking. Selector
+    // logic, geometry and production consumers are untouched.
+    //
+    // The grab remains non-circular:
+    //   priorRange  [i-2W, i-W-1]     scan [i-W, i] AGAINST it, keep the LAST
+    if (action === "ezzy_recent_grab_phase") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const W = Number(body?.window ?? 10);
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 80) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const dstr = (i: number) => series[i]?.datetime?.slice(0, 10) ?? null;
+        const bar = (j: number) => {
+          const n = series[j], nr = n.high - n.low, na = atrAt(j) || 1;
+          const bh = Math.max(n.open, n.close), bl = Math.min(n.open, n.close);
+          return {
+            date: dstr(j), colour: n.close >= n.open ? "up" : "down",
+            o: n.open, h: n.high, l: n.low, c: n.close,
+            rangeAtr: r(nr / na),
+            bodyRangeRatio: nr > 0 ? r(Math.abs(n.close - n.open) / nr) : null,
+            upperWickRatio: nr > 0 ? r((n.high - bh) / nr) : null,
+            lowerWickRatio: nr > 0 ? r((bl - n.low) / nr) : null,
+          };
+        };
+
+        const rows = (tgt.knownBoxes ?? []).map((k: any) => {
+          const i = series.findIndex(c => c.datetime.slice(0, 10) === String(k.date));
+          if (i < 0) return { date: k.date, side: k.side, error: "candle not in series" };
+          const demand = k.side === "demand";
+          const a = atrAt(i) || 1;
+
+          const pS = i - 2 * W, pE = i - W - 1;
+          if (pS < 0) return { date: k.date, side: k.side, error: "insufficient history for prior range" };
+          let phi = -Infinity, plo = Infinity;
+          for (let j = pS; j <= pE; j++) {
+            if (series[j].high > phi) phi = series[j].high;
+            if (series[j].low < plo) plo = series[j].low;
+          }
+
+          // MOST RECENT clearance of each side, scanned forward but kept last.
+          let aboveIdx = -1, belowIdx = -1;
+          for (let j = i - W; j <= i; j++) {
+            if (j < 0) continue;
+            if (series[j].high > phi) aboveIdx = j;
+            if (series[j].low < plo) belowIdx = j;
+          }
+          const anyClearance = aboveIdx >= 0 || belowIdx >= 0;
+          const grabIdx = Math.max(aboveIdx, belowIdx);
+          const grabSide = grabIdx < 0 ? null : (grabIdx === aboveIdx ? "high" : "low");
+          const isGrabBar = grabIdx >= 0 && grabIdx === i;
+
+          // Aligned means the grab took the liquidity the box then trades away
+          // from: a demand box after a low is taken, a supply box after a high.
+          const grabAligned = grabIdx < 0 ? null
+            : (demand ? grabSide === "low" : grabSide === "high");
+
+          const grabBar = grabIdx < 0 ? null : series[grabIdx];
+          const level = grabSide === "high" ? phi : plo;
+          const closeThrough = grabIdx < 0 ? null
+            : (grabSide === "high" ? grabBar!.close > phi : grabBar!.close < plo);
+          const exceededAtr = grabIdx < 0 ? null
+            : r(Math.abs((grabSide === "high" ? grabBar!.high - phi : plo - grabBar!.low)) / a);
+
+          // Only populated when the candle is NOT the grab bar.
+          const between: any[] = [];
+          if (grabIdx >= 0 && grabIdx < i) {
+            for (let j = grabIdx + 1; j <= i; j++) {
+              between.push({ ...bar(j), offsetFromGrab: j - grabIdx, offsetFromKnown: j - i,
+                             isKnownEzzyCandle: j === i });
+            }
+          }
+
+          return {
+            date: k.date, side: k.side, index: i,
+            anyOneSidedClearance: anyClearance,
+            mostRecentGrab: {
+              date: grabIdx < 0 ? null : dstr(grabIdx),
+              side: grabSide,
+              level: grabIdx < 0 ? null : r(level, 5),
+              wickOnly: grabIdx < 0 ? null : !closeThrough,
+              closeThrough,
+              exceededPriorRangeAtr: exceededAtr,
+            },
+            knownCandleIsGrabBar: isGrabBar,
+            grabAlignedWithBoxSide: grabAligned,
+            grabWasPriorLow_forDemand: demand ? (grabSide === "low") : null,
+            grabWasPriorHigh_forSupply: demand ? null : (grabSide === "high"),
+            barsFromGrabToKnownCandle: grabIdx < 0 ? null : i - grabIdx,
+            knownCandle: bar(i),
+            // exceeded-by only meaningful when the candle itself did the grab
+            knownCandleExceededPriorRangeAtr: isGrabBar ? exceededAtr : null,
+            barsBetweenGrabAndKnownCandle: between,
+            priorRange: { from: dstr(pS), to: dstr(pE), high: r(phi, 5), low: r(plo, 5) },
+            group: grabIdx < 0 ? "NO_GRAB" : (isGrabBar ? "A" : "B"),
+          };
+        });
+
+        out.push({ symbol: sym, interval: tf, bars: series.length, window: W, knownCandles: rows });
+      }
+      return respond({
+        note: "DESCRIPTIVE ONLY, most-recent-grab definition. No BOS/CHoCH, no " +
+              "canonical structure, no TURN/continuation, no body thresholds, no " +
+              "past-10 rule, no contraction filters, no ranking. Selector, " +
+              "geometry and production untouched. CORRECTED FINDINGS: " +
+              "candle-is-grab-bar is 6/10 (previously reported 0/10 from a " +
+              "first-occurrence grab); last-opposite-colour is 2/4 on non-vacuous " +
+              "segments (previously reported 8/10, inflated by six single-candidate " +
+              "segments). BTC holdout remains 0/3.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
