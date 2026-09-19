@@ -4,6 +4,7 @@
 // Retention rules:
 // - scan_logs: delete rows older than 30 days
 // - close_audit_log: delete rows older than 30 days
+// - structure_shadow_telemetry: delete rows older than 30 days
 // - paper_trade_history: archive rows older than 90 days to trade_archive
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -37,7 +38,17 @@ Deno.serve(async (req) => {
     if (alErr) console.error("[data-cleanup] close_audit_log error:", alErr.message);
     results.audit_log_deleted = auditDeleted || 0;
 
-    // 3. Archive paper_trade_history older than 90 days
+    // 3. Delete structure_shadow_telemetry older than 30 days
+    // Shadow diagnostics, not trading records — nothing reads them and they
+    // have no archival value once the candidate engine is decided.
+    const { count: shadowDeleted, error: sstErr } = await supabase
+      .from("structure_shadow_telemetry")
+      .delete({ count: "exact" })
+      .lt("observed_at", thirtyDaysAgo);
+    if (sstErr) console.error("[data-cleanup] structure_shadow_telemetry error:", sstErr.message);
+    results.structure_shadow_telemetry_deleted = shadowDeleted || 0;
+
+    // 4. Archive paper_trade_history older than 90 days
     // First, copy to trade_archive table (create if not exists via migration)
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
     const { data: oldTrades, error: fetchErr } = await supabase

@@ -205,3 +205,89 @@ export function buildStructureShadowDiff(
     },
   };
 }
+
+/**
+ * True when the diff contains at least one disagreement.
+ *
+ * Telemetry is gated on this. A scan cycle produces one diff per symbol, so
+ * recording agreements would generate thousands of identical "same" rows that
+ * say nothing and make the disagreements harder to find. The consequence,
+ * stated on the table comment too: row count is a DISAGREEMENT count, not a
+ * scan count, and must never be read as a rate without a denominator from
+ * somewhere else.
+ */
+export function shadowDisagrees(d: StructureShadowDiff): boolean {
+  return !d.trendAgrees ||
+    d.latestEvent.reason !== "same" ||
+    d.latestBOS.reason !== "same" ||
+    d.latestCHoCH.reason !== "same";
+}
+
+/**
+ * Persist one disagreement row. Compact by design: no candles, no swing list,
+ * no ledger — a row is a verdict, not a snapshot.
+ *
+ * Never throws and never blocks. A telemetry write that can fail a scan is
+ * worse than no telemetry, and this repo has already lost trades to a
+ * diagnostic insert being refused by a trigger while the caller swallowed the
+ * error. Here the swallow is deliberate and the table carries no trigger.
+ */
+export async function recordStructureShadow(
+  supabase: any,
+  params: {
+    userId: string;
+    botId?: string | null;
+    symbol: string;
+    timeframe?: string | null;
+    diff: StructureShadowDiff | null;
+  },
+): Promise<"skipped" | "written" | "failed"> {
+  const d = params.diff;
+  if (!d) return "skipped";                 // flag off, or shadow unavailable
+  if (!shadowDisagrees(d)) return "skipped";
+  try {
+    const { error } = await supabase.from("structure_shadow_telemetry").insert({
+      user_id: params.userId,
+      bot_id: params.botId ?? null,
+      symbol: params.symbol,
+      timeframe: params.timeframe ?? null,
+      site: d.site,
+      bars: d.bars,
+      policy: d.policy,
+      max_event_age_bars: d.maxEventAgeBars,
+      current_trend: d.currentTrend,
+      canonical_trend: d.canonicalTrend,
+      trend_agrees: d.trendAgrees,
+      latest_event_reason: d.latestEvent.reason,
+      latest_bos_reason: d.latestBOS.reason,
+      latest_choch_reason: d.latestCHoCH.reason,
+      current_index: d.latestEvent.current?.index ?? null,
+      current_datetime: d.latestEvent.current?.datetime ?? null,
+      current_level: d.latestEvent.current?.level ?? null,
+      current_significance: d.latestEvent.current?.significance ?? null,
+      current_type: d.latestEvent.current?.type ?? null,
+      canonical_index: d.latestEvent.canonical?.index ?? null,
+      canonical_datetime: d.latestEvent.canonical?.datetime ?? null,
+      canonical_level: d.latestEvent.canonical?.level ?? null,
+      canonical_significance: d.latestEvent.canonical?.significance ?? null,
+      canonical_type: d.latestEvent.canonical?.type ?? null,
+      canonical_bars_since_confirmation: d.latestEvent.canonical?.barsSinceConfirmation ?? null,
+      current_bos_count: d.counts.currentBOS,
+      current_choch_count: d.counts.currentCHoCH,
+      canonical_bos_count: d.counts.canonicalBOS,
+      canonical_choch_count: d.counts.canonicalCHoCH,
+      canonical_ledger_entries: d.counts.canonicalLedgerEntries,
+      canonical_ineligible_by_age: d.counts.canonicalIneligibleByAge,
+    });
+    if (error) {
+      // Surfaced in logs, never rethrown. Silent swallowing is what made the
+      // 2026-09-16 insert failure invisible for a day.
+      console.warn(`[structureShadow] telemetry insert failed: ${error.message}`);
+      return "failed";
+    }
+    return "written";
+  } catch (e) {
+    console.warn(`[structureShadow] telemetry insert threw: ${(e as Error)?.message}`);
+    return "failed";
+  }
+}
