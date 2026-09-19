@@ -9,6 +9,7 @@ import {
   detectOrderBlocks,
   detectFVGs,
   detectSwingPoints,
+  analyzeMarketStructureCanonical,
   detectLiquidityPools,
   detectJudasSwing,
   detectReversalCandle,
@@ -1738,6 +1739,151 @@ Deno.serve(async (req) => {
               "pointers only). structureToFractal is emitted for comparison and is " +
               "NOT a selection target — its horizon is unbounded so it drifts toward " +
               "1 with series length. Use the horizon-bounded lifecycle stats instead.",
+        out,
+      });
+    }
+
+    // ── structure_policies ───────────────────────────────────────────────
+    // READ-ONLY three-way comparison. Nothing in production consumes the
+    // canonical engine; analyzeMarketStructure is untouched and remains the
+    // only implementation any caller uses.
+    //
+    //   current                      today's pairwise swing-to-swing detector
+    //   latest_confirmed             one pointer per (significance, type)
+    //   latest_unbroken_structural   prior levels retained until broken or
+    //                                engulfed by a newer same-type swing
+    //
+    // The question this is built to answer is narrow: does latest_confirmed
+    // retire important structure too aggressively? The supersession block is
+    // where the answer lives — every level retired unbroken is recorded, along
+    // with whether it was subsequently broken anyway.
+    if (action === "structure_policies") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      const lvlTol = 1e-8;
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const cur = analyzeMarketStructure(series);
+        const curBreaks = [...cur.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                           ...cur.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+
+        // Direction is part of a break's identity: a swing high and a swing low
+        // can share a price, and matching on level alone would pair a bullish
+        // break with a bearish one — hiding a real miss inside missedByCurrent
+        // while inflating the reclassification count.
+        const sameBreak = (a: any, b: any) =>
+          a.type === b.type && Math.abs(a.level - b.level) < lvlTol;
+
+        const shaped = (policy: "latest_confirmed" | "latest_unbroken_structural") => {
+          const st = analyzeMarketStructureCanonical(series, { policy });
+          const all = [...st.bos, ...st.choch].sort((a, b) => a.index - b.index);
+
+          // Ambiguous levels are excluded from the timing summary rather than
+          // silently distorting it.
+          const dup: number[] = [];
+          for (const t2 of ["high", "low"] as const) {
+            const byT = st.swingPoints.filter(s => s.type === t2)
+              .sort((a, b) => a.price - b.price);
+            for (let i2 = 1; i2 < byT.length; i2++) {
+              if (Math.abs(byT[i2].price - byT[i2 - 1].price) < lvlTol) dup.push(byT[i2].price);
+            }
+          }
+          const ambiguous = (L: number) => dup.some(x => Math.abs(x - L) < lvlTol);
+
+          const missed = all.filter(e => !curBreaks.some((b: any) => sameBreak(b, e)));
+          const late: number[] = []; let ambigSkipped = 0, reclass = 0;
+          for (const e of all) {
+            const m = curBreaks.find((b: any) => sameBreak(b, e));
+            if (!m) continue;
+            if (ambiguous(e.level as number)) { ambigSkipped++; continue; }
+            late.push(m.index - e.index);
+            const kind = st.choch.includes(e) ? "CHoCH" : "BOS";
+            if (kind !== m.kind || e.significance !== m.significance) reclass++;
+          }
+          late.sort((a, b) => a - b);
+
+          return {
+            policy,
+            bos: st.bos.length, choch: st.choch.length, total: all.length,
+            internal: all.filter(e => e.significance === "internal").length,
+            external: all.filter(e => e.significance === "external").length,
+            swingLevelBreaks: st.swingLevelBreaks.length,
+            structuralShare: st.swingLevelBreaks.length
+              ? Math.round(st.swingLevelBreaks.filter((x: any) => x.wasStructural).length /
+                           st.swingLevelBreaks.length * 1000) / 1000 : 0,
+            sameBarCollapsedEvents: st.structureCounts.sameBarCollapsedEvents,
+            maxAlsoBrokenOnOneEvent: st.structureCounts.maxAlsoBrokenOnOneEvent,
+            sweeps: st.sweeps.length,
+            missedByCurrent: missed.length,
+            missedExamples: missed.slice(0, 6).map(e => ({
+              datetime: e.datetime, type: e.type, level: e.level, significance: e.significance,
+            })),
+            timing: {
+              matched: late.length, ambiguousLevelsExcluded: ambigSkipped,
+              medianBarsLate: late.length ? late[Math.floor(late.length / 2)] : null,
+              maxBarsLate: late.length ? late[late.length - 1] : null,
+            },
+            reclassified: reclass,
+            supersessionSummary: st.supersessionSummary,
+            supersessionExamples: st.supersessions.slice(0, 6),
+            lifecycle: st.lifecycle,
+            structureToFractal: st.structureToFractal,
+            requiredCase: tgt.requiredCase ? (() => {
+              const lvl = Number(tgt.requiredCase.level);
+              const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+              const want = String(tgt.requiredCase.closeDate);
+              const dir = tgt.requiredCase.direction ? String(tgt.requiredCase.direction) : null;
+              const hit = all.find(e =>
+                Math.abs((e.level as number) - lvl) < tol &&
+                (e.datetime ?? "").slice(0, 10) === want &&
+                (dir === null || e.type === dir)) ?? null;
+              return {
+                detectsOnExpectedDate: !!hit,
+                kind: hit ? (st.choch.includes(hit) ? "CHoCH" : "BOS") : null,
+                significance: hit ? hit.significance : null,
+                index: hit ? hit.index : null,
+                alsoBroken: hit ? ((hit as any).alsoBrokenLevels ?? []).length : null,
+              };
+            })() : null,
+          };
+        };
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          current: {
+            bos: cur.bos.length, choch: cur.choch.length,
+            total: curBreaks.length,
+            internal: curBreaks.filter((b: any) => b.significance === "internal").length,
+            external: curBreaks.filter((b: any) => b.significance === "external").length,
+            sweeps: (cur.sweeps ?? []).length,
+            structureToFractal: cur.structureToFractal,
+            requiredCase: tgt.requiredCase ? (() => {
+              const lvl = Number(tgt.requiredCase.level);
+              const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+              const dir = tgt.requiredCase.direction ? String(tgt.requiredCase.direction) : null;
+              const hit = curBreaks.filter((b: any) =>
+                Math.abs(b.level - lvl) < tol && (dir === null || b.type === dir))
+                .sort((a: any, b: any) => a.index - b.index)[0] ?? null;
+              return { anyDetection: !!hit, detectionDate: hit ? hit.datetime : null };
+            })() : null,
+          },
+          policies: [shaped("latest_confirmed"), shaped("latest_unbroken_structural")],
+        });
+      }
+      return respond({
+        note: "READ-ONLY shadow. analyzeMarketStructure is unchanged and still the " +
+              "only implementation any production caller uses. structureToFractal is " +
+              "reported for comparison only and is NOT a selection target — its " +
+              "horizon is unbounded so it drifts toward 1 with series length. Use the " +
+              "bounded lifecycle block. Still-active counts are right-censored; read " +
+              "activeByAge, not the raw total.",
         out,
       });
     }

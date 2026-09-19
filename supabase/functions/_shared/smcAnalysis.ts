@@ -3793,3 +3793,339 @@ function _computeRegimeScore(
 export function normalizeSymKey(s: string): string {
   return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
 }
+
+// ─── Canonical market structure (SHADOW — nothing consumes this yet) ────────
+//
+// A second structure engine, built 2026-09-18 beside analyzeMarketStructure
+// rather than replacing it. NO production caller uses it. It exists so the two
+// can be diffed before anything changes.
+//
+// WHY. analyzeMarketStructure builds break events pairwise between consecutive
+// swings, so the break candle is always the NEXT DETECTED SWING rather than the
+// bar that closed through. Measured over ~660-700 daily bars on five FX pairs:
+// it misses 13-28 real structure events per pair, is a median 2-4 bars late on
+// the ones it does find, and the loss is almost entirely EXTERNAL (GBP/AUD 5 ->
+// 18, GBP/USD 9 -> 30). The reference case is GBP/CAD external low 1.84018,
+// closed through on 2026-05-14 and never reported at all in 658 bars.
+//
+// TWO LAYERS, and conflating them was the first wrong turn here. Labelling
+// every crossed level a BOS/CHoCH inflated events threefold.
+//
+//   swingLevelBreaks  every confirmed swing level a close went through.
+//                     Facts. No BOS/CHoCH label.
+//   bos / choch       structure events, emitted only by pointers the active
+//                     policy considers structural.
+//
+// CAUSALITY, both rules load-bearing:
+//
+//   * detectSwingPoints confirms a pivot using bars on BOTH sides, so a swing
+//     at k is not knowable until k + lookback. Scanning from k + 1 would
+//     replace a missed-break bug with a lookahead bug, which is worse because
+//     it flatters every backtest.
+//   * A pivot found by both detectors becomes INTERNAL at k + internalLookback
+//     and PROMOTES to external at k + externalLookback if still unbroken. It is
+//     NOT withheld until external confirmation — doing so would use the future
+//     fact that it is going to be external to suppress a swing that was already
+//     legible.
+//
+// Breaks are CLOSE-through. A wick through with the close holding is a sweep.
+//
+// structureToFractal is emitted for comparison ONLY and must not be optimised
+// against: its horizon is unbounded, so over a long series nearly every swing
+// is eventually crossed and the rate drifts toward 1 with series length. It
+// read 0.298-0.341 across all five pairs and discriminated nothing. The
+// horizon-bounded lifecycle block is the honest measurement.
+export type CanonicalPolicy = "latest_confirmed" | "latest_unbroken_structural";
+
+export interface CanonicalStructureOptions {
+  policy?: CanonicalPolicy;
+  structureLookback?: number;
+}
+
+export function analyzeMarketStructureCanonical(
+  candles: Candle[],
+  opts: CanonicalStructureOptions = {},
+) {
+  const policy: CanonicalPolicy = opts.policy ?? "latest_confirmed";
+  const internalLookback = opts.structureLookback && opts.structureLookback > 0
+    ? opts.structureLookback : 3;
+  const externalLookback = Math.max(internalLookback + 4, 7);
+  const hasATR = candles.length >= 15;
+
+  const internalSwings = detectSwingPoints(candles, internalLookback, hasATR ? 0.2 : 0);
+  const externalSwings = detectSwingPoints(candles, externalLookback, hasATR ? 0.5 : 0);
+  const intKeys = new Set(internalSwings.map(s => `${s.type}_${s.index}`));
+  const extKeys = new Set(externalSwings.map(s => `${s.type}_${s.index}`));
+
+  interface CSwing {
+    key: string; type: "high" | "low"; index: number; price: number;
+    internalAt: number | null; externalAt: number | null;
+    becameExternal: boolean; broken: boolean; brokenAt: number | null;
+    supersededAt: number | null;
+  }
+  const swMap = new Map<string, CSwing>();
+  for (const s of [...internalSwings, ...externalSwings]) {
+    const key = `${s.type}_${s.index}`;
+    if (swMap.has(key)) continue;
+    swMap.set(key, {
+      key, type: s.type, index: s.index, price: s.price,
+      internalAt: intKeys.has(key) ? s.index + internalLookback : null,
+      externalAt: extKeys.has(key) ? s.index + externalLookback : null,
+      becameExternal: false, broken: false, brokenAt: null, supersededAt: null,
+    });
+  }
+  const swings = [...swMap.values()].sort((a, b) => a.index - b.index);
+  const activeAt = (s: CSwing) => {
+    const a = s.internalAt, b = s.externalAt;
+    return a === null ? (b ?? Infinity) : (b === null ? a : Math.min(a, b));
+  };
+  const sigAt = (s: CSwing, j: number): "internal" | "external" =>
+    s.externalAt !== null && j >= s.externalAt ? "external" : "internal";
+
+  const confInt = new Map<number, CSwing[]>(), confExt = new Map<number, CSwing[]>();
+  for (const s of swings) {
+    if (s.internalAt !== null) {
+      if (!confInt.has(s.internalAt)) confInt.set(s.internalAt, []);
+      confInt.get(s.internalAt)!.push(s);
+    }
+    if (s.externalAt !== null) {
+      if (!confExt.has(s.externalAt)) confExt.set(s.externalAt, []);
+      confExt.get(s.externalAt)!.push(s);
+    }
+  }
+
+  // latest_confirmed keeps ONE pointer per (significance, type).
+  // latest_unbroken_structural keeps a SET, retiring a prior level only when a
+  // newer same-type swing confirms at a price that makes it interior — a higher
+  // high for highs, a lower low for lows. Price has already traded through the
+  // old level to print the new one, so it is structurally spent. Anything the
+  // new swing does NOT engulf stays eligible, which in a downtrend preserves
+  // the descending series of lower highs rather than discarding all but the
+  // most recent.
+  const retained: Record<string, Record<string, CSwing[]>> = {
+    internal: { high: [], low: [] }, external: { high: [], low: [] },
+  };
+  interface Supersession {
+    type: "high" | "low"; significance: "internal" | "external";
+    supersededLevel: number; supersededAt: string; supersededIndex: number;
+    replacementLevel: number; replacementAt: string; replacementIndex: number;
+    laterBroken: boolean; laterBreakDate: string | null; barsUntilLaterBreak: number | null;
+    supersededSwingKey: string;
+  }
+  const supersessions: Supersession[] = [];
+
+  const adopt = (s: CSwing, sig: "internal" | "external", j: number) => {
+    const bucket = retained[sig][s.type];
+    const engulfs = (old: CSwing) =>
+      s.type === "high" ? s.price >= old.price : s.price <= old.price;
+    const retire = (old: CSwing) => {
+      if (old.broken) return;
+      old.supersededAt = j;
+      supersessions.push({
+        type: old.type, significance: sig,
+        supersededLevel: old.price,
+        supersededAt: candles[j]?.datetime ?? "", supersededIndex: j,
+        replacementLevel: s.price,
+        replacementAt: candles[s.index]?.datetime ?? "", replacementIndex: s.index,
+        laterBroken: false, laterBreakDate: null, barsUntilLaterBreak: null,
+        supersededSwingKey: old.key,
+      });
+    };
+    if (policy === "latest_confirmed") {
+      for (const old of bucket) if (old !== s) retire(old);
+      retained[sig][s.type] = [s];
+    } else {
+      for (const old of bucket) if (old !== s && engulfs(old)) retire(old);
+      retained[sig][s.type] = bucket.filter(o => o !== s && !engulfs(o) && !o.broken);
+      retained[sig][s.type].push(s);
+    }
+  };
+
+  const bos: StructureBreak[] = [];
+  const choch: StructureBreak[] = [];
+  const sweeps: LiquiditySweep[] = [];
+  const swingLevelBreaks: any[] = [];
+  const collapsedEvents: any[] = [];
+  let trend: "bullish" | "bearish" | "ranging" = "ranging";
+
+  for (let j = 0; j < candles.length; j++) {
+    const bar = candles[j];
+    if (!bar) continue;
+    // Confirmations land before the break test on the same bar: a pivot
+    // confirmed at j is knowable at j's close, and the test uses that close.
+    for (const s of (confInt.get(j) ?? [])) adopt(s, "internal", j);
+    for (const s of (confExt.get(j) ?? [])) {
+      if (s.broken) continue;
+      s.becameExternal = true;
+      adopt(s, "external", j);
+    }
+
+    const crossed = swings.filter(s =>
+      !s.broken && s.index < j && activeAt(s) <= j &&
+      (s.type === "high" ? bar.close > s.price : bar.close < s.price));
+
+    if (crossed.length > 0) {
+      for (const s of crossed) {
+        swingLevelBreaks.push({
+          index: j, datetime: bar.datetime,
+          direction: s.type === "high" ? "bullish" : "bearish",
+          level: s.price, significance: sigAt(s, j),
+          swingIndex: s.index, swingTime: candles[s.index]?.datetime,
+          barsFromConfirmation: j - activeAt(s),
+          wasStructural: retained.external[s.type].includes(s) ||
+                         retained.internal[s.type].includes(s),
+        });
+      }
+
+      for (const dir of ["bullish", "bearish"] as const) {
+        const t: "high" | "low" = dir === "bullish" ? "high" : "low";
+        const inDir = crossed.filter(s => s.type === t);
+        if (inDir.length === 0) continue;
+        const extHits = inDir.filter(s => retained.external[t].includes(s));
+        const intHits = inDir.filter(s => retained.internal[t].includes(s));
+        const pool = extHits.length > 0 ? extHits : intHits;   // EXTERNAL preferred
+        if (pool.length === 0) continue;
+        // Most extreme first: breaking the higher high is the stronger claim.
+        pool.sort((a, b) => t === "high" ? b.price - a.price : a.price - b.price);
+        const primary = pool[0];
+        const others = inDir.filter(s => s !== primary);
+        const isChoch = (dir === "bullish" && trend === "bearish") ||
+                        (dir === "bearish" && trend === "bullish");
+        const entry: StructureBreak = {
+          index: j, type: dir, price: t === "high" ? bar.high : bar.low,
+          datetime: bar.datetime, closeBased: true, level: primary.price,
+          significance: sigAt(primary, j),
+        };
+        (entry as any).swingIndex = primary.index;
+        (entry as any).barsFromConfirmation = j - activeAt(primary);
+        // Nothing is discarded: the other levels this bar crossed are kept as
+        // metadata rather than dropped or emitted as separate events.
+        (entry as any).alsoBrokenLevels = others.map(s => ({
+          level: s.price, significance: sigAt(s, j), swingIndex: s.index,
+        }));
+        (isChoch ? choch : bos).push(entry);
+        if (others.length > 0) {
+          collapsedEvents.push({
+            index: j, datetime: bar.datetime, direction: dir, alsoBroken: others.length,
+          });
+        }
+        trend = dir;
+      }
+
+      for (const s of crossed) {
+        s.broken = true; s.brokenAt = j;
+        for (const sig of ["internal", "external"] as const) {
+          retained[sig][s.type] = retained[sig][s.type].filter(x => x !== s);
+        }
+      }
+    }
+
+    // Sweeps: wick through an active unbroken level, close holding inside.
+    for (const s of swings) {
+      if (s.broken || s.index >= j || activeAt(s) > j) continue;
+      const wick = s.type === "high" ? bar.high > s.price : bar.low < s.price;
+      const held = s.type === "high" ? bar.close <= s.price : bar.close >= s.price;
+      if (wick && held) {
+        sweeps.push({
+          index: j, type: s.type === "high" ? "bearish" : "bullish",
+          price: s.type === "high" ? bar.high : bar.low,
+          datetime: bar.datetime, sweptLevel: s.price,
+          wickDepth: s.type === "high" ? bar.high - s.price : s.price - bar.low,
+        } as LiquiditySweep);
+      }
+    }
+  }
+
+  // What actually happened to levels the policy retired unbroken.
+  for (const sup of supersessions) {
+    const sw = swMap.get(sup.supersededSwingKey);
+    if (sw?.brokenAt != null) {
+      sup.laterBroken = true;
+      sup.laterBreakDate = candles[sw.brokenAt]?.datetime ?? null;
+      sup.barsUntilLaterBreak = sw.brokenAt - sup.supersededIndex;
+    }
+  }
+
+  const lastIdx = candles.length - 1;
+  // brokenBeforeExternalConfirmation is deliberately NOT reported: the pivot
+  // test requires every bar within `lookback` to sit strictly inside the swing,
+  // so a break there is impossible and the counter could only ever read zero.
+  const cohort = (which: "internal" | "external") => {
+    const set = swings.filter(s => which === "internal"
+      ? s.internalAt !== null : s.externalAt !== null && s.becameExternal);
+    const from = (s: CSwing) => (which === "internal" ? s.internalAt! : s.externalAt!);
+    const lives = set.filter(s => s.brokenAt !== null).map(s => s.brokenAt! - from(s))
+      .sort((a, b) => a - b);
+    const within = (n: number) => lives.filter(x => x <= n).length;
+    const rate = (n: number) => set.length ? Math.round(n / set.length * 1000) / 1000 : 0;
+    // The end of the series is RIGHT-CENSORED: a swing confirmed five bars ago
+    // has not had the same chance to break as one confirmed two hundred bars
+    // ago, so a raw still-active count is not evidence of a bad level. Bucket
+    // by age so recent unresolved pivots can be told from ancient ones.
+    const active = set.filter(s => s.brokenAt === null)
+      .map(s => ({ level: s.price, index: s.index, ageAtEndBars: lastIdx - from(s) }));
+    const bucket = (lo: number, hi: number) =>
+      active.filter(a => a.ageAtEndBars >= lo && a.ageAtEndBars <= hi).length;
+    return {
+      total: set.length,
+      brokenWithin5Bars: within(5), brokenWithin10Bars: within(10), brokenWithin20Bars: within(20),
+      rateWithin5: rate(within(5)), rateWithin10: rate(within(10)), rateWithin20: rate(within(20)),
+      medianBarsFromConfirmationToBreak: lives.length ? lives[Math.floor(lives.length / 2)] : null,
+      stillActiveAtEnd: active.length,
+      activeByAge: {
+        "0-5": bucket(0, 5), "6-10": bucket(6, 10), "11-20": bucket(11, 20),
+        "21-50": bucket(21, 50), ">50": active.filter(a => a.ageAtEndBars > 50).length,
+      },
+      oldestActiveAgeBars: active.reduce((m, a) => Math.max(m, a.ageAtEndBars), 0),
+    };
+  };
+
+  const swingPoints: SwingPoint[] = swings.map(s => {
+    const sp: SwingPoint = {
+      index: s.index, price: s.price, type: s.type,
+      datetime: candles[s.index]?.datetime,
+    } as SwingPoint;
+    sp.significance = s.externalAt !== null ? "external" : "internal";
+    if (s.brokenAt !== null) sp.brokenAt = s.brokenAt;
+    return sp;
+  });
+
+  const allEvents = [...bos, ...choch];
+  const highs = swings.filter(s => s.type === "high").length;
+  const lows = swings.filter(s => s.type === "low").length;
+  const bull = allEvents.filter(b => b.type === "bullish").length;
+  const bear = allEvents.filter(b => b.type === "bearish").length;
+
+  return {
+    policy,
+    swingPoints, bos, choch, sweeps, trend,
+    swingLevelBreaks,
+    structureCounts: {
+      internalBOS: bos.filter(b => b.significance === "internal").length,
+      externalBOS: bos.filter(b => b.significance === "external").length,
+      internalCHoCH: choch.filter(b => b.significance === "internal").length,
+      externalCHoCH: choch.filter(b => b.significance === "external").length,
+      sameBarCollapsedEvents: collapsedEvents.length,
+      maxAlsoBrokenOnOneEvent: collapsedEvents.reduce((m, x) => Math.max(m, x.alsoBroken), 0),
+    },
+    supersessions,
+    supersessionSummary: {
+      total: supersessions.length,
+      laterBroken: supersessions.filter(s => s.laterBroken).length,
+      neverBroken: supersessions.filter(s => !s.laterBroken).length,
+      medianBarsUntilLaterBreak: (() => {
+        const v = supersessions.filter(s => s.barsUntilLaterBreak != null)
+          .map(s => s.barsUntilLaterBreak!).sort((a, b) => a - b);
+        return v.length ? v[Math.floor(v.length / 2)] : null;
+      })(),
+    },
+    lifecycle: { internal: cohort("internal"), external: cohort("external") },
+    // Comparison only. NOT a selection target — unbounded horizon.
+    structureToFractal: {
+      bullishRate: bull / Math.max(1, highs),
+      bearishRate: bear / Math.max(1, lows),
+      totalFractals: highs + lows, totalBreaks: bull + bear,
+      overallRate: (bull + bear) / Math.max(1, highs + lows),
+    },
+  };
+}
