@@ -273,3 +273,64 @@ Deno.test("latest_unbroken_structural only ever retires levels the replacement r
       "an engulfing replacement must by definition have reached beyond the old level");
   }
 });
+
+Deno.test("an age cap removes events without touching the factual ledger", () => {
+  // Age gating is an EVENT-eligibility rule, not a lifecycle rule. A level past
+  // the cap is not deleted, not marked broken, and not unrecorded — it simply
+  // stops emitting. If a cap ever changes swingLevelBreaks, the two layers have
+  // been conflated again, which is the mistake that inflated the first
+  // chronological attempt threefold.
+  const candles = twoLowerHighs();
+  const unbounded = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+  });
+  const capped = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural", maxEventAgeBars: 1,
+  });
+
+  const sig = (st: typeof unbounded) =>
+    st.swingLevelBreaks.map((x: any) => `${x.index}_${x.level}_${x.direction}`).join("|");
+  assertEquals(sig(capped), sig(unbounded),
+    "the factual ledger is identical — only event emission is gated");
+
+  const evCount = (st: typeof unbounded) => st.bos.length + st.choch.length;
+  assert(evCount(capped) < evCount(unbounded),
+    "and a cap of 1 bar must actually suppress something, or this proves nothing");
+  assert(capped.swingLevelBreaks.some((x: any) => x.structureEventEligible === false),
+    "suppressed levels are flagged ineligible rather than silently dropped");
+});
+
+Deno.test("a cap never invents an event the unbounded policy did not find", () => {
+  // Filtering the pool by age can change WHICH crossed level is primary on a
+  // bar, so a capped run may attribute an event to a different swing. What it
+  // must never do is emit on a bar where nothing was crossed at all.
+  const candles = twoLowerHighs();
+  const unbounded = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+  });
+  const ledgerBars = new Set(unbounded.swingLevelBreaks.map((x: any) => x.index));
+  for (const cap of [1, 5, 20, 100]) {
+    const st = analyzeMarketStructureCanonical(candles, {
+      policy: "latest_unbroken_structural", maxEventAgeBars: cap,
+    });
+    for (const e of [...st.bos, ...st.choch]) {
+      assert(ledgerBars.has(e.index),
+        `cap ${cap} emitted on bar ${e.index} where no level was crossed`);
+    }
+  }
+});
+
+Deno.test("the reference case survives every age cap", () => {
+  // GBP/CAD 1.84018 fires 5 bars after confirmation, so no cap under
+  // consideration may remove it. If one does, that cap is disqualified.
+  const candles = closeThroughExternalLow();
+  for (const cap of [null, 20, 50, 100]) {
+    const st = analyzeMarketStructureCanonical(candles, {
+      policy: "latest_unbroken_structural", maxEventAgeBars: cap,
+    });
+    const brk = [...st.bos, ...st.choch].filter(b =>
+      b.type === "bearish" && Math.abs((b.level ?? NaN) - 1.84018) < 1e-9);
+    assertEquals(brk.length, 1, `cap ${cap} must preserve the reference break`);
+    assertEquals(brk[0].significance, "external");
+  }
+});

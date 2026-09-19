@@ -3840,6 +3840,24 @@ export type CanonicalPolicy = "latest_confirmed" | "latest_unbroken_structural";
 export interface CanonicalStructureOptions {
   policy?: CanonicalPolicy;
   structureLookback?: number;
+  /**
+   * Event-eligibility age, in bars, measured eventBar - swingConfirmationBar.
+   * NOT age from the pivot candle: a swing is not knowable until it confirms,
+   * so its life as usable structure starts there.
+   *
+   * null / undefined means unbounded — the existing behaviour.
+   *
+   * Exceeding this does NOT delete the level, mark it broken, or remove it
+   * from the factual ledger. The level stays in swingLevelBreaks and stays
+   * sweepable; it merely stops being able to emit a BOS/CHoCH. Ledger entries
+   * carry structureEventEligible so the two layers can be told apart.
+   *
+   * Measured 2026-09-18: latest_unbroken_structural emits events on levels up
+   * to 343 bars old, and zero of its policy-unique events are under 6 bars
+   * old — the policies agree entirely on fresh structure and diverge only on
+   * ancient levels. No cutoff is chosen here; the caps exist to be compared.
+   */
+  maxEventAgeBars?: number | null;
 }
 
 export function analyzeMarketStructureCanonical(
@@ -3847,6 +3865,10 @@ export function analyzeMarketStructureCanonical(
   opts: CanonicalStructureOptions = {},
 ) {
   const policy: CanonicalPolicy = opts.policy ?? "latest_confirmed";
+  const maxEventAgeBars = opts.maxEventAgeBars ?? null;
+  // Eligible to EMIT an event. Ineligible levels remain fully present as facts.
+  const ageEligible = (s2: { key: string }, at: number, conf: number) =>
+    maxEventAgeBars === null || (at - conf) <= maxEventAgeBars;
   const internalLookback = opts.structureLookback && opts.structureLookback > 0
     ? opts.structureLookback : 3;
   const externalLookback = Math.max(internalLookback + 4, 7);
@@ -4002,6 +4024,8 @@ export function analyzeMarketStructureCanonical(
           barsFromConfirmation: j - activeAt(s),
           wasStructural: retained.external[s.type].includes(s) ||
                          retained.internal[s.type].includes(s),
+          // Age gating affects EVENTS only. This entry is recorded either way.
+          structureEventEligible: ageEligible(s, j, activeAt(s)),
         });
       }
 
@@ -4009,8 +4033,12 @@ export function analyzeMarketStructureCanonical(
         const t: "high" | "low" = dir === "bullish" ? "high" : "low";
         const inDir = crossed.filter(s => s.type === t);
         if (inDir.length === 0) continue;
-        const extHits = inDir.filter(s => retained.external[t].includes(s));
-        const intHits = inDir.filter(s => retained.internal[t].includes(s));
+        // Filter by age BEFORE choosing the primary, not after. Otherwise an
+        // over-age level would be selected as primary and then dropped,
+        // suppressing a younger eligible level that crossed on the same bar.
+        const eligible = inDir.filter(s => ageEligible(s, j, activeAt(s)));
+        const extHits = eligible.filter(s => retained.external[t].includes(s));
+        const intHits = eligible.filter(s => retained.internal[t].includes(s));
         const pool = extHits.length > 0 ? extHits : intHits;   // EXTERNAL preferred
         if (pool.length === 0) continue;
         // Most extreme first: breaking the higher high is the stronger claim.
@@ -4155,7 +4183,7 @@ export function analyzeMarketStructureCanonical(
   const bear = allEvents.filter(b => b.type === "bearish").length;
 
   return {
-    policy,
+    policy, maxEventAgeBars,
     swingPoints, bos, choch, sweeps, trend,
     swingLevelBreaks,
     structureCounts: {
