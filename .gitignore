@@ -54,3 +54,5 @@ run-recency.sh
 supabase/.temp/
 ezzy-out.json
 run-ezzy.sh
+holdout-out.json
+run-holdout.sh

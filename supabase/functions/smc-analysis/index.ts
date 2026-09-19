@@ -2208,7 +2208,12 @@ Deno.serve(async (req) => {
       for (const tgt of targets) {
         const sym = String(tgt.symbol);
         const tf = String(tgt.interval ?? "1d");
-        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        // Fetch depth is a parameter so historical targets are reachable. The
+        // DEFAULT IS UNCHANGED at 800, so every earlier run reproduces exactly.
+        // outputsize passes straight through to the provider with no internal
+        // cap, so 2600 daily bars reaches 2019-08 on a 7-day crypto series.
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
         const isFx = (SPECS as any)[sym]?.type === "forex";
         const series = dropFxClosedBars(res.candles ?? [], isFx);
         if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
@@ -2586,9 +2591,86 @@ Deno.serve(async (req) => {
           };
         });
 
+        // ── HOLDOUT REPORT at a FROZEN continuation body threshold ────
+        // Reporting only. It reads the candidates the selector already
+        // produced and re-resolves which one would win at a fixed threshold.
+        // The selector's own behaviour, the windows, the qualifications, the
+        // geometry and the TURN path are all untouched, and
+        // continuationWindow.selected still reports the threshold-0 result.
+        const bodyMin = Number(body?.continuationBodyMin ?? 0);
+        const holdout = known.map(k => {
+          const key = `${k.side}|${k.date}`;
+          // Breaks whose windows contain the known candle at all.
+          const relevant = selections.filter(s2 => s2.side === k.side && (
+            (s2.candidates ?? []).some((c: any) => c.date === k.date) ||
+            (s2.continuationWindow?.candidates ?? []).some((c: any) => c.date === k.date)));
+
+          const turnHit = selections.some(s2 =>
+            s2.side === k.side && s2.selectedCandle?.date === k.date);
+          // Continuation winner at the frozen threshold, same backward-from-break
+          // precedence, only survivors considered.
+          const contWinnerFor = (s2: any) => (s2.continuationWindow?.candidates ?? [])
+            .find((c: any) => c.qualifies && (c.bodyRangeRatio ?? 0) >= bodyMin) ?? null;
+          const contHit = selections.some(s2 =>
+            s2.side === k.side && contWinnerFor(s2)?.date === k.date);
+
+          const inCont = relevant.flatMap(s2 =>
+            (s2.continuationWindow?.candidates ?? []).filter((c: any) => c.date === k.date));
+          const inTurn = relevant.flatMap(s2 =>
+            (s2.candidates ?? []).filter((c: any) => c.date === k.date));
+          const self = inCont[0] ?? inTurn[0] ?? null;
+
+          // The break this candle belongs to: prefer one where it actually won,
+          // else the nearest relevant break.
+          const owning = relevant.find(s2 =>
+            s2.selectedCandle?.date === k.date || contWinnerFor(s2)?.date === k.date)
+            ?? relevant[0] ?? null;
+          const winner = owning
+            ? (owning.selectedCandle?.date === k.date
+                ? owning.selectedCandle
+                : (contWinnerFor(owning) ?? owning.selectedCandle ?? null))
+            : null;
+
+          // Three distinct failure modes, never collapsed into one "miss".
+          let missReason: string | null = null;
+          if (!(turnHit || contHit)) {
+            if (!self) missReason = "never_examined";
+            else if (!self.qualifies) missReason = "rejected_by_qualification";
+            else if ((self.bodyRangeRatio ?? 0) < bodyMin) missReason = "rejected_by_body_threshold";
+            else missReason = "qualified_but_outranked";
+          }
+
+          return {
+            date: k.date, side: k.side,
+            hit: turnHit || contHit, hitTurn: turnHit, hitCont: contHit,
+            knownCandleExamined: !!self,
+            examinedInTurnWindow: inTurn.length > 0,
+            examinedInContinuationWindow: inCont.length > 0,
+            bodyRangeRatio: self ? self.bodyRangeRatio : null,
+            qualification: self ? self.qualification : null,
+            qualifiesOnRun: self ? !!self.qualifies : null,
+            breakDate: owning ? owning.break.datetime.slice(0, 10) : null,
+            breakType: owning ? owning.break.type : null,
+            impulseOriginDate: owning ? (owning.impulse.originDatetime ?? "").slice(0, 10) : null,
+            selectedCandleAtThreshold: winner ? winner.date : null,
+            selectedQualification: winner ? (winner.qualification ?? null) : null,
+            // Geometry the frozen rule predicts for the KNOWN candle itself,
+            // reported whether or not the selector chose it.
+            predictedBox: self ? self.box : null,
+            selectedBox: winner ? (winner.box ?? null) : null,
+            missReason,
+            relevantBreaks: relevant.length,
+          };
+        });
+
         out.push({
           symbol: sym, interval: tf, bars: series.length,
           canonicalEvents: events.length,
+          continuationBodyMinUsed: Number(body?.continuationBodyMin ?? 0),
+          barsRequested: Number(tgt.limit ?? body?.limit ?? 800),
+          firstBar: series[0]?.datetime ?? null,
+          lastBar: series[series.length - 1]?.datetime ?? null,
+          holdout,
           bodyThresholdSweep,
           knownBodyProfile,
           selectionsMade: selections.filter(s => s.selectedCandle).length,
