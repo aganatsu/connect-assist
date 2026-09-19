@@ -2506,9 +2506,91 @@ Deno.serve(async (req) => {
           };
         });
 
+        // ── BODY-QUALITY SWEEP (read-only, additive) ──────────────────
+        // Re-filters the ALREADY-COMPUTED continuation candidates at a range of
+        // bodyRangeRatio minimums. It does not re-walk, does not touch the TURN
+        // window, does not alter the search range, and does not change what
+        // continuationWindow.selected reports — that remains the threshold-0
+        // result. Nothing here chooses or promotes a threshold.
+        //
+        // WHY. The 03-24 break selects 2026-03-23, an up candle with
+        // bodyRangeRatio 0.02 — essentially all wick — purely because the
+        // backward-from-break walk takes the first qualifying candidate and
+        // 03-23 is nearer the break than the known box at 03-19 (ratio 0.44).
+        // Both qualify on isLastOfRun, so proximity alone decided it.
+        //
+        // Precedence is UNCHANGED at every threshold: still backward from the
+        // break, still the first surviving isLastOfRun candidate. The only
+        // variable is which candidates survive.
+        const THRESHOLDS = [0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40];
+        const knownKeys = new Set(known.map(k => `${k.side}|${k.date}`));
+        const bodyThresholdSweep = THRESHOLDS.map(th => {
+          const sel: Array<{ side: string; date: string; ratio: number | null }> = [];
+          const perBreak: Record<string, string | null> = {};
+          for (const s2 of selections) {
+            const cands = s2.continuationWindow?.candidates ?? [];
+            // candidates are already ordered backward from the break, so the
+            // first survivor is the same precedence rule as before
+            const first = cands.find((c: any) =>
+              c.qualifies && (c.bodyRangeRatio ?? 0) >= th);
+            perBreak[`${s2.break.datetime.slice(0, 10)}|${s2.side}`] = first ? first.date : null;
+            if (first) sel.push({ side: s2.side, date: first.date, ratio: first.bodyRangeRatio });
+          }
+          const selKeys = new Set(sel.map(x => `${x.side}|${x.date}`));
+          const contOnly = [...selKeys].filter(k2 => !picked.has(k2));
+          return {
+            threshold: th,
+            continuationSelections: sel.length,
+            distinctContinuationDates: selKeys.size,
+            continuationOnlyDates: contOnly.length,
+            knownBoxes: known.map(k => {
+              const key = `${k.side}|${k.date}`;
+              return {
+                date: k.date, side: k.side,
+                hitTurn: picked.has(key),
+                hitCont: selKeys.has(key),
+                hit: picked.has(key) || selKeys.has(key),
+              };
+            }),
+            totalKnownHits: known.filter(k =>
+              picked.has(`${k.side}|${k.date}`) || selKeys.has(`${k.side}|${k.date}`)).length,
+            // The two breaks under investigation, named explicitly.
+            selectedFor_0324: perBreak["2026-03-24|supply"] ?? null,
+            selectedFor_0407: perBreak["2026-04-07|demand"] ?? null,
+          };
+        });
+
+        // Which known candles the body floor would eliminate, and at what
+        // point. "Rejected SOLELY by body" means it qualified on isLastOfRun
+        // and was only removed because its ratio fell under the threshold.
+        const knownBodyProfile = known.map(k => {
+          const inCont = selections.flatMap(s2 => s2.continuationWindow?.candidates ?? [])
+            .filter((c: any) => c.date === k.date && c.side === k.side);
+          const inTurn = selections.flatMap(s2 => s2.candidates ?? [])
+            .filter((c: any) => c.date === k.date && c.side === k.side);
+          const any = inCont[0] ?? inTurn[0] ?? null;
+          const ratio = any ? any.bodyRangeRatio : null;
+          const qualifiesOnRun = inCont.some((c: any) => c.qualifies);
+          return {
+            date: k.date, side: k.side,
+            bodyRangeRatio: ratio,
+            presentInContinuationWindow: inCont.length > 0,
+            presentInTurnWindow: inTurn.length > 0,
+            qualifiesOnIsLastOfRun: qualifiesOnRun,
+            // Lowest swept threshold that would exclude it, if any.
+            excludedAtThreshold: ratio == null
+              ? null
+              : (THRESHOLDS.find(t => ratio < t) ?? null),
+            rejectedSolelyByBody: ratio != null && qualifiesOnRun &&
+              (THRESHOLDS.find(t => ratio < t) ?? null) !== null,
+          };
+        });
+
         out.push({
           symbol: sym, interval: tf, bars: series.length,
           canonicalEvents: events.length,
+          bodyThresholdSweep,
+          knownBodyProfile,
           selectionsMade: selections.filter(s => s.selectedCandle).length,
           selectionsEmpty: selections.filter(s => s.selectedNone).length,
           continuationSelectionsMade: selections.filter(s => s.continuationWindow?.selected).length,
