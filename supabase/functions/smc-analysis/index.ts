@@ -8,6 +8,7 @@ import {
   analyzeMarketStructure,
   detectOrderBlocks,
   detectFVGs,
+  detectSwingPoints,
   detectLiquidityPools,
   detectJudasSwing,
   detectReversalCandle,
@@ -1115,6 +1116,322 @@ Deno.serve(async (req) => {
               "never asked about those candles. Dedupe aggregates on dedupeKey; " +
               "maxDispRank is window-specific and must not be deduped. Displacement is reported under THREE anchors (proximal/extent/close); legacy maxDispAtr is unchanged and absolute-valued, the three new families are signed and their adverse is clamped at >= 0.",
         horizons: HORIZONS, out, forensic,
+      });
+    }
+
+    // ── structure_comparison ─────────────────────────────────────────────
+    // READ-ONLY measurement of the current swing-to-swing break detector
+    // against a chronological reference. Nothing here changes production
+    // behaviour; analyzeMarketStructure is untouched and still the only thing
+    // any caller uses.
+    //
+    // THE DEFECT (#580). analyzeMarketStructure builds break events pairwise
+    // between consecutive swings, so the "break candle" is always the NEXT
+    // DETECTED SWING rather than the bar that actually closed through. A close
+    // through a level that is not followed by a confirmed pivot produces no
+    // event at all.
+    //
+    // THE REFERENCE. Walk bars in order; a swing may be broken by any bar once
+    // it is causally knowable.
+    //
+    // CONFIRMATION, and why it is two-phase. detectSwingPoints confirms a pivot
+    // using bars on BOTH sides, so a swing at index k is not knowable until
+    // k + lookback. A pivot found by BOTH detectors therefore becomes:
+    //
+    //     INTERNAL at k + internalLookback
+    //     EXTERNAL at k + externalLookback, if still unbroken
+    //
+    // It must NOT be held back as "external-only" until the external lookback
+    // confirms it — doing so would use the future fact that it is going to be
+    // external in order to suppress an internal swing that was already legible.
+    // That is a subtler lookahead than the one being fixed, so significance is
+    // a function of WHEN the question is asked.
+    //
+    // Simultaneous breaks are deliberately NOT collapsed here. Every active
+    // level a bar crosses is recorded, so the frequency of multi-level bars can
+    // be measured before any policy is chosen.
+    //
+    // Sweeps get the same confirmation rule: a swing cannot be swept before it
+    // exists. The current separate sweep scan starts at `highs[i].index + 1`,
+    // the bar straight after the pivot, so it reports sweeps of levels that
+    // were not yet knowable; those are counted as `prematureSweeps`.
+    if (action === "structure_comparison") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        // Mirror analyzeMarketStructure's own parameters exactly.
+        const internalLookback = 3;
+        const externalLookback = Math.max(internalLookback + 4, 7);
+        const hasATR = series.length >= 15;
+        const internalSwings = detectSwingPoints(series, internalLookback, hasATR ? 0.2 : 0);
+        const externalSwings = detectSwingPoints(series, externalLookback, hasATR ? 0.5 : 0);
+
+        const extKeys = new Set(externalSwings.map((s: any) => `${s.type}_${s.index}`));
+        const intKeys = new Set(internalSwings.map((s: any) => `${s.type}_${s.index}`));
+        type Sw = {
+          key: string; type: "high" | "low"; index: number; price: number;
+          internalAt: number | null; externalAt: number | null;
+          broken: boolean; brokenAt: number | null; brokenAs: string | null;
+        };
+        const swMap = new Map<string, Sw>();
+        for (const s of [...internalSwings, ...externalSwings] as any[]) {
+          const key = `${s.type}_${s.index}`;
+          if (swMap.has(key)) continue;
+          swMap.set(key, {
+            key, type: s.type, index: s.index, price: s.price,
+            internalAt: intKeys.has(key) ? s.index + internalLookback : null,
+            externalAt: extKeys.has(key) ? s.index + externalLookback : null,
+            broken: false, brokenAt: null, brokenAs: null,
+          });
+        }
+        const swings = [...swMap.values()].sort((a, b) => a.index - b.index);
+        // Earliest bar at which this swing is knowable at all.
+        const activeAt = (s: Sw) => {
+          const a = s.internalAt, b = s.externalAt;
+          return a === null ? (b ?? Infinity) : (b === null ? a : Math.min(a, b));
+        };
+        // Significance AS OF bar j — internal first, external once confirmed.
+        const sigAt = (s: Sw, j: number) =>
+          s.externalAt !== null && j >= s.externalAt ? "external" : "internal";
+
+        // ── chronological pass ────────────────────────────────────────────
+        let trend: "bullish" | "bearish" | "ranging" = "ranging";
+        const cBos: any[] = [], cChoch: any[] = [], cSweeps: any[] = [];
+        const multiBar: { index: number; datetime: string; levels: number }[] = [];
+        for (let j = 0; j < series.length; j++) {
+          const bar = series[j];
+          const crossed = swings.filter(s =>
+            !s.broken && s.index < j && activeAt(s) <= j &&
+            (s.type === "high" ? bar.close > s.price : bar.close < s.price));
+          if (crossed.length > 1) {
+            multiBar.push({ index: j, datetime: bar.datetime, levels: crossed.length });
+          }
+          // Deterministic order: external before internal, then most extreme.
+          crossed.sort((a, b) => {
+            const sa = sigAt(a, j) === "external" ? 0 : 1, sb = sigAt(b, j) === "external" ? 0 : 1;
+            if (sa !== sb) return sa - sb;
+            return a.type === "high" ? b.price - a.price : a.price - b.price;
+          });
+          for (const s of crossed) {
+            const dir = s.type === "high" ? "bullish" : "bearish";
+            const sig = sigAt(s, j);
+            const entry = {
+              index: j, datetime: bar.datetime, type: dir, level: s.price,
+              significance: sig, swingIndex: s.index, swingTime: series[s.index]?.datetime,
+              barsLate: null as number | null,
+            };
+            const isChoch = (dir === "bullish" && trend === "bearish") ||
+                            (dir === "bearish" && trend === "bullish");
+            (isChoch ? cChoch : cBos).push(entry);
+            trend = dir;
+            s.broken = true; s.brokenAt = j; s.brokenAs = isChoch ? "CHoCH" : "BOS";
+          }
+          // Sweeps, same confirmation rule: wick through an ACTIVE unbroken
+          // level, close holding inside.
+          for (const s of swings) {
+            if (s.broken || s.index >= j || activeAt(s) > j) continue;
+            const wickThrough = s.type === "high" ? bar.high > s.price : bar.low < s.price;
+            const closeHeld = s.type === "high" ? bar.close <= s.price : bar.close >= s.price;
+            if (wickThrough && closeHeld) {
+              cSweeps.push({
+                index: j, datetime: bar.datetime,
+                type: s.type === "high" ? "bearish" : "bullish", sweptLevel: s.price,
+              });
+            }
+          }
+        }
+
+        // ── current implementation, untouched ─────────────────────────────
+        const cur = analyzeMarketStructure(series);
+        const curBreaks = [...cur.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                           ...cur.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+
+        // Premature sweeps in the CURRENT output: a sweep reported before its
+        // swing could causally exist.
+        const lvlTol = 1e-8;
+        let premature = 0;
+        const prematureEx: any[] = [];
+        for (const sp of (cur.sweeps ?? []) as any[]) {
+          const owner = swings.find(s => Math.abs(s.price - sp.sweptLevel) < lvlTol);
+          if (owner && sp.index < activeAt(owner)) {
+            premature++;
+            if (prematureEx.length < 5) {
+              prematureEx.push({
+                sweepIndex: sp.index, sweepTime: sp.datetime, level: sp.sweptLevel,
+                swingIndex: owner.index, knowableAt: activeAt(owner),
+                barsEarly: activeAt(owner) - sp.index,
+              });
+            }
+          }
+        }
+
+        // Levels the current implementation never reports as broken.
+        const curLevels = curBreaks.map((b: any) => b.level);
+        const missed = [...cBos, ...cChoch]
+          .filter(e => !curLevels.some((L: number) => Math.abs(L - e.level) < lvlTol))
+          .sort((a, b) => a.index - b.index);
+
+        // For levels BOTH report: how many bars late is the current one, and
+        // did the BOS/CHoCH label change?
+        const deltas: any[] = [], reclass: any[] = [];
+        for (const e of [...cBos, ...cChoch].sort((a, b) => a.index - b.index)) {
+          const m = curBreaks.find((b: any) => Math.abs(b.level - e.level) < lvlTol);
+          if (!m) continue;
+          const chronoKind = cChoch.includes(e) ? "CHoCH" : "BOS";
+          deltas.push({
+            level: e.level, chronoIndex: e.index, currentIndex: m.index,
+            barsLate: m.index - e.index,
+            chronoTime: e.datetime, currentTime: m.datetime,
+          });
+          if (chronoKind !== m.kind || e.significance !== m.significance) {
+            reclass.push({
+              level: e.level, chrono: `${chronoKind}/${e.significance}`,
+              current: `${m.kind}/${m.significance}`,
+            });
+          }
+        }
+
+        const rate = (n: number, d: number) => d > 0 ? Math.round((n / d) * 1000) / 1000 : 0;
+        const nHigh = swings.filter(s => s.type === "high").length;
+        const nLow = swings.filter(s => s.type === "low").length;
+        const cBull = [...cBos, ...cChoch].filter(e => e.type === "bullish").length;
+        const cBear = [...cBos, ...cChoch].filter(e => e.type === "bearish").length;
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          firstBar: series[0]?.datetime, lastBar: series[series.length - 1]?.datetime,
+          current: {
+            bos: cur.bos.length, choch: cur.choch.length,
+            internal: curBreaks.filter((b: any) => b.significance === "internal").length,
+            external: curBreaks.filter((b: any) => b.significance === "external").length,
+            sweeps: (cur.sweeps ?? []).length,
+            prematureSweeps: premature, prematureExamples: prematureEx,
+            structureToFractal: cur.structureToFractal,
+          },
+          chronological: {
+            bos: cBos.length, choch: cChoch.length,
+            internal: [...cBos, ...cChoch].filter(e => e.significance === "internal").length,
+            external: [...cBos, ...cChoch].filter(e => e.significance === "external").length,
+            sweeps: cSweeps.length,
+            structureToFractal: {
+              bullishRate: rate(cBull, Math.max(1, nHigh)),
+              bearishRate: rate(cBear, Math.max(1, nLow)),
+              totalFractals: nHigh + nLow, totalBreaks: cBull + cBear,
+              overallRate: rate(cBull + cBear, Math.max(1, nHigh + nLow)),
+            },
+          },
+          missedByCurrent: { count: missed.length, examples: missed.slice(0, 12) },
+          sameBarMultiLevel: {
+            bars: multiBar.length,
+            maxLevelsOnOneBar: multiBar.reduce((m, x) => Math.max(m, x.levels), 0),
+            examples: multiBar.slice(0, 8),
+          },
+          breakTimingDelta: {
+            matched: deltas.length,
+            medianBarsLate: deltas.length
+              ? deltas.map(d => d.barsLate).sort((a, b) => a - b)[Math.floor(deltas.length / 2)] : null,
+            maxBarsLate: deltas.reduce((m, d) => Math.max(m, d.barsLate), 0),
+            examples: deltas.slice(0, 10),
+          },
+          reclassified: { count: reclass.length, examples: reclass.slice(0, 10) },
+          // ── Duplicate-level integrity ───────────────────────────────
+          // breakTimingDelta matches current-vs-chronological events by LEVEL
+          // within 1e-8. If two same-type swings share a price to that
+          // tolerance, a match can attach to the wrong one and the timing
+          // delta for that level is meaningless.
+          //
+          // Diagnostic only: the matching logic is NOT changed here. The point
+          // is to make the ambiguity visible in the payload so the deltas are
+          // not trusted blind.
+          integrity: (() => {
+            const dupGroups: any[] = [];
+            for (const t of ["high", "low"] as const) {
+              const byType = swings.filter(s2 => s2.type === t)
+                .sort((a, b) => a.price - b.price);
+              let run: typeof byType = [];
+              const flush = () => {
+                if (run.length > 1) {
+                  dupGroups.push({
+                    type: t, level: run[0].price, count: run.length,
+                    swingIndexes: run.map(x => x.index),
+                    swingDates: run.map(x => series[x.index]?.datetime ?? null),
+                  });
+                }
+                run = [];
+              };
+              for (const sw of byType) {
+                if (run.length && Math.abs(sw.price - run[0].price) >= lvlTol) flush();
+                run.push(sw);
+              }
+              flush();
+            }
+            return {
+              duplicateSwingLevelCount: dupGroups.reduce((n, g) => n + g.count, 0),
+              duplicateSwingLevelGroups: dupGroups.length,
+              duplicateSwingLevelExamples: dupGroups.slice(0, 8),
+            };
+          })(),
+
+          // ── Required real-world case from #580 ──────────────────────
+          // The earlier version only asked whether the current implementation
+          // EVER emits a break at this level. That hides the defect, because
+          // the defect is lateness, not total absence — pairwise event
+          // construction reports the break once a new swing confirms on the
+          // far side, which can be many bars after the close that caused it.
+          //
+          // So the current implementation is NOT asserted to miss the level.
+          // It may well detect it later, and that lateness is the measurement.
+          requiredCase: tgt.requiredCase ? (() => {
+            const lvl = Number(tgt.requiredCase.level);
+            const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+            const want = String(tgt.requiredCase.closeDate);
+            const atLevel = (L: number) => Math.abs(L - lvl) < tol;
+
+            const chronoAll = [...cBos, ...cChoch]
+              .filter(e => atLevel(e.level)).sort((a, b) => a.index - b.index);
+            const chronoOnDate = chronoAll.find(e => e.datetime.slice(0, 10) === want) ?? null;
+            const chronoFirst = chronoAll[0] ?? null;
+
+            const curAll = curBreaks.filter((b: any) => atLevel(b.level))
+              .sort((a: any, b: any) => a.index - b.index);
+            const curOnDate = curAll.find((b: any) => b.datetime.slice(0, 10) === want) ?? null;
+            const curFirst = curAll[0] ?? null;
+
+            // Late relative to the chronological detection on the expected
+            // date where there is one, otherwise the first chronological hit.
+            const baseline = chronoOnDate ?? chronoFirst;
+            return {
+              level: lvl, expectedCloseDate: want,
+              chronologicalDetectsOnExpectedDate: !!chronoOnDate,
+              chronologicalIndex: baseline ? baseline.index : null,
+              chronologicalDate: baseline ? baseline.datetime : null,
+              chronologicalKind: chronoOnDate
+                ? (cChoch.includes(chronoOnDate) ? "CHoCH" : "BOS") : null,
+              chronologicalSignificance: chronoOnDate ? chronoOnDate.significance : null,
+              currentDetectsOnExpectedDate: !!curOnDate,
+              currentAnyDetection: !!curFirst,
+              currentDetectionDate: curFirst ? curFirst.datetime : null,
+              currentIndex: curFirst ? curFirst.index : null,
+              currentKind: curFirst ? curFirst.kind : null,
+              currentBarsLate: curFirst && baseline ? curFirst.index - baseline.index : null,
+            };
+          })() : null,
+        });
+      }
+      return respond({
+        note: "READ-ONLY. analyzeMarketStructure is unchanged and still the only " +
+              "implementation any caller uses. Simultaneous breaks are NOT collapsed. " +
+              "Significance is two-phase: internal at index+internalLookback, promoted " +
+              "to external at index+externalLookback if still unbroken.",
+        out,
       });
     }
 
