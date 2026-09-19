@@ -52,3 +52,5 @@ run-recency.sh
 .fixtures-local/
 
 supabase/.temp/
+ezzy-out.json
+run-ezzy.sh

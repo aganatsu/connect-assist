@@ -2166,6 +2166,253 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_selector ────────────────────────────────────────────────────
+    // SELECTOR RESEARCH ONLY. Read-only. Does not touch production trading
+    // logic, does not replace detectOrderBlocks, and does not promote the
+    // canonical structure engine — it only READS it, the same way the shadow
+    // diff does.
+    //
+    // Hierarchy under test, in order:
+    //
+    //   1. start from a CANONICAL structure break
+    //   2. identify the impulse that caused it
+    //   3. walk back for the LAST QUALIFYING candle before that impulse
+    //   4. reject candles that merely sit inside consolidation
+    //   5. record liquidity-taking features WITHOUT gating on them
+    //   6. apply the frozen proximal-half-of-wick-range geometry
+    //
+    // STEP 4 IS THE LOAD-BEARING ONE. "Last opposite-coloured candle before the
+    // move" on its own selects a consolidation candle whenever the move starts
+    // out of a range, which is most of the time. A candidate must therefore
+    // clear at least one structural qualification:
+    //
+    //   turn         it makes a new past-10 extreme on its own side. Measured
+    //                5/5 on the known TURN blocks against a 23% base rate, and
+    //                0/2 on the CONTINUATION ones.
+    //   continuation it is the last candle of a counter-trend run that the
+    //                impulse then resumes through.
+    //
+    // A candle that is neither is interior consolidation and is recorded as a
+    // competitor with rejected=true rather than silently skipped. Every
+    // candidate examined is reported, so the rule can be judged on what it
+    // passed over as much as on what it chose.
+    //
+    // Liquidity features are RECORDED, NOT GATED. 0 of 7 known blocks satisfy
+    // sweptAndClosedBack, so hard-gating on a sweep would reject the reference
+    // set outright.
+    if (action === "ezzy_selector") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const BACK = Number(body?.maxLookback ?? 12);   // bars to walk back from the impulse origin
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const canon = analyzeMarketStructureCanonical(series, {
+          policy: "latest_unbroken_structural", maxEventAgeBars: 50,
+        });
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+
+        const selections: any[] = [];
+        const events = [...canon.bos, ...canon.choch].sort((a: any, b: any) => a.index - b.index);
+
+        for (const ev of events) {
+          const bearish = ev.type === "bearish";
+          const j = ev.index;
+          const swingIdx = (ev as any).swingIndex ?? Math.max(0, j - 10);
+
+          // ── 2. the impulse responsible for the break ──────────────────
+          // The move that drove price through the level: from the extreme it
+          // started at, to the breaking bar. For a bearish break that origin is
+          // the highest high between the broken swing and the break.
+          let originIdx = swingIdx;
+          for (let k = swingIdx; k <= j; k++) {
+            if (!series[k]) continue;
+            if (bearish ? series[k].high >= series[originIdx].high
+                        : series[k].low <= series[originIdx].low) originIdx = k;
+          }
+          const atr = atrAt(originIdx) || 1;
+          const impulseAtr = bearish
+            ? (series[originIdx].high - series[j].low) / atr
+            : (series[j].high - series[originIdx].low) / atr;
+
+          // ── 3+4. walk back for the last QUALIFYING candle ─────────────
+          // The order block is the opposite colour to the impulse: an UP candle
+          // before a down move (supply), a DOWN candle before an up move.
+          const wantUp = bearish;
+          const side = bearish ? "supply" : "demand";
+          const cands: any[] = [];
+          let chosen: any = null;
+
+          for (let i = originIdx; i >= Math.max(1, originIdx - BACK); i--) {
+            const c = series[i];
+            if (!c) continue;
+            if ((c.close >= c.open) !== wantUp) continue;      // wrong colour
+
+            const a = atrAt(i) || 1;
+            const range = c.high - c.low;
+            const ext = (k: number) => wantUp ? series[k].high : series[k].low;
+            const better = (x: number, y: number) => wantUp ? x > y : x < y;
+            const mine = ext(i);
+
+            // turn qualification — strictly past-only, no lookahead
+            let past10: number | null = null;
+            for (let k = Math.max(0, i - 10); k <= i - 1; k++) {
+              const e = ext(k);
+              if (past10 === null || better(e, past10)) past10 = e;
+            }
+            const newPast10Extreme = past10 !== null && better(mine, past10);
+
+            // continuation qualification — last candle of its own colour run
+            let runStart = i;
+            while (runStart - 1 >= 0 &&
+                   ((series[runStart - 1].close >= series[runStart - 1].open) === wantUp)) runStart--;
+            const nxt = series[i + 1];
+            const isLastOfRun = nxt ? ((nxt.close >= nxt.open) !== wantUp) : false;
+            const runLen = i - runStart + 1;
+
+            // ── 4. consolidation rejection ─────────────────────────────
+            // Neither shape = interior consolidation candle. Recorded, not
+            // silently dropped, so the rule is judged on its near-misses too.
+            const qualifies = newPast10Extreme || isLastOfRun;
+            const qualification = newPast10Extreme
+              ? (isLastOfRun ? "turn+lastOfRun" : "turn(newPast10Extreme)")
+              : (isLastOfRun ? "lastOfPullbackRun" : null);
+
+            // ── 5. liquidity features: RECORDED, NOT GATED ─────────────
+            const priorExt = (() => {
+              let v: number | null = null;
+              for (let k = Math.max(0, i - 10); k <= i - 1; k++) {
+                const e = ext(k);
+                if (v === null || better(e, v)) v = e;
+              }
+              return v;
+            })();
+            const tookPrior = priorExt !== null && better(mine, priorExt);
+            const closedBack = tookPrior && (wantUp ? c.close < priorExt! : c.close > priorExt!);
+            const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+            const liqWick = wantUp ? (c.high - bodyHi) : (bodyLo - c.low);
+            // Equal highs/lows within 0.1 ATR in the prior 10 bars — resting liquidity.
+            let equalCount = 0;
+            for (let k = Math.max(0, i - 10); k <= i - 1; k++) {
+              if (Math.abs(ext(k) - mine) < a * 0.1) equalCount++;
+            }
+
+            // ── 6. FROZEN GEOMETRY — proximal half of the full wick range ──
+            //   supply  proximal = LOW   distal = midpoint   extent = HIGH
+            //   demand  proximal = HIGH  distal = midpoint   extent = LOW
+            // Derived from hand-drawn boxes and validated on 7 boxes / 3 pairs
+            // / 2 brokers. Not to be modified here.
+            const proximal = side === "supply" ? c.low : c.high;
+            const extent = side === "supply" ? c.high : c.low;
+            const distal = (c.high + c.low) / 2;
+
+            const entry = {
+              date: c.datetime.slice(0, 10), datetime: c.datetime, index: i,
+              side, barsBeforeImpulseOrigin: originIdx - i,
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              rangeAtr: r(range / a), bodyAtr: r(Math.abs(c.close - c.open) / a),
+              bodyRangeRatio: range > 0 ? r(Math.abs(c.close - c.open) / range) : null,
+              qualifies, qualification,
+              rejectedAsConsolidation: !qualifies,
+              newPast10Extreme, isLastOfRun, runLength: runLen,
+              liquidity: {
+                tookPriorExtreme: tookPrior,
+                sweptAndClosedBack: closedBack,
+                liquidityWickRatio: range > 0 ? r(liqWick / range) : null,
+                equalLevelsPrior10: equalCount,
+                amountBeyondPriorExtremeAtr: priorExt !== null
+                  ? r(Math.max(0, wantUp ? (mine - priorExt) / a : (priorExt - mine) / a)) : null,
+              },
+              box: { proximal: r(proximal, 5), distal: r(distal, 5), extent: r(extent, 5) },
+              selected: false,
+            };
+            cands.push(entry);
+            if (qualifies && !chosen) { chosen = entry; entry.selected = true; }
+          }
+
+          selections.push({
+            break: {
+              index: j, datetime: ev.datetime, type: ev.type,
+              level: ev.level, significance: ev.significance,
+              swingIndex: (ev as any).swingIndex ?? null,
+              swingDatetime: series[(ev as any).swingIndex]?.datetime ?? null,
+            },
+            impulse: {
+              originIndex: originIdx, originDatetime: series[originIdx]?.datetime ?? null,
+              barsToBreak: j - originIdx, impulseAtr: r(impulseAtr),
+            },
+            side,
+            selectedCandle: chosen
+              ? { date: chosen.date, index: chosen.index, qualification: chosen.qualification, box: chosen.box }
+              : null,
+            selectedNone: !chosen,
+            candidatesExamined: cands.length,
+            candidates: cands,
+          });
+        }
+
+        // ── 7/8. score against the known EZZY boxes ────────────────────
+        const known = (tgt.knownBoxes ?? []) as Array<{ date: string; side: string }>;
+        const picked = new Set(selections.filter(s => s.selectedCandle)
+          .map(s => `${s.side}|${s.selectedCandle.date}`));
+        const scored = known.map(k => {
+          const key = `${k.side}|${k.date}`;
+          const hit = picked.has(key);
+          // Where the rule went instead, and whether the known candle was even
+          // examined — "never reached" and "examined then rejected" are very
+          // different failures.
+          const sameSide = selections.filter(s => s.side === k.side);
+          const examined = sameSide.flatMap(s => s.candidates)
+            .filter((c: any) => c.date === k.date);
+          const nearest = sameSide.filter(s => s.selectedCandle)
+            .map(s => ({ date: s.selectedCandle.date, breakAt: s.break.datetime,
+                         deltaDays: Math.round((Date.parse(s.selectedCandle.date) - Date.parse(k.date)) / 86400000) }))
+            .sort((a, b) => Math.abs(a.deltaDays) - Math.abs(b.deltaDays))[0] ?? null;
+          return {
+            knownBox: k, hit,
+            knownCandleExamined: examined.length > 0,
+            knownCandleVerdict: examined.length
+              ? examined.map((e: any) => ({
+                  qualifies: e.qualifies, qualification: e.qualification,
+                  rejectedAsConsolidation: e.rejectedAsConsolidation,
+                  newPast10Extreme: e.newPast10Extreme, isLastOfRun: e.isLastOfRun,
+                  selected: e.selected,
+                }))
+              : null,
+            nearestSelection: nearest,
+          };
+        });
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          canonicalEvents: events.length,
+          selectionsMade: selections.filter(s => s.selectedCandle).length,
+          selectionsEmpty: selections.filter(s => s.selectedNone).length,
+          knownBoxScore: scored,
+          selections: selections.slice(-Number(body?.maxSelections ?? 30)),
+        });
+      }
+      return respond({
+        note: "SELECTOR RESEARCH ONLY. Read-only. Production trading logic, the " +
+              "live OB detector and structure authority are all untouched; the " +
+              "canonical engine is read, not promoted. Liquidity features are " +
+              "recorded and NOT gated — 0/7 known boxes satisfy sweptAndClosedBack. " +
+              "Geometry is the frozen proximal-half-of-wick-range rule.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
