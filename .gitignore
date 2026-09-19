@@ -56,3 +56,5 @@ ezzy-out.json
 run-ezzy.sh
 holdout-out.json
 run-holdout.sh
+audit-out.json
+run-audit.sh

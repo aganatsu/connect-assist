@@ -2696,6 +2696,226 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_candidate_causal_audit ──────────────────────────────────────
+    // DESCRIPTIVE ONLY. Starts from each KNOWN Ezzy candle and looks forward.
+    // It selects nothing, ranks nothing, chooses no threshold, and changes no
+    // production behaviour. The selector, TURN rule, continuation rule, body
+    // threshold, canonical structure and geometry are all untouched — this
+    // reads them.
+    //
+    // WHY START FROM THE CANDLE. Every previous diagnostic started from a
+    // canonical break and searched backward, so it could only ever describe
+    // candles its own search happened to reach. The BTC holdout scored 0/3 for
+    // three DIFFERENT reasons — rejected_by_qualification, never_examined and
+    // qualified_but_outranked — which means the search itself is part of what
+    // is under suspicion. Inverting the direction removes the search from the
+    // measurement: whatever these candles have in common must be visible from
+    // the candle forward, without any rule deciding which candle to look at.
+    //
+    // The BTC holdout result stands at 0/3 and is not relabelled by anything
+    // here.
+    if (action === "ezzy_candidate_causal_audit") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const HORIZON = Number(body?.horizon ?? 40);
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const canon = analyzeMarketStructureCanonical(series, {
+          policy: "latest_unbroken_structural", maxEventAgeBars: 50,
+        });
+        const evs = [...canon.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                     ...canon.choch.map((c: any) => ({ ...c, kind: "CHoCH" }))]
+                     .sort((a, b) => a.index - b.index);
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const idxOf = (date: string) => series.findIndex(c => c.datetime.slice(0, 10) === date);
+
+        const rows = (tgt.knownBoxes ?? []).map((k: any) => {
+          const i = idxOf(String(k.date));
+          if (i < 0) return { date: k.date, side: k.side, error: "candle not in series" };
+          const c = series[i];
+          const demand = k.side === "demand";
+          const favUp = demand;                       // demand precedes an up move
+          const a = atrAt(i) || 1;
+          const range = c.high - c.low;
+          const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+
+          // Frozen geometry, read-only.
+          const proximal = demand ? c.high : c.low;
+          const extent = demand ? c.low : c.high;
+          const distal = (c.high + c.low) / 2;
+          const boxLo = Math.min(proximal, extent), boxHi = Math.max(proximal, extent);
+
+          // ── first directional expansion ────────────────────────────────
+          // The first maximal run of consecutive favourable-direction candles
+          // after this one. Structural, so no threshold is being chosen.
+          let expStart = -1, expEnd = -1;
+          for (let j = i + 1; j < Math.min(series.length, i + 1 + HORIZON); j++) {
+            const up = series[j].close >= series[j].open;
+            if (up === favUp) { if (expStart < 0) expStart = j; expEnd = j; }
+            else if (expStart >= 0) break;
+          }
+          let expDispAtr: number | null = null;
+          if (expStart >= 0) {
+            let ext = favUp ? -Infinity : Infinity;
+            for (let j = expStart; j <= expEnd; j++) {
+              const v = favUp ? series[j].high : series[j].low;
+              if (favUp ? v > ext : v < ext) ext = v;
+            }
+            expDispAtr = r(Math.abs(ext - proximal) / a);
+          }
+
+          // ── canonical swing levels first closed through after the candle ─
+          const ledgerAfter = (canon.swingLevelBreaks as any[])
+            .filter(x => x.index > i && x.index <= i + HORIZON)
+            .map(x => ({
+              date: String(x.datetime).slice(0, 10), barsAfter: x.index - i,
+              direction: x.direction, level: x.level, significance: x.significance,
+              swingDate: String(x.swingTime ?? "").slice(0, 10),
+            }));
+
+          const after = evs.filter(e => e.index > i && e.index <= i + HORIZON);
+          const pick = (f: (e: any) => boolean) => {
+            const e = after.find(f);
+            return e ? {
+              date: String(e.datetime).slice(0, 10), barsAfter: e.index - i,
+              type: e.type, kind: e.kind, level: e.level, significance: e.significance,
+            } : null;
+          };
+          const firstInternal = pick(e => e.significance === "internal");
+          const firstExternal = pick(e => e.significance === "external");
+          const firstBOS = pick(e => e.kind === "BOS");
+          const firstCHoCH = pick(e => e.kind === "CHoCH");
+
+          // ── revisit and invalidation ───────────────────────────────────
+          // revisit     = any later bar trades back INTO the box
+          // invalidated = a close beyond extent (the frozen lifecycle rule)
+          let revisitIdx = -1, invalIdx = -1;
+          for (let j = i + 1; j < Math.min(series.length, i + 1 + HORIZON); j++) {
+            const b = series[j];
+            if (revisitIdx < 0 && b.low <= boxHi && b.high >= boxLo) revisitIdx = j;
+            if (invalIdx < 0 && (demand ? b.close < extent : b.close > extent)) invalIdx = j;
+          }
+          // MFE up to whichever of revisit/invalidation comes first.
+          const stopAt = Math.min(
+            revisitIdx < 0 ? Infinity : revisitIdx,
+            invalIdx < 0 ? Infinity : invalIdx,
+            i + HORIZON,
+          );
+          let mfe = 0;
+          for (let j = i + 1; j <= Math.min(series.length - 1, stopAt); j++) {
+            const v = favUp ? series[j].high : series[j].low;
+            const d2 = favUp ? v - proximal : proximal - v;
+            if (d2 > mfe) mfe = d2;
+          }
+          const revisitedBefore = (e: any) =>
+            e == null ? null : (revisitIdx >= 0 && revisitIdx < i + e.barsAfter);
+
+          // ── candle-local features, recomputed here ─────────────────────
+          const ext = (j: number) => favUp ? series[j].low : series[j].high;   // the box's own side
+          const better = (x: number, y: number) => favUp ? x < y : x > y;      // deeper low / higher high
+          let past10: number | null = null;
+          for (let j2 = Math.max(0, i - 10); j2 <= i - 1; j2++) {
+            const e = ext(j2);
+            if (past10 === null || better(e, past10)) past10 = e;
+          }
+          const mine = ext(i);
+          const newPast10Extreme = past10 !== null && better(mine, past10);
+          const wantUp = !demand;                        // supply candles are up candles
+          let runStart = i;
+          while (runStart - 1 >= 0 &&
+                 ((series[runStart - 1].close >= series[runStart - 1].open) === wantUp)) runStart--;
+          const nxt = series[i + 1];
+          const isLastOfRun = nxt ? ((nxt.close >= nxt.open) !== wantUp) : false;
+          const liqWick = wantUp ? (c.high - bodyHi) : (bodyLo - c.low);
+          let equalPrior10 = 0;
+          for (let j2 = Math.max(0, i - 10); j2 <= i - 1; j2++) {
+            if (Math.abs(ext(j2) - mine) < a * 0.1) equalPrior10++;
+          }
+          const tookPrior = past10 !== null && better(mine, past10);
+          const closedBack = tookPrior && (demand ? c.close > past10! : c.close < past10!);
+
+          return {
+            date: k.date, side: k.side, index: i,
+            candle: {
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              colour: c.close >= c.open ? "up" : "down",
+              rangeAtr: r(range / a), bodyAtr: r(Math.abs(c.close - c.open) / a),
+              bodyRangeRatio: range > 0 ? r(Math.abs(c.close - c.open) / range) : null,
+              atr: r(a, 5),
+            },
+            box: { proximal: r(proximal, 5), distal: r(distal, 5), extent: r(extent, 5) },
+            firstExpansion: expStart < 0 ? null : {
+              startDate: series[expStart].datetime.slice(0, 10),
+              endDate: series[expEnd].datetime.slice(0, 10),
+              barsAfterCandle: expStart - i, lengthBars: expEnd - expStart + 1,
+              displacementAtr: expDispAtr,
+            },
+            canonicalLevelsClosedThroughAfter: {
+              count: ledgerAfter.length, entries: ledgerAfter.slice(0, 10),
+            },
+            firstInternalBreak: firstInternal,
+            firstExternalBreak: firstExternal,
+            firstBOS, firstCHoCH,
+            excursion: {
+              maxFavourableAtrBeforeRevisitOrInvalidation: r(mfe / a),
+              revisitBarsAfter: revisitIdx < 0 ? null : revisitIdx - i,
+              revisitDate: revisitIdx < 0 ? null : series[revisitIdx].datetime.slice(0, 10),
+              invalidationBarsAfter: invalIdx < 0 ? null : invalIdx - i,
+              invalidationDate: invalIdx < 0 ? null : series[invalIdx].datetime.slice(0, 10),
+              whichCameFirst: revisitIdx < 0 && invalIdx < 0 ? "neither"
+                : invalIdx < 0 ? "revisit"
+                : revisitIdx < 0 ? "invalidation"
+                : (revisitIdx <= invalIdx ? "revisit" : "invalidation"),
+            },
+            boxRevisitedBeforeBreak: {
+              firstInternal: revisitedBefore(firstInternal),
+              firstExternal: revisitedBefore(firstExternal),
+              firstBOS: revisitedBefore(firstBOS),
+              firstCHoCH: revisitedBefore(firstCHoCH),
+            },
+            candleContext: {
+              newPast10Extreme, isLastOfRun, runLength: i - runStart + 1,
+            },
+            liquidity: {
+              tookPriorExtreme: tookPrior, sweptAndClosedBack: closedBack,
+              liquidityWickRatio: range > 0 ? r(liqWick / range) : null,
+              equalLevelsPrior10: equalPrior10,
+              amountBeyondPriorExtremeAtr: past10 !== null
+                ? r(Math.max(0, Math.abs(mine - past10) / a)) : null,
+            },
+          };
+        });
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          firstBar: series[0]?.datetime ?? null, lastBar: series[series.length - 1]?.datetime ?? null,
+          horizon: HORIZON, canonicalEvents: evs.length,
+          knownCandles: rows,
+        });
+      }
+      return respond({
+        note: "DESCRIPTIVE ONLY. Starts from each KNOWN candle and looks forward. " +
+              "Selects nothing, ranks nothing, chooses no threshold. The selector, " +
+              "TURN rule, continuation rule, body threshold, canonical structure, " +
+              "geometry and production are untouched. The BTC holdout stands at 0/3 " +
+              "and is not relabelled by anything here.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
