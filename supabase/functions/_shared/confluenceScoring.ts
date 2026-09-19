@@ -38,6 +38,7 @@ import {
   detectMacroWindow,
   detectAMDPhase,
 } from "./smcAnalysis.ts";
+import { buildStructureShadowDiff } from "./structureShadow.ts";
 
 import {
   detectSession,
@@ -306,6 +307,15 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     : 50;
   const structureCandles = sc.length > structureLookback ? sc.slice(-structureLookback) : sc;
   const structure = analyzeMarketStructure(structureCandles);
+  // SHADOW ONLY. `structure` above stays authoritative and is what every
+  // downstream factor, gate and decision reads. This computes the canonical
+  // candidate beside it and attaches a compact diff to the returned object
+  // under `structureShadow`. Nothing consumes that key. Off unless the
+  // STRUCTURE_CANONICAL_SHADOW secret is exactly "true", in which case
+  // buildStructureShadowDiff returns null and this costs one function call.
+  const structureShadow = buildStructureShadowDiff(
+    structureCandles, structure, "confluenceScoring.runConfluenceAnalysis",
+  );
   const structureBreaks = [...structure.bos, ...structure.choch];
   // P1: OB lookback — pass config-driven recency window
   let orderBlocks = detectOrderBlocks(sc, structureBreaks, config.obLookbackCandles);
@@ -3005,6 +3015,9 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     score, rawScore, normalizedScoring: true, enabledMax,
     strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
+    // Additive shadow diff. null unless the shadow secret is enabled; no
+    // consumer reads it. `structure` remains the authoritative value.
+    structureShadow,
     // Which series the LEVELS came from. The premium/discount gate prints the
     // timeframe in its rejection reason, and that reason existed precisely
     // because the four different P/D definitions were impossible to tell apart
