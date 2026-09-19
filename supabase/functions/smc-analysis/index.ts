@@ -3546,6 +3546,193 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── ezzy_archetype_a_robustness_audit ────────────────────────────────
+    // READ-ONLY. Two questions, no tuning:
+    //
+    //   1. is Archetype A robust to reasonable prior-range window changes?
+    //   2. is it rare enough in the wild to discriminate?
+    //
+    // ARCHETYPE A IS FROZEN EXACTLY AS MEASURED at W=10 and is not adjusted
+    // here. Its observed floors, taken from the six known boxes and used only
+    // as reporting bounds:
+    //
+    //   aligned          demand candle closes below the prior LOW
+    //                    supply candle closes above the prior HIGH
+    //   the candle IS the most recent grab, and it CLOSES through
+    //   closePenetrationAtr  >= 0.89   (observed minimum)
+    //   penetrationRatio     >= 0.83   (observed minimum)
+    //
+    // No new threshold is chosen. The floors are the observed minima of the
+    // labelled set, used to count how much company those six candles have.
+    //
+    // BACKGROUND CANDIDATES, NOT FALSE POSITIVES. An unlabelled candle that
+    // matches the pattern is not a negative — nobody has said it is not a box.
+    // The output is deliberately named candidates throughout, because the
+    // reference set contains no labelled negatives and calling these errors
+    // would invent a ground truth that does not exist.
+    //
+    // Not used: canonical structure, BOS/CHoCH, TURN/continuation, body
+    // thresholds, past-10 rule, contraction filters, ranking, selector logic.
+    if (action === "ezzy_archetype_a_robustness_audit") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const WINDOWS: number[] = Array.isArray(body?.windows) ? body.windows : [5, 7, 10, 12, 15, 20];
+      const PEN_FLOOR = Number(body?.penFloor ?? 0.89);     // observed Group A minimum
+      const RATIO_FLOOR = Number(body?.ratioFloor ?? 0.83); // observed Group A minimum
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 80) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const r = (x: number | null, d = 2) =>
+          x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const atrAt = (i: number) => {
+          const sl = series.slice(Math.max(0, i - 14), i);
+          return sl.length ? sl.reduce((a: number, c: Candle) => a + (c.high - c.low), 0) / sl.length : 0;
+        };
+        const priorRange = (i: number, W: number) => {
+          const pS = i - 2 * W, pE = i - W - 1;
+          if (pS < 0) return null;
+          let hi = -Infinity, lo = Infinity;
+          for (let j = pS; j <= pE; j++) {
+            if (series[j].high > hi) hi = series[j].high;
+            if (series[j].low < lo) lo = series[j].low;
+          }
+          return { hi, lo };
+        };
+
+        // Measure one candle against one window, for a given box side.
+        const measure = (i: number, W: number, demand: boolean) => {
+          const pr = priorRange(i, W);
+          if (!pr) return null;
+          const a = atrAt(i) || 1;
+          const c = series[i];
+          // most recent grab within [i-W, i]
+          let aboveIdx = -1, belowIdx = -1;
+          for (let j = i - W; j <= i; j++) {
+            if (j < 0) continue;
+            if (series[j].high > pr.hi) aboveIdx = j;
+            if (series[j].low < pr.lo) belowIdx = j;
+          }
+          const grabIdx = Math.max(aboveIdx, belowIdx);
+          const grabSide = grabIdx < 0 ? null : (grabIdx === aboveIdx ? "high" : "low");
+          const isGrabBar = grabIdx === i;
+          const aligned = grabIdx < 0 ? false : (demand ? grabSide === "low" : grabSide === "high");
+          const gb = grabIdx < 0 ? null : series[grabIdx];
+          const exc = grabIdx < 0 ? null
+            : Math.max(0, grabSide === "high" ? gb!.high - pr.hi : pr.lo - gb!.low) / a;
+          const pen = grabIdx < 0 ? null
+            : Math.max(0, grabSide === "high" ? gb!.close - pr.hi : pr.lo - gb!.close) / a;
+          const ratio = exc && exc > 0 && pen != null ? pen / exc : null;
+          return {
+            window: W, alignedSide: aligned, grabSide,
+            knownCandleIsMostRecentGrab: isGrabBar,
+            closeThrough: grabIdx < 0 ? null : (pen ?? 0) > 0,
+            extremeExcursionAtr: r(exc), closePenetrationAtr: r(pen), penetrationRatio: r(ratio),
+            // "Group-A-like" reuses the FROZEN definition verbatim.
+            groupALike: !!(aligned && isGrabBar && (pen ?? 0) > 0
+              && (pen ?? 0) >= PEN_FLOOR && (ratio ?? 0) >= RATIO_FLOOR),
+            candleColour: c.close >= c.open ? "up" : "down",
+          };
+        };
+
+        // ── part 1: window sweep over the labelled boxes ───────────────
+        const labelled = (tgt.knownBoxes ?? []).map((k: any) => {
+          const i = series.findIndex(c => c.datetime.slice(0, 10) === String(k.date));
+          if (i < 0) return { date: k.date, side: k.side, error: "candle not in series" };
+          const demand = k.side === "demand";
+          const perWindow = WINDOWS.map(W => measure(i, W, demand)).filter(Boolean);
+          const likeCount = perWindow.filter((x: any) => x.groupALike).length;
+          return {
+            date: k.date, side: k.side, index: i,
+            perWindow,
+            groupALikeWindows: perWindow.filter((x: any) => x.groupALike).map((x: any) => x.window),
+            groupALikeCount: likeCount, windowsTested: perWindow.length,
+            stableAcrossAllWindows: likeCount === perWindow.length,
+          };
+        });
+
+        // ── part 2: background prevalence at W=10 ──────────────────────
+        // Every bar in the available history scored against the frozen pattern.
+        // A bar qualifies as a demand-type candidate if it closes below the
+        // prior low, supply-type if above the prior high — the alignment is
+        // definitional here, since an unlabelled bar has no declared side.
+        const W0 = 10;
+        const cands: any[] = [];
+        for (let i = 2 * W0; i < series.length; i++) {
+          for (const demand of [true, false]) {
+            const m = measure(i, W0, demand);
+            if (!m || !m.groupALike) continue;
+            // colour convention observed on all six: demand boxes are DOWN
+            // candles, supply boxes are UP candles. Recorded, not required.
+            const colourMatches = demand ? m.candleColour === "down" : m.candleColour === "up";
+            cands.push({
+              date: series[i].datetime.slice(0, 10), index: i,
+              type: demand ? "demand" : "supply",
+              closePenetrationAtr: m.closePenetrationAtr,
+              penetrationRatio: m.penetrationRatio,
+              extremeExcursionAtr: m.extremeExcursionAtr,
+              colour: m.candleColour, colourMatchesConvention: colourMatches,
+            });
+          }
+        }
+        const pens = cands.map(c => c.closePenetrationAtr).sort((a, b) => a - b);
+        const rats = cands.map(c => c.penetrationRatio).sort((a, b) => a - b);
+        const q = (arr: number[], p: number) =>
+          arr.length ? r(arr[Math.min(arr.length - 1, Math.floor(arr.length * p))]) : null;
+        const known = new Set((tgt.knownBoxes ?? []).map((k: any) => `${k.side}|${k.date}`));
+        const scanned = series.length - 2 * W0;
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          firstBar: series[0]?.datetime ?? null, lastBar: series[series.length - 1]?.datetime ?? null,
+          windowsTested: WINDOWS,
+          frozenFloors: { closePenetrationAtr: PEN_FLOOR, penetrationRatio: RATIO_FLOOR },
+          labelledBoxes: labelled,
+          backgroundCandidates: {
+            note: "CANDIDATES, not false positives — unlabelled candles are not true negatives",
+            barsScanned: scanned,
+            count: cands.length,
+            perHundredBars: r((cands.length / Math.max(1, scanned)) * 100),
+            withColourConvention: cands.filter(c => c.colourMatchesConvention).length,
+            demand: cands.filter(c => c.type === "demand").length,
+            supply: cands.filter(c => c.type === "supply").length,
+            closePenetrationAtrDistribution: {
+              min: q(pens, 0), p25: q(pens, 0.25), median: q(pens, 0.5),
+              p75: q(pens, 0.75), p90: q(pens, 0.9), max: pens.length ? r(pens[pens.length - 1]) : null,
+            },
+            penetrationRatioDistribution: {
+              min: q(rats, 0), p25: q(rats, 0.25), median: q(rats, 0.5),
+              p75: q(rats, 0.75), p90: q(rats, 0.9), max: rats.length ? r(rats[rats.length - 1]) : null,
+            },
+            knownBoxesAmongCandidates: cands.filter(c => known.has(`${c.type}|${c.date}`))
+              .map(c => ({ date: c.date, type: c.type,
+                           closePenetrationAtr: c.closePenetrationAtr,
+                           penetrationRatio: c.penetrationRatio,
+                           // where each known box sits inside the background
+                           penetrationPercentile: pens.length
+                             ? r(pens.filter(v => v <= c.closePenetrationAtr).length / pens.length * 100, 1) : null })),
+            sample: cands.slice(0, 8),
+          },
+        });
+      }
+      return respond({
+        note: "READ-ONLY. Archetype A is FROZEN as measured at W=10; no threshold " +
+              "is tuned and no best window is chosen. The 0.89/0.83 floors are the " +
+              "OBSERVED MINIMA of the six labelled Group A boxes, used only as " +
+              "reporting bounds. Matches in unlabelled history are BACKGROUND " +
+              "CANDIDATES, not false positives — the reference set contains no " +
+              "labelled negatives. Selector, geometry, canonical structure and " +
+              "production are untouched. BTC holdout remains 0/3.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
