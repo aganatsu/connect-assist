@@ -3469,6 +3469,28 @@ Deno.serve(async (req) => {
           const exceededAtr = grabIdx < 0 ? null
             : r(Math.abs((grabSide === "high" ? grabBar!.high - phi : plo - grabBar!.low)) / a);
 
+          // ── excursion vs penetration ─────────────────────────────────
+          // extremeExcursion  how far the WICK went past the prior extreme
+          // closePenetration  how far the CLOSE finished past it, floored at 0
+          //
+          // These answer different questions. A bar can spear 2 ATR beyond a
+          // level and close back inside — excursion large, penetration zero —
+          // which is a rejection, not acceptance. The ratio is the share of the
+          // excursion that was held into the close: 0 means the move was
+          // entirely given back, 1 means the bar closed at its extreme.
+          //
+          // Both use ATR at the KNOWN CANDLE, matching exceededPriorRangeAtr so
+          // the figures stay comparable. For Group A the grab bar and the known
+          // candle are the same bar, so the choice is moot there; for Group B
+          // they differ by 1-5 bars.
+          const extremeExcursionAtr = grabIdx < 0 ? null
+            : r(Math.max(0, grabSide === "high" ? grabBar!.high - phi : plo - grabBar!.low) / a);
+          const closePenetrationAtr = grabIdx < 0 ? null
+            : r(Math.max(0, grabSide === "high" ? grabBar!.close - phi : plo - grabBar!.close) / a);
+          const penetrationRatio = (extremeExcursionAtr == null || closePenetrationAtr == null
+            || extremeExcursionAtr === 0) ? null
+            : r(closePenetrationAtr / extremeExcursionAtr);
+
           // Only populated when the candle is NOT the grab bar.
           const between: any[] = [];
           if (grabIdx >= 0 && grabIdx < i) {
@@ -3488,6 +3510,9 @@ Deno.serve(async (req) => {
               wickOnly: grabIdx < 0 ? null : !closeThrough,
               closeThrough,
               exceededPriorRangeAtr: exceededAtr,
+              extremeExcursionAtr,
+              closePenetrationAtr,
+              closePenetrationOverExtremeExcursion: penetrationRatio,
             },
             knownCandleIsGrabBar: isGrabBar,
             grabAlignedWithBoxSide: grabAligned,
@@ -3497,6 +3522,9 @@ Deno.serve(async (req) => {
             knownCandle: bar(i),
             // exceeded-by only meaningful when the candle itself did the grab
             knownCandleExceededPriorRangeAtr: isGrabBar ? exceededAtr : null,
+            knownCandleExtremeExcursionAtr: isGrabBar ? extremeExcursionAtr : null,
+            knownCandleClosePenetrationAtr: isGrabBar ? closePenetrationAtr : null,
+            knownCandlePenetrationRatio: isGrabBar ? penetrationRatio : null,
             barsBetweenGrabAndKnownCandle: between,
             priorRange: { from: dstr(pS), to: dstr(pE), high: r(phi, 5), low: r(plo, 5) },
             group: grabIdx < 0 ? "NO_GRAB" : (isGrabBar ? "A" : "B"),
