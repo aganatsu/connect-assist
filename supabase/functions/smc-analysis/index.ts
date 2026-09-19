@@ -29,6 +29,7 @@ import {
   type Candle,
   type ReasoningFactor,
 } from "../_shared/smcAnalysis.ts";
+import { buildStructureShadowDiff } from "../_shared/structureShadow.ts";
 
 // Safe number formatter — guards against undefined/null/NaN
 const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "n/a");
@@ -69,6 +70,10 @@ function calculateCorrelation(data1: number[], data2: number[]): number {
 function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   // Core detections (same functions as scanner)
   const structure = analyzeMarketStructure(candles);
+  // SHADOW ONLY — see confluenceScoring. `structure` stays authoritative.
+  const structureShadow = buildStructureShadowDiff(
+    candles, structure, "smc-analysis.runFullAnalysis",
+  );
   const structureBreaks = [...structure.bos, ...structure.choch];
   const orderBlocks = detectOrderBlocks(candles, structureBreaks);
   const fvgs = detectFVGs(candles, structureBreaks);
@@ -395,6 +400,8 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     bias,
     reasoning,
     structure,
+    // Additive shadow diff; null unless the shadow secret is on.
+    structureShadow,
     orderBlocks,
     fvgs,
     liquidityPools,
