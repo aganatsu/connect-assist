@@ -1,0 +1,67 @@
+name: Set structure shadow flag
+
+# Toggles the canonical-structure shadow on the Supabase project.
+#
+# Exists because SUPABASE_ACCESS_TOKEN is write-only from outside CI: GitHub
+# encrypts secret values so only the runner can decrypt them. Rather than
+# copying a full account credential onto a laptop or into a chat transcript,
+# the flag is flipped where the token already lives.
+#
+# Deliberately narrow. It sets ONE hardcoded secret name and accepts only
+# "true" or "false". It is not a general-purpose "set any secret" workflow,
+# because that would turn a deploy credential into an arbitrary write
+# primitive for anyone who can dispatch a workflow.
+#
+# STRUCTURE_CANONICAL_SHADOW makes analyzeMarketStructureCanonical run beside
+# the live engine and attach a compact diff under `structureShadow`. The live
+# engine stays authoritative and no downstream decision reads the shadow, so
+# this changes no trading behaviour either way.
+#
+# Only the exact string "true" enables it — see structureShadow.ts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: 'Enable the canonical structure shadow'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+concurrency:
+  group: set-shadow-flag
+  cancel-in-progress: false
+
+jobs:
+  set-flag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Set STRUCTURE_CANONICAL_SHADOW
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase secrets set \
+            "STRUCTURE_CANONICAL_SHADOW=${{ inputs.enabled }}" \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      - name: Confirm
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `secrets list` prints names and digests, never plaintext values, so
+          # this confirms the key exists without logging anything sensitive.
+          supabase secrets list --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" \
+            | grep -i STRUCTURE_CANONICAL_SHADOW \
+            || { echo "::error::flag not present after set"; exit 1; }
+          echo "Requested value: ${{ inputs.enabled }}"
+          echo "Edge Function secrets can require a redeploy to take effect."
+          echo "Verify by calling smc-analysis and checking structureShadow is non-null."
