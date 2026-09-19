@@ -2029,6 +2029,136 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── structure_recency ────────────────────────────────────────────────
+    // READ-ONLY. Four shadow variants of latest_unbroken_structural, differing
+    // only in how old a level may be and still emit a BOS/CHoCH.
+    //
+    // Age is eventBar - swingConfirmationBar, NOT age from the pivot candle: a
+    // swing is not knowable until it confirms, so its life as usable structure
+    // starts there.
+    //
+    // NO CUTOFF IS CHOSEN. The caps exist to be compared. Picking one before
+    // seeing which events each removes would repeat the mistake this whole
+    // investigation keeps guarding against.
+    //
+    // Exceeding a cap does not delete a level, mark it broken, or remove it
+    // from the factual ledger. It stays in swingLevelBreaks, stays sweepable,
+    // and is still carried as alsoBrokenLevels metadata on whatever event does
+    // fire. It merely stops being able to emit. Ledger entries carry
+    // structureEventEligible so the layers stay distinguishable — and the
+    // ledger must be IDENTICAL across all four variants, which is asserted
+    // below rather than assumed.
+    if (action === "structure_recency") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      const CAPS: Array<[string, number | null]> = [
+        ["LUS_unbounded", null], ["LUS_maxAge20", 20],
+        ["LUS_maxAge50", 50], ["LUS_maxAge100", 100],
+      ];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const evs = (st: any) => [...st.bos, ...st.choch].sort((a: any, b: any) => a.index - b.index);
+        const key = (e: any) => `${e.swingIndex}_${e.index}_${e.direction}`;
+
+        const lc = analyzeMarketStructureCanonical(series, { policy: "latest_confirmed" });
+        const lcKeys = new Set(evs(lc).map(key));
+
+        const runs = CAPS.map(([name, cap]) => {
+          const st = analyzeMarketStructureCanonical(series, {
+            policy: "latest_unbroken_structural", maxEventAgeBars: cap,
+          });
+          return { name, cap, st, events: evs(st) };
+        });
+        const base = runs[0];                       // LUS_unbounded
+        const baseKeys = new Set(base.events.map(key));
+
+        const ageBuckets = (xs: number[]) => ({
+          "21-50": xs.filter(x => x >= 21 && x <= 50).length,
+          "51-100": xs.filter(x => x >= 51 && x <= 100).length,
+          "101-250": xs.filter(x => x >= 101 && x <= 250).length,
+          ">250": xs.filter(x => x > 250).length,
+          "<=20": xs.filter(x => x <= 20).length,
+        });
+
+        const policies = runs.map(r => {
+          const ks = new Set(r.events.map(key));
+          const removed = base.events.filter((e: any) => !ks.has(key(e)));
+          const unique = r.events.filter((e: any) => !baseKeys.has(key(e)));
+          const ages = removed.map((e: any) => e.barsSinceConfirmation);
+          return {
+            name: r.name, maxEventAgeBars: r.cap,
+            bos: r.st.bos.length, choch: r.st.choch.length, total: r.events.length,
+            internal: r.events.filter((e: any) => e.significance === "internal").length,
+            external: r.events.filter((e: any) => e.significance === "external").length,
+            suppressed: {
+              total: removed.length,
+              bos: removed.filter((e: any) => e.kind === "BOS").length,
+              choch: removed.filter((e: any) => e.kind === "CHoCH").length,
+              internal: removed.filter((e: any) => e.significance === "internal").length,
+              external: removed.filter((e: any) => e.significance === "external").length,
+              ageBuckets: ageBuckets(ages),
+              bosByAge: ageBuckets(removed.filter((e: any) => e.kind === "BOS")
+                .map((e: any) => e.barsSinceConfirmation)),
+              chochByAge: ageBuckets(removed.filter((e: any) => e.kind === "CHoCH")
+                .map((e: any) => e.barsSinceConfirmation)),
+              oldestRemoved: ages.length ? Math.max(...ages) : null,
+              youngestRemoved: ages.length ? Math.min(...ages) : null,
+            },
+            sharedWithUnboundedLUS: r.events.filter((e: any) => baseKeys.has(key(e))).length,
+            sharedWithLatestConfirmed: r.events.filter((e: any) => lcKeys.has(key(e))).length,
+            uniqueToThisPolicy: unique.length,
+            uniqueExamples: unique.slice(0, 4).map((e: any) => ({
+              eventAt: e.eventAt, kind: e.kind, significance: e.significance,
+              level: e.level, barsSinceConfirmation: e.barsSinceConfirmation,
+            })),
+            requiredCase: tgt.requiredCase ? (() => {
+              const lvl = Number(tgt.requiredCase.level);
+              const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+              const want = String(tgt.requiredCase.closeDate);
+              const dir = tgt.requiredCase.direction ? String(tgt.requiredCase.direction) : null;
+              const hit = r.events.find((e: any) =>
+                Math.abs(e.level - lvl) < tol && (e.eventAt ?? "").slice(0, 10) === want &&
+                (dir === null || e.direction === dir)) ?? null;
+              return hit
+                ? { preserved: true, kind: hit.kind, significance: hit.significance,
+                    barsSinceConfirmation: hit.barsSinceConfirmation }
+                : { preserved: false, kind: null, significance: null, barsSinceConfirmation: null };
+            })() : null,
+          };
+        });
+
+        // The factual layer must not move when only event eligibility changes.
+        const ledgerSig = (st: any) => st.swingLevelBreaks
+          .map((x: any) => `${x.index}_${x.level}_${x.direction}`).join("|");
+        const ledgerStable = runs.every(r => ledgerSig(r.st) === ledgerSig(base.st));
+
+        out.push({
+          symbol: sym, bars: series.length,
+          latestConfirmedTotal: evs(lc).length,
+          ledgerEntries: base.st.swingLevelBreaks.length,
+          ledgerIdenticalAcrossCaps: ledgerStable,
+          ineligibleLedgerEntries: Object.fromEntries(runs.map(r =>
+            [r.name, r.st.swingLevelBreaks.filter((x: any) => !x.structureEventEligible).length])),
+          policies,
+        });
+      }
+      return respond({
+        note: "READ-ONLY. No cutoff chosen. Age is eventBar - swingConfirmationBar. " +
+              "Exceeding a cap does not delete, break, or unrecord a level — it only " +
+              "removes event eligibility; the level stays in swingLevelBreaks, stays " +
+              "sweepable, and is still carried as alsoBrokenLevels. " +
+              "ledgerIdenticalAcrossCaps must be true for every symbol.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
