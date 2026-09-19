@@ -2341,7 +2341,101 @@ Deno.serve(async (req) => {
             if (qualifies && !chosen) { chosen = entry; entry.selected = true; }
           }
 
+          // ── SECOND SEARCH WINDOW — CONTINUATION ONLY ────────────────
+          // The first run scored 5/7. Both misses were CONTINUATION blocks and
+          // both were NEVER EXAMINED, not rejected:
+          //
+          //   AUD/USD 03-19 supply  break 03-24  impulse origin 03-18
+          //   AUD/USD 04-03 demand  break 04-07  impulse origin 04-02
+          //
+          // Each sits exactly ONE BAR AFTER the impulse origin. The origin is
+          // the price extreme, and the walk above runs backward FROM it, so no
+          // lookback length could ever reach them. That matches the 02-vs-03
+          // April forensic: 02 April made the deeper low and was rejected;
+          // 03 April was the candle actually drawn. The extreme is not the
+          // block — for a continuation the block is the last pullback candle
+          // on the way back INTO the move.
+          //
+          // So: a second window over (origin, break), exclusive both ends,
+          // traversed BACKWARD from the break toward the origin.
+          //
+          // Only the CONTINUATION qualification is honoured here. The turn test
+          // is deliberately not applied in this window, so the TURN rule and its
+          // 5/7 hits are byte-for-byte unchanged — the two windows are reported
+          // separately rather than merged, because choosing a precedence
+          // between them is a decision the data has not yet earned.
+          //
+          // isLastOfRun is NOT tightened here. It is known to be broad — it
+          // produced a wrong 03-17 pick on the 03-24 break — but tightening it
+          // before the right candles are reachable would be tuning against
+          // candidates the search cannot yet see.
+          const contCands: any[] = [];
+          let contChosen: any = null;
+          for (let i = j - 1; i > originIdx; i--) {
+            const c = series[i];
+            if (!c) continue;
+            if ((c.close >= c.open) !== wantUp) continue;      // wrong colour
+            const a = atrAt(i) || 1;
+            const range = c.high - c.low;
+            const ext = (k: number) => wantUp ? series[k].high : series[k].low;
+            const better = (x: number, y: number) => wantUp ? x > y : x < y;
+            const mine = ext(i);
+
+            let runStart = i;
+            while (runStart - 1 >= 0 &&
+                   ((series[runStart - 1].close >= series[runStart - 1].open) === wantUp)) runStart--;
+            const nxt = series[i + 1];
+            const isLastOfRun = nxt ? ((nxt.close >= nxt.open) !== wantUp) : false;
+
+            // Recorded for information only — NOT used to qualify in this window.
+            let past10: number | null = null;
+            for (let k = Math.max(0, i - 10); k <= i - 1; k++) {
+              const e = ext(k);
+              if (past10 === null || better(e, past10)) past10 = e;
+            }
+            const newPast10Extreme = past10 !== null && better(mine, past10);
+
+            const qualifies = isLastOfRun;
+            const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+            const liqWick = wantUp ? (c.high - bodyHi) : (bodyLo - c.low);
+            const tookPrior = past10 !== null && better(mine, past10);
+            const proximal = side === "supply" ? c.low : c.high;
+            const extent = side === "supply" ? c.high : c.low;
+
+            const entry = {
+              date: c.datetime.slice(0, 10), datetime: c.datetime, index: i,
+              side, window: "continuation",
+              barsAfterImpulseOrigin: i - originIdx, barsBeforeBreak: j - i,
+              o: c.open, h: c.high, l: c.low, c: c.close,
+              rangeAtr: r(range / a), bodyAtr: r(Math.abs(c.close - c.open) / a),
+              bodyRangeRatio: range > 0 ? r(Math.abs(c.close - c.open) / range) : null,
+              qualifies, qualification: qualifies ? "lastOfPullbackRun" : null,
+              rejectedAsConsolidation: !qualifies,
+              isLastOfRun, runLength: i - runStart + 1,
+              newPast10ExtremeInfoOnly: newPast10Extreme,
+              liquidity: {
+                tookPriorExtreme: tookPrior,
+                liquidityWickRatio: range > 0 ? r(liqWick / range) : null,
+              },
+              box: { proximal: r(proximal, 5), distal: r((c.high + c.low) / 2, 5), extent: r(extent, 5) },
+              selected: false,
+            };
+            contCands.push(entry);
+            if (qualifies && !contChosen) { contChosen = entry; entry.selected = true; }
+          }
+
           selections.push({
+            continuationWindow: {
+              range: originIdx + 1 <= j - 1
+                ? `${series[originIdx + 1]?.datetime?.slice(0, 10)} .. ${series[j - 1]?.datetime?.slice(0, 10)}`
+                : "empty",
+              candidatesExamined: contCands.length,
+              selected: contChosen
+                ? { date: contChosen.date, index: contChosen.index,
+                    qualification: contChosen.qualification, box: contChosen.box }
+                : null,
+              candidates: contCands,
+            },
             break: {
               index: j, datetime: ev.datetime, type: ev.type,
               level: ev.level, significance: ev.significance,
@@ -2366,22 +2460,40 @@ Deno.serve(async (req) => {
         const known = (tgt.knownBoxes ?? []) as Array<{ date: string; side: string }>;
         const picked = new Set(selections.filter(s => s.selectedCandle)
           .map(s => `${s.side}|${s.selectedCandle.date}`));
+        const pickedCont = new Set(selections
+          .filter(s => s.continuationWindow?.selected)
+          .map(s => `${s.side}|${s.continuationWindow.selected.date}`));
         const scored = known.map(k => {
           const key = `${k.side}|${k.date}`;
-          const hit = picked.has(key);
+          const hitTurn = picked.has(key);
+          const hitCont = pickedCont.has(key);
+          const hit = hitTurn || hitCont;
           // Where the rule went instead, and whether the known candle was even
           // examined — "never reached" and "examined then rejected" are very
           // different failures.
           const sameSide = selections.filter(s => s.side === k.side);
           const examined = sameSide.flatMap(s => s.candidates)
             .filter((c: any) => c.date === k.date);
+          const examinedCont = sameSide
+            .flatMap(s => s.continuationWindow?.candidates ?? [])
+            .filter((c: any) => c.date === k.date);
           const nearest = sameSide.filter(s => s.selectedCandle)
             .map(s => ({ date: s.selectedCandle.date, breakAt: s.break.datetime,
                          deltaDays: Math.round((Date.parse(s.selectedCandle.date) - Date.parse(k.date)) / 86400000) }))
             .sort((a, b) => Math.abs(a.deltaDays) - Math.abs(b.deltaDays))[0] ?? null;
           return {
-            knownBox: k, hit,
-            knownCandleExamined: examined.length > 0,
+            knownBox: k, hit, hitTurn, hitCont,
+            knownCandleExamined: examined.length > 0 || examinedCont.length > 0,
+            examinedInTurnWindow: examined.length > 0,
+            examinedInContinuationWindow: examinedCont.length > 0,
+            continuationVerdict: examinedCont.length
+              ? examinedCont.map((e: any) => ({
+                  qualifies: e.qualifies, qualification: e.qualification,
+                  isLastOfRun: e.isLastOfRun, selected: e.selected,
+                  barsAfterImpulseOrigin: e.barsAfterImpulseOrigin,
+                  barsBeforeBreak: e.barsBeforeBreak,
+                }))
+              : null,
             knownCandleVerdict: examined.length
               ? examined.map((e: any) => ({
                   qualifies: e.qualifies, qualification: e.qualification,
@@ -2399,6 +2511,13 @@ Deno.serve(async (req) => {
           canonicalEvents: events.length,
           selectionsMade: selections.filter(s => s.selectedCandle).length,
           selectionsEmpty: selections.filter(s => s.selectedNone).length,
+          continuationSelectionsMade: selections.filter(s => s.continuationWindow?.selected).length,
+          // Distinct dates the continuation window adds that the turn window
+          // never picked — the false-positive surface of the new window.
+          continuationOnlyDates: [...new Set(selections
+            .filter(s => s.continuationWindow?.selected)
+            .map(s => `${s.side}|${s.continuationWindow.selected.date}`)
+            .filter(d2 => !picked.has(d2)))].sort(),
           knownBoxScore: scored,
           selections: selections.slice(-Number(body?.maxSelections ?? 30)),
         });
