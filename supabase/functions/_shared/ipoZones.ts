@@ -150,6 +150,17 @@ export const DEFAULTS = {
   departureFvgWithinBars: 3,
   /** Horizon for lifecycle replay. */
   lifecycleHorizon: 200,
+  /**
+   * Canonical event-age cap. NULL = unbounded, which is the correct default for
+   * research and reference analysis.
+   *
+   * The shadow structure engine uses 50 for live comparison, but the reference
+   * boxes are March-May 2026 dailies being examined in September: every one of
+   * them is far older than 50 bars, so a 50-bar cap silently suppressed the
+   * very events this detector exists to confirm. A cap belongs to live use, not
+   * to historical analysis.
+   */
+  maxEventAgeBars: null as number | null,
 } as const;
 
 // ─── small helpers ───────────────────────────────────────────────────────────
@@ -172,10 +183,21 @@ export function ipoGeometry(c: Candle, direction: IPODirection): IPOGeometry {
   };
 }
 
+/**
+ * True ATR at index i, computed only from bars STRICTLY BEFORE i.
+ *
+ * The first version averaged high-low range, which is not ATR: it ignores gaps
+ * entirely. Every metric here is labelled "...Atr" and interveningMaxRangeAtr
+ * is compared against it, so a gap-heavy instrument would have been measured
+ * against a denominator that understated real volatility — and crypto, which is
+ * in the reference set, gaps.
+ *
+ * calculateATR uses true range and reads candles[i-1] for the previous close,
+ * so slicing to [0, i) keeps it causal: the ATR for bar i never sees bar i.
+ */
 function atrAt(candles: Candle[], i: number): number {
-  const slice = candles.slice(Math.max(0, i - 14), i);
-  if (!slice.length) return 0;
-  return slice.reduce((a, c) => a + (c.high - c.low), 0) / slice.length;
+  if (i <= 0) return 0;
+  return calculateATR(candles.slice(0, i), 14);
 }
 
 const isUp = (c: Candle) => c.close >= c.open;
@@ -281,10 +303,17 @@ export function assessConsolidation(
 ): IPOZone["consolidation"] {
   const c = candles[i];
   const a = atrAt(candles, i) || 1;
-  const above = pools.filter((p) => (p as any).type === "high" && (p as any).price >= c.high);
-  const below = pools.filter((p) => (p as any).type === "low" && (p as any).price <= c.low);
-  const nearestAbove = above.length ? Math.min(...above.map((p) => (p as any).price)) : null;
-  const nearestBelow = below.length ? Math.max(...below.map((p) => (p as any).price)) : null;
+  // LiquidityPool.type is "buy-side" | "sell-side", NOT "high" | "low". The
+  // first version filtered on "high"/"low", matched nothing, and so reported
+  // insideConsolidation=false for every candle — a silent always-false
+  // predicate that would have looked like a real finding.
+  //
+  //   buy-side  = resting buy stops ABOVE equal highs  (built from swing highs)
+  //   sell-side = resting sell stops BELOW equal lows  (built from swing lows)
+  const above = pools.filter((p) => p.type === "buy-side" && p.price >= c.high);
+  const below = pools.filter((p) => p.type === "sell-side" && p.price <= c.low);
+  const nearestAbove = above.length ? Math.min(...above.map((p) => p.price)) : null;
+  const nearestBelow = below.length ? Math.max(...below.map((p) => p.price)) : null;
   const boxed = nearestAbove !== null && nearestBelow !== null;
   const rangeAtr = boxed ? (nearestAbove! - nearestBelow!) / a : null;
   return {
@@ -419,6 +448,8 @@ export interface DetectIPOOptions {
   maxLookback?: number;
   liquidityWindow?: number;
   lifecycleHorizon?: number;
+  /** null (default) = unbounded. Pass 50 only to mirror live shadow behaviour. */
+  maxEventAgeBars?: number | null;
 }
 
 /**
@@ -436,7 +467,9 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
 
   const canon = analyzeMarketStructureCanonical(candles, {
     policy: "latest_unbroken_structural",
-    maxEventAgeBars: 50,
+    // Unbounded by default — see DEFAULTS.maxEventAgeBars.
+    maxEventAgeBars: opts.maxEventAgeBars === undefined
+      ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
   });
   const events = [
     ...canon.bos.map((b: any) => ({ ...b, kind: "BOS" })),
@@ -568,7 +601,11 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
  * so importing them would drag that timing back in through the side door. The
  * scaffolding idea is reused; the inner detector is the IPO one.
  *
- * Returns child IPOs whose drawn zone overlaps the parent's drawn zone.
+ * Returns child IPOs whose drawn zone is FULLY CONTAINED by the parent's drawn
+ * zone. Overlap is not sufficient: a child straddling the parent boundary is
+ * partly outside the HTF zone, so entering on it would place risk beyond the
+ * level the parent defines. Containment is the refinement relation; overlap is
+ * merely proximity.
  */
 export function refineIPOToLowerTimeframe(
   parent: IPOZone,
@@ -579,7 +616,7 @@ export function refineIPOToLowerTimeframe(
   const children = detectIPOZones(ltfCandles, { ...opts, timeframe: opts.timeframe ?? "LTF" });
   return children.filter((ch) =>
     ch.direction === parent.direction &&
-    ch.geometry.zoneLow <= parent.geometry.zoneHigh &&
-    ch.geometry.zoneHigh >= parent.geometry.zoneLow
+    ch.geometry.zoneLow >= parent.geometry.zoneLow &&
+    ch.geometry.zoneHigh <= parent.geometry.zoneHigh
   );
 }

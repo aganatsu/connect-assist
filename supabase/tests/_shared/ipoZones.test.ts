@@ -6,7 +6,9 @@ import {
   refineIPOToLowerTimeframe,
   selectIPOCandle,
   trackIPOLifecycle,
+  assessConsolidation,
 } from "../../functions/_shared/ipoZones.ts";
+import { calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
 /**
@@ -299,4 +301,133 @@ Deno.test("SHADOW ONLY — nothing in production imports ipoZones", async () => 
   };
   await walk("supabase/functions");
   assertEquals(offenders, [], `unexpected production import of ipoZones:\n${offenders.join("\n")}`);
+});
+
+// ─── review fixes ────────────────────────────────────────────────────────────
+
+Deno.test("consolidation uses buy-side/sell-side pools and is not always false", () => {
+  // Regression. The first version filtered pools on type "high"/"low", but
+  // LiquidityPool.type is "buy-side" | "sell-side", so nothing ever matched and
+  // insideConsolidation was false for every candle — an always-false predicate
+  // that would have read as a genuine finding. This fixture builds real equal
+  // highs and equal lows so detectLiquidityPools produces pools on both sides.
+  reset();
+  // Equal highs and equal lows must be SWING points to become pools, and
+  // detectSwingPoints needs `lookback` clear bars on each side. An alternating
+  // high/low pattern therefore produces nothing — each spike sits inside the
+  // next one's lookback window. Spacing them with filler bars is what makes
+  // this fixture actually exercise the code.
+  const base = () => candle(100, 100.5, 99.5, 100);
+  const highSpike = () => candle(100, 102.0, 99.8, 100.4);   // equal highs @ 102.0
+  const lowSpike = () => candle(100, 100.2, 98.0, 99.6);     // equal lows  @ 98.0
+  reset();
+  const bars: Candle[] = [];
+  for (let k = 0; k < 6; k++) bars.push(base());
+  for (let rep = 0; rep < 3; rep++) {
+    for (let k = 0; k < 3; k++) bars.push(base());
+    bars.push(highSpike());
+    for (let k = 0; k < 3; k++) bars.push(base());
+    bars.push(lowSpike());
+  }
+  for (let k = 0; k < 3; k++) bars.push(base());
+  bars.push(candle(99.8, 100.4, 99.2, 100.0));   // the candidate, boxed in
+  const i = bars.length - 1;
+
+  const pools = detectLiquidityPools(bars);
+  assert(pools.length > 0, "the fixture must actually produce pools, or this proves nothing");
+  assert(pools.some((p) => p.type === "buy-side"), "buy-side pool exists");
+  assert(pools.some((p) => p.type === "sell-side"), "sell-side pool exists");
+
+  const con = assessConsolidation(bars, i, pools);
+  assertEquals(con.insideConsolidation, true, "boxed in above and below");
+  assert(con.rangeHigh !== null && con.rangeLow !== null);
+  assert(con.rangeHigh! > con.rangeLow!);
+  assert(con.equalHighPools > 0 && con.equalLowPools > 0);
+});
+
+Deno.test("research mode is unbounded: a structure event older than 50 bars still yields an IPO", () => {
+  // Regression. detectIPOZones previously hard-coded maxEventAgeBars: 50. The
+  // reference boxes are March-May 2026 dailies examined in September, all far
+  // older than 50 bars, so the cap silently suppressed exactly the events the
+  // detector exists to confirm.
+  reset();
+  const bars: Candle[] = [];
+  let p = 100;
+  for (let k = 0; k < 20; k++) { bars.push(candle(p, p + 0.5, p - 0.5, p + 0.05)); p += 0.05; }
+  for (let k = 0; k < 5; k++) { const o = p; p -= 1.0; bars.push(candle(o, o + 0.2, p - 0.2, p)); }
+  bars.push(candle(p, p + 0.2, p - 1.5, p - 1.3)); p -= 1.3;      // the IPO low
+  for (let k = 0; k < 10; k++) { const o = p; p += 1.5; bars.push(candle(o, p + 0.3, o - 0.3, p)); }
+  const ipoDate = bars[25].datetime;
+  // Push the whole episode far into the past — well beyond a 50-bar cap.
+  for (let k = 0; k < 140; k++) { const o = p; p += 0.05; bars.push(candle(o, p + 0.3, o - 0.3, p)); }
+
+  const unbounded = detectIPOZones(bars, { symbol: "T", timeframe: "1d" });
+  const capped = detectIPOZones(bars, { symbol: "T", timeframe: "1d", maxEventAgeBars: 50 });
+  assert(unbounded.length > 0, "research mode must still find historical zones");
+  assert(unbounded.length >= capped.length,
+    "an unbounded cap can only ever find at least as many events as a 50-bar cap");
+  assert(unbounded.some((z) => z.candleIndex < bars.length - 50),
+    "at least one zone must come from a candle older than 50 bars");
+  assert(ipoDate.length > 0);
+});
+
+Deno.test("HTF refinement requires CONTAINMENT, not mere overlap", () => {
+  reset();
+  const parentCandle = candle(10, 20, 0, 11);          // demand: zone [10, 20]
+  const parent = {
+    direction: "demand" as const,
+    geometry: ipoGeometry(parentCandle, "demand"),
+  };
+  const contained = { zoneLow: 12, zoneHigh: 18 };
+  const straddling = { zoneLow: 8, zoneHigh: 14 };     // overlaps but hangs below
+  const outside = { zoneLow: 25, zoneHigh: 30 };
+
+  const isContained = (z: { zoneLow: number; zoneHigh: number }) =>
+    z.zoneLow >= parent.geometry.zoneLow && z.zoneHigh <= parent.geometry.zoneHigh;
+  const overlaps = (z: { zoneLow: number; zoneHigh: number }) =>
+    z.zoneLow <= parent.geometry.zoneHigh && z.zoneHigh >= parent.geometry.zoneLow;
+
+  assert(isContained(contained), "a fully-inside child is accepted");
+  assert(overlaps(straddling), "the straddling child DOES overlap...");
+  assert(!isContained(straddling), "...but must be rejected, since part of it sits outside the HTF zone");
+  assert(!overlaps(outside) && !isContained(outside));
+});
+
+Deno.test("refineIPOToLowerTimeframe returns only contained children", () => {
+  const series = trendingSeries();
+  const zones = detectIPOZones(series, { symbol: "TEST", timeframe: "1d" });
+  if (!zones.length) return;
+  for (const parent of zones) {
+    for (const ch of refineIPOToLowerTimeframe(parent, series, { symbol: "TEST", timeframe: "LTF" })) {
+      assert(ch.geometry.zoneLow >= parent.geometry.zoneLow, "child low inside parent");
+      assert(ch.geometry.zoneHigh <= parent.geometry.zoneHigh, "child high inside parent");
+    }
+  }
+});
+
+Deno.test("ATR is true range and reacts to a gap that high-low ignores", () => {
+  // Regression. The first version averaged high-low range and called it ATR,
+  // which ignores gaps entirely — and crypto, which is in the reference set,
+  // gaps. Two series identical in high-low terms but one containing a large
+  // gap must NOT produce the same ATR.
+  reset();
+  const flat: Candle[] = [];
+  for (let k = 0; k < 20; k++) flat.push(candle(100, 101, 99, 100));
+
+  reset();
+  const gapped: Candle[] = [];
+  for (let k = 0; k < 19; k++) gapped.push(candle(100, 101, 99, 100));
+  gapped.push(candle(130, 131, 129, 130));   // same 2.0 high-low range, huge gap
+
+  const hlAvg = (cs: Candle[]) =>
+    cs.slice(-14).reduce((a, c) => a + (c.high - c.low), 0) / 14;
+  assertEquals(
+    Math.round(hlAvg(flat) * 100), Math.round(hlAvg(gapped) * 100),
+    "high-low average cannot tell these apart — which is exactly the bug",
+  );
+
+  const atrFlat = calculateATR(flat, 14);
+  const atrGapped = calculateATR(gapped, 14);
+  assert(atrGapped > atrFlat * 1.5,
+    `true range must register the gap: flat=${atrFlat.toFixed(3)} gapped=${atrGapped.toFixed(3)}`);
 });
