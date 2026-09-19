@@ -1,4 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
+import { detectIPOZones } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -3885,6 +3886,70 @@ Deno.serve(async (req) => {
           validationPositivesNeeded: Math.max(0, TARGETS.validationPositives - val.filter(r => r.label === "POSITIVE").length),
           validationNegativesNeeded: Math.max(0, TARGETS.validationNegatives - val.filter(r => r.label === "NEGATIVE").length),
         },
+      });
+    }
+
+    // ── ipo_zones_shadow ─────────────────────────────────────────────────
+    // The single read-only entry point for the IPO detector. Shadow only:
+    // nothing in production calls detectIPOZones, and a test asserts that no
+    // module outside this file imports it.
+    if (action === "ipo_zones_shadow") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const zones = detectIPOZones(series, { symbol: sym, timeframe: tf });
+        const byDate = new Map(zones.map(z => [`${z.direction}|${z.candleDatetime.slice(0, 10)}`, z]));
+
+        // Score against whichever boxes the caller names. No tuning happens
+        // here — the detector is not parameterised from this result.
+        const known = (tgt.knownBoxes ?? []).map((k: any) => {
+          const hit = byDate.get(`${k.side}|${k.date}`) ?? null;
+          return {
+            date: k.date, side: k.side, detected: !!hit,
+            zone: hit ? {
+              candleDatetime: hit.candleDatetime,
+              geometry: hit.geometry,
+              structure: hit.structure,
+              selection: hit.selection,
+              liquidity: hit.liquidity,
+              consolidation: hit.consolidation,
+              departureFvg: hit.departureFvg,
+              lifecycle: {
+                status: hit.lifecycle.status,
+                testCount: hit.lifecycle.testCount,
+                brokenAtDatetime: hit.lifecycle.brokenAtDatetime,
+                flipRetestCount: hit.lifecycle.flipRetestCount,
+              },
+            } : null,
+          };
+        });
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          zonesDetected: zones.length,
+          zonesPerHundredBars: Math.round((zones.length / series.length) * 1000) / 10,
+          knownBoxes: known,
+          statusBreakdown: {
+            ACTIVE: zones.filter(z => z.lifecycle.status === "ACTIVE").length,
+            TESTED: zones.filter(z => z.lifecycle.status === "TESTED").length,
+            BROKEN: zones.filter(z => z.lifecycle.status === "BROKEN").length,
+            FLIPPED: zones.filter(z => z.lifecycle.status === "FLIPPED").length,
+          },
+          sample: zones.slice(-3),
+        });
+      }
+      return respond({
+        note: "SHADOW ONLY. detectIPOZones has no production consumer. Parameters " +
+              "encode a taught rule and were NOT tuned against the known boxes.",
+        out,
       });
     }
 
