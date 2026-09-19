@@ -1435,6 +1435,295 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── structure_canonical ──────────────────────────────────────────────
+    // READ-ONLY. Three streams side by side. analyzeMarketStructure is
+    // untouched and remains the only implementation any caller uses.
+    //
+    //   CURRENT      today's pairwise swing-to-swing detector
+    //   LEDGER       every confirmed swing level crossed by a close,
+    //                chronologically — the factual lifecycle layer
+    //   CANONICAL    BOS/CHoCH events, emitted only by the latest causally
+    //                confirmed structural pointer
+    //
+    // WHY THE SPLIT. #586 conflated two different questions: "was this level
+    // crossed" and "was this a market-structure event". Every crossed level was
+    // labelled BOS/CHoCH, which inflated the event count roughly threefold.
+    // The ledger keeps the facts; only canonical pointers make events.
+    //
+    // structureToFractal IS NOT A SELECTION TARGET. It has an unbounded
+    // historical horizon, so over ~700 bars almost every confirmed swing is
+    // eventually crossed and the rate drifts toward 1 as history lengthens.
+    // A high value therefore says nothing about permissiveness. It is still
+    // emitted for comparison, and deliberately not optimised against. The
+    // horizon-bounded lifecycle stats below are the honest version.
+    //
+    // CANONICAL POINTERS. Four: latest internal high/low, latest external
+    // high/low. A swing becomes the pointer for its (type, significance) when
+    // it is causally confirmed. Older levels stay in the ledger as liquidity
+    // history but can no longer create structure events.
+    //
+    // TWO-PHASE, unchanged: internal at k+internalLookback, promoted to
+    // external at k+externalLookback if still unbroken. Never suppressed
+    // pending external confirmation — that would use the future fact that it
+    // is going to be external.
+    if (action === "structure_canonical") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: 800, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 40) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+
+        const internalLookback = 3;
+        const externalLookback = Math.max(internalLookback + 4, 7);
+        const hasATR = series.length >= 15;
+        const internalSwings = detectSwingPoints(series, internalLookback, hasATR ? 0.2 : 0);
+        const externalSwings = detectSwingPoints(series, externalLookback, hasATR ? 0.5 : 0);
+        const intKeys = new Set(internalSwings.map((s: any) => `${s.type}_${s.index}`));
+        const extKeys = new Set(externalSwings.map((s: any) => `${s.type}_${s.index}`));
+
+        type Sw = {
+          key: string; type: "high" | "low"; index: number; price: number;
+          internalAt: number | null; externalAt: number | null;
+          broken: boolean; brokenAt: number | null; becameExternal: boolean;
+        };
+        const swMap = new Map<string, Sw>();
+        for (const s of [...internalSwings, ...externalSwings] as any[]) {
+          const key = `${s.type}_${s.index}`;
+          if (swMap.has(key)) continue;
+          swMap.set(key, {
+            key, type: s.type, index: s.index, price: s.price,
+            internalAt: intKeys.has(key) ? s.index + internalLookback : null,
+            externalAt: extKeys.has(key) ? s.index + externalLookback : null,
+            broken: false, brokenAt: null, becameExternal: false,
+          });
+        }
+        const swings = [...swMap.values()].sort((a, b) => a.index - b.index);
+        const activeAt = (s: Sw) => {
+          const a = s.internalAt, b = s.externalAt;
+          return a === null ? (b ?? Infinity) : (b === null ? a : Math.min(a, b));
+        };
+        const sigAt = (s: Sw, j: number) =>
+          s.externalAt !== null && j >= s.externalAt ? "external" : "internal";
+
+        const confInt = new Map<number, Sw[]>(), confExt = new Map<number, Sw[]>();
+        for (const s of swings) {
+          if (s.internalAt !== null) {
+            if (!confInt.has(s.internalAt)) confInt.set(s.internalAt, []);
+            confInt.get(s.internalAt)!.push(s);
+          }
+          if (s.externalAt !== null) {
+            if (!confExt.has(s.externalAt)) confExt.set(s.externalAt, []);
+            confExt.get(s.externalAt)!.push(s);
+          }
+        }
+
+        const canonPtr: Record<string, Record<string, Sw | null>> = {
+          internal: { high: null, low: null }, external: { high: null, low: null },
+        };
+        const ledger: any[] = [];
+        const canonBos: any[] = [], canonChoch: any[] = [];
+        const collapsed: any[] = [];
+        let brokenBeforeExternalConfirmation = 0;
+        let trend: "bullish" | "bearish" | "ranging" = "ranging";
+
+        for (let j = 0; j < series.length; j++) {
+          const bar = series[j];
+          // Confirmations land BEFORE the break test on the same bar: a pivot
+          // confirmed at j is knowable at j's close, and the test uses that close.
+          for (const s of (confInt.get(j) ?? [])) canonPtr.internal[s.type] = s;
+          for (const s of (confExt.get(j) ?? [])) {
+            if (s.broken) { brokenBeforeExternalConfirmation++; continue; }
+            s.becameExternal = true;
+            canonPtr.external[s.type] = s;
+          }
+
+          const crossed = swings.filter(s =>
+            !s.broken && s.index < j && activeAt(s) <= j &&
+            (s.type === "high" ? bar.close > s.price : bar.close < s.price));
+          if (crossed.length === 0) continue;
+
+          // Layer 1 — every crossed level, no BOS/CHoCH label.
+          for (const s of crossed) {
+            ledger.push({
+              index: j, datetime: bar.datetime,
+              direction: s.type === "high" ? "bullish" : "bearish",
+              level: s.price, significance: sigAt(s, j),
+              swingIndex: s.index, swingTime: series[s.index]?.datetime,
+              barsFromConfirmation: j - activeAt(s),
+              wasCanonical: s === canonPtr.internal[s.type] || s === canonPtr.external[s.type],
+            });
+          }
+
+          // Layer 2 — canonical pointers only, at most one event per direction.
+          for (const dir of ["bullish", "bearish"] as const) {
+            const t = dir === "bullish" ? "high" : "low";
+            const hitExt = crossed.find(s => s === canonPtr.external[t]);
+            const hitInt = crossed.find(s => s === canonPtr.internal[t]);
+            const primary = hitExt ?? hitInt;          // EXTERNAL preferred
+            if (!primary) continue;
+            const others = crossed.filter(s => s !== primary &&
+              (s.type === "high" ? "bullish" : "bearish") === dir);
+            const isChoch = (dir === "bullish" && trend === "bearish") ||
+                            (dir === "bearish" && trend === "bullish");
+            const evt = {
+              index: j, datetime: bar.datetime, type: dir,
+              kind: isChoch ? "CHoCH" : "BOS",
+              level: primary.price, significance: sigAt(primary, j),
+              swingIndex: primary.index, swingTime: series[primary.index]?.datetime,
+              barsFromConfirmation: j - activeAt(primary),
+              // Nothing is discarded — the other levels this bar crossed are
+              // kept as metadata rather than dropped or emitted separately.
+              alsoBrokenLevels: others.map(s => ({
+                level: s.price, significance: sigAt(s, j), swingIndex: s.index,
+              })),
+            };
+            (isChoch ? canonChoch : canonBos).push(evt);
+            if (others.length > 0) {
+              collapsed.push({ index: j, datetime: bar.datetime, direction: dir, alsoBroken: others.length });
+            }
+            trend = dir;
+          }
+
+          for (const s of crossed) { s.broken = true; s.brokenAt = j; }
+        }
+
+        // ── horizon-bounded lifecycle, internal and external separately ───
+        // A dual-confirmed swing appears in BOTH cohorts, each measured from
+        // its own confirmation point. This is the replacement for
+        // structureToFractal: a bounded horizon cannot drift toward 1 just
+        // because the series is long.
+        const cohort = (which: "internal" | "external") => {
+          const set = swings.filter(s => which === "internal"
+            ? s.internalAt !== null
+            : s.externalAt !== null && s.becameExternal);
+          const from = (s: Sw) => (which === "internal" ? s.internalAt! : s.externalAt!);
+          const lives = set.map(s => s.brokenAt === null ? null : s.brokenAt - from(s));
+          const done = lives.filter((x): x is number => x !== null).sort((a, b) => a - b);
+          const within = (n: number) => done.filter(x => x <= n).length;
+          return {
+            total: set.length,
+            brokenWithin5Bars: within(5), brokenWithin10Bars: within(10), brokenWithin20Bars: within(20),
+            rateWithin5: set.length ? Math.round(within(5) / set.length * 1000) / 1000 : 0,
+            rateWithin10: set.length ? Math.round(within(10) / set.length * 1000) / 1000 : 0,
+            rateWithin20: set.length ? Math.round(within(20) / set.length * 1000) / 1000 : 0,
+            medianBarsFromConfirmationToBreak: done.length ? done[Math.floor(done.length / 2)] : null,
+            stillActiveAtEnd: set.length - done.length,
+          };
+        };
+
+        const cur = analyzeMarketStructure(series);
+        const curBreaks = [...cur.bos.map((b: any) => ({ ...b, kind: "BOS" })),
+                           ...cur.choch.map((b: any) => ({ ...b, kind: "CHoCH" }))];
+
+        // Duplicate same-type levels make level-matching ambiguous; those
+        // levels are EXCLUDED from the timing summary rather than silently
+        // distorting it.
+        const lvlTol = 1e-8;
+        const dupLevels: number[] = [];
+        for (const t of ["high", "low"] as const) {
+          const byT = swings.filter(s => s.type === t).sort((a, b) => a.price - b.price);
+          for (let i2 = 1; i2 < byT.length; i2++) {
+            if (Math.abs(byT[i2].price - byT[i2 - 1].price) < lvlTol) {
+              dupLevels.push(byT[i2].price);
+            }
+          }
+        }
+        const isAmbiguous = (L: number) => dupLevels.some(x => Math.abs(x - L) < lvlTol);
+
+        const canonAll = [...canonBos, ...canonChoch].sort((a, b) => a.index - b.index);
+        const missed = canonAll.filter(e =>
+          !curBreaks.some((b: any) => Math.abs(b.level - e.level) < lvlTol));
+        const deltas: any[] = [], reclass: any[] = [];
+        let ambiguousSkipped = 0;
+        for (const e of canonAll) {
+          const m = curBreaks.find((b: any) => Math.abs(b.level - e.level) < lvlTol);
+          if (!m) continue;
+          if (isAmbiguous(e.level)) { ambiguousSkipped++; continue; }
+          deltas.push({ level: e.level, canonicalIndex: e.index, currentIndex: m.index,
+                        barsLate: m.index - e.index, canonicalTime: e.datetime, currentTime: m.datetime });
+          if (e.kind !== m.kind || e.significance !== m.significance) {
+            reclass.push({ level: e.level, canonical: `${e.kind}/${e.significance}`,
+                           current: `${m.kind}/${m.significance}` });
+          }
+        }
+        const late = deltas.map(x => x.barsLate).sort((a, b) => a - b);
+
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          current: {
+            bos: cur.bos.length, choch: cur.choch.length,
+            internal: curBreaks.filter((b: any) => b.significance === "internal").length,
+            external: curBreaks.filter((b: any) => b.significance === "external").length,
+            structureToFractal: cur.structureToFractal,
+          },
+          ledger: {
+            swingLevelBreaks: ledger.length,
+            internal: ledger.filter(x => x.significance === "internal").length,
+            external: ledger.filter(x => x.significance === "external").length,
+            canonicalShare: ledger.length
+              ? Math.round(ledger.filter(x => x.wasCanonical).length / ledger.length * 1000) / 1000 : 0,
+          },
+          canonical: {
+            bos: canonBos.length, choch: canonChoch.length,
+            internal: canonAll.filter(e => e.significance === "internal").length,
+            external: canonAll.filter(e => e.significance === "external").length,
+            sameBarCollapsedEvents: collapsed.length,
+            maxAlsoBrokenOnOneEvent: collapsed.reduce((m, x) => Math.max(m, x.alsoBroken), 0),
+            missedByCurrent: missed.length,
+            missedExamples: missed.slice(0, 8).map(e => ({
+              datetime: e.datetime, type: e.type, kind: e.kind,
+              level: e.level, significance: e.significance,
+            })),
+            timing: {
+              matched: deltas.length, ambiguousLevelsExcluded: ambiguousSkipped,
+              medianBarsLate: late.length ? late[Math.floor(late.length / 2)] : null,
+              maxBarsLate: late.length ? late[late.length - 1] : null,
+            },
+            reclassified: { count: reclass.length, examples: reclass.slice(0, 8) },
+          },
+          lifecycle: {
+            internal: cohort("internal"), external: cohort("external"),
+            brokenBeforeExternalConfirmation,
+          },
+          requiredCase: tgt.requiredCase ? (() => {
+            const lvl = Number(tgt.requiredCase.level);
+            const tol = Number(tgt.requiredCase.tol ?? 1e-5);
+            const want = String(tgt.requiredCase.closeDate);
+            const at = (L: number) => Math.abs(L - lvl) < tol;
+            const cEvt = canonAll.find(e => at(e.level) && e.datetime.slice(0, 10) === want) ?? null;
+            const lEntry = ledger.find(x => at(x.level) && x.datetime.slice(0, 10) === want) ?? null;
+            const curHit = curBreaks.filter((b: any) => at(b.level))
+              .sort((a: any, b: any) => a.index - b.index)[0] ?? null;
+            return {
+              level: lvl, expectedCloseDate: want,
+              ledgerRecordsOnExpectedDate: !!lEntry,
+              ledgerSignificance: lEntry ? lEntry.significance : null,
+              canonicalEmitsOnExpectedDate: !!cEvt,
+              canonicalKind: cEvt ? cEvt.kind : null,
+              canonicalSignificance: cEvt ? cEvt.significance : null,
+              canonicalAlsoBroken: cEvt ? cEvt.alsoBrokenLevels.length : null,
+              currentAnyDetection: !!curHit,
+              currentDetectionDate: curHit ? curHit.datetime : null,
+              currentBarsLate: curHit && cEvt ? curHit.index - cEvt.index : null,
+            };
+          })() : null,
+        });
+      }
+      return respond({
+        note: "READ-ONLY. Three streams: CURRENT, LEDGER (every crossed confirmed " +
+              "swing, no BOS/CHoCH label), CANONICAL (events from latest confirmed " +
+              "pointers only). structureToFractal is emitted for comparison and is " +
+              "NOT a selection target — its horizon is unbounded so it drifts toward " +
+              "1 with series length. Use the horizon-bounded lifecycle stats instead.",
+        out,
+      });
+    }
+
     if (action === "qualification_debug") {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const results: any[] = [];
