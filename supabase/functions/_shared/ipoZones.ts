@@ -728,3 +728,285 @@ export function refineIPOToLowerTimeframe(
     ch.geometry.zoneHigh <= parent.geometry.zoneHigh
   );
 }
+
+// ─── Phase A: failure tracing ────────────────────────────────────────────────
+//
+// READ-ONLY. Explains why a known candle did or did not become a candidate.
+// It does not alter detectIPOZones — it re-walks the same logic and narrates
+// each decision, so a "not found" can be attributed to a specific step rather
+// than guessed at.
+
+export type IPOTerminalReason =
+  | "NO_DIRECTIONAL_LEDGER_BREAK"
+  | "ORIGIN_AFTER_KNOWN_CANDLE"
+  | "ORIGIN_BEFORE_KNOWN_CANDLE"
+  | "KNOWN_CANDLE_NOT_REACHED"
+  | "INTERVENING_COUNT_EXCEEDED"
+  | "INTERVENING_RANGE_EXCEEDED"
+  | "LOOKBACK_EXCEEDED"
+  | "OTHER_OPPOSITE_CANDLE_SELECTED"
+  | "DEDUPED"
+  | "CANDIDATE_CONSTRUCTED";
+
+export function traceIPOCandidateFailure(
+  candles: Candle[],
+  knownDate: string,
+  direction: IPODirection,
+  opts: DetectIPOOptions = {},
+) {
+  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
+  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+
+  const kc = candles[ki];
+  const wantDir = direction === "demand" ? "bullish" : "bearish";
+  const wantUp = direction === "supply";            // the IPO's own colour
+  const maxInt = opts.maxIntervening ?? DEFAULTS.maxInterveningCandles;
+  const maxRange = opts.interveningMaxRangeAtr ?? DEFAULTS.interveningMaxRangeAtr;
+  const maxBack = opts.maxLookback ?? DEFAULTS.maxLookbackForIPO;
+
+  const canon = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+    maxEventAgeBars: opts.maxEventAgeBars === undefined
+      ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
+  });
+  const policyKeys = new Set(
+    [...canon.bos, ...canon.choch].map((e: any) => `${e.index}|${e.type}`),
+  );
+
+  // Section 2 — the factual ledger, reported BEFORE any selection rule is
+  // applied, so a structure-association failure is visible on its own terms.
+  const ledger = (canon.swingLevelBreaks as any[])
+    .filter((l) => l.direction === wantDir && l.index > ki)
+    .sort((a, b) => a.index - b.index)
+    .map((l) => ({
+      breakIndex: l.index, breakDate: String(l.datetime).slice(0, 10),
+      level: l.level, significance: l.significance,
+      swingIndex: l.swingIndex, swingDate: String(l.swingTime ?? "").slice(0, 10),
+      barsFromKnownCandle: l.index - ki,
+      hasPolicyEvent: policyKeys.has(`${l.index}|${l.direction}`),
+    }));
+
+  // The detector keeps ONE ledger break per (bar, direction); note which
+  // survive, because a break removed here never reaches selection at all.
+  const kept = new Map<string, any>();
+  for (const l of (canon.swingLevelBreaks as any[])) {
+    const k = `${l.index}|${l.direction}`;
+    const cur = kept.get(k);
+    if (!cur) { kept.set(k, l); continue; }
+    const better = (l.significance === "external" && cur.significance !== "external") ||
+      (l.significance === cur.significance &&
+        (l.direction === "bullish" ? l.level > cur.level : l.level < cur.level));
+    if (better) kept.set(k, l);
+  }
+
+  const perBreak: any[] = [];
+  let best: IPOTerminalReason = "NO_DIRECTIONAL_LEDGER_BREAK";
+  const rank: IPOTerminalReason[] = [
+    "NO_DIRECTIONAL_LEDGER_BREAK", "ORIGIN_AFTER_KNOWN_CANDLE", "DEDUPED",
+    "LOOKBACK_EXCEEDED", "KNOWN_CANDLE_NOT_REACHED", "INTERVENING_RANGE_EXCEEDED",
+    "INTERVENING_COUNT_EXCEEDED", "ORIGIN_BEFORE_KNOWN_CANDLE",
+    "OTHER_OPPOSITE_CANDLE_SELECTED", "CANDIDATE_CONSTRUCTED",
+  ];
+  const promote = (r: IPOTerminalReason) => {
+    if (rank.indexOf(r) > rank.indexOf(best)) best = r;
+  };
+
+  for (const l of ledger) {
+    const survived = kept.get(`${l.breakIndex}|${wantDir}`)?.level === l.level;
+    // Section 3 — the departure origin, computed exactly as the detector does.
+    const swingIdx = l.swingIndex ?? Math.max(0, l.breakIndex - 10);
+    let originIdx = swingIdx;
+    for (let k = swingIdx; k <= l.breakIndex; k++) {
+      if (!candles[k]) continue;
+      if (wantDir === "bullish"
+        ? candles[k].low <= candles[originIdx].low
+        : candles[k].high >= candles[originIdx].high) originIdx = k;
+    }
+    const inLookback = ki >= originIdx - maxBack && ki <= originIdx;
+
+    // Section 4 — narrate the walk, one line per inspected candle.
+    const walk: any[] = [];
+    let terminal: IPOTerminalReason;
+    let selectedIndex: number | null = null;
+    if (originIdx < ki) {
+      terminal = "ORIGIN_BEFORE_KNOWN_CANDLE";
+    } else {
+      let intervening = 0;
+      terminal = "KNOWN_CANDLE_NOT_REACHED";
+      for (let i = originIdx; i >= Math.max(0, originIdx - maxBack); i--) {
+        const c = candles[i];
+        if (!c) break;
+        const a = atrAt(candles, i) || 1;
+        const rangeAtr = Math.round(((c.high - c.low) / a) * 100) / 100;
+        const colour = isUp(c) ? "up" : "down";
+        const isIpoColour = isUp(c) === wantUp;
+        if (i === originIdx && !isIpoColour) {
+          walk.push({ index: i, date: c.datetime.slice(0, 10), colour, expectedIpoColour: wantUp ? "up" : "down",
+                      rangeAtr, classified: "departure (exempt)", interveningCount: intervening });
+          continue;
+        }
+        if (isIpoColour) {
+          selectedIndex = i;
+          walk.push({ index: i, date: c.datetime.slice(0, 10), colour, expectedIpoColour: wantUp ? "up" : "down",
+                      rangeAtr, classified: "IPO selected", interveningCount: intervening });
+          terminal = i === ki ? "CANDIDATE_CONSTRUCTED" : "OTHER_OPPOSITE_CANDLE_SELECTED";
+          break;
+        }
+        if (intervening >= maxInt) {
+          walk.push({ index: i, date: c.datetime.slice(0, 10), colour, expectedIpoColour: wantUp ? "up" : "down",
+                      rangeAtr, classified: "terminating (intervening budget spent)", interveningCount: intervening });
+          terminal = "INTERVENING_COUNT_EXCEEDED"; break;
+        }
+        if (rangeAtr > maxRange) {
+          walk.push({ index: i, date: c.datetime.slice(0, 10), colour, expectedIpoColour: wantUp ? "up" : "down",
+                      rangeAtr, classified: `terminating (range ${rangeAtr} > ${maxRange})`, interveningCount: intervening });
+          terminal = "INTERVENING_RANGE_EXCEEDED"; break;
+        }
+        intervening++;
+        walk.push({ index: i, date: c.datetime.slice(0, 10), colour, expectedIpoColour: wantUp ? "up" : "down",
+                    rangeAtr, classified: "intervening (skipped)", interveningCount: intervening });
+      }
+      if (terminal === "KNOWN_CANDLE_NOT_REACHED" && !inLookback) terminal = "LOOKBACK_EXCEEDED";
+    }
+    if (terminal === "CANDIDATE_CONSTRUCTED" && !survived) terminal = "DEDUPED";
+    promote(terminal);
+    perBreak.push({
+      ledgerBreak: l, survivedLedgerDedup: survived,
+      origin: {
+        index: originIdx, date: candles[originIdx]?.datetime?.slice(0, 10) ?? null,
+        ohlc: candles[originIdx]
+          ? { o: candles[originIdx].open, h: candles[originIdx].high,
+              l: candles[originIdx].low, c: candles[originIdx].close } : null,
+        whySelected: wantDir === "bullish"
+          ? "lowest low between the broken swing and the break bar"
+          : "highest high between the broken swing and the break bar",
+        barsFromKnownCandle: originIdx - ki,
+        knownCandleWithinMaxLookback: inLookback,
+      },
+      selectionWalk: walk,
+      selectedIndex,
+      selectedDate: selectedIndex === null ? null : candles[selectedIndex].datetime.slice(0, 10),
+      terminalReason: terminal,
+    });
+  }
+
+  // Counterfactual: is there ANY origin from which the walk would have chosen
+  // the known candle? This separates "the rule cannot pick it" from "the origin
+  // we computed pointed somewhere else".
+  let reachableFrom: number[] = [];
+  for (let o = ki; o <= Math.min(candles.length - 1, ki + maxBack); o++) {
+    let intervening = 0, picked: number | null = null;
+    for (let i = o; i >= Math.max(0, o - maxBack); i--) {
+      const c = candles[i]; if (!c) break;
+      if (i === o && isUp(c) !== wantUp) continue;
+      if (isUp(c) === wantUp) { picked = i; break; }
+      const a = atrAt(candles, i) || 1;
+      if (intervening >= maxInt || (c.high - c.low) / a > maxRange) break;
+      intervening++;
+    }
+    if (picked === ki) reachableFrom.push(o);
+  }
+
+  return {
+    knownDate, direction,
+    knownCandle: {
+      index: ki, datetime: kc.datetime,
+      ohlc: { o: kc.open, h: kc.high, l: kc.low, c: kc.close },
+      colour: isUp(kc) ? "up" : "down",
+      geometry: ipoGeometry(kc, direction),
+    },
+    directionalLedgerBreaks: ledger.length,
+    ledger: ledger.slice(0, 12),
+    perBreak: perBreak.slice(0, 12),
+    terminalReason: best,
+    couldBeSelectedFromOtherOrigin: reachableFrom.length > 0,
+    originsThatWouldSelectIt: reachableFrom.map((o) => ({
+      index: o, date: candles[o].datetime.slice(0, 10),
+    })),
+  };
+}
+
+// ─── Phase B: local consolidation research ───────────────────────────────────
+//
+// DESCRIPTIVE. Measures the local ranging condition around a candidate WITHOUT
+// deciding validity. None of these becomes a gate here.
+//
+// The current predicate — any buy-side pool above plus any sell-side pool below
+// — produced "consolidations" of 5.35, 12.56 and 13.18 ATR, which are whole
+// swings rather than local ranges. It has no width, recency or containment
+// requirement. These metrics exist to show what such a requirement would need
+// to key on, measured only from information available at the candidate.
+export function analyzeLocalConsolidation(candles: Candle[], i: number, lookback = 30) {
+  const hist = candles.slice(0, i + 1);           // causal
+  const c = candles[i];
+  const a = atrAt(candles, i) || 1;
+  const pools = detectLiquidityPools(hist);
+  const buy = pools.filter((p) => p.type === "buy-side" && p.price >= c.high);
+  const sell = pools.filter((p) => p.type === "sell-side" && p.price <= c.low);
+  const hi = buy.length ? Math.min(...buy.map((p) => p.price)) : null;
+  const lo = sell.length ? Math.max(...sell.map((p) => p.price)) : null;
+
+  const tol = a * 0.2;
+  const touchesOf = (price: number, side: "high" | "low") => {
+    const idx: number[] = [];
+    for (let k = Math.max(0, i - lookback); k <= i; k++) {
+      const v = side === "high" ? hist[k].high : hist[k].low;
+      if (Math.abs(v - price) <= tol) idx.push(k);
+    }
+    return idx;
+  };
+  const hiTouch = hi === null ? [] : touchesOf(hi, "high");
+  const loTouch = lo === null ? [] : touchesOf(lo, "low");
+
+  const start = Math.max(0, i - lookback);
+  const win = hist.slice(start, i + 1);
+  let contained = 0, closesOutside = 0, bodyOverlaps = 0, alternations = 0;
+  let lastSide: "hi" | "lo" | null = null;
+  if (hi !== null && lo !== null) {
+    for (let k = 0; k < win.length; k++) {
+      const b = win[k];
+      if (b.high <= hi && b.low >= lo) contained++;
+      if (b.close > hi || b.close < lo) closesOutside++;
+      const nearHi = Math.abs(b.high - hi) <= tol;
+      const nearLo = Math.abs(b.low - lo) <= tol;
+      if (nearHi && lastSide !== "hi") { if (lastSide !== null) alternations++; lastSide = "hi"; }
+      else if (nearLo && lastSide !== "lo") { if (lastSide !== null) alternations++; lastSide = "lo"; }
+      if (k > 0) {
+        const p = win[k - 1];
+        const aHi = Math.max(b.open, b.close), aLo = Math.min(b.open, b.close);
+        const pHi = Math.max(p.open, p.close), pLo = Math.min(p.open, p.close);
+        if (aLo <= pHi && aHi >= pLo) bodyOverlaps++;
+      }
+    }
+  }
+  const r2 = (x: number | null) => x === null || !Number.isFinite(x) ? null : Math.round(x * 100) / 100;
+  const drift = win.length > 1 ? (win[win.length - 1].close - win[0].close) / a : null;
+
+  return {
+    index: i, date: c.datetime.slice(0, 10), atr: Math.round(a * 1e5) / 1e5,
+    lookbackBars: lookback,
+    nearestEqualHighCluster: hi === null ? null : {
+      price: hi, touches: hiTouch.length,
+      firstTouchDate: hiTouch.length ? hist[hiTouch[0]].datetime.slice(0, 10) : null,
+      lastTouchDate: hiTouch.length ? hist[hiTouch[hiTouch.length - 1]].datetime.slice(0, 10) : null,
+      barsBetweenFirstAndLastTouch: hiTouch.length ? hiTouch[hiTouch.length - 1] - hiTouch[0] : null,
+      ageBarsFromIPO: hiTouch.length ? i - hiTouch[hiTouch.length - 1] : null,
+    },
+    nearestEqualLowCluster: lo === null ? null : {
+      price: lo, touches: loTouch.length,
+      firstTouchDate: loTouch.length ? hist[loTouch[0]].datetime.slice(0, 10) : null,
+      lastTouchDate: loTouch.length ? hist[loTouch[loTouch.length - 1]].datetime.slice(0, 10) : null,
+      barsBetweenFirstAndLastTouch: loTouch.length ? loTouch[loTouch.length - 1] - loTouch[0] : null,
+      ageBarsFromIPO: loTouch.length ? i - loTouch[loTouch.length - 1] : null,
+    },
+    rangeWidthAtr: hi !== null && lo !== null ? r2((hi - lo) / a) : null,
+    percentRecentCandlesContained: hi !== null && lo !== null && win.length
+      ? r2((contained / win.length) * 100) : null,
+    alternatingBoundaryInteractions: hi !== null && lo !== null ? alternations : null,
+    closesOutsideRange: hi !== null && lo !== null ? closesOutside : null,
+    directionalDriftAtr: r2(drift),
+    recentBodyOverlapPercent: win.length > 1 ? r2((bodyOverlaps / (win.length - 1)) * 100) : null,
+    ipoInsideLocalRange: hi !== null && lo !== null ? (c.high <= hi && c.low >= lo) : null,
+    currentPredicateWouldReject: hi !== null && lo !== null,
+  };
+}

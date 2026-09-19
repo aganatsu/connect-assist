@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { detectIPOCandidates } from "../_shared/ipoZones.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -3963,6 +3963,40 @@ Deno.serve(async (req) => {
       return respond({
         note: "SHADOW ONLY. detectIPOZones has no production consumer. Parameters " +
               "encode a taught rule and were NOT tuned against the known boxes.",
+        out,
+      });
+    }
+
+    // ── ipo_failure_trace ────────────────────────────────────────────────
+    // READ-ONLY. Phase A failure tracing and Phase B consolidation research.
+    // detectIPOZones behaviour is unchanged; these re-walk and narrate.
+    if (action === "ipo_failure_trace") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          traces: (tgt.trace ?? []).map((t: any) =>
+            traceIPOCandidateFailure(series, String(t.date), t.side)),
+          consolidationProfiles: (tgt.profile ?? []).map((p: any) => {
+            const i = series.findIndex(c => c.datetime.slice(0, 10) === String(p.date));
+            return i < 0 ? { date: p.date, error: "not in series" }
+              : { side: p.side, ...analyzeLocalConsolidation(series, i) };
+          }),
+        });
+      }
+      return respond({
+        note: "READ-ONLY. Phase A traces why a known candle was or was not " +
+              "constructed; Phase B measures the local ranging condition without " +
+              "deciding validity. No default changed, no gate added, detectIPOZones " +
+              "untouched.",
         out,
       });
     }
