@@ -752,6 +752,32 @@ Deno.serve(async (req) => {
             }
             const brk = allBreaks.filter((b: any) => b.type === wantDir && b.index > i && b.index <= i + 15);
 
+            // ── SHADOW CANDIDATE DEFINITION — TURN — NOT PRODUCTION ─────
+            //
+            //   a TURN candidate makes a new past-10 extreme
+            //
+            // Measured 2026-09-18 on the seven confirmed blocks:
+            //
+            //   positives   5/5   (all five TURN blocks)
+            //   comparison  20/86 (23%)
+            //   continuation 0/2
+            //
+            // Past-only, so it is causal: it uses bars strictly before the
+            // candidate and survives the removal of the lookahead version
+            // (distFromLocalExtremeAtr, which reads bars on BOTH sides).
+            //
+            // This is the strongest current TURN discriminator and it is
+            // RECORDED, not promoted. Nothing consumes it, there is no
+            // threshold on it, and no selector reads it. n=5.
+            //
+            // Read d5, d10 and prevSameSideExtremeDistAtr as ONE structural
+            // measurement, not three confirmations: on 4 of the 5 TURN blocks
+            // they are numerically identical, because a candidate ending a
+            // same-side run makes the previous same-side candle both the
+            // immediately prior bar and the extreme of both past windows.
+            // Only GBP/CAD 05-08 separates them — the one TURN block that is
+            // not last of its run.
+            //
             // ── Archetype features ──────────────────────────────────────
             // The seven positives split into two shapes that should not be
             // pooled: TURN (the candle IS the reversal point) and CONTINUATION
@@ -913,6 +939,51 @@ Deno.serve(async (req) => {
               microSwingClearedByClose: microCleared,
             };
 
+            // ── EXPLORATORY: "preceded by a rejection candle" ────────────
+            // Hypothesis generated from TWO samples, which is not enough to
+            // distinguish a real rule from chart-specific coincidence. It is
+            // recorded here so it can be tested the moment more confirmed
+            // CONTINUATION blocks exist; it is NOT evidence of anything yet
+            // and nothing scores or thresholds it.
+            //
+            // Origin: AUD/USD 02 Apr reached the deeper low of the pullback and
+            // was rejected from it (0.62 lower wick on a 0.22 body), and the
+            // candle DRAWN was 03 Apr — the next one, smaller and clean-bodied.
+            // So the marked candle may be the one that FOLLOWS the rejection
+            // rather than the one that makes the extreme.
+            //
+            // The pullback runs in the candidate's own direction, so the wick
+            // that rejects it is on the ext() side: upper for a supply
+            // candidate, lower for a demand candidate.
+            const pRange = prev ? prev.high - prev.low : 0;
+            const pBody = prev ? Math.abs(prev.close - prev.open) : 0;
+            const pMid = prev ? (prev.high + prev.low) / 2 : 0;
+            const pRejWick = prev ? (favDown ? prev.high - pBodyHi : pBodyLo - prev.low) : 0;
+            const rej = prev ? {
+              prevRangeAtr: atr > 0 ? r(pRange / atr) : null,
+              prevBodyRangeRatio: pRange > 0 ? r(pBody / pRange) : null,
+              prevUpperWickRatio: pRange > 0 ? r((prev.high - pBodyHi) / pRange) : null,
+              prevLowerWickRatio: pRange > 0 ? r((pBodyLo - prev.low) / pRange) : null,
+              // Wick on the pullback side — the one that would reject it.
+              prevRejectionWickRatio: pRange > 0 ? r(pRejWick / pRange) : null,
+              // Wick longer than the body AND the close pulled back past the
+              // midpoint, away from the extreme it reached.
+              prevRejectedExtreme: pRange > 0 && pRejWick > pBody &&
+                (favDown ? prev.close < pMid : prev.close > pMid),
+              // Only meaningful when the previous bar is inside the same
+              // pullback run; null rather than false when it is not, so an
+              // out-of-run bar cannot read as a measured negative.
+              prevWasPullbackExtreme: (i - 1 >= runStart && i - 1 <= runEnd)
+                ? !better(extOver(runStart, runEnd), ext(i - 1))
+                : null,
+              candidateInsidePrevRange: c.high <= prev.high && c.low >= prev.low,
+              candidateSameDirectionAsPrev: (prev.close >= prev.open) === up,
+              candidateBodyVsPrevBody: pBody > 0 ? r(Math.abs(c.close - c.open) / pBody) : null,
+              // "Beyond" means further along the PULLBACK, not favourably.
+              candidateClosesBeyondPrevMid: favDown ? c.close > pMid : c.close < pMid,
+              nextDirClosesBeyondCandidate: cont.nextDirClosesBeyondCandidate,
+            } : null;
+
             const dayKey = `${sym}|${side}|${c.datetime.slice(0, 10)}`;
             const isPositive = positiveKey.has(dayKey);
 
@@ -925,6 +996,7 @@ Deno.serve(async (req) => {
               archetype: i === markIdx ? (mk.archetype ?? null) : null,
               turn,
               cont,
+              rej,
               side, t: c.datetime,
               // ── candle ──
               o: c.open, h: c.high, l: c.low, c: c.close,
