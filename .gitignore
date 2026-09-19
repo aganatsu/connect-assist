@@ -43,3 +43,5 @@ structure-canonical-out.json
 run-canonical.sh
 structure-policies-out.json
 run-policies.sh
+structure-ages-out.json
+run-ages.sh

@@ -226,3 +226,50 @@ Deno.test("shadow only — the production engine is untouched by all of this", (
   assert(low, "the old engine still finds the swing — the gap was never detection");
   assertEquals(low!.significance, "external");
 });
+
+for (const policy of POLICIES) {
+  Deno.test(`[${policy}] supersession reach is a three-way partition, not a boolean`, () => {
+    // The first version of this measurement reported !closedBeyond as
+    // "wick-only", which silently merged two opposite meanings: the
+    // replacement wicked past the old level but its close held, versus the
+    // replacement never reached the old level at all. Under
+    // latest_unbroken_structural the replacement engulfs by definition so it
+    // always reaches; under latest_confirmed a pointer is retired purely
+    // because a newer one confirmed, and that swing may sit nowhere near the
+    // old level. Merging them overstated the semantic mismatch.
+    const candles = twoLowerHighs();
+    const st = analyzeMarketStructureCanonical(candles, { policy });
+
+    for (const sup of st.supersessions) {
+      const flags = [
+        sup.replacementClosedBeyondOldLevel,
+        sup.replacementOnlyWickedBeyondOldLevel,
+        sup.replacementDidNotReachBeyondOldLevel,
+      ].filter(Boolean);
+      assertEquals(flags.length, 1,
+        `exactly one category must hold for a superseded level at ${sup.supersededLevel}`);
+    }
+
+    const s = st.supersessionSummary;
+    assertEquals(
+      s.replacementClosedBeyondOldLevel +
+        s.replacementOnlyWickedBeyondOldLevel +
+        s.replacementDidNotReachBeyondOldLevel,
+      s.total,
+      "the three counts must account for every supersession, with none double-counted",
+    );
+  });
+}
+
+Deno.test("latest_unbroken_structural only ever retires levels the replacement reached", () => {
+  // Engulfment is defined on swing prices, and a swing high's price IS its
+  // high, so the replacement bar necessarily trades beyond the old level. If
+  // this ever fails, the engulfment rule and the supersession measurement have
+  // drifted apart.
+  const candles = twoLowerHighs();
+  const st = analyzeMarketStructureCanonical(candles, { policy: "latest_unbroken_structural" });
+  for (const sup of st.supersessions) {
+    assertEquals(sup.replacementDidNotReachBeyondOldLevel, false,
+      "an engulfing replacement must by definition have reached beyond the old level");
+  }
+});
