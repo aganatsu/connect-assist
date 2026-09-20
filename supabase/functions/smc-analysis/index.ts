@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation } from "../_shared/ipoZones.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -3909,7 +3909,7 @@ Deno.serve(async (req) => {
         // interpretation is never counted as a known-box detection, but it stays
         // visible so an interpretation failure is distinguishable from a
         // detection failure.
-        const { valid: zones, rejected } = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const { valid: zones, rejected, accepted, unresolved } = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
         const byDate = new Map(zones.map(z => [`${z.direction}|${z.candleDatetime.slice(0, 10)}`, z]));
         const rejectedByDate = new Map(rejected.map(z => [`${z.direction}|${z.candleDatetime.slice(0, 10)}`, z]));
 
@@ -3919,7 +3919,11 @@ Deno.serve(async (req) => {
           const hit = byDate.get(`${k.side}|${k.date}`) ?? null;
           const rej = rejectedByDate.get(`${k.side}|${k.date}`) ?? null;
           return {
-            date: k.date, side: k.side, detected: !!hit,
+            date: k.date, side: k.side,
+            detected: !!hit && hit.researchStatus === "CANDIDATE_ACCEPTED",
+            researchStatus: hit ? hit.researchStatus : null,
+            consolidationStatus: hit ? hit.consolidationStatus : null,
+            consolidationFlagRaised: hit ? hit.consolidationFlagRaised : null,
             rejectedCandidate: rej ? {
               rejectionReason: rej.rejectionReason,
               consolidation: rej.consolidation,
@@ -3946,8 +3950,11 @@ Deno.serve(async (req) => {
 
         out.push({
           symbol: sym, interval: tf, bars: series.length,
-          zonesDetected: zones.length,
+          zonesAccepted: accepted.length,
+          zonesUnresolved: unresolved.length,
           zonesRejected: rejected.length,
+          // Deliberately NOT summed: accepted + unresolved is not a detection count.
+          zonesDetected: accepted.length,
           rejectionBreakdown: { INSIDE_CONSOLIDATION: rejected.filter(z => z.rejectionReason === "INSIDE_CONSOLIDATION").length },
           zonesPerHundredBars: Math.round((zones.length / series.length) * 1000) / 10,
           knownBoxes: known,
@@ -3997,6 +4004,38 @@ Deno.serve(async (req) => {
               "constructed; Phase B measures the local ranging condition without " +
               "deciding validity. No default changed, no gate added, detectIPOZones " +
               "untouched.",
+        out,
+      });
+    }
+
+    // ── ipo_origin_hypotheses ────────────────────────────────────────────
+    // READ-ONLY. Measures candidate departure-origin anchors. selectIPOCandle,
+    // the intervening budget and the lookback are used UNMODIFIED; only the
+    // launch position varies. detectIPOZones is untouched.
+    if (action === "ipo_origin_hypotheses") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          hypotheses: (tgt.trace ?? []).map((t: any) =>
+            traceDepartureOriginHypotheses(series, String(t.date), t.side)),
+          background: body?.includeBackground === false ? null : originHypothesisBackground(series),
+        });
+      }
+      return respond({
+        note: "READ-ONLY research. selectIPOCandle, maxInterveningCandles, " +
+              "interveningMaxRangeAtr and maxLookbackForIPO are UNCHANGED — only " +
+              "the launch position varies. No threshold swept, nothing tuned, " +
+              "detectIPOZones untouched. Consolidation now reports UNRESOLVED and " +
+              "vetoes nothing.",
         out,
       });
     }
