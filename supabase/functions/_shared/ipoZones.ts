@@ -1455,8 +1455,12 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
 //   IPO candle -> directional departure -> extent still valid
 //              -> first directionally relevant close-through of structure
 //
-// Departure must happen before the break counts: a close-through while price is
-// still inside the zone is not that zone's confirming move.
+// A confirming break requires the zone to have DEPARTED BY the break bar: a
+// close-through while price is still inside the zone is not that zone's
+// confirming move. Where departure occurs on an earlier bar the ordering is
+// strict. Where departure and break fall on the SAME bar the case is preserved
+// and classified SAME_BAR_UNVERIFIABLE, because OHLC cannot establish intrabar
+// ordering — see DepartureBreakOrdering.
 //
 // knownUniquelyRecovered (global) is retired and deliberately not reported.
 
@@ -1528,7 +1532,9 @@ export function findFirstRelevantConfirmation(
       };
     }
     if (departed === null && (demand ? b.low > g.zoneHigh : b.high < g.zoneLow)) departed = j;
-    if (departed === null) continue;                 // the move must leave first
+    // The zone must have been departed BY this bar. Same-bar departure and
+    // break is allowed here and labelled below; it is not silently dropped.
+    if (departed === null) continue;
     const here = byBar.get(j);
     if (here && here.length) {
       const rep = uniqueBreakEvents(here)[0];
