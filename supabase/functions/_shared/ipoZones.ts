@@ -760,6 +760,71 @@ function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}):
   return zones;
 }
 
+
+/**
+ * Resolve a demonstrated candle to its bar index.
+ *
+ * DATE-ONLY LOOKUP IS WRONG INTRADAY. The three trace diagnostics used
+ * `datetime.slice(0,10) === knownDate.slice(0,10)`, which on a 4H series picks
+ * the FIRST bar of that day. Asked to trace BTC/USD 4h 2020-05-08 16:00 it
+ * silently traced the 00:00 bar and reported a confident failure analysis of a
+ * candle nobody demonstrated — the same defect barKey fixed in the coverage
+ * evaluator, still live here.
+ *
+ * When the caller supplies a time, the time is honoured. When they do not, the
+ * day is searched and `ambiguous` says whether that day held more than one bar.
+ *
+ * AMBIGUITY IS INFORMATION, NOT PERMISSION TO GUESS. Every caller REFUSES to
+ * run when ambiguous is true. Reporting the flag while analysing the first bar
+ * anyway was the same failure in a quieter form: the output still described a
+ * candle nobody demonstrated, and a reader scanning for `error` would not see
+ * it. This matches the coverage evaluator, where DATE_ONLY_AMBIGUOUS is
+ * neither covered nor missed.
+ */
+export function resolveKnownCandleIndex(
+  candles: Candle[], knownDate: string,
+): {
+  index: number;
+  ambiguous: boolean;
+  barsOnThatDay: number;
+  resolvedDatetime: string | null;
+  /** Every bar on that calendar day, so an ambiguous caller can pick one. */
+  candidateDatetimes: string[];
+} {
+  const day = knownDate.slice(0, 10);
+  const sameDay = candles
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.datetime.slice(0, 10) === day);
+  const candidateDatetimes = sameDay.map(({ c }) => c.datetime);
+  if (!sameDay.length) {
+    return { index: -1, ambiguous: false, barsOnThatDay: 0, resolvedDatetime: null, candidateDatetimes };
+  }
+
+  if (!isDateOnly(knownDate)) {
+    const want = String(knownDate).replace(" ", "T").slice(0, 16);
+    const exact = sameDay.find(({ c }) => c.datetime.replace(" ", "T").slice(0, 16) === want);
+    if (exact) {
+      return {
+        index: exact.i, ambiguous: false, barsOnThatDay: sameDay.length,
+        resolvedDatetime: exact.c.datetime, candidateDatetimes,
+      };
+    }
+    // A time was given and no bar carries it. Refuse rather than fall back to
+    // the first bar of the day: that is how the wrong candle gets analysed.
+    return {
+      index: -1, ambiguous: false, barsOnThatDay: sameDay.length,
+      resolvedDatetime: null, candidateDatetimes,
+    };
+  }
+  return {
+    index: sameDay[0].i,
+    ambiguous: sameDay.length > 1,
+    barsOnThatDay: sameDay.length,
+    resolvedDatetime: sameDay[0].c.datetime,
+    candidateDatetimes,
+  };
+}
+
 /**
  * HTF -> LTF refinement.
  *
@@ -814,8 +879,31 @@ export function traceIPOCandidateFailure(
   direction: IPODirection,
   opts: DetectIPOOptions = {},
 ) {
-  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
-  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+  const resolved = resolveKnownCandleIndex(candles, knownDate);
+  const ki = resolved.index;
+  if (ki < 0) {
+    return {
+      knownDate, direction,
+      error: resolved.barsOnThatDay > 0
+        ? `no bar at that exact time — ${resolved.barsOnThatDay} bar(s) exist on ${knownDate.slice(0, 10)}. ` +
+          "Falling back to the first bar of the day would analyse a candle nobody demonstrated."
+        : "candle not in series",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
+  if (resolved.ambiguous) {
+    // A date-only request on an intraday chart. Running the trace would produce
+    // a confident analysis of whichever bar happens to open the day.
+    return {
+      knownDate, direction,
+      error: "DATE_ONLY_AMBIGUOUS",
+      reason: `${resolved.barsOnThatDay} bars exist on ${knownDate.slice(0, 10)} and the request named no time. ` +
+        "Re-send with the demonstrated timestamp; the first bar of the day is a guess, not a resolution.",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
 
   const kc = candles[ki];
   const wantDir = direction === "demand" ? "bullish" : "bearish";
@@ -1157,8 +1245,31 @@ export function traceDepartureOriginHypotheses(
   direction: IPODirection,
   opts: DetectIPOOptions = {},
 ) {
-  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
-  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+  const resolved = resolveKnownCandleIndex(candles, knownDate);
+  const ki = resolved.index;
+  if (ki < 0) {
+    return {
+      knownDate, direction,
+      error: resolved.barsOnThatDay > 0
+        ? `no bar at that exact time — ${resolved.barsOnThatDay} bar(s) exist on ${knownDate.slice(0, 10)}. ` +
+          "Falling back to the first bar of the day would analyse a candle nobody demonstrated."
+        : "candle not in series",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
+  if (resolved.ambiguous) {
+    // A date-only request on an intraday chart. Running the trace would produce
+    // a confident analysis of whichever bar happens to open the day.
+    return {
+      knownDate, direction,
+      error: "DATE_ONLY_AMBIGUOUS",
+      reason: `${resolved.barsOnThatDay} bars exist on ${knownDate.slice(0, 10)} and the request named no time. ` +
+        "Re-send with the demonstrated timestamp; the first bar of the day is a guess, not a resolution.",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
   const wantDir = direction === "demand" ? "bullish" : "bearish";
   const opposingType = wantDir === "bullish" ? "low" : "high";
   const g = ipoGeometry(candles[ki], direction);
@@ -1616,8 +1727,31 @@ export function traceEventLocalRecovery(
   direction: IPODirection,
   opts: DetectIPOOptions = {},
 ) {
-  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
-  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+  const resolved = resolveKnownCandleIndex(candles, knownDate);
+  const ki = resolved.index;
+  if (ki < 0) {
+    return {
+      knownDate, direction,
+      error: resolved.barsOnThatDay > 0
+        ? `no bar at that exact time — ${resolved.barsOnThatDay} bar(s) exist on ${knownDate.slice(0, 10)}. ` +
+          "Falling back to the first bar of the day would analyse a candle nobody demonstrated."
+        : "candle not in series",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
+  if (resolved.ambiguous) {
+    // A date-only request on an intraday chart. Running the trace would produce
+    // a confident analysis of whichever bar happens to open the day.
+    return {
+      knownDate, direction,
+      error: "DATE_ONLY_AMBIGUOUS",
+      reason: `${resolved.barsOnThatDay} bars exist on ${knownDate.slice(0, 10)} and the request named no time. ` +
+        "Re-send with the demonstrated timestamp; the first bar of the day is a guess, not a resolution.",
+      barsOnThatDay: resolved.barsOnThatDay,
+      candidateDatetimes: resolved.candidateDatetimes,
+    };
+  }
   const canon = analyzeMarketStructureCanonical(candles, {
     policy: "latest_unbroken_structural",
     maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
@@ -1630,6 +1764,7 @@ export function traceEventLocalRecovery(
   if (!conf.found || conf.breakIndex === null) {
     return {
       knownDate, direction, knownCandleIndex: ki,
+      resolvedDatetime: resolved.resolvedDatetime,
       firstRelevantConfirmation: conf,
       eventCandidates: [], eventUniqueCandidateCount: 0,
       knownAmongEventCandidates: false, knownEventLocallyUnique: false,
@@ -1660,6 +1795,7 @@ export function traceEventLocalRecovery(
 
   return {
     knownDate, direction, knownCandleIndex: ki,
+    resolvedDatetime: resolved.resolvedDatetime,
     firstRelevantConfirmation: conf,
     eventCandidates: dates.map((dte) => ({
       date: dte, selectedBy: map.get(dte)!,

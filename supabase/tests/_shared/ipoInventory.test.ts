@@ -10,6 +10,10 @@ import {
   isIntradayTimeframe,
   isDateOnly,
   resolveParentLineage,
+  resolveKnownCandleIndex,
+  traceIPOCandidateFailure,
+  traceDepartureOriginHypotheses,
+  traceEventLocalRecovery,
   detectIPOCandidates,
   type DemonstratedExample,
 } from "../../functions/_shared/ipoZones.ts";
@@ -686,4 +690,151 @@ Deno.test("the date-only fallback does not loosen matching on daily charts", () 
   assertEquals(isIntradayTimeframe("4h"), true);
   assertEquals(isDateOnly("2020-05-08"), true);
   assertEquals(isDateOnly("2020-05-08T04:00:00Z"), false);
+});
+
+Deno.test("a historical range defines the VIEW, while detection keeps the buffer", () => {
+  // The action defaults from/to to startDate/endDate. Without that, density,
+  // unlabelled-zone counts and the returned inventory describe the buffered
+  // period — months of context nobody asked about — rather than the window.
+  const s = series();
+  const levels = [{ timeframe: "1d", candles: s }];
+  const all = buildIPOInventory(levels, { symbol: "T" });
+  const mid = all[Math.floor(all.length / 2)].candleDatetime.slice(0, 10);
+
+  const windowed = buildIPOInventory(levels, { symbol: "T", from: mid });
+  const viewBars = inventoryViewBars(levels, { from: mid });
+
+  // Detection is unchanged: a surviving zone is identical to its unfiltered self.
+  for (const e of windowed) {
+    assertEquals(JSON.stringify(e), JSON.stringify(all.find((a) => a.id === e.id)!));
+  }
+  // But the reported shape is the window's, not the buffer's.
+  const wsum = inventorySummary(windowed, viewBars);
+  const bsum = inventorySummary(all, { "1d": s.length });
+  assert(wsum.zones < bsum.zones);
+  assertEquals(wsum.perTimeframe["1d"].bars, viewBars["1d"]);
+  assert(viewBars["1d"] < s.length, "the view is genuinely narrower than the fetch");
+});
+
+Deno.test("coverage scopes corpus examples to the timeframes actually requested", () => {
+  // Filtering on symbol alone lets a BTC DAILY example be scored against a
+  // 4H-only inventory, where it can never match — an artificial miss
+  // manufactured by the shape of the request rather than by the detector.
+  const s = series();
+  const inv = buildIPOInventory([{ timeframe: "4h", candles: s }], { symbol: "T" });
+  const z = inv[0];
+
+  const requested = ["4h"];
+  const corpus = [
+    { symbol: "T", timeframe: "4h", direction: z.direction, candleDatetime: z.candleDatetime },
+    { symbol: "T", timeframe: "1d", direction: "demand", candleDatetime: "2026-01-05" },
+  ];
+
+  const unscoped = corpus.filter((c) => c.symbol === "T");
+  const scoped = corpus.filter((c) => c.symbol === "T" && requested.includes(c.timeframe));
+  assertEquals(scoped.length, 1);
+
+  const bad = evaluateDemonstratedCoverage(inv, unscoped.map((c, i) => ex({ id: `u${i}`, ...c } as any)), {});
+  const good = evaluateDemonstratedCoverage(inv, scoped.map((c, i) => ex({ id: `s${i}`, ...c } as any)), {});
+
+  assertEquals((bad.demonstratedIPOCoverage.byExample as any).pct, 50,
+    "the daily example drags coverage down on an inventory that never had daily zones");
+  assertEquals((good.demonstratedIPOCoverage.byExample as any).pct, 100,
+    "scoped to the requested timeframes, only answerable examples are scored");
+});
+
+Deno.test("a trace resolves the EXACT bar, never the first bar of the day", () => {
+  // The three trace diagnostics matched on datetime.slice(0,10), so asking for
+  // BTC/USD 4h 2020-05-08 16:00 silently traced the 00:00 bar and produced a
+  // confident failure analysis of a candle nobody demonstrated.
+  reset();
+  const bars: Candle[] = [];
+  for (let d = 0; d < 3; d++) {
+    for (const h of [0, 4, 8, 12, 16, 20]) {
+      bars.push({
+        datetime: `2020-05-0${8 + d}T${String(h).padStart(2, "0")}:00:00Z`,
+        open: 100 + h, high: 101 + h, low: 99 + h, close: 100.5 + h,
+      } as Candle);
+    }
+  }
+  const at16 = resolveKnownCandleIndex(bars, "2020-05-08T16:00");
+  assertEquals(at16.resolvedDatetime, "2020-05-08T16:00:00Z");
+  assertEquals(at16.index, 4, "the 16:00 bar, not the 00:00 one");
+  assertEquals(at16.ambiguous, false);
+
+  // A date with no time on an intraday series resolves to the first bar but
+  // SAYS the day held several, so it cannot pass as a precise trace.
+  const dayOnly = resolveKnownCandleIndex(bars, "2020-05-08");
+  assertEquals(dayOnly.index, 0);
+  assertEquals(dayOnly.ambiguous, true);
+  assertEquals(dayOnly.barsOnThatDay, 6);
+
+  // A time that does not exist is refused rather than rounded to the day.
+  const missing = resolveKnownCandleIndex(bars, "2020-05-08T17:30");
+  assertEquals(missing.index, -1);
+  assertEquals(missing.barsOnThatDay, 6,
+    "the day exists, so the caller can tell a bad time from a missing day");
+
+  // Daily series are unaffected: one bar per day, no ambiguity.
+  const daily = [{ datetime: "2020-05-08T00:00:00Z", open: 1, high: 2, low: 0, close: 1 }] as Candle[];
+  assertEquals(resolveKnownCandleIndex(daily, "2020-05-08").index, 0);
+  assertEquals(resolveKnownCandleIndex(daily, "2020-05-08").ambiguous, false);
+});
+
+Deno.test("a date-only intraday request is REFUSED by all three traces", () => {
+  // Ambiguity is information, not permission to guess a candle. Reporting the
+  // flag while analysing the first bar of the day anyway was the same failure
+  // in a quieter form: the output still described a candle nobody
+  // demonstrated, and a reader scanning for `error` would not have seen it.
+  reset();
+  const bars: Candle[] = [];
+  let p = 100;
+  for (let d = 0; d < 60; d++) {
+    for (const h of [0, 4, 8, 12, 16, 20]) {
+      const o = p; p += (d % 3 === 0 ? -0.7 : 0.9);
+      bars.push({
+        datetime: `2020-0${d < 24 ? 4 : 5}-${String((d % 24) + 1).padStart(2, "0")}T${String(h).padStart(2, "0")}:00:00Z`,
+        open: o, high: Math.max(o, p) + 0.3, low: Math.min(o, p) - 0.3, close: p,
+      } as Candle);
+    }
+  }
+  const day = bars[120].datetime.slice(0, 10);          // a day with six bars
+  const r = resolveKnownCandleIndex(bars, day);
+  assertEquals(r.ambiguous, true);
+  assertEquals(r.barsOnThatDay, 6);
+  assertEquals(r.candidateDatetimes.length, 6);
+
+  for (const [name, fn] of [
+    ["traceIPOCandidateFailure", traceIPOCandidateFailure],
+    ["traceDepartureOriginHypotheses", traceDepartureOriginHypotheses],
+    ["traceEventLocalRecovery", traceEventLocalRecovery],
+  ] as const) {
+    const out = (fn as any)(bars, day, "demand") as any;
+    assertEquals(out.error, "DATE_ONLY_AMBIGUOUS", `${name} must refuse`);
+    assertEquals(out.barsOnThatDay, 6);
+    assertEquals(out.candidateDatetimes.length, 6);
+    assert(out.reason.includes("is a guess"), `${name} must say why it refused`);
+    // No diagnostic result may accompany a refusal.
+    for (const leaked of ["perBreak", "results", "eventCandidates", "knownCandle", "firstRelevantConfirmation"]) {
+      assertEquals(out[leaked], undefined, `${name} leaked ${leaked} on a refusal`);
+    }
+  }
+
+  // An exact timestamp on the same day is accepted and analysed.
+  const exact = traceEventLocalRecovery(bars, `${day}T16:00`, "demand") as any;
+  assertEquals(exact.error, undefined);
+  assertEquals(exact.resolvedDatetime, `${day}T16:00:00Z`);
+});
+
+Deno.test("a date-only DAILY request stays valid — one bar, nothing to guess", () => {
+  const s = series();
+  const inv = buildIPOInventory([{ timeframe: "1d", candles: s }], { symbol: "T" });
+  const z = inv[0];
+  const day = z.candleDatetime.slice(0, 10);
+  assertEquals(resolveKnownCandleIndex(s, day).ambiguous, false);
+
+  for (const fn of [traceIPOCandidateFailure, traceDepartureOriginHypotheses, traceEventLocalRecovery]) {
+    const out = (fn as any)(s, day, z.direction) as any;
+    assertEquals(out.error, undefined, "a daily date is unambiguous and must still run");
+  }
 });
