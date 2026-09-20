@@ -177,8 +177,12 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     "down and worked, not that a new zone is found on the lower timeframe. Two " +
     "independent pixel measurements agree: on 2020-05-11 the 1h box matched the 4H " +
     "zone rather than any 1h candle, and on 2020-04-20 the 8h zone matched the DAILY " +
-    "candle's geometry to 2.6 units. Whether a genuinely NARROWER child zone is ever " +
-    "created remains unvalidated at n=1."),
+    "candle's own geometry. INTERPRETATION BOUNDARY: this confirms only that HTF zones " +
+    "are CARRIED DOWN to lower timeframes. It does NOT license inferring that each " +
+    "lower timeframe creates a new refinement child — the one observed case where a " +
+    "zone genuinely narrowed (daily 2020-05-11 to 4H 2020-05-11 16:00) remains " +
+    "unvalidated at n=1, and repeated display of the same box must never be counted " +
+    "as a second example."),
   P("origin.candleThatTookPeopleOut",
     "The origin candle is the one that 'took people out'",
     null, "DIRECT_TEACHING",
