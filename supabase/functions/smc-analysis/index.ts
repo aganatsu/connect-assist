@@ -4,10 +4,11 @@ import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParen
 import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
 import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directionalEvents } from "../_shared/ipoOriginExperiments.ts";
 import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
-import { testOnsetHypothesis, ONSET_DEFINITIONS } from "../_shared/ipoDisplacementOnset.ts";
+import { testOnsetHypothesis, ONSET_DEFINITIONS, lastOppositeBefore } from "../_shared/ipoDisplacementOnset.ts";
 import { testAnchorHypothesis } from "../_shared/ipoOriginAnchor.ts";
 import { discriminateAnchorModes } from "../_shared/ipoAnchorDiscriminator.ts";
-import { testTeachingSpec } from "../_shared/ipoTeachingSpec.ts";
+import { testTeachingSpec, finalBaseExit } from "../_shared/ipoTeachingSpec.ts";
+import { permanentBaseExit, runNeverRevisitsOrigin, describeMove } from "../_shared/ipoOnsetVariants.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4284,6 +4285,97 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_onset_variants ───────────────────────────────────────────────
+    // READ-ONLY. Anchor FIXED to the taught step-back; only the major-move
+    // onset varies. Nothing wired to the detector.
+    if (action === "ipo_onset_variants") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" }); continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const ctx = { candles: series, swingIdx, breakIdx: ev.index, direction: e.side };
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+
+          // Every onset definition, anchored the SAME way: the taught step-back.
+          const defs: Array<[string, number | null]> = [
+            ...ONSET_DEFINITIONS.map((d) => [d.key, d.find(ctx)] as [string, number | null]),
+            ["FINAL_BASE_EXIT", finalBaseExit(ctx)],
+            ["PERMANENT_BASE_EXIT", permanentBaseExit(ctx)],
+            ["RUN_NEVER_REVISITS_ORIGIN", runNeverRevisitsOrigin(ctx)],
+          ];
+          const anatomy = describeMove(ctx);
+          const dt = (i: number | null) => i === null ? null : series[i].datetime;
+          results.push({
+            symbol: sym, interval: tf, date: e.date, side: e.side,
+            demonstratedIndex: r.index, demonstratedDatetime: series[r.index].datetime,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatches: prodPick === r.index,
+            leg: { swingIndex: swingIdx, swingDatetime: series[swingIdx].datetime,
+                   breakIndex: ev.index, breakDatetime: series[ev.index].datetime,
+                   significance: ev.significance },
+            anatomy: {
+              base: anatomy.base ? { ...anatomy.base } : null,
+              firstBaseExit: dt(anatomy.firstBaseExitIndex),
+              permanentExitFromReportedBase: dt(anatomy.permanentExitFromReportedBase),
+              permanentBaseExitAnyCluster: dt(anatomy.permanentBaseExitAnyCluster),
+              firstSustainedClose: dt(anatomy.firstSustainedCloseIndex),
+              neverRevisitsOrigin: dt(anatomy.neverRevisitsOriginIndex),
+            },
+            trials: defs.map(([key, onset]) => {
+              const origin = onset === null ? null : lastOppositeBefore(series, onset, e.side, swingIdx);
+              return { onsetKey: key, onsetDatetime: dt(onset),
+                       originDatetime: dt(origin), exactMatch: origin === r.index };
+            }),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const keys = [...new Set(flat.flatMap((f: any) => f.trials.map((t: any) => t.onsetKey)))];
+      return respond({
+        note: "READ-ONLY. Anchor FIXED to the taught step-back — last opposite candle " +
+              "before the move — because mode A fires 0/4 on Ezzy demonstrations and the " +
+              "teaching states the step-back unconditionally. Only the onset varies. " +
+              "Both new definitions are parameter-free and about PERMANENCE, not magnitude.",
+        productionBaseline: { exact: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byDefinition: keys.map((k: any) => {
+          const hit = flat.filter((f: any) => f.trials.find((t: any) => t.onsetKey === k)?.exactMatch);
+          return { onsetKey: k, exact: hit.length, of: flat.length,
+                   matched: hit.map((f: any) => `${f.symbol}|${f.interval}|${f.date}`) };
+        }).sort((a: any, b: any) => b.exact - a.exact),
+        out,
+      });
+    }
+
     // ── ipo_teaching_spec ────────────────────────────────────────────────
     // READ-ONLY. The origin rule as literally taught, measured clause by clause.
     if (action === "ipo_teaching_spec") {
