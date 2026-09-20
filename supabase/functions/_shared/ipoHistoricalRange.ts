@@ -63,8 +63,30 @@ export interface HistoricalRangeResult {
   fetchedWindow: { startDate: string; endDate: string };
   /** First and last bar actually returned, or null when empty. */
   coverage: { first: string | null; last: string | null; bars: number };
-  /** True when the provider's history begins after the requested start. */
-  truncatedAtStart: boolean;
+  /**
+   * Whether the buffers were actually filled, counted in BARS.
+   *
+   * An earlier version compared the first returned bar's date against the
+   * buffered start date. On FX that fires whenever the buffered start lands on
+   * a Saturday — the market was shut, nothing is missing, and the run is
+   * flagged as truncated. Counting bars asks the question that actually
+   * matters: did the detector get the history it needs?
+   */
+  buffers: {
+    requestedLookbackBars: number;
+    requestedLookaheadBars: number;
+    preWindowBars: number;
+    postWindowBars: number;
+    lookbackComplete: boolean;
+    lookaheadComplete: boolean;
+  };
+  /**
+   * The condition that invalidates a measurement outright: the provider's
+   * history begins AFTER the research window itself, so the example was never
+   * available to be found. Distinct from an unfilled buffer, which only means
+   * the detector saw less context than intended.
+   */
+  providerStartsAfterResearchStart: boolean;
   notes: string[];
 }
 
@@ -186,23 +208,46 @@ export async function fetchHistoricalRangeCandles(
 
   const first = candles.length ? candles[0].datetime : null;
   const last = candles.length ? candles[candles.length - 1].datetime : null;
-  // The provider's own history may begin after our buffered start. Say so:
-  // otherwise a short series reads as a quiet market rather than a data limit.
-  const truncatedAtStart = first !== null && first.slice(0, 10) > fetchStart;
-  if (truncatedAtStart) {
+  const winStart = req.startDate.slice(0, 10);
+  const winEnd = req.endDate.slice(0, 10);
+
+  const preWindowBars = candles.filter((c) => c.datetime.slice(0, 10) < winStart).length;
+  const postWindowBars = candles.filter((c) => c.datetime.slice(0, 10) > winEnd).length;
+  const lookbackComplete = preWindowBars >= lookbackBars;
+  const lookaheadComplete = postWindowBars >= lookaheadBars;
+  if (!lookbackComplete) {
     notes.push(
-      `provider history begins ${first!.slice(0, 10)}, after the buffered start ${fetchStart} — ` +
+      `only ${preWindowBars} of ${lookbackBars} requested lookback bars were available — ` +
       "zones near the left edge saw less history than a longer series would give them",
     );
   }
+  if (!lookaheadComplete) {
+    notes.push(
+      `only ${postWindowBars} of ${lookaheadBars} requested lookahead bars were available — ` +
+      "a lifecycle reported here may simply have run out of chart",
+    );
+  }
+  // The condition that invalidates a measurement rather than weakening it.
+  const providerStartsAfterResearchStart = first !== null && first.slice(0, 10) > winStart;
+  if (providerStartsAfterResearchStart) {
+    notes.push(
+      `provider history begins ${first!.slice(0, 10)}, AFTER the research window start ${winStart} — ` +
+      "examples before that date were never available to be found and must not be scored as misses",
+    );
+  }
+
   return {
     candles,
     source: candles.length ? "twelvedata_range" : "none",
     pages,
-    requestedWindow: { startDate: req.startDate.slice(0, 10), endDate: req.endDate.slice(0, 10) },
+    requestedWindow: { startDate: winStart, endDate: winEnd },
     fetchedWindow: { startDate: fetchStart, endDate: fetchEnd },
     coverage: { first, last, bars: candles.length },
-    truncatedAtStart,
+    buffers: {
+      requestedLookbackBars: lookbackBars, requestedLookaheadBars: lookaheadBars,
+      preWindowBars, postWindowBars, lookbackComplete, lookaheadComplete,
+    },
+    providerStartsAfterResearchStart,
     notes,
   };
 }

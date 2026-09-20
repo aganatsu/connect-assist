@@ -459,7 +459,8 @@ async function researchSeries(
       sourcing: {
         mode: "HISTORICAL_RANGE", source: r.source, pages: r.pages,
         requestedWindow: r.requestedWindow, fetchedWindow: r.fetchedWindow,
-        coverage: r.coverage, truncatedAtStart: r.truncatedAtStart,
+        coverage: r.coverage, buffers: r.buffers,
+        providerStartsAfterResearchStart: r.providerStartsAfterResearchStart,
         barsAfterFxFilter: series.length, notes: r.notes,
       },
     };
@@ -4206,8 +4207,13 @@ Deno.serve(async (req) => {
         }
         if (bad) { out.push({ symbol: sym, error: bad, sourcing: sourcingByTimeframe }); continue; }
 
-        const from = tgt.from ?? body?.from;
-        const to = tgt.to ?? body?.to;
+        // A historical range names the period under research, so it also
+        // defines the VIEW unless the caller narrows it further. Detection
+        // still runs on every buffered bar; without this default the density,
+        // unlabelled-zone count and returned inventory describe the buffer —
+        // months of context nobody asked about — rather than the window.
+        const from = tgt.from ?? body?.from ?? tgt.startDate ?? null;
+        const to = tgt.to ?? body?.to ?? tgt.endDate ?? null;
         const entries = buildIPOInventory(levels, {
           symbol: sym, from, to, parentContextId: tgt.parentContextId,
         });
@@ -4217,7 +4223,10 @@ Deno.serve(async (req) => {
         // plausible — the first live run reported 0.6 where the real figure
         // for that window was 1.4.
         const viewBars = inventoryViewBars(levels, { from, to });
-        const mine = corpus.filter((c: any) => c.symbol === sym);
+        // Symbol AND timeframe. Filtering on symbol alone lets a BTC DAILY
+        // example be scored against a 4H-only inventory, where it can never
+        // match — an artificial miss manufactured by the shape of the request.
+        const mine = corpus.filter((c: any) => c.symbol === sym && tfs.includes(c.timeframe));
         out.push({
           symbol: sym,
           timeframes: tfs,
@@ -4230,6 +4239,10 @@ Deno.serve(async (req) => {
             ? {
               corpusSource: mine.some((c: any) => c._inline) ? "INLINE_DRY_RUN" : "STORED_CORPUS",
               demonstratedExamples: mine.length,
+          corpusScope: { symbol: sym, timeframes: tfs,
+            excludedOtherTimeframes: corpus.filter((c: any) => c.symbol === sym && !tfs.includes(c.timeframe)).length,
+            note: "examples on timeframes this target did not request are not evaluated, " +
+                  "because an inventory that never covered their timeframe cannot contain them" },
               ...evaluateDemonstratedCoverage(entries, mine, viewBars),
               inventory: tgt.includeZones ? entries : undefined,
             }

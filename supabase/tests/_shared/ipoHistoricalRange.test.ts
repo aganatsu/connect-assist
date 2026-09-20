@@ -47,24 +47,27 @@ function tdBars(start: string, n: number) {
   return out;
 }
 
-Deno.test("the request asks for UTC — an exchange offset would move a 16:00 bar", () => {
+Deno.test("the request asks for UTC — an exchange offset would move a 16:00 bar", async () => {
   // candleSource learned this on 2026-09-08: TwelveData defaults to the
   // exchange timezone and the caller appends "Z", asserting a UTC that was
   // never requested. The corpus pins 4H IPOs at 16:00, so an hour of drift
   // either misses the bar or silently matches the wrong one.
+  // AWAITED INSIDE THE TRY. Returning the promise let `finally` restore the
+  // global fetch before the request had finished; it passed only because this
+  // fixture makes a single call, and would have silently stopped stubbing the
+  // moment a second page was added.
   const s = stub(() => ({ values: tdBars("2020-05-01T00:00:00Z", 10) }));
   try {
-    return fetchHistoricalRangeCandles({
+    await fetchHistoricalRangeCandles({
       symbol: "BTC/USD", interval: "4h", startDate: "2020-05-01", endDate: "2020-05-05",
-    }).then(() => {
-      assert(s.urls.length > 0);
-      for (const u of s.urls) {
-        assert(u.includes("timezone=UTC"), "every page must request UTC");
-        assert(u.includes("order=ASC"), "ascending, so pagination can walk forward");
-        assert(u.includes("outputsize=5000"));
-        assert(u.includes("start_date=") && u.includes("end_date="));
-      }
     });
+    assert(s.urls.length > 0);
+    for (const u of s.urls) {
+      assert(u.includes("timezone=UTC"), "every page must request UTC");
+      assert(u.includes("order=ASC"), "ascending, so pagination can walk forward");
+      assert(u.includes("outputsize=5000"));
+      assert(u.includes("start_date=") && u.includes("end_date="));
+    }
   } finally { s.restore(); }
 });
 
@@ -109,16 +112,54 @@ Deno.test("page boundaries do not duplicate a bar", async () => {
   } finally { s.restore(); }
 });
 
-Deno.test("a provider history that starts late is flagged, not silently short", async () => {
-  const s = stub(() => ({ values: tdBars("2024-06-09T08:00:00Z", 20) }));
+Deno.test("buffer completeness is counted in BARS, not inferred from a date", async () => {
+  // A date comparison fires whenever the buffered start lands on a Saturday:
+  // the FX market was shut, nothing is missing, and the run is wrongly flagged.
+  // 600 bars of 4H starting well before the window fills both buffers even
+  // though the first bar's date is later than the buffered start.
+  const s = stub(() => ({ values: tdBars("2020-03-01T00:00:00Z", 600) }));
+  try {
+    const r = await fetchHistoricalRangeCandles({
+      symbol: "BTC/USD", interval: "4h", startDate: "2020-04-20", endDate: "2020-05-01",
+      lookbackBars: 100, lookaheadBars: 50,
+    });
+    assertEquals(r.buffers.requestedLookbackBars, 100);
+    assertEquals(r.buffers.lookbackComplete, true, "300 pre-window bars is plenty for 100");
+    assertEquals(r.buffers.lookaheadComplete, true);
+    assertEquals(r.providerStartsAfterResearchStart, false);
+    assert(r.buffers.preWindowBars > 100 && r.buffers.postWindowBars > 50);
+  } finally { s.restore(); }
+});
+
+Deno.test("an unfilled buffer weakens a measurement; a late provider start voids it", async () => {
+  // Case 1: history begins inside the window. The example was never available,
+  // so scoring it as a miss would be recording a detector failure that did not
+  // happen. This is the condition that invalidates a measurement outright.
+  const late = stub(() => ({ values: tdBars("2024-06-09T08:00:00Z", 20) }));
   try {
     const r = await fetchHistoricalRangeCandles({
       symbol: "BTC/USD", interval: "4h", startDate: "2020-05-08", endDate: "2020-05-11",
     });
-    assertEquals(r.truncatedAtStart, true);
-    assert(r.notes.some((n) => n.includes("provider history begins")),
-      "a short series must not read as a quiet market");
-  } finally { s.restore(); }
+    assertEquals(r.providerStartsAfterResearchStart, true);
+    assertEquals(r.buffers.preWindowBars, 0);
+    assertEquals(r.buffers.lookbackComplete, false);
+    assert(r.notes.some((n) => n.includes("never available to be found")),
+      "the void-the-measurement case must say so in words");
+  } finally { late.restore(); }
+
+  // Case 2: history covers the window but the lookback is thin. The example WAS
+  // available and a miss is real — the detector simply saw less context.
+  const thin = stub(() => ({ values: tdBars("2020-05-06T00:00:00Z", 40) }));
+  try {
+    const r = await fetchHistoricalRangeCandles({
+      symbol: "BTC/USD", interval: "4h", startDate: "2020-05-08", endDate: "2020-05-11",
+      lookbackBars: 300, lookaheadBars: 120,
+    });
+    assertEquals(r.providerStartsAfterResearchStart, false, "the window itself is covered");
+    assertEquals(r.buffers.lookbackComplete, false);
+    assert(r.buffers.preWindowBars > 0 && r.buffers.preWindowBars < 300);
+    assert(r.notes.some((n) => n.includes("requested lookback bars")));
+  } finally { thin.restore(); }
 });
 
 Deno.test("a provider error yields an empty series with a reason, never a partial lie", async () => {
