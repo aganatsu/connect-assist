@@ -68,3 +68,5 @@ robust-out.json
 run-robust.sh
 ipo-out.json
 run-ipo.sh
+trace-out.json
+run-trace.sh

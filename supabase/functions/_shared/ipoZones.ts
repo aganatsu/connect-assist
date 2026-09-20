@@ -36,6 +36,7 @@ import {
   calculateATR,
   detectFVGs,
   detectLiquidityPools,
+  detectSwingPoints,
   type Candle,
   type FairValueGap,
   type LiquidityPool,
@@ -47,7 +48,41 @@ export type IPOStatus =
   | "UNARMED_FOR_RETEST"
   | "ACTIVE" | "TESTED" | "BROKEN" | "FLIPPED";
 
+/** No reason is currently emitted — see consolidationInterpretation. */
 export type IPORejectionReason = "INSIDE_CONSOLIDATION";
+
+/**
+ * The teaching rule "an IPO cannot be inside consolidation" remains part of the
+ * target model. The IMPLEMENTATION of it is retired.
+ *
+ * The predicate was "any buy-side pool above and any sell-side pool below",
+ * which produced ranges of 5.35, 12.56 and 13.18 ATR with ZERO alternating
+ * boundary interactions, and on GBP/CAD 2026-05-08 both boundaries had zero
+ * touches inside the window — levels price was not interacting with at all.
+ * That is not a width mis-setting; it is not a range by any setting.
+ *
+ * Until a defensible local-range definition exists, consolidation is measured
+ * and reported but VETOES NOTHING. Affected candidates are therefore
+ * structurally and candle-valid with consolidation UNRESOLVED — neither
+ * confirmed IPOs nor rejected ones.
+ */
+export type ConsolidationInterpretation = "UNRESOLVED";
+
+/**
+ * PASS and FAIL exist for when a defensible local-range definition arrives.
+ * Today the value is always UNRESOLVED: with the predicate retired we can
+ * assert neither that a candidate IS in consolidation nor that it is NOT.
+ */
+export type ConsolidationStatus = "PASS" | "FAIL" | "UNRESOLVED";
+
+/**
+ * CANDIDATE_ACCEPTED means no open question was raised — NOT that the candidate
+ * was proven clear of consolidation. CANDIDATE_UNRESOLVED means the retired
+ * heuristic flagged something, so the candidate is neither confirmed nor
+ * invalid and must be reported separately. Folding the two together would turn
+ * the scorecard into "5/10 detected", which the evidence does not support.
+ */
+export type IPOResearchStatus = "CANDIDATE_ACCEPTED" | "CANDIDATE_UNRESOLVED" | "CANDIDATE_REJECTED";
 
 export interface IPOGeometry {
   /** Edge price meets first: HIGH for demand, LOW for supply. */
@@ -146,6 +181,15 @@ export interface IPOZone {
    */
   valid: boolean;
   rejectionReason: IPORejectionReason | null;
+  /**
+   * Always "UNRESOLVED". The descriptive consolidation profile is retained and
+   * reported; it simply does not decide validity.
+   */
+  consolidationInterpretation: ConsolidationInterpretation;
+  consolidationStatus: ConsolidationStatus;
+  /** Output of the RETIRED predicate. Kept as a marker of an open question, never as a verdict. */
+  consolidationFlagRaised: boolean;
+  researchStatus: IPOResearchStatus;
 }
 
 export const DEFAULTS = {
@@ -491,6 +535,8 @@ export interface DetectIPOOptions {
   maxLookback?: number;
   liquidityWindow?: number;
   lifecycleHorizon?: number;
+  /** Caps the RETURNED detail rows only. Never affects any statistic. */
+  detailCap?: number;
   /** null (default) = unbounded. Pass 50 only to mirror live shadow behaviour. */
   maxEventAgeBars?: number | null;
 }
@@ -503,10 +549,14 @@ export interface DetectIPOOptions {
  * single opposite-coloured candle before that move is the IPO.
  */
 export interface IPOCandidates {
-  /** Passed every rule. These are the detections. */
+  /** Structurally and candle-valid. Split further by researchStatus. */
   valid: IPOZone[];
-  /** Found structurally, then refused by interpretation. NEVER a detection. */
+  /** Refused outright. Currently always empty — the consolidation veto is retired. */
   rejected: IPOZone[];
+  /** No open question raised. */
+  accepted: IPOZone[];
+  /** The retired heuristic flagged consolidation: neither confirmed nor invalid. */
+  unresolved: IPOZone[];
 }
 
 /**
@@ -521,7 +571,12 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
 /** Valid and rejected candidates, kept separate. */
 export function detectIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOCandidates {
   const all = detectAllIPOCandidates(candles, opts);
-  return { valid: all.filter((z) => z.valid), rejected: all.filter((z) => !z.valid) };
+  const valid = all.filter((z) => z.valid);
+  return {
+    valid, rejected: all.filter((z) => !z.valid),
+    accepted: valid.filter((z) => z.researchStatus === "CANDIDATE_ACCEPTED"),
+    unresolved: valid.filter((z) => z.researchStatus === "CANDIDATE_UNRESOLVED"),
+  };
 }
 
 function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOZone[] {
@@ -641,11 +696,11 @@ function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}):
       .sort((x, y) => x.absIndex - y.absIndex);
     const fvg = nearFvgs[0] ?? null;
 
-    // An IPO formed inside consolidation is not a valid IPO. It is still built
-    // and returned as REJECTED so the evidence survives.
+    // Consolidation is MEASURED but does not veto. The previous predicate was
+    // semantically invalid, so enforcing it discarded structurally sound
+    // candidates on evidence that did not support the conclusion.
     const con = assessConsolidation(candles, i);
-    const rejectionReason: IPORejectionReason | null =
-      con.insideConsolidation ? "INSIDE_CONSOLIDATION" : null;
+    const rejectionReason: IPORejectionReason | null = null;
 
     zones.push({
       id: `${symbol}|${timeframe}|${direction}|${c.datetime}`,
@@ -695,6 +750,10 @@ function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}):
       atrAtCandle: Math.round(a * 1e5) / 1e5,
       valid: rejectionReason === null,
       rejectionReason,
+      consolidationInterpretation: "UNRESOLVED",
+      consolidationStatus: "UNRESOLVED",
+      consolidationFlagRaised: con.insideConsolidation,
+      researchStatus: con.insideConsolidation ? "CANDIDATE_UNRESOLVED" : "CANDIDATE_ACCEPTED",
     });
   }
   return zones;
@@ -1008,5 +1067,369 @@ export function analyzeLocalConsolidation(candles: Candle[], i: number, lookback
     recentBodyOverlapPercent: win.length > 1 ? r2((bodyOverlaps / (win.length - 1)) * 100) : null,
     ipoInsideLocalRange: hi !== null && lo !== null ? (c.high <= hi && c.low >= lo) : null,
     currentPredicateWouldReject: hi !== null && lo !== null,
+  };
+}
+
+// ─── departure-origin hypotheses (read-only research) ────────────────────────
+//
+// The current origin — the absolute extreme between the broken swing and the
+// break bar — is retired from research. Phase A showed all five known misses
+// share one cause: that origin drifts with the AGE OF THE SWING EVENTUALLY
+// BROKEN rather than tracking where the move launched. On BTC 2020-05-11 the
+// broken swing dates to 2020-02-24, so the "lowest low in the span" is the
+// March crash low, 59 bars from the candle wanted. Four of five origins landed
+// BEHIND the known candle, which a backward walk can never recover from.
+//
+// Crucially, selectIPOCandle() itself is sound: all five known candles are
+// selectable given an appropriate origin. So nothing about the selector, the
+// intervening budget or the lookback is touched here. Only the anchor changes.
+//
+// Hypotheses measured, never applied:
+//   ABSOLUTE_EXTREME  the failed baseline, kept for comparison
+//   INTERNAL_SWING    most recent causally-confirmed opposing internal swing
+//   EXTERNAL_SWING    the same at external significance
+//
+// The pivot bar is NOT assumed to be the IPO. AUD/USD 2026-03-19 sits AFTER the
+// local extreme, so each anchor is tested from pivot, +1, +2 and +3. That is a
+// diagnostic sweep of launch positions, not a proposed +3 rule.
+
+export type OriginAnchorType = "ABSOLUTE_EXTREME" | "INTERNAL_SWING" | "EXTERNAL_SWING";
+
+const INTERNAL_LOOKBACK = 3;
+const EXTERNAL_LOOKBACK = 7;
+
+export interface ConfirmedSwing {
+  index: number; price: number; type: string; confirmedAt: number;
+}
+
+/**
+ * Causally-confirmed swings, as TWO INDEPENDENT MEMBERSHIPS.
+ *
+ * The first version promoted any pivot also found by the external detector to
+ * significance "external", which REMOVED it from the internal set. That made
+ * the two hypotheses non-comparable: a pivot both scales agree on vanished
+ * from INTERNAL, and genuine convergence looked like the internal anchor
+ * finding nothing.
+ *
+ * The same pivot may legitimately belong to both sets, confirmed at different
+ * times: index + 3 as an internal swing, index + 7 as an external one. The
+ * canonical engine's own merge behaviour is not changed — this is the research
+ * view, and it needs both scales intact to compare them.
+ */
+export function confirmedSwings(candles: Candle[]): {
+  internal: ConfirmedSwing[]; external: ConfirmedSwing[];
+} {
+  const hasATR = candles.length >= 15;
+  return {
+    internal: detectSwingPoints(candles, INTERNAL_LOOKBACK, hasATR ? 0.2 : 0)
+      .map((s) => ({ index: s.index, price: s.price, type: s.type,
+                     confirmedAt: s.index + INTERNAL_LOOKBACK })),
+    external: detectSwingPoints(candles, EXTERNAL_LOOKBACK, hasATR ? 0.5 : 0)
+      .map((s) => ({ index: s.index, price: s.price, type: s.type,
+                     confirmedAt: s.index + EXTERNAL_LOOKBACK })),
+  };
+}
+
+/**
+ * One representative ledger break per (bar, direction), using the SAME rule the
+ * IPO detector applies: external preferred, then the most extreme level in the
+ * break direction. Several levels closing through on one candle is a single
+ * market event; counting each as independent overweights those bars.
+ */
+export function uniqueBreakEvents(ledger: any[]): any[] {
+  const keep = new Map<string, any>();
+  for (const l of ledger) {
+    const k = `${l.index}|${l.direction}`;
+    const cur = keep.get(k);
+    if (!cur) { keep.set(k, l); continue; }
+    const better = (l.significance === "external" && cur.significance !== "external") ||
+      (l.significance === cur.significance &&
+        (l.direction === "bullish" ? l.level > cur.level : l.level < cur.level));
+    if (better) keep.set(k, l);
+  }
+  return [...keep.values()].sort((a, b) => a.index - b.index);
+}
+
+export function traceDepartureOriginHypotheses(
+  candles: Candle[],
+  knownDate: string,
+  direction: IPODirection,
+  opts: DetectIPOOptions = {},
+) {
+  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
+  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+  const wantDir = direction === "demand" ? "bullish" : "bearish";
+  const opposingType = wantDir === "bullish" ? "low" : "high";
+  const g = ipoGeometry(candles[ki], direction);
+  const demand = direction === "demand";
+
+  const canon = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+    maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
+  });
+  const swings = confirmedSwings(candles);
+  // EVERY compatible break is evaluated. Capping the loop at 8 made the verdict
+  // depend on which breaks happened to come first, and BTC known candles have
+  // 195-228 compatible breaks — a cap there could report "not recovered" for a
+  // candle recovered by break #50. Only the RETURNED detail is capped, after all
+  // statistics are computed, so a display limit can never move the conclusion.
+  const breaks = uniqueBreakEvents(
+    (canon.swingLevelBreaks as any[]).filter((l) => l.direction === wantDir && l.index > ki),
+  );
+  const detailCap = Number(opts.detailCap ?? 24);
+
+  const results: any[] = [];
+  for (const lb of breaks) {
+    const j = lb.index;
+
+    // A — the retired baseline
+    const swingIdx = lb.swingIndex ?? Math.max(0, j - 10);
+    let absIdx = swingIdx;
+    for (let k = swingIdx; k <= j; k++) {
+      if (!candles[k]) continue;
+      if (wantDir === "bullish" ? candles[k].low <= candles[absIdx].low
+                                : candles[k].high >= candles[absIdx].high) absIdx = k;
+    }
+    // B / C — most recent causally-confirmed opposing swing before the break
+    const usable = (arr: ConfirmedSwing[]) =>
+      arr.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j)
+        .sort((a, b) => b.index - a.index)[0] ?? null;
+    const internalAnchor = usable(swings.internal);
+    const externalAnchor = usable(swings.external);
+
+    const anchors: Array<{ type: OriginAnchorType; idx: number | null; sig: string | null; confirmedAt: number | null }> = [
+      { type: "ABSOLUTE_EXTREME", idx: absIdx, sig: null, confirmedAt: null },
+      { type: "INTERNAL_SWING", idx: internalAnchor?.index ?? null, sig: "internal", confirmedAt: internalAnchor?.confirmedAt ?? null },
+      { type: "EXTERNAL_SWING", idx: externalAnchor?.index ?? null, sig: "external", confirmedAt: externalAnchor?.confirmedAt ?? null },
+    ];
+
+    for (const an of anchors) {
+      if (an.idx === null) {
+        results.push({ breakIndex: j, breakDate: String(lb.datetime).slice(0, 10),
+          anchorType: an.type, anchorIndex: null, note: "no such anchor before the break" });
+        continue;
+      }
+      for (const off of [0, 1, 2, 3]) {
+        const launch = an.idx + off;
+        if (launch >= j || launch >= candles.length) continue;
+        // selectIPOCandle is used UNMODIFIED — only the launch position varies.
+        const sel = selectIPOCandle(candles, launch, direction, {
+          maxIntervening: opts.maxIntervening,
+          interveningMaxRangeAtr: opts.interveningMaxRangeAtr,
+          maxLookback: opts.maxLookback,
+        });
+        const picked = sel?.index ?? null;
+        // Did the IPO's extent survive to the break, and did price actually
+        // depart through the correct side first?
+        let extentHeld = true, departed = false;
+        if (picked !== null) {
+          const pg = ipoGeometry(candles[picked], direction);
+          for (let k = picked + 1; k <= j; k++) {
+            const b = candles[k];
+            if (demand ? b.close < pg.extent : b.close > pg.extent) { extentHeld = false; break; }
+            if (demand ? b.low > pg.zoneHigh : b.high < pg.zoneLow) departed = true;
+          }
+        }
+        results.push({
+          breakIndex: j, breakDate: String(lb.datetime).slice(0, 10),
+          breakSignificance: lb.significance,
+          anchorType: an.type, anchorIndex: an.idx,
+          anchorDate: candles[an.idx].datetime.slice(0, 10),
+          anchorSignificance: an.sig,
+          anchorConfirmedDate: an.confirmedAt !== null && candles[an.confirmedAt]
+            ? candles[an.confirmedAt].datetime.slice(0, 10) : null,
+          anchorToKnownBars: an.idx - ki,
+          launchOffset: off, launchIndex: launch,
+          launchDate: candles[launch].datetime.slice(0, 10),
+          selectedIndex: picked,
+          selectedDate: picked === null ? null : candles[picked].datetime.slice(0, 10),
+          matchesKnown: picked === ki,
+          interveningCount: sel?.interveningSkipped ?? null,
+          interveningRangeAtr: (sel?.intervening ?? []).map((x) => x.rangeAtr),
+          barsSelectedToBreak: picked === null ? null : j - picked,
+          ipoExtentSurvivedToBreak: picked === null ? null : extentHeld,
+          departedThroughCorrectSideBeforeBreak: picked === null ? null : departed,
+        });
+      }
+    }
+  }
+
+  const hits = results.filter((r) => r.matchesKnown);
+  const misses = results.filter((r) => r.selectedIndex !== null && !r.matchesKnown);
+  const byType = (t: OriginAnchorType) => hits.filter((h) => h.anchorType === t).length;
+  const intPick = new Set(results.filter((r) => r.anchorType === "INTERNAL_SWING" && r.selectedDate).map((r) => r.selectedDate));
+  const extPick = new Set(results.filter((r) => r.anchorType === "EXTERNAL_SWING" && r.selectedDate).map((r) => r.selectedDate));
+  const converge = [...intPick].filter((d) => extPick.has(d));
+
+  // RECOVERED vs UNIQUELY RECOVERED. "The known candle was selected" and "the
+  // known candle was the ONLY candle selected" are very different evidence.
+  // A hypothesis set that recovers the target alongside four competitors has
+  // widened the search window rather than found the origin.
+  const knownDateStr = candles[ki].datetime.slice(0, 10);
+  const allSelected = [...new Set(results.filter((r) => r.selectedDate).map((r) => r.selectedDate as string))];
+  const competitors = allSelected.filter((d) => d !== knownDateStr);
+  const recoveredBy = hits.map((h) => `${h.anchorType}+${h.launchOffset}`);
+
+  return {
+    knownDate, direction,
+    knownCandle: { index: ki, datetime: candles[ki].datetime, geometry: g },
+    directionalBreaksTotal: breaks.length,
+    detailedBreaksReturned: Math.min(breaks.length, detailCap),
+    // Detail only. Every statistic below is computed over ALL breaks.
+    results: results.filter((r) => breaks.findIndex((b) => b.index === r.breakIndex) < detailCap),
+    recovery: {
+      knownRecovered: hits.length > 0,
+      knownUniquelyRecovered: hits.length > 0 && competitors.length === 0,
+      recoveredBy,
+      uniqueCandlesSelectedTotal: allSelected.length,
+      competingCandles: competitors,
+      summary: hits.length === 0
+        ? `known candle NOT recovered; ${allSelected.length} other candle(s) selected`
+        : competitors.length === 0
+          ? `known recovered by ${recoveredBy.join(", ")}; 1 unique candle total`
+          : `known recovered by ${recoveredBy.join(", ")}, but ${competitors.length} other candle(s) also qualify`,
+    },
+    multiplicity: {
+      hypothesesSelectingKnownCandle: hits.length,
+      hypothesesSelectingAnotherCandle: misses.length,
+      hitsByAnchorType: {
+        ABSOLUTE_EXTREME: byType("ABSOLUTE_EXTREME"),
+        INTERNAL_SWING: byType("INTERNAL_SWING"),
+        EXTERNAL_SWING: byType("EXTERNAL_SWING"),
+      },
+      distinctCandlesSelected: new Set(results.filter((r) => r.selectedDate).map((r) => r.selectedDate)).size,
+      internalExternalConverge: converge.length > 0,
+      convergedOnKnown: converge.includes(candles[ki].datetime.slice(0, 10)),
+    },
+  };
+}
+
+/** Background ambiguity: how noisy is each anchor across a whole series? */
+export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOptions = {}) {
+  const canon = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+    maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
+  });
+  const swings = confirmedSwings(candles);
+  const ledgerAll = canon.swingLevelBreaks as any[];
+  // Statistics run on UNIQUE (bar, direction) events, not raw ledger levels.
+  // Several levels closing through on one candle is one market event; counting
+  // each separately overweights those bars in every ratio below.
+  const events = uniqueBreakEvents(ledgerAll);
+  const stats: Record<string, { origins: number; ipos: number; multi: number }> = {
+    ABSOLUTE_EXTREME: { origins: 0, ipos: 0, multi: 0 },
+    INTERNAL_SWING: { origins: 0, ipos: 0, multi: 0 },
+    EXTERNAL_SWING: { origins: 0, ipos: 0, multi: 0 },
+  };
+  let agree = 0, comparable = 0, breaks = 0;
+  const uniquePerBreak: number[] = [];
+  let zeroUnique = 0, oneUnique = 0, manyUnique = 0, convergedBreaks = 0, tripleConverged = 0;
+
+  const seen = new Map<string, Set<string>>();
+  for (const lb of events) {
+    breaks++;
+    const j = lb.index;
+    const dir: IPODirection = lb.direction === "bullish" ? "demand" : "supply";
+    const opposingType = lb.direction === "bullish" ? "low" : "high";
+    const swingIdx = lb.swingIndex ?? Math.max(0, j - 10);
+    let absIdx = swingIdx;
+    for (let k = swingIdx; k <= j; k++) {
+      if (!candles[k]) continue;
+      if (lb.direction === "bullish" ? candles[k].low <= candles[absIdx].low
+                                     : candles[k].high >= candles[absIdx].high) absIdx = k;
+    }
+    const usable = (arr: ConfirmedSwing[]) =>
+      arr.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j)
+        .sort((a, b) => b.index - a.index)[0] ?? null;
+    const iA = usable(swings.internal);
+    const eA = usable(swings.external);
+
+    const pickFor = (idx: number | null) => {
+      if (idx === null) return new Set<string>();
+      const out = new Set<string>();
+      for (const off of [0, 1, 2, 3]) {
+        const launch = idx + off;
+        if (launch >= j) continue;
+        // Caller overrides must reach the selector here as well; hardcoding {}
+        // would silently measure default behaviour while reporting the caller's.
+        const sel = selectIPOCandle(candles, launch, dir, {
+          maxIntervening: opts.maxIntervening,
+          interveningMaxRangeAtr: opts.interveningMaxRangeAtr,
+          maxLookback: opts.maxLookback,
+        });
+        if (sel) out.add(candles[sel.index].datetime.slice(0, 10));
+      }
+      return out;
+    };
+    const picks: Record<string, Set<string>> = {
+      ABSOLUTE_EXTREME: pickFor(absIdx),
+      INTERNAL_SWING: pickFor(iA?.index ?? null),
+      EXTERNAL_SWING: pickFor(eA?.index ?? null),
+    };
+    // Dedupe ACROSS hypotheses and offsets for this break. Three hypotheses
+    // landing on one candle is far less ambiguous than three landing on three,
+    // and counting raw selections would hide that distinction entirely.
+    const union = new Set<string>([...picks.ABSOLUTE_EXTREME, ...picks.INTERNAL_SWING, ...picks.EXTERNAL_SWING]);
+    uniquePerBreak.push(union.size);
+    if (union.size === 0) zeroUnique++;
+    else if (union.size === 1) oneUnique++;
+    else manyUnique++;
+    // Convergence: how many distinct hypotheses picked the single most-agreed candle.
+    const tally = new Map<string, number>();
+    for (const set of [picks.ABSOLUTE_EXTREME, picks.INTERNAL_SWING, picks.EXTERNAL_SWING]) {
+      for (const dte of set) tally.set(dte, (tally.get(dte) ?? 0) + 1);
+    }
+    const topAgreement = tally.size ? Math.max(...tally.values()) : 0;
+    if (topAgreement >= 2) convergedBreaks++;
+    if (topAgreement >= 3) tripleConverged++;
+    for (const [k, v] of Object.entries(picks)) {
+      if (v.size > 0) stats[k].origins++;
+      stats[k].ipos += v.size;
+      if (v.size > 1) stats[k].multi++;
+      const bag = seen.get(k) ?? new Set<string>();
+      v.forEach((x) => bag.add(x));
+      seen.set(k, bag);
+    }
+    if (picks.INTERNAL_SWING.size && picks.EXTERNAL_SWING.size) {
+      comparable++;
+      if ([...picks.INTERNAL_SWING].some((x) => picks.EXTERNAL_SWING.has(x))) agree++;
+    }
+  }
+  const per100 = (n: number) => Math.round((n / candles.length) * 1000) / 10;
+  return {
+    bars: candles.length,
+    ledgerLevelBreaks: ledgerAll.length,
+    uniqueBreakEvents: events.length,
+    /** Denominator for every ratio below. */
+    breaksUsedAsDenominator: breaks,
+    byAnchor: Object.fromEntries(Object.entries(stats).map(([k, v]) => [k, {
+      originsProducingAnIPO: v.origins,
+      originsPer100Bars: per100(v.origins),
+      distinctIPOCandidates: seen.get(k)?.size ?? 0,
+      ipoCandidatesPer100Bars: per100(seen.get(k)?.size ?? 0),
+      breaksWithMultipleCompetingIPOs: v.multi,
+      percentBreaksWithMultipleIPOs: v.origins ? Math.round((v.multi / v.origins) * 1000) / 10 : 0,
+    }])),
+    internalExternalComparable: comparable,
+    internalExternalAgree: agree,
+    percentInternalExternalAgree: comparable ? Math.round((agree / comparable) * 1000) / 10 : null,
+    // The measurement that decides whether an anchor is a solution or a wider net.
+    uniqueCandidatesPerBreak: (() => {
+      const sorted = [...uniquePerBreak].sort((a, b) => a - b);
+      const pct = (n: number) => breaks ? Math.round((n / breaks) * 1000) / 10 : 0;
+      return {
+        breaksWithZeroUnique: zeroUnique, percentZero: pct(zeroUnique),
+        breaksWithExactlyOneUnique: oneUnique, percentExactlyOne: pct(oneUnique),
+        breaksWithMoreThanOneUnique: manyUnique, percentMoreThanOne: pct(manyUnique),
+        medianUniquePerBreak: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
+        maxUniquePerBreak: sorted.length ? sorted[sorted.length - 1] : null,
+      };
+    })(),
+    hypothesisConvergence: {
+      breaksWhereTwoOrMoreHypothesesAgree: convergedBreaks,
+      percentTwoOrMoreAgree: breaks ? Math.round((convergedBreaks / breaks) * 1000) / 10 : 0,
+      breaksWhereAllThreeAgree: tripleConverged,
+      percentAllThreeAgree: breaks ? Math.round((tripleConverged / breaks) * 1000) / 10 : 0,
+    },
   };
 }
