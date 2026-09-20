@@ -41,6 +41,7 @@ import {
   type FairValueGap,
   type LiquidityPool,
 } from "./smcAnalysis.ts";
+import { EVIDENCE_SOURCES, type EvidenceSource } from "./ipoProvenance.ts";
 
 export type IPODirection = "demand" | "supply";
 export type IPOStatus =
@@ -1854,4 +1855,806 @@ export function buildIPOHierarchy(
     previous = current;
   });
   return nodes;
+}
+
+// ─── A. multi-IPO inventory ──────────────────────────────────────────────────
+//
+// THIS LAYER DOES NOT CHOOSE. Every IPO candidate is returned as an independent
+// zone with its own confirmation, lifecycle, context and lineage. Two zones
+// existing at once is the normal case, not a contradiction to be resolved — the
+// teaching is explicit that several IPOs coexist on a chart.
+//
+// So there is no winner, no ranking and no rejection-by-competition here. A
+// zone is never called a false positive for coexisting with another, and no
+// discriminator is applied: the selector rules are exactly the ones already
+// frozen, and this file adds none.
+//
+// What the inventory adds over detectIPOCandidates is per-zone CONTEXT the
+// earlier diagnostics only computed for known boxes: each zone's own first
+// relevant confirmation and its ordering, its place in a refinement chain, and
+// the provenance of the rules that produced it.
+
+export type ConfirmationOrdering =
+  | "DEPARTURE_BEFORE_BREAK"
+  | "SAME_BAR_UNVERIFIABLE"
+  | "NO_CONFIRMATION";
+
+export interface IPOInventoryLineage {
+  timeframe: string;
+  refinementDepth: number;
+  parentIPOId: string | null;
+  parentTimeframe: string | null;
+  possibleParentIPOIds: string[];
+  lineageAmbiguous: boolean;
+  lineageResolvedBy: LineageResolution;
+  childIds: string[];
+  possibleChildIds: string[];
+  role: IPORole;
+  /**
+   * True for a zone below the top level that no HTF zone contains. It is a
+   * perfectly good IPO at its own timeframe — it is simply not a refinement of
+   * anything in this chain. buildIPOHierarchy drops these; an inventory must
+   * not, or the count becomes a function of which timeframes were requested.
+   */
+  standalone: boolean;
+  /**
+   * False when this zone HAS a parent but the parent fell outside the returned
+   * date range. Lineage is resolved over the whole series, so without this a
+   * reader sees a child holding a parent id with no parent present, and the
+   * role counts read as broken rather than clipped.
+   */
+  parentInView: boolean;
+  /**
+   * How old the parent is at the moment the child forms. MEASUREMENT ONLY —
+   * nothing filters on it and no cap exists.
+   *
+   * It is here because the first live run parented a 2026-05-06 daily zone to a
+   * 2015-11-30 weekly zone. Containment and the time rule both hold, so the
+   * rules accept it, but an eleven-year-old parent is worth being able to SEE
+   * before anyone decides whether it should be allowed. Adding a limit would be
+   * a new discriminator, so the gap is reported and left alone.
+   *
+   * parentAgeBars counts bars of the PARENT's own timeframe between the two
+   * candles; comparing raw indices across timeframes would be meaningless.
+   */
+  parentAgeDays: number | null;
+  parentAgeBars: number | null;
+}
+
+export interface IPOInventoryEntry {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  direction: IPODirection;
+  candleIndex: number;
+  candleDatetime: string;
+  candle: { open: number; high: number; low: number; close: number };
+  geometry: IPOGeometry;
+  confirmation: {
+    ordering: ConfirmationOrdering;
+    /** The zone's OWN first relevant confirmation, recomputed from its candle. */
+    firstRelevant: FirstRelevantConfirmation;
+    /** The break the detector originally attached the zone to, for comparison. */
+    detectorBreak: IPOZone["structure"];
+  };
+  liquidity: IPOZone["liquidity"];
+  departureFvg: IPOZone["departureFvg"];
+  consolidation: {
+    status: ConsolidationStatus;
+    interpretation: ConsolidationInterpretation;
+    flagRaised: boolean;
+    profile: IPOZone["consolidation"];
+    note: string;
+  };
+  lifecycle: IPOZone["lifecycle"];
+  lineage: IPOInventoryLineage;
+  selection: IPOZone["selection"];
+  atrAtCandle: number;
+  /** Detector-level validity. Today nothing sets this false — see consolidation. */
+  valid: boolean;
+  researchStatus: IPOResearchStatus;
+  coexistenceNote: string;
+}
+
+export interface BuildIPOInventoryOptions extends BuildIPOHierarchyOptions {
+  /** Inclusive ISO date bounds on the RETURNED zones. */
+  from?: string;
+  to?: string;
+}
+
+const COEXISTENCE_NOTE =
+  "An independent zone. Coexisting with other IPOs is expected and is not evidence against any of them.";
+
+const CONSOLIDATION_NOTE =
+  "UNRESOLVED. The taught rule (no IPO inside consolidation) stands; the predicate " +
+  "for it was retired as indefensible, so this zone is neither cleared of " +
+  "consolidation nor refused by it.";
+
+/**
+ * Every IPO candidate across one or more timeframes, as independent zones.
+ *
+ * Levels are ordered highest timeframe first. Lineage is resolved against the
+ * level above using resolveParentLineage, which leaves ambiguous parentage
+ * ambiguous rather than picking by array order.
+ *
+ * DATE RANGE. from/to filter only what is RETURNED. Detection always runs on
+ * the full series, because a zone's structure break, lifecycle and ATR all need
+ * the bars around it; trimming the input first would silently change the zones
+ * themselves rather than the view of them.
+ */
+export function buildIPOInventory(
+  levels: Array<{ timeframe: string; candles: Candle[] }>,
+  opts: BuildIPOInventoryOptions = {},
+): IPOInventoryEntry[] {
+  const out: IPOInventoryEntry[] = [];
+  let previous: IPOHierarchyNode[] = [];
+
+  levels.forEach((lvl, depth) => {
+    const detected = detectIPOCandidates(lvl.candles, { ...opts, timeframe: lvl.timeframe });
+    // Rejected candidates are included: today nothing rejects, and if something
+    // ever does, an inventory that hides it would make an interpretation
+    // failure look like a detection failure.
+    const zones = [...detected.valid, ...detected.rejected]
+      .sort((a, b) => a.candleIndex - b.candleIndex);
+
+    const canon = analyzeMarketStructureCanonical(lvl.candles, {
+      policy: "latest_unbroken_structural",
+      maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
+    });
+    const ledger = (canon as any).swingLevelBreaks as any[];
+
+    const levelNodes: IPOHierarchyNode[] = [];
+    const levelEntries: IPOInventoryEntry[] = [];
+
+    for (const z of zones) {
+      const lin = depth === 0
+        ? {
+          parentIPOId: null, possibleParentIPOIds: [] as string[],
+          lineageAmbiguous: false, lineageResolvedBy: "ROOT" as LineageResolution,
+        }
+        : resolveParentLineage(z, previous, opts.parentContextId);
+
+      const node: IPOHierarchyNode = {
+        id: z.id, timeframe: lvl.timeframe, direction: z.direction,
+        candleDatetime: z.candleDatetime, geometry: z.geometry,
+        parentIPOId: lin.parentIPOId,
+        parentTimeframe: lin.parentIPOId
+          ? previous.find((p) => p.id === lin.parentIPOId)?.timeframe ?? null
+          : null,
+        possibleParentIPOIds: lin.possibleParentIPOIds,
+        lineageAmbiguous: lin.lineageAmbiguous,
+        lineageResolvedBy: lin.lineageResolvedBy,
+        childTimeframe: null,
+        refinementDepth: depth,
+        role: "EXECUTION",
+        containedWithinParent: lin.possibleParentIPOIds.length > 0,
+        childIds: [],
+        possibleChildIds: [],
+      };
+      if (lin.parentIPOId) {
+        const parent = previous.find((p) => p.id === lin.parentIPOId)!;
+        parent.childIds.push(node.id);
+        parent.childTimeframe = lvl.timeframe;
+        parent.role = "CONTEXT";
+      } else {
+        for (const pid of lin.possibleParentIPOIds) {
+          previous.find((p) => p.id === pid)?.possibleChildIds.push(node.id);
+        }
+      }
+      levelNodes.push(node);
+
+      const firstRelevant = findFirstRelevantConfirmation(lvl.candles, z.candleIndex, z.direction, ledger);
+      levelEntries.push({
+        id: z.id, symbol: z.symbol, timeframe: lvl.timeframe, direction: z.direction,
+        candleIndex: z.candleIndex, candleDatetime: z.candleDatetime, candle: z.candle,
+        geometry: z.geometry,
+        confirmation: {
+          ordering: firstRelevant.departureBreakOrdering ?? "NO_CONFIRMATION",
+          firstRelevant,
+          detectorBreak: z.structure,
+        },
+        liquidity: z.liquidity,
+        departureFvg: z.departureFvg,
+        consolidation: {
+          status: z.consolidationStatus,
+          interpretation: z.consolidationInterpretation,
+          flagRaised: z.consolidationFlagRaised,
+          profile: z.consolidation,
+          note: CONSOLIDATION_NOTE,
+        },
+        lifecycle: z.lifecycle,
+        lineage: {
+          timeframe: lvl.timeframe, refinementDepth: depth,
+          parentIPOId: node.parentIPOId, parentTimeframe: node.parentTimeframe,
+          possibleParentIPOIds: node.possibleParentIPOIds,
+          lineageAmbiguous: node.lineageAmbiguous,
+          lineageResolvedBy: node.lineageResolvedBy,
+          childIds: node.childIds, possibleChildIds: node.possibleChildIds,
+          role: node.role,
+          standalone: depth > 0 && node.possibleParentIPOIds.length === 0,
+          parentInView: true,          // set for real after the range filter
+          parentAgeDays: null,         // both filled once every level is resolved
+          parentAgeBars: null,
+        },
+        selection: z.selection,
+        atrAtCandle: z.atrAtCandle,
+        valid: z.valid,
+        researchStatus: z.researchStatus,
+        coexistenceNote: COEXISTENCE_NOTE,
+      });
+    }
+
+    out.push(...levelEntries);
+    previous = levelNodes;
+  });
+
+  // Child lists and roles are only knowable once every level has been resolved,
+  // so they are derived here from the finished set rather than patched onto
+  // parents as children appear.
+  const nodeById = new Map(out.map((e) => [e.id, e]));
+  for (const e of out) {
+    const kids = out.filter((c) => c.lineage.parentIPOId === e.id);
+    e.lineage.childIds = kids.map((c) => c.id);
+    e.lineage.possibleChildIds = out
+      .filter((c) => c.lineage.parentIPOId === null && c.lineage.possibleParentIPOIds.includes(e.id))
+      .map((c) => c.id);
+    e.lineage.role = kids.length > 0 ? "CONTEXT" : "EXECUTION";
+    if (e.lineage.parentIPOId) {
+      const p = nodeById.get(e.lineage.parentIPOId) ?? null;
+      e.lineage.parentTimeframe = p?.timeframe ?? null;
+      if (p) {
+        const pt = Date.parse(p.candleDatetime), ct = Date.parse(e.candleDatetime);
+        e.lineage.parentAgeDays = Number.isNaN(pt) || Number.isNaN(ct)
+          ? null : Math.round(((ct - pt) / 86400000) * 10) / 10;
+        const parentLevel = levels.find((l) => l.timeframe === p.timeframe);
+        e.lineage.parentAgeBars = parentLevel
+          ? parentLevel.candles.filter((k) => k.datetime > p.candleDatetime && k.datetime <= e.candleDatetime).length
+          : null;
+      }
+    }
+  }
+
+  const from = opts.from ? opts.from.slice(0, 10) : null;
+  const to = opts.to ? opts.to.slice(0, 10) : null;
+  const shown = out.filter((e) => {
+    const d = e.candleDatetime.slice(0, 10);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  });
+  const visible = new Set(shown.map((e) => e.id));
+  for (const e of shown) {
+    e.lineage.parentInView = e.lineage.parentIPOId === null || visible.has(e.lineage.parentIPOId);
+  }
+  return shown;
+}
+
+/**
+ * Bars of each level that fall INSIDE the requested date range.
+ *
+ * Density must use the same window as the zones it counts. Dividing zones from
+ * a three-month slice by a fifteen-year bar count understates IPOs per 100 bars
+ * by two orders of magnitude, and the number still looks plausible — the first
+ * live run reported 0.6 per 100 bars for a slice whose real density was 1.4.
+ */
+export function inventoryViewBars(
+  levels: Array<{ timeframe: string; candles: Candle[] }>,
+  opts: { from?: string; to?: string } = {},
+): Record<string, number> {
+  const from = opts.from ? opts.from.slice(0, 10) : null;
+  const to = opts.to ? opts.to.slice(0, 10) : null;
+  const out: Record<string, number> = {};
+  for (const l of levels) {
+    out[l.timeframe] = l.candles.filter((c) => {
+      const d = c.datetime.slice(0, 10);
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    }).length;
+  }
+  return out;
+}
+
+/** Aggregate shape of an inventory. No precision term — see the note. */
+export function inventorySummary(
+  entries: IPOInventoryEntry[],
+  barsByTimeframe: Record<string, number>,
+) {
+  const n = entries.length;
+  const pct = (k: number) => (n ? Math.round((k / n) * 1000) / 10 : 0);
+  const ord = (o: ConfirmationOrdering) => entries.filter((e) => e.confirmation.ordering === o).length;
+  const totalBars = Object.values(barsByTimeframe).reduce((a, b) => a + b, 0);
+  const withParent = entries.filter((e) => e.lineage.parentIPOId !== null).length;
+  const ambiguous = entries.filter((e) => e.lineage.lineageAmbiguous).length;
+  return {
+    zones: n,
+    iposPer100Bars: totalBars ? Math.round((n / totalBars) * 1000) / 10 : null,
+    perTimeframe: Object.fromEntries(
+      Object.entries(barsByTimeframe).map(([tf, bars]) => {
+        const k = entries.filter((e) => e.timeframe === tf).length;
+        return [tf, { zones: k, bars, per100Bars: bars ? Math.round((k / bars) * 1000) / 10 : null }];
+      }),
+    ),
+    confirmation: {
+      strictConfirmedPct: pct(ord("DEPARTURE_BEFORE_BREAK")),
+      sameBarPct: pct(ord("SAME_BAR_UNVERIFIABLE")),
+      noConfirmationPct: pct(ord("NO_CONFIRMATION")),
+      counts: {
+        DEPARTURE_BEFORE_BREAK: ord("DEPARTURE_BEFORE_BREAK"),
+        SAME_BAR_UNVERIFIABLE: ord("SAME_BAR_UNVERIFIABLE"),
+        NO_CONFIRMATION: ord("NO_CONFIRMATION"),
+      },
+    },
+    lineage: {
+      withResolvedParent: withParent,
+      ambiguousParentage: ambiguous,
+    parentOutsideView: entries.filter((e) => !e.lineage.parentInView).length,
+      standalone: entries.filter((e) => e.lineage.standalone).length,
+      contextRole: entries.filter((e) => e.lineage.role === "CONTEXT").length,
+      executionRole: entries.filter((e) => e.lineage.role === "EXECUTION").length,
+    },
+    consolidation: {
+      UNRESOLVED: entries.filter((e) => e.consolidation.status === "UNRESOLVED").length,
+      note: CONSOLIDATION_NOTE,
+    },
+    note:
+      "No precision or false-positive rate is computed. An inventory zone that " +
+      "matches no demonstrated example is UNLABELLED, not wrong — nobody has " +
+      "said it is not an IPO.",
+  };
+}
+
+// ─── D. evaluation against demonstrated IPOs ─────────────────────────────────
+//
+// THE OLD SCORE IS RETIRED. "One correct IPO per break" treated the detector as
+// a classifier with exactly one right answer per event, so every extra zone was
+// a mistake by construction and the only way to improve was to suppress zones.
+// That is the opposite of the model: IPOs coexist.
+//
+// The question here is COVERAGE. Of the IPOs actually demonstrated, how many
+// does the inventory contain? Zones with no matching demonstration are
+// UNLABELLED — nobody has said they are not IPOs — so no precision, accuracy or
+// false-positive rate is computed anywhere in this file. Reporting one would
+// require negatives that do not exist.
+//
+// CORRELATED DEMONSTRATIONS. A Weekly -> Daily -> 4H refinement of one move is
+// a single demonstration shown at three scales, not three independent
+// confirmations. Counting it as three would let one well-chosen example inflate
+// the headline threefold, so the primary figure is computed per demonstration
+// GROUP and the per-example figure is reported beside it, never instead of it.
+
+export interface DemonstratedExample {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  direction: IPODirection;
+  /** Null when the exact bar could not be recovered from the demonstration. */
+  candleDatetime: string | null;
+  /** Zone bounds as drawn in the demonstration, when they were recoverable. */
+  demonstratedZoneLow?: number | null;
+  demonstratedZoneHigh?: number | null;
+  /** All rows sharing a group are ONE demonstration seen at several scales. */
+  exampleGroupId: string | null;
+  parentExampleId: string | null;
+  evidenceSource: EvidenceSource;
+}
+
+export type MatchState =
+  | "EXACT_CANDLE"
+  /**
+   * A screenshot gave only the calendar day, the timeframe is intraday, and
+   * exactly ONE direction-compatible zone exists on that day. Distinct from
+   * EXACT_CANDLE on purpose: the demonstration did not name the bar, we
+   * inferred it from there being no alternative. If a later corpus row pins the
+   * time and disagrees, this is the match that was wrong.
+   */
+  | "DATE_ONLY_SINGLE_MATCH"
+  /** Same, but several zones share the day. Which one was shown is unknown. */
+  | "DATE_ONLY_AMBIGUOUS"
+  | "SAME_BAR_OTHER_DIRECTION"
+  | "ABSENT"
+  | "UNDATED_EXAMPLE";
+export type GeometryMatch = "MATCH" | "MISMATCH" | "NOT_DEMONSTRATED";
+export type LineageMatch =
+  | "MATCHED"
+  | "MISMATCHED"
+  | "AMBIGUOUS_IN_INVENTORY"
+  | "PARENT_NOT_IN_INVENTORY"
+  | "NOT_DEMONSTRATED";
+
+export interface DemonstratedExampleResult {
+  exampleId: string;
+  symbol: string;
+  timeframe: string;
+  direction: IPODirection;
+  candleDatetime: string | null;
+  exampleGroupId: string | null;
+  evidenceSource: EvidenceSource;
+  presentInInventory: boolean;
+  matchState: MatchState;
+  matchedZoneId: string | null;
+  /** Populated for DATE_ONLY_AMBIGUOUS: the zones that share the day. */
+  candidateZoneIds: string[];
+  geometryMatch: GeometryMatch;
+  geometryDetail: { expected: [number, number] | null; actual: [number, number] | null; toleranceAtr: number | null };
+  confirmationState: ConfirmationOrdering | null;
+  lifecycleState: IPOStatus | null;
+  lineageMatch: LineageMatch;
+  lineageDetail: { demonstratedParentExampleId: string | null; inventoryParentId: string | null; possibleParents: string[] };
+}
+
+/**
+ * How many minutes one bar of this timeframe spans, or null if unrecognised.
+ * Accepts the forms this project actually passes around: 1d, 1day, 1week, 4h,
+ * 15min, 1h, 30m.
+ */
+export function timeframeMinutes(tf: string): number | null {
+  const m = String(tf).trim().toLowerCase().match(/^(\d+)\s*(min|mins|minute|minutes|m|h|hr|hour|hours|d|day|days|w|week|weeks|mo|month|months)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2];
+  if (/^(min|mins|minute|minutes|m)$/.test(unit)) return n;
+  if (/^(h|hr|hour|hours)$/.test(unit)) return n * 60;
+  if (/^(d|day|days)$/.test(unit)) return n * 1440;
+  if (/^(w|week|weeks)$/.test(unit)) return n * 10080;
+  return n * 43200;
+}
+
+/** True for a timeframe whose bars are shorter than one day. */
+export function isIntradayTimeframe(tf: string): boolean {
+  const m = timeframeMinutes(tf);
+  return m === null || m < 1440;
+}
+
+/** True when a datetime carries no time component at all. */
+export function isDateOnly(dt: string): boolean {
+  return !/\d{2}:\d{2}/.test(String(dt));
+}
+
+/**
+ * Match key precision, chosen by timeframe.
+ *
+ * COLLAPSING TO A DATE IS WRONG INTRADAY. A 4H chart has six bars per calendar
+ * day and a 15m chart has ninety-six; keying on the date alone makes them all
+ * the same bar, so a demonstrated 04:00 IPO would match a 20:00 zone and report
+ * as covered. On daily and above the reverse risk applies — providers stamp
+ * daily bars 00:00:00, 00:00:00Z or 21:00:00 depending on the feed — so those
+ * keep date-only keys and stay robust to the stamp.
+ *
+ * Unrecognised timeframes get MINUTE precision: matching too strictly reports a
+ * miss, which is visible and correctable, whereas matching too loosely reports
+ * false coverage.
+ */
+export function barKey(datetime: string | null, timeframe: string): string | null {
+  if (!datetime) return null;
+  const norm = String(datetime).replace(" ", "T");
+  const mins = timeframeMinutes(timeframe);
+  const intraday = mins === null || mins < 1440;
+  return intraday ? norm.slice(0, 16) : norm.slice(0, 10);
+}
+
+/**
+ * Coverage of demonstrated IPOs by an inventory.
+ *
+ * Geometry is compared within a tolerance derived from the matched zone's own
+ * ATR, because a zone read off a video screenshot cannot be expected to agree
+ * to the tick. When the demonstration did not record bounds the result is
+ * NOT_DEMONSTRATED rather than a pass — an unrecorded value must not count as
+ * agreement.
+ */
+export function evaluateDemonstratedCoverage(
+  entries: IPOInventoryEntry[],
+  examples: DemonstratedExample[],
+  barsByTimeframe: Record<string, number> = {},
+  geometryToleranceAtr = 0.25,
+): {
+  demonstratedIPOCoverage: Record<string, unknown>;
+  reconstructedExamples: Record<string, unknown>;
+  secondary: Record<string, unknown>;
+  results: DemonstratedExampleResult[];
+  unlabelled: Record<string, unknown>;
+  note: string;
+} {
+  const byKey = new Map<string, IPOInventoryEntry>();
+  for (const e of entries) {
+    byKey.set(`${e.symbol}|${e.timeframe}|${e.direction}|${barKey(e.candleDatetime, e.timeframe)}`, e);
+  }
+  const anyDirection = new Map<string, IPOInventoryEntry[]>();
+  for (const e of entries) {
+    const k = `${e.symbol}|${e.timeframe}|${barKey(e.candleDatetime, e.timeframe)}`;
+    anyDirection.set(k, [...(anyDirection.get(k) ?? []), e]);
+  }
+
+  const matchedIdByExample = new Map<string, string>();
+  const results: DemonstratedExampleResult[] = examples.map((x) => {
+    const d = barKey(x.candleDatetime, x.timeframe);
+    let hit = d ? byKey.get(`${x.symbol}|${x.timeframe}|${x.direction}|${d}`) ?? null : null;
+
+    // DATE-ONLY EXAMPLE ON AN INTRADAY CHART.
+    //
+    // A screenshot often gives 2020-05-08 and nothing finer. On a 4H chart the
+    // inventory keys that day as six separate bars, so the exact-key lookup
+    // misses every one of them and the example reads ABSENT — a detector
+    // failure reported where the only thing missing was a timestamp in OUR
+    // records. Fall back to the calendar day, and say so in the match state
+    // rather than dressing an inference up as an exact match.
+    let candidateZoneIds: string[] = [];
+    let dateOnly = false;
+    if (!hit && x.candleDatetime && isDateOnly(x.candleDatetime) &&
+        isIntradayTimeframe(x.timeframe)) {
+      dateOnly = true;
+      const day = x.candleDatetime.slice(0, 10);
+      candidateZoneIds = entries
+        .filter((e) => e.symbol === x.symbol && e.timeframe === x.timeframe &&
+          e.direction === x.direction && e.candleDatetime.slice(0, 10) === day)
+        .map((e) => e.id);
+      if (candidateZoneIds.length === 1) hit = entries.find((e) => e.id === candidateZoneIds[0])!;
+    }
+    if (hit) matchedIdByExample.set(x.id, hit.id);
+
+    let matchState: MatchState;
+    if (!d) matchState = "UNDATED_EXAMPLE";
+    else if (dateOnly && candidateZoneIds.length === 1) matchState = "DATE_ONLY_SINGLE_MATCH";
+    else if (dateOnly && candidateZoneIds.length > 1) matchState = "DATE_ONLY_AMBIGUOUS";
+    else if (hit) matchState = "EXACT_CANDLE";
+    else if ((anyDirection.get(`${x.symbol}|${x.timeframe}|${d}`) ?? []).length) {
+      matchState = "SAME_BAR_OTHER_DIRECTION";
+    } else matchState = "ABSENT";
+
+    // geometry
+    let geometryMatch: GeometryMatch = "NOT_DEMONSTRATED";
+    let expected: [number, number] | null = null;
+    let actual: [number, number] | null = null;
+    let tol: number | null = null;
+    if (x.demonstratedZoneLow != null && x.demonstratedZoneHigh != null) {
+      expected = [x.demonstratedZoneLow, x.demonstratedZoneHigh];
+      if (hit) {
+        actual = [hit.geometry.zoneLow, hit.geometry.zoneHigh];
+        tol = geometryToleranceAtr * (hit.atrAtCandle || 0);
+        geometryMatch = (Math.abs(actual[0] - expected[0]) <= tol && Math.abs(actual[1] - expected[1]) <= tol)
+          ? "MATCH" : "MISMATCH";
+      } else {
+        geometryMatch = "MISMATCH";
+      }
+    }
+
+    return {
+      exampleId: x.id, symbol: x.symbol, timeframe: x.timeframe, direction: x.direction,
+      candleDatetime: x.candleDatetime, exampleGroupId: x.exampleGroupId,
+      evidenceSource: x.evidenceSource,
+      presentInInventory: hit !== null,
+      matchState, matchedZoneId: hit?.id ?? null, candidateZoneIds,
+      geometryMatch,
+      geometryDetail: { expected, actual, toleranceAtr: tol },
+      confirmationState: hit ? hit.confirmation.ordering : null,
+      lifecycleState: hit ? hit.lifecycle.status : null,
+      lineageMatch: "NOT_DEMONSTRATED",
+      lineageDetail: {
+        demonstratedParentExampleId: x.parentExampleId,
+        inventoryParentId: hit?.lineage.parentIPOId ?? null,
+        possibleParents: hit?.lineage.possibleParentIPOIds ?? [],
+      },
+    };
+  });
+
+  // Lineage needs every example resolved first, because a demonstrated parent
+  // is identified by ITS match, not by its example id.
+  for (let i = 0; i < examples.length; i++) {
+    const x = examples[i];
+    if (!x.parentExampleId) continue;
+    const r = results[i];
+    const expectedParentZoneId = matchedIdByExample.get(x.parentExampleId) ?? null;
+    if (!expectedParentZoneId) { r.lineageMatch = "PARENT_NOT_IN_INVENTORY"; continue; }
+    if (!r.matchedZoneId) { r.lineageMatch = "MISMATCHED"; continue; }
+    if (r.lineageDetail.inventoryParentId === expectedParentZoneId) r.lineageMatch = "MATCHED";
+    else if (r.lineageDetail.possibleParents.includes(expectedParentZoneId)) r.lineageMatch = "AMBIGUOUS_IN_INVENTORY";
+    else r.lineageMatch = "MISMATCHED";
+  }
+
+  // ── primary metric, group-aware and demonstration-only ────────────────────
+  //
+  // A ROW WE RECONSTRUCTED IS NOT A DEMONSTRATION. OPERATIONAL_INTERPRETATION
+  // exists in the corpus so a row inferred by us — a bar read off a chart we
+  // redrew, an example rebuilt from a description — cannot masquerade as one
+  // that was shown. Counting those in the headline would let the coverage
+  // figure be raised by adding our own guesses to the corpus, which is the
+  // cheapest possible way to make this number look good and the least
+  // informative. They are evaluated in full and reported in their own block.
+  const isDemonstrated = (x: DemonstratedExample) => x.evidenceSource !== "OPERATIONAL_INTERPRETATION";
+  const demoIdx: number[] = [];
+  const reconIdx: number[] = [];
+  examples.forEach((x, i) => (isDemonstrated(x) ? demoIdx : reconIdx).push(i));
+
+  const groupOf = (x: DemonstratedExample) => x.exampleGroupId ?? `solo:${x.id}`;
+  const groupCounts = (idx: number[]) => {
+    const groups = new Map<string, DemonstratedExampleResult[]>();
+    for (const i of idx) {
+      const g = groupOf(examples[i]);
+      groups.set(g, [...(groups.get(g) ?? []), results[i]]);
+    }
+    let full = 0, partial = 0, missed = 0;
+    for (const rs of groups.values()) {
+      const hits = rs.filter((r) => r.presentInInventory).length;
+      if (hits === rs.length) full++;
+      else if (hits > 0) partial++;
+      else missed++;
+    }
+    return { total: groups.size, full, partial, missed };
+  };
+
+  const rnd = (v: number) => Math.round(v * 1000) / 10;
+  const g = groupCounts(demoIdx);
+  const matchedExamples = demoIdx.filter((i) => results[i].presentInInventory).length;
+  const rg = groupCounts(reconIdx);
+
+  // An ambiguous date-only example is neither covered nor missed: a zone for
+  // that day exists, but the demonstration did not say which one, so claiming
+  // it would assert an identification we have not made. It is excluded from the
+  // headline and reported as the gap between a lower and an upper bound.
+  const ambiguous = demoIdx.filter((i) => results[i].matchState === "DATE_ONLY_AMBIGUOUS").length;
+  const dateOnlySingle = demoIdx.filter((i) => results[i].matchState === "DATE_ONLY_SINGLE_MATCH").length;
+
+  const demonstratedIPOCoverage = {
+    byDemonstration: {
+      total: g.total,
+      fullyCovered: g.full,
+      partiallyCovered: g.partial,
+      missed: g.missed,
+      /** THE HEADLINE. A W->D->4H chain counts once, however many rows it has. */
+      fullyCoveredPct: g.total ? rnd(g.full / g.total) : null,
+      anyCoveragePct: g.total ? rnd((g.full + g.partial) / g.total) : null,
+    },
+    byExample: {
+      total: demoIdx.length,
+      matched: matchedExamples,
+      pct: demoIdx.length ? rnd(matchedExamples / demoIdx.length) : null,
+      note: "Reported beside the group figure, never instead of it: a single " +
+        "demonstration shown at three timeframes contributes three rows here.",
+    },
+    evidenceBasis: {
+      countedSources: EVIDENCE_SOURCES.filter((e) => e !== "OPERATIONAL_INTERPRETATION"),
+      counted: demoIdx.length,
+      byEvidenceSource: Object.fromEntries(EVIDENCE_SOURCES.map((e) =>
+        [e, examples.filter((x) => x.evidenceSource === e).length])),
+      note: "OPERATIONAL_INTERPRETATION rows are EXCLUDED from every figure above. " +
+        "A row we reconstructed is not a demonstration, and letting one raise " +
+        "coverage would make the metric self-serving.",
+    },
+    dateOnlyExamples: {
+      singleMatch: dateOnlySingle,
+      ambiguous,
+      note: "Calendar-day-only examples on an intraday chart. A single match is " +
+        "counted as covered but flagged DATE_ONLY_SINGLE_MATCH, because the bar " +
+        "was inferred from having no alternative rather than demonstrated. An " +
+        "ambiguous one is counted as NEITHER covered nor missed — see " +
+        "coverageUpperBoundPct — and recording the demonstrated time resolves it.",
+    },
+    coverageUpperBoundPct: demoIdx.length
+      ? rnd((matchedExamples + ambiguous) / demoIdx.length)
+      : null,
+    undatedExamples: demoIdx.filter((i) => results[i].matchState === "UNDATED_EXAMPLE").length,
+  };
+
+  const reconstructedExamples = {
+    total: reconIdx.length,
+    matched: reconIdx.filter((i) => results[i].presentInInventory).length,
+    demonstrations: rg.total,
+    fullyCovered: rg.full,
+    note: "OPERATIONAL_INTERPRETATION rows. Evaluated in full and reported here " +
+      "only — never folded into demonstrated coverage.",
+  };
+
+  const demoResults = demoIdx.map((i) => results[i]);
+  const withLineage = demoResults.filter((r) => r.lineageMatch !== "NOT_DEMONSTRATED");
+  const secondary = {
+    ...inventorySummary(entries, barsByTimeframe),
+    parentChildCoverage: {
+      demonstratedRelationships: withLineage.length,
+      matched: withLineage.filter((r) => r.lineageMatch === "MATCHED").length,
+      ambiguousInInventory: withLineage.filter((r) => r.lineageMatch === "AMBIGUOUS_IN_INVENTORY").length,
+      mismatched: withLineage.filter((r) => r.lineageMatch === "MISMATCHED").length,
+      parentNotInInventory: withLineage.filter((r) => r.lineageMatch === "PARENT_NOT_IN_INVENTORY").length,
+      pct: withLineage.length
+        ? rnd(withLineage.filter((r) => r.lineageMatch === "MATCHED").length / withLineage.length)
+        : null,
+    },
+    geometryAgreement: {
+      demonstrated: demoResults.filter((r) => r.geometryMatch !== "NOT_DEMONSTRATED").length,
+      match: demoResults.filter((r) => r.geometryMatch === "MATCH").length,
+      mismatch: demoResults.filter((r) => r.geometryMatch === "MISMATCH").length,
+      note: "NOT_DEMONSTRATED where the demonstration recorded no bounds. An " +
+        "unrecorded value is not agreement.",
+    },
+  };
+
+  const matchedZoneIds = new Set(results.map((r) => r.matchedZoneId).filter(Boolean) as string[]);
+  const unlabelled = {
+    count: entries.length - matchedZoneIds.size,
+    label: "UNLABELLED_COEXISTING",
+    note: "Zones matching no demonstrated example. These are NOT false positives " +
+      "and are not counted against coverage: no one has evaluated them, and " +
+      "coexisting IPOs are expected. Turning them into negatives would " +
+      "manufacture the labels this research does not have.",
+  };
+
+  return {
+    demonstratedIPOCoverage, reconstructedExamples, secondary, results, unlabelled,
+    note: "Coverage only. No precision, accuracy or false-positive rate is " +
+      "computed, because there are no labelled negatives to compute one against.",
+  };
+}
+
+// ─── C. corpus intake validation ─────────────────────────────────────────────
+
+/**
+ * Validates demonstrated-IPO rows before they reach the corpus table.
+ *
+ * The database enforces what it can — direction, evidence source, paired zone
+ * bounds, self-parenthood — but three things it cannot: a cycle deeper than one
+ * hop, a parent that is not in the same demonstration group, and a row trying
+ * to carry a LABEL. The last one matters most. This corpus is positives only;
+ * accepting a `label` field would be the first step to inferring negatives from
+ * unmarked candles, so it is refused loudly rather than ignored silently.
+ */
+export function validateCorpusExamples(rows: any[]): Array<{ row: number; why: string }> {
+  const problems: Array<{ row: number; why: string }> = [];
+
+  // A row may name its parent either by a batch-local handle (localId /
+  // localParentId, used when neither row exists yet) or by a real stored id.
+  // Both forms resolve through the same map so a cycle is caught either way.
+  const handleOf = (e: any) => (e.localId ?? e.id) == null ? null : String(e.localId ?? e.id);
+  const parentOf = (e: any) =>
+    (e.localParentId ?? e.parentExampleId) == null ? null : String(e.localParentId ?? e.parentExampleId);
+
+  const idAt = new Map<string, number>();
+  rows.forEach((e, i) => { const h = handleOf(e); if (h !== null) idAt.set(h, i); });
+
+  rows.forEach((e, i) => {
+    const bad = (why: string) => problems.push({ row: i, why });
+    if (!e.symbol) bad("symbol required");
+    if (!e.timeframe) bad("timeframe required");
+    if (e.direction !== "demand" && e.direction !== "supply") bad("direction must be demand or supply");
+    if (e.evidenceSource && !EVIDENCE_SOURCES.includes(e.evidenceSource)) {
+      bad(`evidenceSource must be one of ${EVIDENCE_SOURCES.join(", ")}`);
+    }
+    if ("label" in e) {
+      bad("this corpus holds POSITIVES ONLY — it has no label column, and an " +
+        "unmarked candle must never be recorded as a negative");
+    }
+    const lo = e.demonstratedZoneLow, hi = e.demonstratedZoneHigh;
+    if ((lo == null) !== (hi == null)) bad("demonstrated zone bounds must be given as a pair or not at all");
+    if (lo != null && hi != null && !(lo < hi)) bad("demonstratedZoneLow must be below demonstratedZoneHigh");
+
+    const parent = parentOf(e);
+    if (!parent) return;
+    const parentIsLocal = idAt.has(parent);
+    if (handleOf(e) !== null && parent === handleOf(e)) bad("a row cannot be its own parent");
+
+    // A chain built inside the batch has its group MINTED by the planner, so
+    // requiring one here would reject a perfectly well-formed W->D->4H send.
+    // A parent that already lives in the database is different: minting a new
+    // group would split one demonstration in two, so the caller must name the
+    // existing group explicitly.
+    if (!parentIsLocal && !e.exampleGroupId) {
+      bad("a child of an already-stored parent must name that parent's exampleGroupId — " +
+        "minting a new one would split the demonstration");
+    }
+
+    if (!parentIsLocal) return;
+    const seen = new Set<number>([i]);
+    let cur: number | undefined = idAt.get(parent);
+    while (cur !== undefined) {
+      if (seen.has(cur)) { bad("refinement chain contains a cycle"); break; }
+      seen.add(cur);
+      const pRow = rows[cur];
+      if (e.exampleGroupId && pRow.exampleGroupId &&
+          String(pRow.exampleGroupId) !== String(e.exampleGroupId)) {
+        bad("parent belongs to a different demonstration group");
+        break;
+      }
+      const pp = parentOf(pRow);
+      cur = pp === null ? undefined : idAt.get(pp);
+    }
+  });
+  return problems;
 }

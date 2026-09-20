@@ -295,12 +295,20 @@ Deno.test("refineIPOToLowerTimeframe only returns overlapping, same-direction ch
   }
 });
 
-Deno.test("SHADOW ONLY — nothing in production imports ipoZones", async () => {
+Deno.test("SHADOW ONLY — nothing in production imports the IPO research modules", async () => {
   // The guarantee the whole design rests on. If a production module ever imports
-  // this, that is a deliberate promotion and must be a conscious decision, not a
-  // side effect of an import added for convenience.
+  // one of these, that is a deliberate promotion and must be a conscious
+  // decision, not a side effect of an import added for convenience.
+  //
+  // All three research modules are checked, not just ipoZones. ipoCorpusPlan
+  // and ipoProvenance arrived later and would otherwise have been an unguarded
+  // back door into exactly the same code.
+  const SHADOW = ["ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts"];
   const allowed = [
-    "supabase/functions/smc-analysis/index.ts",   // the single read-only diagnostic
+    "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
+    "supabase/functions/_shared/ipoZones.ts",        // shadow modules may import each other
+    "supabase/functions/_shared/ipoCorpusPlan.ts",
+    "supabase/functions/_shared/ipoProvenance.ts",
   ];
   const offenders: string[] = [];
   const walk = async (dir: string) => {
@@ -308,13 +316,13 @@ Deno.test("SHADOW ONLY — nothing in production imports ipoZones", async () => 
       const p = `${dir}/${e.name}`;
       if (e.isDirectory) { await walk(p); continue; }
       if (!p.endsWith(".ts") || p.includes(".test.")) continue;
-      if (p.endsWith("_shared/ipoZones.ts")) continue;
+      if (allowed.some((a) => p.endsWith(a))) continue;
       const src = await Deno.readTextFile(p);
-      if (src.includes("ipoZones.ts") && !allowed.some((a) => p.endsWith(a))) offenders.push(p);
+      for (const m of SHADOW) if (src.includes(m)) offenders.push(`${p} -> ${m}`);
     }
   };
   await walk("supabase/functions");
-  assertEquals(offenders, [], `unexpected production import of ipoZones:\n${offenders.join("\n")}`);
+  assertEquals(offenders, [], `unexpected production import of an IPO research module:\n${offenders.join("\n")}`);
 });
 
 // ─── review fixes ────────────────────────────────────────────────────────────
