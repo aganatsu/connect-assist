@@ -6,6 +6,7 @@ import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directi
 import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
 import { testOnsetHypothesis, ONSET_DEFINITIONS } from "../_shared/ipoDisplacementOnset.ts";
 import { testAnchorHypothesis } from "../_shared/ipoOriginAnchor.ts";
+import { discriminateAnchorModes } from "../_shared/ipoAnchorDiscriminator.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4282,6 +4283,55 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_anchor_discriminator ─────────────────────────────────────────
+    // READ-ONLY. Features that might say WHICH anchor mode applies, computed
+    // without ever consulting the demonstration. Frozen onset detectors are
+    // called unchanged; nothing is wired to the detector.
+    if (action === "ipo_anchor_discriminator") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            ...discriminateAnchorModes(series, r.index, e.side, swingIdx, ev.index) });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      return respond({
+        note: "READ-ONLY. Scope is pairs where BOTH readings are structurally " +
+              "available: the onset bar is already the IPO colour and a prior " +
+              "opposite bar exists. Where the onset is departure-coloured, mode A " +
+              "cannot apply and the case cannot discriminate — those are excluded " +
+              "from the comparison rather than counted as evidence for B. No " +
+              "threshold, no score, no detector combination.",
+        out,
+      });
+    }
+
     // ── ipo_origin_anchor ────────────────────────────────────────────────
     // READ-ONLY. ONSET_OR_LAST_OPPOSITE_BEFORE applied over the FROZEN onset
     // detectors. The onset finders are called exactly as implemented; only the
