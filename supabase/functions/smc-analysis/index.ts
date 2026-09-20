@@ -1,6 +1,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples } from "../_shared/ipoZones.ts";
+import { planCorpusInsert, resolveWaveParents } from "../_shared/ipoCorpusPlan.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -4151,27 +4152,33 @@ Deno.serve(async (req) => {
         }
         if (bad) { out.push({ symbol: sym, error: bad }); continue; }
 
+        const from = tgt.from ?? body?.from;
+        const to = tgt.to ?? body?.to;
         const entries = buildIPOInventory(levels, {
-          symbol: sym,
-          from: tgt.from ?? body?.from,
-          to: tgt.to ?? body?.to,
-          parentContextId: tgt.parentContextId,
+          symbol: sym, from, to, parentContextId: tgt.parentContextId,
         });
+        // Density must use the same window as the zones it counts. Dividing a
+        // three-month slice of zones by a fifteen-year bar count understates
+        // IPOs per 100 bars by two orders of magnitude and still looks
+        // plausible — the first live run reported 0.6 where the real figure
+        // for that window was 1.4.
+        const viewBars = inventoryViewBars(levels, { from, to });
         const mine = corpus.filter((c: any) => c.symbol === sym);
         out.push({
           symbol: sym,
           timeframes: tfs,
           barsByTimeframe,
-          dateRange: { from: tgt.from ?? body?.from ?? null, to: tgt.to ?? body?.to ?? null,
+          barsInView: viewBars,
+          dateRange: { from: from ?? null, to: to ?? null,
             note: "filters the RETURNED zones only; detection always runs on the full series" },
           ...(action === "ipo_coverage"
             ? {
               corpusSource: mine.some((c: any) => c._inline) ? "INLINE_DRY_RUN" : "STORED_CORPUS",
               demonstratedExamples: mine.length,
-              ...evaluateDemonstratedCoverage(entries, mine, barsByTimeframe),
+              ...evaluateDemonstratedCoverage(entries, mine, viewBars),
               inventory: tgt.includeZones ? entries : undefined,
             }
-            : { summary: inventorySummary(entries, barsByTimeframe), inventory: entries }),
+            : { summary: inventorySummary(entries, viewBars), inventory: entries }),
         });
       }
 
@@ -4209,28 +4216,55 @@ Deno.serve(async (req) => {
       if (sub === "add") {
         const rows = Array.isArray(body?.examples) ? body.examples : [];
         if (!rows.length) return respond({ error: "examples[] required" });
-        const problems = validateCorpusExamples(rows);
-        if (problems.length) return respond({ error: "validation failed", problems });
-        const prepared = rows.map((e: any) => ({
-          user_id: userId,
-          evidence_source: e.evidenceSource ?? "VIDEO_DEMONSTRATION",
-          source_video: e.sourceVideo ?? null,
-          source_timestamp: e.sourceTimestamp ?? null,
-          reference_url: e.referenceUrl ?? null,
-          symbol: e.symbol, timeframe: e.timeframe,
-          candle_datetime: e.candleDatetime ?? null,
-          direction: e.direction,
-          demonstrated_zone_low: e.demonstratedZoneLow ?? null,
-          demonstrated_zone_high: e.demonstratedZoneHigh ?? null,
-          example_group_id: e.exampleGroupId ?? null,
-          parent_example_id: e.parentExampleId ?? null,
-          notes: e.notes ?? null,
-        }));
-        const { data, error } = await supa.from("ipo_corpus_examples")
-          .upsert(prepared, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
-          .select("id,symbol,timeframe,candle_datetime,direction,example_group_id");
-        if (error) return respond({ error: error.message });
-        return respond({ upserted: data?.length ?? 0, rows: data ?? [] });
+        const plan = planCorpusInsert(rows, userId, () => crypto.randomUUID());
+        if (plan.problems.length) return respond({ error: "validation failed", problems: plan.problems });
+
+        // One upsert per WAVE, roots first. A W->D->4H chain cannot go in a
+        // single statement: the daily row's parent is the weekly row of the
+        // same batch, which has no id until its own wave has landed.
+        const idByLocal = new Map<string, string>();
+        const written: any[] = [];
+        for (const wave of plan.waves) {
+          const payload = resolveWaveParents(wave, idByLocal);
+          const { data, error } = await supa.from("ipo_corpus_examples")
+            .upsert(payload, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
+            .select("id,symbol,timeframe,candle_datetime,direction,example_group_id,parent_example_id");
+          if (error) {
+            return respond({
+              error: error.message,
+              partial: true,
+              wavesCompleted: written.length ? plan.waves.indexOf(wave) : 0,
+              writtenSoFar: written,
+              note: "earlier waves are already committed; re-send the batch to finish it — " +
+                    "the unique constraint makes the whole thing idempotent",
+            });
+          }
+          // Map each returned row back to its local handle by natural key, so a
+          // row that already existed resolves to its EXISTING id rather than
+          // dropping the edge.
+          for (const p of wave) {
+            if (!p.localId) continue;
+            const r = p.row as any;
+            const hit = (data ?? []).find((d: any) =>
+              d.symbol === r.symbol && d.timeframe === r.timeframe &&
+              d.direction === r.direction &&
+              (d.candle_datetime ?? null) === (r.candle_datetime ?? null));
+            if (hit) idByLocal.set(p.localId, hit.id);
+          }
+          written.push(...(data ?? []));
+        }
+        const edges = written.filter((r: any) => r.parent_example_id).length;
+        return respond({
+          upserted: written.length,
+          waves: plan.waves.length,
+          refinementEdgesStored: edges,
+          demonstrations: new Set(written.map((r: any) => r.example_group_id ?? r.id)).size,
+          rows: written,
+          note: plan.waves.length > 1
+            ? "a refinement chain was written across " + plan.waves.length + " waves; " +
+              "refinementEdgesStored is the count that actually persisted"
+            : "single wave, no local parent references",
+        });
       }
 
       const { data, error } = await supa.from("ipo_corpus_examples").select("*")

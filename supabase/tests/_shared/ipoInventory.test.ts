@@ -4,6 +4,10 @@ import {
   inventorySummary,
   evaluateDemonstratedCoverage,
   validateCorpusExamples,
+  inventoryViewBars,
+  barKey,
+  timeframeMinutes,
+  resolveParentLineage,
   detectIPOCandidates,
   type DemonstratedExample,
 } from "../../functions/_shared/ipoZones.ts";
@@ -230,11 +234,21 @@ Deno.test("a refinement child must belong to its parent's demonstration", () => 
   ]);
   assertEquals(ok, []);
 
-  const noGroup = validateCorpusExamples([
-    { id: "p", symbol: "X", timeframe: "W", direction: "demand", exampleGroupId: G },
+  // A chain built entirely inside the batch may omit the group: the planner
+  // mints one per chain, so demanding it here would reject a valid W->D->4H send.
+  const minted = validateCorpusExamples([
+    { id: "p", symbol: "X", timeframe: "W", direction: "demand" },
     { id: "c", symbol: "X", timeframe: "D", direction: "demand", parentExampleId: "p" },
   ]);
-  assert(noGroup.some((x) => x.why.includes("exampleGroupId")));
+  assertEquals(minted, [], "an in-batch chain has its group minted, not demanded");
+
+  // A parent that ALREADY lives in the database is different — minting there
+  // would split one demonstration across two groups.
+  const storedParent = validateCorpusExamples([
+    { symbol: "X", timeframe: "D", direction: "demand",
+      parentExampleId: "44444444-4444-4444-4444-444444444444" },
+  ]);
+  assert(storedParent.some((x) => x.why.includes("exampleGroupId")));
 
   const otherGroup = validateCorpusExamples([
     { id: "p", symbol: "X", timeframe: "W", direction: "demand", exampleGroupId: G },
@@ -431,4 +445,156 @@ Deno.test("a parent clipped out of the date range is flagged, not silently missi
   assertEquals(c2.lineage.parentInView, false,
     "a child holding a parent id whose parent is not returned must say so");
   assertEquals((inventorySummary(clipped, {}).lineage as any).parentOutsideView >= 1, true);
+});
+
+// ─── #610 review patches ─────────────────────────────────────────────────────
+
+Deno.test("intraday matching uses the full timestamp, not the date", () => {
+  // A 4H chart has six bars a day. Keying on the date alone makes them one bar,
+  // so a demonstrated 04:00 IPO would 'match' a 20:00 zone and report covered.
+  assertEquals(barKey("2026-03-05T04:00:00Z", "4h"), "2026-03-05T04:00");
+  assertEquals(barKey("2026-03-05T20:00:00Z", "4h"), "2026-03-05T20:00");
+  assert(barKey("2026-03-05T04:00:00Z", "4h") !== barKey("2026-03-05T20:00:00Z", "4h"));
+  assertEquals(barKey("2026-03-05 04:00:00", "15min"), "2026-03-05T04:00");
+
+  // Daily and above stay date-only, because feeds stamp them 00:00:00,
+  // 00:00:00Z or 21:00:00 and the stamp is not part of the identity.
+  assertEquals(barKey("2026-03-05T00:00:00Z", "1day"), "2026-03-05");
+  assertEquals(barKey("2026-03-05T21:00:00", "1d"), "2026-03-05");
+  assertEquals(barKey("2026-03-02T00:00:00Z", "1week"), "2026-03-02");
+
+  // An unknown timeframe gets MINUTE precision: matching too strictly reports a
+  // visible miss, matching too loosely reports false coverage.
+  assertEquals(barKey("2026-03-05T04:30:00Z", "banana"), "2026-03-05T04:30");
+  assertEquals(timeframeMinutes("4h"), 240);
+  assertEquals(timeframeMinutes("1day"), 1440);
+  assertEquals(timeframeMinutes("nonsense"), null);
+});
+
+Deno.test("two 4H zones on one date do not collide in the evaluator", () => {
+  const mk = (dt: string, id: string): any => ({
+    id, symbol: "T", timeframe: "4h", direction: "demand",
+    candleIndex: 0, candleDatetime: dt, candle: { open: 1, high: 2, low: 0, close: 1 },
+    geometry: { proximal: 2, distal: 1, extent: 0, zoneLow: 1, zoneHigh: 2 },
+    confirmation: { ordering: "NO_CONFIRMATION", firstRelevant: {}, detectorBreak: {} },
+    liquidity: {}, departureFvg: {}, consolidation: { status: "UNRESOLVED" },
+    lifecycle: { status: "ACTIVE" },
+    lineage: { timeframe: "4h", refinementDepth: 0, parentIPOId: null, parentTimeframe: null,
+      possibleParentIPOIds: [], lineageAmbiguous: false, lineageResolvedBy: "ROOT",
+      childIds: [], possibleChildIds: [], role: "EXECUTION", standalone: false,
+      parentInView: true, parentAgeDays: null, parentAgeBars: null },
+    selection: {}, atrAtCandle: 1, valid: true, researchStatus: "CANDIDATE_ACCEPTED",
+    coexistenceNote: "x",
+  });
+  const inv = [mk("2026-03-05T04:00:00Z", "early"), mk("2026-03-05T20:00:00Z", "late")];
+  const r = evaluateDemonstratedCoverage(inv as any, [
+    ex({ id: "a", timeframe: "4h", candleDatetime: "2026-03-05T20:00:00Z" }),
+  ], {});
+  assertEquals(r.results[0].matchedZoneId, "late",
+    "the demonstrated 20:00 IPO must not be satisfied by the 04:00 zone");
+});
+
+Deno.test("OPERATIONAL_INTERPRETATION rows cannot inflate demonstrated coverage", () => {
+  const s = series();
+  const inv = buildIPOInventory([{ timeframe: "1d", candles: s }], { symbol: "T" });
+  const found = inv[0], alsoFound = inv[1];
+
+  // One demonstrated example that is MISSED.
+  const base = [ex({ id: "missed", timeframe: "1d", candleDatetime: "1999-01-01" })];
+  const before = evaluateDemonstratedCoverage(inv, base, {});
+  assertEquals((before.demonstratedIPOCoverage.byDemonstration as any).fullyCoveredPct, 0);
+
+  // Adding reconstructed rows that DO match must not move the headline — this
+  // is the cheapest possible way to fake coverage and it has to fail.
+  const padded = [
+    ...base,
+    ex({ id: "r1", timeframe: "1d", direction: found.direction, candleDatetime: found.candleDatetime, evidenceSource: "OPERATIONAL_INTERPRETATION" }),
+    ex({ id: "r2", timeframe: "1d", direction: alsoFound.direction, candleDatetime: alsoFound.candleDatetime, evidenceSource: "OPERATIONAL_INTERPRETATION" }),
+  ];
+  const after = evaluateDemonstratedCoverage(inv, padded, {});
+  assertEquals((after.demonstratedIPOCoverage.byDemonstration as any).fullyCoveredPct, 0,
+    "a row we reconstructed is not a demonstration");
+  assertEquals((after.demonstratedIPOCoverage.byDemonstration as any).total, 1);
+  assertEquals((after.demonstratedIPOCoverage.byExample as any).total, 1);
+
+  // They are still evaluated, just reported apart.
+  assertEquals((after.reconstructedExamples as any).total, 2);
+  assertEquals((after.reconstructedExamples as any).matched, 2);
+  assertEquals(after.results.length, 3, "every row is still evaluated in full");
+
+  // The other three sources all count.
+  for (const src of ["VIDEO_DEMONSTRATION", "DIRECT_TEACHING", "USER_CONFIRMED"] as const) {
+    const r = evaluateDemonstratedCoverage(inv, [
+      ex({ id: "x", timeframe: "1d", direction: found.direction, candleDatetime: found.candleDatetime, evidenceSource: src }),
+    ], {});
+    assertEquals((r.demonstratedIPOCoverage.byDemonstration as any).total, 1, `${src} must count`);
+  }
+});
+
+Deno.test("density uses bars inside the date range, not the whole series", () => {
+  const s = series();
+  const levels = [{ timeframe: "1d", candles: s }];
+  const all = buildIPOInventory(levels, { symbol: "T" });
+  const mid = all[Math.floor(all.length / 2)].candleDatetime.slice(0, 10);
+
+  const sliced = buildIPOInventory(levels, { symbol: "T", from: mid });
+  const viewBars = inventoryViewBars(levels, { from: mid });
+  assert(viewBars["1d"] < s.length, "the window really is smaller than the series");
+
+  const honest = inventorySummary(sliced, viewBars);
+  const wrong = inventorySummary(sliced, { "1d": s.length });
+  assert(honest.iposPer100Bars! > wrong.iposPer100Bars!,
+    "dividing a slice of zones by the full bar count understates density");
+  assertEquals(honest.perTimeframe["1d"].bars, viewBars["1d"]);
+  assertEquals(inventoryViewBars(levels)["1d"], s.length, "no range means the whole series");
+});
+
+Deno.test("parent age is measured and reported, and nothing filters on it", () => {
+  const levels = [
+    { timeframe: "W", candles: series(1.0) },
+    { timeframe: "D", candles: series(0.5) },
+  ];
+  const inv = buildIPOInventory(levels, { symbol: "T" });
+  const kids = inv.filter((e) => e.lineage.parentIPOId !== null);
+  assert(kids.length > 0, "fixture must produce parented children");
+
+  for (const k of kids) {
+    const p = inv.find((e) => e.id === k.lineage.parentIPOId)!;
+    assert(k.lineage.parentAgeDays !== null, "age must be measured");
+    assert(k.lineage.parentAgeBars !== null);
+    assert(k.lineage.parentAgeDays! >= 0, "a parent never post-dates its child");
+    const expected = (Date.parse(k.candleDatetime) - Date.parse(p.candleDatetime)) / 86400000;
+    assertEquals(k.lineage.parentAgeDays, Math.round(expected * 10) / 10);
+  }
+  // No cap: the oldest parent in the set is still a parent.
+  const oldest = kids.reduce((a, b) => (b.lineage.parentAgeDays! > a.lineage.parentAgeDays! ? b : a));
+  assertEquals(oldest.lineage.parentIPOId !== null, true,
+    "age is measurement only — adding a limit would be a new discriminator");
+});
+
+Deno.test("refinement keeps direction aligned, and that rule is declared", () => {
+  // An opposite-direction IPO inside the parent zone may exist; it is simply
+  // not that parent's refinement child.
+  const parentNode: any = {
+    id: "P", timeframe: "W", direction: "demand", candleDatetime: "2026-01-01T00:00:00",
+    geometry: { proximal: 80, distal: 40, extent: 39, zoneLow: 40, zoneHigh: 80 },
+    parentIPOId: null, parentTimeframe: null, possibleParentIPOIds: [],
+    lineageAmbiguous: false, lineageResolvedBy: "ROOT", childTimeframe: null,
+    refinementDepth: 0, role: "EXECUTION", containedWithinParent: false,
+    childIds: [], possibleChildIds: [],
+  };
+  const inside = (direction: "demand" | "supply") => ({
+    direction, candleDatetime: "2026-02-01T00:00:00",
+    geometry: { proximal: 58, distal: 52, extent: 51, zoneLow: 52, zoneHigh: 58 },
+  });
+  assertEquals(resolveParentLineage(inside("demand"), [parentNode]).parentIPOId, "P");
+  assertEquals(resolveParentLineage(inside("supply"), [parentNode]).parentIPOId, null,
+    "an opposite-direction zone inside the parent is not its refinement child");
+  assertEquals(resolveParentLineage(inside("supply"), [parentNode]).possibleParentIPOIds, []);
+
+  const r = PROVENANCE_BY_KEY["refinement.sameDirection"];
+  assert(r, "the same-direction rule must be declared, not left implicit");
+  assertEquals(r.evidenceSource, "USER_CONFIRMED");
+  assert(provenanceManifest().rules.some((x) => x.key === "refinement.sameDirection"),
+    "and it must appear in the manifest attached to research output");
 });

@@ -1904,6 +1904,21 @@ export interface IPOInventoryLineage {
    * role counts read as broken rather than clipped.
    */
   parentInView: boolean;
+  /**
+   * How old the parent is at the moment the child forms. MEASUREMENT ONLY —
+   * nothing filters on it and no cap exists.
+   *
+   * It is here because the first live run parented a 2026-05-06 daily zone to a
+   * 2015-11-30 weekly zone. Containment and the time rule both hold, so the
+   * rules accept it, but an eleven-year-old parent is worth being able to SEE
+   * before anyone decides whether it should be allowed. Adding a limit would be
+   * a new discriminator, so the gap is reported and left alone.
+   *
+   * parentAgeBars counts bars of the PARENT's own timeframe between the two
+   * candles; comparing raw indices across timeframes would be meaningless.
+   */
+  parentAgeDays: number | null;
+  parentAgeBars: number | null;
 }
 
 export interface IPOInventoryEntry {
@@ -2058,6 +2073,8 @@ export function buildIPOInventory(
           role: node.role,
           standalone: depth > 0 && node.possibleParentIPOIds.length === 0,
           parentInView: true,          // set for real after the range filter
+          parentAgeDays: null,         // both filled once every level is resolved
+          parentAgeBars: null,
         },
         selection: z.selection,
         atrAtCandle: z.atrAtCandle,
@@ -2083,7 +2100,17 @@ export function buildIPOInventory(
       .map((c) => c.id);
     e.lineage.role = kids.length > 0 ? "CONTEXT" : "EXECUTION";
     if (e.lineage.parentIPOId) {
-      e.lineage.parentTimeframe = nodeById.get(e.lineage.parentIPOId)?.timeframe ?? null;
+      const p = nodeById.get(e.lineage.parentIPOId) ?? null;
+      e.lineage.parentTimeframe = p?.timeframe ?? null;
+      if (p) {
+        const pt = Date.parse(p.candleDatetime), ct = Date.parse(e.candleDatetime);
+        e.lineage.parentAgeDays = Number.isNaN(pt) || Number.isNaN(ct)
+          ? null : Math.round(((ct - pt) / 86400000) * 10) / 10;
+        const parentLevel = levels.find((l) => l.timeframe === p.timeframe);
+        e.lineage.parentAgeBars = parentLevel
+          ? parentLevel.candles.filter((k) => k.datetime > p.candleDatetime && k.datetime <= e.candleDatetime).length
+          : null;
+      }
     }
   }
 
@@ -2100,6 +2127,32 @@ export function buildIPOInventory(
     e.lineage.parentInView = e.lineage.parentIPOId === null || visible.has(e.lineage.parentIPOId);
   }
   return shown;
+}
+
+/**
+ * Bars of each level that fall INSIDE the requested date range.
+ *
+ * Density must use the same window as the zones it counts. Dividing zones from
+ * a three-month slice by a fifteen-year bar count understates IPOs per 100 bars
+ * by two orders of magnitude, and the number still looks plausible — the first
+ * live run reported 0.6 per 100 bars for a slice whose real density was 1.4.
+ */
+export function inventoryViewBars(
+  levels: Array<{ timeframe: string; candles: Candle[] }>,
+  opts: { from?: string; to?: string } = {},
+): Record<string, number> {
+  const from = opts.from ? opts.from.slice(0, 10) : null;
+  const to = opts.to ? opts.to.slice(0, 10) : null;
+  const out: Record<string, number> = {};
+  for (const l of levels) {
+    out[l.timeframe] = l.candles.filter((c) => {
+      const d = c.datetime.slice(0, 10);
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    }).length;
+  }
+  return out;
 }
 
 /** Aggregate shape of an inventory. No precision term — see the note. */
@@ -2214,7 +2267,44 @@ export interface DemonstratedExampleResult {
   lineageDetail: { demonstratedParentExampleId: string | null; inventoryParentId: string | null; possibleParents: string[] };
 }
 
-const iso = (s: string | null) => (s ? s.slice(0, 10) : null);
+/**
+ * How many minutes one bar of this timeframe spans, or null if unrecognised.
+ * Accepts the forms this project actually passes around: 1d, 1day, 1week, 4h,
+ * 15min, 1h, 30m.
+ */
+export function timeframeMinutes(tf: string): number | null {
+  const m = String(tf).trim().toLowerCase().match(/^(\d+)\s*(min|mins|minute|minutes|m|h|hr|hour|hours|d|day|days|w|week|weeks|mo|month|months)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2];
+  if (/^(min|mins|minute|minutes|m)$/.test(unit)) return n;
+  if (/^(h|hr|hour|hours)$/.test(unit)) return n * 60;
+  if (/^(d|day|days)$/.test(unit)) return n * 1440;
+  if (/^(w|week|weeks)$/.test(unit)) return n * 10080;
+  return n * 43200;
+}
+
+/**
+ * Match key precision, chosen by timeframe.
+ *
+ * COLLAPSING TO A DATE IS WRONG INTRADAY. A 4H chart has six bars per calendar
+ * day and a 15m chart has ninety-six; keying on the date alone makes them all
+ * the same bar, so a demonstrated 04:00 IPO would match a 20:00 zone and report
+ * as covered. On daily and above the reverse risk applies — providers stamp
+ * daily bars 00:00:00, 00:00:00Z or 21:00:00 depending on the feed — so those
+ * keep date-only keys and stay robust to the stamp.
+ *
+ * Unrecognised timeframes get MINUTE precision: matching too strictly reports a
+ * miss, which is visible and correctable, whereas matching too loosely reports
+ * false coverage.
+ */
+export function barKey(datetime: string | null, timeframe: string): string | null {
+  if (!datetime) return null;
+  const norm = String(datetime).replace(" ", "T");
+  const mins = timeframeMinutes(timeframe);
+  const intraday = mins === null || mins < 1440;
+  return intraday ? norm.slice(0, 16) : norm.slice(0, 10);
+}
 
 /**
  * Coverage of demonstrated IPOs by an inventory.
@@ -2232,6 +2322,7 @@ export function evaluateDemonstratedCoverage(
   geometryToleranceAtr = 0.25,
 ): {
   demonstratedIPOCoverage: Record<string, unknown>;
+  reconstructedExamples: Record<string, unknown>;
   secondary: Record<string, unknown>;
   results: DemonstratedExampleResult[];
   unlabelled: Record<string, unknown>;
@@ -2239,17 +2330,17 @@ export function evaluateDemonstratedCoverage(
 } {
   const byKey = new Map<string, IPOInventoryEntry>();
   for (const e of entries) {
-    byKey.set(`${e.symbol}|${e.timeframe}|${e.direction}|${iso(e.candleDatetime)}`, e);
+    byKey.set(`${e.symbol}|${e.timeframe}|${e.direction}|${barKey(e.candleDatetime, e.timeframe)}`, e);
   }
   const anyDirection = new Map<string, IPOInventoryEntry[]>();
   for (const e of entries) {
-    const k = `${e.symbol}|${e.timeframe}|${iso(e.candleDatetime)}`;
+    const k = `${e.symbol}|${e.timeframe}|${barKey(e.candleDatetime, e.timeframe)}`;
     anyDirection.set(k, [...(anyDirection.get(k) ?? []), e]);
   }
 
   const matchedIdByExample = new Map<string, string>();
   const results: DemonstratedExampleResult[] = examples.map((x) => {
-    const d = iso(x.candleDatetime);
+    const d = barKey(x.candleDatetime, x.timeframe);
     const hit = d ? byKey.get(`${x.symbol}|${x.timeframe}|${x.direction}|${d}`) ?? null : null;
     if (hit) matchedIdByExample.set(x.id, hit.id);
 
@@ -2310,44 +2401,82 @@ export function evaluateDemonstratedCoverage(
     else r.lineageMatch = "MISMATCHED";
   }
 
-  // ── primary metric, group-aware ───────────────────────────────────────────
+  // ── primary metric, group-aware and demonstration-only ────────────────────
+  //
+  // A ROW WE RECONSTRUCTED IS NOT A DEMONSTRATION. OPERATIONAL_INTERPRETATION
+  // exists in the corpus so a row inferred by us — a bar read off a chart we
+  // redrew, an example rebuilt from a description — cannot masquerade as one
+  // that was shown. Counting those in the headline would let the coverage
+  // figure be raised by adding our own guesses to the corpus, which is the
+  // cheapest possible way to make this number look good and the least
+  // informative. They are evaluated in full and reported in their own block.
+  const isDemonstrated = (x: DemonstratedExample) => x.evidenceSource !== "OPERATIONAL_INTERPRETATION";
+  const demoIdx: number[] = [];
+  const reconIdx: number[] = [];
+  examples.forEach((x, i) => (isDemonstrated(x) ? demoIdx : reconIdx).push(i));
+
   const groupOf = (x: DemonstratedExample) => x.exampleGroupId ?? `solo:${x.id}`;
-  const groups = new Map<string, DemonstratedExampleResult[]>();
-  examples.forEach((x, i) => {
-    const g = groupOf(x);
-    groups.set(g, [...(groups.get(g) ?? []), results[i]]);
-  });
-  let full = 0, partial = 0, missed = 0;
-  for (const rs of groups.values()) {
-    const hits = rs.filter((r) => r.presentInInventory).length;
-    if (hits === rs.length) full++;
-    else if (hits > 0) partial++;
-    else missed++;
-  }
-  const matchedExamples = results.filter((r) => r.presentInInventory).length;
+  const groupCounts = (idx: number[]) => {
+    const groups = new Map<string, DemonstratedExampleResult[]>();
+    for (const i of idx) {
+      const g = groupOf(examples[i]);
+      groups.set(g, [...(groups.get(g) ?? []), results[i]]);
+    }
+    let full = 0, partial = 0, missed = 0;
+    for (const rs of groups.values()) {
+      const hits = rs.filter((r) => r.presentInInventory).length;
+      if (hits === rs.length) full++;
+      else if (hits > 0) partial++;
+      else missed++;
+    }
+    return { total: groups.size, full, partial, missed };
+  };
+
   const rnd = (v: number) => Math.round(v * 1000) / 10;
+  const g = groupCounts(demoIdx);
+  const matchedExamples = demoIdx.filter((i) => results[i].presentInInventory).length;
+  const rg = groupCounts(reconIdx);
 
   const demonstratedIPOCoverage = {
     byDemonstration: {
-      total: groups.size,
-      fullyCovered: full,
-      partiallyCovered: partial,
-      missed,
+      total: g.total,
+      fullyCovered: g.full,
+      partiallyCovered: g.partial,
+      missed: g.missed,
       /** THE HEADLINE. A W->D->4H chain counts once, however many rows it has. */
-      fullyCoveredPct: groups.size ? rnd(full / groups.size) : null,
-      anyCoveragePct: groups.size ? rnd((full + partial) / groups.size) : null,
+      fullyCoveredPct: g.total ? rnd(g.full / g.total) : null,
+      anyCoveragePct: g.total ? rnd((g.full + g.partial) / g.total) : null,
     },
     byExample: {
-      total: examples.length,
+      total: demoIdx.length,
       matched: matchedExamples,
-      pct: examples.length ? rnd(matchedExamples / examples.length) : null,
+      pct: demoIdx.length ? rnd(matchedExamples / demoIdx.length) : null,
       note: "Reported beside the group figure, never instead of it: a single " +
         "demonstration shown at three timeframes contributes three rows here.",
     },
-    undatedExamples: results.filter((r) => r.matchState === "UNDATED_EXAMPLE").length,
+    evidenceBasis: {
+      countedSources: EVIDENCE_SOURCES.filter((e) => e !== "OPERATIONAL_INTERPRETATION"),
+      counted: demoIdx.length,
+      byEvidenceSource: Object.fromEntries(EVIDENCE_SOURCES.map((e) =>
+        [e, examples.filter((x) => x.evidenceSource === e).length])),
+      note: "OPERATIONAL_INTERPRETATION rows are EXCLUDED from every figure above. " +
+        "A row we reconstructed is not a demonstration, and letting one raise " +
+        "coverage would make the metric self-serving.",
+    },
+    undatedExamples: demoIdx.filter((i) => results[i].matchState === "UNDATED_EXAMPLE").length,
   };
 
-  const withLineage = results.filter((r) => r.lineageMatch !== "NOT_DEMONSTRATED");
+  const reconstructedExamples = {
+    total: reconIdx.length,
+    matched: reconIdx.filter((i) => results[i].presentInInventory).length,
+    demonstrations: rg.total,
+    fullyCovered: rg.full,
+    note: "OPERATIONAL_INTERPRETATION rows. Evaluated in full and reported here " +
+      "only — never folded into demonstrated coverage.",
+  };
+
+  const demoResults = demoIdx.map((i) => results[i]);
+  const withLineage = demoResults.filter((r) => r.lineageMatch !== "NOT_DEMONSTRATED");
   const secondary = {
     ...inventorySummary(entries, barsByTimeframe),
     parentChildCoverage: {
@@ -2361,9 +2490,9 @@ export function evaluateDemonstratedCoverage(
         : null,
     },
     geometryAgreement: {
-      demonstrated: results.filter((r) => r.geometryMatch !== "NOT_DEMONSTRATED").length,
-      match: results.filter((r) => r.geometryMatch === "MATCH").length,
-      mismatch: results.filter((r) => r.geometryMatch === "MISMATCH").length,
+      demonstrated: demoResults.filter((r) => r.geometryMatch !== "NOT_DEMONSTRATED").length,
+      match: demoResults.filter((r) => r.geometryMatch === "MATCH").length,
+      mismatch: demoResults.filter((r) => r.geometryMatch === "MISMATCH").length,
       note: "NOT_DEMONSTRATED where the demonstration recorded no bounds. An " +
         "unrecorded value is not agreement.",
     },
@@ -2380,7 +2509,7 @@ export function evaluateDemonstratedCoverage(
   };
 
   return {
-    demonstratedIPOCoverage, secondary, results, unlabelled,
+    demonstratedIPOCoverage, reconstructedExamples, secondary, results, unlabelled,
     note: "Coverage only. No precision, accuracy or false-positive rate is " +
       "computed, because there are no labelled negatives to compute one against.",
   };
@@ -2400,8 +2529,16 @@ export function evaluateDemonstratedCoverage(
  */
 export function validateCorpusExamples(rows: any[]): Array<{ row: number; why: string }> {
   const problems: Array<{ row: number; why: string }> = [];
+
+  // A row may name its parent either by a batch-local handle (localId /
+  // localParentId, used when neither row exists yet) or by a real stored id.
+  // Both forms resolve through the same map so a cycle is caught either way.
+  const handleOf = (e: any) => (e.localId ?? e.id) == null ? null : String(e.localId ?? e.id);
+  const parentOf = (e: any) =>
+    (e.localParentId ?? e.parentExampleId) == null ? null : String(e.localParentId ?? e.parentExampleId);
+
   const idAt = new Map<string, number>();
-  rows.forEach((e, i) => { if (e.id) idAt.set(String(e.id), i); });
+  rows.forEach((e, i) => { const h = handleOf(e); if (h !== null) idAt.set(h, i); });
 
   rows.forEach((e, i) => {
     const bad = (why: string) => problems.push({ row: i, why });
@@ -2418,23 +2555,36 @@ export function validateCorpusExamples(rows: any[]): Array<{ row: number; why: s
     const lo = e.demonstratedZoneLow, hi = e.demonstratedZoneHigh;
     if ((lo == null) !== (hi == null)) bad("demonstrated zone bounds must be given as a pair or not at all");
     if (lo != null && hi != null && !(lo < hi)) bad("demonstratedZoneLow must be below demonstratedZoneHigh");
-    if (e.parentExampleId) {
-      if (!e.exampleGroupId) bad("a child in a refinement chain must carry exampleGroupId — it is part of one demonstration");
-      if (e.id && String(e.parentExampleId) === String(e.id)) bad("a row cannot be its own parent");
-      // Cycle check within the batch. Rows referencing an id not present in the
-      // batch are left to the database's foreign key.
-      const seen = new Set<number>([i]);
-      let cur = idAt.get(String(e.parentExampleId));
-      while (cur !== undefined) {
-        if (seen.has(cur)) { bad("refinement chain contains a cycle"); break; }
-        seen.add(cur);
-        const p = rows[cur];
-        if (e.exampleGroupId && p.exampleGroupId && String(p.exampleGroupId) !== String(e.exampleGroupId)) {
-          bad("parent belongs to a different demonstration group");
-          break;
-        }
-        cur = p.parentExampleId ? idAt.get(String(p.parentExampleId)) : undefined;
+
+    const parent = parentOf(e);
+    if (!parent) return;
+    const parentIsLocal = idAt.has(parent);
+    if (handleOf(e) !== null && parent === handleOf(e)) bad("a row cannot be its own parent");
+
+    // A chain built inside the batch has its group MINTED by the planner, so
+    // requiring one here would reject a perfectly well-formed W->D->4H send.
+    // A parent that already lives in the database is different: minting a new
+    // group would split one demonstration in two, so the caller must name the
+    // existing group explicitly.
+    if (!parentIsLocal && !e.exampleGroupId) {
+      bad("a child of an already-stored parent must name that parent's exampleGroupId — " +
+        "minting a new one would split the demonstration");
+    }
+
+    if (!parentIsLocal) return;
+    const seen = new Set<number>([i]);
+    let cur: number | undefined = idAt.get(parent);
+    while (cur !== undefined) {
+      if (seen.has(cur)) { bad("refinement chain contains a cycle"); break; }
+      seen.add(cur);
+      const pRow = rows[cur];
+      if (e.exampleGroupId && pRow.exampleGroupId &&
+          String(pRow.exampleGroupId) !== String(e.exampleGroupId)) {
+        bad("parent belongs to a different demonstration group");
+        break;
       }
+      const pp = parentOf(pRow);
+      cur = pp === null ? undefined : idAt.get(pp);
     }
   });
   return problems;

@@ -136,6 +136,10 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     "A higher-timeframe IPO remains valid as CONTEXT after a child refines it",
     null, "USER_CONFIRMED",
     "Stated directly. Finding a child must never invalidate the parent."),
+  P("refinement.sameDirection",
+    "A refined child IPO must have the same direction as its parent IPO",
+    null, "USER_CONFIRMED",
+    "Confirmed in review. HTF demand refines to LTF demand, HTF supply to LTF supply. An opposite-direction IPO may well exist inside the parent zone — it is simply not that parent's refinement or execution child. The rule was already enforced in resolveParentLineage as an unstated implementation assumption; it is declared here so it can be reviewed rather than discovered by reading the filter."),
   P("refinement.containmentIsFull",
     "A child must sit FULLY inside the parent zone; overlap is not refinement",
     null, "USER_CONFIRMED", "Corrected in review against an overlap test."),
@@ -152,7 +156,7 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
   P("selection.maxInterveningCandles",
     "Candles allowed between the IPO and the start of the departure move",
     2, "OPERATIONAL_INTERPRETATION",
-    "Ours. The tolerance is an interpretation of 'a small candle or two may drift before the move'; the number 2 is not taught."),
+    "THE TOLERANCE IS TAUGHT, THE NUMBER IS OURS. Roughly one to three small candles may drift between the IPO and the start of the move. Pinning that to exactly 2 is a choice: it sits inside the taught range but excludes the top of it, so a demonstrated IPO with three drifting candles would be missed by the default and found at 3. Treat it as a free parameter under the usual holdout discipline, not as the method."),
   P("selection.interveningMaxRangeAtr",
     "An intervening candle must be smaller than this multiple of ATR",
     0.75, "OPERATIONAL_INTERPRETATION",
@@ -183,7 +187,8 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     "Ours. Changes which sweeps count as 'prior'."),
   P("fvg.departureCreatesGap",
     "The departure move typically leaves a fair value gap",
-    null, "DIRECT_TEACHING", "Taught as a characteristic. Reported, never required."),
+    null, "USER_CONFIRMED",
+    "Downgraded from DIRECT_TEACHING: confirmed in review, but no specific teaching statement has been located for it. Restore DIRECT_TEACHING only when one is. Reported, never required."),
   P("fvg.withinBars",
     "Bars after the IPO in which an FVG counts as the departure FVG",
     3, "OPERATIONAL_INTERPRETATION",
@@ -224,6 +229,7 @@ export const DETECTION_RULE_KEYS: string[] = [
   "confirmation.departedByBreakBar",
   "confirmation.sameBarUnverifiable",
   "coexistence.multipleIPOsCoexist",
+  "refinement.sameDirection",
 ];
 
 export function provenanceManifest(keys: string[] = DETECTION_RULE_KEYS) {
