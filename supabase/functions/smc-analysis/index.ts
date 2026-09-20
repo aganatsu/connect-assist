@@ -5,6 +5,7 @@ import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidatio
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
+import { fetchHistoricalRangeCandles } from "../_shared/ipoHistoricalRange.ts";
 import { enumerateImpulseLegs, mapImpulsePOIs } from "../_shared/impulseZoneEngine.ts";
 import { findImpulseBase, detectStructuralOrderBlocks, DEFAULT_MAX_BASE_CANDLES } from "../_shared/structuralOrderBlocks.ts";
 import { dropFxClosedBars } from "../_shared/sessions.ts";
@@ -428,6 +429,53 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
 }
 
 // ─── HTTP Handler ───────────────────────────────────────────────────
+// ─── research-only candle sourcing ───────────────────────────────────────────
+//
+// SHADOW ACTIONS ONLY. When a target names startDate/endDate the series comes
+// from the paged historical-range fetcher instead of "the last N bars ending
+// now". Nothing else changes: same detector, same defaults, same geometry.
+//
+// The reason is measurement honesty. The rolling fetch caps at 5,000 bars, so
+// on 4H the window opens mid-2024 and a May-2020 demonstrated IPO was reported
+// ABSENT — a detector miss recorded where the detector never saw the bars.
+//
+// Production trading paths do not call this and market-data is untouched.
+async function researchSeries(
+  tgt: any, symbol: string, interval: string, limit: number, isFx: boolean,
+): Promise<{ series: any[]; sourcing: Record<string, unknown> }> {
+  const startDate = tgt?.startDate ?? null;
+  const endDate = tgt?.endDate ?? null;
+  if (startDate && endDate) {
+    const r = await fetchHistoricalRangeCandles({
+      symbol, interval, startDate: String(startDate), endDate: String(endDate),
+      lookbackBars: tgt?.lookbackBars, lookaheadBars: tgt?.lookaheadBars,
+    });
+    // dropFxClosedBars is applied here too: a weekend bar is an artefact
+    // whichever fetch produced it, and skipping it for range mode would make
+    // historical and rolling runs disagree for a reason unrelated to the range.
+    const series = dropFxClosedBars(r.candles ?? [], isFx);
+    return {
+      series,
+      sourcing: {
+        mode: "HISTORICAL_RANGE", source: r.source, pages: r.pages,
+        requestedWindow: r.requestedWindow, fetchedWindow: r.fetchedWindow,
+        coverage: r.coverage, truncatedAtStart: r.truncatedAtStart,
+        barsAfterFxFilter: series.length, notes: r.notes,
+      },
+    };
+  }
+  const res = await fetchCandlesWithFallback({ symbol, interval, limit, skipBroker: true });
+  const series = dropFxClosedBars(res.candles ?? [], isFx);
+  return {
+    series,
+    sourcing: {
+      mode: "ROLLING_RECENT", requestedBars: limit, barsAfterFxFilter: series.length,
+      note: "last N bars ending now; capped at 5000 by the provider. Pass " +
+            "startDate/endDate to measure an older window.",
+    },
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -3986,11 +4034,11 @@ Deno.serve(async (req) => {
         const sym = String(tgt.symbol);
         const tf = String(tgt.interval ?? "1d");
         const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
-        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
         const isFx = (SPECS as any)[sym]?.type === "forex";
-        const series = dropFxClosedBars(res.candles ?? [], isFx);
-        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars`, sourcing }); continue; }
         out.push({
+          sourcing,
           symbol: sym, interval: tf, bars: series.length,
           traces: (tgt.trace ?? []).map((t: any) =>
             traceIPOCandidateFailure(series, String(t.date), t.side)),
@@ -4021,11 +4069,11 @@ Deno.serve(async (req) => {
         const sym = String(tgt.symbol);
         const tf = String(tgt.interval ?? "1d");
         const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
-        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
         const isFx = (SPECS as any)[sym]?.type === "forex";
-        const series = dropFxClosedBars(res.candles ?? [], isFx);
-        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars`, sourcing }); continue; }
         out.push({
+          sourcing,
           symbol: sym, interval: tf, bars: series.length,
           hypotheses: (tgt.trace ?? []).map((t: any) =>
             traceDepartureOriginHypotheses(series, String(t.date), t.side, { detailCap: Number(body?.detailCap ?? 24) })),
@@ -4053,11 +4101,11 @@ Deno.serve(async (req) => {
         const sym = String(tgt.symbol);
         const tf = String(tgt.interval ?? "1d");
         const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
-        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
         const isFx = (SPECS as any)[sym]?.type === "forex";
-        const series = dropFxClosedBars(res.candles ?? [], isFx);
-        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars`, sourcing }); continue; }
         out.push({
+          sourcing,
           symbol: sym, interval: tf, bars: series.length,
           knownBoxes: (tgt.knownBoxes ?? []).map((k: any) =>
             traceEventLocalRecovery(series, String(k.date), k.side)),
@@ -4142,15 +4190,21 @@ Deno.serve(async (req) => {
         const isFx = (SPECS as any)[sym]?.type === "forex";
         const levels: Array<{ timeframe: string; candles: any[] }> = [];
         const barsByTimeframe: Record<string, number> = {};
+        const sourcingByTimeframe: Record<string, unknown> = {};
         let bad: string | null = null;
         for (const tf of tfs) {
-          const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
-          const series = dropFxClosedBars(res.candles ?? [], isFx);
-          if (series.length < 60) { bad = `${tf}: only ${series.length} bars`; break; }
+          const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+          sourcingByTimeframe[tf] = sourcing;
+          if (series.length < 60) {
+            // Report the sourcing with the failure. "only 12 bars" alone cannot
+            // distinguish a thin market from a window that missed the data.
+            bad = `${tf}: only ${series.length} bars`;
+            break;
+          }
           levels.push({ timeframe: tf, candles: series });
           barsByTimeframe[tf] = series.length;
         }
-        if (bad) { out.push({ symbol: sym, error: bad }); continue; }
+        if (bad) { out.push({ symbol: sym, error: bad, sourcing: sourcingByTimeframe }); continue; }
 
         const from = tgt.from ?? body?.from;
         const to = tgt.to ?? body?.to;
@@ -4169,6 +4223,7 @@ Deno.serve(async (req) => {
           timeframes: tfs,
           barsByTimeframe,
           barsInView: viewBars,
+          sourcing: sourcingByTimeframe,
           dateRange: { from: from ?? null, to: to ?? null,
             note: "filters the RETURNED zones only; detection always runs on the full series" },
           ...(action === "ipo_coverage"

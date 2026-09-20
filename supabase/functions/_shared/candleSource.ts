@@ -198,7 +198,7 @@ const POLYGON_SYMBOLS: Record<string, string> = {
 
 // Twelve Data uses standard pair format with a slash (e.g. "EUR/USD") for FX,
 // dash for crypto, and the index/commodity symbol directly.
-const TWELVE_DATA_SYMBOLS: Record<string, string> = {
+export const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
   "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
   "USD/CHF": "USD/CHF",
@@ -255,7 +255,7 @@ function polygonLookbackDays(canon: string): number {
   return m[canon] || 7;
 }
 
-function twelveDataInterval(canon: string): string {
+export function twelveDataInterval(canon: string): string {
   const m: Record<string, string> = {
     "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
     "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
