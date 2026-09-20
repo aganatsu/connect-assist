@@ -1,5 +1,5 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground } from "../_shared/ipoZones.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -4036,6 +4036,52 @@ Deno.serve(async (req) => {
               "the launch position varies. No threshold swept, nothing tuned, " +
               "detectIPOZones untouched. Consolidation now reports UNRESOLVED and " +
               "vetoes nothing.",
+        out,
+      });
+    }
+
+    // ── ipo_event_local ──────────────────────────────────────────────────
+    // READ-ONLY. Event-local recovery and parent/child refinement. Global
+    // uniqueness is retired: candidates belonging to other confirmation
+    // episodes are coexisting IPOs, not competitors.
+    if (action === "ipo_event_local") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const series = dropFxClosedBars(res.candles ?? [], isFx);
+        if (series.length < 60) { out.push({ symbol: sym, error: `only ${series.length} bars` }); continue; }
+        out.push({
+          symbol: sym, interval: tf, bars: series.length,
+          knownBoxes: (tgt.knownBoxes ?? []).map((k: any) =>
+            traceEventLocalRecovery(series, String(k.date), k.side)),
+        });
+      }
+      // Strict and same-bar evidence are tallied APART. A same-bar departure
+      // satisfies the rule but cannot prove departure preceded the break, so
+      // folding the two together would overstate how much of the evidence is
+      // causally ordered.
+      const allBoxes = out.flatMap((o: any) => o.knownBoxes ?? []);
+      const ordering = (v: string | null) =>
+        allBoxes.filter((b: any) => (b.firstRelevantConfirmation?.departureBreakOrdering ?? null) === v).length;
+      return respond({
+        note: "READ-ONLY. Uniqueness is EVENT-LOCAL: a known IPO is compared only " +
+              "against candidates for its own first relevant confirmation. Later " +
+              "breaks are separate episodes and their candidates are coexisting " +
+              "IPOs, not competitors. Consolidation remains UNRESOLVED, no " +
+              "discriminator added, no threshold tuned, no production consumer.",
+        orderingSummary: {
+          knownBoxes: allBoxes.length,
+          departureBeforeBreak: ordering("DEPARTURE_BEFORE_BREAK"),
+          sameBarUnverifiable: ordering("SAME_BAR_UNVERIFIABLE"),
+          noConfirmation: ordering(null),
+          note: "same-bar cases are kept and counted separately — the bar satisfies " +
+                "the rule but cannot establish that departure preceded the break",
+        },
         out,
       });
     }

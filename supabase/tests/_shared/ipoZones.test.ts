@@ -12,6 +12,10 @@ import {
   originHypothesisBackground,
   confirmedSwings,
   uniqueBreakEvents,
+  findFirstRelevantConfirmation,
+  traceEventLocalRecovery,
+  buildIPOHierarchy,
+  resolveParentLineage,
 } from "../../functions/_shared/ipoZones.ts";
 import { analyzeMarketStructureCanonical, calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
@@ -711,4 +715,369 @@ Deno.test("background passes caller options through to selectIPOCandle", () => {
     Object.values(b.byAnchor).reduce((a: number, v: any) => a + v.distinctIPOCandidates, 0);
   assert(total(strict) < total(loose),
     `a lookback of 1 must find strictly fewer candidates: strict=${total(strict)} loose=${total(loose)}`);
+});
+
+// ─── event-local uniqueness and parent/child refinement ──────────────────────
+
+Deno.test("first relevant confirmation requires departure, then a close-through, with extent intact", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);                  // demand, extent 8, zone [10,12]
+  const bars = [
+    ipo,
+    candle(9, 11.0, 8.9, 10.8),                      // still inside — not a departure
+    candle(10.8, 13.5, 10.6, 13.2),                  // rallies
+    candle(13.2, 14, 12.6, 13.6),                    // FULLY above -> departed
+    candle(13.6, 15, 13.4, 14.8),                    // the close-through bar
+  ];
+  const ledger = [
+    { index: 1, direction: "bullish", level: 10.5, significance: "internal" },  // before departure
+    { index: 4, direction: "bullish", level: 14.0, significance: "external" },
+  ];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+  assertEquals(conf.found, true);
+  assertEquals(conf.breakIndex, 4,
+    "a close-through while price is still inside the zone is not that zone's confirming move");
+  assertEquals(conf.departedAtIndex, 3);
+  assertEquals(conf.significance, "external");
+});
+
+Deno.test("extent invalidation ends the episode with no confirmation", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);
+  const bars = [ipo, candle(9, 9.4, 7.2, 7.5), candle(7.5, 15, 7.4, 14.8)];
+  const ledger = [{ index: 2, direction: "bullish", level: 14, significance: "external" }];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+  assertEquals(conf.found, false);
+  assertEquals(conf.invalidatedAtIndex, 1);
+  assert(conf.reason.includes("extent invalidated"));
+});
+
+Deno.test("candidates from OTHER events are coexisting IPOs, not competitors", () => {
+  const series = manyBreakSeries();
+  const known = series[Math.floor(series.length * 0.3)].datetime.slice(0, 10);
+  const r = traceEventLocalRecovery(series, known, "demand") as any;
+  if (r.error || !r.firstRelevantConfirmation.found) return;
+
+  // Event-local count must be far smaller than the global pool, and every
+  // event candidate is labelled as belonging to THIS event.
+  assert(r.eventUniqueCandidateCount >= 1);
+  for (const c of r.eventCandidates) assertEquals(c.relation, "IPO_CANDIDATE_FOR_EVENT");
+  assertEquals(r.otherEventCandidates.relation, "OTHER_IPO_OTHER_EVENT");
+  assert(r.eventUniqueCandidateCount <= r.otherEventCandidates.count + r.eventUniqueCandidateCount,
+    "other-event candidates are reported separately, never folded into the event count");
+
+  const global = traceDepartureOriginHypotheses(series, known, "demand", { detailCap: 1 }) as any;
+  assert(r.eventUniqueCandidateCount <= global.recovery.uniqueCandlesSelectedTotal,
+    "event-local can never exceed the retired global pool");
+});
+
+/**
+ * Three timeframes over ONE self-similar price path, with candle amplitude
+ * shrinking as the timeframe drops. Each level therefore produces genuinely
+ * NARROWER zones than the level above at the same moment, which is what
+ * refinement means — as opposed to feeding the same series three times, where
+ * containment holds only because the zones are identical.
+ */
+function refinementLevels() {
+  const series = (amp: number): Candle[] => {
+    reset();
+    const out: Candle[] = [];
+    let p = 100;
+    for (let cycle = 0; cycle < 14; cycle++) {
+      for (let k = 0; k < 6; k++) { const o = p; p -= 0.9; out.push(candle(o, o + 0.25 * amp, p - 0.25 * amp, p)); }
+      out.push(candle(p, p + 0.2 * amp, p - 1.1 * amp, p - 0.9)); p -= 0.9;
+      for (let k = 0; k < 8; k++) { const o = p; p += 1.1; out.push(candle(o, p + 0.3 * amp, o - 0.3 * amp, p)); }
+      out.push(candle(p, p + 1.0 * amp, p - 0.2 * amp, p + 0.8)); p += 0.8;
+    }
+    return out;
+  };
+  return [
+    { timeframe: "W", candles: series(1.0) },
+    { timeframe: "D", candles: series(0.5) },
+    { timeframe: "H4", candles: series(0.25) },
+  ];
+}
+
+Deno.test("a parent IPO is NOT invalidated by finding a child", () => {
+  const [w, d] = refinementLevels();
+  const nodes = buildIPOHierarchy([w, d], { symbol: "T" });
+
+  const parents = nodes.filter((n) => n.childIds.length > 0);
+  // NON-VACUOUS. Without this the loop below passes on an empty hierarchy and
+  // asserts nothing at all.
+  assert(parents.length > 0, "the fixture must actually produce a parent with a child");
+  assert(nodes.some((n) => n.refinementDepth === 1),
+    "and an actual child, not just roots");
+
+  for (const p of parents) {
+    assertEquals(p.role, "CONTEXT", "a refined parent stays valid as context");
+    assert(p.childTimeframe !== null);
+    for (const cid of p.childIds) {
+      const child = nodes.find((n) => n.id === cid)!;
+      assertEquals(child.parentIPOId, p.id);
+      assertEquals(child.parentTimeframe, p.timeframe);
+      assertEquals(child.containedWithinParent, true);
+      assert(child.geometry.zoneLow >= p.geometry.zoneLow &&
+             child.geometry.zoneHigh <= p.geometry.zoneHigh,
+        "containment is full, not overlap");
+      assert(child.refinementDepth > p.refinementDepth);
+    }
+  }
+  // Leaves are execution zones; a childless parent is EXECUTION at its own TF.
+  for (const n of nodes.filter((x) => x.childIds.length === 0)) {
+    assertEquals(n.role, "EXECUTION");
+  }
+});
+
+Deno.test("refinement recurses beyond one HTF->LTF step", () => {
+  const nodes = buildIPOHierarchy(refinementLevels(), { symbol: "T" });
+  const depths = new Set(nodes.map((n) => n.refinementDepth));
+  assert(depths.has(0), "top level exists");
+
+  // NON-VACUOUS. A hierarchy that stops at depth 1 would make every assertion
+  // below unreachable while the test still reported green.
+  const grandchildren = nodes.filter((n) => n.refinementDepth === 2);
+  assert(grandchildren.length > 0, "the fixture must reach a third level");
+  assert(grandchildren.some((g) => g.parentIPOId !== null),
+    "and at least one grandchild must have decidable lineage to walk back through");
+
+  let walked = 0;
+  for (const g of grandchildren) {
+    if (!g.parentIPOId) continue;             // ambiguous lineage is not a chain to walk
+    const parent = nodes.find((n) => n.id === g.parentIPOId)!;
+    assertEquals(parent.refinementDepth, 1);
+    if (!parent.parentIPOId) continue;
+    const grandparent = nodes.find((n) => n.id === parent.parentIPOId)!;
+    assertEquals(grandparent.refinementDepth, 0);
+    assertEquals(grandparent.role, "CONTEXT", "a grandparent stays valid context");
+    walked++;
+  }
+  assert(walked > 0, "at least one full grandchild -> parent -> grandparent chain was checked");
+
+  assert(nodes.every((n) => n.refinementDepth === 0 || n.containedWithinParent),
+    "every non-root node is contained within some parent");
+});
+
+// ─── same-bar departure, sample caps, ambiguous lineage ──────────────────────
+
+Deno.test("a same-bar departure and break is KEPT but labelled unverifiable", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);                  // demand, zone [10,12], extent 8
+  const bars = [
+    ipo,
+    candle(9, 11.5, 8.5, 11.0),                      // inside the zone
+    // One bar that both leaves the zone entirely (low 12.4 > zoneHigh 12) AND
+    // closes through 14. OHLC cannot say which happened first.
+    candle(11.0, 15, 12.4, 14.8),
+  ];
+  const ledger = [{ index: 2, direction: "bullish", level: 14, significance: "external" }];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+
+  assertEquals(conf.found, true, "the case is preserved, not discarded");
+  assertEquals(conf.breakIndex, 2);
+  assertEquals(conf.departedAtIndex, 2);
+  assertEquals(conf.departureBreakOrdering, "SAME_BAR_UNVERIFIABLE");
+  assert(!conf.reason.includes("after departure"),
+    "the reason must not claim a chronological departure -> break it cannot prove");
+});
+
+Deno.test("a departure on an earlier bar than the break is labelled strict", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);
+  const bars = [
+    ipo,
+    candle(9, 13, 12.3, 12.8),                       // fully above the zone -> departed
+    candle(12.8, 15, 12.6, 14.8),                    // the close-through, one bar later
+  ];
+  const ledger = [{ index: 2, direction: "bullish", level: 14, significance: "external" }];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+  assertEquals(conf.departedAtIndex, 1);
+  assertEquals(conf.breakIndex, 2);
+  assertEquals(conf.departureBreakOrdering, "DEPARTURE_BEFORE_BREAK");
+});
+
+/** manyBreakSeries with an arbitrary cycle count, to get past 120 events. */
+function longBreakSeries(cycles: number): Candle[] {
+  reset();
+  const out: Candle[] = [];
+  let p = 100;
+  for (let cycle = 0; cycle < cycles; cycle++) {
+    for (let k = 0; k < 6; k++) { const o = p; p -= 0.9; out.push(candle(o, o + 0.25, p - 0.25, p)); }
+    out.push(candle(p, p + 0.2, p - 1.1, p - 0.9)); p -= 0.9;
+    for (let k = 0; k < 8; k++) { const o = p; p += 1.1; out.push(candle(o, p + 0.3, o - 0.3, p)); }
+    out.push(candle(p, p + 1.0, p - 0.2, p + 0.8)); p += 0.8;
+  }
+  return out;
+}
+
+Deno.test("the other-event SAMPLE cap cannot change the other-event COUNT", () => {
+  // Regression. otherEvents was sliced to 120 before the candidates were even
+  // computed, so `count` measured how many events happened to come first
+  // rather than the series — the same defect as the retired 8-break cap. Only
+  // the returned sample may be capped now.
+  //
+  // The fixture is deliberately long enough to produce MORE than 120 other
+  // events, so the deleted cap would actually bite here; a 14-cycle series
+  // yields 12 and would have passed either way.
+  const series = longBreakSeries(150);
+  const known = series[Math.floor(series.length * 0.25)].datetime.slice(0, 10);
+
+  const small = traceEventLocalRecovery(series, known, "demand", { detailCap: 1 }) as any;
+  const big = traceEventLocalRecovery(series, known, "demand", { detailCap: 500 }) as any;
+  if (small.error || !small.firstRelevantConfirmation.found) {
+    throw new Error("fixture must produce a confirmation for this test to mean anything");
+  }
+  assert(small.otherEventCandidates.otherEventsEvaluated > 120,
+    `the fixture must exceed the old cap: got ${small.otherEventCandidates.otherEventsEvaluated}`);
+
+  // Independent recount straight from the ledger — nothing here is capped.
+  const canon = analyzeMarketStructureCanonical(series, {
+    policy: "latest_unbroken_structural",
+    maxEventAgeBars: null,
+  }) as any;
+  const expected = uniqueBreakEvents(canon.swingLevelBreaks)
+    .filter((l: any) => l.index !== small.firstRelevantConfirmation.breakIndex).length;
+  assertEquals(small.otherEventCandidates.otherEventsEvaluated, expected,
+    "EVERY other event is evaluated, not the first N");
+
+  assertEquals(small.otherEventCandidates.count, big.otherEventCandidates.count,
+    "the count is computed over all other events regardless of sample size");
+  assertEquals(
+    small.otherEventCandidates.otherEventsEvaluated,
+    big.otherEventCandidates.otherEventsEvaluated,
+  );
+  assertEquals(small.otherEventCandidates.sample.length, 1, "the sample IS capped");
+  assert(big.otherEventCandidates.sample.length > small.otherEventCandidates.sample.length);
+  assertEquals(small.eventUniqueCandidateCount, big.eventUniqueCandidateCount,
+    "and the event-local count is untouched by display settings");
+});
+
+// Minimal hand-built nodes: only the fields lineage resolution reads.
+function pnode(id: string, lo: number, hi: number, dt: string): any {
+  return {
+    id, timeframe: "W", direction: "demand" as const, candleDatetime: dt,
+    geometry: { proximal: hi, distal: lo, extent: lo - 1, zoneLow: lo, zoneHigh: hi },
+    parentIPOId: null, parentTimeframe: null, possibleParentIPOIds: [],
+    lineageAmbiguous: false, lineageResolvedBy: "ROOT", childTimeframe: null,
+    refinementDepth: 0, role: "EXECUTION", containedWithinParent: false,
+    childIds: [], possibleChildIds: [],
+  };
+}
+const kid = (lo: number, hi: number, dt: string) => ({
+  direction: "demand" as const, candleDatetime: dt,
+  geometry: { proximal: hi, distal: lo, extent: lo - 1, zoneLow: lo, zoneHigh: hi },
+});
+
+Deno.test("two OVERLAPPING HTF parents leave lineage ambiguous, in either array order", () => {
+  // A and B overlap on [50,60]; the child sits inside both.
+  const A = pnode("A", 40, 60, "2026-01-01T00:00:00");
+  const B = pnode("B", 50, 70, "2026-01-02T00:00:00");
+  const child = kid(52, 58, "2026-02-01T00:00:00");
+
+  const fwd = resolveParentLineage(child, [A, B]);
+  const rev = resolveParentLineage(child, [B, A]);
+
+  assertEquals(fwd.lineageAmbiguous, true);
+  assertEquals(fwd.parentIPOId, null, "no parent is chosen when two qualify");
+  assertEquals(fwd.lineageResolvedBy, "AMBIGUOUS_MULTIPLE_PARENTS");
+  assertEquals([...fwd.possibleParentIPOIds].sort(), ["A", "B"]);
+  // The old .find() made this depend entirely on emission order.
+  assertEquals(rev.parentIPOId, fwd.parentIPOId);
+  assertEquals([...rev.possibleParentIPOIds].sort(), [...fwd.possibleParentIPOIds].sort());
+});
+
+Deno.test("NESTED HTF parents stay ambiguous — no narrowest-parent tiebreak is invented", () => {
+  const OUTER = pnode("OUTER", 40, 80, "2026-01-01T00:00:00");
+  const INNER = pnode("INNER", 50, 60, "2026-01-02T00:00:00");
+  const child = kid(52, 58, "2026-02-01T00:00:00");
+
+  const r = resolveParentLineage(child, [OUTER, INNER]);
+  assertEquals(r.lineageAmbiguous, true,
+    "narrowest-parent is plausible but untaught, so it must not be assumed");
+  assertEquals(r.parentIPOId, null);
+  assertEquals([...r.possibleParentIPOIds].sort(), ["INNER", "OUTER"]);
+
+  // An explicit context supplied by the caller — not guessed by the code — settles it.
+  const withCtx = resolveParentLineage(child, [OUTER, INNER], "OUTER");
+  assertEquals(withCtx.parentIPOId, "OUTER");
+  assertEquals(withCtx.lineageAmbiguous, false);
+  assertEquals(withCtx.lineageResolvedBy, "EXPLICIT_PARENT_CONTEXT");
+  // A context that does not actually contain the child cannot rescue it.
+  assertEquals(resolveParentLineage(child, [OUTER, INNER], "NOPE").parentIPOId, null);
+});
+
+Deno.test("a child cannot predate its parent, however neatly it nests", () => {
+  const LATE = pnode("LATE", 40, 80, "2026-03-01T00:00:00");
+  const EARLY = pnode("EARLY", 40, 80, "2026-01-01T00:00:00");
+  const child = kid(52, 58, "2026-02-01T00:00:00");
+
+  const r = resolveParentLineage(child, [LATE, EARLY]);
+  assertEquals(r.possibleParentIPOIds, ["EARLY"],
+    "the zone that formed after the child is not a parent of it");
+  assertEquals(r.parentIPOId, "EARLY");
+  assertEquals(r.lineageResolvedBy, "SINGLE_VALID_PARENT");
+
+  // Equal timestamps are allowed: same-bar refinement is containment, not time travel.
+  const sameTime = resolveParentLineage(kid(52, 58, "2026-01-01T00:00:00"), [EARLY]);
+  assertEquals(sameTime.parentIPOId, "EARLY");
+});
+
+/**
+ * Wide HTF candles and very narrow LTF ones, so HTF zones OVERLAP each other
+ * and a single child genuinely falls inside more than one of them. This is the
+ * case the old .find() resolved by array position.
+ */
+function overlappingParentLevels() {
+  const series = (amp: number): Candle[] => {
+    reset();
+    const out: Candle[] = [];
+    let p = 100;
+    for (let cycle = 0; cycle < 14; cycle++) {
+      for (let k = 0; k < 6; k++) { const o = p; p -= 0.9; out.push(candle(o, o + 0.25 * amp, p - 0.25 * amp, p)); }
+      out.push(candle(p, p + 0.2 * amp, p - 1.1 * amp, p - 0.9)); p -= 0.9;
+      for (let k = 0; k < 8; k++) { const o = p; p += 1.1; out.push(candle(o, p + 0.3 * amp, o - 0.3 * amp, p)); }
+      out.push(candle(p, p + 1.0 * amp, p - 0.2 * amp, p + 0.8)); p += 0.8;
+    }
+    return out;
+  };
+  return [
+    { timeframe: "W", candles: series(20) },
+    { timeframe: "D", candles: series(0.02) },
+  ];
+}
+
+Deno.test("an ambiguous child promotes NO parent to CONTEXT but is recorded as possible", () => {
+  const nodes = buildIPOHierarchy(overlappingParentLevels(), { symbol: "T" });
+
+  const ambiguous = nodes.filter((n) => n.lineageAmbiguous);
+  assert(ambiguous.length > 0,
+    "the fixture must actually produce overlapping parents, or this asserts nothing");
+
+  for (const n of nodes) {
+    if (n.lineageAmbiguous) {
+      assertEquals(n.parentIPOId, null);
+      assert(n.possibleParentIPOIds.length > 1);
+      for (const pid of n.possibleParentIPOIds) {
+        const p = nodes.find((x) => x.id === pid)!;
+        assert(p.possibleChildIds.includes(n.id),
+          "every candidate parent records the possibility");
+        assert(!p.childIds.includes(n.id),
+          "and none of them claims it as a settled child");
+      }
+    }
+  }
+  // Roles follow settled children only.
+  for (const n of nodes) {
+    assertEquals(n.role, n.childIds.length > 0 ? "CONTEXT" : "EXECUTION");
+  }
+
+  // An explicit parent context supplied by the caller settles the children that
+  // fall inside it, and leaves the rest ambiguous rather than guessing.
+  const ctxId = ambiguous[0].possibleParentIPOIds[0];
+  const withCtx = buildIPOHierarchy(overlappingParentLevels(), { symbol: "T", parentContextId: ctxId });
+  const resolved = withCtx.filter((n) => n.lineageResolvedBy === "EXPLICIT_PARENT_CONTEXT");
+  assert(resolved.length > 0, "the supplied context must resolve at least one child");
+  for (const r of resolved) assertEquals(r.parentIPOId, ctxId);
+  assert(withCtx.filter((n) => n.lineageAmbiguous).length < ambiguous.length,
+    "and strictly fewer children remain ambiguous than without it");
 });
