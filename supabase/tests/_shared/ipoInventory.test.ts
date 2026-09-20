@@ -11,6 +11,9 @@ import {
   isDateOnly,
   resolveParentLineage,
   resolveKnownCandleIndex,
+  traceIPOCandidateFailure,
+  traceDepartureOriginHypotheses,
+  traceEventLocalRecovery,
   detectIPOCandidates,
   type DemonstratedExample,
 } from "../../functions/_shared/ipoZones.ts";
@@ -776,4 +779,62 @@ Deno.test("a trace resolves the EXACT bar, never the first bar of the day", () =
   const daily = [{ datetime: "2020-05-08T00:00:00Z", open: 1, high: 2, low: 0, close: 1 }] as Candle[];
   assertEquals(resolveKnownCandleIndex(daily, "2020-05-08").index, 0);
   assertEquals(resolveKnownCandleIndex(daily, "2020-05-08").ambiguous, false);
+});
+
+Deno.test("a date-only intraday request is REFUSED by all three traces", () => {
+  // Ambiguity is information, not permission to guess a candle. Reporting the
+  // flag while analysing the first bar of the day anyway was the same failure
+  // in a quieter form: the output still described a candle nobody
+  // demonstrated, and a reader scanning for `error` would not have seen it.
+  reset();
+  const bars: Candle[] = [];
+  let p = 100;
+  for (let d = 0; d < 60; d++) {
+    for (const h of [0, 4, 8, 12, 16, 20]) {
+      const o = p; p += (d % 3 === 0 ? -0.7 : 0.9);
+      bars.push({
+        datetime: `2020-0${d < 24 ? 4 : 5}-${String((d % 24) + 1).padStart(2, "0")}T${String(h).padStart(2, "0")}:00:00Z`,
+        open: o, high: Math.max(o, p) + 0.3, low: Math.min(o, p) - 0.3, close: p,
+      } as Candle);
+    }
+  }
+  const day = bars[120].datetime.slice(0, 10);          // a day with six bars
+  const r = resolveKnownCandleIndex(bars, day);
+  assertEquals(r.ambiguous, true);
+  assertEquals(r.barsOnThatDay, 6);
+  assertEquals(r.candidateDatetimes.length, 6);
+
+  for (const [name, fn] of [
+    ["traceIPOCandidateFailure", traceIPOCandidateFailure],
+    ["traceDepartureOriginHypotheses", traceDepartureOriginHypotheses],
+    ["traceEventLocalRecovery", traceEventLocalRecovery],
+  ] as const) {
+    const out = (fn as any)(bars, day, "demand") as any;
+    assertEquals(out.error, "DATE_ONLY_AMBIGUOUS", `${name} must refuse`);
+    assertEquals(out.barsOnThatDay, 6);
+    assertEquals(out.candidateDatetimes.length, 6);
+    assert(out.reason.includes("is a guess"), `${name} must say why it refused`);
+    // No diagnostic result may accompany a refusal.
+    for (const leaked of ["perBreak", "results", "eventCandidates", "knownCandle", "firstRelevantConfirmation"]) {
+      assertEquals(out[leaked], undefined, `${name} leaked ${leaked} on a refusal`);
+    }
+  }
+
+  // An exact timestamp on the same day is accepted and analysed.
+  const exact = traceEventLocalRecovery(bars, `${day}T16:00`, "demand") as any;
+  assertEquals(exact.error, undefined);
+  assertEquals(exact.resolvedDatetime, `${day}T16:00:00Z`);
+});
+
+Deno.test("a date-only DAILY request stays valid — one bar, nothing to guess", () => {
+  const s = series();
+  const inv = buildIPOInventory([{ timeframe: "1d", candles: s }], { symbol: "T" });
+  const z = inv[0];
+  const day = z.candleDatetime.slice(0, 10);
+  assertEquals(resolveKnownCandleIndex(s, day).ambiguous, false);
+
+  for (const fn of [traceIPOCandidateFailure, traceDepartureOriginHypotheses, traceEventLocalRecovery]) {
+    const out = (fn as any)(s, day, z.direction) as any;
+    assertEquals(out.error, undefined, "a daily date is unambiguous and must still run");
+  }
 });
