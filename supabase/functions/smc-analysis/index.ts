@@ -2,7 +2,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
 import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParentError } from "../_shared/ipoCorpusPlan.ts";
 import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
-import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS } from "../_shared/ipoOriginExperiments.ts";
+import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directionalEvents } from "../_shared/ipoOriginExperiments.ts";
+import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4279,6 +4280,58 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_origin_features ──────────────────────────────────────────────
+    // READ-ONLY. For every demonstrated origin, the features of that candle and
+    // of every IPO-coloured competitor in the same structural leg. Counts only,
+    // no scoring, nothing wired to the detector.
+    if (action === "ipo_origin_features") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      const allSets: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const legs: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            legs.push({ date: e.date, side: e.side, error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          // What production picked in that same leg, for the pairwise column.
+          const set0 = legCandidateSet(series, r.index, e.side, events, null);
+          const prodInLeg = set0
+            ? allZones.filter((z) => z.direction === e.side &&
+                z.candleIndex >= set0.swingIndex && z.candleIndex <= set0.breakIndex)
+                .map((z) => z.candleIndex).sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null
+            : null;
+          const set = legCandidateSet(series, r.index, e.side, events, prodInLeg ?? null);
+          if (!set) { legs.push({ date: e.date, side: e.side, error: "no break whose leg contains the candle" }); continue; }
+          allSets.push(set);
+          legs.push({ date: e.date, side: e.side, symbol: sym, interval: tf, ...set });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, legs });
+      }
+      return respond({
+        note: "READ-ONLY measurement. A 'competitor' is any IPO-coloured candle in the " +
+              "same structural leg — a bar the search had to pass over, NOT a false " +
+              "positive. No feature is combined into a score; with this few " +
+              "demonstrations a weighted formula would fit the sample and teach nothing. " +
+              "Nothing here is wired to the detector.",
+        summary: summariseFeatures(allSets),
+        out,
+      });
+    }
+
     // ── ipo_origin_probe / ipo_origin_experiment ─────────────────────────
     // READ-ONLY. Walks a demonstrated candle through the production origin
     // pipeline and reports where it is lost, and measures what alternative
