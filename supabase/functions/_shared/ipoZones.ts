@@ -535,6 +535,8 @@ export interface DetectIPOOptions {
   maxLookback?: number;
   liquidityWindow?: number;
   lifecycleHorizon?: number;
+  /** Caps the RETURNED detail rows only. Never affects any statistic. */
+  detailCap?: number;
   /** null (default) = unbounded. Pass 50 only to mirror live shadow behaviour. */
   maxEventAgeBars?: number | null;
 }
@@ -1096,24 +1098,56 @@ export type OriginAnchorType = "ABSOLUTE_EXTREME" | "INTERNAL_SWING" | "EXTERNAL
 const INTERNAL_LOOKBACK = 3;
 const EXTERNAL_LOOKBACK = 7;
 
-/** Causally-confirmed swings, mirroring the canonical engine's two-phase rule. */
-function confirmedSwings(candles: Candle[]) {
+export interface ConfirmedSwing {
+  index: number; price: number; type: string; confirmedAt: number;
+}
+
+/**
+ * Causally-confirmed swings, as TWO INDEPENDENT MEMBERSHIPS.
+ *
+ * The first version promoted any pivot also found by the external detector to
+ * significance "external", which REMOVED it from the internal set. That made
+ * the two hypotheses non-comparable: a pivot both scales agree on vanished
+ * from INTERNAL, and genuine convergence looked like the internal anchor
+ * finding nothing.
+ *
+ * The same pivot may legitimately belong to both sets, confirmed at different
+ * times: index + 3 as an internal swing, index + 7 as an external one. The
+ * canonical engine's own merge behaviour is not changed — this is the research
+ * view, and it needs both scales intact to compare them.
+ */
+export function confirmedSwings(candles: Candle[]): {
+  internal: ConfirmedSwing[]; external: ConfirmedSwing[];
+} {
   const hasATR = candles.length >= 15;
-  const internal = detectSwingPoints(candles, INTERNAL_LOOKBACK, hasATR ? 0.2 : 0);
-  const external = detectSwingPoints(candles, EXTERNAL_LOOKBACK, hasATR ? 0.5 : 0);
-  const extKeys = new Set(external.map((s) => `${s.type}_${s.index}`));
-  return internal
-    .map((s) => ({
-      index: s.index, price: s.price, type: s.type,
-      significance: extKeys.has(`${s.type}_${s.index}`) ? "external" : "internal",
-      confirmedAt: s.index + (extKeys.has(`${s.type}_${s.index}`) ? EXTERNAL_LOOKBACK : INTERNAL_LOOKBACK),
-    }))
-    .concat(external
-      .filter((s) => !internal.some((x) => x.index === s.index && x.type === s.type))
-      .map((s) => ({
-        index: s.index, price: s.price, type: s.type,
-        significance: "external", confirmedAt: s.index + EXTERNAL_LOOKBACK,
-      })));
+  return {
+    internal: detectSwingPoints(candles, INTERNAL_LOOKBACK, hasATR ? 0.2 : 0)
+      .map((s) => ({ index: s.index, price: s.price, type: s.type,
+                     confirmedAt: s.index + INTERNAL_LOOKBACK })),
+    external: detectSwingPoints(candles, EXTERNAL_LOOKBACK, hasATR ? 0.5 : 0)
+      .map((s) => ({ index: s.index, price: s.price, type: s.type,
+                     confirmedAt: s.index + EXTERNAL_LOOKBACK })),
+  };
+}
+
+/**
+ * One representative ledger break per (bar, direction), using the SAME rule the
+ * IPO detector applies: external preferred, then the most extreme level in the
+ * break direction. Several levels closing through on one candle is a single
+ * market event; counting each as independent overweights those bars.
+ */
+export function uniqueBreakEvents(ledger: any[]): any[] {
+  const keep = new Map<string, any>();
+  for (const l of ledger) {
+    const k = `${l.index}|${l.direction}`;
+    const cur = keep.get(k);
+    if (!cur) { keep.set(k, l); continue; }
+    const better = (l.significance === "external" && cur.significance !== "external") ||
+      (l.significance === cur.significance &&
+        (l.direction === "bullish" ? l.level > cur.level : l.level < cur.level));
+    if (better) keep.set(k, l);
+  }
+  return [...keep.values()].sort((a, b) => a.index - b.index);
 }
 
 export function traceDepartureOriginHypotheses(
@@ -1134,12 +1168,18 @@ export function traceDepartureOriginHypotheses(
     maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
   });
   const swings = confirmedSwings(candles);
-  const breaks = (canon.swingLevelBreaks as any[])
-    .filter((l) => l.direction === wantDir && l.index > ki)
-    .sort((a, b) => a.index - b.index);
+  // EVERY compatible break is evaluated. Capping the loop at 8 made the verdict
+  // depend on which breaks happened to come first, and BTC known candles have
+  // 195-228 compatible breaks — a cap there could report "not recovered" for a
+  // candle recovered by break #50. Only the RETURNED detail is capped, after all
+  // statistics are computed, so a display limit can never move the conclusion.
+  const breaks = uniqueBreakEvents(
+    (canon.swingLevelBreaks as any[]).filter((l) => l.direction === wantDir && l.index > ki),
+  );
+  const detailCap = Number(opts.detailCap ?? 24);
 
   const results: any[] = [];
-  for (const lb of breaks.slice(0, 8)) {
+  for (const lb of breaks) {
     const j = lb.index;
 
     // A — the retired baseline
@@ -1151,9 +1191,11 @@ export function traceDepartureOriginHypotheses(
                                 : candles[k].high >= candles[absIdx].high) absIdx = k;
     }
     // B / C — most recent causally-confirmed opposing swing before the break
-    const opposing = swings.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j);
-    const internalAnchor = opposing.filter((s) => s.significance === "internal").sort((a, b) => b.index - a.index)[0] ?? null;
-    const externalAnchor = opposing.filter((s) => s.significance === "external").sort((a, b) => b.index - a.index)[0] ?? null;
+    const usable = (arr: ConfirmedSwing[]) =>
+      arr.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j)
+        .sort((a, b) => b.index - a.index)[0] ?? null;
+    const internalAnchor = usable(swings.internal);
+    const externalAnchor = usable(swings.external);
 
     const anchors: Array<{ type: OriginAnchorType; idx: number | null; sig: string | null; confirmedAt: number | null }> = [
       { type: "ABSOLUTE_EXTREME", idx: absIdx, sig: null, confirmedAt: null },
@@ -1231,8 +1273,10 @@ export function traceDepartureOriginHypotheses(
   return {
     knownDate, direction,
     knownCandle: { index: ki, datetime: candles[ki].datetime, geometry: g },
-    directionalBreaksExamined: breaks.slice(0, 8).length,
-    results,
+    directionalBreaksTotal: breaks.length,
+    detailedBreaksReturned: Math.min(breaks.length, detailCap),
+    // Detail only. Every statistic below is computed over ALL breaks.
+    results: results.filter((r) => breaks.findIndex((b) => b.index === r.breakIndex) < detailCap),
     recovery: {
       knownRecovered: hits.length > 0,
       knownUniquelyRecovered: hits.length > 0 && competitors.length === 0,
@@ -1267,6 +1311,11 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
     maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
   });
   const swings = confirmedSwings(candles);
+  const ledgerAll = canon.swingLevelBreaks as any[];
+  // Statistics run on UNIQUE (bar, direction) events, not raw ledger levels.
+  // Several levels closing through on one candle is one market event; counting
+  // each separately overweights those bars in every ratio below.
+  const events = uniqueBreakEvents(ledgerAll);
   const stats: Record<string, { origins: number; ipos: number; multi: number }> = {
     ABSOLUTE_EXTREME: { origins: 0, ipos: 0, multi: 0 },
     INTERNAL_SWING: { origins: 0, ipos: 0, multi: 0 },
@@ -1277,7 +1326,7 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
   let zeroUnique = 0, oneUnique = 0, manyUnique = 0, convergedBreaks = 0, tripleConverged = 0;
 
   const seen = new Map<string, Set<string>>();
-  for (const lb of (canon.swingLevelBreaks as any[])) {
+  for (const lb of events) {
     breaks++;
     const j = lb.index;
     const dir: IPODirection = lb.direction === "bullish" ? "demand" : "supply";
@@ -1289,9 +1338,11 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
       if (lb.direction === "bullish" ? candles[k].low <= candles[absIdx].low
                                      : candles[k].high >= candles[absIdx].high) absIdx = k;
     }
-    const opposing = swings.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j);
-    const iA = opposing.filter((s) => s.significance === "internal").sort((a, b) => b.index - a.index)[0] ?? null;
-    const eA = opposing.filter((s) => s.significance === "external").sort((a, b) => b.index - a.index)[0] ?? null;
+    const usable = (arr: ConfirmedSwing[]) =>
+      arr.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j)
+        .sort((a, b) => b.index - a.index)[0] ?? null;
+    const iA = usable(swings.internal);
+    const eA = usable(swings.external);
 
     const pickFor = (idx: number | null) => {
       if (idx === null) return new Set<string>();
@@ -1299,7 +1350,13 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
       for (const off of [0, 1, 2, 3]) {
         const launch = idx + off;
         if (launch >= j) continue;
-        const sel = selectIPOCandle(candles, launch, dir, {});
+        // Caller overrides must reach the selector here as well; hardcoding {}
+        // would silently measure default behaviour while reporting the caller's.
+        const sel = selectIPOCandle(candles, launch, dir, {
+          maxIntervening: opts.maxIntervening,
+          interveningMaxRangeAtr: opts.interveningMaxRangeAtr,
+          maxLookback: opts.maxLookback,
+        });
         if (sel) out.add(candles[sel.index].datetime.slice(0, 10));
       }
       return out;
@@ -1340,7 +1397,11 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
   }
   const per100 = (n: number) => Math.round((n / candles.length) * 1000) / 10;
   return {
-    bars: candles.length, ledgerBreaks: breaks,
+    bars: candles.length,
+    ledgerLevelBreaks: ledgerAll.length,
+    uniqueBreakEvents: events.length,
+    /** Denominator for every ratio below. */
+    breaksUsedAsDenominator: breaks,
     byAnchor: Object.fromEntries(Object.entries(stats).map(([k, v]) => [k, {
       originsProducingAnIPO: v.origins,
       originsPer100Bars: per100(v.origins),

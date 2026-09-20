@@ -4026,7 +4026,7 @@ Deno.serve(async (req) => {
         out.push({
           symbol: sym, interval: tf, bars: series.length,
           hypotheses: (tgt.trace ?? []).map((t: any) =>
-            traceDepartureOriginHypotheses(series, String(t.date), t.side)),
+            traceDepartureOriginHypotheses(series, String(t.date), t.side, { detailCap: Number(body?.detailCap ?? 24) })),
           background: body?.includeBackground === false ? null : originHypothesisBackground(series),
         });
       }

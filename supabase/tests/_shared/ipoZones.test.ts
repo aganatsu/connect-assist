@@ -8,6 +8,10 @@ import {
   trackIPOLifecycle,
   assessConsolidation,
   detectIPOCandidates,
+  traceDepartureOriginHypotheses,
+  originHypothesisBackground,
+  confirmedSwings,
+  uniqueBreakEvents,
 } from "../../functions/_shared/ipoZones.ts";
 import { analyzeMarketStructureCanonical, calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
@@ -603,4 +607,108 @@ Deno.test("supply arms by leaving DOWNWARD, not upward", () => {
   const lc = trackIPOLifecycle(down, 0, "supply", ipoGeometry(ipo2, "supply"));
   assertEquals(lc.armedForRetestAtIndex, 2);
   assertEquals(lc.testCount, 1);
+});
+
+// ─── origin-hypothesis diagnostic regressions ────────────────────────────────
+
+/** A long series with many alternating swings, so there are plenty of breaks. */
+function manyBreakSeries(): Candle[] {
+  reset();
+  const out: Candle[] = [];
+  let p = 100;
+  for (let cycle = 0; cycle < 14; cycle++) {
+    for (let k = 0; k < 6; k++) { const o = p; p -= 0.9; out.push(candle(o, o + 0.25, p - 0.25, p)); }
+    out.push(candle(p, p + 0.2, p - 1.1, p - 0.9)); p -= 0.9;
+    for (let k = 0; k < 8; k++) { const o = p; p += 1.1; out.push(candle(o, p + 0.3, o - 0.3, p)); }
+    out.push(candle(p, p + 1.0, p - 0.2, p + 0.8)); p += 0.8;
+  }
+  return out;
+}
+
+Deno.test("a display cap cannot change the conclusion — statistics span ALL breaks", () => {
+  // Regression. The loop was capped at 8 breaks, so a known candle recovered by
+  // break #50 would have been reported NOT recovered. BTC known candles have
+  // 195-228 compatible breaks, so the cap was load-bearing on exactly the cases
+  // that mattered. Only the RETURNED detail may be capped now.
+  const series = manyBreakSeries();
+  const known = series[Math.floor(series.length * 0.25)].datetime.slice(0, 10);
+
+  const tight = traceDepartureOriginHypotheses(series, known, "demand", { detailCap: 1 }) as any;
+  const wide = traceDepartureOriginHypotheses(series, known, "demand", { detailCap: 1000 }) as any;
+  if (tight.error) return;
+
+  assert(tight.directionalBreaksTotal > 1, "the fixture must produce more breaks than the cap");
+  assertEquals(tight.detailedBreaksReturned, 1, "detail is capped");
+  assert(wide.detailedBreaksReturned > tight.detailedBreaksReturned, "and the wide run returns more");
+
+  // Every statistic must be identical regardless of the display cap.
+  assertEquals(tight.directionalBreaksTotal, wide.directionalBreaksTotal);
+  assertEquals(tight.recovery.knownRecovered, wide.recovery.knownRecovered);
+  assertEquals(tight.recovery.knownUniquelyRecovered, wide.recovery.knownUniquelyRecovered);
+  assertEquals(tight.recovery.uniqueCandlesSelectedTotal, wide.recovery.uniqueCandlesSelectedTotal);
+  assertEquals(tight.recovery.recoveredBy.sort(), wide.recovery.recoveredBy.sort());
+  assertEquals(tight.multiplicity, wide.multiplicity);
+});
+
+Deno.test("a pivot in BOTH swing scales stays available to both hypotheses", () => {
+  // Regression. Promoting a dual pivot to "external" removed it from the
+  // internal set, so the two hypotheses were not comparable and genuine
+  // convergence looked like the internal anchor finding nothing.
+  const series = manyBreakSeries();
+  const { internal, external } = confirmedSwings(series);
+  const key = (s: { type: string; index: number }) => `${s.type}_${s.index}`;
+  const intKeys = new Set(internal.map(key));
+  const shared = external.filter((e) => intKeys.has(key(e)));
+
+  assert(shared.length > 0, "the fixture must contain at least one dual-scale pivot");
+  for (const e of shared) {
+    const i = internal.find((x) => key(x) === key(e))!;
+    assertEquals(i.confirmedAt, i.index + 3, "internal membership confirms at +3");
+    assertEquals(e.confirmedAt, e.index + 7, "external membership confirms at +7");
+    assert(i.confirmedAt < e.confirmedAt, "the same pivot is knowable earlier as internal");
+  }
+});
+
+Deno.test("several levels breaking on one bar+direction count as ONE background event", () => {
+  const ledger = [
+    { index: 10, direction: "bullish", level: 5, significance: "internal" },
+    { index: 10, direction: "bullish", level: 7, significance: "external" },
+    { index: 10, direction: "bullish", level: 9, significance: "internal" },
+    { index: 10, direction: "bearish", level: 3, significance: "internal" },
+    { index: 12, direction: "bullish", level: 4, significance: "internal" },
+  ];
+  const uniq = uniqueBreakEvents(ledger);
+  assertEquals(uniq.length, 3, "two directions on bar 10 plus bar 12");
+  const bar10bull = uniq.find((u) => u.index === 10 && u.direction === "bullish")!;
+  assertEquals(bar10bull.significance, "external",
+    "the representative prefers EXTERNAL, matching the detector's own rule");
+  assertEquals(bar10bull.level, 7);
+
+  // And the background denominator uses unique events, not raw levels.
+  const series = manyBreakSeries();
+  const bg = originHypothesisBackground(series) as any;
+  assert(bg.uniqueBreakEvents <= bg.ledgerLevelBreaks, "unique events cannot exceed raw levels");
+  assertEquals(bg.breaksUsedAsDenominator, bg.uniqueBreakEvents,
+    "ratios must be computed against unique events");
+  const u = bg.uniqueCandidatesPerBreak;
+  assertEquals(u.breaksWithZeroUnique + u.breaksWithExactlyOneUnique + u.breaksWithMoreThanOneUnique,
+    bg.uniqueBreakEvents, "the three buckets must partition the unique events exactly");
+});
+
+Deno.test("background passes caller options through to selectIPOCandle", () => {
+  // Regression. selectIPOCandle was called with a hardcoded {}, so the
+  // background silently measured DEFAULT behaviour while reporting the
+  // caller's settings — the results would have looked valid and been wrong.
+  const series = manyBreakSeries();
+  const loose = originHypothesisBackground(series, { maxLookback: 12, maxIntervening: 2 }) as any;
+  // maxLookback 0 means the walk inspects ONLY the launch bar, so a candidate
+  // can be found only where the launch bar is itself IPO-coloured. If options
+  // were still hardcoded to {}, this would be identical to the loose run.
+  const strict = originHypothesisBackground(series, { maxLookback: 0 }) as any;
+
+  assertEquals(loose.uniqueBreakEvents, strict.uniqueBreakEvents, "same breaks either way");
+  const total = (b: any) =>
+    Object.values(b.byAnchor).reduce((a: number, v: any) => a + v.distinctIPOCandidates, 0);
+  assert(total(strict) < total(loose),
+    `a lookback of 1 must find strictly fewer candidates: strict=${total(strict)} loose=${total(loose)}`);
 });
