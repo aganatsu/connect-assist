@@ -5,6 +5,7 @@ import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAut
 import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directionalEvents } from "../_shared/ipoOriginExperiments.ts";
 import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
 import { testOnsetHypothesis, ONSET_DEFINITIONS } from "../_shared/ipoDisplacementOnset.ts";
+import { testAnchorHypothesis } from "../_shared/ipoOriginAnchor.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4281,6 +4282,83 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_origin_anchor ────────────────────────────────────────────────
+    // READ-ONLY. ONSET_OR_LAST_OPPOSITE_BEFORE applied over the FROZEN onset
+    // detectors. The onset finders are called exactly as implemented; only the
+    // anchoring after them differs. Nothing wired to the detector.
+    if (action === "ipo_origin_anchor") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            ...testAnchorHypothesis(series, r.index, e.side, swingIdx, ev.index, prodPick ?? null) });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const byDef = ONSET_DEFINITIONS.map((d) => {
+        const ts = flat.map((f: any) => ({ f, t: f.trials.find((t: any) => t.onsetKey === d.key) }))
+          .filter((x: any) => x.t);
+        const hit = ts.filter((x: any) => x.t.exactMatch);
+        return {
+          onsetKey: d.key,
+          exactMatches: hit.length,
+          of: ts.length,
+          byAnchorMode: {
+            ONSET_IS_ORIGIN: hit.filter((x: any) => x.t.anchorMode === "ONSET_IS_ORIGIN").length,
+            STEP_BACK_TO_LAST_OPPOSITE: hit.filter((x: any) => x.t.anchorMode === "STEP_BACK_TO_LAST_OPPOSITE").length,
+          },
+          matched: hit.map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+          gainedVsProduction: hit.filter((x: any) => !x.f.productionMatches)
+            .map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+          lostVsProduction: ts.filter((x: any) => x.f.productionMatches && !x.t.exactMatch)
+            .map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+        };
+      }).sort((a, b) => b.exactMatches - a.exactMatches);
+      return respond({
+        note: "READ-ONLY. ONSET_OR_LAST_OPPOSITE_BEFORE over the FROZEN onset " +
+              "detectors — the finders are unchanged and only the anchoring after " +
+              "them differs. No threshold introduced: the rule branches on candle " +
+              "colour, which already defines IPO direction everywhere else. " +
+              "Definitions are NOT unioned and nothing is scored.",
+        productionBaseline: { exactMatches: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byDefinition: byDef,
+        out,
+      });
+    }
+
     // ── ipo_displacement_onset ───────────────────────────────────────────
     // READ-ONLY. Locates the impulse onset FIRST, by definitions that never
     // look at a candidate's own future move, then steps back to the last

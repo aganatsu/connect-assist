@@ -306,7 +306,7 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
   const SHADOW = [
     "ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts",
     "ipoHistoricalRange.ts", "ipoResearchAuth.ts", "ipoOriginExperiments.ts",
-    "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts",
+    "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts", "ipoOriginAnchor.ts",
   ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
@@ -318,6 +318,7 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
     "supabase/functions/_shared/ipoOriginExperiments.ts",
     "supabase/functions/_shared/ipoOriginFeatures.ts",
     "supabase/functions/_shared/ipoDisplacementOnset.ts",
+    "supabase/functions/_shared/ipoOriginAnchor.ts",
   ];
   const offenders: string[] = [];
   const walk = async (dir: string) => {
