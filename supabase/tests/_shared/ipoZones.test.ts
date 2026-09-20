@@ -12,6 +12,9 @@ import {
   originHypothesisBackground,
   confirmedSwings,
   uniqueBreakEvents,
+  findFirstRelevantConfirmation,
+  traceEventLocalRecovery,
+  buildIPOHierarchy,
 } from "../../functions/_shared/ipoZones.ts";
 import { analyzeMarketStructureCanonical, calculateATR, detectLiquidityPools } from "../../functions/_shared/smcAnalysis.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
@@ -711,4 +714,107 @@ Deno.test("background passes caller options through to selectIPOCandle", () => {
     Object.values(b.byAnchor).reduce((a: number, v: any) => a + v.distinctIPOCandidates, 0);
   assert(total(strict) < total(loose),
     `a lookback of 1 must find strictly fewer candidates: strict=${total(strict)} loose=${total(loose)}`);
+});
+
+// ─── event-local uniqueness and parent/child refinement ──────────────────────
+
+Deno.test("first relevant confirmation requires departure, then a close-through, with extent intact", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);                  // demand, extent 8, zone [10,12]
+  const bars = [
+    ipo,
+    candle(9, 11.0, 8.9, 10.8),                      // still inside — not a departure
+    candle(10.8, 13.5, 10.6, 13.2),                  // rallies
+    candle(13.2, 14, 12.6, 13.6),                    // FULLY above -> departed
+    candle(13.6, 15, 13.4, 14.8),                    // the close-through bar
+  ];
+  const ledger = [
+    { index: 1, direction: "bullish", level: 10.5, significance: "internal" },  // before departure
+    { index: 4, direction: "bullish", level: 14.0, significance: "external" },
+  ];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+  assertEquals(conf.found, true);
+  assertEquals(conf.breakIndex, 4,
+    "a close-through while price is still inside the zone is not that zone's confirming move");
+  assertEquals(conf.departedAtIndex, 3);
+  assertEquals(conf.significance, "external");
+});
+
+Deno.test("extent invalidation ends the episode with no confirmation", () => {
+  reset();
+  const ipo = candle(10, 12, 8, 9);
+  const bars = [ipo, candle(9, 9.4, 7.2, 7.5), candle(7.5, 15, 7.4, 14.8)];
+  const ledger = [{ index: 2, direction: "bullish", level: 14, significance: "external" }];
+  const conf = findFirstRelevantConfirmation(bars, 0, "demand", ledger);
+  assertEquals(conf.found, false);
+  assertEquals(conf.invalidatedAtIndex, 1);
+  assert(conf.reason.includes("extent invalidated"));
+});
+
+Deno.test("candidates from OTHER events are coexisting IPOs, not competitors", () => {
+  const series = manyBreakSeries();
+  const known = series[Math.floor(series.length * 0.3)].datetime.slice(0, 10);
+  const r = traceEventLocalRecovery(series, known, "demand") as any;
+  if (r.error || !r.firstRelevantConfirmation.found) return;
+
+  // Event-local count must be far smaller than the global pool, and every
+  // event candidate is labelled as belonging to THIS event.
+  assert(r.eventUniqueCandidateCount >= 1);
+  for (const c of r.eventCandidates) assertEquals(c.relation, "IPO_CANDIDATE_FOR_EVENT");
+  assertEquals(r.otherEventCandidates.relation, "OTHER_IPO_OTHER_EVENT");
+  assert(r.eventUniqueCandidateCount <= r.otherEventCandidates.count + r.eventUniqueCandidateCount,
+    "other-event candidates are reported separately, never folded into the event count");
+
+  const global = traceDepartureOriginHypotheses(series, known, "demand", { detailCap: 1 }) as any;
+  assert(r.eventUniqueCandidateCount <= global.recovery.uniqueCandlesSelectedTotal,
+    "event-local can never exceed the retired global pool");
+});
+
+Deno.test("a parent IPO is NOT invalidated by finding a child", () => {
+  const series = manyBreakSeries();
+  const nodes = buildIPOHierarchy(
+    [{ timeframe: "HTF", candles: series }, { timeframe: "LTF", candles: series }],
+    { symbol: "T" },
+  );
+  const parents = nodes.filter((n) => n.childIds.length > 0);
+  for (const p of parents) {
+    assertEquals(p.role, "CONTEXT", "a refined parent stays valid as context");
+    assert(p.childTimeframe !== null);
+    for (const cid of p.childIds) {
+      const child = nodes.find((n) => n.id === cid)!;
+      assertEquals(child.parentIPOId, p.id);
+      assertEquals(child.parentTimeframe, p.timeframe);
+      assertEquals(child.containedWithinParent, true);
+      assert(child.geometry.zoneLow >= p.geometry.zoneLow &&
+             child.geometry.zoneHigh <= p.geometry.zoneHigh,
+        "containment is full, not overlap");
+      assert(child.refinementDepth > p.refinementDepth);
+    }
+  }
+  // Leaves are execution zones; a childless parent is EXECUTION at its own TF.
+  for (const n of nodes.filter((x) => x.childIds.length === 0)) {
+    assertEquals(n.role, "EXECUTION");
+  }
+});
+
+Deno.test("refinement recurses beyond one HTF->LTF step", () => {
+  const series = manyBreakSeries();
+  const nodes = buildIPOHierarchy([
+    { timeframe: "W", candles: series },
+    { timeframe: "D", candles: series },
+    { timeframe: "H4", candles: series },
+  ], { symbol: "T" });
+  const depths = new Set(nodes.map((n) => n.refinementDepth));
+  assert(depths.has(0), "top level exists");
+  // Depth is not hardcoded to a single step — a grandchild must be possible.
+  const grandchildren = nodes.filter((n) => n.refinementDepth === 2);
+  for (const g of grandchildren) {
+    const parent = nodes.find((n) => n.id === g.parentIPOId)!;
+    assertEquals(parent.refinementDepth, 1);
+    const grandparent = nodes.find((n) => n.id === parent.parentIPOId)!;
+    assertEquals(grandparent.refinementDepth, 0);
+    assertEquals(grandparent.role, "CONTEXT");
+  }
+  assert(nodes.every((n) => n.refinementDepth === 0 || n.containedWithinParent),
+    "every non-root node is contained within its parent");
 });

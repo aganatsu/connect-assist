@@ -70,3 +70,5 @@ ipo-out.json
 run-ipo.sh
 trace-out.json
 run-trace.sh
+origin-out.json
+run-origin.sh

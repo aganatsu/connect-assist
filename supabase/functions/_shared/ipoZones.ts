@@ -1279,7 +1279,14 @@ export function traceDepartureOriginHypotheses(
     results: results.filter((r) => breaks.findIndex((b) => b.index === r.breakIndex) < detailCap),
     recovery: {
       knownRecovered: hits.length > 0,
-      knownUniquelyRecovered: hits.length > 0 && competitors.length === 0,
+      /**
+       * RETIRED. Global uniqueness pooled candidates from every future break and
+       * labelled them competitors, which reported "286 other candles also
+       * qualify" on BTC 2020-05-11. Multiple IPOs coexist on a chart; a candle
+       * belonging to a later move is not a false positive for an earlier one.
+       * Use traceEventLocalRecovery().knownEventLocallyUnique instead.
+       */
+      knownUniquelyRecovered_RETIRED: hits.length > 0 && competitors.length === 0,
       recoveredBy,
       uniqueCandlesSelectedTotal: allSelected.length,
       competingCandles: competitors,
@@ -1432,4 +1439,276 @@ export function originHypothesisBackground(candles: Candle[], opts: DetectIPOOpt
       percentAllThreeAgree: breaks ? Math.round((tripleConverged / breaks) * 1000) / 10 : 0,
     },
   };
+}
+
+// ─── event-local recovery + parent/child refinement ──────────────────────────
+//
+// MODEL CORRECTION. The earlier uniqueness metric pooled candidates from EVERY
+// future compatible structure break and called them competitors, which reported
+// "known recovered, but 286 other candles also qualify" on BTC 2020-05-11. That
+// framing was wrong: multiple IPOs coexist on a chart, and a candle belonging to
+// a later move is not a false positive for an earlier one.
+//
+// Uniqueness is therefore EVENT-LOCAL. A known IPO is compared only against the
+// candidates for its OWN first relevant confirmation, defined as:
+//
+//   IPO candle -> directional departure -> extent still valid
+//              -> first directionally relevant close-through of structure
+//
+// Departure must happen before the break counts: a close-through while price is
+// still inside the zone is not that zone's confirming move.
+//
+// knownUniquelyRecovered (global) is retired and deliberately not reported.
+
+export type IPOCandidateRelation =
+  | "IPO_CANDIDATE_FOR_EVENT"
+  | "OTHER_IPO_OTHER_EVENT"
+  | "UNRELATED";
+
+export interface FirstRelevantConfirmation {
+  found: boolean;
+  reason: string;
+  breakIndex: number | null;
+  breakDate: string | null;
+  level: number | null;
+  significance: string | null;
+  barsFromIPOToBreak: number | null;
+  departedAtIndex: number | null;
+  departedAtDate: string | null;
+  invalidatedAtIndex: number | null;
+}
+
+export function findFirstRelevantConfirmation(
+  candles: Candle[],
+  ipoIndex: number,
+  direction: IPODirection,
+  ledger: any[],
+): FirstRelevantConfirmation {
+  const demand = direction === "demand";
+  const wantDir = demand ? "bullish" : "bearish";
+  const g = ipoGeometry(candles[ipoIndex], direction);
+  const byBar = new Map<number, any[]>();
+  for (const l of ledger) {
+    if (l.direction !== wantDir || l.index <= ipoIndex) continue;
+    (byBar.get(l.index) ?? byBar.set(l.index, []).get(l.index)!).push(l);
+  }
+  let departed: number | null = null;
+  for (let j = ipoIndex + 1; j < candles.length; j++) {
+    const b = candles[j];
+    // Extent must hold. A close beyond it ends the episode with no confirmation.
+    if (demand ? b.close < g.extent : b.close > g.extent) {
+      return {
+        found: false, reason: "extent invalidated before any relevant close-through",
+        breakIndex: null, breakDate: null, level: null, significance: null,
+        barsFromIPOToBreak: null,
+        departedAtIndex: departed, departedAtDate: departed === null ? null : candles[departed].datetime.slice(0, 10),
+        invalidatedAtIndex: j,
+      };
+    }
+    if (departed === null && (demand ? b.low > g.zoneHigh : b.high < g.zoneLow)) departed = j;
+    if (departed === null) continue;                 // the move must leave first
+    const here = byBar.get(j);
+    if (here && here.length) {
+      const rep = uniqueBreakEvents(here)[0];
+      return {
+        found: true, reason: "first directionally relevant close-through after departure",
+        breakIndex: j, breakDate: b.datetime.slice(0, 10),
+        level: rep.level, significance: rep.significance,
+        barsFromIPOToBreak: j - ipoIndex,
+        departedAtIndex: departed, departedAtDate: candles[departed].datetime.slice(0, 10),
+        invalidatedAtIndex: null,
+      };
+    }
+  }
+  return {
+    found: false, reason: departed === null
+      ? "price never departed the zone on the departure side"
+      : "departed, but no directionally relevant close-through before the series ended",
+    breakIndex: null, breakDate: null, level: null, significance: null,
+    barsFromIPOToBreak: null,
+    departedAtIndex: departed, departedAtDate: departed === null ? null : candles[departed].datetime.slice(0, 10),
+    invalidatedAtIndex: null,
+  };
+}
+
+/** Candidates produced by all anchors/offsets for ONE break event. */
+function candidatesForBreak(
+  candles: Candle[], breakIndex: number, direction: IPODirection,
+  swings: { internal: ConfirmedSwing[]; external: ConfirmedSwing[] },
+  lb: any, opts: DetectIPOOptions,
+): Map<string, string[]> {
+  const wantDir = direction === "demand" ? "bullish" : "bearish";
+  const opposingType = wantDir === "bullish" ? "low" : "high";
+  const j = breakIndex;
+  const swingIdx = lb?.swingIndex ?? Math.max(0, j - 10);
+  let absIdx = swingIdx;
+  for (let k = swingIdx; k <= j; k++) {
+    if (!candles[k]) continue;
+    if (wantDir === "bullish" ? candles[k].low <= candles[absIdx].low
+                              : candles[k].high >= candles[absIdx].high) absIdx = k;
+  }
+  const usable = (arr: ConfirmedSwing[]) =>
+    arr.filter((s) => s.type === opposingType && s.index < j && s.confirmedAt <= j)
+      .sort((a, b) => b.index - a.index)[0] ?? null;
+  const anchors: Array<[OriginAnchorType, number | null]> = [
+    ["ABSOLUTE_EXTREME", absIdx],
+    ["INTERNAL_SWING", usable(swings.internal)?.index ?? null],
+    ["EXTERNAL_SWING", usable(swings.external)?.index ?? null],
+  ];
+  const out = new Map<string, string[]>();
+  for (const [type, idx] of anchors) {
+    if (idx === null) continue;
+    for (const off of [0, 1, 2, 3]) {
+      const launch = idx + off;
+      if (launch >= j) continue;
+      const sel = selectIPOCandle(candles, launch, direction, {
+        maxIntervening: opts.maxIntervening,
+        interveningMaxRangeAtr: opts.interveningMaxRangeAtr,
+        maxLookback: opts.maxLookback,
+      });
+      if (!sel) continue;
+      const dte = candles[sel.index].datetime.slice(0, 10);
+      out.set(dte, [...(out.get(dte) ?? []), `${type}+${off}`]);
+    }
+  }
+  return out;
+}
+
+export function traceEventLocalRecovery(
+  candles: Candle[],
+  knownDate: string,
+  direction: IPODirection,
+  opts: DetectIPOOptions = {},
+) {
+  const ki = candles.findIndex((c) => c.datetime.slice(0, 10) === knownDate.slice(0, 10));
+  if (ki < 0) return { knownDate, direction, error: "candle not in series" };
+  const canon = analyzeMarketStructureCanonical(candles, {
+    policy: "latest_unbroken_structural",
+    maxEventAgeBars: opts.maxEventAgeBars === undefined ? DEFAULTS.maxEventAgeBars : opts.maxEventAgeBars,
+  });
+  const ledger = canon.swingLevelBreaks as any[];
+  const swings = confirmedSwings(candles);
+  const conf = findFirstRelevantConfirmation(candles, ki, direction, ledger);
+  const knownStr = candles[ki].datetime.slice(0, 10);
+
+  if (!conf.found || conf.breakIndex === null) {
+    return {
+      knownDate, direction, knownCandleIndex: ki,
+      firstRelevantConfirmation: conf,
+      eventCandidates: [], eventUniqueCandidateCount: 0,
+      knownAmongEventCandidates: false, knownEventLocallyUnique: false,
+      note: "no first relevant confirmation, so event-local uniqueness is undefined",
+    };
+  }
+
+  const rep = uniqueBreakEvents(ledger.filter((l) => l.index === conf.breakIndex))
+    .find((l) => l.direction === (direction === "demand" ? "bullish" : "bearish"));
+  const map = candidatesForBreak(candles, conf.breakIndex, direction, swings, rep, opts);
+  const dates = [...map.keys()].sort();
+
+  // Candidates belonging to OTHER break events are not false positives — the
+  // teaching is explicit that several IPOs coexist. Classify, do not condemn.
+  const otherEvents = uniqueBreakEvents(ledger)
+    .filter((l) => l.index !== conf.breakIndex);
+  const elsewhere = new Set<string>();
+  for (const l of otherEvents.slice(0, 120)) {
+    const dir: IPODirection = l.direction === "bullish" ? "demand" : "supply";
+    for (const dte of candidatesForBreak(candles, l.index, dir, swings, l, opts).keys()) elsewhere.add(dte);
+  }
+
+  return {
+    knownDate, direction, knownCandleIndex: ki,
+    firstRelevantConfirmation: conf,
+    eventCandidates: dates.map((dte) => ({
+      date: dte, selectedBy: map.get(dte)!,
+      isKnownCandle: dte === knownStr,
+      // Everything in this map was selected FOR THIS EVENT by construction.
+      relation: "IPO_CANDIDATE_FOR_EVENT" as IPOCandidateRelation,
+    })),
+    eventUniqueCandidateCount: dates.length,
+    knownAmongEventCandidates: dates.includes(knownStr),
+    knownEventLocallyUnique: dates.length === 1 && dates[0] === knownStr,
+    otherEventCandidates: {
+      count: elsewhere.size,
+      relation: "OTHER_IPO_OTHER_EVENT" as IPOCandidateRelation,
+      note: "candidates belonging to different confirmation episodes — coexisting IPOs, NOT competitors",
+      sample: [...elsewhere].filter((d) => !dates.includes(d)).slice(0, 8),
+    },
+  };
+}
+
+// ─── parent / child refinement ───────────────────────────────────────────────
+
+export type IPORole = "CONTEXT" | "EXECUTION";
+
+export interface IPOHierarchyNode {
+  id: string;
+  timeframe: string;
+  direction: IPODirection;
+  candleDatetime: string;
+  geometry: IPOGeometry;
+  parentIPOId: string | null;
+  parentTimeframe: string | null;
+  childTimeframe: string | null;
+  refinementDepth: number;
+  role: IPORole;
+  containedWithinParent: boolean;
+  childIds: string[];
+}
+
+/**
+ * Recursive HTF -> LTF refinement. Weekly -> Daily -> 4H -> execution, and the
+ * chain may be any depth; nothing hardcodes a single step.
+ *
+ * A PARENT IS NEVER INVALIDATED BY FINDING A CHILD. It keeps role CONTEXT and
+ * remains a valid IPO in its own right. Only a leaf — a node with no refinement
+ * beneath it — carries role EXECUTION.
+ *
+ * Containment is full, not overlap: a child straddling the parent boundary sits
+ * partly outside the zone the parent defines.
+ *
+ * Not every parent must have a child; a childless parent is simply EXECUTION at
+ * its own timeframe.
+ */
+export function buildIPOHierarchy(
+  levels: Array<{ timeframe: string; candles: Candle[] }>,
+  opts: DetectIPOOptions = {},
+): IPOHierarchyNode[] {
+  const nodes: IPOHierarchyNode[] = [];
+  let previous: IPOHierarchyNode[] = [];
+
+  levels.forEach((lvl, depth) => {
+    const zones = detectIPOCandidates(lvl.candles, { ...opts, timeframe: lvl.timeframe }).valid;
+    const current: IPOHierarchyNode[] = [];
+    for (const z of zones) {
+      const parent = previous.find((p) =>
+        p.direction === z.direction &&
+        z.geometry.zoneLow >= p.geometry.zoneLow &&
+        z.geometry.zoneHigh <= p.geometry.zoneHigh
+      ) ?? null;
+      // At depth 0 there is no parent to contain anything, which is not a
+      // containment failure — it is the top of the chain.
+      if (depth > 0 && !parent) continue;
+      const node: IPOHierarchyNode = {
+        id: z.id, timeframe: lvl.timeframe, direction: z.direction,
+        candleDatetime: z.candleDatetime, geometry: z.geometry,
+        parentIPOId: parent?.id ?? null,
+        parentTimeframe: parent?.timeframe ?? null,
+        childTimeframe: null,
+        refinementDepth: depth,
+        role: "EXECUTION",              // provisional; promoted below if refined
+        containedWithinParent: parent !== null,
+        childIds: [],
+      };
+      if (parent) {
+        parent.childIds.push(node.id);
+        parent.childTimeframe = lvl.timeframe;
+        parent.role = "CONTEXT";        // refined, but still a valid IPO
+      }
+      current.push(node);
+      nodes.push(node);
+    }
+    previous = current;
+  });
+  return nodes;
 }
