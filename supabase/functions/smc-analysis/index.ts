@@ -2,7 +2,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
 import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParentError } from "../_shared/ipoCorpusPlan.ts";
 import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars } from "../_shared/ipoZones.ts";
+import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS } from "../_shared/ipoOriginExperiments.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -4278,6 +4279,69 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_origin_probe / ipo_origin_experiment ─────────────────────────
+    // READ-ONLY. Walks a demonstrated candle through the production origin
+    // pipeline and reports where it is lost, and measures what alternative
+    // origin definitions WOULD have selected. The detector is untouched: these
+    // definitions are not wired to anything.
+    if (action === "ipo_origin_probe" || action === "ipo_origin_experiment") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+
+        if (action === "ipo_origin_probe") {
+          out.push({
+            symbol: sym, interval: tf, bars: series.length, sourcing,
+            probes: (tgt.expected ?? []).map((e: any) =>
+              probeOriginPipeline(series, String(e.date), e.side)),
+          });
+          continue;
+        }
+
+        // Experiment: what set of IPO candles does each definition produce, and
+        // how does that land against the demonstrated examples for this target?
+        const expected = (tgt.expected ?? []) as Array<{ date: string; side: "demand" | "supply" }>;
+        const resolveIdx = (e: any) => {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          return r.ambiguous ? -1 : r.index;
+        };
+        const wanted = expected.map((e) => ({ ...e, index: resolveIdx(e) }));
+        const defs = Array.isArray(tgt.definitions) && tgt.definitions.length
+          ? tgt.definitions : ORIGIN_DEFINITIONS.map((d) => d.key);
+        out.push({
+          symbol: sym, interval: tf, bars: series.length, sourcing,
+          expected: wanted.map((w) => ({ date: w.date, side: w.side, index: w.index })),
+          definitions: defs.map((key: any) => {
+            const inv = shadowOriginInventory(series, key, {});
+            const hit = (w: any) => inv.some((z) => z.index === w.index && z.direction === w.side);
+            return {
+              key,
+              assumption: ORIGIN_DEFINITIONS.find((d) => d.key === key)?.assumption,
+              zones: inv.length,
+              recovered: wanted.filter((w) => w.index >= 0 && hit(w)).map((w) => w.date),
+              stillMissing: wanted.filter((w) => w.index >= 0 && !hit(w)).map((w) => w.date),
+              zoneDatetimes: tgt.includeZones ? inv.map((z) => `${z.direction}|${z.datetime}`) : undefined,
+            };
+          }),
+        });
+      }
+      return respond({
+        note: "READ-ONLY. Alternative origin definitions are MEASUREMENTS of what a " +
+              "different rule would have selected. Production still runs " +
+              "EXTREME_OF_LEG; nothing here is wired to the detector, no threshold " +
+              "was tuned and consolidation remains UNRESOLVED.",
+        out,
+      });
+    }
+
     if (action === "ipo_corpus") {
       const sub = String(body?.sub ?? "stats");
       // Project-owned data: the question is "is this the research operator",
