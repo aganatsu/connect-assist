@@ -162,10 +162,12 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     "The origin is the last opposite-colour candle before the major move: the last " +
     "bullish candle before a drop, the last bearish candle before a push up",
     null, "DIRECT_TEACHING",
-    "Stated twice and independently. On-screen rules list: 'Last candle before major " +
-    "move'. Chart annotations: 'Last Bullish before the big drop' and 'last bearish " +
-    "candle before the big push up'. Note what it does NOT say: nothing about the swing " +
-    "extreme, the largest candle, or the strongest displacement."),
+    "Stated twice within ONE source, 'smart money part 1'. On-screen rules list: 'Last " +
+    "candle before major move'. Chart annotations: 'Last Bullish before the big drop' and " +
+    "'last bearish candle before the big push up'. Note what it does NOT say: nothing " +
+    "about the swing extreme, the largest candle, or the strongest displacement. " +
+    "SCOPE: this is one teacher's stated rule. It has NOT been shown to hold for material " +
+    "from other creators, and that video contains no dated demonstrations to test it on."),
   P("origin.candleThatTookPeopleOut",
     "The origin candle is the one that 'took people out'",
     null, "DIRECT_TEACHING",
