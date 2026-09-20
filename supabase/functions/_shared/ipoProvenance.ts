@@ -168,6 +168,17 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     "about the swing extreme, the largest candle, or the strongest displacement. " +
     "SCOPE: this is one teacher's stated rule. It has NOT been shown to hold for material " +
     "from other creators, and that video contains no dated demonstrations to test it on."),
+  P("refinement.findOnHtfWorkOnLtf",
+    "Find your zones on a bigger timeframe, then work THAT zone on a lower timeframe",
+    null, "DIRECT_TEACHING",
+    "On-screen tip in Smart money part 2 at 03:00-04:00, verbatim: 'TIP: FIND YOUR " +
+    "ZONES ON A BIGGER TIME FRAME AND THEN WORK THAT ZONE ON A LOWER TIME FRAME'. " +
+    "Note the definite article — THAT zone, singular. It says the HTF zone is carried " +
+    "down and worked, not that a new zone is found on the lower timeframe. Two " +
+    "independent pixel measurements agree: on 2020-05-11 the 1h box matched the 4H " +
+    "zone rather than any 1h candle, and on 2020-04-20 the 8h zone matched the DAILY " +
+    "candle's geometry to 2.6 units. Whether a genuinely NARROWER child zone is ever " +
+    "created remains unvalidated at n=1."),
   P("origin.candleThatTookPeopleOut",
     "The origin candle is the one that 'took people out'",
     null, "DIRECT_TEACHING",
@@ -273,6 +284,7 @@ export const DETECTION_RULE_KEYS: string[] = [
   "origin.candleThatTookPeopleOut",
   "origin.mustBreakStructure",
   "origin.notInsideConsolidation",
+  "refinement.findOnHtfWorkOnLtf",
 ];
 
 export function provenanceManifest(keys: string[] = DETECTION_RULE_KEYS) {
