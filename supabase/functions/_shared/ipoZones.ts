@@ -36,6 +36,7 @@ import {
   calculateATR,
   detectFVGs,
   detectLiquidityPools,
+  detectSwingPoints,
   type Candle,
   type FairValueGap,
   type LiquidityPool,
@@ -47,7 +48,41 @@ export type IPOStatus =
   | "UNARMED_FOR_RETEST"
   | "ACTIVE" | "TESTED" | "BROKEN" | "FLIPPED";
 
+/** No reason is currently emitted — see consolidationInterpretation. */
 export type IPORejectionReason = "INSIDE_CONSOLIDATION";
+
+/**
+ * The teaching rule "an IPO cannot be inside consolidation" remains part of the
+ * target model. The IMPLEMENTATION of it is retired.
+ *
+ * The predicate was "any buy-side pool above and any sell-side pool below",
+ * which produced ranges of 5.35, 12.56 and 13.18 ATR with ZERO alternating
+ * boundary interactions, and on GBP/CAD 2026-05-08 both boundaries had zero
+ * touches inside the window — levels price was not interacting with at all.
+ * That is not a width mis-setting; it is not a range by any setting.
+ *
+ * Until a defensible local-range definition exists, consolidation is measured
+ * and reported but VETOES NOTHING. Affected candidates are therefore
+ * structurally and candle-valid with consolidation UNRESOLVED — neither
+ * confirmed IPOs nor rejected ones.
+ */
+export type ConsolidationInterpretation = "UNRESOLVED";
+
+/**
+ * PASS and FAIL exist for when a defensible local-range definition arrives.
+ * Today the value is always UNRESOLVED: with the predicate retired we can
+ * assert neither that a candidate IS in consolidation nor that it is NOT.
+ */
+export type ConsolidationStatus = "PASS" | "FAIL" | "UNRESOLVED";
+
+/**
+ * CANDIDATE_ACCEPTED means no open question was raised — NOT that the candidate
+ * was proven clear of consolidation. CANDIDATE_UNRESOLVED means the retired
+ * heuristic flagged something, so the candidate is neither confirmed nor
+ * invalid and must be reported separately. Folding the two together would turn
+ * the scorecard into "5/10 detected", which the evidence does not support.
+ */
+export type IPOResearchStatus = "CANDIDATE_ACCEPTED" | "CANDIDATE_UNRESOLVED" | "CANDIDATE_REJECTED";
 
 export interface IPOGeometry {
   /** Edge price meets first: HIGH for demand, LOW for supply. */
@@ -146,6 +181,15 @@ export interface IPOZone {
    */
   valid: boolean;
   rejectionReason: IPORejectionReason | null;
+  /**
+   * Always "UNRESOLVED". The descriptive consolidation profile is retained and
+   * reported; it simply does not decide validity.
+   */
+  consolidationInterpretation: ConsolidationInterpretation;
+  consolidationStatus: ConsolidationStatus;
+  /** Output of the RETIRED predicate. Kept as a marker of an open question, never as a verdict. */
+  consolidationFlagRaised: boolean;
+  researchStatus: IPOResearchStatus;
 }
 
 export const DEFAULTS = {
@@ -503,10 +547,14 @@ export interface DetectIPOOptions {
  * single opposite-coloured candle before that move is the IPO.
  */
 export interface IPOCandidates {
-  /** Passed every rule. These are the detections. */
+  /** Structurally and candle-valid. Split further by researchStatus. */
   valid: IPOZone[];
-  /** Found structurally, then refused by interpretation. NEVER a detection. */
+  /** Refused outright. Currently always empty — the consolidation veto is retired. */
   rejected: IPOZone[];
+  /** No open question raised. */
+  accepted: IPOZone[];
+  /** The retired heuristic flagged consolidation: neither confirmed nor invalid. */
+  unresolved: IPOZone[];
 }
 
 /**
@@ -521,7 +569,12 @@ export function detectIPOZones(candles: Candle[], opts: DetectIPOOptions = {}): 
 /** Valid and rejected candidates, kept separate. */
 export function detectIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOCandidates {
   const all = detectAllIPOCandidates(candles, opts);
-  return { valid: all.filter((z) => z.valid), rejected: all.filter((z) => !z.valid) };
+  const valid = all.filter((z) => z.valid);
+  return {
+    valid, rejected: all.filter((z) => !z.valid),
+    accepted: valid.filter((z) => z.researchStatus === "CANDIDATE_ACCEPTED"),
+    unresolved: valid.filter((z) => z.researchStatus === "CANDIDATE_UNRESOLVED"),
+  };
 }
 
 function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}): IPOZone[] {
@@ -641,11 +694,11 @@ function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}):
       .sort((x, y) => x.absIndex - y.absIndex);
     const fvg = nearFvgs[0] ?? null;
 
-    // An IPO formed inside consolidation is not a valid IPO. It is still built
-    // and returned as REJECTED so the evidence survives.
+    // Consolidation is MEASURED but does not veto. The previous predicate was
+    // semantically invalid, so enforcing it discarded structurally sound
+    // candidates on evidence that did not support the conclusion.
     const con = assessConsolidation(candles, i);
-    const rejectionReason: IPORejectionReason | null =
-      con.insideConsolidation ? "INSIDE_CONSOLIDATION" : null;
+    const rejectionReason: IPORejectionReason | null = null;
 
     zones.push({
       id: `${symbol}|${timeframe}|${direction}|${c.datetime}`,
@@ -695,6 +748,10 @@ function detectAllIPOCandidates(candles: Candle[], opts: DetectIPOOptions = {}):
       atrAtCandle: Math.round(a * 1e5) / 1e5,
       valid: rejectionReason === null,
       rejectionReason,
+      consolidationInterpretation: "UNRESOLVED",
+      consolidationStatus: "UNRESOLVED",
+      consolidationFlagRaised: con.insideConsolidation,
+      researchStatus: con.insideConsolidation ? "CANDIDATE_UNRESOLVED" : "CANDIDATE_ACCEPTED",
     });
   }
   return zones;

@@ -478,7 +478,7 @@ Deno.test("consolidation is CAUSAL — future pools cannot change a past verdict
   assertEquals(verdictNow.equalHighPools, verdictThen.equalHighPools);
 });
 
-Deno.test("an inside-consolidation candidate is rejected, not detected — but stays inspectable", () => {
+Deno.test("consolidation is UNRESOLVED and vetoes nothing; the rejection channel stays intact", () => {
   reset();
   const c = candle(100, 101, 99, 99.5);
   // Direct check of the contract the detector relies on.
@@ -497,8 +497,8 @@ Deno.test("an inside-consolidation candidate is rejected, not detected — but s
   for (const z of valid) {
     assertEquals(z.valid, true);
     assertEquals(z.rejectionReason, null);
-    assertEquals(z.consolidation.insideConsolidation, false,
-      "a valid IPO can never be inside consolidation");
+    assertEquals(z.consolidationInterpretation, "UNRESOLVED",
+      "consolidation is measured but must not veto while its definition is unresolved");
   }
   for (const z of rejected) {
     assertEquals(z.valid, false);
