@@ -1,5 +1,6 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery } from "../_shared/ipoZones.ts";
+import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -4083,6 +4084,192 @@ Deno.serve(async (req) => {
                 "the rule but cannot establish that departure preceded the break",
         },
         out,
+      });
+    }
+
+    // ── ipo_inventory / ipo_corpus / ipo_coverage ────────────────────────
+    // READ-ONLY research. The inventory does not choose between coexisting
+    // IPOs, the corpus holds positives only, and the evaluation reports
+    // coverage rather than accuracy. Nothing here is wired to trading.
+    if (action === "ipo_inventory" || action === "ipo_coverage") {
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+
+      // Corpus rows are needed only for the coverage action, and they are the
+      // caller's own rows — identity comes from the JWT, never the body.
+      let corpus: any[] = [];
+      if (action === "ipo_coverage") {
+        const authHeader = req.headers.get("Authorization") ?? "";
+        if (!authHeader.startsWith("Bearer ")) {
+          return respond({ error: "Authorization: Bearer <jwt> required" });
+        }
+        const supa = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_ANON_KEY")!,
+          { global: { headers: { Authorization: authHeader } } },
+        );
+        const { data: claimsData, error: claimsErr } =
+          await supa.auth.getClaims(authHeader.slice("Bearer ".length));
+        const userId = String(claimsData?.claims?.sub ?? "");
+        if (claimsErr || !userId) {
+          return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
+        }
+        // Inline examples are accepted for dry runs, but they are labelled as
+        // such so a result computed from ad-hoc input is never mistaken for one
+        // measured against the stored corpus.
+        if (Array.isArray(body?.examples) && body.examples.length) {
+          corpus = body.examples.map((e: any, i: number) => ({ id: e.id ?? `inline-${i}`, ...e, _inline: true }));
+        } else {
+          const { data, error } = await supa.from("ipo_corpus_examples").select("*").eq("user_id", userId);
+          if (error) return respond({ error: error.message });
+          corpus = (data ?? []).map((r: any) => ({
+            id: r.id, symbol: r.symbol, timeframe: r.timeframe, direction: r.direction,
+            candleDatetime: r.candle_datetime,
+            demonstratedZoneLow: r.demonstrated_zone_low, demonstratedZoneHigh: r.demonstrated_zone_high,
+            exampleGroupId: r.example_group_id, parentExampleId: r.parent_example_id,
+            evidenceSource: r.evidence_source,
+          }));
+        }
+      }
+
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        // Levels are HIGHEST timeframe first; a single interval is just one level.
+        const tfs: string[] = Array.isArray(tgt.timeframes) && tgt.timeframes.length
+          ? tgt.timeframes.map(String) : [String(tgt.interval ?? "1d")];
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const levels: Array<{ timeframe: string; candles: any[] }> = [];
+        const barsByTimeframe: Record<string, number> = {};
+        let bad: string | null = null;
+        for (const tf of tfs) {
+          const res = await fetchCandlesWithFallback({ symbol: sym, interval: tf, limit: barsBack, skipBroker: true });
+          const series = dropFxClosedBars(res.candles ?? [], isFx);
+          if (series.length < 60) { bad = `${tf}: only ${series.length} bars`; break; }
+          levels.push({ timeframe: tf, candles: series });
+          barsByTimeframe[tf] = series.length;
+        }
+        if (bad) { out.push({ symbol: sym, error: bad }); continue; }
+
+        const entries = buildIPOInventory(levels, {
+          symbol: sym,
+          from: tgt.from ?? body?.from,
+          to: tgt.to ?? body?.to,
+          parentContextId: tgt.parentContextId,
+        });
+        const mine = corpus.filter((c: any) => c.symbol === sym);
+        out.push({
+          symbol: sym,
+          timeframes: tfs,
+          barsByTimeframe,
+          dateRange: { from: tgt.from ?? body?.from ?? null, to: tgt.to ?? body?.to ?? null,
+            note: "filters the RETURNED zones only; detection always runs on the full series" },
+          ...(action === "ipo_coverage"
+            ? {
+              corpusSource: mine.some((c: any) => c._inline) ? "INLINE_DRY_RUN" : "STORED_CORPUS",
+              demonstratedExamples: mine.length,
+              ...evaluateDemonstratedCoverage(entries, mine, barsByTimeframe),
+              inventory: tgt.includeZones ? entries : undefined,
+            }
+            : { summary: inventorySummary(entries, barsByTimeframe), inventory: entries }),
+        });
+      }
+
+      return respond({
+        note: "READ-ONLY, shadow research. This layer is an INVENTORY, not a " +
+              "selector: every IPO is independent and coexisting IPOs are " +
+              "expected, so no zone is called a false positive for the existence " +
+              "of another. No discriminator was added and no selector rule was " +
+              "tuned. Consolidation remains UNRESOLVED.",
+        provenance: provenanceManifest(),
+        out,
+      });
+    }
+
+    // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
+    // column, so an unmarked candle cannot become a negative.
+    if (action === "ipo_corpus") {
+      const sub = String(body?.sub ?? "stats");
+      const authHeader = req.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) {
+        return respond({ error: "Authorization: Bearer <jwt> required" });
+      }
+      const supa = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: claimsData, error: claimsErr } =
+        await supa.auth.getClaims(authHeader.slice("Bearer ".length));
+      const userId = String(claimsData?.claims?.sub ?? "");
+      if (claimsErr || !userId) {
+        return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
+      }
+
+      if (sub === "add") {
+        const rows = Array.isArray(body?.examples) ? body.examples : [];
+        if (!rows.length) return respond({ error: "examples[] required" });
+        const problems = validateCorpusExamples(rows);
+        if (problems.length) return respond({ error: "validation failed", problems });
+        const prepared = rows.map((e: any) => ({
+          user_id: userId,
+          evidence_source: e.evidenceSource ?? "VIDEO_DEMONSTRATION",
+          source_video: e.sourceVideo ?? null,
+          source_timestamp: e.sourceTimestamp ?? null,
+          reference_url: e.referenceUrl ?? null,
+          symbol: e.symbol, timeframe: e.timeframe,
+          candle_datetime: e.candleDatetime ?? null,
+          direction: e.direction,
+          demonstrated_zone_low: e.demonstratedZoneLow ?? null,
+          demonstrated_zone_high: e.demonstratedZoneHigh ?? null,
+          example_group_id: e.exampleGroupId ?? null,
+          parent_example_id: e.parentExampleId ?? null,
+          notes: e.notes ?? null,
+        }));
+        const { data, error } = await supa.from("ipo_corpus_examples")
+          .upsert(prepared, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
+          .select("id,symbol,timeframe,candle_datetime,direction,example_group_id");
+        if (error) return respond({ error: error.message });
+        return respond({ upserted: data?.length ?? 0, rows: data ?? [] });
+      }
+
+      const { data, error } = await supa.from("ipo_corpus_examples").select("*")
+        .eq("user_id", userId).order("symbol").order("timeframe").order("candle_datetime");
+      if (error) return respond({ error: error.message });
+      const all = data ?? [];
+      const groups = new Map<string, any[]>();
+      for (const r of all) {
+        const g = r.example_group_id ?? `solo:${r.id}`;
+        groups.set(g, [...(groups.get(g) ?? []), r]);
+      }
+      const chains = [...groups.values()].filter((g) => g.length > 1);
+
+      if (sub === "list") {
+        return respond({
+          count: all.length,
+          demonstrations: groups.size,
+          examples: all,
+          note: "Positives only. Absence from this list means unexamined, never rejected.",
+        });
+      }
+
+      return respond({
+        total: all.length,
+        demonstrations: groups.size,
+        note: "`demonstrations` is the metric that matters: a Weekly->Daily->4H " +
+              "refinement is ONE demonstration, and `total` counts its rows " +
+              "separately only for bookkeeping.",
+        refinementChains: chains.length,
+        deepestChain: chains.reduce((m, g) => Math.max(m, g.length), 0),
+        bySymbol: [...new Set(all.map((r: any) => r.symbol))].sort(),
+        byTimeframe: [...new Set(all.map((r: any) => r.timeframe))].sort(),
+        byEvidenceSource: Object.fromEntries(EVIDENCE_SOURCES.map((s) =>
+          [s, all.filter((r: any) => r.evidence_source === s).length])),
+        withDemonstratedGeometry: all.filter((r: any) => r.demonstrated_zone_low !== null).length,
+        withUnrecoverableCandle: all.filter((r: any) => !r.candle_datetime).length,
+        negativesPossible: false,
+        negativesNote: "There is no label column. Unmarked candles are not negatives " +
+                       "and cannot be recorded as such.",
       });
     }
 
