@@ -4,6 +4,7 @@ import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParen
 import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
 import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directionalEvents } from "../_shared/ipoOriginExperiments.ts";
 import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
+import { testOnsetHypothesis, ONSET_DEFINITIONS } from "../_shared/ipoDisplacementOnset.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4280,6 +4281,80 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_displacement_onset ───────────────────────────────────────────
+    // READ-ONLY. Locates the impulse onset FIRST, by definitions that never
+    // look at a candidate's own future move, then steps back to the last
+    // opposite-direction candle. Nothing wired to the detector.
+    if (action === "ipo_displacement_onset") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ date: e.date, side: e.side, error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ date: e.date, side: e.side, error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({
+            date: e.date, side: e.side, symbol: sym, interval: tf,
+            productionSelectedIndex: prodPick,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatchesDemonstrated: prodPick === r.index,
+            ...testOnsetHypothesis(series, r.index, e.side, swingIdx, ev.index),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const byDef = ONSET_DEFINITIONS.map((d) => {
+        const ts = flat.map((f: any) => f.trials.find((t: any) => t.onsetKey === d.key)).filter(Boolean);
+        return {
+          onsetKey: d.key, definition: d.definition, parameter: d.parameter,
+          exactMatches: ts.filter((t: any) => t.exactMatch).length,
+          of: ts.length,
+          onsetNotFound: ts.filter((t: any) => t.onsetIndex === null).length,
+          stepBackFailed: ts.filter((t: any) => t.onsetIndex !== null && t.steppedBackIndex === null).length,
+          matched: flat.filter((f: any) => f.trials.find((t: any) => t.onsetKey === d.key)?.exactMatch)
+            .map((f: any) => `${f.symbol}|${f.interval}|${f.date}`),
+        };
+      }).sort((a, b) => b.exactMatches - a.exactMatches);
+      return respond({
+        note: "READ-ONLY. Onset is located FIRST by rules that never inspect a " +
+              "candidate's own future move, then the origin is read off by stepping " +
+              "back. No definition is combined with another and nothing is scored. " +
+              "Two definitions carry an ATR threshold and are labelled " +
+              "OPERATIONAL_INTERPRETATION; a threshold tuned on twelve examples is a " +
+              "fitted parameter, not a hypothesis.",
+        baseline: { productionExactMatches: flat.filter((f: any) => f.productionMatchesDemonstrated).length, of: flat.length },
+        byDefinition: byDef,
+        out,
+      });
+    }
+
     // ── ipo_origin_features ──────────────────────────────────────────────
     // READ-ONLY. For every demonstrated origin, the features of that candle and
     // of every IPO-coloured competitor in the same structural leg. Counts only,
