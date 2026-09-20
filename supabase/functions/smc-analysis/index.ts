@@ -1,6 +1,7 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
 import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParentError } from "../_shared/ipoCorpusPlan.ts";
+import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -429,6 +430,26 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
 }
 
 // ─── HTTP Handler ───────────────────────────────────────────────────
+
+/**
+ * Service-role client for the project-owned IPO corpus.
+ *
+ * CALL checkResearchKey FIRST. This client bypasses RLS entirely, which is the
+ * point — the table has no anon/authenticated policy and their grants are
+ * revoked — but it means the research-key check is the ONLY thing standing
+ * between a caller and the canonical corpus.
+ *
+ * The key never leaves this process: it is read from the environment, compared,
+ * and discarded. Nothing about it reaches a response or a log line.
+ */
+function corpusServiceClient() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: { persistSession: false } },
+  );
+}
+
 // ─── research-only candle sourcing ───────────────────────────────────────────
 //
 // SHADOW ACTIONS ONLY. When a target names startDate/endDate the series comes
@@ -4145,32 +4166,26 @@ Deno.serve(async (req) => {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const out: any[] = [];
 
-      // Corpus rows are needed only for the coverage action, and they are the
-      // caller's own rows — identity comes from the JWT, never the body.
+      // The canonical corpus is read internally with the service role. It is
+      // project data, so there is no "caller's own rows" to scope to.
+      //
+      // The research key is required for coverage as well as for the corpus
+      // endpoints. Coverage is not a cheap read: it builds a full inventory per
+      // timeframe and, with startDate/endDate, issues paged historical fetches
+      // against a metered provider. Left open to the publishable key it is an
+      // unauthenticated way to spend the project's data budget.
       let corpus: any[] = [];
       if (action === "ipo_coverage") {
-        const authHeader = req.headers.get("Authorization") ?? "";
-        if (!authHeader.startsWith("Bearer ")) {
-          return respond({ error: "Authorization: Bearer <jwt> required" });
-        }
-        const supa = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_ANON_KEY")!,
-          { global: { headers: { Authorization: authHeader } } },
-        );
-        const { data: claimsData, error: claimsErr } =
-          await supa.auth.getClaims(authHeader.slice("Bearer ".length));
-        const userId = String(claimsData?.claims?.sub ?? "");
-        if (claimsErr || !userId) {
-          return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
-        }
+        const auth = await checkResearchKey(req);
+        if (!auth.ok) return respond({ error: auth.error }, auth.status);
         // Inline examples are accepted for dry runs, but they are labelled as
         // such so a result computed from ad-hoc input is never mistaken for one
         // measured against the stored corpus.
         if (Array.isArray(body?.examples) && body.examples.length) {
           corpus = body.examples.map((e: any, i: number) => ({ id: e.id ?? `inline-${i}`, ...e, _inline: true }));
         } else {
-          const { data, error } = await supa.from("ipo_corpus_examples").select("*").eq("user_id", userId);
+          const supa = corpusServiceClient();
+          const { data, error } = await supa.from("ipo_corpus_examples").select("*");
           if (error) return respond({ error: error.message });
           corpus = (data ?? []).map((r: any) => ({
             id: r.id, symbol: r.symbol, timeframe: r.timeframe, direction: r.direction,
@@ -4265,21 +4280,12 @@ Deno.serve(async (req) => {
     // column, so an unmarked candle cannot become a negative.
     if (action === "ipo_corpus") {
       const sub = String(body?.sub ?? "stats");
-      const authHeader = req.headers.get("Authorization") ?? "";
-      if (!authHeader.startsWith("Bearer ")) {
-        return respond({ error: "Authorization: Bearer <jwt> required" });
-      }
-      const supa = createClient(
-        Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_ANON_KEY")!,
-        { global: { headers: { Authorization: authHeader } } },
-      );
-      const { data: claimsData, error: claimsErr } =
-        await supa.auth.getClaims(authHeader.slice("Bearer ".length));
-      const userId = String(claimsData?.claims?.sub ?? "");
-      if (claimsErr || !userId) {
-        return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
-      }
+      // Project-owned data: the question is "is this the research operator",
+      // not "which account is this". A user JWT would let any signed-in account
+      // rewrite the shared record of what the videos demonstrate.
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const supa = corpusServiceClient();
 
       if (sub === "add") {
         const rows = Array.isArray(body?.examples) ? body.examples : [];
@@ -4293,7 +4299,6 @@ Deno.serve(async (req) => {
         const { data: existing, error: exErr } = await supa
           .from("ipo_corpus_examples")
           .select("symbol,timeframe,candle_datetime,direction,example_group_id")
-          .eq("user_id", userId)
           .in("symbol", [...new Set(rows.map((e: any) => e.symbol))]);
         if (exErr) return respond({ error: exErr.message });
         const existingGroupByKey = new Map<string, string>();
@@ -4302,7 +4307,7 @@ Deno.serve(async (req) => {
         }
         const reused = keys.filter((k: string) => existingGroupByKey.has(k)).length;
 
-        const plan = planCorpusInsert(rows, userId, () => crypto.randomUUID(), existingGroupByKey);
+        const plan = planCorpusInsert(rows, () => crypto.randomUUID(), existingGroupByKey);
         if (plan.problems.length) return respond({ error: "validation failed", problems: plan.problems });
 
         // One upsert per WAVE, roots first. A W->D->4H chain cannot go in a
@@ -4328,7 +4333,7 @@ Deno.serve(async (req) => {
             throw e;
           }
           const { data, error } = await supa.from("ipo_corpus_examples")
-            .upsert(payload, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
+            .upsert(payload, { onConflict: "symbol,timeframe,candle_datetime,direction" })
             .select("id,symbol,timeframe,candle_datetime,direction,example_group_id,parent_example_id");
           if (error) {
             return respond({
@@ -4370,7 +4375,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await supa.from("ipo_corpus_examples").select("*")
-        .eq("user_id", userId).order("symbol").order("timeframe").order("candle_datetime");
+        .order("symbol").order("timeframe").order("candle_datetime");
       if (error) return respond({ error: error.message });
       const all = data ?? [];
       const groups = new Map<string, any[]>();
@@ -5244,8 +5249,13 @@ function breakItWouldNeedEmitted(brk: any[], series: any[]) {
   }));
 }
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
+  // status is optional so every existing call keeps returning 200. The research
+  // endpoints need real codes: a 401 that arrives as 200 with an error field is
+  // invisible to anything checking response status, including CORS-layer
+  // monitoring and any future client retry logic.
   return new Response(JSON.stringify(data), {
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
