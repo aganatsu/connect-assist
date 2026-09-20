@@ -4061,12 +4061,27 @@ Deno.serve(async (req) => {
             traceEventLocalRecovery(series, String(k.date), k.side)),
         });
       }
+      // Strict and same-bar evidence are tallied APART. A same-bar departure
+      // satisfies the rule but cannot prove departure preceded the break, so
+      // folding the two together would overstate how much of the evidence is
+      // causally ordered.
+      const allBoxes = out.flatMap((o: any) => o.knownBoxes ?? []);
+      const ordering = (v: string | null) =>
+        allBoxes.filter((b: any) => (b.firstRelevantConfirmation?.departureBreakOrdering ?? null) === v).length;
       return respond({
         note: "READ-ONLY. Uniqueness is EVENT-LOCAL: a known IPO is compared only " +
               "against candidates for its own first relevant confirmation. Later " +
               "breaks are separate episodes and their candidates are coexisting " +
               "IPOs, not competitors. Consolidation remains UNRESOLVED, no " +
               "discriminator added, no threshold tuned, no production consumer.",
+        orderingSummary: {
+          knownBoxes: allBoxes.length,
+          departureBeforeBreak: ordering("DEPARTURE_BEFORE_BREAK"),
+          sameBarUnverifiable: ordering("SAME_BAR_UNVERIFIABLE"),
+          noConfirmation: ordering(null),
+          note: "same-bar cases are kept and counted separately — the bar satisfies " +
+                "the rule but cannot establish that departure preceded the break",
+        },
         out,
       });
     }

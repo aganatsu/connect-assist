@@ -1465,6 +1465,25 @@ export type IPOCandidateRelation =
   | "OTHER_IPO_OTHER_EVENT"
   | "UNRELATED";
 
+/**
+ * Whether departure is PROVABLY before the close-through, or merely consistent
+ * with it.
+ *
+ * On a daily bar a candle can both leave the zone entirely and close through
+ * the level. The rule is satisfied — the bar sits fully outside the zone and
+ * closes beyond — but the two facts share one bar, and nothing in OHLC fixes
+ * their order within it. Price may have broken structure first and only then
+ * detached from the zone, which is the opposite of the causal story the rule
+ * is meant to capture.
+ *
+ * These cases are KEPT, not discarded: dropping them would silently shrink the
+ * evidence base. They are labelled so they can be counted apart, and the
+ * reason string for them never claims a chronological departure -> break.
+ */
+export type DepartureBreakOrdering =
+  | "DEPARTURE_BEFORE_BREAK"
+  | "SAME_BAR_UNVERIFIABLE";
+
 export interface FirstRelevantConfirmation {
   found: boolean;
   reason: string;
@@ -1476,6 +1495,8 @@ export interface FirstRelevantConfirmation {
   departedAtIndex: number | null;
   departedAtDate: string | null;
   invalidatedAtIndex: number | null;
+  /** Null when there is no confirmation to order against. */
+  departureBreakOrdering: DepartureBreakOrdering | null;
 }
 
 export function findFirstRelevantConfirmation(
@@ -1503,6 +1524,7 @@ export function findFirstRelevantConfirmation(
         barsFromIPOToBreak: null,
         departedAtIndex: departed, departedAtDate: departed === null ? null : candles[departed].datetime.slice(0, 10),
         invalidatedAtIndex: j,
+        departureBreakOrdering: null,
       };
     }
     if (departed === null && (demand ? b.low > g.zoneHigh : b.high < g.zoneLow)) departed = j;
@@ -1510,13 +1532,19 @@ export function findFirstRelevantConfirmation(
     const here = byBar.get(j);
     if (here && here.length) {
       const rep = uniqueBreakEvents(here)[0];
+      const sameBar = departed === j;
       return {
-        found: true, reason: "first directionally relevant close-through after departure",
+        found: true,
+        // Never assert an ordering the bar cannot prove.
+        reason: sameBar
+          ? "close-through on the SAME BAR the zone was left — ordering within the bar is unverifiable"
+          : "first directionally relevant close-through after departure",
         breakIndex: j, breakDate: b.datetime.slice(0, 10),
         level: rep.level, significance: rep.significance,
         barsFromIPOToBreak: j - ipoIndex,
         departedAtIndex: departed, departedAtDate: candles[departed].datetime.slice(0, 10),
         invalidatedAtIndex: null,
+        departureBreakOrdering: sameBar ? "SAME_BAR_UNVERIFIABLE" : "DEPARTURE_BEFORE_BREAK",
       };
     }
   }
@@ -1528,6 +1556,7 @@ export function findFirstRelevantConfirmation(
     barsFromIPOToBreak: null,
     departedAtIndex: departed, departedAtDate: departed === null ? null : candles[departed].datetime.slice(0, 10),
     invalidatedAtIndex: null,
+    departureBreakOrdering: null,
   };
 }
 
@@ -1608,13 +1637,19 @@ export function traceEventLocalRecovery(
 
   // Candidates belonging to OTHER break events are not false positives — the
   // teaching is explicit that several IPOs coexist. Classify, do not condemn.
+  //
+  // EVERY other event is evaluated. An earlier version stopped at 120, which
+  // made `count` a function of how many events happened to come first rather
+  // than of the series — the same defect as the retired 8-break detail cap.
+  // Only the returned SAMPLE is capped, and capping it cannot move the count.
   const otherEvents = uniqueBreakEvents(ledger)
     .filter((l) => l.index !== conf.breakIndex);
   const elsewhere = new Set<string>();
-  for (const l of otherEvents.slice(0, 120)) {
+  for (const l of otherEvents) {
     const dir: IPODirection = l.direction === "bullish" ? "demand" : "supply";
     for (const dte of candidatesForBreak(candles, l.index, dir, swings, l, opts).keys()) elsewhere.add(dte);
   }
+  const sampleCap = opts.detailCap ?? 8;
 
   return {
     knownDate, direction, knownCandleIndex: ki,
@@ -1630,9 +1665,11 @@ export function traceEventLocalRecovery(
     knownEventLocallyUnique: dates.length === 1 && dates[0] === knownStr,
     otherEventCandidates: {
       count: elsewhere.size,
+      otherEventsEvaluated: otherEvents.length,
       relation: "OTHER_IPO_OTHER_EVENT" as IPOCandidateRelation,
       note: "candidates belonging to different confirmation episodes — coexisting IPOs, NOT competitors",
-      sample: [...elsewhere].filter((d) => !dates.includes(d)).slice(0, 8),
+      sampleCap,
+      sample: [...elsewhere].filter((d) => !dates.includes(d)).slice(0, sampleCap),
     },
   };
 }
@@ -1647,13 +1684,95 @@ export interface IPOHierarchyNode {
   direction: IPODirection;
   candleDatetime: string;
   geometry: IPOGeometry;
+  /** Set ONLY when lineage is unambiguous, or fixed by an explicit context. */
   parentIPOId: string | null;
   parentTimeframe: string | null;
+  /** Every HTF IPO that validly contains this one. Length > 1 => ambiguous. */
+  possibleParentIPOIds: string[];
+  lineageAmbiguous: boolean;
+  lineageResolvedBy: LineageResolution;
   childTimeframe: string | null;
   refinementDepth: number;
   role: IPORole;
   containedWithinParent: boolean;
+  /** Children whose lineage resolved to THIS node and nothing else. */
   childIds: string[];
+  /** Children that might be this node's, but might be another parent's. */
+  possibleChildIds: string[];
+}
+
+export type LineageResolution =
+  | "ROOT"
+  | "SINGLE_VALID_PARENT"
+  | "EXPLICIT_PARENT_CONTEXT"
+  | "AMBIGUOUS_MULTIPLE_PARENTS";
+
+export interface BuildIPOHierarchyOptions extends DetectIPOOptions {
+  /**
+   * The HTF IPO the caller is deliberately trading under. When an otherwise
+   * ambiguous child is contained by this zone, that settles it — the analyst
+   * supplied the context, the code did not guess it.
+   */
+  parentContextId?: string;
+}
+
+/**
+ * Which HTF IPOs can validly parent this one, and whether that is decidable.
+ *
+ * Two hard requirements:
+ *
+ *   1. FULL containment, same direction. Overlap is not refinement.
+ *   2. The child cannot predate its parent. A candle that formed before the
+ *      HTF candle exists is not a refinement of it, however neatly it nests.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO. When several HTF IPOs qualify — which
+ * happens whenever HTF zones overlap — it does not pick one. The previous
+ * version called .find(), so lineage was decided by detector emission order:
+ * re-sorting the zone array would have silently reassigned parents, and the
+ * output would have looked equally confident either way.
+ *
+ * There is no nearest-parent or narrowest-parent tiebreak here on purpose.
+ * Both are plausible and neither is taught, so inventing one would bury a
+ * guess inside a diagnostic. Ambiguity is reported as ambiguity.
+ */
+export function resolveParentLineage(
+  child: { direction: IPODirection; geometry: IPOGeometry; candleDatetime: string },
+  candidates: IPOHierarchyNode[],
+  parentContextId?: string,
+): {
+  parentIPOId: string | null;
+  possibleParentIPOIds: string[];
+  lineageAmbiguous: boolean;
+  lineageResolvedBy: LineageResolution;
+} {
+  const at = (s: string) => {
+    const n = Date.parse(s);
+    return Number.isNaN(n) ? null : n;
+  };
+  const childAt = at(child.candleDatetime);
+  const valid = candidates.filter((p) => {
+    if (p.direction !== child.direction) return false;
+    if (child.geometry.zoneLow < p.geometry.zoneLow) return false;
+    if (child.geometry.zoneHigh > p.geometry.zoneHigh) return false;
+    const parentAt = at(p.candleDatetime);
+    // Unparseable either side: fall back to lexicographic ISO comparison
+    // rather than letting the time rule silently pass.
+    if (childAt === null || parentAt === null) {
+      return child.candleDatetime >= p.candleDatetime;
+    }
+    return childAt >= parentAt;
+  });
+  const ids = valid.map((p) => p.id);
+  if (ids.length === 0) {
+    return { parentIPOId: null, possibleParentIPOIds: [], lineageAmbiguous: false, lineageResolvedBy: "ROOT" };
+  }
+  if (ids.length === 1) {
+    return { parentIPOId: ids[0], possibleParentIPOIds: ids, lineageAmbiguous: false, lineageResolvedBy: "SINGLE_VALID_PARENT" };
+  }
+  if (parentContextId && ids.includes(parentContextId)) {
+    return { parentIPOId: parentContextId, possibleParentIPOIds: ids, lineageAmbiguous: false, lineageResolvedBy: "EXPLICIT_PARENT_CONTEXT" };
+  }
+  return { parentIPOId: null, possibleParentIPOIds: ids, lineageAmbiguous: true, lineageResolvedBy: "AMBIGUOUS_MULTIPLE_PARENTS" };
 }
 
 /**
@@ -1669,10 +1788,15 @@ export interface IPOHierarchyNode {
  *
  * Not every parent must have a child; a childless parent is simply EXECUTION at
  * its own timeframe.
+ *
+ * Lineage that cannot be decided is left undecided — see resolveParentLineage.
+ * An ambiguous child promotes NO parent to CONTEXT, because we cannot say which
+ * HTF IPO was the one refined; each possible parent records it under
+ * possibleChildIds instead.
  */
 export function buildIPOHierarchy(
   levels: Array<{ timeframe: string; candles: Candle[] }>,
-  opts: DetectIPOOptions = {},
+  opts: BuildIPOHierarchyOptions = {},
 ): IPOHierarchyNode[] {
   const nodes: IPOHierarchyNode[] = [];
   let previous: IPOHierarchyNode[] = [];
@@ -1681,29 +1805,42 @@ export function buildIPOHierarchy(
     const zones = detectIPOCandidates(lvl.candles, { ...opts, timeframe: lvl.timeframe }).valid;
     const current: IPOHierarchyNode[] = [];
     for (const z of zones) {
-      const parent = previous.find((p) =>
-        p.direction === z.direction &&
-        z.geometry.zoneLow >= p.geometry.zoneLow &&
-        z.geometry.zoneHigh <= p.geometry.zoneHigh
-      ) ?? null;
+      const lin = depth === 0
+        ? { parentIPOId: null, possibleParentIPOIds: [] as string[], lineageAmbiguous: false, lineageResolvedBy: "ROOT" as LineageResolution }
+        : resolveParentLineage(z, previous, opts.parentContextId);
       // At depth 0 there is no parent to contain anything, which is not a
-      // containment failure — it is the top of the chain.
-      if (depth > 0 && !parent) continue;
+      // containment failure — it is the top of the chain. Below depth 0, a zone
+      // contained by nothing is not a refinement of this chain at all.
+      if (depth > 0 && lin.possibleParentIPOIds.length === 0) continue;
+
       const node: IPOHierarchyNode = {
         id: z.id, timeframe: lvl.timeframe, direction: z.direction,
         candleDatetime: z.candleDatetime, geometry: z.geometry,
-        parentIPOId: parent?.id ?? null,
-        parentTimeframe: parent?.timeframe ?? null,
+        parentIPOId: lin.parentIPOId,
+        parentTimeframe: lin.parentIPOId
+          ? previous.find((p) => p.id === lin.parentIPOId)?.timeframe ?? null
+          : null,
+        possibleParentIPOIds: lin.possibleParentIPOIds,
+        lineageAmbiguous: lin.lineageAmbiguous,
+        lineageResolvedBy: lin.lineageResolvedBy,
         childTimeframe: null,
         refinementDepth: depth,
         role: "EXECUTION",              // provisional; promoted below if refined
-        containedWithinParent: parent !== null,
+        containedWithinParent: lin.possibleParentIPOIds.length > 0,
         childIds: [],
+        possibleChildIds: [],
       };
-      if (parent) {
+
+      if (lin.parentIPOId) {
+        const parent = previous.find((p) => p.id === lin.parentIPOId)!;
         parent.childIds.push(node.id);
         parent.childTimeframe = lvl.timeframe;
         parent.role = "CONTEXT";        // refined, but still a valid IPO
+      } else {
+        // Ambiguous. Record the possibility on every candidate; promote none.
+        for (const pid of lin.possibleParentIPOIds) {
+          previous.find((p) => p.id === pid)?.possibleChildIds.push(node.id);
+        }
       }
       current.push(node);
       nodes.push(node);
