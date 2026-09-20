@@ -152,6 +152,43 @@ export const IPO_RULE_PROVENANCE: RuleProvenance[] = [
     null, "OPERATIONAL_INTERPRETATION",
     "Ours, and deliberately incomplete. Nearest-parent and narrowest-parent are both plausible and neither is taught, so neither is applied."),
 
+  // ── the origin rule as literally stated on screen ─────────────────────────
+  //
+  // Observed in "smart money part 1" as an on-screen list and as two chart
+  // annotations. This is the first DIRECT_TEACHING evidence this project has
+  // for ORIGIN SELECTION specifically — everything else in that area was
+  // OPERATIONAL_INTERPRETATION.
+  P("origin.lastOppositeBeforeMajorMove",
+    "The origin is the last opposite-colour candle before the major move: the last " +
+    "bullish candle before a drop, the last bearish candle before a push up",
+    null, "DIRECT_TEACHING",
+    "Stated twice and independently. On-screen rules list: 'Last candle before major " +
+    "move'. Chart annotations: 'Last Bullish before the big drop' and 'last bearish " +
+    "candle before the big push up'. Note what it does NOT say: nothing about the swing " +
+    "extreme, the largest candle, or the strongest displacement."),
+  P("origin.candleThatTookPeopleOut",
+    "The origin candle is the one that 'took people out'",
+    null, "DIRECT_TEACHING",
+    "From the same on-screen rules list. AMBIGUOUS AS STATED and deliberately left so: " +
+    "it could mean a sweep of prior highs/lows, a wick through liquidity that closes " +
+    "back, an engulfing of the previous candle, or removal of an immediate short-term " +
+    "extreme. It must not be assumed to mean the swing extreme — the detector already " +
+    "prefers extreme and sweep bars and that is precisely where it disagrees with the " +
+    "demonstrations."),
+  P("origin.mustBreakStructure",
+    "The setup must break structure",
+    null, "DIRECT_TEACHING",
+    "On-screen rules list. Already implemented as the confirmation requirement, and " +
+    "this upgrades structure.breakRequired from inferred to stated."),
+  P("origin.notInsideConsolidation",
+    "The origin cannot be inside a consolidation",
+    null, "DIRECT_TEACHING",
+    "On-screen rules list, and it names a condition this project CANNOT CURRENTLY " +
+    "EVALUATE. The consolidation predicate was retired as indefensible (5-13 ATR " +
+    "'ranges' with zero boundary interaction) and every zone reports UNRESOLVED. So a " +
+    "rule the teaching states plainly is one we measure not at all — that gap is the " +
+    "finding, not an oversight to paper over."),
+
   // ── candle selection: ALL OURS ─────────────────────────────────────────────
   P("selection.maxInterveningCandles",
     "Candles allowed between the IPO and the start of the departure move",
@@ -230,6 +267,10 @@ export const DETECTION_RULE_KEYS: string[] = [
   "confirmation.sameBarUnverifiable",
   "coexistence.multipleIPOsCoexist",
   "refinement.sameDirection",
+  "origin.lastOppositeBeforeMajorMove",
+  "origin.candleThatTookPeopleOut",
+  "origin.mustBreakStructure",
+  "origin.notInsideConsolidation",
 ];
 
 export function provenanceManifest(keys: string[] = DETECTION_RULE_KEYS) {

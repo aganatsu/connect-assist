@@ -7,6 +7,7 @@ import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures
 import { testOnsetHypothesis, ONSET_DEFINITIONS } from "../_shared/ipoDisplacementOnset.ts";
 import { testAnchorHypothesis } from "../_shared/ipoOriginAnchor.ts";
 import { discriminateAnchorModes } from "../_shared/ipoAnchorDiscriminator.ts";
+import { testTeachingSpec } from "../_shared/ipoTeachingSpec.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4283,6 +4284,92 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_teaching_spec ────────────────────────────────────────────────
+    // READ-ONLY. The origin rule as literally taught, measured clause by clause.
+    if (action === "ipo_teaching_spec") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const canon: any = analyzeMarketStructureCanonical(series, {
+          policy: "latest_unbroken_structural", maxEventAgeBars: null,
+        });
+        const policyAt = new Map<string, string>();
+        for (const b of (canon.bos ?? [])) policyAt.set(`${b.index}|${b.type}`, "BOS");
+        for (const c of (canon.choch ?? [])) policyAt.set(`${c.index}|${c.type}`, "CHoCH");
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" }); continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({
+            symbol: sym, interval: tf, date: e.date, side: e.side,
+            productionSelectedIndex: prodPick,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatches: prodPick === r.index,
+            ...testTeachingSpec(series, r.index, e.side, swingIdx, ev.index,
+              policyAt.get(`${ev.index}|${ev.direction}`) ?? null),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const keys = [...new Set(flat.flatMap((f: any) => f.trials.map((t: any) => t.onsetKey)))];
+      return respond({
+        teachingSpec: {
+          source: "smart money part 1 — on-screen rules list plus two chart annotations",
+          clauses: ["Break Structure", "Cannot be inside a consolidation",
+                    "Last candle before major move", "Candle that took people out"],
+          annotations: ["Last Bullish before the big drop (supply)",
+                        "last bearish candle before the big push up (demand)"],
+          note: "Measured clause by clause. 'Cannot be inside a consolidation' is " +
+                "UNEVALUATED: the predicate for it was retired as indefensible, so no " +
+                "example can be said to satisfy or violate it.",
+        },
+        productionBaseline: { exactMatches: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byOnsetDefinition: keys.map((k: any) => {
+          const ts = flat.map((f: any) => ({ f, t: f.trials.find((x: any) => x.onsetKey === k) })).filter((x: any) => x.t);
+          const hit = ts.filter((x: any) => x.t.exactMatch);
+          return {
+            onsetKey: k,
+            parameterFree: ts[0]?.t.parameterFree ?? null,
+            exactMatches: hit.length, of: ts.length,
+            matched: hit.map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+            onsetNotFound: ts.filter((x: any) => x.t.onsetIndex === null).length,
+          };
+        }).sort((a: any, b: any) => b.exactMatches - a.exactMatches),
+        tookPeopleOutTally: ["sweepsPriorLocalExtreme", "wicksThroughAndClosesBack",
+          "engulfsPreviousCandle", "removesShortTermExtreme", "merelyPrecedesALaterSweep"]
+          .map((k) => ({ reading: k, trueFor: flat.filter((f: any) => f.tookPeopleOut[k]).length, of: flat.length })),
+        out,
+      });
+    }
+
     // ── ipo_anchor_discriminator ─────────────────────────────────────────
     // READ-ONLY. Features that might say WHICH anchor mode applies, computed
     // without ever consulting the demonstration. Frozen onset detectors are
