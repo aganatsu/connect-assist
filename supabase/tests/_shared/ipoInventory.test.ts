@@ -7,6 +7,8 @@ import {
   inventoryViewBars,
   barKey,
   timeframeMinutes,
+  isIntradayTimeframe,
+  isDateOnly,
   resolveParentLineage,
   detectIPOCandidates,
   type DemonstratedExample,
@@ -597,4 +599,91 @@ Deno.test("refinement keeps direction aligned, and that rule is declared", () =>
   assertEquals(r.evidenceSource, "USER_CONFIRMED");
   assert(provenanceManifest().rules.some((x) => x.key === "refinement.sameDirection"),
     "and it must appear in the manifest attached to research output");
+});
+
+Deno.test("a date-only example on an intraday chart searches the calendar day", () => {
+  // A screenshot often gives 2020-05-08 and nothing finer. On a 4H chart the
+  // inventory keys that day as six bars, so the exact-key lookup misses all of
+  // them and the example read ABSENT — a detector failure reported where the
+  // only thing missing was a timestamp in OUR records.
+  const mk = (dt: string, id: string, direction: "demand" | "supply" = "demand"): any => ({
+    id, symbol: "T", timeframe: "4h", direction,
+    candleIndex: 0, candleDatetime: dt, candle: { open: 1, high: 2, low: 0, close: 1 },
+    geometry: { proximal: 2, distal: 1, extent: 0, zoneLow: 1, zoneHigh: 2 },
+    confirmation: { ordering: "DEPARTURE_BEFORE_BREAK", firstRelevant: {}, detectorBreak: {} },
+    liquidity: {}, departureFvg: {}, consolidation: { status: "UNRESOLVED" },
+    lifecycle: { status: "TESTED" },
+    lineage: { timeframe: "4h", refinementDepth: 0, parentIPOId: null, parentTimeframe: null,
+      possibleParentIPOIds: [], lineageAmbiguous: false, lineageResolvedBy: "ROOT",
+      childIds: [], possibleChildIds: [], role: "EXECUTION", standalone: false,
+      parentInView: true, parentAgeDays: null, parentAgeBars: null },
+    selection: {}, atrAtCandle: 1, valid: true, researchStatus: "CANDIDATE_ACCEPTED",
+    coexistenceNote: "x",
+  });
+
+  // ── exactly one direction-compatible zone that day ──
+  const single = [mk("2020-05-08T04:00:00Z", "only"), mk("2020-05-08T12:00:00Z", "other", "supply")];
+  const r1 = evaluateDemonstratedCoverage(single as any, [
+    ex({ id: "a", timeframe: "4h", direction: "demand", candleDatetime: "2020-05-08" }),
+  ], {});
+  assertEquals(r1.results[0].matchState, "DATE_ONLY_SINGLE_MATCH");
+  assertEquals(r1.results[0].matchedZoneId, "only");
+  assertEquals(r1.results[0].presentInInventory, true);
+  assert(r1.results[0].matchState !== "EXACT_CANDLE",
+    "an inferred bar must never be reported as an exact match");
+  assertEquals(r1.results[0].confirmationState, "DEPARTURE_BEFORE_BREAK",
+    "a resolved single match carries the zone's real state");
+  assertEquals((r1.demonstratedIPOCoverage as any).dateOnlyExamples.singleMatch, 1);
+
+  // ── several compatible zones that day ──
+  const many = [mk("2020-05-08T04:00:00Z", "a1"), mk("2020-05-08T20:00:00Z", "a2")];
+  const r2 = evaluateDemonstratedCoverage(many as any, [
+    ex({ id: "a", timeframe: "4h", direction: "demand", candleDatetime: "2020-05-08" }),
+  ], {});
+  assertEquals(r2.results[0].matchState, "DATE_ONLY_AMBIGUOUS");
+  assertEquals(r2.results[0].matchedZoneId, null, "we cannot name which zone was shown");
+  assertEquals(r2.results[0].presentInInventory, false);
+  assertEquals([...r2.results[0].candidateZoneIds].sort(), ["a1", "a2"]);
+  assertEquals(r2.results[0].confirmationState, null,
+    "no zone was identified, so no zone's state may be claimed");
+
+  // Ambiguous is neither covered nor missed — it is the gap between the bounds.
+  const cov = r2.demonstratedIPOCoverage as any;
+  assertEquals(cov.byExample.pct, 0);
+  assertEquals(cov.coverageUpperBoundPct, 100);
+  assertEquals(cov.dateOnlyExamples.ambiguous, 1);
+
+  // ── a date-only example with NO zone that day is still absent ──
+  const r3 = evaluateDemonstratedCoverage(single as any, [
+    ex({ id: "a", timeframe: "4h", direction: "demand", candleDatetime: "2020-05-09" }),
+  ], {});
+  assertEquals(r3.results[0].matchState, "ABSENT");
+
+  // ── direction still binds: a supply demonstration does not take a demand zone ──
+  const r4 = evaluateDemonstratedCoverage([mk("2020-05-08T04:00:00Z", "d1")] as any, [
+    ex({ id: "a", timeframe: "4h", direction: "supply", candleDatetime: "2020-05-08" }),
+  ], {});
+  assertEquals(r4.results[0].matchState, "ABSENT");
+  assertEquals(r4.results[0].candidateZoneIds, []);
+});
+
+Deno.test("the date-only fallback does not loosen matching on daily charts", () => {
+  // At 1D the key is already date-only, so exact matching works and the
+  // fallback must not fire — otherwise a real miss could be papered over.
+  const s = series();
+  const inv = buildIPOInventory([{ timeframe: "1d", candles: s }], { symbol: "T" });
+  const z = inv[0];
+  const hit = evaluateDemonstratedCoverage(inv, [
+    ex({ id: "a", timeframe: "1d", direction: z.direction, candleDatetime: z.candleDatetime.slice(0, 10) }),
+  ], {});
+  assertEquals(hit.results[0].matchState, "EXACT_CANDLE",
+    "a daily example matches exactly, not by day-search");
+  const miss = evaluateDemonstratedCoverage(inv, [
+    ex({ id: "a", timeframe: "1d", candleDatetime: "1999-01-01" }),
+  ], {});
+  assertEquals(miss.results[0].matchState, "ABSENT");
+  assertEquals(isIntradayTimeframe("1d"), false);
+  assertEquals(isIntradayTimeframe("4h"), true);
+  assertEquals(isDateOnly("2020-05-08"), true);
+  assertEquals(isDateOnly("2020-05-08T04:00:00Z"), false);
 });

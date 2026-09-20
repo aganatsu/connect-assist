@@ -1,6 +1,6 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
-import { planCorpusInsert, resolveWaveParents } from "../_shared/ipoCorpusPlan.ts";
+import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParentError } from "../_shared/ipoCorpusPlan.ts";
 import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
@@ -4216,7 +4216,25 @@ Deno.serve(async (req) => {
       if (sub === "add") {
         const rows = Array.isArray(body?.examples) ? body.examples : [];
         if (!rows.length) return respond({ error: "examples[] required" });
-        const plan = planCorpusInsert(rows, userId, () => crypto.randomUUID());
+        // Existing demonstration groups, so a re-send cannot change the identity
+        // of a demonstration. Without this the mint runs again and the upsert
+        // overwrites example_group_id with a fresh uuid: the rows and edges
+        // survive, but every earlier reference to that group stops matching and
+        // one demonstration is counted as two across runs.
+        const keys = rows.map((e: any) => corpusNaturalKey(e));
+        const { data: existing, error: exErr } = await supa
+          .from("ipo_corpus_examples")
+          .select("symbol,timeframe,candle_datetime,direction,example_group_id")
+          .eq("user_id", userId)
+          .in("symbol", [...new Set(rows.map((e: any) => e.symbol))]);
+        if (exErr) return respond({ error: exErr.message });
+        const existingGroupByKey = new Map<string, string>();
+        for (const r of existing ?? []) {
+          if (r.example_group_id) existingGroupByKey.set(corpusNaturalKey(r), r.example_group_id);
+        }
+        const reused = keys.filter((k: string) => existingGroupByKey.has(k)).length;
+
+        const plan = planCorpusInsert(rows, userId, () => crypto.randomUUID(), existingGroupByKey);
         if (plan.problems.length) return respond({ error: "validation failed", problems: plan.problems });
 
         // One upsert per WAVE, roots first. A W->D->4H chain cannot go in a
@@ -4225,7 +4243,22 @@ Deno.serve(async (req) => {
         const idByLocal = new Map<string, string>();
         const written: any[] = [];
         for (const wave of plan.waves) {
-          const payload = resolveWaveParents(wave, idByLocal);
+          let payload: Array<Record<string, unknown>>;
+          try {
+            payload = resolveWaveParents(wave, idByLocal);
+          } catch (e) {
+            // A local parent that did not resolve is fatal. Writing the child
+            // with a null parent would silently drop the refinement edge — the
+            // exact failure the wave planner exists to prevent.
+            if (e instanceof UnresolvedParentError) {
+              return respond({
+                error: e.message, partial: true, writtenSoFar: written,
+                unresolvedLocalParent: e.localParentId, sourceRow: e.sourceIndex,
+                note: "no child was written without its parent; re-send the batch to retry",
+              });
+            }
+            throw e;
+          }
           const { data, error } = await supa.from("ipo_corpus_examples")
             .upsert(payload, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
             .select("id,symbol,timeframe,candle_datetime,direction,example_group_id,parent_example_id");
@@ -4258,6 +4291,7 @@ Deno.serve(async (req) => {
           upserted: written.length,
           waves: plan.waves.length,
           refinementEdgesStored: edges,
+          demonstrationGroupsReused: reused,
           demonstrations: new Set(written.map((r: any) => r.example_group_id ?? r.id)).size,
           rows: written,
           note: plan.waves.length > 1

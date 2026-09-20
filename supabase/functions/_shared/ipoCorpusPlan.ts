@@ -37,6 +37,14 @@ export interface CorpusInsertPlan {
   problems: Array<{ row: number; why: string }>;
 }
 
+/** Natural key of a corpus row — the same tuple the unique constraint uses. */
+export function corpusNaturalKey(
+  e: { symbol?: unknown; timeframe?: unknown; candleDatetime?: unknown; candle_datetime?: unknown; direction?: unknown },
+): string {
+  const dt = (e as any).candleDatetime ?? (e as any).candle_datetime ?? null;
+  return `${e.symbol}|${e.timeframe}|${dt ?? "~"}|${e.direction}`;
+}
+
 /**
  * Orders a corpus batch into insertable waves and resolves local parent refs.
  *
@@ -47,6 +55,17 @@ export function planCorpusInsert(
   rows: any[],
   userId: string,
   mintGroupId: () => string,
+  /**
+   * example_group_id of rows ALREADY stored, keyed by corpusNaturalKey.
+   *
+   * Without this a re-send mints a fresh uuid and the upsert overwrites the
+   * group, so the row ids and edges survive but the DEMONSTRATION IDENTITY
+   * changes — every earlier reference to that group silently stops matching,
+   * and the coverage report would count one demonstration as two across runs.
+   * The group is the demonstration, so an existing one always wins over a
+   * minted one.
+   */
+  existingGroupByKey: Map<string, string> = new Map(),
 ): CorpusInsertPlan {
   const problems = validateCorpusExamples(rows);
   if (problems.length) return { waves: [], problems };
@@ -100,8 +119,13 @@ export function planCorpusInsert(
   rows.forEach((_, i) => {
     const r = rootOf(i);
     if (groupByRoot.has(r)) return;
+    // Precedence: a group the caller named, then a group already stored for any
+    // row of this chain, then a fresh one. Minting is the last resort.
     const explicit = rows.find((e, j) => rootOf(j) === r && e.exampleGroupId)?.exampleGroupId;
-    groupByRoot.set(r, explicit ? String(explicit) : mintGroupId());
+    const stored = rows
+      .map((e, j) => (rootOf(j) === r ? existingGroupByKey.get(corpusNaturalKey(e)) : undefined))
+      .find((v) => v);
+    groupByRoot.set(r, explicit ? String(explicit) : (stored ?? mintGroupId()));
   });
   const inAChain = (i: number): boolean =>
     localParentIndex(i) !== undefined ||
@@ -130,7 +154,11 @@ export function planCorpusInsert(
         // into demonstrations they are not part of.
         example_group_id: e.exampleGroupId
           ? String(e.exampleGroupId)
-          : (inAChain(i) ? groupByRoot.get(rootOf(i))! : null),
+          : (inAChain(i)
+            ? groupByRoot.get(rootOf(i))!
+            // A solo row is not given a group it never had, but it does keep
+            // one it already has — an upsert must not blank it.
+            : (existingGroupByKey.get(corpusNaturalKey(e)) ?? null)),
         // Only an id the caller says is ALREADY in the database survives here.
         // A batch-local handle is resolved after its own wave lands.
         parent_example_id: parentIdx === undefined ? (e.parentExampleId ?? null) : null,
@@ -148,7 +176,29 @@ export function planCorpusInsert(
   return { waves, problems: [] };
 }
 
-/** Rewrites a wave's local parent handles to the real ids of earlier waves. */
+/** Raised when a batch-local parent handle cannot be resolved to a real id. */
+export class UnresolvedParentError extends Error {
+  constructor(readonly localParentId: string, readonly sourceIndex: number) {
+    super(
+      `local parent "${localParentId}" (row ${sourceIndex}) has no database id. ` +
+      "Its wave should already have landed, so this means an earlier wave did " +
+      "not return the row — writing the child without its parent would lose the " +
+      "refinement edge silently, which is the failure this planner exists to stop.",
+    );
+    this.name = "UnresolvedParentError";
+  }
+}
+
+/**
+ * Rewrites a wave's local parent handles to the real ids of earlier waves.
+ *
+ * AN UNRESOLVED HANDLE IS FATAL. The earlier draft wrote `real ?? null`, which
+ * reintroduced exactly the bug this module was written to remove: a child
+ * stored with no parent, no error, and a response saying the batch succeeded.
+ * Waves are ordered by depth, so a local parent is GUARANTEED to have been
+ * inserted already; a missing entry means something upstream went wrong, and
+ * failing loudly leaves the chain reconstructible on a re-send.
+ */
 export function resolveWaveParents(
   wave: PlannedCorpusRow[],
   idByLocal: Map<string, string>,
@@ -156,9 +206,7 @@ export function resolveWaveParents(
   return wave.map((p) => {
     if (!p.localParentId) return p.row;
     const real = idByLocal.get(p.localParentId);
-    // An unresolvable handle DROPS the edge rather than writing a bad id. A row
-    // with a missing parent is recoverable and visible in the coverage report;
-    // a row pointing at the wrong parent is neither.
-    return { ...p.row, parent_example_id: real ?? null };
+    if (!real) throw new UnresolvedParentError(p.localParentId, p.sourceIndex);
+    return { ...p.row, parent_example_id: real };
   });
 }

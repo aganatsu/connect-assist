@@ -2239,7 +2239,21 @@ export interface DemonstratedExample {
   evidenceSource: EvidenceSource;
 }
 
-export type MatchState = "EXACT_CANDLE" | "SAME_BAR_OTHER_DIRECTION" | "ABSENT" | "UNDATED_EXAMPLE";
+export type MatchState =
+  | "EXACT_CANDLE"
+  /**
+   * A screenshot gave only the calendar day, the timeframe is intraday, and
+   * exactly ONE direction-compatible zone exists on that day. Distinct from
+   * EXACT_CANDLE on purpose: the demonstration did not name the bar, we
+   * inferred it from there being no alternative. If a later corpus row pins the
+   * time and disagrees, this is the match that was wrong.
+   */
+  | "DATE_ONLY_SINGLE_MATCH"
+  /** Same, but several zones share the day. Which one was shown is unknown. */
+  | "DATE_ONLY_AMBIGUOUS"
+  | "SAME_BAR_OTHER_DIRECTION"
+  | "ABSENT"
+  | "UNDATED_EXAMPLE";
 export type GeometryMatch = "MATCH" | "MISMATCH" | "NOT_DEMONSTRATED";
 export type LineageMatch =
   | "MATCHED"
@@ -2259,6 +2273,8 @@ export interface DemonstratedExampleResult {
   presentInInventory: boolean;
   matchState: MatchState;
   matchedZoneId: string | null;
+  /** Populated for DATE_ONLY_AMBIGUOUS: the zones that share the day. */
+  candidateZoneIds: string[];
   geometryMatch: GeometryMatch;
   geometryDetail: { expected: [number, number] | null; actual: [number, number] | null; toleranceAtr: number | null };
   confirmationState: ConfirmationOrdering | null;
@@ -2282,6 +2298,17 @@ export function timeframeMinutes(tf: string): number | null {
   if (/^(d|day|days)$/.test(unit)) return n * 1440;
   if (/^(w|week|weeks)$/.test(unit)) return n * 10080;
   return n * 43200;
+}
+
+/** True for a timeframe whose bars are shorter than one day. */
+export function isIntradayTimeframe(tf: string): boolean {
+  const m = timeframeMinutes(tf);
+  return m === null || m < 1440;
+}
+
+/** True when a datetime carries no time component at all. */
+export function isDateOnly(dt: string): boolean {
+  return !/\d{2}:\d{2}/.test(String(dt));
 }
 
 /**
@@ -2341,11 +2368,34 @@ export function evaluateDemonstratedCoverage(
   const matchedIdByExample = new Map<string, string>();
   const results: DemonstratedExampleResult[] = examples.map((x) => {
     const d = barKey(x.candleDatetime, x.timeframe);
-    const hit = d ? byKey.get(`${x.symbol}|${x.timeframe}|${x.direction}|${d}`) ?? null : null;
+    let hit = d ? byKey.get(`${x.symbol}|${x.timeframe}|${x.direction}|${d}`) ?? null : null;
+
+    // DATE-ONLY EXAMPLE ON AN INTRADAY CHART.
+    //
+    // A screenshot often gives 2020-05-08 and nothing finer. On a 4H chart the
+    // inventory keys that day as six separate bars, so the exact-key lookup
+    // misses every one of them and the example reads ABSENT — a detector
+    // failure reported where the only thing missing was a timestamp in OUR
+    // records. Fall back to the calendar day, and say so in the match state
+    // rather than dressing an inference up as an exact match.
+    let candidateZoneIds: string[] = [];
+    let dateOnly = false;
+    if (!hit && x.candleDatetime && isDateOnly(x.candleDatetime) &&
+        isIntradayTimeframe(x.timeframe)) {
+      dateOnly = true;
+      const day = x.candleDatetime.slice(0, 10);
+      candidateZoneIds = entries
+        .filter((e) => e.symbol === x.symbol && e.timeframe === x.timeframe &&
+          e.direction === x.direction && e.candleDatetime.slice(0, 10) === day)
+        .map((e) => e.id);
+      if (candidateZoneIds.length === 1) hit = entries.find((e) => e.id === candidateZoneIds[0])!;
+    }
     if (hit) matchedIdByExample.set(x.id, hit.id);
 
     let matchState: MatchState;
     if (!d) matchState = "UNDATED_EXAMPLE";
+    else if (dateOnly && candidateZoneIds.length === 1) matchState = "DATE_ONLY_SINGLE_MATCH";
+    else if (dateOnly && candidateZoneIds.length > 1) matchState = "DATE_ONLY_AMBIGUOUS";
     else if (hit) matchState = "EXACT_CANDLE";
     else if ((anyDirection.get(`${x.symbol}|${x.timeframe}|${d}`) ?? []).length) {
       matchState = "SAME_BAR_OTHER_DIRECTION";
@@ -2373,7 +2423,7 @@ export function evaluateDemonstratedCoverage(
       candleDatetime: x.candleDatetime, exampleGroupId: x.exampleGroupId,
       evidenceSource: x.evidenceSource,
       presentInInventory: hit !== null,
-      matchState, matchedZoneId: hit?.id ?? null,
+      matchState, matchedZoneId: hit?.id ?? null, candidateZoneIds,
       geometryMatch,
       geometryDetail: { expected, actual, toleranceAtr: tol },
       confirmationState: hit ? hit.confirmation.ordering : null,
@@ -2437,6 +2487,13 @@ export function evaluateDemonstratedCoverage(
   const matchedExamples = demoIdx.filter((i) => results[i].presentInInventory).length;
   const rg = groupCounts(reconIdx);
 
+  // An ambiguous date-only example is neither covered nor missed: a zone for
+  // that day exists, but the demonstration did not say which one, so claiming
+  // it would assert an identification we have not made. It is excluded from the
+  // headline and reported as the gap between a lower and an upper bound.
+  const ambiguous = demoIdx.filter((i) => results[i].matchState === "DATE_ONLY_AMBIGUOUS").length;
+  const dateOnlySingle = demoIdx.filter((i) => results[i].matchState === "DATE_ONLY_SINGLE_MATCH").length;
+
   const demonstratedIPOCoverage = {
     byDemonstration: {
       total: g.total,
@@ -2463,6 +2520,18 @@ export function evaluateDemonstratedCoverage(
         "A row we reconstructed is not a demonstration, and letting one raise " +
         "coverage would make the metric self-serving.",
     },
+    dateOnlyExamples: {
+      singleMatch: dateOnlySingle,
+      ambiguous,
+      note: "Calendar-day-only examples on an intraday chart. A single match is " +
+        "counted as covered but flagged DATE_ONLY_SINGLE_MATCH, because the bar " +
+        "was inferred from having no alternative rather than demonstrated. An " +
+        "ambiguous one is counted as NEITHER covered nor missed — see " +
+        "coverageUpperBoundPct — and recording the demonstrated time resolves it.",
+    },
+    coverageUpperBoundPct: demoIdx.length
+      ? rnd((matchedExamples + ambiguous) / demoIdx.length)
+      : null,
     undatedExamples: demoIdx.filter((i) => results[i].matchState === "UNDATED_EXAMPLE").length,
   };
 
