@@ -1,0 +1,46 @@
+Subject: harden ipo_paper_ledger RLS to match ipo_corpus_examples
+
+PREPARED, NOT APPLIED. Phase B is engine-only; this is staged for whoever runs
+the paper-environment phase.
+
+Apply with:
+    git apply docs/patches/ipo_paper_ledger_rls.patch
+
+The migration 20260921120000 is still UNAPPLIED, so this is an edit to a pending
+file, not a schema change to a live database.
+
+WHY EACH LINE IS NEEDED
+
+  FORCE ROW LEVEL SECURITY
+    ENABLE alone does not constrain the table OWNER. Without FORCE, a query run
+    as the owning role reads every row regardless of policy. ipo_corpus_examples
+    (migration 20260920100000) already sets it; this table did not.
+
+  REVOKE ALL FROM anon, authenticated
+    RLS governs rows; GRANTs govern reachability. Leaving default grants in
+    place means PostgREST will attempt the query and rely on RLS to refuse it.
+    Revoking makes the table unreachable rather than merely empty.
+
+  GRANT ALL TO service_role
+    Explicit rather than inherited, so the edge function keeps working if
+    default privileges change.
+
+--- a/supabase/migrations/20260921120000_ipo_paper_ledger.sql
++++ b/supabase/migrations/20260921120000_ipo_paper_ledger.sql
+@@
+--- Project-owned research data, same posture as the IPO corpus: no anon or
+--- authenticated policy. Reachable only with the service role, which means only
+--- from the edge function. RLS on with zero policies denies everyone else.
++-- Project-owned research data, matching the posture already established for
++-- ipo_corpus_examples (migration 20260920100000) exactly.
++--
++-- FORCE matters and ENABLE alone is not enough: without it the table OWNER
++-- bypasses RLS, so a query run as the owning role would still read the table.
++-- REVOKE matters too — RLS governs rows, grants govern reachability, and
++-- leaving the default grants in place means PostgREST will happily attempt the
++-- query before RLS refuses it. Both, or the guarantee is partial.
+ alter table public.ipo_paper_ledger enable row level security;
++alter table public.ipo_paper_ledger force row level security;
++
++revoke all on public.ipo_paper_ledger from anon, authenticated;
++grant all on public.ipo_paper_ledger to service_role;
