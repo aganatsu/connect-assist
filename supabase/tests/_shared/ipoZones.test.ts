@@ -311,6 +311,10 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
   ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
+    // DELIBERATE PROMOTION, 2026-09-21. The paper runner is the first function
+    // allowed to import the candidate. It is PAPER ONLY: a separate test asserts
+    // it cannot reach a broker, a position table, or any execution helper.
+    "supabase/functions/ipo-paper-trading/index.ts",
     "supabase/functions/_shared/ipoZones.ts",        // shadow modules may import each other
     "supabase/functions/_shared/ipoCorpusPlan.ts",
     "supabase/functions/_shared/ipoProvenance.ts",
