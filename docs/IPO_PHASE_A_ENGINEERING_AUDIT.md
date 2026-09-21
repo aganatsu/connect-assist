@@ -127,13 +127,59 @@ the MANAGEMENT loop, not the entry path.** A position merely *existing* in
 **Answering §12 directly: almost nothing is enforced.** The only hard correlation
 block is Gate 22, and it is a different code path from `portfolioCorrelation.ts`.
 
-> **Discrepancy found — conflicting defaults for Gate 22.**
-> `bot-scanner:1281` resolves `correlationFilterEnabled ?? false`.
-> `configMapper.ts:332` sets `RUNTIME_DEFAULTS.correlationFilterEnabled = true`.
-> `BotConfigModal.tsx:255` also defaults it true.
-> Whether the only enforced correlation control is on or off by default depends
-> on which mapping wins at runtime. **Unresolved statically — must be confirmed
-> against the live `bot_configs` row before anything depends on it.**
+> ### CORRECTION (2026-09-21) — D1's "conflicting defaults" claim was WRONG
+>
+> The original audit reported a conflict between `bot-scanner:1281` (`?? false`)
+> and `configMapper:332` (`true`). **There is no conflict.** `bot-scanner:1281`
+> sits inside `function _legacyLoadConfigMapping(...)` — defined once at line
+> 1036, **called nowhere**, under the comment *"LEGACY loadConfig body preserved
+> as reference (DO NOT USE)"*. It is dead code and was misread as live.
+>
+> The live path is `bot-scanner:1023 -> mapNestedToFlat -> configMapper:720`.
+>
+> **Effective runtime defaults: `correlationFilterEnabled = true`,
+> `maxCorrelatedPositions = 2`.**
+
+### Live configuration, independently verified
+
+| key as stored | live value |
+|---|---|
+| `instruments.correlationFilterEnabled` | `true` |
+| `instruments.maxCorrelatedPositions` | `2` |
+| `instruments.maxCorrelation` | `0.7` |
+| `strategy.correlationFilterEnabled` / `.maxCorrelatedPositions` | `null` |
+
+### NEW FINDING — all three UI correlation settings are inert
+
+Resolving D1 surfaced a config-drift defect that is **not an IPO problem and
+must not be fixed as IPO work**.
+
+`mapNestedToFlat` reads these keys from `strategy.*`, then top-level `raw.*`,
+then `RUNTIME_DEFAULTS`. **It never reads `instruments.*`** — and
+`instruments.*` is exactly where `BotConfigModal` writes them. The mapper also
+returns an explicit object literal with no spread, so unmapped keys are dropped
+entirely.
+
+| setting | UI writes | mapper reads | reaches the engine? | engine uses |
+|---|---|---|---|---|
+| `correlationFilterEnabled` | `instruments.*` = true | `strategy.*` / `raw.*` | **NO** | `RUNTIME_DEFAULTS` = true |
+| `maxCorrelatedPositions` | `instruments.*` = 2 | `strategy.*` / `raw.*` | **NO** | `RUNTIME_DEFAULTS` = 2 |
+| `maxCorrelation` | `instruments.*` = 0.7 | **not mapped at all** | **NO** | Gate 22 inline `\|\| 0.8` |
+
+Two of the three coincide with their defaults, so the drift is currently
+invisible. The third does not: **the engine uses 0.8 where the UI shows 0.7.**
+
+The consequence that matters: **turning the correlation filter OFF in the UI
+would not turn it off at runtime.** A user-visible control silently does nothing.
+
+This looks like a regression from the mapping extraction — the dead
+`_legacyLoadConfigMapping` block *did* read `instruments.correlationFilterEnabled`,
+and the replacement reads `strategy.*`.
+
+> **DO NOT FIX AS PART OF IPO WORK.** Correcting the mapping would change live
+> SMC behaviour: Gate 22's threshold would move 0.8 -> 0.7 and the enable flag
+> would become genuinely user-controlled. That is an SMC change and needs its
+> own regression testing. Recorded here, owned elsewhere.
 
 ## 6. Prop-Firm Enforcement Map
 
@@ -227,7 +273,7 @@ therefore fits the existing architecture better than adding a SELECT policy to
 
 | # | design says | repo actually | severity |
 |---|---|---|---|
-| D1 | §12 "audit which correlation controls are enforced" | **`approved`, `blockThreshold` and `maxCurrencyExposure` are all dead.** Only Gate 22 blocks, via a different module | **high** — the design assumes a correlation layer exists to extend |
+| D1 | §12 "audit which correlation controls are enforced" | **`approved`, `blockThreshold` and `maxCurrencyExposure` are all dead.** Only Gate 22 blocks, via a different module. *Corrected: the "conflicting defaults" part of this finding was wrong — see §5. Effective defaults are `true` / `2`, and separately all three UI correlation settings are inert* | **high** — the design assumes a correlation layer exists to extend |
 | D2 | §12 correlation sits "after signal, before execution" | it sits before sizing and only *scales* size | medium |
 | D3 | §6 control plane via strategy modes | `strategy_activation_registry` exists, is well-governed, and **has zero readers/writers** — it is unused scaffolding, not a live control plane | medium |
 | D4 | §9 "treat current SMC state as SMC-owned" | agreed, but the enforcing mechanism is one fail-open filter `!p.bot_id \|\| p.bot_id === "smc"` | **high** |
