@@ -303,12 +303,40 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
   // All three research modules are checked, not just ipoZones. ipoCorpusPlan
   // and ipoProvenance arrived later and would otherwise have been an unguarded
   // back door into exactly the same code.
-  const SHADOW = ["ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts"];
+  const SHADOW = [
+    "ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts",
+    "ipoHistoricalRange.ts", "ipoResearchAuth.ts", "ipoOriginExperiments.ts",
+    "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts", "ipoOriginAnchor.ts", "ipoAnchorDiscriminator.ts", "ipoTeachingSpec.ts", "ipoOnsetVariants.ts",
+    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoForwardLedger.ts",
+  ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
     "supabase/functions/_shared/ipoZones.ts",        // shadow modules may import each other
     "supabase/functions/_shared/ipoCorpusPlan.ts",
     "supabase/functions/_shared/ipoProvenance.ts",
+    "supabase/functions/_shared/ipoHistoricalRange.ts",
+    "supabase/functions/_shared/ipoResearchAuth.ts",
+    "supabase/functions/_shared/ipoOriginExperiments.ts",
+    "supabase/functions/_shared/ipoOriginFeatures.ts",
+    "supabase/functions/_shared/ipoDisplacementOnset.ts",
+    "supabase/functions/_shared/ipoOriginAnchor.ts",
+    "supabase/functions/_shared/ipoAnchorDiscriminator.ts",
+    "supabase/functions/_shared/ipoTeachingSpec.ts",
+    "supabase/functions/_shared/ipoOnsetVariants.ts",
+    "supabase/functions/_shared/ipoContraction.ts",
+    "supabase/functions/_shared/ipoContractionDetector.ts",
+    "supabase/functions/_shared/ipoContractionSeeds.ts",
+    "supabase/functions/_shared/ipoContractionTwoStage.ts",
+    "supabase/functions/_shared/ipoMoveDetection.ts",
+    "supabase/functions/_shared/ipoStateMachine.ts",
+    "supabase/functions/_shared/ipoContractionStateExit.ts",
+    "supabase/functions/_shared/ipoLifecycle.ts",
+    "supabase/functions/_shared/ipoRawBacktest.ts",
+    "supabase/functions/_shared/ipoConfluenceFeatures.ts",
+    "supabase/functions/_shared/ipoAPlusClassifier.ts",
+    "supabase/functions/_shared/ipoRegimeDescriptors.ts",
+    "supabase/functions/_shared/ipoLiveVolatility.ts",
+    "supabase/functions/_shared/ipoForwardLedger.ts",
   ];
   const offenders: string[] = [];
   const walk = async (dir: string) => {

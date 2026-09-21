@@ -41,7 +41,12 @@ import {
   type FairValueGap,
   type LiquidityPool,
 } from "./smcAnalysis.ts";
-import { EVIDENCE_SOURCES, type EvidenceSource } from "./ipoProvenance.ts";
+import {
+  CONFIDENCE_TIERS,
+  EVIDENCE_SOURCES,
+  SOURCE_FAMILIES,
+  type EvidenceSource,
+} from "./ipoProvenance.ts";
 
 export type IPODirection = "demand" | "supply";
 export type IPOStatus =
@@ -2752,6 +2757,15 @@ export function validateCorpusExamples(rows: any[]): Array<{ row: number; why: s
     if (e.direction !== "demand" && e.direction !== "supply") bad("direction must be demand or supply");
     if (e.evidenceSource && !EVIDENCE_SOURCES.includes(e.evidenceSource)) {
       bad(`evidenceSource must be one of ${EVIDENCE_SOURCES.join(", ")}`);
+    }
+    // Both are optional, because a row whose tier or teacher has not been
+    // established must be storable as unknown rather than guessed at. What is
+    // rejected is a WRONG value, which would read as an established fact.
+    if (e.confidenceTier && !CONFIDENCE_TIERS.includes(e.confidenceTier)) {
+      bad(`confidenceTier must be one of ${CONFIDENCE_TIERS.join(", ")}`);
+    }
+    if (e.sourceFamily && !SOURCE_FAMILIES.includes(e.sourceFamily)) {
+      bad(`sourceFamily must be one of ${SOURCE_FAMILIES.join(", ")}`);
     }
     if ("label" in e) {
       bad("this corpus holds POSITIVES ONLY — it has no label column, and an " +

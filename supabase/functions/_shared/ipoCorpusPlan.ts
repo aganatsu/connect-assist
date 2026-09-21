@@ -37,7 +37,13 @@ export interface CorpusInsertPlan {
   problems: Array<{ row: number; why: string }>;
 }
 
-/** Natural key of a corpus row — the same tuple the unique constraint uses. */
+/**
+ * Natural key of a corpus row — the same tuple the unique constraint uses.
+ *
+ * user_id is deliberately absent: the constraint is now
+ * (symbol, timeframe, candle_datetime, direction) project-wide, so two
+ * accounts can no longer store contradictory versions of one demonstration.
+ */
 export function corpusNaturalKey(
   e: { symbol?: unknown; timeframe?: unknown; candleDatetime?: unknown; candle_datetime?: unknown; direction?: unknown },
 ): string {
@@ -53,7 +59,6 @@ export function corpusNaturalKey(
  */
 export function planCorpusInsert(
   rows: any[],
-  userId: string,
   mintGroupId: () => string,
   /**
    * example_group_id of rows ALREADY stored, keyed by corpusNaturalKey.
@@ -138,7 +143,8 @@ export function planCorpusInsert(
       sourceIndex: i,
       localParentId: parentIdx === undefined ? null : parentHandleOf(e),
       row: {
-        user_id: userId,
+        // No user_id. The corpus is project-owned: there is exactly one record
+        // of what a video demonstrated, not one per account.
         evidence_source: e.evidenceSource ?? "VIDEO_DEMONSTRATION",
         source_video: e.sourceVideo ?? null,
         source_timestamp: e.sourceTimestamp ?? null,
@@ -149,6 +155,12 @@ export function planCorpusInsert(
         direction: e.direction,
         demonstrated_zone_low: e.demonstratedZoneLow ?? null,
         demonstrated_zone_high: e.demonstratedZoneHigh ?? null,
+        // Stored, not derived. Both were previously held only in conversation
+        // and had to be recovered from a session transcript — which means a
+        // row's usability for rule-proposal was not actually recorded anywhere.
+        // Null is "not established" and must never be defaulted to a value.
+        confidence_tier: e.confidenceTier ?? null,
+        source_family: e.sourceFamily ?? null,
         // A row in a chain always carries a group. A lone row keeps null unless
         // the caller asked for one, so solo examples are not silently grouped
         // into demonstrations they are not part of.
