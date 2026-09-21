@@ -36,7 +36,7 @@
 import { segmentEpisodes } from "./ipoContractionStateExit.ts";
 import { twoStageContractions } from "./ipoContractionTwoStage.ts";
 import { ipoGeometry, fvgsNear } from "./ipoZones.ts";
-import { LiveVolatility, isEligible } from "./ipoLiveVolatility.ts";
+import { LiveVolatility, isEligible, type VolatilityState } from "./ipoLiveVolatility.ts";
 import type { Episode } from "./ipoLifecycle.ts";
 import type { VolBucket } from "./ipoRegimeDescriptors.ts";
 import type { Candle } from "./smcAnalysis.ts";
@@ -45,8 +45,28 @@ import type { EngineConfig, LiveEvent, LiveTrade, RefusalReason } from "./ipoLiv
 const isUp = (c: Candle) => c.close >= c.open;
 const overlaps = (c: Candle, lo: number, hi: number) => c.low <= hi && c.high >= lo;
 
+/**
+ * Every frozen parameter this engine applies, in one place.
+ *
+ * Collected so a runtime-state fingerprint can be DERIVED from the rules rather
+ * than hand-maintained beside them: change any value here and persisted state
+ * created under the old value stops being restorable, automatically. The values
+ * themselves are unchanged from the frozen spec.
+ */
+export const FROZEN_RULES = {
+  fvgWindow: 10,
+  fvgDetectionReachExtra: 21,
+  contraction: {
+    seedFamily: "E1_STRUCTURE_STALL",
+    sideways: "W2_ALTERNATION_RISE",
+    start: "S_AFTER_STALL",
+    exit: "X_BODY_EXPANSION",
+  },
+  stateExit: "S2_EFFICIENCY_REGIME_SHIFT",
+} as const;
+
 /** The forward window `runLifecycle` scans for an aligned FVG. */
-const FVG_WINDOW = 10;
+const FVG_WINDOW = FROZEN_RULES.fvgWindow;
 
 /**
  * How far past `k + FVG_WINDOW` the answer can still change.
@@ -57,7 +77,7 @@ const FVG_WINDOW = 10;
  * candidate 764, which read false at k+10 and true at k+17. Settling at k+10
  * silently drops real setups.
  */
-const FVG_DETECTION_REACH = FVG_WINDOW + 21;
+const FVG_DETECTION_REACH = FVG_WINDOW + FROZEN_RULES.fvgDetectionReachExtra;
 
 /**
  * One candidate IPO, advanced a bar at a time.
@@ -98,6 +118,22 @@ interface Tracked {
   touchedThisBar: boolean;
 }
 
+/**
+ * The complete continuation state of an engine. See `IncrementalEngine.snapshot`
+ * for why each field is present and why `refusals` is not.
+ */
+export interface EngineSnapshot {
+  bars: Candle[];
+  vol: VolatilityState;
+  tracked: Tracked[];
+  frozenEpisodes: Episode[];
+  episodes: Episode[];
+  open: LiveTrade | null;
+  lastExitIndex: number;
+  lastVol: VolBucket;
+  trades: LiveTrade[];
+}
+
 export class IncrementalEngine {
   private bars: Candle[] = [];
   private vol = new LiveVolatility();
@@ -116,6 +152,66 @@ export class IncrementalEngine {
 
   get openTrade(): LiveTrade | null { return this.open; }
   get barCount(): number { return this.bars.length; }
+
+  /**
+   * Everything a continuation needs, and deliberately nothing else.
+   *
+   * This is an ENUMERATED list, not a dump of the instance. Each field is here
+   * because some later bar reads it:
+   *
+   *   bars             every whole-series call — twoStageContractions,
+   *                    segmentEpisodes, fvgsNear — rescans the full prefix
+   *   vol              the percentile reference the next bar is ranked against
+   *   tracked          candidate lifecycles mid-flight
+   *   frozenEpisodes   the cache whose absence would change nothing in theory
+   *                    and is persisted anyway, because "in theory" is not the
+   *                    standard for a restart
+   *   episodes         the context string each candidate is compared against
+   *   open/lastExitIndex/lastVol   sequencing and management
+   *   trades           consumed by the paper layer's reconciliation
+   *
+   * `refusals` is deliberately ABSENT. It is written and never read — a
+   * diagnostic accumulator, not state — so persisting it would grow the payload
+   * without being able to change a decision. A test pins that it stays unread.
+   *
+   * Everything is copied, so a snapshot cannot be mutated by continued feeding.
+   */
+  snapshot(): EngineSnapshot {
+    return {
+      bars: this.bars.map((b) => ({ ...b })),
+      vol: this.vol.exportState(),
+      tracked: this.tracked.map((t) => ({ ...t })),
+      frozenEpisodes: this.frozenEpisodes.map((e) => ({ ...e })),
+      episodes: this.episodes.map((e) => ({ ...e })),
+      open: this.open ? { ...this.open } : null,
+      lastExitIndex: this.lastExitIndex,
+      lastVol: this.lastVol,
+      trades: this.trades.map((t) => ({ ...t })),
+    };
+  }
+
+  /**
+   * Rebuilds an engine that will decide exactly what the original would have.
+   *
+   * `cfg` is supplied by the caller and NOT taken from the snapshot: it carries
+   * `costPerSide`, a function, which cannot cross a serialisation boundary. That
+   * is the one piece of the engine's identity a payload cannot prove, which is
+   * why `ipoEngineState` records a cost-model id beside the state and refuses a
+   * restore whose id does not match.
+   */
+  static fromSnapshot(cfg: EngineConfig, s: EngineSnapshot): IncrementalEngine {
+    const e = new IncrementalEngine(cfg);
+    e.bars = s.bars.map((b) => ({ ...b }));
+    e.vol = LiveVolatility.restore(e.bars, s.vol);
+    e.tracked = s.tracked.map((t) => ({ ...t }));
+    e.frozenEpisodes = s.frozenEpisodes.map((x) => ({ ...x }));
+    e.episodes = s.episodes.map((x) => ({ ...x }));
+    e.open = s.open ? { ...s.open } : null;
+    e.lastExitIndex = s.lastExitIndex;
+    e.lastVol = s.lastVol;
+    for (const t of s.trades) e.trades.push({ ...t });
+    return e;
+  }
 
   /**
    * Read-only view of every tracked candidate, for observation.
@@ -152,18 +248,14 @@ export class IncrementalEngine {
   private refreshEpisodes(): void {
     const s = this.bars;
     const K = s.length - 1;
-    const raw = twoStageContractions(s, {
-      seedFamily: "E1_STRUCTURE_STALL",
-      sideways: "W2_ALTERNATION_RISE",
-      start: "S_AFTER_STALL",
-      exit: "X_BODY_EXPANSION",
-    }).map((e) => ({ start: e.start, end: e.end, sidewaysAtIndex: e.sidewaysAtIndex }));
+    const raw = twoStageContractions(s, { ...FROZEN_RULES.contraction })
+      .map((e) => ({ start: e.start, end: e.end, sidewaysAtIndex: e.sidewaysAtIndex }));
 
     const frozenStarts = new Set(this.frozenEpisodes.map((e) => e.start));
     const pending = raw.filter((e) => !frozenStarts.has(e.start));
 
     const settled = pending.length
-      ? segmentEpisodes(s, pending, "S2_EFFICIENCY_REGIME_SHIFT").map((e) => {
+      ? segmentEpisodes(s, pending, FROZEN_RULES.stateExit).map((e) => {
           let hi = -Infinity, lo = Infinity;
           for (let i = e.start; i <= e.end; i++) { hi = Math.max(hi, s[i].high); lo = Math.min(lo, s[i].low); }
           return { start: e.start, end: e.end, high: hi, low: lo };

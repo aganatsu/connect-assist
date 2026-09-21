@@ -49,6 +49,21 @@ export function isEligible(v: VolBucket, highVolOnly: boolean): boolean {
 }
 
 /**
+ * The percentile reference, as persisted.
+ *
+ * Both arrays are kept SORTED ASCENDING by `insert`, and the sort order is part
+ * of the contract — `classify` ranks against them directly. They are stored
+ * rather than recomputed because recomputing means re-deriving `measureSeries`
+ * over the prefix, which is most of the bootstrap cost this state exists to
+ * avoid, and because a recomputation is a second implementation of the frozen
+ * rule and therefore something that can drift.
+ */
+export interface VolatilityState {
+  effSeen: number[];
+  atrSeen: number[];
+}
+
+/**
  * Streaming classifier.
  *
  * Bars are appended in order and the regime for the newest bar is returned. The
@@ -60,6 +75,26 @@ export class LiveVolatility {
   private bars: Candle[] = [];
   private effSeen: number[] = [];
   private atrSeen: number[] = [];
+
+  /** Exact copy of the reference distribution. Copies, so a holder cannot mutate it. */
+  exportState(): VolatilityState {
+    return { effSeen: [...this.effSeen], atrSeen: [...this.atrSeen] };
+  }
+
+  /**
+   * Rebuilds a classifier that will behave exactly as the original would have.
+   *
+   * `bars` must be the SAME prefix the original consumed: `push` recomputes
+   * `measureSeries` over it, so a different prefix produces a different
+   * measurement for the next bar even with an identical reference.
+   */
+  static restore(bars: Candle[], s: VolatilityState): LiveVolatility {
+    const v = new LiveVolatility();
+    v.bars = [...bars];
+    v.effSeen = [...s.effSeen];
+    v.atrSeen = [...s.atrSeen];
+    return v;
+  }
 
   /** Bars accepted so far. */
   get length(): number { return this.bars.length; }
