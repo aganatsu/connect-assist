@@ -1,0 +1,103 @@
+name: Apply pending migrations
+
+# Runs `supabase db push` against the project, from CI, where the access token
+# already lives. Same reasoning as set-shadow-flag.yml: SUPABASE_ACCESS_TOKEN is
+# write-only from outside CI, and copying a full account credential onto a laptop
+# or into a chat transcript to run one DDL statement is a worse trade than
+# building a narrow workflow that does it where the credential already is.
+#
+# READ THIS BEFORE DISPATCHING — `db push` IS NOT SELECTIVE.
+#
+# There is no "apply only this file" mode. `db push` applies EVERY migration in
+# supabase/migrations/ that is absent from the remote schema_migrations table, in
+# version order. If two migrations are pending and you only meant to apply one,
+# you are applying two. That is why this workflow dry-runs by default and makes
+# you type the exact set you expect.
+#
+# HOW IT PROTECTS YOU:
+#   - `dry_run: true` (the default) prints the plan and changes nothing;
+#   - a real run requires `confirm` to equal the literal string APPLY;
+#   - `expected_versions` must list, comma-separated, exactly the 14-digit
+#     versions you expect to be pending. If the plan does not match, the run
+#     fails before touching the database. A migration you did not know about is
+#     then a failed CI run rather than a surprise table in production.
+#
+# It does not roll back. Postgres DDL in `db push` is per-file; a failure part
+# way through leaves earlier files applied. Dry-run first, always.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the plan without applying'
+        required: true
+        default: true
+        type: boolean
+      expected_versions:
+        description: 'Comma-separated 14-digit versions you expect to be pending'
+        required: true
+        type: string
+      confirm:
+        description: 'Type APPLY to actually apply (ignored when dry_run is true)'
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: apply-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      - name: Show the plan
+        id: plan
+        run: |
+          set -euo pipefail
+          echo "::group::remote migration history"
+          supabase migration list --linked
+          echo "::endgroup::"
+          # A pending migration is one the CLI shows with a local version and no
+          # remote counterpart. Parsed from the table rather than guessed.
+          pending=$(supabase migration list --linked \
+            | awk -F'|' 'NF>2 {gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1 ~ /^[0-9]{14}$/ && $2 == "") print $1}' \
+            | sort | tr '\n' ',' | sed 's/,$//')
+          echo "pending: [$pending]"
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse if the plan is not what was expected
+        run: |
+          set -euo pipefail
+          want=$(echo "${{ inputs.expected_versions }}" | tr -d ' ' | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+          got="${{ steps.plan.outputs.pending }}"
+          if [ "$want" != "$got" ]; then
+            echo "::error::pending set does not match. expected [$want] but the project has [$got]"
+            exit 1
+          fi
+          echo "plan matches: [$got]"
+
+      - name: Apply
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "APPLY" ]; then
+            echo "::error::confirm must be the literal string APPLY"; exit 1
+          fi
+          supabase db push --linked
+
+      - name: Post-apply history
+        if: ${{ inputs.dry_run == false }}
+        run: supabase migration list --linked

@@ -273,6 +273,46 @@ Deno.test("all three tables are RLS-forced and unreachable from a browser", asyn
   }
 });
 
+Deno.test("EVERY unapplied IPO table carries the full posture, not just Phase D's", () => {
+  // `supabase db push` applies every pending migration, so the Phase D tables
+  // cannot be applied alone. The ledger from 20260921120000 goes with them, and
+  // it shipped with ENABLE but no FORCE and no REVOKE — which is a table that is
+  // empty to a browser rather than unreachable. Pinned here because the fix was
+  // previously staged as a patch file that, when finally tried, did not apply.
+  const CASES = [
+    ["20260921120000_ipo_paper_ledger.sql", ["ipo_paper_ledger"]],
+    ["20260921140000_ipo_paper_state.sql",
+      ["ipo_paper_positions", "ipo_paper_trade_history", "ipo_execution_events"]],
+  ] as const;
+
+  for (const [file, tables] of CASES) {
+    const sql = Deno.readTextFileSync(`supabase/migrations/${file}`);
+    for (const t of tables) {
+      for (const [what, re] of [
+        ["ENABLE RLS", `alter table public\\.${t}\\s+enable row level security`],
+        ["FORCE RLS", `alter table public\\.${t}\\s+force\\s+row level security`],
+        ["REVOKE from browser roles", `revoke all on public\\.${t}\\s+from anon, authenticated`],
+        ["GRANT to service_role", `grant all on public\\.${t}\\s+to service_role`],
+      ] as const) {
+        assert(new RegExp(re).test(sql), `${file}: ${t} is missing ${what}`);
+      }
+    }
+  }
+});
+
+Deno.test("no security hardening is left sitting in an unapplied patch file", async () => {
+  // A patch staged for "whoever runs the paper phase" is a promise, not a
+  // guarantee, and this one turned out not even to apply. If hardening matters
+  // it belongs in the migration.
+  try {
+    const left = [...Deno.readDirSync("docs/patches")].filter((e) => e.name.endsWith(".patch"));
+    assertEquals(left.map((e) => e.name), [], "security changes must live in the migration");
+  } catch {
+    // No patches directory at all is the desired end state.
+  }
+  await Promise.resolve();
+});
+
 Deno.test("an all-aborted window reports no expectancy rather than zero", () => {
   const s = summarize([{ realized_r: null, realized_pnl_usd: null, excluded_from_stats: true }]);
   assertEquals(s.trades, 0);

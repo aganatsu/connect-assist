@@ -59,10 +59,25 @@ create index if not exists ipo_paper_ledger_instrument_bar_idx
 create index if not exists ipo_paper_ledger_filled_idx
   on public.ipo_paper_ledger (filled, bar_time desc) where filled;
 
--- Project-owned research data, same posture as the IPO corpus: no anon or
--- authenticated policy. Reachable only with the service role, which means only
--- from the edge function. RLS on with zero policies denies everyone else.
+-- Project-owned research data, matching the posture already established for
+-- ipo_corpus_examples (migration 20260920100000) exactly.
+--
+-- FORCE matters and ENABLE alone is not enough: without it the table OWNER
+-- bypasses RLS, so a query run as the owning role would still read the table.
+-- REVOKE matters too — RLS governs rows, grants govern reachability, and
+-- leaving the default grants in place means PostgREST will happily attempt the
+-- query before RLS refuses it. Both, or the guarantee is partial.
+--
+-- HARDENED 2026-09-21 at the D.2 checkpoint, before anything was applied.
+-- `supabase db push` applies every pending migration, so this file would have
+-- gone to the database alongside the Phase D one — un-hardened. The three lines
+-- below are not optional extras for later; they are the difference between this
+-- table being unreachable and being merely empty.
 alter table public.ipo_paper_ledger enable row level security;
+alter table public.ipo_paper_ledger force  row level security;
+
+revoke all on public.ipo_paper_ledger from anon, authenticated;
+grant all on public.ipo_paper_ledger to service_role;
 
 comment on table public.ipo_paper_ledger is
   'IPO forward/paper-trading ledger. PAPER ONLY — no broker execution is derived '
