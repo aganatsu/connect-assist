@@ -60,6 +60,16 @@ jobs:
         with:
           version: latest
 
+      - name: Check the credential exists before doing anything
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DB_PASSWORD:-}" ]; then
+            # Single quotes: backticks inside a double-quoted bash string would
+            # be command substitution, and the error message would run commands.
+            echo '::error::SUPABASE_DB_PASSWORD is not set. supabase link, migration list and db push all open a direct Postgres connection. The access token authenticates the Management API and cannot substitute for it. Add the repository secret first.'
+            exit 1
+          fi
+
       - name: Link project
         run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
 
@@ -68,13 +78,20 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::remote migration history"
-          supabase migration list --linked
+          supabase migration list --linked || true
           echo "::endgroup::"
-          # A pending migration is one the CLI shows with a local version and no
-          # remote counterpart. Parsed from the table rather than guessed.
-          pending=$(supabase migration list --linked \
-            | awk -F'|' 'NF>2 {gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1 ~ /^[0-9]{14}$/ && $2 == "") print $1}' \
-            | sort | tr '\n' ',' | sed 's/,$//')
+
+          # The plan comes from `db push --dry-run`, not from parsing the
+          # migration-list table. That table is drawn with U+2502 box characters
+          # rather than ASCII pipes, so an awk -F'|' parse silently produces an
+          # EMPTY pending set — which would then have to be matched against an
+          # empty expected set to proceed. A gate that is easiest to satisfy
+          # when it is broken is worse than no gate.
+          echo "::group::db push --dry-run"
+          supabase db push --linked --dry-run | tee /tmp/plan.txt
+          echo "::endgroup::"
+
+          pending=$(grep -oE '[0-9]{14}' /tmp/plan.txt | sort -u | tr '\n' ',' | sed 's/,$//')
           echo "pending: [$pending]"
           echo "pending=$pending" >> "$GITHUB_OUTPUT"
 

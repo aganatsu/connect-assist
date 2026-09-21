@@ -1,0 +1,103 @@
+name: Inspect live schema (read-only)
+
+# Answers "what is actually in the database right now" WITHOUT a database
+# password and WITHOUT changing anything.
+#
+# WHY IT EXISTS. apply-migrations.yml needs SUPABASE_DB_PASSWORD, because
+# `supabase link` / `migration list` / `db push` all open a direct Postgres
+# connection. The Management API does not: it accepts SQL over HTTPS
+# authenticated by SUPABASE_ACCESS_TOKEN, which this repo already has. So the
+# live questions a migration dry run would answer can be answered first, with
+# no new credential and no write.
+#
+# STRICTLY READ-ONLY. Every statement below is a SELECT. The job fails if any
+# query text contains a write verb — a guard against this becoming a general
+# "run any SQL on production" primitive, which is exactly what set-shadow-flag
+# refused to be.
+#
+# It does not apply migrations, deploy anything, or create a schedule.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: inspect-live-schema
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Query
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          API="https://api.supabase.com/v1/projects/$REF/database/query"
+
+          run_sql() {  # run_sql <label> <sql>
+            local label=$1 sql=$2
+            # Read-only guard. A write verb here is a bug in this file, not input.
+            if echo "$sql" | grep -qiE '\b(insert|update|delete|drop|alter|create|truncate|grant|revoke)\b'; then
+              echo "::error::query \"$label\" is not read-only"; exit 1
+            fi
+            echo "### $label" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            curl -sS -X POST "$API" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -nc --arg q "$sql" '{query:$q}')" \
+              | jq '.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          echo "# Live schema inspection" >> "$GITHUB_STEP_SUMMARY"
+
+          run_sql "1. applied migration versions (newest 15)" \
+            "select version from supabase_migrations.schema_migrations order by version desc limit 15"
+
+          run_sql "2. are the three pending versions recorded as applied?" \
+            "select v as version,
+                    exists(select 1 from supabase_migrations.schema_migrations m where m.version = v) as applied
+             from (values ('20260920100000'),('20260920200000'),('20260921140000')) t(v)"
+
+          run_sql "3. ipo_corpus_examples columns" \
+            "select column_name, data_type, is_nullable
+             from information_schema.columns
+             where table_schema='public' and table_name='ipo_corpus_examples'
+             order by ordinal_position"
+
+          # THE ONE THAT DECIDES WHETHER 20260920100000 SUCCEEDS.
+          # It drops user_id and then re-adds ice_unique_example WITHOUT it. If
+          # two rows share (symbol, timeframe, candle_datetime, direction) and
+          # differ only by user_id, the ADD CONSTRAINT fails and the migration
+          # aborts AFTER the column has already been dropped.
+          run_sql "4. would the new unique key collide? (0 = safe)" \
+            "select count(*) as colliding_groups from (
+               select symbol, timeframe, candle_datetime, direction
+               from public.ipo_corpus_examples
+               group by 1,2,3,4 having count(*) > 1) d"
+
+          run_sql "5. corpus size and ownership spread (user_id is about to be dropped)" \
+            "select count(*) as rows,
+                    count(distinct user_id) as distinct_users
+             from public.ipo_corpus_examples"
+
+          run_sql "6. do the Phase D tables already exist?" \
+            "select t as table_name, to_regclass('public.'||t) is not null as exists
+             from (values ('ipo_paper_positions'),('ipo_paper_trade_history'),
+                          ('ipo_execution_events'),('ipo_paper_ledger')) x(t)"
+
+          run_sql "7. SMC baseline row counts, for the Step 5 before/after" \
+            "select 'paper_positions' as t, count(*) from public.paper_positions
+             union all select 'pending_orders', count(*) from public.pending_orders
+             union all select 'paper_trade_history', count(*) from public.paper_trade_history"
+
+          run_sql "8. current RLS posture on ipo_corpus_examples" \
+            "select relname, relrowsecurity as rls_enabled, relforcerowsecurity as rls_forced
+             from pg_class c join pg_namespace n on n.oid=c.relnamespace
+             where n.nspname='public' and relname='ipo_corpus_examples'"
