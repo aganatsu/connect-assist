@@ -1,6 +1,10 @@
 # IPO Forward Trading Specification
 
-**Version 1.0 — frozen 2026-09-21.**
+**Version 1.1 — frozen 2026-09-21.**
+
+*v1.1: the expected baseline in §11 is now the CAUSAL live-equivalent result. The
+previous 2,113-trade / +0.690R batch figure is marked non-causal and superseded.
+No rule changed.*
 
 This is the complete live rule set. It is deliberately unambiguous: every number
 here is either derived from the bar data or fixed below. There are no free
@@ -193,9 +197,15 @@ Declared before testing, not fitted:
 | spread (per side, already in costs) | 0.8 pip | 0.8 pip | 0.15% |
 | assumed adverse slippage on S2 exit | 0.5 pip | 0.5 pip | 0.10% |
 
-Portfolio expectancy across fill models: ideal +0.690R, spread-aware +0.657R,
-with exit slippage **+0.622R**, through-fill +0.660R. Use **+0.622R** as the
-planning figure — it is the most conservative model tested.
+Portfolio expectancy across fill models, measured on the NON-CAUSAL batch set:
+ideal +0.690R, spread-aware +0.657R, with exit slippage +0.622R, through-fill
++0.660R — a haircut of -0.03R to -0.07R, with ~92% of ideal fills surviving a
+spread-aware test.
+
+**These are relative haircuts, not planning figures.** The absolute baseline is
+the causal one in §11 (+0.585R). Applying the harshest haircut to it gives a
+conservative planning figure of roughly **+0.52R**. The fill models have not been
+re-measured on the causal trade set.
 
 ---
 
@@ -217,23 +227,66 @@ Run `auditLedger()` on every session's output. It must return an empty array.
 
 ---
 
-## 11. What "working" looks like
+## 11. What "working" looks like — CAUSAL BASELINE
 
-Validation baseline over 15 untouched windows across five years (24,101 bars),
-causal volatility, one position per instrument:
+**This is the official expected baseline.** It comes from `ipoLiveEngine.ts`
+replaying all 15 untouched validation windows one closed bar at a time, using
+only information available at each bar. It is what a live system can actually
+reproduce.
 
-| instrument | n | win% | expR | PF | maxDD | MAE | trades/mo |
-|---|---|---|---|---|---|---|---|
-| EUR/USD | 678 | 77.0 | +0.793 | 2.68 | 15.0 | 1.26 | 68 |
-| USD/JPY | 1151 | 76.2 | +0.726 | 2.36 | 17.8 | 1.40 | 116 |
-| BTC/USD HIGH_VOL | 284 | 76.0 | +0.296 | 1.51 | 15.7 | 1.25 | 28 |
-| **portfolio** | **2113** | **76.4** | **+0.690** | **2.33** | **19.5** | 1.34 | ~180 |
+| instrument | n | win% | expR | PF | maxDD | streak | totalR | MAE | trades/mo |
+|---|---|---|---|---|---|---|---|---|---|
+| EUR/USD | 341 | 74.5 | **+0.758** | 2.60 | 8.2 | 3 | +258.5 | 1.18 | 34.3 |
+| USD/JPY | 558 | 70.6 | **+0.550** | 1.88 | 18.4 | 4 | +307.1 | 1.48 | 56.0 |
+| BTC/USD HIGH_VOL | 140 | 75.7 | **+0.301** | 1.50 | 14.4 | 3 | +42.1 | 1.16 | 14.0 |
+| **PORTFOLIO** | **1039** | **72.6** | **+0.585** | **2.02** | **18.4** | **4** | **+607.7** | 1.34 | **103.7** |
 
-Forward results materially below this — particularly a win rate under ~65% or a
-drawdown beyond ~40R — indicate the forward environment differs from validation.
-That is information, **not** a reason to adjust the rules.
+Forward results materially below this — particularly a portfolio win rate under
+~62% or a drawdown beyond ~40R — indicate the forward environment differs from
+validation. That is information, **not** a reason to adjust the rules.
 
----
+### SUPERSEDED: the 2,113-trade / +0.690R batch result is NON-CAUSAL
+
+The figure previously carried here — 2,113 trades at +0.690R, PF 2.33 — **must
+not be used.** It came from evaluating whole series at once, which let the
+backtest see bars a live system would not have had.
+
+**Cause, isolated and singular.** `runLifecycle` establishes `hasFvg` by scanning
+`[candidateIndex, candidateIndex + 10]`. When a touch occurs within 10 bars of
+the IPO candle, the batch admitted the trade on **an FVG that had not formed
+yet**. Measured on EUR/USD window 1: of 142 batch trades, 81 were knowable in
+time, **61 (43%) only became knowable after their own entry bar**, and 0 were
+never knowable. Lateness was median 3 bars and **maximum exactly 10** — the scan
+window, which is what identifies the cause rather than merely suggesting it.
+
+The rules are sound; the evaluation was not. **The FVG rule is NOT changed and
+those trades are NOT recovered.** A live system simply takes about half of them:
+
+| | batch (non-causal) | causal live | kept |
+|---|---|---|---|
+| EUR/USD | 678 @ +0.793 | 341 @ +0.758 | 50.3% |
+| USD/JPY | 1151 @ +0.726 | 558 @ +0.550 | 48.5% |
+| BTC/USD | 284 @ +0.296 | 140 @ +0.301 | 49.3% |
+| **portfolio** | **2113 @ +0.690** | **1039 @ +0.585** | **49.2%** |
+
+Expectancy per trade holds on EUR/USD and BTC and degrades on USD/JPY. All three
+remain positive. On every trade both paths take, they agree on realized R to
+1e-9, so this is a difference in which trades are taken, not in how they are
+valued.
+
+**Also superseded:** an earlier live figure of 1,109 trades at +0.619R. That came
+from a version of the engine with two bugs since fixed — cost priced off the exit
+bar rather than the entry bar, and same-bar re-entry permitted where the frozen
+`sequential()` requires `touchIndex > previousExitIndex`. The table at the top of
+this section is the corrected result.
+
+### Consequences for planning
+
+- Expect roughly **half** the trade frequency of section 17: ~104 portfolio
+  trades/month, not ~180.
+- Plan on **+0.585R**, or lower still if the §9 execution haircut is applied on
+  top. The most conservative combination tested remains the right planning
+  figure, not the most favourable.
 
 ## 12. Standing prohibitions
 
