@@ -104,6 +104,7 @@ export class IncrementalEngine {
   private open: LiveTrade | null = null;
   private lastExitIndex = -1;
   private tracked: Tracked[] = [];
+  private lastVol: VolBucket = "UNCLASSIFIED";
   /** Episodes whose `end` can no longer change, keyed by start index. */
   private frozenEpisodes: Episode[] = [];
   private episodes: Episode[] = [];
@@ -115,6 +116,31 @@ export class IncrementalEngine {
 
   get openTrade(): LiveTrade | null { return this.open; }
   get barCount(): number { return this.bars.length; }
+
+  /**
+   * Read-only view of every tracked candidate, for observation.
+   *
+   * Returns copies so an observer cannot mutate engine state, and adds nothing
+   * to the decision path — the equivalence tests cover the same code with and
+   * without this being called.
+   */
+  inspect(): ReadonlyArray<Readonly<Tracked>> {
+    return this.tracked.map((t) => ({ ...t }));
+  }
+
+  /** The current bar index, or -1 before any bar has been fed. */
+  get currentIndex(): number { return this.bars.length - 1; }
+
+  /** Bar at an index, for resolving timestamps in an observation. */
+  barAt(i: number): Candle | undefined { return this.bars[i]; }
+
+  /** Volatility bucket of the newest bar. */
+  get currentVol(): VolBucket { return this.lastVol; }
+
+  /** Set to `POSITION_ALREADY_OPEN` while a trade occupies the instrument. */
+  get sequencingBlocked(): boolean {
+    return this.open !== null || this.currentIndex <= this.lastExitIndex;
+  }
 
   /**
    * Recomputes the episode list for the current prefix.
@@ -173,6 +199,7 @@ export class IncrementalEngine {
     const s = this.bars;
     const K = s.length - 1;
     const bucket = this.vol.push(bar).vol;
+    this.lastVol = bucket;
     const out: LiveEvent[] = [];
 
     if (this.open) {
@@ -370,6 +397,8 @@ export function replayIncremental(s: Candle[], cfg: EngineConfig): IncrementalEn
   for (const b of s) e.feed(b);
   return e;
 }
+
+export type { Tracked };
 
 export interface EquivalenceReport {
   matched: number;
