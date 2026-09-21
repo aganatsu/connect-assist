@@ -307,14 +307,10 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
     "ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts",
     "ipoHistoricalRange.ts", "ipoResearchAuth.ts", "ipoOriginExperiments.ts",
     "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts", "ipoOriginAnchor.ts", "ipoAnchorDiscriminator.ts", "ipoTeachingSpec.ts", "ipoOnsetVariants.ts",
-    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoForwardLedger.ts", "ipoLiveEngine.ts", "ipoFibConfluence.ts", "ipoFtmoSimulator.ts", "ipoIncrementalEngine.ts", "ipoObservation.ts", "ipoPaperContract.ts", "ipoPaperRunner.ts", "ipoEngineState.ts",
+    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoLiveEngine.ts", "ipoFibConfluence.ts", "ipoFtmoSimulator.ts", "ipoIncrementalEngine.ts", "ipoObservation.ts", "ipoPaperContract.ts", "ipoPaperRunner.ts", "ipoEngineState.ts",
   ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
-    // DELIBERATE PROMOTION, 2026-09-21. The paper runner is the first function
-    // allowed to import the candidate. It is PAPER ONLY: a separate test asserts
-    // it cannot reach a broker, a position table, or any execution helper.
-    "supabase/functions/ipo-paper-trading/index.ts",
     // Phase C observation endpoint. READ-ONLY: a dedicated test asserts it
     // cannot reach a broker or any SMC trading-state table.
     "supabase/functions/ipo-observation/index.ts",
@@ -349,7 +345,6 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
     "supabase/functions/_shared/ipoAPlusClassifier.ts",
     "supabase/functions/_shared/ipoRegimeDescriptors.ts",
     "supabase/functions/_shared/ipoLiveVolatility.ts",
-    "supabase/functions/_shared/ipoForwardLedger.ts",
     "supabase/functions/_shared/ipoLiveEngine.ts",
     "supabase/functions/_shared/ipoFibConfluence.ts",
     "supabase/functions/_shared/ipoFtmoSimulator.ts",

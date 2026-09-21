@@ -24,7 +24,7 @@ set -uo pipefail
 : "${SUPABASE_URL:?set SUPABASE_URL}"
 : "${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY}"
 
-IPO_TABLES=(ipo_paper_positions ipo_paper_trade_history ipo_execution_events ipo_paper_ledger)
+IPO_TABLES=(ipo_paper_positions ipo_paper_trade_history ipo_execution_events)
 fails=0
 
 say() { printf '%-6s %s\n' "$1" "$2"; }

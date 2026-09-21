@@ -290,7 +290,9 @@ analytics layer explicitly querying the IPO table.
 ## 8. RLS / security
 
 All three IPO tables adopt the `ipo_corpus_examples` posture, which is the
-hardening already staged in `docs/patches/ipo_paper_ledger_rls.patch`:
+hardening that was staged in `docs/patches/ipo_paper_ledger_rls.patch`
+(RETIRED at D.2 — the patch did not apply and the table it hardened was
+removed; the posture below is what the Phase D migration ships):
 
 ```sql
 alter table public.<t> enable row level security;
@@ -306,6 +308,10 @@ direct table reads.
 
 The prepared ledger patch should be applied in the same migration batch so the
 existing `ipo_paper_ledger` does not remain the one weakly-secured IPO table.
+
+**UPDATE, D.2:** resolved by removing that table rather than hardening it. It
+was superseded by the three tables above, had never been applied or deployed,
+and `supabase db push` would have created it alongside them.
 
 ---
 
@@ -338,7 +344,7 @@ close a position twice.
 | `ipo_paper_positions` | yes | yes | **no** | **no** |
 | `ipo_paper_trade_history` | yes | yes | **no** | **no** |
 | `ipo_execution_events` | yes | yes | **no** | **no** |
-| `ipo_paper_ledger` (Phase C) | yes | yes | **no** | **no** |
+| ~~`ipo_paper_ledger` (Phase C)~~ | — | — | — | — | *retired at D.2, never applied* |
 | `kv_cache` | yes (namespaced) | yes (namespaced) | yes | yes |
 | `paper_positions` | **no** | **no** | yes | yes |
 | `pending_orders` | **no** | **no** | yes | yes |

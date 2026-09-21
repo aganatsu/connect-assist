@@ -1,5 +1,5 @@
 -- D.2 Step 1 verification — run in the Supabase SQL editor AFTER applying
--- 20260921120000_ipo_paper_ledger.sql and 20260921140000_ipo_paper_state.sql.
+-- 20260921140000_ipo_paper_state.sql, which is the ONLY pending migration.
 --
 -- Returns one row per required property with a PASS/FAIL column. Read the FAILs;
 -- there should be none. If any row FAILs, the live schema differs from the
@@ -13,13 +13,11 @@ with expected(check_name, kind, detail) as (values
   -- existence
   ('table ipo_paper_positions exists',            'table',  'ipo_paper_positions'),
   ('table ipo_paper_trade_history exists',        'table',  'ipo_paper_trade_history'),
-  ('table ipo_execution_events exists',           'table',  'ipo_execution_events'),
-  ('table ipo_paper_ledger exists',               'table',  'ipo_paper_ledger')
+  ('table ipo_execution_events exists',           'table',  'ipo_execution_events')
 ),
 
 tables(t) as (values
-  ('ipo_paper_positions'), ('ipo_paper_trade_history'),
-  ('ipo_execution_events'), ('ipo_paper_ledger')
+  ('ipo_paper_positions'), ('ipo_paper_trade_history'), ('ipo_execution_events')
 ),
 
 -- ── existence ────────────────────────────────────────────────────────────────

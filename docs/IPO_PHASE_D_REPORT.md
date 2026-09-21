@@ -271,5 +271,7 @@ supabase functions deploy ipo-paper-state
 Optional sizing overrides: `IPO_PAPER_REFERENCE_BALANCE`,
 `IPO_PAPER_NOMINAL_RISK_PCT`.
 
-Note that `docs/patches/ipo_paper_ledger_rls.patch` (Phase pre-D, for
-`ipo_paper_ledger`) is still prepared and **not applied**.
+**UPDATE, D.2:** `docs/patches/ipo_paper_ledger_rls.patch` no longer exists. It
+turned out not to apply, and the table it hardened was retired rather than
+fixed — see `docs/IPO_PHASE_D2_STATUS.md`. `20260921140000_ipo_paper_state.sql`
+is now the only pending migration.

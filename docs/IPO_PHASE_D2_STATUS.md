@@ -27,43 +27,54 @@ Phase D and D.1 went in as one commit. They were validated as one tree — the
 Phase D worker imports the D.1 state module — so splitting them would have
 produced a commit that never existed and never ran green. The message says so.
 
-### The hardening-patch reconciliation — done, and it mattered
+### The superseded ledger path — RETIRED
 
-You asked me to reconcile this before applying anything. Two findings.
+The reconciliation you asked for turned into a removal, because the audit found
+the path had never become real.
 
-**1. The patch targeted a different migration, and that migration would have
-been applied too.**
+**Audit.** Nothing depends on it:
 
-`docs/patches/ipo_paper_ledger_rls.patch` hardened
-`20260921120000_ipo_paper_ledger.sql`, not the Phase D migration. Both are
-pending. `supabase db push` has no "apply only this file" mode — it applies
-every migration absent from the remote history, in version order. So "apply the
-Phase D migration only" is not a thing the tooling can do: the ledger table
-would have been created alongside it, **in its un-hardened state** — `ENABLE`
-RLS with no `FORCE` and no `REVOKE`. That is a table PostgREST will query and
-RLS will answer with an empty array, rather than a table it cannot reach.
+| | on `origin/main`? | consequence |
+|---|---|---|
+| `20260921120000_ipo_paper_ledger.sql` | **no** | never applied — there is no migration CI at all, and the file never reached main |
+| `supabase/functions/ipo-paper-trading/` | **no** | never deployed — `deploy-functions.yml` fires on push to main |
+| `_shared/ipoForwardLedger.ts` | **no** | the row DTO for that table; consumers were the function and its own test, nothing else |
 
-**2. The patch did not apply.**
+All three were added on this branch by `ddece731`. No cron references IPO. No
+frontend file references `ipo_paper_ledger`. `excursions()`, `auditLedger()`,
+`toJsonl()` and `summarize()` had no consumer outside the retired function.
 
-`git apply --check` fails: `error: No valid patches in input`. The file has a
-prose preamble and `@@` hunk headers with no line numbers. It had been sitting
-there since Phase B described as "staged for whoever runs the paper-environment
-phase", and it would have failed at the moment someone tried to use it.
+**Two findings that made retirement the right call rather than hardening.**
 
-**Resolution:** the four hardening lines are now in
-`20260921120000_ipo_paper_ledger.sql` itself, with the reasoning inline. The
-patch file is deleted and `docs/patches/` is empty. Two new tests pin this:
+1. **`db push` would have created it anyway.** It is not selective — it applies
+   every migration absent from the remote history. "Apply only the Phase D
+   migration" was never achievable, so the ledger table would have become
+   production schema purely because its file was pending.
 
-- every IPO table in every pending migration must have all four of ENABLE RLS,
-  FORCE RLS, REVOKE from anon/authenticated, GRANT to service_role;
-- `docs/patches/` must contain no `.patch` file, because security hardening that
-  lives in a patch is a promise, not a guarantee.
+2. **The staged hardening patch did not apply.** `git apply --check` fails with
+   `No valid patches in input` — prose preamble, `@@` headers with no line
+   numbers. It had been described since Phase B as staged for this phase and
+   would have failed the moment anyone reached for it.
 
-**Flagged, not acted on:** applying these two migrations creates a *fourth* IPO
-table, `ipo_paper_ledger`, which Phase D's three tables supersede. It is still
-written by the `ipo-paper-trading` function from Phase pre-D. It is IPO-owned and
-isolated, so this is surface area rather than a contamination risk — but if you
-would rather retire it, that is a decision to make before the push, not after.
+**Removed:** the migration, the function, `ipoForwardLedger.ts`, both their test
+files (11 + 14 tests), and `docs/patches/` entirely.
+
+**Preserved:** the research evidence stands in `docs/IPO_RESEARCH_FREEZE.md`
+(16,169 ledger rows over the validation windows, `auditLedger()` returning zero
+violations) and the code is recoverable from `ddece731`.
+`docs/IPO_FORWARD_TRADING_SPEC.md` §10 — which specified the ledger as the live
+contract — is rewritten to point at the three Phase D tables, with the mapping
+from the old fields: `noFillReason` is now `reason_codes` on a `REFUSED` event,
+and `OPEN`/`NOT_FILLED` no longer exist as exit reasons because an open position
+is a row in `ipo_paper_positions` and a non-fill is an event, not a history row
+with empty columns. What `auditLedger()` checked in TypeScript the database now
+enforces as `ipo_paper_history_outcome_coherent`.
+
+The Phase A and system-integration audits still mention the table. Those are
+dated records of what was true when they were written and were left alone.
+
+**Guard added:** a test walks every migration and every function and fails if
+`ipo_paper_ledger`, `ipo-paper-trading` or `ipoForwardLedger` reappears.
 
 ---
 
@@ -175,17 +186,56 @@ printed.
 
 ---
 
+## 2b. The pending migration set — and a correction
+
+I previously told you the pending set was `20260921120000,20260921140000`. That
+was wrong in both directions. The repo state after the retirement is:
+
+**On this branch and NOT on `origin/main` — three files:**
+
+```
+20260920100000_ipo_corpus_project_owned.sql
+20260920200000_ipo_corpus_tier_and_source_family.sql
+20260921140000_ipo_paper_state.sql          <- the only Phase D one
+```
+
+**"Not on main" is not the same as "not applied", and I cannot tell which from
+here.** The two corpus migrations look already-applied out-of-band: the Phase A
+audit records `ipo_corpus_examples` as live with FORCE RLS (which only
+20260920100000 sets), and the Ezzy Tier-1 work queried `confidence_tier` and
+`source_family` columns that only 20260920200000 adds. If they were pasted into
+the SQL editor rather than pushed through the CLI, `supabase_migrations` has no
+record of them and `db push` will try them again.
+
+**That is safe.** I checked both for re-runnability:
+
+- `20260920100000` — every statement is `IF EXISTS` / `IF NOT EXISTS`, and the
+  one unguarded `ADD CONSTRAINT` is immediately preceded by a matching
+  `DROP CONSTRAINT IF EXISTS`.
+- `20260920200000` — `ADD COLUMN IF NOT EXISTS`, constraints wrapped in
+  `DO $$ ... EXCEPTION WHEN duplicate_object THEN NULL $$`, and the three
+  `UPDATE`s are value-idempotent.
+
+So whichever way the history reads, re-running them changes nothing. **The
+dry-run settles it**, and the `expected_versions` gate refuses to apply if the
+plan differs from what you typed — which is exactly the case this gate was built
+for.
+
+---
+
 ## 3. What I need from you
 
 **Option A — you run the live steps.** Everything is ready:
 
 ```
-# Step 1
+# Step 1 — DRY RUN FIRST. See the pending-set note below: the expected list
+# depends on whether the two corpus migrations were applied out-of-band.
 gh workflow run apply-migrations.yml --ref feature/ipo-live-integration \
-  -f dry_run=true -f expected_versions=20260921120000,20260921140000
-#   ...read the plan, confirm the pending set is exactly those two...
+  -f dry_run=true -f expected_versions=20260921140000
+#   ...read the printed plan. If it also lists 20260920100000 and
+#   20260920200000, re-run the dry run with all three, then apply...
 gh workflow run apply-migrations.yml --ref feature/ipo-live-integration \
-  -f dry_run=false -f expected_versions=20260921120000,20260921140000 -f confirm=APPLY
+  -f dry_run=false -f expected_versions=<the set the dry run printed> -f confirm=APPLY
 
 # then, in the SQL editor
 supabase/queries/ipo_phase_d_verify.sql        # expect zero FAIL rows
@@ -223,9 +273,15 @@ them and paste the output.
 ## 4. Test state
 
 ```
-deno test supabase/tests/ supabase/functions/   2739 passed | 0 failed  (5m16s)
-vitest run                                        57 passed | 0 failed  (1.9s)
+deno test supabase/tests/ supabase/functions/   2715 passed | 0 failed  (3m34s)
+vitest run                                        57 passed | 0 failed  (2.2s)
+deno check                                        clean on every function and IPO module
 ```
+
+2739 → 2715 is exactly the retirement: −11 `ipoPaperTrading` tests, −14
+`ipoForwardLedger` tests, +1 guard against the path reappearing. The shadow /
+import guard and the advisor-isolation suite were run again on their own and
+pass.
 
 Unchanged from D.1 apart from two new tests pinning the RLS posture across all
 pending IPO migrations and the absence of unapplied security patches.

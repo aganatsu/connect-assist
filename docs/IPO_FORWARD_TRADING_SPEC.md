@@ -211,19 +211,35 @@ re-measured on the causal trade set.
 
 ## 10. Event ledger
 
-Module: `ipoForwardLedger.ts`. Append-only JSONL, **one row per candidate**
-whether or not it fills. Fields: `timestamp`, `instrument`, `timeframe`,
-`direction`, `ipoCandleTimestamp`, `ipoZoneLow`, `ipoZoneHigh`, `entryLevel`,
-`invalidationLevel`, `targetPrice`, `fvgPresent`, `fvgTimestamp`,
-`volatilityBucket`, `contractionState`, `lifecycleState`, `filled`,
-`noFillReason`, `fillPrice`, `exitTimestamp`, `exitPrice`, `exitReason`,
-`realizedR`, `mae`, `mfe`.
+**SUPERSEDED 2026-09-21 by Phase D.** This section originally specified an
+append-only JSONL ledger written by `ipoForwardLedger.ts` into a single
+`ipo_paper_ledger` table. That path was retired at the D.2 checkpoint: it had
+never been deployed and its migration had never been applied, and keeping it
+would have put a fourth IPO table into production schema for no reason. The
+research it produced stands — 16,169 rows over the validation windows with
+`auditLedger()` returning zero violations, recorded in
+`docs/IPO_RESEARCH_FREEZE.md` — and the code remains in git history.
 
-`noFillReason` ∈ {`VOLATILITY_NOT_ELIGIBLE`, `PRICE_DID_NOT_REACH_50_PERCENT`,
-`POSITION_ALREADY_OPEN`}. `exitReason` ∈ {`TARGET_2R`, `S2_CLOSE_INVALIDATION`,
-`OPEN`, `NOT_FILLED`}.
+The forward record now lives in three IPO-owned tables, created by
+`20260921140000_ipo_paper_state.sql`:
 
-Run `auditLedger()` on every session's output. It must return an empty array.
+| table | holds |
+|---|---|
+| `ipo_execution_events` | append-only audit, **one row per decision including refusals** — the property §10 existed to guarantee. `strategy_decision` and `account_decision` are recorded separately and never collapsed. |
+| `ipo_paper_positions` | open state, one row per live paper position |
+| `ipo_paper_trade_history` | closed results; `realized_r` canonical, `realized_pnl_usd` a view of it under the sizing stored on the row |
+
+The old `noFillReason` set is now `reason_codes` on a `REFUSED` event, and the
+old `exitReason` values `OPEN` and `NOT_FILLED` no longer exist: an open
+position is a row in `ipo_paper_positions`, and a candidate that did not fill is
+a `REFUSED` event rather than a history row with empty columns.
+
+`exit_reason` is now {`TARGET_2R`, `S2_CLOSE_INVALIDATION`, `DATA_GAP_ABORTED`},
+the third being a data-quality failure that carries no exit price and no R and
+is `excluded_from_stats` at the column level.
+
+The audit `auditLedger()` performed in TypeScript is now enforced by the
+database: see the `ipo_paper_history_outcome_coherent` CHECK.
 
 ---
 
@@ -314,4 +330,5 @@ this section is the corrected result.
 
 **Production changed: only where required to make the frozen candidate causal
 and observable** — `ipoLiveVolatility.ts` and `ipoForwardLedger.ts` were added.
+(The latter was retired at D.2; see section 10.)
 No frozen rule was modified. No new research rule was introduced.

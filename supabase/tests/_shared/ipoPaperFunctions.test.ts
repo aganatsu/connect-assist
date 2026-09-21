@@ -274,13 +274,12 @@ Deno.test("all three tables are RLS-forced and unreachable from a browser", asyn
 });
 
 Deno.test("EVERY unapplied IPO table carries the full posture, not just Phase D's", () => {
-  // `supabase db push` applies every pending migration, so the Phase D tables
-  // cannot be applied alone. The ledger from 20260921120000 goes with them, and
-  // it shipped with ENABLE but no FORCE and no REVOKE — which is a table that is
-  // empty to a browser rather than unreachable. Pinned here because the fix was
-  // previously staged as a patch file that, when finally tried, did not apply.
+  // `supabase db push` applies every pending migration, so this has to hold for
+  // EVERY pending IPO migration, not just the one being thought about. The
+  // superseded ledger migration was retired for exactly that reason: it would
+  // have been applied alongside Phase D carrying ENABLE without FORCE or
+  // REVOKE, which is a table that is empty to a browser rather than unreachable.
   const CASES = [
-    ["20260921120000_ipo_paper_ledger.sql", ["ipo_paper_ledger"]],
     ["20260921140000_ipo_paper_state.sql",
       ["ipo_paper_positions", "ipo_paper_trade_history", "ipo_execution_events"]],
   ] as const;
@@ -297,6 +296,25 @@ Deno.test("EVERY unapplied IPO table carries the full posture, not just Phase D'
         assert(new RegExp(re).test(sql), `${file}: ${t} is missing ${what}`);
       }
     }
+  }
+});
+
+Deno.test("the retired ledger path cannot come back through a migration", async () => {
+  // The table, its migration, its edge function and its row DTO were removed at
+  // the D.2 checkpoint because Phase D's three tables supersede them and none of
+  // it had ever reached main — so nothing was deployed and nothing was applied.
+  // Re-adding it would put a fourth IPO table into production schema by
+  // accident, which is the specific thing that retirement prevented.
+  for await (const e of Deno.readDir("supabase/migrations")) {
+    const sql = await Deno.readTextFile(`supabase/migrations/${e.name}`);
+    assert(!sql.includes("ipo_paper_ledger"), `${e.name} resurrects ipo_paper_ledger`);
+  }
+  for await (const e of Deno.readDir("supabase/functions")) {
+    if (!e.isDirectory || e.name === "_shared") continue;
+    assert(e.name !== "ipo-paper-trading", "the superseded function is back");
+    const src = await Deno.readTextFile(`supabase/functions/${e.name}/index.ts`);
+    assert(!src.includes("ipo_paper_ledger"), `${e.name} writes the retired table`);
+    assert(!src.includes("ipoForwardLedger"), `${e.name} imports the retired DTO`);
   }
 });
 

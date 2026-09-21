@@ -23,7 +23,7 @@ const SMC_CONSUMERS = [
 ];
 const IPO_TABLES = [
   "ipo_paper_positions", "ipo_paper_trade_history",
-  "ipo_execution_events", "ipo_paper_ledger",
+  "ipo_execution_events",
 ];
 
 Deno.test("T11 — no SMC analytics consumer references any IPO table", async () => {
