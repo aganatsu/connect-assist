@@ -186,40 +186,94 @@ printed.
 
 ---
 
-## 2b. The pending migration set — and a correction
+## 2b. Migration reconciliation against the LIVE state
 
-I previously told you the pending set was `20260921120000,20260921140000`. That
-was wrong in both directions. The repo state after the retirement is:
-
-**On this branch and NOT on `origin/main` — three files:**
+Live preflight, run 2026-09-21 on `rvouzhacxqlbetwcttoe`:
 
 ```
-20260920100000_ipo_corpus_project_owned.sql
-20260920200000_ipo_corpus_tier_and_source_family.sql
-20260921140000_ipo_paper_state.sql          <- the only Phase D one
+ipo_corpus_examples      14 rows
+collision groups         0
+user_id                  ABSENT
+confidence_tier          ABSENT
+source_family            ABSENT
+unique index             already in the post-user_id (4-column) shape
+RLS                      enabled AND forced
 ```
 
-**"Not on main" is not the same as "not applied", and I cannot tell which from
-here.** The two corpus migrations look already-applied out-of-band: the Phase A
-audit records `ipo_corpus_examples` as live with FORCE RLS (which only
-20260920100000 sets), and the Ezzy Tier-1 work queried `confidence_tier` and
-`source_family` columns that only 20260920200000 adds. If they were pasted into
-the SQL editor rather than pushed through the CLI, `supabase_migrations` has no
-record of them and `db push` will try them again.
+### What that settles, including one of my own warnings
 
-**That is safe.** I checked both for re-runnability:
+**`20260920100000` is already applied — structurally — but not recorded.**
+Every one of its effects is live: `user_id` dropped, `ice_unique_example` in its
+four-column form, FORCE RLS on, the per-user policy gone. Yet its version does
+not appear in `supabase_migrations`.
 
-- `20260920100000` — every statement is `IF EXISTS` / `IF NOT EXISTS`, and the
-  one unguarded `ADD CONSTRAINT` is immediately preceded by a matching
-  `DROP CONSTRAINT IF EXISTS`.
-- `20260920200000` — `ADD COLUMN IF NOT EXISTS`, constraints wrapped in
-  `DO $$ ... EXCEPTION WHEN duplicate_object THEN NULL $$`, and the three
-  `UPDATE`s are value-idempotent.
+Two consequences, and the second is the important one:
 
-So whichever way the history reads, re-running them changes nothing. **The
-dry-run settles it**, and the `expected_versions` gate refuses to apply if the
-plan differs from what you typed — which is exactly the case this gate was built
-for.
+1. **My "irreversible data loss" warning is moot.** I flagged
+   `DROP COLUMN IF EXISTS user_id` as destroying live data. The column is
+   already gone, so on a re-run that line is a no-op. And with **0 collision
+   groups** the `ADD CONSTRAINT` that worried me will succeed. Re-running
+   `20260920100000` against this database is safe and idempotent — it drops and
+   recreates a unique constraint and two indexes on a 14-row table.
+
+2. **The recorded history and the real schema have already diverged.** That is
+   not a detail about one file. `supabase db push` decides what to run *purely*
+   from `supabase_migrations`, so it will re-run anything unrecorded — and six
+   of the seventeen local migrations do not survive a second run:
+
+   | migration | why it fails on re-run |
+   |---|---|
+   | `20260914000000_baseline_schema` | dozens of unguarded `ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY` |
+   | `20260915120000_frozen_decision_hash_trigger` | three unguarded `CREATE TRIGGER` (Postgres has no `IF NOT EXISTS` for triggers) |
+   | `20260917000000_structural_order_blocks_v2` | two unguarded `CREATE POLICY` |
+   | `20260919000000_structure_shadow_telemetry` | unguarded `CREATE POLICY` |
+   | `20260919020000_ezzy_labelled_examples` | unguarded `CREATE POLICY` |
+   | `20260920000000_ipo_corpus_examples` | unguarded `CREATE POLICY` |
+
+   The baseline is **first in version order**, so if it is unrecorded the push
+   fails on statement one and applies nothing. That is the benign failure. The
+   dangerous one is a partially-recorded history that fails somewhere in the
+   middle, after applying some files.
+
+**`20260920200000` is genuinely not applied** — `confidence_tier` and
+`source_family` are absent. It is additive only: two `ADD COLUMN IF NOT EXISTS`,
+two constraints in `DO $$ … EXCEPTION WHEN duplicate_object` blocks, comments,
+and three `UPDATE`s. Safe to apply and safe to re-apply.
+
+One caveat worth checking rather than assuming: `candle_datetime` is `text` and
+the `UPDATE`s match on literals like `'2020-04-20T00:00:00Z'`. A different
+stored format means **zero rows updated and no error** — the tier data would
+silently fail to land. With 14 rows this is directly observable; preflight 2
+dumps all of them and counts the expected matches (4 TIER_1, 2 TIER_3).
+
+**`20260921140000` (Phase D)** — no destructive statement, creates exactly
+`ipo_paper_positions`, `ipo_paper_trade_history`, `ipo_execution_events` plus
+five indexes, and references nothing pre-existing except `auth.users` via FK.
+Whether the three tables are already present is the one Phase D fact not yet
+confirmed live; preflight 2 asks.
+
+### The decisive unknown, and the recommendation
+
+**Everything now turns on the full contents of
+`supabase_migrations.schema_migrations`**, not on the three IPO rows.
+`supabase/queries/ipo_premigration_preflight2.sql` returns it, marks each of the
+seventeen local files "recorded — skipped" or "NOT RECORDED — would be RE-RUN",
+and flags the six that are unsafe to re-run.
+
+Recommended path once that is known:
+
+- **If only the three IPO versions are unrecorded** — `db push` is correct and
+  safe. `20260920100000` re-runs harmlessly, the other two apply for the first
+  time. `expected_versions=20260920100000,20260920200000,20260921140000`.
+
+- **If the baseline or any of the other five is unrecorded** — do **not**
+  `db push`. Bring the history into line first with
+  `supabase migration repair --status applied <version>` for each migration that
+  is already live, then push. Repair writes to `schema_migrations` only; it runs
+  no DDL. This is the case the divergence above makes likely.
+
+Either way the `expected_versions` gate in `apply-migrations.yml` would have
+caught the mismatch before touching the database — which is what it is for.
 
 ---
 
