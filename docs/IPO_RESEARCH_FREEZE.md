@@ -993,4 +993,70 @@ ledger schema, expected baseline, standing prohibitions, and six open items.
 
 ---
 
+## 19. Live-equivalence engine — the backtest is 43% non-causal (2026-09-21)
+
+`ipoLiveEngine.ts` + 12 tests, on `feature/ipo-live-integration`.
+
+**Design: the engine re-implements no rule.** It re-runs the FROZEN functions
+over a growing prefix and acts on what they say about the newest bar. Two copies
+of a rule drift; one copy cannot. Causality is structural — `feed()` appends one
+closed bar and nothing downstream can see a later bar because none exists yet.
+
+### The finding
+
+Replaying all 15 final-validation windows bar by bar:
+
+| instrument | live n | live R | **live expR** | batch n | batch R | batch expR | kept | delta |
+|---|---|---|---|---|---|---|---|---|
+| EUR/USD | 368 | +294.7 | **+0.801** | 678 | +537.9 | +0.793 | 54.3% | +0.007 |
+| USD/JPY | 595 | +346.5 | **+0.582** | 1151 | +835.5 | +0.726 | 51.7% | **-0.144** |
+| BTC/USD | 146 | +45.2 | **+0.310** | 284 | +84.0 | +0.296 | 51.4% | +0.014 |
+| **PORTFOLIO** | **1109** | **+686.4** | **+0.619** | 2113 | +1457.4 | +0.690 | **52.5%** | -0.071 |
+
+**A live system reproduces only 52.5% of the backtested trades.** Expectancy
+per trade survives almost intact on EUR/USD and BTC and degrades on USD/JPY.
+All three stay positive. Zero value-mismatches: on every trade both paths take,
+they agree on realized R to 1e-9.
+
+### Cause — isolated, single, and in the frozen rules
+
+Diagnostic over EUR/USD window 1 (142 batch trades): for each trade, the first
+prefix length at which the frozen pipeline reveals it.
+
+- known in time (live could have taken it): **81**
+- **only known AFTER its own entry bar: 61 (43%)**
+- never revealed by any prefix: **0**
+- lateness: median 3 bars, **maximum exactly 10**
+
+Maximum lateness of exactly 10 identifies the cause precisely: `runLifecycle`
+computes `hasFvg` by scanning `[candidateIndex, candidateIndex + 10]`. When a
+touch occurs within 10 bars of the IPO candle — 77 of 142 here — **the backtest
+admitted the trade on an FVG that had not formed yet.**
+
+The rules themselves are sound (0 never-revealed). This is purely a timing
+defect in how the backtest was evaluated, not a broken rule. The remaining
+divergence (live-only trades) is cascade: having skipped an earlier trade, the
+live engine's position-occupancy timeline differs, so it takes different later
+trades.
+
+### Two bugs the equivalence harness caught in the engine itself
+
+Both were in the new code, not the frozen rules, and both are fixed:
+
+1. **Cost priced off the exit bar** instead of fixed at entry. Invisible on FX
+   (constant spread); on BTC's price-proportional fee it produced 8-21 value
+   mismatches per window. Now fixed at entry, matching `simulate`. Mismatches: 0.
+2. **Same-bar re-entry allowed.** The frozen `sequential()` requires
+   `touchIndex > previousExitIndex`; the engine let a new position open on the
+   bar the previous one closed. Also an unsupported intrabar-ordering assumption.
+   Now refused.
+
+### Status
+
+Not a reason to change any rule — research is closed. It IS a reason to treat
+**+0.619R, 1,109 trades** as the forward expectation rather than the +0.690 /
+2,113 in section 17 and the spec's §11 baseline.
+
+---
+
 **Production changed: NO** for all research phases; phase 18 added two observability/causality modules only — at every step of this programme.
