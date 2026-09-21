@@ -339,3 +339,45 @@ Deno.test("an all-aborted window reports no expectancy rather than zero", () => 
   assertEquals(s.abortedExcluded, 1);
   assertEquals(RECENT_TRADES, 100);
 });
+
+// ── the apply pack must never drift from the migrations ──────────────────────
+
+Deno.test("the apply pack contains the migrations verbatim", async () => {
+  // A stale copy would record a version as applied while the database received
+  // different SQL — the same divergence class the repair step just cleaned up,
+  // except self-inflicted and invisible.
+  const pack = await Deno.readTextFile("supabase/queries/ipo_apply_pending.sql");
+  for (const f of [
+    "20260920200000_ipo_corpus_tier_and_source_family.sql",
+    "20260921140000_ipo_paper_state.sql",
+  ]) {
+    const body = (await Deno.readTextFile(`supabase/migrations/${f}`)).trimEnd();
+    assert(pack.includes(body), `${f} is not embedded verbatim in the apply pack`);
+    const version = f.slice(0, 14);
+    assert(pack.includes(`values ('${version}') on conflict (version) do nothing;`),
+      `${f} has no bookkeeping insert in the pack`);
+  }
+});
+
+Deno.test("each apply-pack migration records itself inside its own transaction", async () => {
+  // Outside the transaction, a failed DDL would leave the version recorded and
+  // the migration silently skipped forever.
+  const pack = await Deno.readTextFile("supabase/queries/ipo_apply_pending.sql");
+  const txs = pack.split(/^begin;$/m).slice(1);
+  assertEquals(txs.length, 2, "expected exactly two transactions");
+  for (const tx of txs) {
+    const body = tx.slice(0, tx.indexOf("commit;"));
+    assert(body.includes("schema_migrations"), "bookkeeping is outside the transaction");
+  }
+});
+
+Deno.test("the apply pack applies only the two pending versions", async () => {
+  const pack = await Deno.readTextFile("supabase/queries/ipo_apply_pending.sql");
+  const recorded = [...pack.matchAll(/values \('(\d{14})'\)/g)].map((m) => m[1]);
+  assertEquals(recorded.sort(), ["20260920200000", "20260921140000"]);
+  // The repaired ones must not be touched again, and the retired one must not
+  // reappear under any guise.
+  for (const banned of ["20260920000000", "20260920100000", "ipo_paper_ledger"]) {
+    assert(!pack.includes(banned), `the apply pack references ${banned}`);
+  }
+});

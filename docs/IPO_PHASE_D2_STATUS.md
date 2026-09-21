@@ -186,94 +186,110 @@ printed.
 
 ---
 
-## 2b. Migration reconciliation against the LIVE state
+## 2b. Migration reconciliation — COMPLETE
 
-Live preflight, run 2026-09-21 on `rvouzhacxqlbetwcttoe`:
+### Where it started
+
+`supabase_migrations` recorded 13 versions. Four local files were unrecorded:
+`20260920000000`, `20260920100000`, `20260920200000`, `20260921140000`.
+
+Two of those four were **already live** — the corpus table existed in its
+post-`20260920100000` shape with `user_id` dropped, the four-column unique key
+in place and FORCE RLS on — while neither version was recorded. Recorded history
+and real schema had diverged.
+
+That mattered far beyond the corpus table, because `db push` decides what to run
+purely from the recorded history and **six of the seventeen local migrations do
+not survive a second run**: the Lovable baseline (dozens of unguarded
+`ADD CONSTRAINT … PRIMARY KEY`), `frozen_decision_hash_trigger` (three unguarded
+`CREATE TRIGGER`), and four unguarded `CREATE POLICY` files. Pushing blind would
+have failed on the baseline — first in version order — and applied nothing.
+
+### What was checked before repairing
+
+Repair tells the tooling to skip a file **forever**, so any statement that never
+ran will never run and nothing will report it again. The live report covered the
+headline effects; Part A of `ipo_migration_repair.sql` covered the rest, and all
+of it passed:
+
+- six corpus CHECK constraints present
+- the `parent_example_id` self-FK present, no leftover `auth.users` FK
+- both indexes rebuilt **without** `user_id`
+- the four-column `ice_unique_example` in place
+- RLS enabled, FORCE RLS enabled, **no policies**
+- **anon/authenticated hold no table grants** — this was the one that mattered.
+  RLS-enabled-and-forced had been confirmed; the `REVOKE` had not. Without it the
+  browser roles keep their default grants and the table is reachable-but-empty
+  rather than unreachable, and repair would have buried that permanently.
+- `service_role` holds the expected privileges
+
+### What was done
+
+```sql
+insert into supabase_migrations.schema_migrations (version)
+values ('20260920000000'), ('20260920100000')
+on conflict (version) do nothing;
+```
+
+Bookkeeping only. No DDL, nothing about the corpus table changed.
+
+### State now
+
+| | before | after |
+|---|---|---|
+| recorded versions | 13 | **15** |
+| pending | 4 | **2** |
+
+Pending is exactly:
 
 ```
-ipo_corpus_examples      14 rows
-collision groups         0
-user_id                  ABSENT
-confidence_tier          ABSENT
-source_family            ABSENT
-unique index             already in the post-user_id (4-column) shape
-RLS                      enabled AND forced
+20260920200000_ipo_corpus_tier_and_source_family
+20260921140000_ipo_paper_state
 ```
 
-### What that settles, including one of my own warnings
+Also confirmed live: `ipo_paper_positions`, `ipo_paper_trade_history` and
+`ipo_execution_events` are all **absent**, and `candle_datetime` is stored in
+the ISO `…T…Z` format the tier `UPDATE`s match on — so they will affect rows
+rather than silently updating none.
 
-**`20260920100000` is already applied — structurally — but not recorded.**
-Every one of its effects is live: `user_id` dropped, `ice_unique_example` in its
-four-column form, FORCE RLS on, the per-user policy gone. Yet its version does
-not appear in `supabase_migrations`.
+---
 
-Two consequences, and the second is the important one:
+## 2c. The apply step — prepared, not run
 
-1. **My "irreversible data loss" warning is moot.** I flagged
-   `DROP COLUMN IF EXISTS user_id` as destroying live data. The column is
-   already gone, so on a re-run that line is a no-op. And with **0 collision
-   groups** the `ADD CONSTRAINT` that worried me will succeed. Re-running
-   `20260920100000` against this database is safe and idempotent — it drops and
-   recreates a unique constraint and two indexes on a 14-row table.
+`supabase/queries/ipo_apply_pending.sql`.
 
-2. **The recorded history and the real schema have already diverged.** That is
-   not a detail about one file. `supabase db push` decides what to run *purely*
-   from `supabase_migrations`, so it will re-run anything unrecorded — and six
-   of the seventeen local migrations do not survive a second run:
+The CLI route is still blocked on two independent things: `SUPABASE_DB_PASSWORD`
+does not exist, and GitHub only dispatches a `workflow_dispatch` workflow that
+lives on the default branch, which `apply-migrations.yml` does not. The apply
+pack reaches the same end state through the SQL editor, which is the mechanism
+that has been working throughout.
 
-   | migration | why it fails on re-run |
-   |---|---|
-   | `20260914000000_baseline_schema` | dozens of unguarded `ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY` |
-   | `20260915120000_frozen_decision_hash_trigger` | three unguarded `CREATE TRIGGER` (Postgres has no `IF NOT EXISTS` for triggers) |
-   | `20260917000000_structural_order_blocks_v2` | two unguarded `CREATE POLICY` |
-   | `20260919000000_structure_shadow_telemetry` | unguarded `CREATE POLICY` |
-   | `20260919020000_ezzy_labelled_examples` | unguarded `CREATE POLICY` |
-   | `20260920000000_ipo_corpus_examples` | unguarded `CREATE POLICY` |
+**Each migration is one transaction, with its bookkeeping row written inside
+it.** A failure rolls back the DDL and the record together, so the two can never
+disagree — the same guarantee `db push` gives, and the property whose absence
+caused the divergence this reconciliation just fixed.
 
-   The baseline is **first in version order**, so if it is unrecorded the push
-   fails on statement one and applies nothing. That is the benign failure. The
-   dangerous one is a partially-recorded history that fails somewhere in the
-   middle, after applying some files.
+The pack is **generated** from the migration files, and three tests pin it:
+the DDL is embedded byte-for-byte, each transaction contains its own
+`schema_migrations` insert, and the pack records exactly the two pending
+versions and mentions neither repaired version nor the retired ledger.
 
-**`20260920200000` is genuinely not applied** — `confidence_tier` and
-`source_family` are absent. It is additive only: two `ADD COLUMN IF NOT EXISTS`,
-two constraints in `DO $$ … EXCEPTION WHEN duplicate_object` blocks, comments,
-and three `UPDATE`s. Safe to apply and safe to re-apply.
+**Order, and what to expect:**
 
-One caveat worth checking rather than assuming: `candle_datetime` is `text` and
-the `UPDATE`s match on literals like `'2020-04-20T00:00:00Z'`. A different
-stored format means **zero rows updated and no error** — the tier data would
-silently fail to land. With 14 rows this is directly observable; preflight 2
-dumps all of them and counts the expected matches (4 TIER_1, 2 TIER_3).
+1. `20260920200000` — additive only. Expect 4 rows `TIER_1_DIRECTLY_INSPECTABLE`,
+   2 rows `TIER_3_UNINSPECTABLE_LEGACY`, and `USER_CONFIRMED` rows set to
+   `USER_INDEPENDENT`. **Check those counts before continuing** — a zero would
+   mean the literals did not match after all.
+2. `20260921140000` — creates the three Phase D tables, five indexes, three
+   unique constraints, RLS enabled and forced, anon/authenticated revoked,
+   service_role granted. No destructive statement.
 
-**`20260921140000` (Phase D)** — no destructive statement, creates exactly
-`ipo_paper_positions`, `ipo_paper_trade_history`, `ipo_execution_events` plus
-five indexes, and references nothing pre-existing except `auth.users` via FK.
-Whether the three tables are already present is the one Phase D fact not yet
-confirmed live; preflight 2 asks.
+Then, still before any deployment:
 
-### The decisive unknown, and the recommendation
-
-**Everything now turns on the full contents of
-`supabase_migrations.schema_migrations`**, not on the three IPO rows.
-`supabase/queries/ipo_premigration_preflight2.sql` returns it, marks each of the
-seventeen local files "recorded — skipped" or "NOT RECORDED — would be RE-RUN",
-and flags the six that are unsafe to re-run.
-
-Recommended path once that is known:
-
-- **If only the three IPO versions are unrecorded** — `db push` is correct and
-  safe. `20260920100000` re-runs harmlessly, the other two apply for the first
-  time. `expected_versions=20260920100000,20260920200000,20260921140000`.
-
-- **If the baseline or any of the other five is unrecorded** — do **not**
-  `db push`. Bring the history into line first with
-  `supabase migration repair --status applied <version>` for each migration that
-  is already live, then push. Repair writes to `schema_migrations` only; it runs
-  no DDL. This is the case the divergence above makes likely.
-
-Either way the `expected_versions` gate in `apply-migrations.yml` would have
-caught the mismatch before touching the database — which is what it is for.
+- `supabase/queries/ipo_phase_d_verify.sql` — expect zero FAIL rows, and the SMC
+  baseline counts it records become the "before" for Step 5.
+- `scripts/ipo_t13_live_rls.sh` — the deferred T13, against PostgREST rather than
+  the catalog. A 200 counts as a failure even with an empty body.
 
 ---
 
