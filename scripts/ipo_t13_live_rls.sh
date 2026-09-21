@@ -43,69 +43,92 @@ say() { printf '%-6s %s\n' "$1" "$2"; }
 ok()   { say "PASS" "$1"; }
 bad()  { say "FAIL" "$1"; fails=$((fails+1)); }
 
-req() {  # req <method> <path> <key> [body] -> prints HTTP status
-  local method=$1 path=$2 key=$3 body=${4:-}
+# Returns "<status> <body>" so the REASON can be checked, not just the code.
+req() {  # req <method> <path> <key> [body]
+  local method=$1 path=$2 key=$3 body=${4:-} out
   if [ -n "$body" ]; then
-    curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+    out=$(curl -s -w '\n%{http_code}' -X "$method" \
       -H "apikey: $key" -H "Authorization: Bearer $key" \
       -H "Content-Type: application/json" -H "Prefer: return=minimal" \
-      --data "$body" "$SUPABASE_URL/rest/v1/$path"
+      --data "$body" "$SUPABASE_URL/rest/v1/$path")
   else
-    curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+    out=$(curl -s -w '\n%{http_code}' -X "$method" \
       -H "apikey: $key" -H "Authorization: Bearer $key" \
-      "$SUPABASE_URL/rest/v1/$path"
+      "$SUPABASE_URL/rest/v1/$path")
   fi
+  printf '%s %s' "$(printf '%s' "$out" | tail -n1)" "$(printf '%s' "$out" | sed '$d' | tr -d '\n')"
 }
 
+# A refusal must be a PERMISSION refusal. An invalid key also returns 401, and
+# it would make every assertion below pass while proving nothing — so the reason
+# is checked, not just the status.
+refused() {  # refused <status+body>
+  case "$1" in
+    *"Invalid API key"*) return 1 ;;
+    401*|403*|404*)      return 0 ;;
+    *)                   return 1 ;;
+  esac
+}
+
+# ── the key must actually work, or the whole test is vacuous ─────────────────
+echo "=== precondition: the key is valid ==="
+probe=$(req GET "paper_positions?select=id&limit=1" "$SUPABASE_ANON_KEY")
+case "$probe" in
+  200*) ok "the anon key is accepted (a known-reachable table returns 200)" ;;
+  *"Invalid API key"*)
+    bad "the anon key is INVALID — every refusal below would be meaningless"
+    echo; echo "T13 ABORTED."; exit 1 ;;
+  *) bad "unexpected precondition response: ${probe:0:120}"
+     echo; echo "T13 ABORTED."; exit 1 ;;
+esac
+
+echo
 echo "=== T13: the browser roles must not reach the IPO tables ==="
 for t in "${IPO_TABLES[@]}"; do
-  # A refusal is 401/403 (no grant) or 404 (not exposed). A 200 is a failure even
-  # with an empty body: reachable-but-empty is not the guarantee we claimed.
-  code=$(req GET "$t?select=*&limit=1" "$SUPABASE_ANON_KEY")
-  case "$code" in
-    401|403|404) ok  "anon SELECT $t refused ($code)" ;;
-    200)         bad "anon SELECT $t RETURNED 200 — the table is reachable" ;;
-    *)           bad "anon SELECT $t unexpected status $code" ;;
-  esac
-
-  code=$(req POST "$t" "$SUPABASE_ANON_KEY" '{"symbol":"T13/PROBE"}')
-  case "$code" in
-    401|403|404) ok  "anon INSERT $t refused ($code)" ;;
-    *)           bad "anon INSERT $t unexpected status $code" ;;
-  esac
-
-  code=$(req PATCH "$t?symbol=eq.T13%2FPROBE" "$SUPABASE_ANON_KEY" '{"symbol":"T13/PROBE2"}')
-  case "$code" in
-    401|403|404) ok  "anon UPDATE $t refused ($code)" ;;
-    *)           bad "anon UPDATE $t unexpected status $code" ;;
-  esac
-
-  code=$(req DELETE "$t?symbol=eq.T13%2FPROBE" "$SUPABASE_ANON_KEY")
-  case "$code" in
-    401|403|404) ok  "anon DELETE $t refused ($code)" ;;
-    *)           bad "anon DELETE $t unexpected status $code" ;;
-  esac
+  # A refusal must be 401/403 (no grant) or 404 (not exposed), AND must not be
+  # an invalid-key error. A 200 is a failure even with an empty body:
+  # reachable-but-empty is not the guarantee we claimed.
+  for probe in \
+      "GET|$t?select=*&limit=1|" \
+      "POST|$t|{\"symbol\":\"T13/PROBE\"}" \
+      "PATCH|$t?symbol=eq.T13%2FPROBE|{\"symbol\":\"T13/PROBE2\"}" \
+      "DELETE|$t?symbol=eq.T13%2FPROBE|"; do
+    m=${probe%%|*}; rest=${probe#*|}; path=${rest%%|*}; payload=${rest#*|}
+    r=$(req "$m" "$path" "$SUPABASE_ANON_KEY" "$payload")
+    if refused "$r"; then
+      ok "anon $m $t refused (${r%% *})"
+    elif [ "${r%% *}" = "200" ] || [ "${r%% *}" = "201" ] || [ "${r%% *}" = "204" ]; then
+      bad "anon $m $t SUCCEEDED (${r%% *}) — the table is reachable"
+    else
+      bad "anon $m $t not a permission refusal: ${r:0:140}"
+    fi
+  done
 done
 
 echo
 echo "=== the service role must still work, or the worker cannot run ==="
 if [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
   for t in "${IPO_TABLES[@]}"; do
-    code=$(req GET "$t?select=*&limit=1" "$SUPABASE_SERVICE_ROLE_KEY")
-    if [ "$code" = "200" ]; then ok "service_role SELECT $t ($code)"
-    else bad "service_role SELECT $t got $code — the worker would fail"; fi
+    r=$(req GET "$t?select=*&limit=1" "$SUPABASE_SERVICE_ROLE_KEY")
+    if [ "${r%% *}" = "200" ]; then ok "service_role SELECT $t (200)"
+    else bad "service_role SELECT $t got ${r:0:100} — the worker would fail"; fi
   done
 else
   say "SKIP" "SUPABASE_SERVICE_ROLE_KEY not set; the positive half was not run"
 fi
 
 echo
-echo "=== the SMC tables are untouched by this change ==="
-# Not an IPO guarantee, a regression check: whatever the browser could do before
-# D.2, it must still do. These are expected to be reachable under their own RLS.
+echo "=== control: the SMC tables are UNCHANGED, and the key demonstrably works ==="
+# This is an assertion, not a note. If these also refused, the IPO refusals above
+# would be explained by a broken key rather than by the grants — the test would
+# look green while proving nothing. They must succeed.
 for t in paper_positions pending_orders paper_trade_history; do
-  code=$(req GET "$t?select=*&limit=1" "$SUPABASE_ANON_KEY")
-  say "INFO" "anon SELECT $t -> $code (unchanged by D.2; recorded for the record)"
+  r=$(req GET "$t?select=*&limit=1" "$SUPABASE_ANON_KEY")
+  if [ "${r%% *}" = "200" ]; then
+    ok "anon SELECT $t -> 200 (reachable, as before D.2)"
+  else
+    bad "anon SELECT $t -> ${r:0:100} — D.2 changed SMC reachability, or the key is bad"
+  fi
 done
 
 echo

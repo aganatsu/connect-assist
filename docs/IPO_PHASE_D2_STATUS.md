@@ -315,41 +315,77 @@ FAIL rows**:
 | `paper_trade_history` | 461 |
 | `pending_orders` | 13 |
 
-## 2e. T13 — blocked on one public value
+## 2e. T13 — PASSED against the live API
 
-`scripts/ipo_t13_live_rls.sh` needs the **publishable (anon) key**. It is not in
-the repo: the frontend reads it from `VITE_SUPABASE_PUBLISHABLE_KEY` at build
-time and there is no `.env` here. `SUPABASE_URL` now defaults from
-`supabase/config.toml`, so the key is the only missing input.
-
-That key is **not a secret**. It is compiled into the frontend bundle every
-visitor downloads, and its entire security model is that it grants nothing RLS
-and grants do not already allow — which is exactly what T13 checks. It is not
-comparable to the service-role key or the access token, and the service-role
-half of the script is optional and should stay unset.
+Run 2026-09-21 with the publishable key. **16 assertions, 0 failures, exit 0.**
 
 ```
-export SUPABASE_ANON_KEY='<publishable key>'
-./scripts/ipo_t13_live_rls.sh
+precondition   anon key accepted (a known-reachable table returns 200)
+
+ipo_paper_positions       GET / POST / PATCH / DELETE   all refused 401
+ipo_paper_trade_history   GET / POST / PATCH / DELETE   all refused 401
+ipo_execution_events      GET / POST / PATCH / DELETE   all refused 401
+
+control        paper_positions / pending_orders / paper_trade_history -> 200
+service_role   SKIPPED (key deliberately not supplied)
 ```
 
-### Interim: `ipo_t13_role_fallback.sql`
+### The refusals are genuine, and that was checked rather than assumed
 
-Runnable through the connection already in use, no DDL. PostgREST authenticates
-a request and then does precisely what these statements do — SET the role from
-the JWT and run the query — so this exercises the real grant-and-RLS path, which
-is strictly more than the catalog check.
+A 401 alone does not prove much — an invalid key returns 401 too, and would have
+made every assertion pass while proving nothing. Three things separate the two:
 
-It is **not** a substitute. It cannot see anything above Postgres: schema
-exposure, how PostgREST maps an error to a status code, or what an
-unauthenticated HTTP request actually receives. A table can be correctly locked
-at the role level and still be described in the OpenAPI output. Run both.
+```
+IPO table, valid key   {"code":"42501", "message":"permission denied for
+                        table ipo_paper_positions",
+                        "hint":"GRANT SELECT ... TO anon;"}
+SMC table, same key    200
+bogus key              {"message":"Invalid API key"}
+```
 
-Expected for all six SELECTs and the INSERT probe: `permission denied`. A result
-set of any kind, including zero rows, is a failure — same reason the HTTP script
-treats 200-with-empty-body as a failure.
+So the refusal is a per-table grant refusal, the key demonstrably works, and an
+invalid-key response is a distinguishable third case.
+
+**The script was hardened after the first green run**, because the first version
+would have accepted an invalid-key 401 as a pass. It now (1) checks the key
+works before asserting anything and aborts if not, (2) inspects the refusal
+*reason* rather than only the status, and (3) treats the SMC control as an
+assertion instead of an informational note — if those also refused, the IPO
+refusals would be explained by a broken key rather than by the grants. Re-run
+after hardening: same result, still green.
+
+The SMC 200s also double as the Step 5 regression control: browser reachability
+of the SMC tables is unchanged by D.2.
+
+`supabase/queries/ipo_t13_role_fallback.sql` is retained for the role-level view
+but is no longer needed — the HTTP test is the stronger of the two and it ran.
 
 ---
+
+## 2f. Step 2 — deploying the read-only surface is still blocked
+
+`ipo-observation` and `ipo-paper-state` cannot be deployed from here:
+
+- `deploy-function.yml` (the narrow one) is not on `main`, and GitHub dispatches
+  `workflow_dispatch` only from the default branch;
+- `deploy-functions.yml` (the bulk one, which is on main) deploys **all 25**
+  functions — including `ipo-paper-runner`, which Step 2 forbids, and 22 SMC
+  production functions from unmerged branch code.
+
+Options, in the order I would pick them:
+
+1. **Merge only the three workflow files to `main`.** A merge touching just
+   `.github/workflows/deploy-function.yml`, `apply-migrations.yml` and
+   `inspect-live-schema.yml` does **not** trigger the bulk deploy: its path
+   filter is `supabase/functions/**` plus its own filename, neither of which
+   matches. After that, `gh workflow run deploy-function.yml --ref
+   feature/ipo-live-integration -f functions=ipo-observation,ipo-paper-state`
+   deploys exactly those two, from the feature branch.
+2. **Deploy the two by hand** with the Supabase CLI, if you have it and the
+   access token locally.
+
+Option 1 is a merge to `main`, which has been prohibited throughout — so it
+needs an explicit decision. It adds no application code and changes no function.
 
 ## 3. What I need from you
 
