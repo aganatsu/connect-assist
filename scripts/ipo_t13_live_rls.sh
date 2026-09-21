@@ -12,17 +12,29 @@
 # KEYS ARE READ FROM THE ENVIRONMENT AND NEVER PRINTED. Nothing here echoes a
 # key, and no key should be pasted into a transcript.
 #
-#   export SUPABASE_URL=https://<project>.supabase.co
-#   export SUPABASE_ANON_KEY=...            # the publishable anon key
-#   export SUPABASE_SERVICE_ROLE_KEY=...    # optional; enables the positive test
+#   export SUPABASE_ANON_KEY=...            # publishable key; see the note below
 #   ./scripts/ipo_t13_live_rls.sh
+#
+# SUPABASE_URL defaults to the project in supabase/config.toml, so the anon key
+# is the only thing you have to supply.
+#
+# THE ANON KEY IS NOT A SECRET. It is compiled into the frontend bundle that
+# every visitor downloads; its whole security model is that it grants nothing
+# RLS and grants do not already allow. That is exactly what this script checks.
+# The SERVICE ROLE key is a different matter and is optional here — set it only
+# if you want the positive half, and never paste it into a transcript.
 #
 # Exit code 0 means every expectation held.
 
 set -uo pipefail
 
-: "${SUPABASE_URL:?set SUPABASE_URL}"
-: "${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY}"
+# Default the URL from the project ref the repo already declares.
+if [ -z "${SUPABASE_URL:-}" ] && [ -r supabase/config.toml ]; then
+  REF=$(grep -m1 '^project_id' supabase/config.toml | cut -d'"' -f2)
+  [ -n "$REF" ] && SUPABASE_URL="https://$REF.supabase.co"
+fi
+: "${SUPABASE_URL:?could not determine SUPABASE_URL}"
+: "${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY (the publishable key — it is not a secret)}"
 
 IPO_TABLES=(ipo_paper_positions ipo_paper_trade_history ipo_execution_events)
 fails=0

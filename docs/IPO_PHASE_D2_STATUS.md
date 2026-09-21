@@ -293,6 +293,64 @@ Then, still before any deployment:
 
 ---
 
+## 2d. Step 1 — APPLIED AND VERIFIED
+
+Both pending migrations are applied. `ipo_phase_d_verify.sql` returned **zero
+FAIL rows**:
+
+- all three IPO tables exist
+- every required CHECK constraint present
+- one-open-position-per-strategy/symbol enforced by the partial unique index
+- `strategy_id`, `strategy_version`, `user_id` all NOT NULL
+- RLS enabled **and forced** on all three
+- anon and authenticated hold no direct grants
+- service_role holds the required privileges
+- all three tables at **0 rows**
+
+**SMC baseline captured for the Step 5 before/after:**
+
+| table | rows before any IPO activity |
+|---|---|
+| `paper_positions` | 0 |
+| `paper_trade_history` | 461 |
+| `pending_orders` | 13 |
+
+## 2e. T13 — blocked on one public value
+
+`scripts/ipo_t13_live_rls.sh` needs the **publishable (anon) key**. It is not in
+the repo: the frontend reads it from `VITE_SUPABASE_PUBLISHABLE_KEY` at build
+time and there is no `.env` here. `SUPABASE_URL` now defaults from
+`supabase/config.toml`, so the key is the only missing input.
+
+That key is **not a secret**. It is compiled into the frontend bundle every
+visitor downloads, and its entire security model is that it grants nothing RLS
+and grants do not already allow — which is exactly what T13 checks. It is not
+comparable to the service-role key or the access token, and the service-role
+half of the script is optional and should stay unset.
+
+```
+export SUPABASE_ANON_KEY='<publishable key>'
+./scripts/ipo_t13_live_rls.sh
+```
+
+### Interim: `ipo_t13_role_fallback.sql`
+
+Runnable through the connection already in use, no DDL. PostgREST authenticates
+a request and then does precisely what these statements do — SET the role from
+the JWT and run the query — so this exercises the real grant-and-RLS path, which
+is strictly more than the catalog check.
+
+It is **not** a substitute. It cannot see anything above Postgres: schema
+exposure, how PostgREST maps an error to a status code, or what an
+unauthenticated HTTP request actually receives. A table can be correctly locked
+at the role level and still be described in the OpenAPI output. Run both.
+
+Expected for all six SELECTs and the INSERT probe: `permission denied`. A result
+set of any kind, including zero rows, is a failure — same reason the HTTP script
+treats 200-with-empty-body as a failure.
+
+---
+
 ## 3. What I need from you
 
 **Option A — you run the live steps.** Everything is ready:
