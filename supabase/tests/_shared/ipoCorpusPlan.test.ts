@@ -340,3 +340,51 @@ Deno.test("a negative label is refused before any wave is planned", () => {
   assertEquals(written.length, 0, "the whole batch is rejected, not partially applied");
   assertEquals(t.rows.length, 0);
 });
+
+Deno.test("confidence tier and source family are stored, not derived", () => {
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    {
+      symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-04-20T00:00:00Z", direction: "demand",
+      evidenceSource: "VIDEO_DEMONSTRATION",
+      confidenceTier: "TIER_1_DIRECTLY_INSPECTABLE", sourceFamily: "EZZY",
+    },
+  ]);
+  assertEquals(t.rows[0].confidence_tier, "TIER_1_DIRECTLY_INSPECTABLE");
+  assertEquals(t.rows[0].source_family, "EZZY");
+});
+
+Deno.test("an unattributed row stores NULL rather than a guessed family", () => {
+  // The whole point of the columns: absence of evidence must be recorded as
+  // absence, never defaulted to the family that happens to be most common.
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-06-01T00:00:00Z", direction: "demand" },
+  ]);
+  assertEquals(t.rows[0].confidence_tier, null);
+  assertEquals(t.rows[0].source_family, null);
+});
+
+Deno.test("TubePull keeps its own family and is never folded into EZZY", () => {
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    {
+      symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-07-01T00:00:00Z", direction: "supply",
+      sourceFamily: "TUBEPULL_UNKNOWN_SOURCE",
+    },
+  ]);
+  assertEquals(t.rows[0].source_family, "TUBEPULL_UNKNOWN_SOURCE");
+  assert(t.rows.every((r) => r.source_family !== "EZZY"));
+});
+
+Deno.test("a misspelt tier or family is refused and nothing is written", () => {
+  for (const bad of [{ confidenceTier: "TIER_1" }, { sourceFamily: "ezzy" }]) {
+    const t = new FakeCorpusTable();
+    const { problems, written } = runInsert(t, [
+      { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-08-01T00:00:00Z", direction: "demand", ...bad },
+    ]);
+    assert(problems.length > 0, `${JSON.stringify(bad)} must be rejected`);
+    assertEquals(written.length, 0);
+    assertEquals(t.rows.length, 0);
+  }
+});

@@ -23,6 +23,7 @@
 
 import { lastOppositeBefore, type OnsetContext } from "./ipoDisplacementOnset.ts";
 import { ipoGeometry } from "./ipoZones.ts";
+import { baseConstructIsDegenerate } from "./ipoContraction.ts";
 import type { Candle } from "./smcAnalysis.ts";
 
 const overlaps = (a: Candle, b: Candle) => a.low <= b.high && a.high >= b.low;
@@ -91,6 +92,15 @@ export function runNeverRevisitsOrigin(ctx: OnsetContext): number | null {
 }
 
 export interface MoveAnatomy {
+  /**
+   * DEGENERATE_FOR_RESEARCH. Every base-derived field below rests on the
+   * adjacent-overlap construct. When this is true that construct spans the whole
+   * window, so `base`, both exit fields and PERMANENT_BASE_EXIT collapse onto
+   * the break bar and carry no independent information.
+   */
+  degenerateForResearch: boolean;
+  degeneracyNote: string;
+  adjacentOverlapFraction: number | null;
   /** Bars of the last overlapping base before the break. */
   base: { start: number; end: number; startDatetime: string; endDatetime: string; high: number; low: number } | null;
   /** First bar closing beyond the base, whether or not it holds. */
@@ -166,7 +176,11 @@ export function describeMove(ctx: OnsetContext): MoveAnatomy {
     }
   }
 
+  const degen = baseConstructIsDegenerate(candles, swingIdx, breakIdx);
   return {
+    degenerateForResearch: degen.degenerate,
+    degeneracyNote: degen.note,
+    adjacentOverlapFraction: degen.adjacentOverlapFraction,
     base,
     firstBaseExitIndex: firstExit,
     permanentExitFromReportedBase: permFromReported,

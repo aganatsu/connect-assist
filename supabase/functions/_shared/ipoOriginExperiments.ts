@@ -48,7 +48,13 @@ export type ExpectedOutcome =
   | "CREATED_THEN_REMOVED"
   /** E — present in the inventory; the coverage matcher failed to associate it. */
   | "PRESENT_MATCHER_FAILED"
-  | "PRESENT_AND_MATCHED";
+  | "PRESENT_AND_MATCHED"
+  /**
+   * The detector selected the candle, but no coverage result was supplied to
+   * the probe. Distinct from both of the above ON PURPOSE: reporting one of
+   * them here would be asserting something this probe cannot see.
+   */
+  | "SELECTED_COVERAGE_UNCHECKED";
 
 export type PipelineStage =
   | "structural-leg-construction"
@@ -228,7 +234,12 @@ export function probeOriginPipeline(
   candles: Candle[],
   knownDate: string,
   direction: IPODirection,
-  opts: DetectIPOOptions = {},
+  /**
+   * coverageMatched is what evaluateDemonstratedCoverage ACTUALLY reported for
+   * this example. Omit it and the probe says coverage is unchecked rather than
+   * inventing a verdict.
+   */
+  opts: DetectIPOOptions & { coverageMatched?: boolean } = {},
 ) {
   const resolved = resolveKnownCandleIndex(candles, knownDate);
   if (resolved.index < 0) {
@@ -315,9 +326,29 @@ export function probeOriginPipeline(
   let stage: PipelineStage;
   let firstDivergence: string;
   if (everSelected) {
-    outcome = "PRESENT_MATCHER_FAILED";
-    stage = "inventory-persistence";
-    firstDivergence = "the detector did select this candle — check dedup and the coverage matcher";
+    // THIS BRANCH USED TO LIE. It asserted PRESENT_MATCHER_FAILED for every
+    // candle the detector selected, without ever consulting the coverage
+    // matcher — so a row that was selected AND matched was reported as a
+    // harness defect. On BTC/USD 4h 2020-05-11 16:00 the matcher in fact
+    // returns EXACT_CANDLE, and the "defect" was this label.
+    //
+    // The probe cannot see the inventory, so it no longer guesses. The caller
+    // passes what the matcher actually said; absent that, the outcome says only
+    // what was observed here and names coverage as unchecked.
+    if (opts.coverageMatched === true) {
+      outcome = "PRESENT_AND_MATCHED";
+      stage = "none";
+      firstDivergence = "no divergence — the detector selected this candle and coverage matched it";
+    } else if (opts.coverageMatched === false) {
+      outcome = "PRESENT_MATCHER_FAILED";
+      stage = "inventory-persistence";
+      firstDivergence = "the detector selected this candle but coverage did NOT match it — check dedup and the matcher";
+    } else {
+      outcome = "SELECTED_COVERAGE_UNCHECKED";
+      stage = "none";
+      firstDivergence = "the detector did select this candle; coverage was not supplied to this probe, " +
+        "so whether the matcher associates it is UNKNOWN here — pass coverageMatched to resolve it";
+    }
   } else if (!insideAnyWindow) {
     outcome = "NEVER_ENTERED";
     stage = "structural-leg-construction";

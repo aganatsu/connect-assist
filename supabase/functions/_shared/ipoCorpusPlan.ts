@@ -155,6 +155,12 @@ export function planCorpusInsert(
         direction: e.direction,
         demonstrated_zone_low: e.demonstratedZoneLow ?? null,
         demonstrated_zone_high: e.demonstratedZoneHigh ?? null,
+        // Stored, not derived. Both were previously held only in conversation
+        // and had to be recovered from a session transcript — which means a
+        // row's usability for rule-proposal was not actually recorded anywhere.
+        // Null is "not established" and must never be defaulted to a value.
+        confidence_tier: e.confidenceTier ?? null,
+        source_family: e.sourceFamily ?? null,
         // A row in a chain always carries a group. A lone row keeps null unless
         // the caller asked for one, so solo examples are not silently grouped
         // into demonstrations they are not part of.

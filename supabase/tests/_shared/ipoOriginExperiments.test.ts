@@ -104,10 +104,26 @@ Deno.test("a candle production DOES select is not reported as never entered", ()
   const r = probeOriginPipeline(s, z.candleDatetime, z.direction) as any;
   if (r.error) return;
   assertEquals(r.expectedIndex, z.candleIndex);
-  assertEquals(r.outcome, "PRESENT_MATCHER_FAILED",
-    "a candle the detector selects must classify as present, not as never entered");
-  assertEquals(r.stage, "inventory-persistence");
+  assertEquals(r.outcome, "SELECTED_COVERAGE_UNCHECKED",
+    "a candle the detector selects must classify as present, not as never entered — " +
+    "and with no coverage result supplied the probe must NOT assert a matcher failure");
+  assertEquals(r.stage, "none");
   assert(r.perBreak.some((b: any) => b.selectedIsExpected));
+});
+
+Deno.test("the probe reports what coverage ACTUALLY said, not what it assumes", () => {
+  // The old classifier answered PRESENT_MATCHER_FAILED for every selected
+  // candle without consulting the matcher, which reported a harness defect on
+  // BTC/USD 4h 2020-05-11 16:00 where the matcher in fact returns EXACT_CANDLE.
+  const s = manyBreakSeries();
+  const z = detectIPOCandidates(s, { symbol: "T", timeframe: "1d" }).valid[0];
+  const matched = probeOriginPipeline(s, z.candleDatetime, z.direction, { coverageMatched: true }) as any;
+  const missed = probeOriginPipeline(s, z.candleDatetime, z.direction, { coverageMatched: false }) as any;
+  if (matched.error || missed.error) return;
+  assertEquals(matched.outcome, "PRESENT_AND_MATCHED");
+  assertEquals(matched.stage, "none");
+  assertEquals(missed.outcome, "PRESENT_MATCHER_FAILED");
+  assertEquals(missed.stage, "inventory-persistence");
 });
 
 // ─── H1, stated and bounded ──────────────────────────────────────────────────

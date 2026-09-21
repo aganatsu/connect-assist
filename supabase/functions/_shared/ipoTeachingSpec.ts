@@ -34,6 +34,7 @@ import {
   type OnsetContext,
 } from "./ipoDisplacementOnset.ts";
 import { assessConsolidation, type IPODirection } from "./ipoZones.ts";
+import { baseConstructIsDegenerate } from "./ipoContraction.ts";
 import type { Candle } from "./smcAnalysis.ts";
 
 const isUp = (c: Candle) => c.close >= c.open;
@@ -142,6 +143,15 @@ export function tookPeopleOut(
 export interface TeachingTrial {
   onsetKey: TeachingOnsetKey;
   parameterFree: boolean;
+  /**
+   * DEGENERATE_FOR_RESEARCH. Set when this trial rests on the adjacent-overlap
+   * base construct AND that construct cannot separate anything in this leg.
+   * A degenerate trial must not be counted as evidence for or against anything:
+   * measured on all four Tier-1 Ezzy legs it returned the break bar, and its
+   * origin was identical to LAST_OPPOSITE_BEFORE_BREAK on 4 of 4.
+   */
+  degenerateForResearch?: boolean;
+  degeneracyNote?: string;
   onsetIndex: number | null;
   onsetDatetime: string | null;
   lastOppositeIndex: number | null;
@@ -195,14 +205,19 @@ export function testTeachingSpec(
     { key: "FINAL_BASE_EXIT", free: true, find: finalBaseExit },
   ];
 
+  const degen = baseConstructIsDegenerate(candles, swingIdx, breakIdx);
+  const DEPENDS_ON_BASE = new Set<TeachingOnsetKey>(["FINAL_BASE_EXIT"]);
+
   const trials: TeachingTrial[] = defs.map(({ key, free, find }) => {
     const onset = find(ctx);
+    const degenerate = DEPENDS_ON_BASE.has(key) && degen.degenerate;
     // The taught rule is unconditional: the LAST opposite candle before the
     // move. No branch on the onset's own colour — that was our invention and it
     // is not in the specification.
     const last = onset === null ? null : lastOppositeBefore(candles, onset, direction, swingIdx);
     return {
       onsetKey: key, parameterFree: free,
+      ...(degenerate ? { degenerateForResearch: true, degeneracyNote: degen.note } : {}),
       onsetIndex: onset,
       onsetDatetime: onset === null ? null : candles[onset].datetime,
       lastOppositeIndex: last,

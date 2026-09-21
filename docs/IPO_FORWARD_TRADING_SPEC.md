@@ -1,0 +1,264 @@
+# IPO Forward Trading Specification
+
+**Version 1.0 — frozen 2026-09-21.**
+
+This is the complete live rule set. It is deliberately unambiguous: every number
+here is either derived from the bar data or fixed below. There are no free
+parameters, no optional steps and no "use judgement" clauses.
+
+Research is closed. **Nothing in this document may be changed to improve a
+result.** It may be changed only to correct a defect that makes the live system
+disagree with this specification.
+
+Backing evidence: `docs/IPO_RESEARCH_FREEZE.md` sections 10–17.
+
+---
+
+## 1. Instruments and eligibility
+
+| instrument | timeframe | volatility gate |
+|---|---|---|
+| EUR/USD | 1H | none — trade all volatility states |
+| USD/JPY | 30M | none — trade all volatility states |
+| BTC/USD | 1H | **HIGH_VOL only** |
+
+No other instrument trades. No other timeframe trades.
+
+---
+
+## 2. Signal — A1
+
+A trade candidate exists when **all** of the following hold.
+
+1. **A valid IPO exists**, per the frozen lifecycle (`ipoLifecycle.ts`):
+   - candidate = the last opposite-colour candle immediately before the first
+     directional candle of a move;
+   - a candidate inside an **active** contraction is invalid (offset 0 counts as
+     inside);
+   - the candidate is promoted to VALID only when the trend **closes beyond the
+     opposite side of the prior contraction**;
+   - it has not been invalidated (see §5).
+2. **An aligned FVG is present** within bars `[candidateIndex, candidateIndex+10]`
+   — bullish FVG for a demand IPO, bearish for a supply IPO. This is the A1
+   condition and it is **mandatory**.
+3. Price **touches the IPO zone** (any overlap).
+4. For BTC/USD only: the volatility bucket at the touch bar is `HIGH_VOL`.
+
+**Nothing else gates a trade.** Not SR overlap, not trend alignment, not fib
+position, not HTF parent, not touch number, not IPDA. Those are recorded, never
+applied.
+
+### Geometry (frozen)
+
+For a **demand** IPO (bullish, from a bearish candle):
+- `zoneHigh` = candle HIGH, `zoneLow` = midpoint of the candle's FULL WICK range
+- `invalidationLevel` = candle LOW
+- direction = LONG
+
+For a **supply** IPO, mirrored: `zoneLow` = candle LOW, `zoneHigh` = midpoint,
+`invalidationLevel` = candle HIGH, direction = SHORT.
+
+---
+
+## 3. Volatility classification (live-causal)
+
+Module: `ipoLiveVolatility.ts`. Measure and thirds come from the frozen
+`ipoRegimeDescriptors.ts`; only the reference distribution is restricted.
+
+- **Measure**: `ATR(14) / close` at each closed bar. Period 14 is
+  `DEFAULTS.slATRPeriod`.
+- **Bucket**: percentile rank of that measure against **all strictly earlier
+  bars of the same instrument**. `>= 2/3` → HIGH_VOL, `< 1/3` → LOW_VOL,
+  otherwise MID_VOL.
+- **Warmup**: fewer than `MIN_REFERENCE` (200) prior observations →
+  `UNCLASSIFIED`.
+
+**`UNCLASSIFIED` IS NOT ELIGIBLE.** For BTC it means no trade, exactly as
+MID_VOL and LOW_VOL do. BTC therefore needs ≥ 200 closed 1H bars of warmup
+before it can trade at all. Seed from history at startup.
+
+**Only closed bars may be fed to the classifier.** An in-progress bar has no
+final close; feeding it leaks a value that does not exist yet.
+
+---
+
+## 4. Entry — E2_50_PERCENT
+
+Place a **limit** order at the 50% level of the IPO candle:
+
+- LONG: limit BUY at `zoneLow` (the midpoint of the full wick range)
+- SHORT: limit SELL at `zoneHigh`
+
+If price does not reach that level, **there is no trade**. Do not chase, do not
+enter at the zone edge, do not widen.
+
+Validation fill behaviour: ~92% of ideal-model fills survive a spread-aware fill
+test, and the expectancy cost of realistic fills is −0.03R to −0.07R (§9).
+
+---
+
+## 5. Stop — S2_CLOSE_INVALIDATION
+
+The position closes only when a bar **CLOSES** beyond the original IPO candle's
+far extreme.
+
+- LONG: exit when `close < invalidationLevel`
+- SHORT: exit when `close > invalidationLevel`
+
+A wick through the level does **not** exit. Repeated touches of the zone do
+**not** exit. The realized exit price is that bar's **close**.
+
+> **This is not a 1R stop.** See §8. It is the single most important thing to
+> understand before sizing a position.
+
+---
+
+## 6. Target — T_2R
+
+Fixed limit at 2R from the fill, where `1R = |entry − invalidationLevel|`.
+
+- LONG: `entry + 2 × R`
+- SHORT: `entry − 2 × R`
+
+No trailing, no partials, no break-even move, no time stop.
+
+---
+
+## 7. Position management
+
+- **One open position per instrument.** A new candidate while a position is open
+  on that instrument is logged with `noFillReason: POSITION_ALREADY_OPEN` and
+  skipped. First come, first served.
+- EUR/USD, USD/JPY and BTC/USD may be open **simultaneously**. Maximum 3
+  concurrent positions.
+- Equal fixed risk per trade. No compounding during the forward test.
+
+---
+
+## 8. Risk reality — read before sizing
+
+`1R` is the nominal IPO geometry distance. Under S2 it is **not** the loss.
+Measured across validation:
+
+| | EUR/USD | USD/JPY | BTC HIGH_VOL | portfolio |
+|---|---|---|---|---|
+| median losing trade | 1.71R | 1.71R | 1.98R | **1.75R** |
+| p90 | 3.24R | 3.38R | 3.55R | 3.38R |
+| p95 | 4.17R | 4.71R | 4.86R | 4.35R |
+| p99 | 6.42R | 13.34R | 8.08R | 8.26R |
+| worst | 8.26R | **17.33R** | 8.08R | **17.33R** |
+
+Percentage of **losing** trades exceeding a given loss:
+
+| | >1R | >1.5R | >2R | >3R | >5R |
+|---|---|---|---|---|---|
+| EUR/USD | 98.1% | 66.7% | 35.3% | 12.8% | 1.9% |
+| USD/JPY | 99.6% | 69.7% | 36.1% | 13.9% | 4.7% |
+| BTC HIGH_VOL | 86.1% | 81.9% | 48.6% | 25.0% | 4.2% |
+| **portfolio** | **97.2%** | **70.5%** | **37.6%** | **15.1%** | **3.8%** |
+
+**Sizing "1% risk" off nominal R would risk ~1.75% on the median loser, ~4.4% at
+p95 and 17% on the worst observed trade.** Average MAE is 1.34R — the typical
+trade travels further against the position than its own nominal stop.
+
+Size against observed loss distribution, not nominal R. This specification does
+not prescribe a position size; that decision is explicitly outstanding.
+
+### Cost-dominated setups — outstanding decision
+
+Round-trip cost expressed in R (`2 × perSide / risk`):
+
+| | median | p90 | max | >0.5R | >1R | >2R (a 2R win still loses) |
+|---|---|---|---|---|---|---|
+| EUR/USD | 0.29 | 0.63 | 4.00 | 16.5% | 4.7% | 1.3% |
+| USD/JPY | 0.27 | 0.64 | 3.52 | 14.7% | 3.2% | 0.8% |
+| **BTC/USD** | **0.72** | **1.64** | 4.11 | **74.6%** | **28.9%** | **4.9%** |
+
+On BTC the fee is proportional to price while 1R is the candle's wick span, so
+small-risk setups are structurally uneconomic: 32 validation trades reached the
+2R target and still finished net negative (−32.4R combined).
+
+A minimum risk-to-cost requirement would fix this. **It is not in this
+specification, because adding it would be a new filter and research is closed.**
+It must be decided explicitly before live capital is committed.
+
+---
+
+## 9. Execution assumptions
+
+Declared before testing, not fitted:
+
+| | EUR/USD | USD/JPY | BTC/USD |
+|---|---|---|---|
+| spread (per side, already in costs) | 0.8 pip | 0.8 pip | 0.15% |
+| assumed adverse slippage on S2 exit | 0.5 pip | 0.5 pip | 0.10% |
+
+Portfolio expectancy across fill models: ideal +0.690R, spread-aware +0.657R,
+with exit slippage **+0.622R**, through-fill +0.660R. Use **+0.622R** as the
+planning figure — it is the most conservative model tested.
+
+---
+
+## 10. Event ledger
+
+Module: `ipoForwardLedger.ts`. Append-only JSONL, **one row per candidate**
+whether or not it fills. Fields: `timestamp`, `instrument`, `timeframe`,
+`direction`, `ipoCandleTimestamp`, `ipoZoneLow`, `ipoZoneHigh`, `entryLevel`,
+`invalidationLevel`, `targetPrice`, `fvgPresent`, `fvgTimestamp`,
+`volatilityBucket`, `contractionState`, `lifecycleState`, `filled`,
+`noFillReason`, `fillPrice`, `exitTimestamp`, `exitPrice`, `exitReason`,
+`realizedR`, `mae`, `mfe`.
+
+`noFillReason` ∈ {`VOLATILITY_NOT_ELIGIBLE`, `PRICE_DID_NOT_REACH_50_PERCENT`,
+`POSITION_ALREADY_OPEN`}. `exitReason` ∈ {`TARGET_2R`, `S2_CLOSE_INVALIDATION`,
+`OPEN`, `NOT_FILLED`}.
+
+Run `auditLedger()` on every session's output. It must return an empty array.
+
+---
+
+## 11. What "working" looks like
+
+Validation baseline over 15 untouched windows across five years (24,101 bars),
+causal volatility, one position per instrument:
+
+| instrument | n | win% | expR | PF | maxDD | MAE | trades/mo |
+|---|---|---|---|---|---|---|---|
+| EUR/USD | 678 | 77.0 | +0.793 | 2.68 | 15.0 | 1.26 | 68 |
+| USD/JPY | 1151 | 76.2 | +0.726 | 2.36 | 17.8 | 1.40 | 116 |
+| BTC/USD HIGH_VOL | 284 | 76.0 | +0.296 | 1.51 | 15.7 | 1.25 | 28 |
+| **portfolio** | **2113** | **76.4** | **+0.690** | **2.33** | **19.5** | 1.34 | ~180 |
+
+Forward results materially below this — particularly a win rate under ~65% or a
+drawdown beyond ~40R — indicate the forward environment differs from validation.
+That is information, **not** a reason to adjust the rules.
+
+---
+
+## 12. Standing prohibitions
+
+- No new filters, confluence, or ranking.
+- No target, stop or entry optimisation.
+- No instrument added or removed on the basis of forward results.
+- No re-fitting of the volatility thirds, the ATR period, or the FVG window.
+- No change to this document to make a result look better.
+
+---
+
+## 13. Known open items (all pre-existing, none resolved here)
+
+1. **Position sizing is undecided** — §8 is the input, not the answer.
+2. **Cost-dominated BTC setups are unaddressed** — §8.
+3. **S2 permits unbounded adverse excursion** — no catastrophic stop exists.
+4. **Trade frequency is high** (~180 portfolio trades/month) and every entry
+   assumes a resting limit fill.
+5. **Validation spans five windows, not five years of continuous history.**
+6. **The IPO anchor is a contributor, not a carrier** — it adds ~+0.2R over an
+   equivalent random zone with the same FVG filter (section 16). FVG and
+   volatility state do more of the work.
+
+---
+
+**Production changed: only where required to make the frozen candidate causal
+and observable** — `ipoLiveVolatility.ts` and `ipoForwardLedger.ts` were added.
+No frozen rule was modified. No new research rule was introduced.
