@@ -387,6 +387,114 @@ Options, in the order I would pick them:
 Option 1 is a merge to `main`, which has been prohibited throughout — so it
 needs an explicit decision. It adds no application code and changes no function.
 
+## 2g. Step 2 — DEPLOYED. One function works, one cannot run.
+
+Deployed 2026-09-21 from `feature/ipo-live-integration` with the Supabase CLI
+v2.117.0, installed from the official GitHub release because npm is unreachable
+from this sandbox. **The CLI was already authenticated via the macOS keychain** —
+no token was requested, handled or printed.
+
+| function | version | verify_jwt | status |
+|---|---|---|---|
+| `ipo-paper-state` | **1** | `true` | **working** |
+| `ipo-observation` | **1** | `true` | **deployed but fails every invocation** |
+| `ipo-paper-runner` | — | — | **not deployed** (correct) |
+
+No `--no-verify-jwt`. No SMC, broker or scheduled function was touched: every
+other function still shows its pre-existing `updated_at` (`1789…`) against the
+new deploys at `1790036…`. `smc-analysis` shows `verify_jwt: false`, confirming
+it is the deliberate exception and not something this step changed.
+
+Asset counts on upload were 2 and 21 — exactly the import closures computed
+beforehand.
+
+### What passed
+
+```
+OPTIONS            both 200 (no longer 404)
+unauthenticated    both 401 UNAUTHORIZED_NO_AUTH_HEADER  (gateway)
+ipo-paper-state    200 in 0.32 / 0.47 / 0.29 s
+                   {"ok":true,"mode":"PAPER_READ_ONLY","runtime":[],
+                    "openPositions":[],"recentTrades":[],"recentEvents":[],
+                    "summary":{"trades":0,...,"abortedExcluded":0}}
+T13                re-run after deployment, still PASSED
+```
+
+### What failed, and it is not a tuning problem
+
+```
+ipo-observation    HTTP 546 WORKER_RESOURCE_LIMIT
+                   all instruments   5.5 s
+                   EUR/USD only      5.6 s
+                   USD/JPY only      3.5 s
+                   BTC/USD only     15.7 s
+```
+
+**A single instrument fails.** It is not cumulative load across three, and at
+3–16 seconds it is not the 150 s wall clock either — the worker is killed for
+compute.
+
+The cause is the bootstrap, and the number was already in the D.1 report without
+my drawing this conclusion from it: **a 1,200-bar rebuild costs ~17 seconds of
+CPU** on a laptop. An Edge Function's CPU budget is a small number of seconds.
+The bootstrap misses it by roughly an order of magnitude.
+
+This was never going to show up earlier. Phase C was approved and pushed but
+**never deployed** — `ipo-observation` was at version 1 before today, meaning
+today was its first invocation anywhere. Every prior statement about it,
+including my own Phase C report, described code that had never run in the
+environment it was written for.
+
+### What this means for the plan
+
+It is not confined to observation. `ipo-paper-runner`'s **cold path is the same
+1,200-bar bootstrap**, so it would fail the same way on its first run — and
+because the warm path can only resume from a state the bootstrap creates, the
+49 ms warm invocation measured in D.1 is unreachable on Edge. D.1's architecture
+is sound and its measurements hold; the platform it targets cannot execute the
+one step that starts it.
+
+Options, not yet acted on:
+
+1. **Run the bootstrap off-Edge.** This repo already has `local-runner/` — a Mac
+   Mini process that exists precisely because Supabase's scheduler and runtime
+   were not adequate. Its README even anticipates "Approach 2: Full Local —
+   import scanner logic directly, run everything in-process." A bootstrap that
+   needs 17 s of CPU belongs there, writing the D.1 engine state to `kv_cache`;
+   Edge then only ever does warm 49 ms steps, which it can do comfortably.
+2. **Shrink the bootstrap** below the CPU budget. `HISTORY_BARS` is 1,200 and the
+   volatility warmup needs 200, so there is room — but the cost is superlinear
+   and this would change which bars the engine sees, which changes decisions. It
+   is a strategy change wearing a performance costume and should not be done to
+   fit a platform limit.
+3. **Delete `ipo-observation` from the project** until one of the above lands. It
+   currently occupies a slug and fails every call.
+
+My recommendation is 1, with 3 in the meantime.
+
+### Cost note
+
+The failing invocations still fetched candles before being killed — BTC ran
+15.7 s, most of it network. Five failed calls have therefore spent TwelveData
+credits for no result. I stopped after characterising the failure rather than
+retrying, and did not attempt to bisect `HISTORY_BARS`, which would have cost
+more credits for a number that option 2 above argues against acting on anyway.
+
+### Not verified, and why
+
+`ipo_paper_positions`, `ipo_paper_trade_history`, `ipo_execution_events` row
+counts, the SMC baseline, and `broker_connections` being unchanged all need a
+database query. I have no SQL path from here — the CLI's stored credential lets
+it deploy but `db` commands still need the database password, and reading the
+service-role key out of the keychain to make raw API calls is not something I
+will do. `supabase/queries/ipo_post_deploy_verify.sql` has the exact query.
+
+Note the `broker_connections` check is now weakly informative in either
+direction: `ipo-observation` never reached the candle-fetch completion path, and
+it passes `persistSymbolOverrides: false` regardless.
+
+---
+
 ## 3. What I need from you
 
 **Option A — you run the live steps.** Everything is ready:
