@@ -9,6 +9,7 @@
  */
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { shouldPersistSymbolOverride } from "../../functions/_shared/candleSource.ts";
 
 async function closure(entry: string): Promise<string[]> {
   const seen = new Set<string>();
@@ -68,29 +69,71 @@ Deno.test("no IPO function can write an SMC TRADING table at any depth", async (
   }
 });
 
-Deno.test("the ONLY table ipo-observation can write transitively is kv_cache and broker_connections", async () => {
-  // DISCLOSED, NOT WAIVED. `candleSource` persists an auto-discovered symbol
-  // mapping with
-  //     supabase.from("broker_connections").update({ symbol_overrides })
-  // so `ipo-observation` inherits a write to an SMC-owned CONFIG table. It is
-  // not trading state and not a broker order, and it is the same line the SMC
-  // scanner already executes — but it is a write, and the Phase C claim that
-  // this function "writes only kv_cache" was therefore narrower than it sounded.
-  //
-  // Pinned here so the set cannot grow quietly. Shrinking it is the goal;
-  // growing it must be a deliberate edit to this list.
+Deno.test("ipo-observation's closure writes exactly kv_cache, plus one guarded exception", async () => {
+  // Stated precisely. A text scan of the import closure cannot prove call-path
+  // unreachability — `candleSource` still CONTAINS the broker_connections write,
+  // because SMC needs it. So this enumerates every write in the closure and the
+  // next test proves the one exception is reachable only through a guard that
+  // ipo-observation closes.
   const writes = new Set<string>();
   for (const f of await closure("supabase/functions/ipo-observation/index.ts")) {
     const code = strip(await Deno.readTextFile(f));
-    for (const m of code.matchAll(/\.from\("([^"]+)"\)\s*\n?\s*\.(insert|upsert|update|delete)/g)) {
-      writes.add(m[1]);
-    }
-    // multi-line form: .from("x") then a later .update(
     for (const m of code.matchAll(/\.from\("([^"]+)"\)[\s\S]{0,80}?\.(insert|upsert|update|delete)\(/g)) {
       writes.add(m[1]);
     }
   }
   assertEquals([...writes].sort(), ["broker_connections", "kv_cache"]);
+  assertEquals([...writes].filter((w) => w !== "broker_connections"), ["kv_cache"],
+    "the unguarded write set must be kv_cache alone");
+});
+
+Deno.test("the broker_connections write sits behind exactly one guarded call", async () => {
+  const src = await Deno.readTextFile("supabase/functions/_shared/candleSource.ts");
+  const code = strip(src);
+
+  // It lives in one function, and that function is called from one place.
+  const defs = [...code.matchAll(/async function persistSymbolOverride\(/g)];
+  assertEquals(defs.length, 1, "more than one definition");
+  const calls = [...code.matchAll(/await persistSymbolOverride\(/g)];
+  assertEquals(calls.length, 1, "more than one call site — the guard would be incomplete");
+
+  // And that one call is inside the guard.
+  const at = code.indexOf("await persistSymbolOverride(");
+  const before = code.slice(Math.max(0, at - 220), at);
+  assert(before.includes("shouldPersistSymbolOverride(opts)"),
+    "the call site is not guarded by shouldPersistSymbolOverride");
+
+  // No other statement writes that table.
+  const brokerWrites = [...code.matchAll(/\.from\("broker_connections"\)[\s\S]{0,80}?\.(insert|upsert|update|delete)\(/g)];
+  assertEquals(brokerWrites.length, 1, "a second broker_connections write exists, outside the guard");
+});
+
+Deno.test("the default is persist — every existing SMC caller is unaffected", async () => {
+  // The guard is `!== false`, so a caller that says nothing keeps writing.
+  assertEquals(shouldPersistSymbolOverride({}), true);
+  assertEquals(shouldPersistSymbolOverride({ persistSymbolOverrides: undefined }), true);
+  assertEquals(shouldPersistSymbolOverride({ persistSymbolOverrides: true }), true);
+  assertEquals(shouldPersistSymbolOverride({ persistSymbolOverrides: false }), false);
+
+  // And nothing except ipo-observation sets it, so no SMC behaviour moved.
+  const setters: string[] = [];
+  for await (const e of Deno.readDir("supabase/functions")) {
+    if (!e.isDirectory || e.name === "_shared") continue;
+    const src = await Deno.readTextFile(`supabase/functions/${e.name}/index.ts`);
+    if (src.includes("persistSymbolOverrides")) setters.push(e.name);
+  }
+  assertEquals(setters, ["ipo-observation"]);
+});
+
+Deno.test("ipo-observation opts out at EVERY candle fetch it makes", async () => {
+  const src = await Deno.readTextFile("supabase/functions/ipo-observation/index.ts");
+  const code = strip(src);
+  const calls = [...code.matchAll(/fetchCandlesWithFallback\(\{[\s\S]*?\}/g)];
+  assert(calls.length > 0, "the function must fetch candles");
+  for (const c of calls) {
+    assert(c[0].includes("persistSymbolOverrides: false"),
+      `a fetch without the opt-out: ${c[0].slice(0, 120)}`);
+  }
 });
 
 Deno.test("ipo-paper-state writes nothing at all", async () => {

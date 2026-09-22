@@ -73,6 +73,11 @@ export async function handler(req: Request): Promise<Response> {
 
         const { candles } = await fetchCandlesWithFallback({
           symbol: cfg.instrument, interval: cfg.timeframe, limit: OBSERVATION_BARS,
+          // READ-ONLY. candleSource otherwise writes a newly discovered symbol
+          // mapping back to broker_connections, an SMC-owned table. Observation
+          // passes no brokerConn so that branch cannot run today, but relying on
+          // the absence of an argument is not a guarantee — this is.
+          persistSymbolOverrides: false,
         } as Parameters<typeof fetchCandlesWithFallback>[0]);
 
         const closed = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);

@@ -140,3 +140,48 @@ Phase D must not begin until these are defined:
    journal, daily review and weekly advisor, so this is a real pooling risk.
 
 **Phase C complete. Stop before Phase D.**
+
+---
+
+## CORRECTION, 2026-09-21 (D.2) — the import closure
+
+This report described `ipo-observation` as writing only `kv_cache`. **That claim
+was narrower than it sounded, and it was wrong as stated.**
+
+The Phase C isolation tests grep the *function file*. That proves the file names
+nothing forbidden; it does not prove the function cannot **reach** something.
+Walking the transitive import closure at the D.2 deployment gate:
+
+```
+ipo-paper-state    2 modules (itself + cors)   writes nothing
+ipo-observation   21 modules                   kv_cache, and — via candleSource —
+                                               broker_connections
+```
+
+`candleSource.persistSymbolOverride` writes an auto-discovered symbol mapping
+back with `.from("broker_connections").update({ symbol_overrides })`. That is an
+SMC-owned config table. It is not trading state, not a broker order, and it is
+the same line the SMC scanner already runs — but it is a write, and this report
+should not have implied otherwise.
+
+Two mitigating facts, neither of which excuses the overstatement:
+
+- `ipo-observation` passes no `brokerConn`, and the branch requires one, so the
+  write could not actually execute. That was an implicit invariant, not a
+  guarantee — one added argument would have broken it silently.
+- Nothing in either closure reaches `broker-execute`, `placeOrder`,
+  `closePosition`, `modifyPosition`, `paper_positions`, `pending_orders`,
+  `paper_trade_history` or `paper_accounts`, at any depth. That part held.
+
+**Fixed at D.2.** `FetchOptions.persistSymbolOverrides` defaults to true — the
+guard is `!== false`, so every existing SMC caller is untouched — and
+`ipo-observation` sets it to false. Symbol discovery is unchanged; only the
+write-back and the in-memory mutation are suppressed.
+
+`supabase/tests/_shared/ipoFunctionReachability.test.ts` now walks the closure
+rather than the file, and proves the write is reachable through exactly one call
+site behind exactly one guard.
+
+The general lesson, which applies to every isolation claim in this programme: a
+grep over a file is evidence about that file. Reachability is a property of the
+graph.
