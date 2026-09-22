@@ -149,6 +149,24 @@ export interface RunnerPlan {
 
 const ms = (t: string) => new Date(t).getTime();
 
+/**
+ * Do two timestamps name the same bar?
+ *
+ * COMPARE THE INSTANT, NOT THE STRING. A position round-trips through a
+ * Postgres `timestamptz`, which renders as `2026-09-22T09:30:00+00:00`, while a
+ * bar carries the provider's own `2026-09-22T09:30:00Z`. Same moment, different
+ * text. A `===` here reported COVERAGE_LOST on a live position and suspended a
+ * healthy trade — the second time this programme has been bitten by a
+ * timestamp being re-rendered in transit.
+ *
+ * The distinction that matters: an IDENTITY (`setupId`, `intentId`) is
+ * content-addressed over the provider's exact string and must stay byte-exact,
+ * which is why schema 2 stores bar times verbatim. A COMPARISON against a value
+ * that has been through the database must be by instant, because the database
+ * chooses its own rendering and is entitled to.
+ */
+const sameBar = (a: string, b: string) => ms(a) === ms(b);
+
 function ev(
   type: PaperEventType, symbol: string, barTime: string,
   strategyDecision: string, accountDecision: AccountDecision,
@@ -202,7 +220,7 @@ function manage(
 ): { position: PaperPosition | null; result: PaperResult | null; events: PaperEvent[] } {
   const events: PaperEvent[] = [];
   const newest = bars[bars.length - 1];
-  const covered = bars.some((b) => b.datetime === pos.lastManagedBarTime);
+  const covered = bars.some((b) => sameBar(b.datetime, pos.lastManagedBarTime));
   const stale = ms(newest.datetime) + barMs + policy.staleAfterMs < nowMs;
 
   if (!covered || stale) {
@@ -238,7 +256,7 @@ function manage(
     }, live));
   }
 
-  const start = bars.findIndex((b) => b.datetime === live.lastManagedBarTime) + 1;
+  const start = bars.findIndex((b) => sameBar(b.datetime, live.lastManagedBarTime)) + 1;
   let held = 0;
   for (let i = start; i < bars.length; i++) {
     held++;

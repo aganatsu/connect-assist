@@ -307,7 +307,7 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
     "ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts",
     "ipoHistoricalRange.ts", "ipoResearchAuth.ts", "ipoOriginExperiments.ts",
     "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts", "ipoOriginAnchor.ts", "ipoAnchorDiscriminator.ts", "ipoTeachingSpec.ts", "ipoOnsetVariants.ts",
-    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoLiveEngine.ts", "ipoFibConfluence.ts", "ipoFtmoSimulator.ts", "ipoIncrementalEngine.ts", "ipoObservation.ts", "ipoPaperContract.ts", "ipoPaperRunner.ts", "ipoEngineState.ts", "ipoInstruments.ts",
+    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoLiveEngine.ts", "ipoFibConfluence.ts", "ipoFtmoSimulator.ts", "ipoIncrementalEngine.ts", "ipoObservation.ts", "ipoPaperContract.ts", "ipoPaperRunner.ts", "ipoEngineState.ts", "ipoInstruments.ts", "ipoRunnerHealth.ts",
   ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
@@ -354,6 +354,7 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
     "supabase/functions/_shared/ipoPaperRunner.ts",
     "supabase/functions/_shared/ipoEngineState.ts",
     "supabase/functions/_shared/ipoInstruments.ts",
+    "supabase/functions/_shared/ipoRunnerHealth.ts",
   ];
   const offenders: string[] = [];
   const walk = async (dir: string) => {

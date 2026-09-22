@@ -52,6 +52,10 @@ import {
 } from "../_shared/ipoEngineState.ts";
 import { IncrementalEngine } from "../_shared/ipoIncrementalEngine.ts";
 import {
+  buildHealth, parseHealth, runnerHealthKey,
+  type RunSummary,
+} from "../_shared/ipoRunnerHealth.ts";
+import {
   IPO_INSTRUMENTS, INCREMENTAL_BARS, engineStateKey,
 } from "../_shared/ipoInstruments.ts";
 
@@ -250,6 +254,15 @@ export async function handler(req: Request): Promise<Response> {
     const now = Date.now();
     const results: InstrumentRun[] = [];
 
+    // Operational only. Collected alongside the run and written at the end,
+    // whatever the outcome; nothing in the loop reads it.
+    const summary: RunSummary = {
+      strategyId: STRATEGY_ID, strategyVersion: STRATEGY_VERSION,
+      startedAtMs: now, endedAtMs: now,
+      instrumentsChecked: 0, barsProcessed: 0, eventsEmitted: 0,
+      bootstrapRequired: [], divergent: [], errors: [],
+    };
+
     for (const cfg of IPO_INSTRUMENTS) {
       if (only && only !== cfg.instrument) continue;
       const out: InstrumentRun = {
@@ -360,9 +373,18 @@ export async function handler(req: Request): Promise<Response> {
         results.push(out);
       } catch (e) {
         out.error = (e as Error).message;
+        summary.errors.push({ instrument: cfg.instrument, message: out.error });
         results.push(out);
+      } finally {
+        summary.instrumentsChecked++;
+        summary.barsProcessed += out.barsProcessed ?? 0;
+        summary.eventsEmitted += out.events ?? 0;
+        if (out.skipped === "BOOTSTRAP_REQUIRED") summary.bootstrapRequired.push(cfg.instrument);
+        if (out.divergence) summary.divergent.push(cfg.instrument);
       }
     }
+
+    await writeHeartbeat(db, summary);
 
     return respond({
       ok: true,
@@ -372,7 +394,56 @@ export async function handler(req: Request): Promise<Response> {
       sizing, results,
     });
   } catch (e) {
+    // A crash here would otherwise be indistinguishable from a quiet no-op,
+    // which is the ambiguity the heartbeat exists to remove. Best effort: if
+    // even this fails there is nothing further to try.
+    try {
+      const db = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false } },
+      );
+      const t0 = Date.now();
+      await writeHeartbeat(db, {
+        strategyId: STRATEGY_ID, strategyVersion: STRATEGY_VERSION,
+        startedAtMs: t0, endedAtMs: t0,
+        instrumentsChecked: 0, barsProcessed: 0, eventsEmitted: 0,
+        bootstrapRequired: [], divergent: [], errors: [],
+        fatal: { code: "RUNNER_FATAL", message: (e as Error).message },
+      });
+    } catch { /* the run already failed; do not mask it with a second error */ }
     return respond({ ok: false, error: (e as Error).message }, 500);
+  }
+}
+
+/**
+ * Writes the heartbeat. NEVER throws.
+ *
+ * A failure to record health is an observability problem, not a trading one:
+ * the strategy work is already done and committed by this point. Letting it
+ * propagate would turn a monitoring hiccup into a failed run — and then into a
+ * retry that re-derives decisions for no reason.
+ */
+async function writeHeartbeat(
+  // deno-lint-ignore no-explicit-any
+  db: any, summary: RunSummary,
+): Promise<void> {
+  try {
+    summary.endedAtMs = Date.now();
+    const key = runnerHealthKey(summary.strategyId);
+    const { data } = await db.from("kv_cache").select("value").eq("key", key).maybeSingle();
+    const next = buildHealth(summary, parseHealth(data?.value));
+    await db.from("kv_cache").upsert({
+      key,
+      value: JSON.stringify(next),
+      // Far future on purpose: kv-cache-cleanup-hourly deletes expired rows,
+      // and a swept heartbeat reads as "never ran" — the exact false alarm
+      // this record exists to prevent.
+      expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "key" });
+  } catch (e) {
+    console.warn(`[ipo-paper-runner] heartbeat write failed: ${(e as Error).message}`);
   }
 }
 

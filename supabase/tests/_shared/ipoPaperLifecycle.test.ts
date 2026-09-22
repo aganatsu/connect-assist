@@ -478,3 +478,69 @@ Deno.test("TELEMETRY — the migration adds only additive, nullable columns", as
   }
   assert(sql.includes("add column if not exists"), "not re-runnable");
 });
+
+// ── the Postgres round-trip regression ───────────────────────────────────────
+
+Deno.test("REGRESSION — a position restored from Postgres is not falsely suspended", () => {
+  // FOUND IN PRODUCTION, 2026-09-22. A position opened on the 09:30 bar was
+  // suspended with COVERAGE_LOST on the very next scheduled run, on a feed with
+  // no gap at all.
+  //
+  //   position.last_managed_bar_time  '2026-09-22T09:30:00+00:00'  (timestamptz)
+  //   bar.datetime                    '2026-09-22T09:30:00Z'       (provider)
+  //
+  // Same instant, different text, and the coverage check compared strings. The
+  // fail-closed design turned a formatting difference into a stuck position
+  // rather than a mismanaged one — which is why it was visible at all.
+  const s = market(N, 3);
+  const f = driveOnce("seed3", () => drive(s, cfg()));
+  const p = { ...f.closed[0].position, status: "open" as const };
+
+  // Exactly what rowToPosition hands back after a timestamptz round trip.
+  const pg = (iso: string) => new Date(iso).toISOString().replace("Z", "+00:00");
+  const restored: PaperPosition = {
+    ...p,
+    entryTime: pg(p.entryTime),
+    lastManagedBarTime: pg(p.lastManagedBarTime),
+    ipoCandleTime: pg(p.ipoCandleTime),
+  };
+  assert(restored.lastManagedBarTime !== p.lastManagedBarTime,
+    "the fixture must actually differ in text, or it proves nothing");
+
+  // The bars still carry the provider's form. The window must genuinely COVER
+  // the last managed bar, or the suspension would be correct and prove nothing.
+  const lastIdx = s.findIndex((b) => b.datetime === p.lastManagedBarTime);
+  assert(lastIdx >= 0, "fixture: the managed bar must exist in the series");
+  const window = s.slice(0, lastIdx + 3);
+  const plan = runPaper({
+    cfg: cfg(), barMs: BAR_MS, closedBars: window, nowMs: clock(window),
+    state: {
+      strategyId: "ipo_cet", strategyVersion: "spec-1.1", symbol: "EUR/USD",
+      timeframe: "1h", cursorBarTime: window[window.length - 1].datetime,
+      activatedAtBarTime: s[WARMUP].datetime, barsSeen: window.length, bootstrapCount: 1,
+    },
+    openPosition: restored, minHistoryBars: WARMUP,
+  });
+
+  const suspended = plan.events.filter((e) => e.eventType === "GAP_SUSPENDED");
+  assertEquals(suspended.map((e) => e.reasonCodes).flat(), [],
+    "a Postgres-rendered timestamp was read as a data gap");
+  // It resumed management normally: either still open or properly closed.
+  assert(plan.openPosition === null || plan.openPosition.status === "open");
+});
+
+Deno.test("REGRESSION — both timestamp formats resolve to the same bar", async () => {
+  // The rule: an IDENTITY stays byte-exact (schema 2 stores bar times verbatim,
+  // because setupId/intentId are content-addressed over them); a COMPARISON
+  // against a value that has been through the database is by instant, because
+  // the database picks its own rendering.
+  const src = await Deno.readTextFile("supabase/functions/_shared/ipoPaperRunner.ts");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+  assert(code.includes("const sameBar ="), "the instant comparison is gone");
+  for (const bad of ["=== pos.lastManagedBarTime", "=== live.lastManagedBarTime",
+                     "b.datetime === pos.", "b.datetime === live."]) {
+    assert(!code.includes(bad), `a raw string comparison against a DB timestamp: ${bad}`);
+  }
+  // And identities must NOT be normalised — they are keyed on the exact bytes.
+  assert(code.includes("bars[t.entryIndex].datetime"), "intentId no longer uses the bar string");
+});
