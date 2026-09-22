@@ -25,7 +25,11 @@
  *
  * USAGE
  *   cd local-runner && cp .env.local.example .env.local   # fill in the values
- *   deno run --allow-net --allow-env --allow-read ipo-bootstrap.ts [flags]
+ *   deno run --allow-net --allow-env --allow-read --env-file=.env.local \
+ *     ipo-bootstrap.ts [flags]
+ *
+ * `--env-file` is Deno's own loader. `runner.ts` uses std/dotenv, which reads
+ * `.env` rather than `.env.local`, so the flag is not optional here.
  *
  *   --instrument=EUR/USD   just one (default: all three)
  *   --verify               build twice and assert byte-identical, then exit

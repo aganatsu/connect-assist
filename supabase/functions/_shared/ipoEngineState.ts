@@ -33,7 +33,7 @@ import type { Candle } from "./smcAnalysis.ts";
 import type { EngineConfig } from "./ipoLiveEngine.ts";
 
 /** Bumped whenever the shape below changes in a way old payloads cannot satisfy. */
-export const RUNTIME_STATE_SCHEMA_VERSION = 1;
+export const RUNTIME_STATE_SCHEMA_VERSION = 2;
 
 /**
  * Hard ceiling on retained bars.
@@ -78,17 +78,34 @@ export interface StateIdentity {
 }
 
 /**
- * Columnar, delta-encoded bars.
+ * Columnar bars.
  *
- * Bars dominate the payload, and one object per bar spends most of its bytes on
- * repeated key names. Times are stored as deltas from the first bar because a
- * fixed-interval series compresses to a column of identical small integers.
+ * One object per bar spends most of its bytes on repeated key names, so the
+ * columns are split out. Prices and volumes are numbers; times are the
+ * PROVIDER'S OWN STRINGS, verbatim.
+ *
+ * SCHEMA 2 STORES TIMES AS STRINGS, AND THAT IS NOT A SIZE OVERSIGHT.
+ * Schema 1 delta-encoded epoch milliseconds and rebuilt each datetime with
+ * `new Date(ms).toISOString()`. That is lossy in a way that matters: the
+ * provider sends `2026-09-21T23:00:00Z` and `toISOString()` returns
+ * `2026-09-21T23:00:00.000Z`. Same instant, different string.
+ *
+ * It broke two things, and the second is the serious one:
+ *
+ *   - `continuityCheck` anchors on `b.datetime === lastProcessedBarTime`, so a
+ *     restored state could never match the provider page again;
+ *   - `setupId` and `intentId` are content-addressed over the datetime STRING,
+ *     so a restored engine would mint different identities for the same trade —
+ *     silently defeating the idempotency the whole paper layer rests on.
+ *
+ * The fixtures never caught it because they build timestamps with
+ * `toISOString()`, which is already canonical. Only real provider data differs.
+ * Round-tripping the exact bytes costs about 15 KB per instrument and removes an
+ * entire class of near-miss.
  */
 export interface PackedBars {
-  /** Epoch ms of the first bar. */
-  t0: number;
-  /** Millisecond deltas; `dt[i]` is bar i+1 minus bar i. */
-  dt: number[];
+  /** Provider datetime strings, verbatim. Not normalised, not re-rendered. */
+  t: string[];
   o: number[];
   h: number[];
   l: number[];
@@ -149,10 +166,8 @@ function checksumBody(s: Omit<EngineRuntimeState, "checksum">): string {
 // ─── bar packing ─────────────────────────────────────────────────────────────
 
 export function packBars(bars: Candle[]): PackedBars {
-  const t = bars.map((b) => new Date(b.datetime).getTime());
   return {
-    t0: t.length ? t[0] : 0,
-    dt: t.slice(1).map((x, i) => x - t[i]),
+    t: bars.map((b) => b.datetime),
     o: bars.map((b) => b.open),
     h: bars.map((b) => b.high),
     l: bars.map((b) => b.low),
@@ -163,11 +178,9 @@ export function packBars(bars: Candle[]): PackedBars {
 
 export function unpackBars(p: PackedBars): Candle[] {
   const out: Candle[] = [];
-  let t = p.t0;
   for (let i = 0; i < p.o.length; i++) {
-    if (i > 0) t += p.dt[i - 1];
     const c: Candle = {
-      datetime: new Date(t).toISOString(),
+      datetime: p.t[i],
       open: p.o[i], high: p.h[i], low: p.l[i], close: p.c[i],
     };
     // A volume key is only added back when the original had one, so a

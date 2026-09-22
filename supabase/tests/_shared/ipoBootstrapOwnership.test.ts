@@ -17,6 +17,7 @@ import {
 } from "../../functions/_shared/ipoInstruments.ts";
 import {
   exportState, serializeState, restoreState, parseState,
+  RUNTIME_STATE_SCHEMA_VERSION,
 } from "../../functions/_shared/ipoEngineState.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
 
@@ -58,7 +59,9 @@ Deno.test("bootstrapped state carries both versions and restores in the Edge sha
   const cfg = instrumentBySymbol("EUR/USD")!;
   const payload = bootstrap("EUR/USD", market(400));
   const st = parseState(payload)!;
-  assertEquals(st.identity.schemaVersion, 1);
+  // The constant, not a literal: a schema bump is a deliberate act and this
+  // test should not have to be remembered as part of it.
+  assertEquals(st.identity.schemaVersion, RUNTIME_STATE_SCHEMA_VERSION);
   assertEquals(st.identity.strategyVersion, "spec-1.1");
   assertEquals(st.identity.costModelId, "fx_fixed_0.00008");
   assertEquals(st.identity.instrument, "EUR/USD");

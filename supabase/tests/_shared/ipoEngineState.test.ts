@@ -249,6 +249,49 @@ Deno.test("the snapshot omits refusals, and refusals are never read", async () =
 
 // ─── bar packing ─────────────────────────────────────────────────────────────
 
+Deno.test("packed bars round-trip the PROVIDER's datetime string, not a re-rendering", () => {
+  // THE REGRESSION. Schema 1 stored epoch deltas and rebuilt each datetime with
+  // `new Date(ms).toISOString()`. The provider sends "2026-09-21T23:00:00Z";
+  // toISOString returns "2026-09-21T23:00:00.000Z". Same instant, different
+  // string — and the string is what `continuityCheck` anchors on and what
+  // `setupId`/`intentId` are content-addressed over. Live bootstrap state was
+  // rejected with MALFORMED_STATE the first time it met a real feed.
+  //
+  // Every fixture in this suite uses toISOString(), which is already canonical,
+  // so none of them could ever have caught it. This one deliberately does not.
+  const providerStyle: Candle[] = [
+    { datetime: "2026-09-21T23:00:00Z", open: 1.1, high: 1.2, low: 1.0, close: 1.15 },
+    { datetime: "2026-09-22T00:00:00Z", open: 1.15, high: 1.25, low: 1.1, close: 1.2 },
+  ];
+  const back = unpackBars(packBars(providerStyle));
+  assertEquals(back, providerStyle, "the provider's exact bytes must survive");
+  assertEquals(back[0].datetime, "2026-09-21T23:00:00Z");
+  assert(!back[0].datetime.includes(".000"), "the string was re-rendered");
+});
+
+Deno.test("a bootstrap on provider-style timestamps restores and stays anchored", () => {
+  // End to end on the shape that actually failed live.
+  const bars: Candle[] = Array.from({ length: 300 }, (_, i) => {
+    const ms = Date.UTC(2026, 0, 1) + i * 3_600_000;
+    return {
+      datetime: new Date(ms).toISOString().replace(".000Z", "Z"),  // provider form
+      open: 100 + i * 0.01, high: 100.5 + i * 0.01,
+      low: 99.5 + i * 0.01, close: 100.2 + i * 0.01,
+    };
+  });
+  const e = new IncrementalEngine(cfg());
+  feed(e, bars);
+  const payload = serializeState(exportState(e, cfg(), META));
+
+  const r = restoreState(payload, cfg(), META);
+  assert(r.ok, `restore rejected: ${r.ok ? "" : `${r.reason} — ${r.detail}`}`);
+
+  // And the anchor still matches a provider page carrying the same strings.
+  const cont = continuityCheck((r as { state: EngineRuntimeState }).state, bars.slice(280));
+  assert(cont.ok, `continuity broke: ${cont.ok ? "" : cont.detail}`);
+  assertEquals((cont as { append: Candle[] }).append, [], "no bar is new yet");
+});
+
 Deno.test("packed bars round-trip exactly, including an absent volume", () => {
   const bars: Candle[] = [
     { datetime: "2025-01-01T00:00:00.000Z", open: 1.1, high: 1.2, low: 1.0, close: 1.15, volume: 7 },
@@ -262,12 +305,17 @@ Deno.test("packed bars round-trip exactly, including an absent volume", () => {
   assert(!("volume" in back[1]));
 });
 
-Deno.test("packing is what makes the payload affordable", () => {
+Deno.test("columnar packing still pays for itself, at the price exactness costs", () => {
+  // Schema 1 hit ~0.45 by delta-encoding times as integers. Schema 2 stores the
+  // provider's strings verbatim and lands at ~0.74: the saving is now only the
+  // repeated key names, not the timestamps. That is the deliberate trade — the
+  // 0.3 of payload bought back an entire class of identity bug, and ~15KB per
+  // instrument is not a reason to re-introduce it.
   const bars = market(1200);
   const packed = JSON.stringify(packBars(bars)).length;
   const naive = JSON.stringify(bars).length;
-  assert(packed < naive * 0.6,
-    `packed ${packed} vs naive ${naive} — packing should cut the bar payload substantially`);
+  assert(packed < naive * 0.8,
+    `packed ${packed} vs naive ${naive} — columnar packing stopped helping`);
 });
 
 // ─── identity and integrity: every rejection must fire ───────────────────────
