@@ -22,7 +22,12 @@ enforced cap. IPO is 0.2/min. SMC is 99% of provider spend.
 
 - The candle cache key is `symbol:interval` and **excludes the requested
   depth**. A cached 300-bar entry satisfies an 800-bar request and returns 300
-  bars silently (§4.1). Every SMC caller mixes depths on the same key.
+  bars silently (§4.1). ~~Every SMC caller mixes depths on the same key.~~
+  **CORRECTED 2026-09-22 — that last sentence was wrong.** `bot-scanner` derives
+  depth from the interval (`CANDLE_LIMITS[interval] ?? 300`), so the scheduled
+  path can never hit a shallower entry than it asked for. Only `smc-analysis`,
+  which is on-demand and not scheduled, mixes depths on one key. See
+  `docs/SMC_CACHE_DEPTH_STUDY.md`.
 - **`POLYGON_API_KEY` is not configured.** The documented three-provider
   failover is two, and for any caller that passes `skipBroker` or no broker
   connection — which is SMC's scanner and all of IPO — it is TwelveData with
@@ -339,12 +344,13 @@ same completed bars.
 
 Called out explicitly, because this is the part that decides the answer.
 
-**Option A** changes nothing *if and only if* the depth defect is fixed as part
-of it. Same provider, same bars. But note that fixing the defect **is itself a
-change to what SMC receives today** — SMC currently sometimes analyses 300 bars
-where it asked for 800, and correcting that will change SMC decisions. That is a
-bug fix with a behaviour change attached, and it needs its own before/after
-comparison rather than being smuggled in as an optimisation.
+**Option A** changes nothing. **CORRECTED:** I wrote that SMC "currently
+sometimes analyses 300 bars where it asked for 800" and that fixing it would
+change SMC decisions. That is not true of the scheduled scanner, which cannot
+reach the defect. It is true only of the on-demand `smc-analysis` endpoint, and
+even there a measured 300-vs-800 comparison leaves every decision-bearing
+primitive identical — the only deltas are enumerative counts, of which liquidity
+pools feed confluence. See `docs/SMC_CACHE_DEPTH_STUDY.md` §3.
 
 **Option B** changes nothing *if and only if* WS output never reaches an engine.
 The discipline is easy to state and easy to erode: the first "we already have the
