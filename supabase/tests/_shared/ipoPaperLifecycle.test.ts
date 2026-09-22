@@ -389,3 +389,92 @@ Deno.test("REPORT — exact lifecycle figures", () => {
   console.log(`  events: ${f.events.length}, positions opened: ${f.closed.length + (f.position ? 1 : 0)}, history rows: ${f.closed.length}`);
   assert(f.closed.length > 0);
 });
+
+// ── repeated-zone telemetry: measured, never acted on ────────────────────────
+
+Deno.test("TELEMETRY — re-entries on one zone are counted and ordered", () => {
+  // Seed 3 re-enters the same zone four times at an identical entry/target/S2.
+  // The strategy behaviour is frozen and unchanged; what is new is that the
+  // repetition is now visible in the data.
+  const s = market(N, 3);
+  const f = driveOnce("seed3", () => drive(s, cfg()));
+
+  const byZone = new Map<string, PaperResult[]>();
+  for (const r of f.closed) {
+    const k = r.position.setupId;
+    byZone.set(k, [...(byZone.get(k) ?? []), r]);
+  }
+  const repeated = [...byZone.values()].filter((v) => v.length > 1);
+  assert(repeated.length > 0, "the fixture must re-enter at least one zone");
+
+  for (const trades of byZone.values()) {
+    trades.sort((a, b) => a.position.entryTime.localeCompare(b.position.entryTime));
+    trades.forEach((r, i) => {
+      // The ordinal is 1-based and strictly increasing within a zone.
+      assertEquals(r.position.zoneEntryOrdinal, i + 1,
+        `zone ${r.position.setupId} entry ${i + 1} carries ordinal ${r.position.zoneEntryOrdinal}`);
+      if (i === 0) {
+        assertEquals(r.position.zonePreviousExitTime, null, "a first entry has no predecessor");
+      } else {
+        // The previous exit must be the previous trade's exit, and must precede
+        // this entry — which is the frozen rule touchIndex > previousExitIndex.
+        assertEquals(r.position.zonePreviousExitTime, trades[i - 1].exitTime);
+        assert(r.position.zonePreviousExitTime! <= r.position.entryTime,
+          "a re-entry preceded the exit it followed");
+      }
+    });
+  }
+
+  // And it reaches the database columns.
+  const re = repeated[0][1];
+  const row = historyRow(re, USER);
+  assertEquals(row.zone_entry_ordinal, re.position.zoneEntryOrdinal);
+  assertEquals(row.zone_previous_exit_time, re.position.zonePreviousExitTime);
+  assertEquals(row.ipo_candle_time, re.position.ipoCandleTime);
+  assertEquals(row.volatility_bucket, re.position.volatilityBucket);
+  assert(row.zone_entry_ordinal! >= 2);
+});
+
+Deno.test("TELEMETRY — the ordinal cannot influence any decision", async () => {
+  // The whole point is that it observes. If the ordinal ever reached the
+  // execution verdict it would be an undeclared re-entry filter.
+  const src = await Deno.readTextFile("supabase/functions/_shared/ipoPaperContract.ts");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+  const decisionRegion = code.slice(code.indexOf("export function buildIntent"),
+                                   code.indexOf("export function openPosition"));
+  // It may be assigned into the returned object, but never tested.
+  for (const bad of ["zoneEntryOrdinal >", "zoneEntryOrdinal <", "zoneEntryOrdinal ==",
+                     "zoneEntryOrdinal ===", "if (zone", "zonePreviousExitTime &&"]) {
+    assert(!decisionRegion.includes(bad), `the ordinal is being read as a gate: ${bad}`);
+  }
+  // Same execution verdict whatever the ordinal says.
+  const bars2 = Array.from({ length: 6 }, (_, i) => ({
+    datetime: `2026-03-0${i + 1}T00:00:00Z`, open: 100, high: 101, low: 99, close: 100, volume: 0,
+  })) as Candle[];
+  const t: LiveTrade = {
+    instrument: "EUR/USD", direction: "demand", ipoIndex: 0, entryIndex: 2,
+    entry: 100, stop: 99, target: 102, risk: 1, vol: "HIGH_VOL", costR: 0.3,
+    exitIndex: null, exitPrice: null, netR: null, mae: 0, mfe: 0,
+  };
+  const first = buildIntent(t, bars2, "1h", "UNAVAILABLE", { zoneEntryOrdinal: 1, zonePreviousExitTime: null });
+  const tenth = buildIntent(t, bars2, "1h", "UNAVAILABLE",
+    { zoneEntryOrdinal: 10, zonePreviousExitTime: "2026-03-02T00:00:00Z" });
+  assertEquals(tenth.execution, first.execution);
+  assertEquals(tenth.strategyDecision, first.strategyDecision);
+  assertEquals(tenth.reasonCodes, first.reasonCodes);
+  // And the identity is unchanged by it, so replay stays idempotent.
+  assertEquals(tenth.intentId, first.intentId);
+  assertEquals(tenth.setupId, first.setupId);
+});
+
+Deno.test("TELEMETRY — the migration adds only additive, nullable columns", async () => {
+  const sql = await Deno.readTextFile("supabase/migrations/20260922020000_ipo_zone_telemetry.sql");
+  assert(!/\bdrop\b/i.test(sql), "the telemetry migration drops something");
+  assert(!/\bnot null\b/i.test(sql.replace(/is null|is not null/gi, "")),
+    "a new column is NOT NULL, which would reject rows written before it");
+  for (const c of ["zone_entry_ordinal", "zone_previous_exit_time",
+                   "ipo_candle_time", "volatility_bucket"]) {
+    assert(sql.includes(c), `missing column ${c}`);
+  }
+  assert(sql.includes("add column if not exists"), "not re-runnable");
+});

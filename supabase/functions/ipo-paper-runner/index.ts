@@ -93,6 +93,8 @@ export const positionRow = (p: PaperPosition, userId: string) => ({
   reference_balance_at_entry: p.referenceBalanceAtEntry,
   nominal_risk_pct: p.nominalRiskPct, nominal_risk_usd: p.nominalRiskUsd,
   ipo_candle_time: p.ipoCandleTime, volatility_bucket: p.volatilityBucket,
+  zone_entry_ordinal: p.zoneEntryOrdinal,
+  zone_previous_exit_time: p.zonePreviousExitTime,
   execution_mode: p.executionMode, status: p.status,
   mae_r: p.maeR, mfe_r: p.mfeR, last_managed_bar_time: p.lastManagedBarTime,
   gap_from_bar_time: p.gapFromBarTime, gap_to_bar_time: p.gapToBarTime,
@@ -116,6 +118,11 @@ export const historyRow = (r: PaperResult, userId: string) => {
     same_bar_ambiguous: r.sameBarAmbiguous,
     excluded_from_stats: r.excludedFromStats, exclusion_reason: r.exclusionReason,
     gap_from_bar_time: p.gapFromBarTime, gap_to_bar_time: p.gapToBarTime,
+    // Carried over from the position: a closed row cannot otherwise be
+    // attributed to its zone or its regime.
+    ipo_candle_time: p.ipoCandleTime, volatility_bucket: p.volatilityBucket,
+    zone_entry_ordinal: p.zoneEntryOrdinal,
+    zone_previous_exit_time: p.zonePreviousExitTime,
   };
 };
 
@@ -172,6 +179,8 @@ export function rowToPosition(r: Record<string, unknown> | null): PaperPosition 
     referenceBalanceAtEntry: Number(r.reference_balance_at_entry),
     nominalRiskPct: Number(r.nominal_risk_pct), nominalRiskUsd: Number(r.nominal_risk_usd),
     ipoCandleTime: r.ipo_candle_time as string, volatilityBucket: r.volatility_bucket as string,
+    zoneEntryOrdinal: Number(r.zone_entry_ordinal ?? 1),
+    zonePreviousExitTime: (r.zone_previous_exit_time as string) ?? null,
     executionMode: "paper", status: r.status as PaperPosition["status"],
     maeR: Number(r.mae_r), mfeR: Number(r.mfe_r),
     lastManagedBarTime: r.last_managed_bar_time as string,

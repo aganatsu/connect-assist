@@ -36,7 +36,7 @@ import {
   eventId, setupId, intentId,
   DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
   type AccountDecision, type PaperIntent, type PaperPosition,
-  type PaperResult, type SizingConfig,
+  type PaperResult, type SizingConfig, type ZoneTelemetry,
 } from "./ipoPaperContract.ts";
 import type { Candle } from "./smcAnalysis.ts";
 import type { EngineConfig, LiveTrade } from "./ipoLiveEngine.ts";
@@ -160,6 +160,26 @@ function ev(
     eventType: type, symbol, barTime,
     setupId: ids.setupId ?? null, intentId: ids.intentId ?? null,
     strategyDecision, accountDecision, reasonCodes, payload,
+  };
+}
+
+/**
+ * How many times this IPO candle has already been traded, and when it last
+ * exited.
+ *
+ * Derived from the engine's own trade list rather than from the paper tables,
+ * so it is a property of the strategy rather than of what happened to be
+ * recorded. Trades are matched on `ipoIndex` — the candle — which is exactly
+ * the zone identity `setupId` is built from.
+ */
+function zoneTelemetry(t: LiveTrade, engine: IncrementalEngine, bars: Candle[]): ZoneTelemetry {
+  const prior = engine.trades
+    .filter((x) => x.ipoIndex === t.ipoIndex && x.entryIndex < t.entryIndex)
+    .sort((a, b) => a.entryIndex - b.entryIndex);
+  const last = prior[prior.length - 1];
+  return {
+    zoneEntryOrdinal: prior.length + 1,
+    zonePreviousExitTime: last?.exitIndex != null ? bars[last.exitIndex].datetime : null,
   };
 }
 
@@ -353,12 +373,15 @@ export function runPaper(input: RunnerInput): RunnerPlan {
 
   for (const t of fresh) {
     if (live) break;                      // one position per instrument
-    const intent: PaperIntent = buildIntent(t, closedBars, cfg.timeframe, accountDecision);
+    const intent: PaperIntent = buildIntent(t, closedBars, cfg.timeframe, accountDecision,
+      zoneTelemetry(t, engine, closedBars));
     events.push(ev("INTENT_CREATED", intent.symbol, intent.barTime,
       intent.strategyDecision, intent.accountDecision, intent.reasonCodes, {
         entry: intent.entryPrice, target: intent.targetPrice,
         s2: intent.s2InvalidationLevel, costR: intent.costR,
         volatilityBucket: intent.volatilityBucket,
+        zoneEntryOrdinal: intent.zoneEntryOrdinal,
+        zonePreviousExitTime: intent.zonePreviousExitTime,
       }, intent));
 
     if (intent.execution === "BLOCKED") {

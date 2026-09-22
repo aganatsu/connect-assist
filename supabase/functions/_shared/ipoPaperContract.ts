@@ -69,7 +69,40 @@ export type ExecutionBlockReason =
 export type PositionStatus = "open" | "data_gap_suspended";
 export type ExitReason = "TARGET_2R" | "S2_CLOSE_INVALIDATION" | "DATA_GAP_ABORTED";
 
-export interface PaperPosition {
+/**
+ * Repeated-zone exposure telemetry. OBSERVATION ONLY.
+ *
+ * The frozen sequencing rule is `touchIndex > previousExitIndex`, so a still
+ * valid IPO may be entered again once the previous trade on it has exited. That
+ * is deliberate and is NOT changed here: no cooldown, no one-trade-per-zone, no
+ * retirement. Altering it would be a strategy change requiring its own research
+ * and version.
+ *
+ * What was missing is the ability to MEASURE it afterwards. A fixture run showed
+ * four consecutive fills on one zone at an identical entry, target and stop, and
+ * nothing recorded made that visible in the data. These fields make questions
+ * like "win rate by re-entry ordinal" and "worst cumulative loss from one IPO"
+ * answerable without re-deriving them from bars.
+ *
+ * NOTHING HERE FEEDS A DECISION. A test asserts the ordinal cannot reach the
+ * execution verdict.
+ */
+export interface ZoneTelemetry {
+  /**
+   * 1 for the first trade on this IPO candle, 2 for the next, and so on.
+   *
+   * Counted over the ENGINE's trade list, which at activation already contains
+   * the history the bootstrap replayed. So an ordinal of 3 on the first paper
+   * trade means the engine had already taken this zone twice before paper
+   * trading began — which is the honest answer to "how often has this zone been
+   * traded", and is not the same as "how many paper rows exist for it".
+   */
+  zoneEntryOrdinal: number;
+  /** Exit time of the previous trade on this same zone, or null for the first. */
+  zonePreviousExitTime: string | null;
+}
+
+export interface PaperPosition extends ZoneTelemetry {
   strategyId: string;
   strategyVersion: string;
   setupId: string;
@@ -145,7 +178,7 @@ export const eventId = (type: string, ref: string, barTime: string) =>
 
 // ─── intent ──────────────────────────────────────────────────────────────────
 
-export interface PaperIntent {
+export interface PaperIntent extends ZoneTelemetry {
   setupId: string;
   intentId: string;
   symbol: string;
@@ -177,6 +210,7 @@ export interface PaperIntent {
 export function buildIntent(
   trade: LiveTrade, bars: Candle[], timeframe: string,
   accountDecision: AccountDecision = "UNAVAILABLE",
+  zone: ZoneTelemetry = { zoneEntryOrdinal: 1, zonePreviousExitTime: null },
 ): PaperIntent {
   const barTime = bars[trade.entryIndex].datetime;
   const ipoCandleTime = bars[trade.ipoIndex].datetime;
@@ -208,6 +242,9 @@ export function buildIntent(
     // The signal is VALID regardless of the execution verdict.
     strategyDecision: "WOULD_ENTER",
     accountDecision, execution, blockReason, reasonCodes,
+    // Recorded, never consulted: nothing above reads these.
+    zoneEntryOrdinal: zone.zoneEntryOrdinal,
+    zonePreviousExitTime: zone.zonePreviousExitTime,
   };
 }
 
@@ -225,6 +262,8 @@ export function openPosition(
     nominalRiskPct: sizing.nominalRiskPct,
     nominalRiskUsd: nominalRiskUsd(sizing),
     ipoCandleTime: intent.ipoCandleTime, volatilityBucket: intent.volatilityBucket,
+    zoneEntryOrdinal: intent.zoneEntryOrdinal,
+    zonePreviousExitTime: intent.zonePreviousExitTime,
     executionMode: "paper", status: "open",
     maeR: 0, mfeR: 0, lastManagedBarTime: intent.barTime,
     gapFromBarTime: null, gapToBarTime: null, gapReason: null,

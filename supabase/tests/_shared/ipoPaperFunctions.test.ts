@@ -436,3 +436,41 @@ Deno.test("the run reports whether it actually wrote", async () => {
   assert(c.includes("out.engineStateWritten"), "no engine write flag");
   assert(c.includes("out.paperStateWritten"), "no cursor write flag");
 });
+
+Deno.test("the telemetry apply pack embeds its migration verbatim", async () => {
+  const pack = await Deno.readTextFile("supabase/queries/ipo_apply_zone_telemetry.sql");
+  const body = (await Deno.readTextFile(
+    "supabase/migrations/20260922020000_ipo_zone_telemetry.sql")).trimEnd();
+  assert(pack.includes(body), "the apply pack has drifted from the migration");
+  assert(pack.includes("values ('20260922020000')"), "no bookkeeping insert");
+  const tx = pack.slice(pack.indexOf("begin;"), pack.indexOf("commit;"));
+  assert(tx.includes("schema_migrations"), "bookkeeping is outside the transaction");
+});
+
+Deno.test("cron schedules the paper runner and nothing else", async () => {
+  const raw = await Deno.readTextFile("supabase/cron/ipo_paper_runner_cron.sql");
+  // Comments explain what is deliberately NOT scheduled, so only statements
+  // are searched — otherwise the file fails for documenting its own exclusions.
+  const sql = raw.split("\n").filter((l) => !l.trimStart().startsWith("--")).join("\n");
+  const scheduled = [...sql.matchAll(/cron\.schedule\('([^']+)'/g)].map((m) => m[1]);
+  assertEquals(scheduled, ["ipo-paper-runner-15min"]);
+  for (const f of ["ipo-observation", "ipo-paper-state", "bootstrap"]) {
+    assert(!new RegExp(`functions/v1/${f}`).test(sql), `cron calls ${f}`);
+  }
+  assert(!/broker/i.test(sql), "a scheduled statement reaches a broker path");
+  assert(sql.includes("'*/15 * * * *'"), "cadence changed without updating the test");
+});
+
+Deno.test("engine state is written with a far-future expiry", async () => {
+  // kv-cache-cleanup-hourly runs `DELETE FROM kv_cache WHERE expires_at < now()`.
+  // Durable runtime state living in a table whose contract is "cache with
+  // expiry" is only safe while every writer sets a long one. A short expiry
+  // would not corrupt anything — the runner fails closed with
+  // BOOTSTRAP_REQUIRED — but it would silently halt paper trading.
+  for (const f of ["supabase/functions/ipo-paper-runner/index.ts",
+                   "local-runner/ipo-bootstrap.ts"]) {
+    const src = await Deno.readTextFile(f);
+    assert(src.includes("365 * 24 * 3_600_000"),
+      `${f} does not set a one-year expiry on the state row`);
+  }
+});
