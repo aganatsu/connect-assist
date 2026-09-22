@@ -11,6 +11,7 @@
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { IncrementalEngine } from "../../functions/_shared/ipoIncrementalEngine.ts";
+import { snapshotOf } from "../../functions/_shared/ipoObservation.ts";
 import {
   IPO_INSTRUMENTS, HISTORY_BARS, INCREMENTAL_BARS, engineStateKey,
   engineConfig, exportMeta, instrumentBySymbol,
@@ -146,22 +147,23 @@ Deno.test("no Edge function can bootstrap", async () => {
   }
 });
 
-Deno.test("ipo-observation returns BOOTSTRAP_REQUIRED and fetches nothing first", async () => {
+Deno.test("ipo-observation returns BOOTSTRAP_REQUIRED without fetching anything", async () => {
   const code = (await Deno.readTextFile("supabase/functions/ipo-observation/index.ts"))
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
   assert(code.includes('"BOOTSTRAP_REQUIRED"'), "no fail-closed status");
+  // It has no fetch at all now, so there is no ordering left to get wrong.
+  assert(!code.includes("fetchCandlesWithFallback"), "the read surface fetches");
+});
 
-  // Order matters as much as presence: a fetch before the restore check would
-  // spend provider credits on an instrument that cannot be served anyway.
+Deno.test("the runtime owner restores BEFORE it spends a provider request", async () => {
+  // Ordering matters where a fetch still exists: a fetch before the restore
+  // check would spend metered credits on an instrument that cannot be served.
+  const code = (await Deno.readTextFile("supabase/functions/ipo-paper-runner/index.ts"))
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
   const restoreAt = code.indexOf("restoreState(");
   const fetchAt = code.indexOf("fetchCandlesWithFallback(");
   assert(restoreAt > 0 && fetchAt > 0);
   assert(restoreAt < fetchAt, "candles are fetched before state is restored");
-
-  // And the bail-out must sit between them.
-  const bail = code.indexOf('out.status = "BOOTSTRAP_REQUIRED"');
-  assert(bail > restoreAt && bail < fetchAt,
-    "the fail-closed branch does not short-circuit the fetch");
 });
 
 Deno.test("the bootstrap runner touches no SMC table and no broker", async () => {
@@ -178,4 +180,100 @@ Deno.test("the bootstrap runner touches no SMC table and no broker", async () =>
   assertEquals([...new Set(tables)], ["kv_cache"]);
   assert(src.includes("persistSymbolOverrides: false"),
     "the bootstrap must fetch read-only too");
+});
+
+// ── single-writer runtime ownership ──────────────────────────────────────────
+
+/**
+ * Exactly one normal writer.
+ *
+ * ipo-observation used to advance and persist state, which made opening the UI
+ * tab a strategy action: a poll decided when the engine moved, two tabs could
+ * race the same instrument, and the paper runner could find state a browser had
+ * already consumed. Advancement is not a rendering concern.
+ */
+const WRITERS = ["supabase/functions/ipo-paper-runner/index.ts", "local-runner/ipo-bootstrap.ts"];
+const READERS = ["supabase/functions/ipo-observation/index.ts",
+                 "supabase/functions/ipo-paper-state/index.ts"];
+
+const bare = async (f: string) =>
+  (await Deno.readTextFile(f)).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+
+Deno.test("only the paper runner and the local bootstrap write engine state", async () => {
+  for (const f of WRITERS) {
+    const c = await bare(f);
+    assert(c.includes("engineStateKey"), `${f} should be a writer`);
+    assert(/\.upsert\(/.test(c), `${f} does not persist anything`);
+  }
+  for (const f of READERS) {
+    const c = await bare(f);
+    for (const verb of [".upsert(", ".insert(", ".update(", ".delete("]) {
+      assert(!c.includes(verb), `${f} performs ${verb} — it must be read-only`);
+    }
+  }
+});
+
+Deno.test("ipo-observation cannot advance the engine", async () => {
+  const c = await bare("supabase/functions/ipo-observation/index.ts");
+  // Feeding a bar IS advancement, whoever calls it.
+  assert(!c.includes(".feed("), "observation feeds the engine");
+  assert(!c.includes("fetchCandlesWithFallback"), "observation fetches bars");
+  assert(!c.includes("continuityCheck"), "observation is deciding what to append");
+  assert(!c.includes("exportState"), "observation is producing new state");
+  assert(!c.includes("serializeState"), "observation is serialising state");
+  // It may only read one key and render.
+  assert(c.includes("restoreState"), "observation must still restore to render");
+  assert(c.includes("snapshotOf"), "observation must still render");
+});
+
+Deno.test("observation is a pure function of persisted state", () => {
+  // Same state in, same snapshot out — no clock, no fetch, nothing accumulated.
+  // This is what makes repeated polling safe and repeatable.
+  const cfg = instrumentBySymbol("EUR/USD")!;
+  const payload = bootstrap("EUR/USD", market(400));
+  const render = () => {
+    const r = restoreState(payload, engineConfig(cfg), exportMeta(cfg));
+    assert(r.ok);
+    return JSON.stringify(snapshotOf(r.engine, engineConfig(cfg)));
+  };
+  assertEquals(render(), render(), "two reads of unchanged state differ");
+});
+
+Deno.test("rendering does not mutate the state it rendered from", () => {
+  // restoreState copies; snapshotOf reads. Re-exporting after a render must
+  // reproduce the original bytes, or a reader has become a writer by accident.
+  const cfg = instrumentBySymbol("EUR/USD")!;
+  const ec = engineConfig(cfg), meta = exportMeta(cfg);
+  const payload = bootstrap("EUR/USD", market(400));
+  const r = restoreState(payload, ec, meta);
+  assert(r.ok);
+  snapshotOf(r.engine, ec);
+  assertEquals(serializeState(exportState(r.engine, ec, meta)), payload);
+});
+
+Deno.test("the paper runner is the runtime owner and still fails closed", async () => {
+  const c = await bare("supabase/functions/ipo-paper-runner/index.ts");
+  assert(c.includes("restoreState("), "it must restore");
+  assert(c.includes("continuityCheck("), "it must decide what is genuinely new");
+  assert(c.includes(".feed("), "it must advance the engine");
+  assert(c.includes("exportState("), "it must persist the advance");
+  assert(c.includes('"BOOTSTRAP_REQUIRED"'), "it must fail closed");
+  assert(!c.includes("new IncrementalEngine("), "it must never rebuild");
+});
+
+Deno.test("the runtime owner preserves provider timestamps exactly", () => {
+  // Schema 2. The paper runner's identities are content-addressed over these
+  // strings, so a re-rendered timestamp would mint a different intentId for the
+  // same trade.
+  const cfg = instrumentBySymbol("EUR/USD")!;
+  const bars = Array.from({ length: 300 }, (_, i) => ({
+    datetime: new Date(Date.UTC(2026, 0, 1) + i * 3_600_000).toISOString().replace(".000Z", "Z"),
+    open: 100 + i * 0.01, high: 100.5 + i * 0.01, low: 99.5 + i * 0.01, close: 100.2 + i * 0.01,
+  }));
+  const payload = bootstrap("EUR/USD", bars as Candle[]);
+  const st = parseState(payload)!;
+  assertEquals(st.identity.schemaVersion, RUNTIME_STATE_SCHEMA_VERSION);
+  assertEquals(st.lastProcessedBarTime, bars[bars.length - 1].datetime);
+  assert(!st.lastProcessedBarTime.includes(".000"), "the timestamp was normalised");
+  assertEquals(st.bars.t[0], bars[0].datetime);
 });

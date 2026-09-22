@@ -232,3 +232,36 @@ redeployed function: HTTP 200 in 1.56 s, all three instruments
 The Phase C *observation model* — what a row means, `NOT_TRACKED` for untracked
 states, closed-bars-only — is unaffected. What changed is where the engine is
 built.
+
+---
+
+## CORRECTION 3, 2026-09-21 (D.2) — single-writer runtime ownership
+
+The warm design in Correction 2 had `ipo-observation` restore state, fetch newly
+closed bars, advance the engine and persist. That worked, and it was still
+wrong: **it made opening the UI tab a strategy action.** A browser poll decided
+when the engine moved, two tabs could race the same instrument, and the paper
+runner could find state a render had already consumed.
+
+Runtime ownership is now explicit and singular:
+
+| actor | may |
+|---|---|
+| `local-runner/ipo-bootstrap.ts` | cold start only — build state from 1,200 bars |
+| `ipo-paper-runner` | the sole runtime owner — fetch new closed bars, advance, persist |
+| `ipo-observation` | read that state and render it. Nothing else. |
+
+Observation therefore shows exactly what the paper runner last acted on. A
+snapshot a few bars behind is a true statement about the strategy; a snapshot the
+UI advanced itself would be a different strategy.
+
+**A second benefit fell out of it.** Removing the fetch removed `candleSource`
+from observation's import closure, and with it the transitive
+`broker_connections.symbol_overrides` write disclosed in Correction 1. That
+exception is now eliminated rather than guarded — the closure has **zero**
+reachable writes. The opt-out moved with the fetch to the paper runner, where a
+test now checks whoever holds the fetch rather than a named function.
+
+Verified on the redeployed function: five authenticated calls, 0.60–1.21 s, all
+returning byte-identical snapshots, and the three `ipo_engine_state` rows
+unchanged by SHA-256 and by `updated_at`.

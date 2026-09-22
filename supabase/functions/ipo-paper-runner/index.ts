@@ -260,6 +260,11 @@ export async function handler(req: Request): Promise<Response> {
         if (restored.ok) {
           const { candles } = await fetchCandlesWithFallback({
             symbol: cfg.instrument, interval: cfg.timeframe, limit: INCREMENTAL_BARS,
+            // READ-ONLY. candleSource otherwise writes a newly discovered symbol
+            // mapping back to broker_connections, an SMC-owned table. This
+            // function inherited the fetch from ipo-observation when runtime
+            // ownership moved, and the opt-out has to move with it.
+            persistSymbolOverrides: false,
           } as Parameters<typeof fetchCandlesWithFallback>[0]);
           out.barsFetched = candles?.length ?? 0;
           const page = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);

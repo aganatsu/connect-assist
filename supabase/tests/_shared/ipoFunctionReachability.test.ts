@@ -69,12 +69,10 @@ Deno.test("no IPO function can write an SMC TRADING table at any depth", async (
   }
 });
 
-Deno.test("ipo-observation's closure writes exactly kv_cache, plus one guarded exception", async () => {
-  // Stated precisely. A text scan of the import closure cannot prove call-path
-  // unreachability — `candleSource` still CONTAINS the broker_connections write,
-  // because SMC needs it. So this enumerates every write in the closure and the
-  // next test proves the one exception is reachable only through a guard that
-  // ipo-observation closes.
+Deno.test("ipo-observation's closure can write NOTHING", async () => {
+  // It was kv_cache plus a guarded broker_connections exception. Both are gone:
+  // single-writer ownership removed the fetch, which removed candleSource from
+  // the closure entirely. The exception is eliminated rather than guarded.
   const writes = new Set<string>();
   for (const f of await closure("supabase/functions/ipo-observation/index.ts")) {
     const code = strip(await Deno.readTextFile(f));
@@ -82,9 +80,16 @@ Deno.test("ipo-observation's closure writes exactly kv_cache, plus one guarded e
       writes.add(m[1]);
     }
   }
-  assertEquals([...writes].sort(), ["broker_connections", "kv_cache"]);
-  assertEquals([...writes].filter((w) => w !== "broker_connections"), ["kv_cache"],
-    "the unguarded write set must be kv_cache alone");
+  assertEquals([...writes], [], "the read surface can reach a write");
+});
+
+Deno.test("ipo-observation cannot fetch a candle at any depth", async () => {
+  for (const f of await closure("supabase/functions/ipo-observation/index.ts")) {
+    const code = strip(await Deno.readTextFile(f));
+    assert(!code.includes("fetchCandlesWithFallback"),
+      `the read surface reaches the candle source via ${f}`);
+    assert(!code.includes("candleSource"), `candleSource is back in the closure via ${f}`);
+  }
 });
 
 Deno.test("the broker_connections write sits behind exactly one guarded call", async () => {
@@ -122,17 +127,22 @@ Deno.test("the default is persist — every existing SMC caller is unaffected", 
     const src = await Deno.readTextFile(`supabase/functions/${e.name}/index.ts`);
     if (src.includes("persistSymbolOverrides")) setters.push(e.name);
   }
-  assertEquals(setters, ["ipo-observation"]);
+  // The runtime owner is the only fetcher, so it is the only opt-out setter.
+  assertEquals(setters, ["ipo-paper-runner"]);
 });
 
-Deno.test("ipo-observation opts out at EVERY candle fetch it makes", async () => {
-  const src = await Deno.readTextFile("supabase/functions/ipo-observation/index.ts");
-  const code = strip(src);
-  const calls = [...code.matchAll(/fetchCandlesWithFallback\(\{[\s\S]*?\}/g)];
-  assert(calls.length > 0, "the function must fetch candles");
-  for (const c of calls) {
-    assert(c[0].includes("persistSymbolOverrides: false"),
-      `a fetch without the opt-out: ${c[0].slice(0, 120)}`);
+Deno.test("every candle fetch in the IPO stack opts out of the override write", async () => {
+  // The fetch moved from observation to the paper runner when runtime ownership
+  // was corrected. The opt-out has to move with it, so this checks whoever has
+  // the fetch rather than a named function.
+  for (const f of ["supabase/functions/ipo-paper-runner/index.ts",
+                   "supabase/functions/ipo-observation/index.ts",
+                   "local-runner/ipo-bootstrap.ts"]) {
+    const code = strip(await Deno.readTextFile(f));
+    for (const c of code.matchAll(/fetchCandlesWithFallback\(\{[\s\S]*?\}/g)) {
+      assert(c[0].includes("persistSymbolOverrides: false"),
+        `${f}: a fetch without the opt-out: ${c[0].slice(0, 120)}`);
+    }
   }
 });
 
