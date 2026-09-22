@@ -186,8 +186,8 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
 // no signal that it was three currency regimes out of date.
 //
 // Both are gone. `getQuoteToUSDRate` is imported from the shared module, and
-// the rate map is built through the same LIVE → CACHED_STALE → STATIC_FALLBACK
-// ladder `bot-scanner` uses, sharing its last-known-good cache row.
+// the rate map is built through the same live → cached → static ladder
+// `bot-scanner` uses, sharing its last-known-good cache row.
 //
 // WHAT CONVERSION TOUCHES HERE. Only `calcPnl` — display P&L, partial closes,
 // SL/TP closes, manual close and kill-switch closes. It does NOT touch lot
@@ -282,7 +282,11 @@ async function ensureRates(
     }));
   }
 
-  const resolved = resolveRates(required, live, cache, Date.now());
+  // A poll that deliberately did not fetch attempted nothing, so its cache
+  // reads report CACHED_BY_DESIGN and leave `degraded` false. Without this the
+  // healthiest possible status poll warns on every single request.
+  const resolved = resolveRates(required, live, cache, Date.now(),
+    { attempted: allowFetch ? required : [] });
   // ASSIGNED, not merged. A warm isolate keeps `_rateMap` between invocations,
   // and carrying a rate forward that this resolve did not produce would make
   // the provenance a lie — it would report STATIC_FALLBACK while `calcPnl`
@@ -1490,10 +1494,12 @@ Deno.serve(async (req) => {
         marginUsed: 0, freeMargin: balance + unrealizedPnl,
         marginLevel: 0, uptime: 0,
         // Where each FX conversion rate came from. Every P&L figure above is
-        // denominated through these, so a CACHED_STALE or STATIC_FALLBACK entry
-        // is the difference between a real number and an approximate one, and
-        // the caller should be able to see which it got. An all-USD-quoted book
-        // reports an empty list and `degraded: false` — it needs no rate.
+        // denominated through these, so the caller should be able to see which
+        // rung each rate came from. CACHED_BY_DESIGN is the healthy steady
+        // state of this endpoint — it does not fetch — while
+        // CACHED_AFTER_FETCH_FAILURE and STATIC_FALLBACK set `degraded` and
+        // mean a provider problem. An all-USD-quoted book reports an empty list
+        // and `degraded: false`; it needs no rate at all.
         rateMapHealth: { degraded: _rateDegraded, pairs: _rateProvenance },
         strategy: {
           name: "SMC Default",

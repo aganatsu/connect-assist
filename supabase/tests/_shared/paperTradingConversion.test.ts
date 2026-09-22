@@ -132,7 +132,7 @@ Deno.test("cached fallback uses the cached real rate, not a constant", () => {
   const r = resolveRates(["USD/JPY"], {}, cache, NOW);
 
   assertEquals(r.rateMap["USD/JPY"], cached);
-  assertEquals(r.provenance[0].source, "CACHED_STALE");
+  assertEquals(r.provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
   assertEquals(r.provenance[0].ageMs, 6 * MIN);
   // And the resulting conversion is the cached rate used live, to the bit.
   assertEquals(getQuoteToUSDRate("USD/JPY", r.rateMap),
@@ -144,7 +144,7 @@ Deno.test("cached fallback uses the cached real rate, not a constant", () => {
 Deno.test("static fallback only when there is neither a live nor a cached rate", () => {
   assertEquals(resolveRates(["USD/JPY"], { "USD/JPY": 157.4 }, {}, NOW).provenance[0].source, "LIVE");
   assertEquals(resolveRates(["USD/JPY"], {}, { "USD/JPY": { rate: 157.3, at: ago(MIN) } }, NOW)
-    .provenance[0].source, "CACHED_STALE");
+    .provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
 
   const bare = resolveRates(["USD/JPY"], {}, {}, NOW);
   assertEquals(bare.provenance[0].source, "STATIC_FALLBACK");
@@ -257,4 +257,32 @@ Deno.test("the service-role client is confined to the rate-cache key", () => {
   assertEquals([...new Set(uses)], ["kv_cache"], "the service-role client reaches another table");
   assert(CODE.includes("const key = rateCacheKey(userId, \"smc\")"), "the cache key is not derived from the user id");
   assert(!/rateCacheKey\([^)]*payload/.test(CODE), "the cache key is built from request input");
+});
+
+// ── 8. a healthy status poll must not report itself as degraded ─────────────
+
+Deno.test("a plain status poll reads the cache by design and is not degraded", () => {
+  // The steady state of this endpoint: it does not fetch, so it reaches the
+  // cache every time. That is health, not degradation — and before the split
+  // it warned on every single request, which made the warning worthless.
+  const cache: RateCache = { "USD/JPY": { rate: 157.5017, at: ago(1 * MIN) } };
+  const poll = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: [] });
+  assertEquals(poll.provenance[0].source, "CACHED_BY_DESIGN");
+  assertEquals(poll.degraded, false);
+
+  // An engine poll that fetched and got nothing reports the problem instead.
+  const failed = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: ["USD/JPY"] });
+  assertEquals(failed.provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
+  assertEquals(failed.degraded, true);
+
+  // Identical conversion either way — this is a reporting change only.
+  assertEquals(getQuoteToUSDRate("USD/JPY", poll.rateMap), getQuoteToUSDRate("USD/JPY", failed.rateMap));
+});
+
+Deno.test("the attempted set follows allowFetch, not the other way round", () => {
+  assert(CODE.includes("attempted: allowFetch ? required : []"),
+    "a status poll would report a provider failure it never had");
+  // The fetch condition itself must be untouched: still gated on allowFetch.
+  assert(/if \(allowFetch\) \{[\s\S]{0,400}?fetchLivePrice\(pair\)/.test(CODE),
+    "the fetch gate changed — API-call behaviour must be identical");
 });

@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   requiredRatePairs, resolveRates, parseRateCache, describeProvenance, rateCacheKey,
-  type RateCache,
+  isDegradedSource, type RateCache,
 } from "../../functions/_shared/rateMapPolicy.ts";
 import { getQuoteToUSDRate, QUOTE_CONVERSION } from "../../functions/_shared/smcAnalysis.ts";
 import { computePositionSize } from "../../functions/_shared/unifiedPositionSizing.ts";
@@ -126,7 +126,7 @@ Deno.test("a pair that fell back does not overwrite the cache with the stale val
   assertEquals(r.nextCache["USD/JPY"], { rate: 157.3, at }, "the age was reset by a fallback");
 });
 
-// ── 4. CACHED_STALE: same calculation as using that rate live ────────────────
+// ── 4. the cached rungs: same calculation as using that rate live ───────────
 
 Deno.test("cached fallback produces exactly the calculation of that rate used live", () => {
   const cached = 157.3;
@@ -148,7 +148,7 @@ Deno.test("falling back is flagged degraded and carries the rate's age", () => {
     { "USD/JPY": { rate: 157.3, at: ago(47 * MIN) } }, NOW);
   assertEquals(r.degraded, true);
   const jpy = r.provenance.find((p) => p.pair === "USD/JPY")!;
-  assertEquals(jpy.source, "CACHED_STALE");
+  assertEquals(jpy.source, "CACHED_AFTER_FETCH_FAILURE");
   assertEquals(jpy.ageMs, 47 * MIN);
   assertEquals(jpy.rate, 157.3);
   assertEquals(r.provenance.find((p) => p.pair === "USD/CAD")!.source, "LIVE");
@@ -160,7 +160,7 @@ Deno.test("a cached rate is never age-capped out of use", () => {
   const r = resolveRates(["USD/JPY"], {},
     { "USD/JPY": { rate: 150.0, at: ago(365 * 24 * 60 * MIN) } }, NOW);
   assertEquals(r.rateMap["USD/JPY"], 150.0);
-  assertEquals(r.provenance[0].source, "CACHED_STALE");
+  assertEquals(r.provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
 });
 
 Deno.test("the cached rate beats the static constant by two orders of magnitude", () => {
@@ -178,7 +178,7 @@ Deno.test("the cached rate beats the static constant by two orders of magnitude"
 
 Deno.test("static fallback occurs ONLY when no prior cached rate exists", () => {
   const withCache = resolveRates(["USD/JPY"], {}, { "USD/JPY": { rate: 157.3, at: ago(MIN) } }, NOW);
-  assertEquals(withCache.provenance[0].source, "CACHED_STALE");
+  assertEquals(withCache.provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
 
   const without = resolveRates(["USD/JPY"], {}, {}, NOW);
   assertEquals(without.provenance[0].source, "STATIC_FALLBACK");
@@ -281,5 +281,84 @@ Deno.test("provenance renders one readable line per pair", () => {
     { "USD/CAD": 1.40727 },
     { "USD/CHF": { rate: 0.82, at: ago(90 * MIN) } }, NOW);
   assertEquals(describeProvenance(r.provenance),
-    "USD/CAD=LIVE USD/CHF=CACHED(90m) USD/JPY=STATIC");
+    "USD/CAD=LIVE USD/CHF=CACHED_FETCH_FAILED(90m) USD/JPY=STATIC");
+});
+
+// ── 7. health semantics: not-live is not the same as unhealthy ──────────────
+
+Deno.test("a cache read with no fetch attempted is CACHED_BY_DESIGN and NOT degraded", () => {
+  const cache: RateCache = { "USD/JPY": { rate: 157.3, at: ago(2 * MIN) } };
+  const r = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: [] });
+  assertEquals(r.provenance[0].source, "CACHED_BY_DESIGN");
+  assertEquals(r.provenance[0].ageMs, 2 * MIN);
+  assertEquals(r.degraded, false, "a healthy deliberate cache read must not warn");
+  assertEquals(r.rateMap["USD/JPY"], 157.3, "the rate itself must be unchanged");
+});
+
+Deno.test("the same cache read AFTER a failed fetch is degraded", () => {
+  const cache: RateCache = { "USD/JPY": { rate: 157.3, at: ago(2 * MIN) } };
+  const byDesign = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: [] });
+  const afterFail = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: ["USD/JPY"] });
+
+  assertEquals(afterFail.provenance[0].source, "CACHED_AFTER_FETCH_FAILURE");
+  assertEquals(afterFail.degraded, true);
+  // Same rate, same map, same arithmetic — only the diagnosis differs.
+  assertEquals(afterFail.rateMap, byDesign.rateMap);
+  assertEquals(afterFail.provenance[0].rate, byDesign.provenance[0].rate);
+  assertEquals(afterFail.provenance[0].ageMs, byDesign.provenance[0].ageMs);
+});
+
+Deno.test("omitting `attempted` preserves the old semantics exactly", () => {
+  const cache: RateCache = { "USD/JPY": { rate: 157.3, at: ago(MIN) } };
+  const implicit = resolveRates(["USD/JPY"], {}, cache, NOW);
+  const explicit = resolveRates(["USD/JPY"], {}, cache, NOW, { attempted: ["USD/JPY"] });
+  assertEquals(implicit, explicit, "the default stopped meaning all-attempted");
+});
+
+Deno.test("degraded is true for exactly the two unhealthy sources", () => {
+  assertEquals(isDegradedSource("LIVE"), false);
+  assertEquals(isDegradedSource("CACHED_BY_DESIGN"), false);
+  assertEquals(isDegradedSource("CACHED_AFTER_FETCH_FAILURE"), true);
+  assertEquals(isDegradedSource("STATIC_FALLBACK"), true);
+
+  // And the aggregate agrees with the per-pair verdict, always.
+  const cache: RateCache = { "USD/CHF": { rate: 0.82, at: ago(MIN) } };
+  for (const attempted of [[], ["USD/CAD"], ["USD/CAD", "USD/CHF", "USD/JPY"]]) {
+    const r = resolveRates(["USD/CAD", "USD/CHF", "USD/JPY"], { "USD/CAD": 1.4 }, cache, NOW, { attempted });
+    assertEquals(r.degraded, r.provenance.some((x) => isDegradedSource(x.source)),
+      `aggregate disagrees with per-pair for attempted=${JSON.stringify(attempted)}`);
+  }
+});
+
+Deno.test("STATIC_FALLBACK is degraded whether or not a fetch was attempted", () => {
+  // Nothing observed, ever. Not asking does not make that healthy.
+  for (const attempted of [[], ["USD/JPY"]]) {
+    const r = resolveRates(["USD/JPY"], {}, {}, NOW, { attempted });
+    assertEquals(r.provenance[0].source, "STATIC_FALLBACK");
+    assertEquals(r.degraded, true);
+  }
+});
+
+Deno.test("a LIVE rate is never degraded, whatever else happened", () => {
+  const r = resolveRates(["USD/JPY"], { "USD/JPY": 157.4 }, {}, NOW, { attempted: ["USD/JPY"] });
+  assertEquals(r.provenance[0].source, "LIVE");
+  assertEquals(r.degraded, false);
+});
+
+Deno.test("the two cached rungs are distinguishable in one line of log", () => {
+  const cache: RateCache = { "USD/CHF": { rate: 0.82, at: ago(90 * MIN) }, "USD/JPY": { rate: 157.3, at: ago(3 * MIN) } };
+  const r = resolveRates(["USD/CAD", "USD/CHF", "USD/JPY"], { "USD/CAD": 1.40727 }, cache, NOW,
+    { attempted: ["USD/CAD", "USD/CHF"] });
+  assertEquals(describeProvenance(r.provenance),
+    "USD/CAD=LIVE USD/CHF=CACHED_FETCH_FAILED(90m) USD/JPY=CACHED(3m)");
+});
+
+Deno.test("the callers declare what they attempted", async () => {
+  const scanner = await Deno.readTextFile("supabase/functions/bot-scanner/index.ts");
+  assert(scanner.includes("{ attempted: RATE_PAIRS }"),
+    "the scanner no longer declares that it fetches every required pair");
+
+  const paper = await Deno.readTextFile("supabase/functions/paper-trading/index.ts");
+  assert(paper.includes("attempted: allowFetch ? required : []"),
+    "paper-trading no longer distinguishes a deliberate cache read from a failure");
 });

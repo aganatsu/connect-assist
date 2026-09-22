@@ -2989,7 +2989,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
-    const resolved = resolveRates(RATE_PAIRS, live, rateCache, Date.now());
+    // `attempted` is every required pair: this path always fetches. So a cache
+    // read here means a fetch failed, and is reported as such.
+    const resolved = resolveRates(RATE_PAIRS, live, rateCache, Date.now(), { attempted: RATE_PAIRS });
     rateMap = resolved.rateMap;
     rateProvenance = resolved.provenance;
     rateDegraded = resolved.degraded;
@@ -8630,10 +8632,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
-      // Which source each FX conversion rate came from this cycle. A
-      // CACHED_STALE or STATIC_FALLBACK entry means sizing used something other
-      // than a rate observed this cycle, and that must be visible rather than
-      // inferred from an absence.
+      // Which source each FX conversion rate came from this cycle. Anything
+      // other than LIVE means sizing used a rate this cycle did not observe,
+      // and that must be visible rather than inferred from an absence. This
+      // path always fetches, so CACHED_BY_DESIGN cannot occur here.
       rateMapHealth: { degraded: rateDegraded, pairs: rateProvenance },
       // Credit budget health. `unenforced` non-zero means the shared budget
       // failed open and we are back to per-isolate limiting; `gaveUp` counts

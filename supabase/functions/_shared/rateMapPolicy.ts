@@ -17,8 +17,23 @@
  * ORDER OF PREFERENCE, and nothing else is allowed to jump the queue:
  *
  *   LIVE            a valid rate fetched this cycle
- *   CACHED_STALE    the most recent rate previously observed, with its age
+ *   cached          the most recent rate previously observed, with its age
  *   STATIC_FALLBACK no rate has EVER been observed for this pair
+ *
+ * THE CACHED RUNG IS TWO DIFFERENT EVENTS, and reporting them as one thing was
+ * misleading. A caller that deliberately does not fetch — the paper-trading
+ * status endpoint is polled several times a second by the dashboard and is
+ * contractually read-only — reaches the cache every single time, by design and
+ * in perfect health. A caller that DID fetch and got nothing has a provider
+ * problem. Both used to report `CACHED_STALE, degraded: true`, so the warning
+ * was permanently on for a healthy endpoint, and a warning that is always on is
+ * one nobody reads.
+ *
+ *   CACHED_BY_DESIGN            no fetch was attempted; the cache IS the plan
+ *   CACHED_AFTER_FETCH_FAILURE  a fetch was attempted and returned nothing
+ *
+ * They resolve to the SAME rate and the same arithmetic. The only difference is
+ * what they say about the system, which is the whole point of the split.
  *
  * HOW STATIC_FALLBACK IS REACHED IS DELIBERATE. This module does not know the
  * constants and never substitutes them. When it has nothing, it OMITS the pair
@@ -40,7 +55,17 @@
 
 import { QUOTE_CONVERSION } from "./smcAnalysis.ts";
 
-export type RateSource = "LIVE" | "CACHED_STALE" | "STATIC_FALLBACK";
+export type RateSource =
+  | "LIVE"
+  /** Served from cache because this caller did not attempt a fetch. Healthy. */
+  | "CACHED_BY_DESIGN"
+  /** Served from cache because the attempted fetch produced nothing. Not healthy. */
+  | "CACHED_AFTER_FETCH_FAILURE"
+  | "STATIC_FALLBACK";
+
+/** True for the sources that mean something is wrong, as opposed to merely not-live. */
+export const isDegradedSource = (s: RateSource): boolean =>
+  s === "CACHED_AFTER_FETCH_FAILURE" || s === "STATIC_FALLBACK";
 
 export interface CachedRate {
   rate: number;
@@ -64,7 +89,11 @@ export interface ResolvedRates {
   provenance: RateProvenance[];
   /** The cache to persist: previous entries plus anything observed live. */
   nextCache: RateCache;
-  /** True when any pair fell back. Worth logging loudly. */
+  /**
+   * True when any pair fell back for a reason worth acting on — a failed fetch
+   * or no observation ever. A deliberate cache read is NOT degraded; see
+   * `RateSource`.
+   */
   degraded: boolean;
 }
 
@@ -118,13 +147,22 @@ export function parseRateCache(value: string | null | undefined): RateCache {
  * `live` holds whatever this cycle actually got — a pair may be absent because
  * the fetch was refused, timed out, or returned no candles. Those are the same
  * case here: no usable rate.
+ *
+ * `opts.attempted` lists the pairs a provider fetch was actually tried for. It
+ * is what separates "cached because we chose not to ask" from "cached because
+ * asking failed", and it cannot be inferred from `live` — an absent pair looks
+ * identical either way. Omitted means every required pair was attempted, which
+ * is the common case and the pre-existing behaviour.
  */
 export function resolveRates(
   required: readonly string[],
   live: Record<string, number>,
   cache: RateCache,
   nowMs: number,
+  opts?: { attempted?: readonly string[] },
 ): ResolvedRates {
+  const attempted = opts?.attempted ? new Set(opts.attempted) : null;
+  const wasAttempted = (pair: string) => attempted === null || attempted.has(pair);
   const rateMap: Record<string, number> = {};
   const provenance: RateProvenance[] = [];
   const nextCache: RateCache = { ...cache };
@@ -141,10 +179,14 @@ export function resolveRates(
 
     const c = cache[pair];
     if (c && valid(c.rate)) {
+      // Same rate, same arithmetic, either way. Only the diagnosis differs.
+      const source: RateSource = wasAttempted(pair)
+        ? "CACHED_AFTER_FETCH_FAILURE"
+        : "CACHED_BY_DESIGN";
       rateMap[pair] = c.rate;
-      degraded = true;
+      if (isDegradedSource(source)) degraded = true;
       provenance.push({
-        pair, source: "CACHED_STALE",
+        pair, source,
         ageMs: Math.max(0, nowMs - new Date(c.at).getTime()),
         rate: c.rate,
       });
@@ -163,9 +205,11 @@ export function resolveRates(
 
 /** Compact one-line summary for a scan log. */
 export function describeProvenance(p: readonly RateProvenance[]): string {
+  const mins = (x: RateProvenance) => Math.round((x.ageMs ?? 0) / 60000);
   return p.map((x) =>
     x.source === "LIVE" ? `${x.pair}=LIVE`
-    : x.source === "CACHED_STALE" ? `${x.pair}=CACHED(${Math.round((x.ageMs ?? 0) / 60000)}m)`
+    : x.source === "CACHED_BY_DESIGN" ? `${x.pair}=CACHED(${mins(x)}m)`
+    : x.source === "CACHED_AFTER_FETCH_FAILURE" ? `${x.pair}=CACHED_FETCH_FAILED(${mins(x)}m)`
     : `${x.pair}=STATIC`
   ).join(" ");
 }
