@@ -1,6 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
+import {
+  MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, getQuoteToUSDRate, type Candle,
+} from "../_shared/smcAnalysis.ts";
+import {
+  requiredRatePairs, resolveRates, parseRateCache, describeProvenance, rateCacheKey,
+  type RateProvenance,
+} from "../_shared/rateMapPolicy.ts";
 import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
@@ -169,58 +175,121 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
-// ─── Hardcoded fallback rates (approximate) — used when TwelveData is unavailable ──
-// These prevent catastrophic PnL miscalculation (e.g., treating JPY as USD = 142x error)
-const FALLBACK_RATES: Record<string, number> = {
-  "USD/JPY": 142.0,
-  "GBP/USD": 1.27,
-  "AUD/USD": 0.66,
-  "NZD/USD": 0.61,
-  "USD/CAD": 1.36,
-  "USD/CHF": 0.88,
-};
+// ─── FX conversion: one implementation, one policy ──────────────────────────
+//
+// This file used to carry its OWN `FALLBACK_RATES` and its OWN
+// `getQuoteToUSDRate`, duplicating `_shared/smcAnalysis.ts`. Two
+// implementations of a money conversion is a divergence waiting to happen, and
+// this copy was the worse of the two: `buildRateMap` SEEDED the map with the
+// static constants before fetching, so a failed fetch was indistinguishable
+// from a successful one — every downstream reader saw a plausible number and
+// no signal that it was three currency regimes out of date.
+//
+// Both are gone. `getQuoteToUSDRate` is imported from the shared module, and
+// the rate map is built through the same LIVE → CACHED_STALE → STATIC_FALLBACK
+// ladder `bot-scanner` uses, sharing its last-known-good cache row.
+//
+// WHAT CONVERSION TOUCHES HERE. Only `calcPnl` — display P&L, partial closes,
+// SL/TP closes, manual close and kill-switch closes. It does NOT touch lot
+// sizing: `place_order` receives a size and never converts. So the exposure is
+// realized and unrealized P&L, which is where the old constants were writing
+// a USD/JPY close ~10.9% too large into `paper_trade_history` and the balance.
 
-// ─── Quote-to-USD conversion (matching shared/smcAnalysis.ts) ──
-function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  // Non-forex instruments are already USD-denominated
-  if (!symbol.includes("/")) return 1.0;
-  const parts = symbol.split("/");
-  const quote = parts[1];
-  if (quote === "USD") return 1.0;
-  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
-    "JPY": { pair: "USD/JPY", invert: true },
-    "GBP": { pair: "GBP/USD", invert: false },
-    "AUD": { pair: "AUD/USD", invert: false },
-    "NZD": { pair: "NZD/USD", invert: false },
-    "CAD": { pair: "USD/CAD", invert: true },
-    "CHF": { pair: "USD/CHF", invert: true },
-  };
-  const conv = QUOTE_CONVERSION[quote];
-  if (!conv) return 1.0;
-  // Try live rate first, then fallback to approximate hardcoded rate
-  const liveRate = rateMap?.[conv.pair];
-  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
-  if (!rate || rate <= 0) return 1.0;
-  return conv.invert ? (1 / rate) : rate;
-}
-
-// Module-level rateMap built once per invocation from live prices
+/** Live rates resolved this invocation. Empty means "no rate", NOT "use a constant". */
 let _rateMap: Record<string, number> = {};
+let _rateProvenance: RateProvenance[] = [];
+let _rateDegraded = false;
 
-async function buildRateMap(): Promise<Record<string, number>> {
-  const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  // Start with fallback rates so we always have something reasonable
-  const map: Record<string, number> = { ...FALLBACK_RATES };
-  await Promise.all(RATE_PAIRS.map(async (pair) => {
-    const price = await fetchLivePrice(pair);
-    if (price !== null) map[pair] = price; // Override fallback with live rate
-  }));
-  const liveCount = RATE_PAIRS.filter(p => map[p] !== FALLBACK_RATES[p]).length;
-  if (liveCount < RATE_PAIRS.length) {
-    console.warn(`[rateMap] Only ${liveCount}/${RATE_PAIRS.length} live rates fetched — using fallbacks for the rest`);
+/**
+ * The shared last-known-good row, memoised for the same 10s as `priceCache`.
+ *
+ * The status endpoint is polled by four UI components at up to 0.1Hz each, so
+ * anything on that path has to be cheap. One indexed select per 10s is; one per
+ * poll would be wasteful for a row `bot-scanner` only rewrites once a minute.
+ */
+let _rateCacheMemo: { value: Record<string, { rate: number; at: string }>; expiresAt: number } | null = null;
+
+/**
+ * Resolves the conversion rates needed by `symbols`, and nothing else.
+ *
+ * PAIRS ARE DERIVED from the symbols actually being acted on, so a book of
+ * USD-quoted positions fetches nothing at all — `getQuoteToUSDRate` returns 1.0
+ * for those before it ever reads the map. The old code fetched a fixed six on
+ * every write action, including actions that never convert anything.
+ *
+ * `allowFetch` is false on plain dashboard polls. That is deliberate and
+ * preserves the existing rule that a status poll makes no external calls: it
+ * resolves from the shared cache instead, which costs one select and is still
+ * enormously better than the constant it used to fall to. Engine-triggered and
+ * close actions DO fetch, because they write realized P&L.
+ *
+ * Never throws. On any failure the map is left without that pair, and
+ * `getQuoteToUSDRate` falls to its own constant exactly as it did before — the
+ * worst case is the old behaviour, never worse than it.
+ */
+async function ensureRates(
+  supabase: any, userId: string, symbols: string[], allowFetch: boolean,
+): Promise<void> {
+  const required = requiredRatePairs(symbols);
+  if (required.length === 0) { _rateProvenance = []; _rateDegraded = false; return; }
+
+  let cache: Record<string, { rate: number; at: string }> = {};
+  const key = rateCacheKey(userId, "smc");
+  try {
+    if (_rateCacheMemo && Date.now() < _rateCacheMemo.expiresAt) {
+      cache = _rateCacheMemo.value;
+    } else {
+      const { data, error } = await supabase.from("kv_cache").select("value").eq("key", key).maybeSingle();
+      if (error) console.warn(`[rateMap] cache read failed: ${error.message}`);
+      cache = parseRateCache(data?.value ?? null);
+      _rateCacheMemo = { value: cache, expiresAt: Date.now() + PRICE_CACHE_TTL_MS };
+    }
+  } catch (e: any) {
+    console.warn(`[rateMap] cache read threw: ${e?.message}`);
   }
-  return map;
+
+  const live: Record<string, number> = {};
+  if (allowFetch) {
+    await Promise.all(required.map(async (pair) => {
+      try {
+        const price = await fetchLivePrice(pair);
+        if (price !== null) live[pair] = price;
+      } catch { /* absent from `live` — the ladder handles it */ }
+    }));
+  }
+
+  const resolved = resolveRates(required, live, cache, Date.now());
+  // ASSIGNED, not merged. A warm isolate keeps `_rateMap` between invocations,
+  // and carrying a rate forward that this resolve did not produce would make
+  // the provenance a lie — it would report STATIC_FALLBACK while `calcPnl`
+  // quietly used a rate from ten minutes ago. The shared kv_cache is the
+  // last-known-good store; module memory is not a second one.
+  _rateMap = resolved.rateMap;
+  _rateProvenance = resolved.provenance;
+  _rateDegraded = resolved.degraded;
+
+  if (allowFetch && Object.keys(live).length > 0) {
+    // Shared with bot-scanner. `resolveRates` carries forward every existing
+    // entry, so two writers cannot delete each other's pairs — the loser of a
+    // race only loses freshness on one pair for one cycle.
+    try {
+      const next = JSON.stringify(resolved.nextCache);
+      if (next !== JSON.stringify(cache)) {
+        await supabase.from("kv_cache").upsert({
+          key, value: next,
+          expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "key" });
+        _rateCacheMemo = { value: resolved.nextCache, expiresAt: Date.now() + PRICE_CACHE_TTL_MS };
+      }
+    } catch (e: any) {
+      console.warn(`[rateMap] cache write failed (non-fatal): ${e?.message}`);
+    }
+  }
+
+  const summary = describeProvenance(resolved.provenance);
+  if (resolved.degraded) console.warn(`[rateMap] DEGRADED: ${summary}`);
+  else console.log(`[rateMap] ${summary}`);
 }
 
 function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
@@ -840,20 +909,11 @@ Deno.serve(async (req) => {
 
     const { action, ...payload } = await req.json().catch(() => ({ action: "status" }));
 
-    // Build live conversion rates only for write/engine actions. The dashboard
-    // status endpoint is polled frequently and must stay fast/read-only; doing
-    // multiple external API requests on every cold status worker was causing
-    // runtime churn and intermittent hosted 503s.
-    if (action !== "status" && Object.keys(_rateMap).length === 0) {
-      try {
-        _rateMap = await buildRateMap();
-      } catch (e: any) {
-        console.warn(`rateMap build failed: ${e?.message} — using fallback rates`);
-        _rateMap = { ...FALLBACK_RATES };
-      }
-    } else if (Object.keys(_rateMap).length === 0) {
-      _rateMap = { ...FALLBACK_RATES };
-    }
+    // Conversion rates are NOT built here any more. A blanket build could not
+    // know which pairs were needed, so it fetched a fixed six on every write
+    // action — including the many that convert nothing — and seeded the rest
+    // with static constants. Each branch that actually converts now resolves
+    // exactly the pairs its own symbols require, once those symbols are known.
 
     // ── Get account state ──
     if (action === "status") {
@@ -903,6 +963,12 @@ Deno.serve(async (req) => {
           })).catch(() => {});
         }
       }
+      // Conversion rates for exactly the open symbols. A plain dashboard poll
+      // resolves from the shared cache and makes no external call, keeping the
+      // existing read-only contract of this endpoint; an engine-triggered poll
+      // fetches live, because it can write realized P&L and a balance.
+      await ensureRates(supabase, user.id, (positions || []).map((p: any) => p.symbol),
+        payload.processEngine === true);
       // Engine processing (SL/TP/trail/BE logic) only runs when explicitly triggered.
       // Dashboard polling must not perform broker mirror actions.
       if (payload.processEngine === true && positions && positions.length > 0) {
@@ -1398,6 +1464,12 @@ Deno.serve(async (req) => {
         dailyPnl, drawdown, equityCurve,
         marginUsed: 0, freeMargin: balance + unrealizedPnl,
         marginLevel: 0, uptime: 0,
+        // Where each FX conversion rate came from. Every P&L figure above is
+        // denominated through these, so a CACHED_STALE or STATIC_FALLBACK entry
+        // is the difference between a real number and an approximate one, and
+        // the caller should be able to see which it got. An all-USD-quoted book
+        // reports an empty list and `degraded: false` — it needs no rate.
+        rateMapHealth: { degraded: _rateDegraded, pairs: _rateProvenance },
         strategy: {
           name: "SMC Default",
           winRate: histArr.length > 0 ? (wins / histArr.length) * 100 : 0,
@@ -1600,6 +1672,9 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id).eq("position_id", positionId).single();
       if (!pos) throw new Error("Position not found");
 
+      // This writes realized P&L, so it fetches live rather than settling for
+      // the cache.
+      await ensureRates(supabase, user.id, [pos.symbol], true);
       const ep = exitPrice || parseFloat(pos.current_price);
       const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
       const closeReason = payload.reason || "manual";
@@ -1675,6 +1750,7 @@ Deno.serve(async (req) => {
         const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
 
         if (positions && positions.length > 0) {
+          await ensureRates(supabase, user.id, positions.map((p: any) => p.symbol), true);
           let totalPnl = 0;
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);
