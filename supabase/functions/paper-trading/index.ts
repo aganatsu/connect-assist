@@ -210,6 +210,29 @@ let _rateDegraded = false;
 let _rateCacheMemo: { value: Record<string, { rate: number; at: string }>; expiresAt: number } | null = null;
 
 /**
+ * Service-role client, used for ONE thing: the shared rate-cache row.
+ *
+ * `kv_cache` has RLS enabled with no policies, so the user-scoped client this
+ * function runs on reads nothing from it — the first deploy of this change
+ * reported STATIC_FALLBACK on every poll for exactly that reason, with the
+ * cache sitting one row away, freshly written.
+ *
+ * Deliberately narrow: this client touches `kv_cache` at the single key
+ * `smc_rate_cache:smc:<sub>`, where `<sub>` is the JWT claim already verified
+ * above. No caller-supplied value reaches the key, and no other table is
+ * reachable through it. If the key is unset the cache is simply skipped and the
+ * ladder falls to the static constant, which is what this path did before.
+ */
+let _adminClient: any = null;
+function rateCacheClient(): any {
+  if (_adminClient !== null) return _adminClient;
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const url = Deno.env.get("SUPABASE_URL");
+  _adminClient = (key && url) ? createClient(url, key) : false;
+  return _adminClient;
+}
+
+/**
  * Resolves the conversion rates needed by `symbols`, and nothing else.
  *
  * PAIRS ARE DERIVED from the symbols actually being acted on, so a book of
@@ -228,18 +251,19 @@ let _rateCacheMemo: { value: Record<string, { rate: number; at: string }>; expir
  * worst case is the old behaviour, never worse than it.
  */
 async function ensureRates(
-  supabase: any, userId: string, symbols: string[], allowFetch: boolean,
+  userId: string, symbols: string[], allowFetch: boolean,
 ): Promise<void> {
   const required = requiredRatePairs(symbols);
   if (required.length === 0) { _rateProvenance = []; _rateDegraded = false; return; }
 
   let cache: Record<string, { rate: number; at: string }> = {};
   const key = rateCacheKey(userId, "smc");
+  const db = rateCacheClient();
   try {
     if (_rateCacheMemo && Date.now() < _rateCacheMemo.expiresAt) {
       cache = _rateCacheMemo.value;
-    } else {
-      const { data, error } = await supabase.from("kv_cache").select("value").eq("key", key).maybeSingle();
+    } else if (db) {
+      const { data, error } = await db.from("kv_cache").select("value").eq("key", key).maybeSingle();
       if (error) console.warn(`[rateMap] cache read failed: ${error.message}`);
       cache = parseRateCache(data?.value ?? null);
       _rateCacheMemo = { value: cache, expiresAt: Date.now() + PRICE_CACHE_TTL_MS };
@@ -268,19 +292,20 @@ async function ensureRates(
   _rateProvenance = resolved.provenance;
   _rateDegraded = resolved.degraded;
 
-  if (allowFetch && Object.keys(live).length > 0) {
+  if (allowFetch && db && Object.keys(live).length > 0) {
     // Shared with bot-scanner. `resolveRates` carries forward every existing
     // entry, so two writers cannot delete each other's pairs — the loser of a
     // race only loses freshness on one pair for one cycle.
     try {
       const next = JSON.stringify(resolved.nextCache);
       if (next !== JSON.stringify(cache)) {
-        await supabase.from("kv_cache").upsert({
+        const { error } = await db.from("kv_cache").upsert({
           key, value: next,
           expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
           updated_at: new Date().toISOString(),
         }, { onConflict: "key" });
-        _rateCacheMemo = { value: resolved.nextCache, expiresAt: Date.now() + PRICE_CACHE_TTL_MS };
+        if (error) console.warn(`[rateMap] cache write failed (non-fatal): ${error.message}`);
+        else _rateCacheMemo = { value: resolved.nextCache, expiresAt: Date.now() + PRICE_CACHE_TTL_MS };
       }
     } catch (e: any) {
       console.warn(`[rateMap] cache write failed (non-fatal): ${e?.message}`);
@@ -967,7 +992,7 @@ Deno.serve(async (req) => {
       // resolves from the shared cache and makes no external call, keeping the
       // existing read-only contract of this endpoint; an engine-triggered poll
       // fetches live, because it can write realized P&L and a balance.
-      await ensureRates(supabase, user.id, (positions || []).map((p: any) => p.symbol),
+      await ensureRates(user.id, (positions || []).map((p: any) => p.symbol),
         payload.processEngine === true);
       // Engine processing (SL/TP/trail/BE logic) only runs when explicitly triggered.
       // Dashboard polling must not perform broker mirror actions.
@@ -1674,7 +1699,7 @@ Deno.serve(async (req) => {
 
       // This writes realized P&L, so it fetches live rather than settling for
       // the cache.
-      await ensureRates(supabase, user.id, [pos.symbol], true);
+      await ensureRates(user.id, [pos.symbol], true);
       const ep = exitPrice || parseFloat(pos.current_price);
       const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
       const closeReason = payload.reason || "manual";
@@ -1750,7 +1775,7 @@ Deno.serve(async (req) => {
         const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
 
         if (positions && positions.length > 0) {
-          await ensureRates(supabase, user.id, positions.map((p: any) => p.symbol), true);
+          await ensureRates(user.id, positions.map((p: any) => p.symbol), true);
           let totalPnl = 0;
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);

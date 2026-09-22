@@ -234,3 +234,27 @@ Deno.test("open_position_price_refresh and cron cadence are not in this file to 
   assert(!SRC.includes("open_position_price_refresh"), "the SL/TP feed leaked into paper-trading");
   assert(!SRC.includes("cron.schedule"), "a cron change leaked into paper-trading");
 });
+
+// ── 7. the rate cache is reachable at all ────────────────────────────────────
+
+Deno.test("the rate cache is read with a client that RLS does not silence", () => {
+  // kv_cache has RLS enabled and no policies, so the user-scoped client this
+  // function runs on reads nothing from it. The first deploy of this change
+  // reported STATIC_FALLBACK on every poll for exactly that reason.
+  const fn = CODE.slice(CODE.indexOf("async function ensureRates"), CODE.indexOf("function calcPnl"));
+  assert(!/\bsupabase\.from\(/.test(fn), "the rate cache is read through the RLS-scoped client");
+  assert(fn.includes("db.from(\"kv_cache\")"), "the cache is not read through the service-role client");
+  assert(!/ensureRates\(\s*supabase/.test(CODE), "the RLS-scoped client is still passed in");
+});
+
+Deno.test("the service-role client is confined to the rate-cache key", () => {
+  const helper = CODE.slice(CODE.indexOf("function rateCacheClient"), CODE.indexOf("async function ensureRates"));
+  assert(helper.includes("SUPABASE_SERVICE_ROLE_KEY"), "the helper no longer builds a service client");
+  // Every service-role table access in the file must be kv_cache, and the key
+  // must come from the verified claim, never from the request payload.
+  const uses = [...CODE.matchAll(/\bdb\.from\("([^"]+)"\)/g)].map((m) => m[1]);
+  assert(uses.length > 0, "no service-role access found — this test is stale");
+  assertEquals([...new Set(uses)], ["kv_cache"], "the service-role client reaches another table");
+  assert(CODE.includes("const key = rateCacheKey(userId, \"smc\")"), "the cache key is not derived from the user id");
+  assert(!/rateCacheKey\([^)]*payload/.test(CODE), "the cache key is built from request input");
+});
