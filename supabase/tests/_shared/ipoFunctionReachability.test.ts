@@ -35,13 +35,20 @@ const SMC_TRADING_TABLES = [
   "paper_positions", "pending_orders", "paper_trade_history", "paper_accounts",
 ];
 
-Deno.test("ipo-paper-state reaches nothing but itself and cors", async () => {
+Deno.test("ipo-paper-state reaches only itself, cors and the health parser", async () => {
   // The browser-facing read API. Its closure is the guarantee: it cannot fetch
   // a candle, cannot run an engine, and cannot reach infrastructure at all.
+  // `ipoRunnerHealth` was added so the view can show whether the runner is
+  // alive; it is pure, and the next assertion pins that rather than trusting it.
   assertEquals(await closure("supabase/functions/ipo-paper-state/index.ts"), [
     "supabase/functions/_shared/cors.ts",
+    "supabase/functions/_shared/ipoRunnerHealth.ts",
     "supabase/functions/ipo-paper-state/index.ts",
   ]);
+  const health = strip(await Deno.readTextFile("supabase/functions/_shared/ipoRunnerHealth.ts"));
+  for (const impure of ["createClient", "fetch(", "Deno.env", ".from(", "supabase-js"]) {
+    assert(!health.includes(impure), `the health module is not pure: ${impure}`);
+  }
 });
 
 Deno.test("no IPO function can reach a broker execution path", async () => {

@@ -119,10 +119,18 @@ Deno.test("the heartbeat is invisible to strategy code", async () => {
     assert(!src.includes("ipoRunnerHealth"), `${f} imports the heartbeat`);
     assert(!src.includes("runner_health"), `${f} references the heartbeat key`);
   }
-  // And the read surfaces must not have started writing it either.
-  for (const f of ["ipo-observation", "ipo-paper-state"]) {
-    const src = await Deno.readTextFile(`supabase/functions/${f}/index.ts`);
-    assert(!src.includes("ipoRunnerHealth"), `${f} writes a heartbeat`);
+  // ipo-observation has no business with health at all: it is not the runner
+  // and does not report on it.
+  const obs = await Deno.readTextFile("supabase/functions/ipo-observation/index.ts");
+  assert(!obs.includes("ipoRunnerHealth"), "ipo-observation touches the heartbeat");
+
+  // ipo-paper-state MAY read it — serving it to the monitor is the point — but
+  // must never write it. Only the runner beats.
+  const readApi = await Deno.readTextFile("supabase/functions/ipo-paper-state/index.ts");
+  assert(readApi.includes("parseHealth"), "the read surface should expose health");
+  assert(!readApi.includes("buildHealth"), "the read surface is constructing a heartbeat");
+  for (const verb of [".insert(", ".upsert(", ".update(", ".delete("]) {
+    assert(!readApi.includes(verb), `the read surface writes (${verb})`);
   }
 });
 

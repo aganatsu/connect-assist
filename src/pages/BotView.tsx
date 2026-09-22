@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 import { IpoScanner } from "@/components/IpoScanner";
+import { IpoPaperMonitor } from "@/components/IpoPaperMonitor";
 
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
@@ -1377,7 +1378,22 @@ export default function BotView() {
         </TabsContent>
 
         <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-y-auto p-2">
-          <IpoScanner />
+          {/* Two IPO views, both read-only. Scanner is what the rules see right
+              now; Paper is what the forward test has actually done. Neither
+              touches SMC, and IPO results are deliberately not merged into the
+              SMC Journal or its analytics. */}
+          <Tabs defaultValue="scanner" className="flex flex-col gap-2 min-w-0">
+            <TabsList className="h-6 shrink-0 self-start bg-card border border-border rounded-none p-0 gap-0 justify-start">
+              <TabsTrigger value="scanner" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Scanner</TabsTrigger>
+              <TabsTrigger value="paper" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Paper</TabsTrigger>
+            </TabsList>
+            <TabsContent value="scanner" className="mt-0 min-w-0">
+              <IpoScanner />
+            </TabsContent>
+            <TabsContent value="paper" className="mt-0 min-w-0">
+              <IpoPaperMonitor />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </AppShell>

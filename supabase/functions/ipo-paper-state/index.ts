@@ -19,9 +19,21 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { parseHealth, isStale } from "../_shared/ipoRunnerHealth.ts";
 
 /** Enough to render a panel without paging; not a research export. */
 export const RECENT_TRADES = 100;
+
+/**
+ * The scheduled cadence, for staleness only.
+ *
+ * Mirrors the every-15-minutes cron in
+ * supabase/cron/ipo_paper_runner_cron.sql. Display concern only: nothing here
+ * schedules anything, and a wrong value would mis-colour a badge rather than
+ * change behaviour. (The cron expression is not quoted here because a slash-star
+ * sequence would end this comment.)
+ */
+export const CADENCE_MS = 15 * 60_000;
 export const RECENT_EVENTS = 200;
 
 export interface CleanSummary {
@@ -86,9 +98,14 @@ export async function handler(req: Request): Promise<Response> {
       events = events.eq("symbol", only);
     }
 
-    const [p, h, e, s] = await Promise.all([
+    const [p, h, e, s, hb] = await Promise.all([
       positions, history, events,
       db.from("kv_cache").select("key, value, updated_at").like("key", "ipo_paper_state:%"),
+      // The heartbeat is a small dedicated row. The ENGINE state rows are ~330KB
+      // each and are deliberately not fetched: a monitoring view has no business
+      // pulling a megabyte of bar history, and the paper cursor below already
+      // says where each instrument has got to.
+      db.from("kv_cache").select("value, updated_at").like("key", "ipo_runner_health:%"),
     ]);
 
     const err = p.error ?? h.error ?? e.error ?? s.error;
@@ -99,9 +116,17 @@ export async function handler(req: Request): Promise<Response> {
       catch { return { key: r.key, unreadable: true, lastRunAt: r.updated_at }; }
     });
 
+    const health = parseHealth((hb.data ?? [])[0]?.value ?? null);
+
     return respond({
       ok: true,
       mode: "PAPER_READ_ONLY",
+      // Operational, not strategy. `stale` is the question a human actually
+      // asks — "is this thing still running" — and it cannot be answered from
+      // the strategy tables, because a healthy quiet run writes nothing to them.
+      health,
+      healthStale: isStale(health, Date.now(), CADENCE_MS),
+      cadenceMs: CADENCE_MS,
       note: "Persisted rows only — no engine run, no candle fetch, no writes. " +
             "realized_r is canonical; USD figures are a view under the recorded " +
             "nominal sizing and are NOT a maximum loss.",
