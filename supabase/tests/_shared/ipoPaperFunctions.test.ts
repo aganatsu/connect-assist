@@ -9,7 +9,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   PAPER_INSTRUMENTS, stateKey, sizingFromEnv,
-  positionRow, historyRow, eventRow, parseState, rowToPosition,
+  positionRow, historyRow, eventRow, parseState, rowToPosition, needsWrite,
 } from "../../functions/ipo-paper-runner/index.ts";
 import { summarize, RECENT_TRADES } from "../../functions/ipo-paper-state/index.ts";
 import { HISTORY_BARS } from "../../functions/_shared/ipoInstruments.ts";
@@ -385,4 +385,54 @@ Deno.test("the apply pack applies only the two pending versions", async () => {
   for (const banned of ["20260920000000", "20260920100000", "ipo_paper_ledger"]) {
     assert(!pack.includes(banned), `the apply pack references ${banned}`);
   }
+});
+
+// ── no-op runs must not write ────────────────────────────────────────────────
+
+Deno.test("an unchanged payload is not rewritten", () => {
+  // The runner used to upsert both state rows every invocation. On a poll with
+  // no new bars that rewrote ~1MB for nothing and moved updated_at, so the
+  // column could no longer tell "the strategy advanced" from "someone called
+  // the endpoint".
+  assertEquals(needsWrite("same", "same"), false);
+  assertEquals(needsWrite("old", "new"), true);
+  // Absent is not the same as unchanged: a first write must happen.
+  assertEquals(needsWrite(null, "first"), true);
+  assertEquals(needsWrite(undefined, "first"), true);
+  // And an empty stored value is still a difference worth writing.
+  assertEquals(needsWrite("", "first"), true);
+});
+
+Deno.test("the write decision is on CONTENT, not on a bar count", async () => {
+  // A run that processed bars but produced identical state has nothing to
+  // write; a run that processed none but differs somehow must still write.
+  // Keying off barsProcessed would get both backwards.
+  const c = code(await src(RUNNER));
+  assert(c.includes("needsWrite(prior.engine, engineState)"),
+    "the engine write is not content-gated");
+  assert(c.includes("needsWrite(prior.cursor, cursorValue)"),
+    "the cursor write is not content-gated");
+  assert(!/if\s*\(\s*\w*\.?barsProcessed\s*[>=]/.test(c),
+    "the write is gated on a bar count somewhere");
+});
+
+Deno.test("both kv_cache writes sit behind the guard, and the order still holds", async () => {
+  const c = code(await src(RUNNER));
+  // Engine state before the cursor: a crash between them must leave the engine
+  // AHEAD of the cursor, which replays harmlessly. The reverse loses setups.
+  const engineAt = c.indexOf("key: engineStateKey(symbol)");
+  const cursorAt = c.indexOf("key: stateKey(symbol)");
+  assert(engineAt > 0 && cursorAt > 0);
+  assert(engineAt < cursorAt, "the cursor is written before the engine state");
+  // Every kv_cache upsert is inside an `if`.
+  const upserts = [...c.matchAll(/if \((engineWritten|cursorWritten)\) \{/g)];
+  assertEquals(upserts.length, 2, "a kv_cache write escaped the guard");
+});
+
+Deno.test("the run reports whether it actually wrote", async () => {
+  // Otherwise a no-op and a write are indistinguishable from the outside, and
+  // the whole point is to make that observable.
+  const c = code(await src(RUNNER));
+  assert(c.includes("out.engineStateWritten"), "no engine write flag");
+  assert(c.includes("out.paperStateWritten"), "no cursor write flag");
 });

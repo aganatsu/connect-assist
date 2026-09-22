@@ -130,6 +130,23 @@ export const eventRow = (e: PaperEvent, userId: string) => ({
 
 // ─── state <-> kv_cache ──────────────────────────────────────────────────────
 
+/**
+ * Whether a kv_cache row is worth rewriting.
+ *
+ * WHY THIS IS NOT MERELY TIDY. The runner used to upsert both state rows on
+ * every invocation. On a poll with no new bars that rewrote ~1 MB for nothing
+ * and, worse, moved `updated_at` — so the column could no longer distinguish
+ * "the strategy advanced" from "someone called the endpoint". An audit trail
+ * that ticks when nothing happened is not an audit trail.
+ *
+ * The comparison is on CONTENT, not on a bar count. A run that processed bars
+ * but somehow produced identical state genuinely has nothing to write, and a
+ * run that processed none but differs somehow must still be written.
+ */
+export function needsWrite(previous: string | null | undefined, next: string): boolean {
+  return previous !== next;
+}
+
 export function parseState(value: string | null): RuntimeState | null {
   if (!value) return null;
   try {
@@ -183,6 +200,9 @@ export interface InstrumentRun {
   closed: number;
   events: number;
   statePayloadBytes?: number;
+  /** False when the run changed nothing and the row was left alone. */
+  engineStateWritten?: boolean;
+  paperStateWritten?: boolean;
   restoreMs?: number;
   processMs?: number;
   persistMs?: number;
@@ -323,8 +343,11 @@ export async function handler(req: Request): Promise<Response> {
         out.statePayloadBytes = serialized.length;
 
         const w0 = Date.now();
-        await applyPlan(db, plan, openPosition, userId, cfg.instrument, serialized);
+        const applied = await applyPlan(db, plan, openPosition, userId, cfg.instrument,
+          serialized, { engine: engineRow?.value ?? null, cursor: stateRow?.value ?? null });
         out.persistMs = Date.now() - w0;
+        out.engineStateWritten = applied.engineWritten;
+        out.paperStateWritten = applied.cursorWritten;
         results.push(out);
       } catch (e) {
         out.error = (e as Error).message;
@@ -350,11 +373,23 @@ export async function handler(req: Request): Promise<Response> {
  * Every write is idempotent on a content-addressed key, so a retry after a
  * partial failure converges instead of duplicating.
  */
+interface PriorRows {
+  /** The engine-state payload as it was read at the start of this run. */
+  engine: string | null;
+  /** The paper-cursor payload as it was read at the start of this run. */
+  cursor: string | null;
+}
+
+interface ApplyResult {
+  engineWritten: boolean;
+  cursorWritten: boolean;
+}
+
 async function applyPlan(
   // deno-lint-ignore no-explicit-any
   db: any, plan: RunnerPlan, before: PaperPosition | null,
-  userId: string, symbol: string, engineState: string,
-): Promise<void> {
+  userId: string, symbol: string, engineState: string, prior: PriorRows,
+): Promise<ApplyResult> {
   for (const r of plan.closed) {
     const { error } = await db.from("ipo_paper_trade_history")
       .upsert(historyRow(r, userId), { onConflict: "intent_id" });
@@ -390,21 +425,32 @@ async function applyPlan(
   // the cursor has not yet passed, and every write is keyed by content, so the
   // replay is a no-op. The reverse order would advance the cursor past bars the
   // engine had not recorded, and those setups would be lost silently.
-  const eng = await db.from("kv_cache").upsert({
-    key: engineStateKey(symbol),
-    value: engineState,
-    expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
-    updated_at: new Date().toISOString(),
-  }, { onConflict: "key" });
-  if (eng.error) throw new Error(`engine state write failed: ${eng.error.message}`);
+  //
+  // NEITHER IS WRITTEN IF IT DID NOT CHANGE. See `needsWrite`.
+  const engineWritten = needsWrite(prior.engine, engineState);
+  if (engineWritten) {
+    const eng = await db.from("kv_cache").upsert({
+      key: engineStateKey(symbol),
+      value: engineState,
+      expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "key" });
+    if (eng.error) throw new Error(`engine state write failed: ${eng.error.message}`);
+  }
 
-  const { error } = await db.from("kv_cache").upsert({
-    key: stateKey(symbol),
-    value: JSON.stringify(plan.state),
-    expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
-    updated_at: new Date().toISOString(),
-  }, { onConflict: "key" });
-  if (error) throw new Error(`cursor write failed: ${error.message}`);
+  const cursorValue = JSON.stringify(plan.state);
+  const cursorWritten = needsWrite(prior.cursor, cursorValue);
+  if (cursorWritten) {
+    const { error } = await db.from("kv_cache").upsert({
+      key: stateKey(symbol),
+      value: cursorValue,
+      expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "key" });
+    if (error) throw new Error(`cursor write failed: ${error.message}`);
+  }
+
+  return { engineWritten, cursorWritten };
 }
 
 if (import.meta.main) Deno.serve(handler);
