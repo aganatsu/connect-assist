@@ -32,8 +32,9 @@ class FakeCorpusTable {
       if (pid && !/^[0-9a-f-]{36}$/i.test(pid)) {
         throw new Error(`invalid input syntax for type uuid: "${pid}"`);
       }
+      // Mirrors the project-wide constraint: no user_id in the natural key.
       const key = (r: any) =>
-        `${r.user_id}|${r.symbol}|${r.timeframe}|${r.candle_datetime ?? "~"}|${r.direction}`;
+        `${r.symbol}|${r.timeframe}|${r.candle_datetime ?? "~"}|${r.direction}`;
       const existing = this.rows.find((r) => key(r) === key(p));
       if (existing) { Object.assign(existing, p); out.push({ ...existing }); continue; }
       const row = { ...p, id: `00000000-0000-4000-8000-${String(++this.n).padStart(12, "0")}` };
@@ -52,15 +53,13 @@ class FakeCorpusTable {
  * wrong reason: the mint simply produced the same value twice. With a real
  * random mint, a group that survives a re-send can only have been preserved.
  */
-function runInsert(table: FakeCorpusTable, rows: any[], userId = "u1",
+function runInsert(table: FakeCorpusTable, rows: any[],
                    mint: () => string = () => crypto.randomUUID()) {
   const existingGroupByKey = new Map<string, string>();
   for (const r of table.rows) {
-    if (r.user_id === userId && r.example_group_id) {
-      existingGroupByKey.set(corpusNaturalKey(r), r.example_group_id);
-    }
+    if (r.example_group_id) existingGroupByKey.set(corpusNaturalKey(r), r.example_group_id);
   }
-  const plan = planCorpusInsert(rows, userId, mint, existingGroupByKey);
+  const plan = planCorpusInsert(rows, mint, existingGroupByKey);
   if (plan.problems.length) return { plan, written: [] as any[], problems: plan.problems };
   const idByLocal = new Map<string, string>();
   const written: any[] = [];
@@ -195,7 +194,7 @@ Deno.test("an unresolved local parent is REFUSED, never written as a null edge",
   // The failure mode the wave planner exists to remove. `real ?? null` looked
   // defensive and quietly restored it: a child stored with no parent, no error,
   // and a success response.
-  const plan = planCorpusInsert([W, D], "u1", () => crypto.randomUUID());
+  const plan = planCorpusInsert([W, D], () => crypto.randomUUID());
   assertEquals(plan.waves.length, 2);
   const childWave = plan.waves[1];
   assertEquals(childWave[0].localParentId, "w");
@@ -217,7 +216,7 @@ Deno.test("an unresolved local parent is REFUSED, never written as a null edge",
 Deno.test("a partially-written batch refuses the child rather than orphaning it", () => {
   // Simulates the production loop when wave 1 returns nothing usable.
   const t = new FakeCorpusTable();
-  const plan = planCorpusInsert([W, D, H], "u1", () => crypto.randomUUID());
+  const plan = planCorpusInsert([W, D, H], () => crypto.randomUUID());
   t.upsert(resolveWaveParents(plan.waves[0], new Map()));   // weekly lands
   assertEquals(t.rows.length, 1);
 
@@ -252,4 +251,140 @@ Deno.test("an upsert never blanks the group of a solo row that already has one",
   assertEquals(t.rows.length, 1);
   assertEquals(t.rows[0].example_group_id, "77777777-7777-4777-8777-777777777777",
     "a group the row already has survives an upsert that does not mention it");
+});
+
+// ─── project-owned corpus: the full 12-row batch ─────────────────────────────
+
+/** The real first batch: 12 rows, 11 demonstrations, one W->D->4H style chain. */
+const BATCH = [
+  { symbol: "AUD/USD", timeframe: "1d", candleDatetime: "2026-03-19T00:00:00Z", direction: "supply", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "AUD/USD", timeframe: "1d", candleDatetime: "2026-03-30T00:00:00Z", direction: "demand", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "AUD/USD", timeframe: "1d", candleDatetime: "2026-04-03T00:00:00Z", direction: "demand", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "GBP/AUD", timeframe: "1d", candleDatetime: "2026-03-11T00:00:00Z", direction: "demand", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "GBP/AUD", timeframe: "1d", candleDatetime: "2026-03-26T00:00:00Z", direction: "supply", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "GBP/AUD", timeframe: "1d", candleDatetime: "2026-05-14T00:00:00Z", direction: "demand", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "GBP/CAD", timeframe: "1d", candleDatetime: "2026-05-08T00:00:00Z", direction: "supply", evidenceSource: "USER_CONFIRMED" },
+  { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-03-27T00:00:00Z", direction: "demand", evidenceSource: "VIDEO_DEMONSTRATION" },
+  { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-04-08T00:00:00Z", direction: "supply", evidenceSource: "VIDEO_DEMONSTRATION" },
+  { localId: "btc_may11_daily", symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-05-11T00:00:00Z", direction: "demand", evidenceSource: "VIDEO_DEMONSTRATION" },
+  { symbol: "BTC/USD", timeframe: "4h", candleDatetime: "2020-05-08T16:00:00Z", direction: "supply", evidenceSource: "VIDEO_DEMONSTRATION" },
+  { localId: "btc_may11_4h", localParentId: "btc_may11_daily", symbol: "BTC/USD", timeframe: "4h", candleDatetime: "2020-05-11T16:00:00Z", direction: "demand", evidenceSource: "VIDEO_DEMONSTRATION" },
+];
+
+const demosOf = (rows: any[]) =>
+  new Set(rows.map((r) => r.example_group_id ?? `solo:${r.id}`)).size;
+
+Deno.test("the 12-row batch round-trips as 11 demonstrations with one chain", () => {
+  const t = new FakeCorpusTable();
+  const { written } = runInsert(t, BATCH);
+
+  assertEquals(t.rows.length, 12, "12 corpus rows");
+  assertEquals(written.length, 12);
+  assertEquals(demosOf(t.rows), 11, "11 demonstrations — the chain counts once");
+
+  const chains = t.rows.filter((r) => r.parent_example_id);
+  assertEquals(chains.length, 1, "exactly one refinement edge");
+  const child = t.rows.find((r) => r.timeframe === "4h" && r.direction === "demand")!;
+  const parent = t.rows.find((r) => r.id === child.parent_example_id)!;
+  assertEquals(parent.timeframe, "1d");
+  assertEquals(parent.candle_datetime, "2020-05-11T00:00:00Z");
+  assertEquals(child.example_group_id, parent.example_group_id);
+
+  // The unrelated 4H supply row must NOT be swept into the chain's group.
+  const lone4h = t.rows.find((r) => r.timeframe === "4h" && r.direction === "supply")!;
+  assertEquals(lone4h.example_group_id, null);
+  assertEquals(lone4h.parent_example_id, null);
+
+  // Positives only: no row carries anything resembling a label.
+  for (const r of t.rows) {
+    assertEquals((r as any).label, undefined);
+    assertEquals((r as any).user_id, undefined, "project-owned — no ownership column");
+  }
+});
+
+Deno.test("re-sending the 12-row batch is idempotent, edges and groups intact", () => {
+  const t = new FakeCorpusTable();
+  runInsert(t, BATCH);
+  const ids = t.rows.map((r) => r.id).sort();
+  const groups = t.rows.map((r) => `${r.symbol}|${r.timeframe}|${r.example_group_id}`).sort();
+  const child0 = t.rows.find((r) => r.parent_example_id)!;
+
+  runInsert(t, BATCH);                       // random mint again
+
+  assertEquals(t.rows.length, 12, "no duplicates");
+  assertEquals(t.rows.map((r) => r.id).sort(), ids, "ids are stable");
+  assertEquals(t.rows.map((r) => `${r.symbol}|${r.timeframe}|${r.example_group_id}`).sort(), groups,
+    "demonstration identity is preserved, not re-minted");
+  const child1 = t.rows.find((r) => r.id === child0.id)!;
+  assertEquals(child1.parent_example_id, child0.parent_example_id, "the edge survives");
+  assertEquals(demosOf(t.rows), 11);
+});
+
+Deno.test("two symbols sharing a bar and direction are still distinct rows", () => {
+  // The unique key lost user_id but kept symbol, so this must not collapse.
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    { symbol: "AUD/USD", timeframe: "1d", candleDatetime: "2026-03-19T00:00:00Z", direction: "supply" },
+    { symbol: "GBP/AUD", timeframe: "1d", candleDatetime: "2026-03-19T00:00:00Z", direction: "supply" },
+  ]);
+  assertEquals(t.rows.length, 2);
+});
+
+Deno.test("a negative label is refused before any wave is planned", () => {
+  const t = new FakeCorpusTable();
+  const { problems, written } = runInsert(t, [
+    ...BATCH.slice(0, 2),
+    { symbol: "AUD/USD", timeframe: "1d", candleDatetime: "2026-06-01T00:00:00Z", direction: "supply", label: "NEGATIVE" },
+  ]);
+  assert(problems.some((p) => p.why.includes("POSITIVES ONLY")));
+  assertEquals(written.length, 0, "the whole batch is rejected, not partially applied");
+  assertEquals(t.rows.length, 0);
+});
+
+Deno.test("confidence tier and source family are stored, not derived", () => {
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    {
+      symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-04-20T00:00:00Z", direction: "demand",
+      evidenceSource: "VIDEO_DEMONSTRATION",
+      confidenceTier: "TIER_1_DIRECTLY_INSPECTABLE", sourceFamily: "EZZY",
+    },
+  ]);
+  assertEquals(t.rows[0].confidence_tier, "TIER_1_DIRECTLY_INSPECTABLE");
+  assertEquals(t.rows[0].source_family, "EZZY");
+});
+
+Deno.test("an unattributed row stores NULL rather than a guessed family", () => {
+  // The whole point of the columns: absence of evidence must be recorded as
+  // absence, never defaulted to the family that happens to be most common.
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-06-01T00:00:00Z", direction: "demand" },
+  ]);
+  assertEquals(t.rows[0].confidence_tier, null);
+  assertEquals(t.rows[0].source_family, null);
+});
+
+Deno.test("TubePull keeps its own family and is never folded into EZZY", () => {
+  const t = new FakeCorpusTable();
+  runInsert(t, [
+    {
+      symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-07-01T00:00:00Z", direction: "supply",
+      sourceFamily: "TUBEPULL_UNKNOWN_SOURCE",
+    },
+  ]);
+  assertEquals(t.rows[0].source_family, "TUBEPULL_UNKNOWN_SOURCE");
+  assert(t.rows.every((r) => r.source_family !== "EZZY"));
+});
+
+Deno.test("a misspelt tier or family is refused and nothing is written", () => {
+  for (const bad of [{ confidenceTier: "TIER_1" }, { sourceFamily: "ezzy" }]) {
+    const t = new FakeCorpusTable();
+    const { problems, written } = runInsert(t, [
+      { symbol: "BTC/USD", timeframe: "1d", candleDatetime: "2020-08-01T00:00:00Z", direction: "demand", ...bad },
+    ]);
+    assert(problems.length > 0, `${JSON.stringify(bad)} must be rejected`);
+    assertEquals(written.length, 0);
+    assertEquals(t.rows.length, 0);
+  }
 });

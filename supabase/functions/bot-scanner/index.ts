@@ -1,7 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides, isExplicitlySet } from "../_shared/configMapper.ts";
-import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, peekThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
+import {
+  summariseInvocation, accumulate, accumulateKeys, parseTelemetry, mgmtTelemetryKey,
+  type FetchRecord, type FetchReason,
+} from "../_shared/smcMgmtTelemetry.ts";
+import {
+  requiredRatePairs, resolveRates, parseRateCache, describeProvenance, rateCacheKey,
+  type RateProvenance,
+} from "../_shared/rateMapPolicy.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { stylePendingExpiryMinutes, styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
@@ -2193,7 +2201,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
-  const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
+
+  // OBSERVATION ONLY. The wrapper records which call site asked for what and
+  // whether the per-cycle cache already had it. It adds no fetch, removes none,
+  // reorders none, and returns exactly what scanCache returns — the awaited
+  // value and the rejection behaviour are unchanged.
+  //
+  // Hit/miss is read from scanCache's own counters around the call rather than
+  // guessed, so an in-flight dedup counts as a hit exactly as the cache counts it.
+  const _fetchLog: FetchRecord[] = [];
+  const _mgmtStartedAt = Date.now();
+  const cachedFetch = (sym: string, interval: string, range: string, reason: FetchReason = "untagged") => {
+    const before = scanCache.stats();
+    const t0 = Date.now();
+    const p = scanCache.get(sym, interval, range);
+    return p.then((candles) => {
+      const after = scanCache.stats();
+      _fetchLog.push({
+        symbol: sym, interval, reason,
+        cacheHit: after.hits > before.hits,
+        bars: candles.length, ms: Date.now() - t0,
+      });
+      return candles;
+    });
+  };
 
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
@@ -2479,7 +2510,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
       try {
-        const candles = await cachedFetch(sym, "15m", "5d");
+        const candles = await cachedFetch(sym, "15m", "5d", "open_position_price_refresh");
         if (candles.length > 0) {
           livePriceMap[sym] = candles[candles.length - 1].close;
         }
@@ -2907,20 +2938,90 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
-  // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
-  const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  const rateMap: Record<string, number> = {};
+  //
+  // PAIRS ARE DERIVED, NOT LISTED. getQuoteToUSDRate returns 1.0 without reading
+  // the map when the QUOTE currency is USD, so a book of */USD pairs needs no
+  // rates at all. The old hardcoded six included GBP/USD, AUD/USD and NZD/USD,
+  // which are reachable only through crosses like EUR/GBP — none enabled — so
+  // they were fetched 1,440 times a day and never read.
+  //
+  // FALLBACK ORDER: live → last-known-good → the static constant. The constants
+  // in FALLBACK_RATES are years stale (USD/JPY 142.0 against a live 157.59), and
+  // lot size scales linearly with the error, so a refused fetch used to size a
+  // $1,000-risk trade ~$99 wrong, silently. An hour-old observed rate is wrong by
+  // at most 0.149%. A pair with no observation ever is left OUT of the map so
+  // getQuoteToUSDRate's own existing constant branch fires unchanged.
+  //
+  // The cache is a FALLBACK, not a TTL: every required pair is still fetched
+  // every cycle, exactly as before.
+  //
+  // OPEN POSITIONS ARE INCLUDED, not just enabled instruments. The map is read
+  // for portfolio heat and for P&L at close, and an open position can sit
+  // outside the enabled set — weekend crypto mode narrows `config.instruments`
+  // to crypto while an FX position is still open, and an instrument can be
+  // disabled after entry. Deriving from the enabled list alone would drop that
+  // position's rate and silently close it at a static constant.
+  const RATE_PAIRS = requiredRatePairs([
+    ...(config.instruments ?? []),
+    ...openPosArr.map((p: any) => p.symbol as string),
+  ]);
+  let rateMap: Record<string, number> = {};
+  let rateProvenance: RateProvenance[] = [];
+  let rateDegraded = false;
   try {
-    const rateFetches = await Promise.all(
-      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
-    );
-    for (let i = 0; i < RATE_PAIRS.length; i++) {
-      const candles = rateFetches[i];
-      if (candles.length > 0) {
-        rateMap[RATE_PAIRS[i]] = candles[candles.length - 1].close;
+    const { data: rcRow, error: rcErr } = await supabase.from("kv_cache").select("value")
+      .eq("key", rateCacheKey(userId, BOT_ID)).maybeSingle();
+    // A failed read is not fatal — it degrades the fallback to the static
+    // constants, which is exactly the old behaviour — but it must be visible,
+    // because silently it looks identical to "no rate ever observed".
+    if (rcErr) console.warn(`[scan ${scanCycleId}] rate cache read failed: ${rcErr.message}`);
+    const rateCache = parseRateCache(rcRow?.value ?? null);
+    const rateCacheBefore = JSON.stringify(rateCache);
+
+    const live: Record<string, number> = {};
+    if (RATE_PAIRS.length > 0) {
+      const rateFetches = await Promise.all(
+        RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d", "rate_map"))
+      );
+      for (let i = 0; i < RATE_PAIRS.length; i++) {
+        const candles = rateFetches[i];
+        if (candles.length > 0) live[RATE_PAIRS[i]] = candles[candles.length - 1].close;
       }
     }
-    console.log(`[scan ${scanCycleId}] rateMap built: ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`); 
+
+    // `attempted` is every required pair: this path always fetches. So a cache
+    // read here means a fetch failed, and is reported as such.
+    const resolved = resolveRates(RATE_PAIRS, live, rateCache, Date.now(), { attempted: RATE_PAIRS });
+    rateMap = resolved.rateMap;
+    rateProvenance = resolved.provenance;
+    rateDegraded = resolved.degraded;
+
+    // Persist last-known-good, but only when something was actually observed —
+    // during a provider outage every pair falls back and `nextCache` is
+    // unchanged, so writing would be a row update per minute saying nothing.
+    const rateCacheAfter = JSON.stringify(resolved.nextCache);
+    if (rateCacheAfter !== rateCacheBefore) {
+      // Non-fatal: a failed write costs freshness of the fallback on a LATER
+      // cycle, never correctness of this one. `.upsert()` resolves with an
+      // error rather than throwing, so it is checked, not caught.
+      const { error: wErr } = await supabase.from("kv_cache").upsert({
+        key: rateCacheKey(userId, BOT_ID),
+        value: rateCacheAfter,
+        // Long expiry on purpose. This is a fallback of last resort; an entry
+        // expiring would drop the pair back to the stale constant it exists to
+        // avoid. Age is surfaced in provenance instead of being enforced here.
+        expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "key" });
+      if (wErr) console.warn(`[scan ${scanCycleId}] rate cache write failed (non-fatal): ${wErr.message}`);
+    }
+
+    const summary = describeProvenance(rateProvenance);
+    if (rateDegraded) {
+      console.warn(`[scan ${scanCycleId}] rateMap DEGRADED: ${summary}`);
+    } else if (RATE_PAIRS.length > 0) {
+      console.log(`[scan ${scanCycleId}] rateMap built (${summary}): ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`);
+    }
   } catch (e: any) {
     console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
   }
@@ -3178,7 +3279,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
         const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
         const batchResults = await Promise.all(
-          batch.map(p => cachedFetch(p, "1d", "6mo"))
+          batch.map(p => cachedFetch(p, "1d", "6mo", "fotsi_daily"))
         );
         for (let j = 0; j < batch.length; j++) {
           if (batchResults[j] && batchResults[j].length >= 30) {
@@ -3374,7 +3475,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // need, on a budget that is already refusing fetches.
         const pendingInterval = getEntryInterval(config.entryTimeframe || "15min");
         const pendingRange = getEntryRange(config.entryTimeframe || "15min");
-        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange);
+        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange, "pending_fill_check");
         if (pendingCandles.length === 0) {
           // dataCache caches the empty result for the rest of the cycle, so a
           // single refused fetch silently skips this order until the next run.
@@ -3458,9 +3559,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
-              cachedFetch(pending.symbol, "1d", "1y"),
-              cachedFetch(pending.symbol, "4h", "1mo").then(c => c.slice(-LEGACY_H4_WINDOW)),
-              cachedFetch(pending.symbol, "1h", "5d"),
+              cachedFetch(pending.symbol, "1d", "1y", "pending_thesis_htf"),
+              cachedFetch(pending.symbol, "4h", "1mo", "pending_thesis_htf").then(c => c.slice(-LEGACY_H4_WINDOW)),
+              cachedFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"),
             ]);
 
             // Under styleAwareDirection the validator uses the same engine and
@@ -3482,10 +3583,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
             if (thesisStyleAware || !opts?.isManagementOnly) {
               if (resolvedStyle === "scalper") {
-                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d");
+                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d", "pending_thesis_m15");
                 thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
               } else if (resolvedStyle === "swing_trader") {
-                const tvW = await cachedFetch(pending.symbol, "1w", "2y");
+                const tvW = await cachedFetch(pending.symbol, "1w", "2y", "pending_thesis_weekly");
                 thesisStyleCandles = { bias: tvW, structure: tvDaily, confirm: tvH4 };
               } else {
                 thesisStyleCandles = { bias: tvDaily, structure: tvH4, confirm: tvH1 };
@@ -3760,7 +3861,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // right timeframe before hunting on the wrong one.
           const confirmTF = styleConfirmationTimeframe(resolvedStyle);
           const confirmRange = getEntryRange(confirmTF);
-          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange);
+          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange, "pending_confirmation");
           if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
             console.log(`[pending] ${pending.symbol} — insufficient ${confirmTF} candles for confirmation (${confirmCandles.length})`);
             confirmationHunt.push({
@@ -4147,6 +4248,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     console.log(`[manage ${scanCycleId}] Management-only complete: ${activeActions.length} actions, ${pendingFilled} fills, ${pendingExpired} expired, ${confirmationHunt.length} hunt outcomes`);
+
+    // ── management market-data telemetry. OBSERVATION ONLY. ──
+    // Never throws: a measurement must not be able to fail a management cycle.
+    await recordMgmtTelemetry(supabase, userId, "manage", _mgmtStartedAt, _fetchLog, {
+      openPositions: openPosArr.length,
+      pendingOrders: activePendingOrders?.length ?? 0,
+      managementActions: activeActions.length,
+    });
+
     return {
       pairsScanned: 0,
       signalsFound: 0,
@@ -8522,6 +8632,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
+      // Which source each FX conversion rate came from this cycle. Anything
+      // other than LIVE means sizing used a rate this cycle did not observe,
+      // and that must be visible rather than inferred from an absence. This
+      // path always fetches, so CACHED_BY_DESIGN cannot occur here.
+      rateMapHealth: { degraded: rateDegraded, pairs: rateProvenance },
       // Credit budget health. `unenforced` non-zero means the shared budget
       // failed open and we are back to per-isolate limiting; `gaveUp` counts
       // fetches abandoned at the wait ceiling, which surface downstream as
@@ -8581,4 +8696,55 @@ function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
     status, headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+/**
+ * Writes the management-loop market-data telemetry. OBSERVATION ONLY.
+ *
+ * NEVER THROWS. This measures a cycle that has already done its trading work;
+ * letting a monitoring write fail the cycle would be strictly worse than losing
+ * the measurement. Budget counters are read with `peekThrottleStats`, which does
+ * not reset — the full scan still reports the same numbers it always did.
+ */
+async function recordMgmtTelemetry(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  mode: "manage" | "scan",
+  startedAtMs: number,
+  fetches: FetchRecord[],
+  ctx: { openPositions: number; pendingOrders: number; managementActions: number },
+): Promise<void> {
+  try {
+    const budget = peekThrottleStats();
+    const symbols = new Set(fetches.map((f) => f.symbol));
+    const rec = summariseInvocation({
+      mode,
+      startedAtMs,
+      endedAtMs: Date.now(),
+      openPositions: ctx.openPositions,
+      pendingOrders: ctx.pendingOrders,
+      distinctSymbols: symbols.size,
+      managementActions: ctx.managementActions,
+      // `refused` has no non-destructive reader, so it is reported as 0 here
+      // rather than stolen from the scan cycle. The scan log remains the source
+      // of truth for refusals.
+      budgetRefused: 0,
+      budgetGaveUp: budget.gaveUpCount,
+      budgetUnenforced: budget.unenforcedCount,
+    }, fetches);
+
+    const key = mgmtTelemetryKey(userId, BOT_ID);
+    const { data } = await supabase.from("kv_cache").select("value").eq("key", key).maybeSingle();
+    const next = accumulateKeys(accumulate(parseTelemetry(data?.value), rec), fetches);
+
+    await supabase.from("kv_cache").upsert({
+      key,
+      value: JSON.stringify(next),
+      expires_at: new Date(Date.now() + 30 * 24 * 3_600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "key" });
+  } catch (e: any) {
+    console.warn(`[mgmt-telemetry] write failed (non-fatal): ${e?.message}`);
+  }
 }

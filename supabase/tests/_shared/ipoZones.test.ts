@@ -303,12 +303,58 @@ Deno.test("SHADOW ONLY — nothing in production imports the IPO research module
   // All three research modules are checked, not just ipoZones. ipoCorpusPlan
   // and ipoProvenance arrived later and would otherwise have been an unguarded
   // back door into exactly the same code.
-  const SHADOW = ["ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts"];
+  const SHADOW = [
+    "ipoZones.ts", "ipoCorpusPlan.ts", "ipoProvenance.ts",
+    "ipoHistoricalRange.ts", "ipoResearchAuth.ts", "ipoOriginExperiments.ts",
+    "ipoOriginFeatures.ts", "ipoDisplacementOnset.ts", "ipoOriginAnchor.ts", "ipoAnchorDiscriminator.ts", "ipoTeachingSpec.ts", "ipoOnsetVariants.ts",
+    "ipoContraction.ts", "ipoContractionDetector.ts", "ipoContractionSeeds.ts", "ipoContractionTwoStage.ts", "ipoMoveDetection.ts", "ipoStateMachine.ts", "ipoContractionStateExit.ts", "ipoLifecycle.ts", "ipoRawBacktest.ts", "ipoConfluenceFeatures.ts", "ipoAPlusClassifier.ts", "ipoRegimeDescriptors.ts", "ipoLiveVolatility.ts", "ipoLiveEngine.ts", "ipoFibConfluence.ts", "ipoFtmoSimulator.ts", "ipoIncrementalEngine.ts", "ipoObservation.ts", "ipoPaperContract.ts", "ipoPaperRunner.ts", "ipoEngineState.ts", "ipoInstruments.ts", "ipoRunnerHealth.ts",
+  ];
   const allowed = [
     "supabase/functions/smc-analysis/index.ts",      // the single read-only diagnostic
+    // Phase C observation endpoint. READ-ONLY: a dedicated test asserts it
+    // cannot reach a broker or any SMC trading-state table.
+    "supabase/functions/ipo-observation/index.ts",
+    // Phase D paper worker. PAPER ONLY and IPO-owned: a dedicated test asserts
+    // it writes no SMC table and reaches no broker. It is the ONLY place the
+    // 1,200-bar bootstrap runs.
+    "supabase/functions/ipo-paper-runner/index.ts",
+    // Phase D read path. Persisted rows only — no engine, no candles, no writes.
+    "supabase/functions/ipo-paper-state/index.ts",
     "supabase/functions/_shared/ipoZones.ts",        // shadow modules may import each other
     "supabase/functions/_shared/ipoCorpusPlan.ts",
     "supabase/functions/_shared/ipoProvenance.ts",
+    "supabase/functions/_shared/ipoHistoricalRange.ts",
+    "supabase/functions/_shared/ipoResearchAuth.ts",
+    "supabase/functions/_shared/ipoOriginExperiments.ts",
+    "supabase/functions/_shared/ipoOriginFeatures.ts",
+    "supabase/functions/_shared/ipoDisplacementOnset.ts",
+    "supabase/functions/_shared/ipoOriginAnchor.ts",
+    "supabase/functions/_shared/ipoAnchorDiscriminator.ts",
+    "supabase/functions/_shared/ipoTeachingSpec.ts",
+    "supabase/functions/_shared/ipoOnsetVariants.ts",
+    "supabase/functions/_shared/ipoContraction.ts",
+    "supabase/functions/_shared/ipoContractionDetector.ts",
+    "supabase/functions/_shared/ipoContractionSeeds.ts",
+    "supabase/functions/_shared/ipoContractionTwoStage.ts",
+    "supabase/functions/_shared/ipoMoveDetection.ts",
+    "supabase/functions/_shared/ipoStateMachine.ts",
+    "supabase/functions/_shared/ipoContractionStateExit.ts",
+    "supabase/functions/_shared/ipoLifecycle.ts",
+    "supabase/functions/_shared/ipoRawBacktest.ts",
+    "supabase/functions/_shared/ipoConfluenceFeatures.ts",
+    "supabase/functions/_shared/ipoAPlusClassifier.ts",
+    "supabase/functions/_shared/ipoRegimeDescriptors.ts",
+    "supabase/functions/_shared/ipoLiveVolatility.ts",
+    "supabase/functions/_shared/ipoLiveEngine.ts",
+    "supabase/functions/_shared/ipoFibConfluence.ts",
+    "supabase/functions/_shared/ipoFtmoSimulator.ts",
+    "supabase/functions/_shared/ipoIncrementalEngine.ts",
+    "supabase/functions/_shared/ipoObservation.ts",
+    "supabase/functions/_shared/ipoPaperContract.ts",
+    "supabase/functions/_shared/ipoPaperRunner.ts",
+    "supabase/functions/_shared/ipoEngineState.ts",
+    "supabase/functions/_shared/ipoInstruments.ts",
+    "supabase/functions/_shared/ipoRunnerHealth.ts",
   ];
   const offenders: string[] = [];
   const walk = async (dir: string) => {

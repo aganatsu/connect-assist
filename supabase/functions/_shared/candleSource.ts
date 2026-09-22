@@ -95,6 +95,33 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
  * These become "Insufficient candles" and a skipped pair downstream, so a
  * rising value means the scanner is being starved rather than merely paced.
  */
+/**
+ * Read the throttle counters WITHOUT resetting them.
+ *
+ * `resetThrottleStats` is read-and-clear and is called once per full scan
+ * cycle. The 1-minute management loop returns long before that, so if it called
+ * the resetting version it would silently steal counts the next full scan is
+ * supposed to report. This exists so management telemetry can observe the same
+ * numbers without perturbing them.
+ *
+ * Note the budget half (`rpcFailures`, `refused`) lives in apiCreditBudget and
+ * has no non-destructive reader, so it is deliberately absent here rather than
+ * reported as zero — an absent number is honest, a wrong one is not.
+ */
+export function peekThrottleStats(): {
+  throttleCount: number;
+  rateLimited429: number;
+  unenforcedCount: number;
+  gaveUpCount: number;
+} {
+  return {
+    throttleCount: _tdThrottleCount,
+    rateLimited429: _td429Count,
+    unenforcedCount: _tdUnenforcedCount,
+    gaveUpCount: _tdGaveUpCount,
+  };
+}
+
 export function resetThrottleStats(): {
   throttleCount: number;
   rateLimited429: number;
@@ -684,6 +711,36 @@ export interface FetchOptions {
   limit?: number;            // desired number of candles (default 200)
   brokerConn?: BrokerConn | null; // optional MetaAPI connection
   skipBroker?: boolean;      // true for request-budget-sensitive scans; use public data directly
+  /**
+   * Whether a newly discovered symbol mapping may be written back to
+   * `broker_connections.symbol_overrides`.
+   *
+   * DEFAULTS TO TRUE, and the guard is `!== false`, so every existing caller —
+   * none of which sets it — keeps the current behaviour exactly.
+   *
+   * A read-only caller sets it to false. Symbol DISCOVERY is unaffected: the
+   * broker symbol list is still fetched, still matched, and the discovered
+   * symbol is still used for this request. Only the write back is suppressed,
+   * along with the in-memory mutation of the caller's connection object, so a
+   * read-only caller leaves no trace at all. The cost is that the next request
+   * re-discovers, which is work rather than incorrectness.
+   *
+   * Added for `ipo-observation`, which must not write an SMC-owned table. That
+   * function passes no `brokerConn` today, so this branch is already
+   * unreachable for it — but that is an implicit invariant that one added
+   * argument would silently break, and this makes it explicit.
+   */
+  persistSymbolOverrides?: boolean;
+}
+
+/**
+ * The persistence decision, exported so it can be tested directly rather than
+ * inferred from the call site.
+ */
+export function shouldPersistSymbolOverride(
+  opts: { persistSymbolOverrides?: boolean },
+): boolean {
+  return opts.persistSymbolOverrides !== false;
 }
 
 export interface FetchResult {
@@ -828,7 +885,11 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
         brokerSymbol = match.brokerSymbol;
         candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
         if (candles.length > 0) {
-          await persistSymbolOverride(opts.brokerConn, opts.symbol, brokerSymbol);
+          if (shouldPersistSymbolOverride(opts)) {
+            await persistSymbolOverride(opts.brokerConn, opts.symbol, brokerSymbol);
+          } else {
+            console.log(`[candleSource] auto-mapped ${opts.symbol} → ${brokerSymbol} (NOT persisted: read-only caller)`);
+          }
         }
       }
     }

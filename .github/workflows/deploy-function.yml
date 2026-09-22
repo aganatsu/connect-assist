@@ -1,0 +1,81 @@
+name: Deploy named Edge Functions
+
+# Deploys ONLY the functions you name. Singular, on purpose.
+#
+# WHY THIS EXISTS ALONGSIDE deploy-functions.yml. That workflow loops over every
+# directory under supabase/functions/ and deploys all 25. That is the right
+# behaviour for a push to main, where the branch is the deployed truth. It is the
+# wrong behaviour for a staged rollout: a plan that says "deploy the read-only
+# surface first, then the worker" cannot be expressed by a workflow with no way
+# to deploy a subset. Dispatching the bulk workflow from a feature branch would
+# also redeploy every SMC production function from unmerged code, which is a
+# production change wearing the costume of an IPO step.
+#
+# SO THIS ONE IS DELIBERATELY NARROW:
+#   - it deploys exactly the comma-separated names given, nothing else;
+#   - it refuses a name with no index.ts rather than silently skipping it, so a
+#     typo fails the run instead of quietly deploying nothing;
+#   - it refuses _shared, which is imported code and not a function;
+#   - it prints the resolved list before deploying anything.
+#
+# It does NOT create schedules. Deploying a function makes it callable; it does
+# not make it run. Scheduling is a separate, separately-authorised act.
+
+on:
+  workflow_dispatch:
+    inputs:
+      functions:
+        description: 'Comma-separated function names, e.g. ipo-observation,ipo-paper-state'
+        required: true
+        type: string
+
+concurrency:
+  # Shares a group with the bulk deploy: two deploys of the same project must
+  # never interleave, whichever workflow started them.
+  group: deploy-functions
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Resolve and validate the list
+        id: plan
+        run: |
+          set -euo pipefail
+          names=$(echo "${{ inputs.functions }}" | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$')
+          [ -n "$names" ] || { echo "::error::no function names given"; exit 1; }
+          while read -r name; do
+            if [ "$name" = "_shared" ]; then
+              echo "::error::_shared is imported code, not a deployable function"; exit 1
+            fi
+            if [ ! -f "supabase/functions/$name/index.ts" ]; then
+              echo "::error::supabase/functions/$name/index.ts does not exist"; exit 1
+            fi
+            echo "will deploy: $name"
+          done <<< "$names"
+          echo "names<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$names" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # No --no-verify-jwt, for the same reason the bulk workflow omits it:
+          # nothing in supabase/config.toml sets verify_jwt, so Supabase's
+          # default (ON) is the only thing keeping these functions from being
+          # publicly callable. Passing the flag would open them.
+          while read -r name; do
+            echo "::group::deploy $name"
+            supabase functions deploy "$name" \
+              --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+            echo "::endgroup::"
+          done <<< "${{ steps.plan.outputs.names }}"

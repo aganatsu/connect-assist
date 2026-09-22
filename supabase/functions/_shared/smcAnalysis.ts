@@ -2570,6 +2570,22 @@ export const FALLBACK_RATES: Record<string, number> = {
   "USD/CHF": 0.88,
 };
 
+/**
+ * Quote currency → the pair that prices it in USD, and whether to invert.
+ *
+ * Hoisted out of `getQuoteToUSDRate` and exported so callers can DERIVE which
+ * conversion pairs they actually need instead of hardcoding a list. The values
+ * are unchanged; this is the same literal in a wider scope.
+ */
+export const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
+  "JPY": { pair: "USD/JPY", invert: true },   // 1 JPY = 1/USDJPY USD
+  "GBP": { pair: "GBP/USD", invert: false },  // 1 GBP = GBPUSD USD
+  "AUD": { pair: "AUD/USD", invert: false },  // 1 AUD = AUDUSD USD
+  "NZD": { pair: "NZD/USD", invert: false },  // 1 NZD = NZDUSD USD
+  "CAD": { pair: "USD/CAD", invert: true },   // 1 CAD = 1/USDCAD USD
+  "CHF": { pair: "USD/CHF", invert: true },   // 1 CHF = 1/USDCHF USD
+};
+
 export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
   // Non-forex: already USD-denominated
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -2581,15 +2597,6 @@ export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, numbe
 
   // Quote is already USD — no conversion needed
   if (quote === "USD") return 1.0;
-
-  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
-    "JPY": { pair: "USD/JPY", invert: true },   // 1 JPY = 1/USDJPY USD
-    "GBP": { pair: "GBP/USD", invert: false },   // 1 GBP = GBPUSD USD
-    "AUD": { pair: "AUD/USD", invert: false },   // 1 AUD = AUDUSD USD
-    "NZD": { pair: "NZD/USD", invert: false },   // 1 NZD = NZDUSD USD
-    "CAD": { pair: "USD/CAD", invert: true },    // 1 CAD = 1/USDCAD USD
-    "CHF": { pair: "USD/CHF", invert: true },    // 1 CHF = 1/USDCHF USD
-  };
 
   const conv = QUOTE_CONVERSION[quote];
   if (!conv) return 1.0; // Unknown quote currency — safe fallback

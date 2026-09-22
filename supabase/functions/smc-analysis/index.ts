@@ -1,7 +1,15 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { provenanceManifest, EVIDENCE_SOURCES } from "../_shared/ipoProvenance.ts";
 import { planCorpusInsert, resolveWaveParents, corpusNaturalKey, UnresolvedParentError } from "../_shared/ipoCorpusPlan.ts";
-import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars } from "../_shared/ipoZones.ts";
+import { checkResearchKey, RESEARCH_KEY_HEADER } from "../_shared/ipoResearchAuth.ts";
+import { probeOriginPipeline, shadowOriginInventory, ORIGIN_DEFINITIONS, directionalEvents } from "../_shared/ipoOriginExperiments.ts";
+import { legCandidateSet, summariseFeatures } from "../_shared/ipoOriginFeatures.ts";
+import { testOnsetHypothesis, ONSET_DEFINITIONS, lastOppositeBefore } from "../_shared/ipoDisplacementOnset.ts";
+import { testAnchorHypothesis } from "../_shared/ipoOriginAnchor.ts";
+import { discriminateAnchorModes } from "../_shared/ipoAnchorDiscriminator.ts";
+import { testTeachingSpec, finalBaseExit } from "../_shared/ipoTeachingSpec.ts";
+import { permanentBaseExit, runNeverRevisitsOrigin, describeMove } from "../_shared/ipoOnsetVariants.ts";
+import { detectIPOCandidates, traceIPOCandidateFailure, analyzeLocalConsolidation, traceDepartureOriginHypotheses, originHypothesisBackground, traceEventLocalRecovery, buildIPOInventory, inventorySummary, evaluateDemonstratedCoverage, validateCorpusExamples, inventoryViewBars, resolveKnownCandleIndex } from "../_shared/ipoZones.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Diagnostic only — see the "impulse_debug" action at the bottom of the handler.
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
@@ -429,6 +437,26 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
 }
 
 // ─── HTTP Handler ───────────────────────────────────────────────────
+
+/**
+ * Service-role client for the project-owned IPO corpus.
+ *
+ * CALL checkResearchKey FIRST. This client bypasses RLS entirely, which is the
+ * point — the table has no anon/authenticated policy and their grants are
+ * revoked — but it means the research-key check is the ONLY thing standing
+ * between a caller and the canonical corpus.
+ *
+ * The key never leaves this process: it is read from the environment, compared,
+ * and discarded. Nothing about it reaches a response or a log line.
+ */
+function corpusServiceClient() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: { persistSession: false } },
+  );
+}
+
 // ─── research-only candle sourcing ───────────────────────────────────────────
 //
 // SHADOW ACTIONS ONLY. When a target names startDate/endDate the series comes
@@ -4145,32 +4173,26 @@ Deno.serve(async (req) => {
       const targets = Array.isArray(body?.targets) ? body.targets : [];
       const out: any[] = [];
 
-      // Corpus rows are needed only for the coverage action, and they are the
-      // caller's own rows — identity comes from the JWT, never the body.
+      // The canonical corpus is read internally with the service role. It is
+      // project data, so there is no "caller's own rows" to scope to.
+      //
+      // The research key is required for coverage as well as for the corpus
+      // endpoints. Coverage is not a cheap read: it builds a full inventory per
+      // timeframe and, with startDate/endDate, issues paged historical fetches
+      // against a metered provider. Left open to the publishable key it is an
+      // unauthenticated way to spend the project's data budget.
       let corpus: any[] = [];
       if (action === "ipo_coverage") {
-        const authHeader = req.headers.get("Authorization") ?? "";
-        if (!authHeader.startsWith("Bearer ")) {
-          return respond({ error: "Authorization: Bearer <jwt> required" });
-        }
-        const supa = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_ANON_KEY")!,
-          { global: { headers: { Authorization: authHeader } } },
-        );
-        const { data: claimsData, error: claimsErr } =
-          await supa.auth.getClaims(authHeader.slice("Bearer ".length));
-        const userId = String(claimsData?.claims?.sub ?? "");
-        if (claimsErr || !userId) {
-          return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
-        }
+        const auth = await checkResearchKey(req);
+        if (!auth.ok) return respond({ error: auth.error }, auth.status);
         // Inline examples are accepted for dry runs, but they are labelled as
         // such so a result computed from ad-hoc input is never mistaken for one
         // measured against the stored corpus.
         if (Array.isArray(body?.examples) && body.examples.length) {
           corpus = body.examples.map((e: any, i: number) => ({ id: e.id ?? `inline-${i}`, ...e, _inline: true }));
         } else {
-          const { data, error } = await supa.from("ipo_corpus_examples").select("*").eq("user_id", userId);
+          const supa = corpusServiceClient();
+          const { data, error } = await supa.from("ipo_corpus_examples").select("*");
           if (error) return respond({ error: error.message });
           corpus = (data ?? []).map((r: any) => ({
             id: r.id, symbol: r.symbol, timeframe: r.timeframe, direction: r.direction,
@@ -4263,23 +4285,506 @@ Deno.serve(async (req) => {
 
     // Corpus of demonstrated IPOs. POSITIVES ONLY — the table has no label
     // column, so an unmarked candle cannot become a negative.
+    // ── ipo_onset_variants ───────────────────────────────────────────────
+    // READ-ONLY. Anchor FIXED to the taught step-back; only the major-move
+    // onset varies. Nothing wired to the detector.
+    if (action === "ipo_onset_variants") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" }); continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const ctx = { candles: series, swingIdx, breakIdx: ev.index, direction: e.side };
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+
+          // Every onset definition, anchored the SAME way: the taught step-back.
+          const defs: Array<[string, number | null]> = [
+            ...ONSET_DEFINITIONS.map((d) => [d.key, d.find(ctx)] as [string, number | null]),
+            ["FINAL_BASE_EXIT", finalBaseExit(ctx)],
+            ["PERMANENT_BASE_EXIT", permanentBaseExit(ctx)],
+            ["RUN_NEVER_REVISITS_ORIGIN", runNeverRevisitsOrigin(ctx)],
+          ];
+          const anatomy = describeMove(ctx);
+          const dt = (i: number | null) => i === null ? null : series[i].datetime;
+          results.push({
+            symbol: sym, interval: tf, date: e.date, side: e.side,
+            demonstratedIndex: r.index, demonstratedDatetime: series[r.index].datetime,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatches: prodPick === r.index,
+            leg: { swingIndex: swingIdx, swingDatetime: series[swingIdx].datetime,
+                   breakIndex: ev.index, breakDatetime: series[ev.index].datetime,
+                   significance: ev.significance },
+            anatomy: {
+              base: anatomy.base ? { ...anatomy.base } : null,
+              firstBaseExit: dt(anatomy.firstBaseExitIndex),
+              permanentExitFromReportedBase: dt(anatomy.permanentExitFromReportedBase),
+              permanentBaseExitAnyCluster: dt(anatomy.permanentBaseExitAnyCluster),
+              firstSustainedClose: dt(anatomy.firstSustainedCloseIndex),
+              neverRevisitsOrigin: dt(anatomy.neverRevisitsOriginIndex),
+            },
+            trials: defs.map(([key, onset]) => {
+              const origin = onset === null ? null : lastOppositeBefore(series, onset, e.side, swingIdx);
+              return { onsetKey: key, onsetDatetime: dt(onset),
+                       originDatetime: dt(origin), exactMatch: origin === r.index };
+            }),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const keys = [...new Set(flat.flatMap((f: any) => f.trials.map((t: any) => t.onsetKey)))];
+      return respond({
+        note: "READ-ONLY. Anchor FIXED to the taught step-back — last opposite candle " +
+              "before the move — because mode A fires 0/4 on Ezzy demonstrations and the " +
+              "teaching states the step-back unconditionally. Only the onset varies. " +
+              "Both new definitions are parameter-free and about PERMANENCE, not magnitude.",
+        productionBaseline: { exact: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byDefinition: keys.map((k: any) => {
+          const hit = flat.filter((f: any) => f.trials.find((t: any) => t.onsetKey === k)?.exactMatch);
+          return { onsetKey: k, exact: hit.length, of: flat.length,
+                   matched: hit.map((f: any) => `${f.symbol}|${f.interval}|${f.date}`) };
+        }).sort((a: any, b: any) => b.exact - a.exact),
+        out,
+      });
+    }
+
+    // ── ipo_teaching_spec ────────────────────────────────────────────────
+    // READ-ONLY. The origin rule as literally taught, measured clause by clause.
+    if (action === "ipo_teaching_spec") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const canon: any = analyzeMarketStructureCanonical(series, {
+          policy: "latest_unbroken_structural", maxEventAgeBars: null,
+        });
+        const policyAt = new Map<string, string>();
+        for (const b of (canon.bos ?? [])) policyAt.set(`${b.index}|${b.type}`, "BOS");
+        for (const c of (canon.choch ?? [])) policyAt.set(`${c.index}|${c.type}`, "CHoCH");
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" }); continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({
+            symbol: sym, interval: tf, date: e.date, side: e.side,
+            productionSelectedIndex: prodPick,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatches: prodPick === r.index,
+            ...testTeachingSpec(series, r.index, e.side, swingIdx, ev.index,
+              policyAt.get(`${ev.index}|${ev.direction}`) ?? null),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const keys = [...new Set(flat.flatMap((f: any) => f.trials.map((t: any) => t.onsetKey)))];
+      return respond({
+        teachingSpec: {
+          source: "smart money part 1 — on-screen rules list plus two chart annotations",
+          clauses: ["Break Structure", "Cannot be inside a consolidation",
+                    "Last candle before major move", "Candle that took people out"],
+          annotations: ["Last Bullish before the big drop (supply)",
+                        "last bearish candle before the big push up (demand)"],
+          note: "Measured clause by clause. 'Cannot be inside a consolidation' is " +
+                "UNEVALUATED: the predicate for it was retired as indefensible, so no " +
+                "example can be said to satisfy or violate it.",
+        },
+        productionBaseline: { exactMatches: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byOnsetDefinition: keys.map((k: any) => {
+          const ts = flat.map((f: any) => ({ f, t: f.trials.find((x: any) => x.onsetKey === k) })).filter((x: any) => x.t);
+          const hit = ts.filter((x: any) => x.t.exactMatch);
+          return {
+            onsetKey: k,
+            parameterFree: ts[0]?.t.parameterFree ?? null,
+            exactMatches: hit.length, of: ts.length,
+            matched: hit.map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+            onsetNotFound: ts.filter((x: any) => x.t.onsetIndex === null).length,
+          };
+        }).sort((a: any, b: any) => b.exactMatches - a.exactMatches),
+        tookPeopleOutTally: ["sweepsPriorLocalExtreme", "wicksThroughAndClosesBack",
+          "engulfsPreviousCandle", "removesShortTermExtreme", "merelyPrecedesALaterSweep"]
+          .map((k) => ({ reading: k, trueFor: flat.filter((f: any) => f.tookPeopleOut[k]).length, of: flat.length })),
+        out,
+      });
+    }
+
+    // ── ipo_anchor_discriminator ─────────────────────────────────────────
+    // READ-ONLY. Features that might say WHICH anchor mode applies, computed
+    // without ever consulting the demonstration. Frozen onset detectors are
+    // called unchanged; nothing is wired to the detector.
+    if (action === "ipo_anchor_discriminator") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            ...discriminateAnchorModes(series, r.index, e.side, swingIdx, ev.index) });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      return respond({
+        note: "READ-ONLY. Scope is pairs where BOTH readings are structurally " +
+              "available: the onset bar is already the IPO colour and a prior " +
+              "opposite bar exists. Where the onset is departure-coloured, mode A " +
+              "cannot apply and the case cannot discriminate — those are excluded " +
+              "from the comparison rather than counted as evidence for B. No " +
+              "threshold, no score, no detector combination.",
+        out,
+      });
+    }
+
+    // ── ipo_origin_anchor ────────────────────────────────────────────────
+    // READ-ONLY. ONSET_OR_LAST_OPPOSITE_BEFORE applied over the FROZEN onset
+    // detectors. The onset finders are called exactly as implemented; only the
+    // anchoring after them differs. Nothing wired to the detector.
+    if (action === "ipo_origin_anchor") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+              error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({ symbol: sym, interval: tf, date: e.date, side: e.side,
+            ...testAnchorHypothesis(series, r.index, e.side, swingIdx, ev.index, prodPick ?? null) });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const byDef = ONSET_DEFINITIONS.map((d) => {
+        const ts = flat.map((f: any) => ({ f, t: f.trials.find((t: any) => t.onsetKey === d.key) }))
+          .filter((x: any) => x.t);
+        const hit = ts.filter((x: any) => x.t.exactMatch);
+        return {
+          onsetKey: d.key,
+          exactMatches: hit.length,
+          of: ts.length,
+          byAnchorMode: {
+            ONSET_IS_ORIGIN: hit.filter((x: any) => x.t.anchorMode === "ONSET_IS_ORIGIN").length,
+            STEP_BACK_TO_LAST_OPPOSITE: hit.filter((x: any) => x.t.anchorMode === "STEP_BACK_TO_LAST_OPPOSITE").length,
+          },
+          matched: hit.map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+          gainedVsProduction: hit.filter((x: any) => !x.f.productionMatches)
+            .map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+          lostVsProduction: ts.filter((x: any) => x.f.productionMatches && !x.t.exactMatch)
+            .map((x: any) => `${x.f.symbol}|${x.f.interval}|${x.f.date}`),
+        };
+      }).sort((a, b) => b.exactMatches - a.exactMatches);
+      return respond({
+        note: "READ-ONLY. ONSET_OR_LAST_OPPOSITE_BEFORE over the FROZEN onset " +
+              "detectors — the finders are unchanged and only the anchoring after " +
+              "them differs. No threshold introduced: the rule branches on candle " +
+              "colour, which already defines IPO direction everywhere else. " +
+              "Definitions are NOT unioned and nothing is scored.",
+        productionBaseline: { exactMatches: flat.filter((f: any) => f.productionMatches).length, of: flat.length },
+        byDefinition: byDef,
+        out,
+      });
+    }
+
+    // ── ipo_displacement_onset ───────────────────────────────────────────
+    // READ-ONLY. Locates the impulse onset FIRST, by definitions that never
+    // look at a candidate's own future move, then steps back to the last
+    // opposite-direction candle. Nothing wired to the detector.
+    if (action === "ipo_displacement_onset") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const results: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            results.push({ date: e.date, side: e.side, error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          const wantDir = e.side === "demand" ? "bullish" : "bearish";
+          const ev = events.find((x: any) => {
+            if (x.direction !== wantDir || x.index <= r.index) return false;
+            const sw = x.swingIndex ?? Math.max(0, x.index - 10);
+            return r.index >= sw && r.index <= x.index;
+          });
+          if (!ev) { results.push({ date: e.date, side: e.side, error: "no break whose leg contains the candle" }); continue; }
+          const swingIdx = ev.swingIndex ?? Math.max(0, ev.index - 10);
+          const prodPick = allZones
+            .filter((z) => z.direction === e.side && z.candleIndex >= swingIdx && z.candleIndex <= ev.index)
+            .map((z) => z.candleIndex)
+            .sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null;
+          results.push({
+            date: e.date, side: e.side, symbol: sym, interval: tf,
+            productionSelectedIndex: prodPick,
+            productionSelectedDatetime: prodPick === null ? null : series[prodPick].datetime,
+            productionMatchesDemonstrated: prodPick === r.index,
+            ...testOnsetHypothesis(series, r.index, e.side, swingIdx, ev.index),
+          });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, results });
+      }
+      const flat = out.flatMap((o: any) => (o.results ?? []).filter((x: any) => !x.error));
+      const byDef = ONSET_DEFINITIONS.map((d) => {
+        const ts = flat.map((f: any) => f.trials.find((t: any) => t.onsetKey === d.key)).filter(Boolean);
+        return {
+          onsetKey: d.key, definition: d.definition, parameter: d.parameter,
+          exactMatches: ts.filter((t: any) => t.exactMatch).length,
+          of: ts.length,
+          onsetNotFound: ts.filter((t: any) => t.onsetIndex === null).length,
+          stepBackFailed: ts.filter((t: any) => t.onsetIndex !== null && t.steppedBackIndex === null).length,
+          matched: flat.filter((f: any) => f.trials.find((t: any) => t.onsetKey === d.key)?.exactMatch)
+            .map((f: any) => `${f.symbol}|${f.interval}|${f.date}`),
+        };
+      }).sort((a, b) => b.exactMatches - a.exactMatches);
+      return respond({
+        note: "READ-ONLY. Onset is located FIRST by rules that never inspect a " +
+              "candidate's own future move, then the origin is read off by stepping " +
+              "back. No definition is combined with another and nothing is scored. " +
+              "Two definitions carry an ATR threshold and are labelled " +
+              "OPERATIONAL_INTERPRETATION; a threshold tuned on twelve examples is a " +
+              "fitted parameter, not a hypothesis.",
+        baseline: { productionExactMatches: flat.filter((f: any) => f.productionMatchesDemonstrated).length, of: flat.length },
+        byDefinition: byDef,
+        out,
+      });
+    }
+
+    // ── ipo_origin_features ──────────────────────────────────────────────
+    // READ-ONLY. For every demonstrated origin, the features of that candle and
+    // of every IPO-coloured competitor in the same structural leg. Counts only,
+    // no scoring, nothing wired to the detector.
+    if (action === "ipo_origin_features") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      const allSets: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, Number(tgt.limit ?? 800), isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+        const events = directionalEvents(series, {});
+        const zones = detectIPOCandidates(series, { symbol: sym, timeframe: tf });
+        const allZones = [...zones.valid, ...zones.rejected];
+
+        const legs: any[] = [];
+        for (const e of (tgt.expected ?? [])) {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          if (r.index < 0 || r.ambiguous) {
+            legs.push({ date: e.date, side: e.side, error: r.ambiguous ? "DATE_ONLY_AMBIGUOUS" : "not resolvable" });
+            continue;
+          }
+          // What production picked in that same leg, for the pairwise column.
+          const set0 = legCandidateSet(series, r.index, e.side, events, null);
+          const prodInLeg = set0
+            ? allZones.filter((z) => z.direction === e.side &&
+                z.candleIndex >= set0.swingIndex && z.candleIndex <= set0.breakIndex)
+                .map((z) => z.candleIndex).sort((a, b) => Math.abs(a - r.index) - Math.abs(b - r.index))[0] ?? null
+            : null;
+          const set = legCandidateSet(series, r.index, e.side, events, prodInLeg ?? null);
+          if (!set) { legs.push({ date: e.date, side: e.side, error: "no break whose leg contains the candle" }); continue; }
+          allSets.push(set);
+          legs.push({ date: e.date, side: e.side, symbol: sym, interval: tf, ...set });
+        }
+        out.push({ symbol: sym, interval: tf, bars: series.length, sourcing, legs });
+      }
+      return respond({
+        note: "READ-ONLY measurement. A 'competitor' is any IPO-coloured candle in the " +
+              "same structural leg — a bar the search had to pass over, NOT a false " +
+              "positive. No feature is combined into a score; with this few " +
+              "demonstrations a weighted formula would fit the sample and teach nothing. " +
+              "Nothing here is wired to the detector.",
+        summary: summariseFeatures(allSets),
+        out,
+      });
+    }
+
+    // ── ipo_origin_probe / ipo_origin_experiment ─────────────────────────
+    // READ-ONLY. Walks a demonstrated candle through the production origin
+    // pipeline and reports where it is lost, and measures what alternative
+    // origin definitions WOULD have selected. The detector is untouched: these
+    // definitions are not wired to anything.
+    if (action === "ipo_origin_probe" || action === "ipo_origin_experiment") {
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const targets = Array.isArray(body?.targets) ? body.targets : [];
+      const out: any[] = [];
+      for (const tgt of targets) {
+        const sym = String(tgt.symbol);
+        const tf = String(tgt.interval ?? "1d");
+        const barsBack = Number(tgt.limit ?? body?.limit ?? 800);
+        const isFx = (SPECS as any)[sym]?.type === "forex";
+        const { series, sourcing } = await researchSeries(tgt, sym, tf, barsBack, isFx);
+        if (series.length < 60) { out.push({ symbol: sym, interval: tf, error: `only ${series.length} bars`, sourcing }); continue; }
+
+        if (action === "ipo_origin_probe") {
+          out.push({
+            symbol: sym, interval: tf, bars: series.length, sourcing,
+            probes: (tgt.expected ?? []).map((e: any) =>
+              probeOriginPipeline(series, String(e.date), e.side)),
+          });
+          continue;
+        }
+
+        // Experiment: what set of IPO candles does each definition produce, and
+        // how does that land against the demonstrated examples for this target?
+        const expected = (tgt.expected ?? []) as Array<{ date: string; side: "demand" | "supply" }>;
+        const resolveIdx = (e: any) => {
+          const r = resolveKnownCandleIndex(series, String(e.date));
+          return r.ambiguous ? -1 : r.index;
+        };
+        const wanted = expected.map((e) => ({ ...e, index: resolveIdx(e) }));
+        const defs = Array.isArray(tgt.definitions) && tgt.definitions.length
+          ? tgt.definitions : ORIGIN_DEFINITIONS.map((d) => d.key);
+        out.push({
+          symbol: sym, interval: tf, bars: series.length, sourcing,
+          expected: wanted.map((w) => ({ date: w.date, side: w.side, index: w.index })),
+          definitions: defs.map((key: any) => {
+            const inv = shadowOriginInventory(series, key, {});
+            const hit = (w: any) => inv.some((z) => z.index === w.index && z.direction === w.side);
+            return {
+              key,
+              assumption: ORIGIN_DEFINITIONS.find((d) => d.key === key)?.assumption,
+              zones: inv.length,
+              recovered: wanted.filter((w) => w.index >= 0 && hit(w)).map((w) => w.date),
+              stillMissing: wanted.filter((w) => w.index >= 0 && !hit(w)).map((w) => w.date),
+              zoneDatetimes: tgt.includeZones ? inv.map((z) => `${z.direction}|${z.datetime}`) : undefined,
+            };
+          }),
+        });
+      }
+      return respond({
+        note: "READ-ONLY. Alternative origin definitions are MEASUREMENTS of what a " +
+              "different rule would have selected. Production still runs " +
+              "EXTREME_OF_LEG; nothing here is wired to the detector, no threshold " +
+              "was tuned and consolidation remains UNRESOLVED.",
+        out,
+      });
+    }
+
     if (action === "ipo_corpus") {
       const sub = String(body?.sub ?? "stats");
-      const authHeader = req.headers.get("Authorization") ?? "";
-      if (!authHeader.startsWith("Bearer ")) {
-        return respond({ error: "Authorization: Bearer <jwt> required" });
-      }
-      const supa = createClient(
-        Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_ANON_KEY")!,
-        { global: { headers: { Authorization: authHeader } } },
-      );
-      const { data: claimsData, error: claimsErr } =
-        await supa.auth.getClaims(authHeader.slice("Bearer ".length));
-      const userId = String(claimsData?.claims?.sub ?? "");
-      if (claimsErr || !userId) {
-        return respond({ error: "a signed-in user session is required (no sub claim on this token)" });
-      }
+      // Project-owned data: the question is "is this the research operator",
+      // not "which account is this". A user JWT would let any signed-in account
+      // rewrite the shared record of what the videos demonstrate.
+      const auth = await checkResearchKey(req);
+      if (!auth.ok) return respond({ error: auth.error }, auth.status);
+      const supa = corpusServiceClient();
 
       if (sub === "add") {
         const rows = Array.isArray(body?.examples) ? body.examples : [];
@@ -4293,7 +4798,6 @@ Deno.serve(async (req) => {
         const { data: existing, error: exErr } = await supa
           .from("ipo_corpus_examples")
           .select("symbol,timeframe,candle_datetime,direction,example_group_id")
-          .eq("user_id", userId)
           .in("symbol", [...new Set(rows.map((e: any) => e.symbol))]);
         if (exErr) return respond({ error: exErr.message });
         const existingGroupByKey = new Map<string, string>();
@@ -4302,7 +4806,7 @@ Deno.serve(async (req) => {
         }
         const reused = keys.filter((k: string) => existingGroupByKey.has(k)).length;
 
-        const plan = planCorpusInsert(rows, userId, () => crypto.randomUUID(), existingGroupByKey);
+        const plan = planCorpusInsert(rows, () => crypto.randomUUID(), existingGroupByKey);
         if (plan.problems.length) return respond({ error: "validation failed", problems: plan.problems });
 
         // One upsert per WAVE, roots first. A W->D->4H chain cannot go in a
@@ -4328,7 +4832,7 @@ Deno.serve(async (req) => {
             throw e;
           }
           const { data, error } = await supa.from("ipo_corpus_examples")
-            .upsert(payload, { onConflict: "user_id,symbol,timeframe,candle_datetime,direction" })
+            .upsert(payload, { onConflict: "symbol,timeframe,candle_datetime,direction" })
             .select("id,symbol,timeframe,candle_datetime,direction,example_group_id,parent_example_id");
           if (error) {
             return respond({
@@ -4370,7 +4874,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await supa.from("ipo_corpus_examples").select("*")
-        .eq("user_id", userId).order("symbol").order("timeframe").order("candle_datetime");
+        .order("symbol").order("timeframe").order("candle_datetime");
       if (error) return respond({ error: error.message });
       const all = data ?? [];
       const groups = new Map<string, any[]>();
@@ -5244,8 +5748,13 @@ function breakItWouldNeedEmitted(brk: any[], series: any[]) {
   }));
 }
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
+  // status is optional so every existing call keeps returning 200. The research
+  // endpoints need real codes: a 401 that arrives as 200 with an error field is
+  // invisible to anything checking response status, including CORS-layer
+  // monitoring and any future client retry logic.
   return new Response(JSON.stringify(data), {
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }

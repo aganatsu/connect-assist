@@ -43,7 +43,9 @@ Deno.test("bot-scanner resolves it rather than hardcoding 5m", () => {
     "resolved from the style the scan is running",
   );
   assert(
-    /cachedFetch\(pending\.symbol, confirmTF, confirmRange\)/.test(scanner),
+    // The optional 4th argument is the management telemetry tag, which is
+    // observation-only; the first three are what this test is about.
+    /cachedFetch\(pending\.symbol, confirmTF, confirmRange(, "[a-z0-9_]+")?\)/.test(scanner),
     "and used for the fetch",
   );
 });

@@ -21,6 +21,8 @@ import {
   Eye, EyeOff, PanelRightClose, PanelRightOpen, MoreVertical, Wallet,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { IpoScanner } from "@/components/IpoScanner";
+import { IpoPaperMonitor } from "@/components/IpoPaperMonitor";
 
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
@@ -58,6 +60,9 @@ export default function BotView() {
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
   const [selectedScanIdx, setSelectedScanIdx] = useState(0);
+  // Strategy-level tab. SMC renders exactly what it rendered before; IPO is a
+  // sibling, not a conditional inside the SMC tree.
+  const [strategyTab, setStrategyTab] = useState<"smc" | "ipo">("smc");
   const [botTab, setBotTab] = useState("open");
 
   const [customBalanceInput, setCustomBalanceInput] = useState("");
@@ -401,6 +406,13 @@ export default function BotView() {
 
   return (
     <AppShell>
+      <Tabs value={strategyTab} onValueChange={(v) => setStrategyTab(v as "smc" | "ipo")} className="flex flex-col h-page w-full max-w-full min-w-0 overflow-x-hidden">
+        <TabsList className="h-7 shrink-0 self-start bg-card border border-border rounded-none p-0 gap-0 justify-start">
+          <TabsTrigger value="smc" className="h-7 px-3 text-[11px] rounded-none data-[state=active]:bg-muted">SMC</TabsTrigger>
+          <TabsTrigger value="ipo" className="h-7 px-3 text-[11px] rounded-none data-[state=active]:bg-muted">IPO</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="smc" className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden">
       <div className="flex flex-col h-page w-full max-w-full min-w-0 overflow-x-hidden">
         {/* Phase-1 cleanup: removed duplicate desktop stats strip.
             StatusBar (bottom of app shell) and the Account drawer already cover
@@ -1363,6 +1375,27 @@ export default function BotView() {
           </SheetContent>
         </Sheet>
       </div>
+        </TabsContent>
+
+        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-y-auto p-2">
+          {/* Two IPO views, both read-only. Scanner is what the rules see right
+              now; Paper is what the forward test has actually done. Neither
+              touches SMC, and IPO results are deliberately not merged into the
+              SMC Journal or its analytics. */}
+          <Tabs defaultValue="scanner" className="flex flex-col gap-2 min-w-0">
+            <TabsList className="h-6 shrink-0 self-start bg-card border border-border rounded-none p-0 gap-0 justify-start">
+              <TabsTrigger value="scanner" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Scanner</TabsTrigger>
+              <TabsTrigger value="paper" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Paper</TabsTrigger>
+            </TabsList>
+            <TabsContent value="scanner" className="mt-0 min-w-0">
+              <IpoScanner />
+            </TabsContent>
+            <TabsContent value="paper" className="mt-0 min-w-0">
+              <IpoPaperMonitor />
+            </TabsContent>
+          </Tabs>
+        </TabsContent>
+      </Tabs>
     </AppShell>
   );
 }

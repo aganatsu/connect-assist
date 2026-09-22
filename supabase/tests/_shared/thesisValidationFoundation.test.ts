@@ -197,7 +197,8 @@ Deno.test("the style-aware path costs one extra fetch, not three", () => {
   const i = scanner.indexOf("if (thesisStyleAware || !opts?.isManagementOnly) {");
   assert(i > -1, "the shadow-candles branch was not found");
   const block = scanner.slice(i, i + 800);
-  assert(/cachedFetch\(pending\.symbol, "15m", "5d"\)/.test(block), "scalper adds 15m");
+  // Trailing tag is the observation-only telemetry reason, not a behaviour change.
+  assert(/cachedFetch\(pending\.symbol, "15m", "5d"(, "[a-z0-9_]+")?\)/.test(block), "scalper adds 15m");
   assert(/confirm: pendingCandles/.test(block), "and reuses the candles already fetched");
   assert(/bias: tvH1/.test(block), "and the 1H already fetched above");
 });
