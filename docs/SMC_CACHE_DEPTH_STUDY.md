@@ -150,12 +150,15 @@ Decomposition, from `scan_logs` telemetry:
   hits** (49.3% hit rate). Observed full scans at 15:01 and 15:10 → roughly
   6/hour → **~5,000/day**.
 - The remaining **~23,400/day (~976/hour, ~16/min)** is unattributed by scan
-  telemetry. It correlates almost exactly with the **1-minute management loop ×
-  16 open pending orders** (16 × 60 = 960/hour). *Inference, not proof* — the
-  management path does not call `resetThrottleStats`/`beginScanSourceTally`, so
-  its fetches are counted by the credit ledger but not by `dataCache`. Confirming
-  it needs a caller tag on the management path, which is a change and therefore
-  out of scope here.
+  telemetry. ~~It correlates almost exactly with the 1-minute management loop ×
+  16 open pending orders.~~ **CORRECTED 2026-09-22 by direct measurement —
+  see `docs/SMC_MANAGEMENT_LOOP_TELEMETRY.md`.** Both halves of that inference
+  were wrong. The "16 pending orders" was a raw row count; all 21 rows are
+  `expired`, so there are zero active. And the mechanism is not per-order
+  fetching: the management loop makes **exactly 7 provider fetches per
+  invocation**, of which **6 are daily bars for an unguarded currency-rate map**
+  (8,640/day) and 1 is the open-position price refresh. Measured management
+  spend is **10,080/day**, not 23,400.
 
 | option | mechanism | estimated requests/day | reduction |
 |---|---|---|---|
