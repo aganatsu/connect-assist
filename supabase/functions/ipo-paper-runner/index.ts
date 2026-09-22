@@ -39,7 +39,7 @@ import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { closedBarsOnly } from "../_shared/ipoObservation.ts";
 import {
-  runPaper, MIN_HISTORY_BARS,
+  runPaper,
   type PaperEvent, type RunnerPlan, type RuntimeState,
 } from "../_shared/ipoPaperRunner.ts";
 import {
@@ -51,33 +51,22 @@ import {
   type ExportMeta, type RebuildReason,
 } from "../_shared/ipoEngineState.ts";
 import { IncrementalEngine } from "../_shared/ipoIncrementalEngine.ts";
+import {
+  IPO_INSTRUMENTS, INCREMENTAL_BARS, engineStateKey,
+} from "../_shared/ipoInstruments.ts";
+
+// Re-exported so existing importers keep their names. HISTORY_BARS is
+// deliberately NOT among them: this function no longer has a path that could
+// use it, and re-exporting it would leave the bootstrap looking available here.
+export { IPO_INSTRUMENTS as PAPER_INSTRUMENTS, INCREMENTAL_BARS, engineStateKey };
 import type { Candle } from "../_shared/smcAnalysis.ts";
 
 /** The frozen spec §1. Nothing else trades. */
-export const PAPER_INSTRUMENTS = [
-  { instrument: "EUR/USD", timeframe: "1h",    barMs: 3_600_000, highVolOnly: false, costPerSide: (_p: number) => 0.00008, costModelId: "fx_fixed_0.00008" },
-  { instrument: "USD/JPY", timeframe: "30min", barMs: 1_800_000, highVolOnly: false, costPerSide: (_p: number) => 0.008,   costModelId: "jpy_fixed_0.008" },
-  { instrument: "BTC/USD", timeframe: "1h",    barMs: 3_600_000, highVolOnly: true,  costPerSide: (p: number) => p * 0.0015, costModelId: "btc_prop_0.0015" },
-] as const;
 
-/**
- * Bars of history per run. Unchanged from Phase C and NOT to be raised: it is
- * one provider page and comfortably past the 200-bar volatility warmup.
- */
-export const HISTORY_BARS = 1200;
 
-/**
- * Bars fetched on a WARM run.
- *
- * Only bars after the persisted cursor are processed, but the page must overlap
- * the cursor to prove nothing is missing between the two — so the fetch is sized
- * for tolerance, not for one bar. 120 hourly bars covers five days of missed
- * schedules; past that the overlap fails and the run re-anchors on a rebuild.
- */
-export const INCREMENTAL_BARS = 120;
+
 
 export const stateKey = (symbol: string) => `ipo_paper_state:${STRATEGY_ID}:${symbol}`;
-export const engineStateKey = (symbol: string) => `ipo_engine_state:${STRATEGY_ID}:${symbol}`;
 
 /**
  * Paper sizing, read from the environment so the risk policy stays outside the
@@ -232,7 +221,7 @@ export async function handler(req: Request): Promise<Response> {
     const now = Date.now();
     const results: InstrumentRun[] = [];
 
-    for (const cfg of PAPER_INSTRUMENTS) {
+    for (const cfg of IPO_INSTRUMENTS) {
       if (only && only !== cfg.instrument) continue;
       const out: InstrumentRun = {
         instrument: cfg.instrument, bars: 0, barsProcessed: 0, barsFetched: 0,
@@ -289,27 +278,18 @@ export async function handler(req: Request): Promise<Response> {
           rebuild = { reason: restored.reason, detail: restored.detail };
         }
 
-        // ── cold path: the only place the ~1,200-bar bootstrap is paid ────────
+        // ── no cold path. FAIL CLOSED. ───────────────────────────────────────
+        // A 1,200-bar rebuild costs ~17s of CPU and an Edge Function has a few;
+        // ipo-observation proved that empirically with WORKER_RESOURCE_LIMIT on
+        // a single instrument. Falling back to a rebuild here would fail the
+        // same way, intermittently, after spending provider credits. The
+        // bootstrap belongs to local-runner/ipo-bootstrap.ts.
         if (!engine) {
-          out.bootstrapped = true;
+          out.skipped = "BOOTSTRAP_REQUIRED";
           out.rebuildReason = rebuild!.reason;
           out.rebuildDetail = rebuild!.detail;
-          const { candles } = await fetchCandlesWithFallback({
-            symbol: cfg.instrument, interval: cfg.timeframe, limit: HISTORY_BARS,
-          } as Parameters<typeof fetchCandlesWithFallback>[0]);
-          out.barsFetched += candles?.length ?? 0;
-          bars = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);
-          if (bars.length < MIN_HISTORY_BARS) {
-            out.bars = bars.length;
-            out.skipped = `only ${bars.length} closed bars — below the volatility warmup`;
-            results.push(out);
-            continue;
-          }
-          const p0 = Date.now();
-          engine = new IncrementalEngine(engineCfg);
-          for (const b of bars) engine.feed(b);
-          out.processMs = Date.now() - p0;
-          out.barsProcessed = bars.length;
+          results.push(out);
+          continue;
         }
 
         out.bars = bars.length;

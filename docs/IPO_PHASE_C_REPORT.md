@@ -185,3 +185,50 @@ site behind exactly one guard.
 The general lesson, which applies to every isolation claim in this programme: a
 grep over a file is evidence about that file. Reachability is a property of the
 graph.
+
+---
+
+## CORRECTION 2, 2026-09-21 (D.2) — Edge cannot run the bootstrap
+
+This report described `ipo-observation` bootstrapping ~1,200 bars per request
+and caching the snapshot in `kv_cache`, at "~30s". **That design does not work on
+the platform it was written for, and the report should not be read as evidence
+that it does.**
+
+Phase C was approved and pushed but **never deployed**. The function was at
+version 1 when D.2 deployed it on 2026-09-21 — its first invocation anywhere.
+Every invocation failed:
+
+```
+546 WORKER_RESOURCE_LIMIT
+  all three instruments  5.5s
+  EUR/USD alone          5.6s      USD/JPY alone   3.5s      BTC/USD alone  15.7s
+```
+
+A single instrument fails, so it is not cumulative; at 3–16 s it is not the
+150 s wall clock. The worker is killed for **compute**. A 1,200-bar rebuild
+costs ~17 s of CPU (measured in D.1) against an Edge budget of a few seconds —
+about an order of magnitude out. No amount of tuning closes that.
+
+**Resolution: bootstrap ownership moved off-Edge.**
+
+```
+local-runner/ipo-bootstrap.ts     1,200 bars -> engine -> D.1 state -> kv_cache
+        │
+        ▼
+ipo-observation (Edge)            restore -> append new closed bars -> persist
+ipo-paper-runner (Edge, later)    same
+```
+
+`HISTORY_BARS` stays at **1,200**. Shortening it would change which bars the
+whole-series functions see and therefore which trades exist — a strategy change,
+and a platform limit is not a reason to make one.
+
+Edge now **fails closed**: with no compatible state it returns
+`BOOTSTRAP_REQUIRED` and stops, before fetching any candle. Verified live on the
+redeployed function: HTTP 200 in 1.56 s, all three instruments
+`BOOTSTRAP_REQUIRED / NO_STATE`, no provider credits spent.
+
+The Phase C *observation model* — what a row means, `NOT_TRACKED` for untracked
+states, closed-bars-only — is unaffected. What changed is where the engine is
+built.

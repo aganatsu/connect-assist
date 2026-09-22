@@ -8,10 +8,11 @@
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  PAPER_INSTRUMENTS, HISTORY_BARS, stateKey, sizingFromEnv,
+  PAPER_INSTRUMENTS, stateKey, sizingFromEnv,
   positionRow, historyRow, eventRow, parseState, rowToPosition,
 } from "../../functions/ipo-paper-runner/index.ts";
 import { summarize, RECENT_TRADES } from "../../functions/ipo-paper-state/index.ts";
+import { HISTORY_BARS } from "../../functions/_shared/ipoInstruments.ts";
 import {
   buildIntent, openPosition, abortForGap, stepPosition,
   DEFAULT_SIZING, STRATEGY_ID,
@@ -76,10 +77,14 @@ Deno.test("the read path runs no engine, fetches no candles and writes nothing",
   assert(c.includes(".select("), "it must at least read");
 });
 
-Deno.test("the bootstrap lives in the worker and only there", async () => {
+Deno.test("history depth is unchanged, and the worker no longer owns the bootstrap", async () => {
+  // HISTORY_BARS now lives in the shared spec and is used only by the off-Edge
+  // bootstrap. It stays at 1,200: shortening it to fit the Edge CPU limit would
+  // change which bars the engine sees, and that is a strategy change.
+  assertEquals(HISTORY_BARS, 1200);
   const worker = code(await src(RUNNER));
-  assert(worker.includes("runPaper("), "the worker is where the rebuild happens");
-  assertEquals(HISTORY_BARS, 1200, "normal history must not be raised above 1,200");
+  assert(worker.includes("runPaper("), "the worker still plans the paper layer");
+  assert(worker.includes("BOOTSTRAP_REQUIRED"), "the worker must fail closed");
 });
 
 Deno.test("importing a function must not bind a port", async () => {

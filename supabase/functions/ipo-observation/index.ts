@@ -1,41 +1,64 @@
 /**
- * IPO observation endpoint. Phase C. READ-ONLY.
+ * IPO observation endpoint. READ-ONLY, and WARM-ONLY.
  *
  * Returns what the frozen IPO rules currently see. It places no orders, writes
  * no trading state, and touches no SMC table. Tests assert it cannot reach
  * broker-execute, paper_positions, pending_orders, paper_trade_history or
- * paper_accounts.
+ * paper_accounts at any depth of its import closure.
  *
- * THE ONLY THING IT WRITES is a short-lived snapshot in `kv_cache`, the generic
- * cache the codebase already uses for FOTSI and daily candles. That choice is
- * deliberate: bootstrapping the engine over ~1,200 bars costs ~30s, which is
- * unacceptable per UI poll, and a new table would be a schema change Phase C
- * does not need. A kv_cache row is a string keyed by name — SMC management
- * cannot read it as a position, and nothing adopts it.
+ * IT NO LONGER BOOTSTRAPS, AND IT MUST NOT LEARN HOW AGAIN.
  *
- * CLOSED BARS ONLY. The newest forming bar is dropped before the engine sees
- * it, because an unfinished close would move both the volatility bucket and the
- * S2 test and the snapshot would describe a state that never existed.
+ * The first real deployment of this function, 2026-09-21, failed every
+ * invocation with WORKER_RESOURCE_LIMIT — a single instrument, 3 to 16 seconds,
+ * killed for compute rather than wall clock. A 1,200-bar rebuild costs about 17
+ * seconds of CPU and an Edge Function's budget is a few seconds. The gap is
+ * roughly an order of magnitude, so it is not something a tighter loop or a
+ * shorter history closes. It is the wrong place to do the work.
+ *
+ * The bootstrap therefore lives off-Edge in `local-runner/ipo-bootstrap.ts`,
+ * which writes the D.1 runtime state. This function restores that state and
+ * advances it by the few bars that have closed since. Measured in D.1: restore
+ * 2.9 ms, one new bar 41 ms, export 4.6 ms.
+ *
+ * FAIL CLOSED. With no compatible state it returns BOOTSTRAP_REQUIRED and stops.
+ * It does not rebuild, and it does not fetch candles first — a fallback would
+ * reintroduce exactly the failure above, intermittently, while spending metered
+ * provider credits on the way to being killed.
+ *
+ * CLOSED BARS ONLY. A forming bar would move both the volatility bucket and the
+ * S2 test, so the snapshot would describe a state that never existed.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-import { observe, closedBarsOnly, type IpoObservationSnapshot } from "../_shared/ipoObservation.ts";
+import {
+  closedBarsOnly, snapshotOf, type IpoObservationSnapshot,
+} from "../_shared/ipoObservation.ts";
+import {
+  IPO_INSTRUMENTS, INCREMENTAL_BARS, engineStateKey, engineConfig, exportMeta,
+} from "../_shared/ipoInstruments.ts";
+import {
+  restoreState, continuityCheck, exportState, serializeState,
+  type RebuildReason,
+} from "../_shared/ipoEngineState.ts";
 import type { Candle } from "../_shared/smcAnalysis.ts";
 
-/** The frozen spec §1. Nothing else is observed. */
-export const OBSERVED = [
-  { instrument: "EUR/USD", timeframe: "1h",    barMs: 3_600_000, highVolOnly: false, costPerSide: (_p: number) => 0.00008 },
-  { instrument: "USD/JPY", timeframe: "30min", barMs: 1_800_000, highVolOnly: false, costPerSide: (_p: number) => 0.008 },
-  { instrument: "BTC/USD", timeframe: "1h",    barMs: 3_600_000, highVolOnly: true,  costPerSide: (p: number) => p * 0.0015 },
-] as const;
-
-/** BTC needs >= 200 closed bars before its volatility bucket resolves at all. */
-export const OBSERVATION_BARS = 1200;
-
-const cacheKey = (i: string) => `ipo_observation:${i}`;
+export interface ObservationRun {
+  instrument: string;
+  status: "OK" | "BOOTSTRAP_REQUIRED" | "ERROR";
+  /** Why state could not be used. Never silent. */
+  reason?: RebuildReason;
+  detail?: string;
+  barsInState?: number;
+  barsFetched?: number;
+  barsProcessed?: number;
+  restoreMs?: number;
+  processMs?: number;
+  persistMs?: number;
+  error?: string;
+}
 
 export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -52,63 +75,92 @@ export async function handler(req: Request): Promise<Response> {
       { auth: { persistSession: false } },
     );
 
-    const url = new URL(req.url);
-    const only = url.searchParams.get("instrument");
-    const force = url.searchParams.get("refresh") === "1";
+    const only = new URL(req.url).searchParams.get("instrument");
     const now = Date.now();
-
     const snapshots: IpoObservationSnapshot[] = [];
-    const errors: Array<{ instrument: string; error: string }> = [];
+    const runs: ObservationRun[] = [];
 
-    for (const cfg of OBSERVED) {
+    for (const cfg of IPO_INSTRUMENTS) {
       if (only && only !== cfg.instrument) continue;
+      const out: ObservationRun = { instrument: cfg.instrument, status: "OK" };
       try {
-        if (!force) {
-          const { data } = await db.from("kv_cache").select("value, expires_at")
-            .eq("key", cacheKey(cfg.instrument)).maybeSingle();
-          if (data && new Date(data.expires_at).getTime() > now) {
-            snapshots.push(JSON.parse(data.value)); continue;
-          }
-        }
+        const ec = engineConfig(cfg);
+        const meta = exportMeta(cfg);
 
+        // ── restore, or stop. No candle is fetched before this succeeds. ─────
+        const t0 = Date.now();
+        const { data: row } = await db.from("kv_cache").select("value")
+          .eq("key", engineStateKey(cfg.instrument)).maybeSingle();
+        const restored = restoreState(row?.value ?? null, ec, meta);
+        out.restoreMs = Date.now() - t0;
+
+        if (!restored.ok) {
+          out.status = "BOOTSTRAP_REQUIRED";
+          out.reason = restored.reason;
+          out.detail = restored.detail;
+          runs.push(out);
+          continue;
+        }
+        out.barsInState = restored.state.barCount;
+
+        // ── only now is a provider request worth making ──────────────────────
         const { candles } = await fetchCandlesWithFallback({
-          symbol: cfg.instrument, interval: cfg.timeframe, limit: OBSERVATION_BARS,
+          symbol: cfg.instrument, interval: cfg.timeframe, limit: INCREMENTAL_BARS,
           // READ-ONLY. candleSource otherwise writes a newly discovered symbol
-          // mapping back to broker_connections, an SMC-owned table. Observation
-          // passes no brokerConn so that branch cannot run today, but relying on
-          // the absence of an argument is not a guarantee — this is.
+          // mapping back to broker_connections, an SMC-owned table.
           persistSymbolOverrides: false,
         } as Parameters<typeof fetchCandlesWithFallback>[0]);
+        out.barsFetched = candles?.length ?? 0;
 
-        const closed = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);
-        if (closed.length < 250) {
-          errors.push({ instrument: cfg.instrument, error: `only ${closed.length} closed bars — below the volatility warmup` });
+        const page = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);
+        const cont = continuityCheck(restored.state, page);
+        if (!cont.ok) {
+          // A hole we cannot prove is absent. Re-anchoring is a bootstrap, and
+          // a bootstrap is not this function's job.
+          out.status = "BOOTSTRAP_REQUIRED";
+          out.reason = cont.reason;
+          out.detail = cont.detail;
+          runs.push(out);
           continue;
         }
 
-        const snap = observe(closed, {
-          instrument: cfg.instrument, timeframe: cfg.timeframe,
-          highVolOnly: cfg.highVolOnly, costPerSide: cfg.costPerSide,
-        });
-        snapshots.push(snap);
+        const p0 = Date.now();
+        for (const b of cont.append) restored.engine.feed(b);
+        out.processMs = Date.now() - p0;
+        out.barsProcessed = cont.append.length;
 
-        // Cache until the next bar closes, so a UI poll never re-bootstraps.
-        await db.from("kv_cache").upsert({
-          key: cacheKey(cfg.instrument),
-          value: JSON.stringify(snap),
-          expires_at: new Date(now + cfg.barMs).toISOString(),
-          updated_at: new Date(now).toISOString(),
-        }, { onConflict: "key" });
+        snapshots.push(snapshotOf(restored.engine, ec));
+
+        // ── persist the advanced state: one row, one upsert ──────────────────
+        if (cont.append.length > 0) {
+          const w0 = Date.now();
+          const next = serializeState(exportState(restored.engine, ec, meta));
+          const { error } = await db.from("kv_cache").upsert({
+            key: engineStateKey(cfg.instrument),
+            value: next,
+            expires_at: new Date(now + 365 * 24 * 3_600_000).toISOString(),
+            updated_at: new Date(now).toISOString(),
+          }, { onConflict: "key" });
+          out.persistMs = Date.now() - w0;
+          if (error) throw new Error(`state write failed: ${error.message}`);
+        }
+        runs.push(out);
       } catch (e) {
-        errors.push({ instrument: cfg.instrument, error: (e as Error).message });
+        out.status = "ERROR";
+        out.error = (e as Error).message;
+        runs.push(out);
       }
     }
 
+    const needsBootstrap = runs.filter((r) => r.status === "BOOTSTRAP_REQUIRED");
     return respond({
-      ok: true,
+      ok: needsBootstrap.length === 0 && runs.every((r) => r.status !== "ERROR"),
       mode: "OBSERVATION_ONLY",
-      note: "No orders, no trading state, no broker. executionEligible is informational.",
-      snapshots, errors,
+      note: "No orders, no trading state, no broker. executionEligible is " +
+            "informational. This function never bootstraps — run " +
+            "local-runner/ipo-bootstrap.ts to create the runtime state.",
+      bootstrapRequired: needsBootstrap.map((r) => r.instrument),
+      runs, snapshots,
     });
   } catch (e) {
     return respond({ ok: false, error: (e as Error).message }, 500);

@@ -316,3 +316,32 @@ unchanged after `FROZEN_RULES` was extracted.
 - Event-copy fix on `LiveEvent.trade`: prerequisite for any event-driven runner.
 - `#580` still open; consolidation still unresolved; the `maxCorrelation` config
   drift still deliberately unfixed.
+
+---
+
+## ADDENDUM, 2026-09-21 (D.2) — where the bootstrap runs
+
+**Every measurement in this report stands.** Warm restore 2.9 ms, one new bar
+41 ms, `runPaper` 0.3 ms, export 4.6 ms, 49 ms per warm invocation, 384× against
+a rebuild, and zero-mismatch restart exactness across every lifecycle state.
+None of it is revised.
+
+What changed is the conclusion drawn about **where the 17-second cold bootstrap
+executes.** This report assumed the worker would pay it on first run. It cannot:
+deployed on 2026-09-21, `ipo-observation` was killed with
+`WORKER_RESOURCE_LIMIT` on a single instrument. An Edge Function's CPU budget is
+a few seconds.
+
+The number that proves it was already in §4 of this report — *"cold bootstrap
+(1,200 bars): 17,094 ms"* — and I did not draw the platform conclusion from it at
+the time. The warm path was measured against the right target; the cold path was
+never measured against the runtime it was meant to run in.
+
+**This strengthens rather than weakens the D.1 case.** Persistence is no longer
+only a 384× cost saving; it is the *only* way the engine can run on Edge at all,
+because the sole affordable operation there is resuming from state someone else
+built. §6's withdrawal stands too: sliding-window rebuilds do not drift, so
+persistence is still not a correctness fix — it is now a feasibility one.
+
+Bootstrap ownership is `local-runner/ipo-bootstrap.ts`. Edge fails closed with
+`BOOTSTRAP_REQUIRED` and never rebuilds.

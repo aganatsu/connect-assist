@@ -157,9 +157,18 @@ Deno.test("the plan matches the frozen rules: entry is the midpoint, target is 2
 });
 
 Deno.test("the endpoint observes exactly the three frozen instruments", async () => {
-  const src = await Deno.readTextFile(OBS);
-  assert(src.includes('"EUR/USD"') && src.includes('"USD/JPY"') && src.includes('"BTC/USD"'));
-  assert(src.includes("highVolOnly: true"), "BTC must stay volatility-gated");
-  const syms = [...src.matchAll(/instrument: "([A-Z/]+)"/g)].map((m) => m[1]);
+  // The list moved to _shared/ipoInstruments.ts when the bootstrap went
+  // off-Edge: the local runner and the Edge functions must agree on the
+  // instrument, timeframe, gate and cost-model id exactly, or restoreState
+  // refuses. One definition is the only way that holds.
+  const spec = await Deno.readTextFile("supabase/functions/_shared/ipoInstruments.ts");
+  const syms = [...spec.matchAll(/instrument: "([A-Z/]+)"/g)].map((m) => m[1]);
   assertEquals(syms, ["EUR/USD", "USD/JPY", "BTC/USD"]);
+  assert(spec.includes("highVolOnly: true"), "BTC must stay volatility-gated");
+
+  // And the endpoint must take it from there rather than keeping a copy.
+  const src = await Deno.readTextFile(OBS);
+  assert(src.includes("ipoInstruments.ts"), "the endpoint does not import the shared spec");
+  assertEquals([...src.matchAll(/instrument: "([A-Z/]+)"/g)].map((m) => m[1]), [],
+    "the endpoint still carries its own instrument literals");
 });
