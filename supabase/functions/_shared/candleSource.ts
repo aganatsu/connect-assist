@@ -95,6 +95,33 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
  * These become "Insufficient candles" and a skipped pair downstream, so a
  * rising value means the scanner is being starved rather than merely paced.
  */
+/**
+ * Read the throttle counters WITHOUT resetting them.
+ *
+ * `resetThrottleStats` is read-and-clear and is called once per full scan
+ * cycle. The 1-minute management loop returns long before that, so if it called
+ * the resetting version it would silently steal counts the next full scan is
+ * supposed to report. This exists so management telemetry can observe the same
+ * numbers without perturbing them.
+ *
+ * Note the budget half (`rpcFailures`, `refused`) lives in apiCreditBudget and
+ * has no non-destructive reader, so it is deliberately absent here rather than
+ * reported as zero — an absent number is honest, a wrong one is not.
+ */
+export function peekThrottleStats(): {
+  throttleCount: number;
+  rateLimited429: number;
+  unenforcedCount: number;
+  gaveUpCount: number;
+} {
+  return {
+    throttleCount: _tdThrottleCount,
+    rateLimited429: _td429Count,
+    unenforcedCount: _tdUnenforcedCount,
+    gaveUpCount: _tdGaveUpCount,
+  };
+}
+
 export function resetThrottleStats(): {
   throttleCount: number;
   rateLimited429: number;

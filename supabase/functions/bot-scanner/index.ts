@@ -1,7 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides, isExplicitlySet } from "../_shared/configMapper.ts";
-import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, peekThrottleStats, lastClosedCandle, type BrokerConn } from "../_shared/candleSource.ts";
+import {
+  summariseInvocation, accumulate, accumulateKeys, parseTelemetry, mgmtTelemetryKey,
+  type FetchRecord, type FetchReason,
+} from "../_shared/smcMgmtTelemetry.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { stylePendingExpiryMinutes, styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
@@ -2193,7 +2197,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
-  const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
+
+  // OBSERVATION ONLY. The wrapper records which call site asked for what and
+  // whether the per-cycle cache already had it. It adds no fetch, removes none,
+  // reorders none, and returns exactly what scanCache returns — the awaited
+  // value and the rejection behaviour are unchanged.
+  //
+  // Hit/miss is read from scanCache's own counters around the call rather than
+  // guessed, so an in-flight dedup counts as a hit exactly as the cache counts it.
+  const _fetchLog: FetchRecord[] = [];
+  const _mgmtStartedAt = Date.now();
+  const cachedFetch = (sym: string, interval: string, range: string, reason: FetchReason = "untagged") => {
+    const before = scanCache.stats();
+    const t0 = Date.now();
+    const p = scanCache.get(sym, interval, range);
+    return p.then((candles) => {
+      const after = scanCache.stats();
+      _fetchLog.push({
+        symbol: sym, interval, reason,
+        cacheHit: after.hits > before.hits,
+        bars: candles.length, ms: Date.now() - t0,
+      });
+      return candles;
+    });
+  };
 
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
@@ -2479,7 +2506,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
       try {
-        const candles = await cachedFetch(sym, "15m", "5d");
+        const candles = await cachedFetch(sym, "15m", "5d", "open_position_price_refresh");
         if (candles.length > 0) {
           livePriceMap[sym] = candles[candles.length - 1].close;
         }
@@ -2912,7 +2939,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const rateMap: Record<string, number> = {};
   try {
     const rateFetches = await Promise.all(
-      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
+      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d", "rate_map"))
     );
     for (let i = 0; i < RATE_PAIRS.length; i++) {
       const candles = rateFetches[i];
@@ -3178,7 +3205,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
         const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
         const batchResults = await Promise.all(
-          batch.map(p => cachedFetch(p, "1d", "6mo"))
+          batch.map(p => cachedFetch(p, "1d", "6mo", "fotsi_daily"))
         );
         for (let j = 0; j < batch.length; j++) {
           if (batchResults[j] && batchResults[j].length >= 30) {
@@ -3374,7 +3401,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // need, on a budget that is already refusing fetches.
         const pendingInterval = getEntryInterval(config.entryTimeframe || "15min");
         const pendingRange = getEntryRange(config.entryTimeframe || "15min");
-        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange);
+        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange, "pending_fill_check");
         if (pendingCandles.length === 0) {
           // dataCache caches the empty result for the rest of the cycle, so a
           // single refused fetch silently skips this order until the next run.
@@ -3458,9 +3485,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
-              cachedFetch(pending.symbol, "1d", "1y"),
-              cachedFetch(pending.symbol, "4h", "1mo").then(c => c.slice(-LEGACY_H4_WINDOW)),
-              cachedFetch(pending.symbol, "1h", "5d"),
+              cachedFetch(pending.symbol, "1d", "1y", "pending_thesis_htf"),
+              cachedFetch(pending.symbol, "4h", "1mo", "pending_thesis_htf").then(c => c.slice(-LEGACY_H4_WINDOW)),
+              cachedFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"),
             ]);
 
             // Under styleAwareDirection the validator uses the same engine and
@@ -3482,10 +3509,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
             if (thesisStyleAware || !opts?.isManagementOnly) {
               if (resolvedStyle === "scalper") {
-                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d");
+                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d", "pending_thesis_m15");
                 thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
               } else if (resolvedStyle === "swing_trader") {
-                const tvW = await cachedFetch(pending.symbol, "1w", "2y");
+                const tvW = await cachedFetch(pending.symbol, "1w", "2y", "pending_thesis_weekly");
                 thesisStyleCandles = { bias: tvW, structure: tvDaily, confirm: tvH4 };
               } else {
                 thesisStyleCandles = { bias: tvDaily, structure: tvH4, confirm: tvH1 };
@@ -3760,7 +3787,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // right timeframe before hunting on the wrong one.
           const confirmTF = styleConfirmationTimeframe(resolvedStyle);
           const confirmRange = getEntryRange(confirmTF);
-          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange);
+          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange, "pending_confirmation");
           if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
             console.log(`[pending] ${pending.symbol} — insufficient ${confirmTF} candles for confirmation (${confirmCandles.length})`);
             confirmationHunt.push({
@@ -4147,6 +4174,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     console.log(`[manage ${scanCycleId}] Management-only complete: ${activeActions.length} actions, ${pendingFilled} fills, ${pendingExpired} expired, ${confirmationHunt.length} hunt outcomes`);
+
+    // ── management market-data telemetry. OBSERVATION ONLY. ──
+    // Never throws: a measurement must not be able to fail a management cycle.
+    await recordMgmtTelemetry(supabase, userId, "manage", _mgmtStartedAt, _fetchLog, {
+      openPositions: openPosArr.length,
+      pendingOrders: activePendingOrders?.length ?? 0,
+      managementActions: activeActions.length,
+    });
+
     return {
       pairsScanned: 0,
       signalsFound: 0,
@@ -8581,4 +8617,55 @@ function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
     status, headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+/**
+ * Writes the management-loop market-data telemetry. OBSERVATION ONLY.
+ *
+ * NEVER THROWS. This measures a cycle that has already done its trading work;
+ * letting a monitoring write fail the cycle would be strictly worse than losing
+ * the measurement. Budget counters are read with `peekThrottleStats`, which does
+ * not reset — the full scan still reports the same numbers it always did.
+ */
+async function recordMgmtTelemetry(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  mode: "manage" | "scan",
+  startedAtMs: number,
+  fetches: FetchRecord[],
+  ctx: { openPositions: number; pendingOrders: number; managementActions: number },
+): Promise<void> {
+  try {
+    const budget = peekThrottleStats();
+    const symbols = new Set(fetches.map((f) => f.symbol));
+    const rec = summariseInvocation({
+      mode,
+      startedAtMs,
+      endedAtMs: Date.now(),
+      openPositions: ctx.openPositions,
+      pendingOrders: ctx.pendingOrders,
+      distinctSymbols: symbols.size,
+      managementActions: ctx.managementActions,
+      // `refused` has no non-destructive reader, so it is reported as 0 here
+      // rather than stolen from the scan cycle. The scan log remains the source
+      // of truth for refusals.
+      budgetRefused: 0,
+      budgetGaveUp: budget.gaveUpCount,
+      budgetUnenforced: budget.unenforcedCount,
+    }, fetches);
+
+    const key = mgmtTelemetryKey(userId, BOT_ID);
+    const { data } = await supabase.from("kv_cache").select("value").eq("key", key).maybeSingle();
+    const next = accumulateKeys(accumulate(parseTelemetry(data?.value), rec), fetches);
+
+    await supabase.from("kv_cache").upsert({
+      key,
+      value: JSON.stringify(next),
+      expires_at: new Date(Date.now() + 30 * 24 * 3_600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "key" });
+  } catch (e: any) {
+    console.warn(`[mgmt-telemetry] write failed (non-fatal): ${e?.message}`);
+  }
 }
