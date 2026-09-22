@@ -6,6 +6,10 @@ import {
   summariseInvocation, accumulate, accumulateKeys, parseTelemetry, mgmtTelemetryKey,
   type FetchRecord, type FetchReason,
 } from "../_shared/smcMgmtTelemetry.ts";
+import {
+  requiredRatePairs, resolveRates, parseRateCache, describeProvenance, rateCacheKey,
+  type RateProvenance,
+} from "../_shared/rateMapPolicy.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { stylePendingExpiryMinutes, styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
@@ -2934,20 +2938,88 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
-  // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
-  const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  const rateMap: Record<string, number> = {};
+  //
+  // PAIRS ARE DERIVED, NOT LISTED. getQuoteToUSDRate returns 1.0 without reading
+  // the map when the QUOTE currency is USD, so a book of */USD pairs needs no
+  // rates at all. The old hardcoded six included GBP/USD, AUD/USD and NZD/USD,
+  // which are reachable only through crosses like EUR/GBP — none enabled — so
+  // they were fetched 1,440 times a day and never read.
+  //
+  // FALLBACK ORDER: live → last-known-good → the static constant. The constants
+  // in FALLBACK_RATES are years stale (USD/JPY 142.0 against a live 157.59), and
+  // lot size scales linearly with the error, so a refused fetch used to size a
+  // $1,000-risk trade ~$99 wrong, silently. An hour-old observed rate is wrong by
+  // at most 0.149%. A pair with no observation ever is left OUT of the map so
+  // getQuoteToUSDRate's own existing constant branch fires unchanged.
+  //
+  // The cache is a FALLBACK, not a TTL: every required pair is still fetched
+  // every cycle, exactly as before.
+  //
+  // OPEN POSITIONS ARE INCLUDED, not just enabled instruments. The map is read
+  // for portfolio heat and for P&L at close, and an open position can sit
+  // outside the enabled set — weekend crypto mode narrows `config.instruments`
+  // to crypto while an FX position is still open, and an instrument can be
+  // disabled after entry. Deriving from the enabled list alone would drop that
+  // position's rate and silently close it at a static constant.
+  const RATE_PAIRS = requiredRatePairs([
+    ...(config.instruments ?? []),
+    ...openPosArr.map((p: any) => p.symbol as string),
+  ]);
+  let rateMap: Record<string, number> = {};
+  let rateProvenance: RateProvenance[] = [];
+  let rateDegraded = false;
   try {
-    const rateFetches = await Promise.all(
-      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d", "rate_map"))
-    );
-    for (let i = 0; i < RATE_PAIRS.length; i++) {
-      const candles = rateFetches[i];
-      if (candles.length > 0) {
-        rateMap[RATE_PAIRS[i]] = candles[candles.length - 1].close;
+    const { data: rcRow, error: rcErr } = await supabase.from("kv_cache").select("value")
+      .eq("key", rateCacheKey(userId, BOT_ID)).maybeSingle();
+    // A failed read is not fatal — it degrades the fallback to the static
+    // constants, which is exactly the old behaviour — but it must be visible,
+    // because silently it looks identical to "no rate ever observed".
+    if (rcErr) console.warn(`[scan ${scanCycleId}] rate cache read failed: ${rcErr.message}`);
+    const rateCache = parseRateCache(rcRow?.value ?? null);
+    const rateCacheBefore = JSON.stringify(rateCache);
+
+    const live: Record<string, number> = {};
+    if (RATE_PAIRS.length > 0) {
+      const rateFetches = await Promise.all(
+        RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d", "rate_map"))
+      );
+      for (let i = 0; i < RATE_PAIRS.length; i++) {
+        const candles = rateFetches[i];
+        if (candles.length > 0) live[RATE_PAIRS[i]] = candles[candles.length - 1].close;
       }
     }
-    console.log(`[scan ${scanCycleId}] rateMap built: ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`); 
+
+    const resolved = resolveRates(RATE_PAIRS, live, rateCache, Date.now());
+    rateMap = resolved.rateMap;
+    rateProvenance = resolved.provenance;
+    rateDegraded = resolved.degraded;
+
+    // Persist last-known-good, but only when something was actually observed —
+    // during a provider outage every pair falls back and `nextCache` is
+    // unchanged, so writing would be a row update per minute saying nothing.
+    const rateCacheAfter = JSON.stringify(resolved.nextCache);
+    if (rateCacheAfter !== rateCacheBefore) {
+      // Non-fatal: a failed write costs freshness of the fallback on a LATER
+      // cycle, never correctness of this one. `.upsert()` resolves with an
+      // error rather than throwing, so it is checked, not caught.
+      const { error: wErr } = await supabase.from("kv_cache").upsert({
+        key: rateCacheKey(userId, BOT_ID),
+        value: rateCacheAfter,
+        // Long expiry on purpose. This is a fallback of last resort; an entry
+        // expiring would drop the pair back to the stale constant it exists to
+        // avoid. Age is surfaced in provenance instead of being enforced here.
+        expires_at: new Date(Date.now() + 365 * 24 * 3_600_000).toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "key" });
+      if (wErr) console.warn(`[scan ${scanCycleId}] rate cache write failed (non-fatal): ${wErr.message}`);
+    }
+
+    const summary = describeProvenance(rateProvenance);
+    if (rateDegraded) {
+      console.warn(`[scan ${scanCycleId}] rateMap DEGRADED: ${summary}`);
+    } else if (RATE_PAIRS.length > 0) {
+      console.log(`[scan ${scanCycleId}] rateMap built (${summary}): ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`);
+    }
   } catch (e: any) {
     console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
   }
@@ -8558,6 +8630,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
+      // Which source each FX conversion rate came from this cycle. A
+      // CACHED_STALE or STATIC_FALLBACK entry means sizing used something other
+      // than a rate observed this cycle, and that must be visible rather than
+      // inferred from an absence.
+      rateMapHealth: { degraded: rateDegraded, pairs: rateProvenance },
       // Credit budget health. `unenforced` non-zero means the shared budget
       // failed open and we are back to per-isolate limiting; `gaveUp` counts
       // fetches abandoned at the wait ceiling, which surface downstream as
