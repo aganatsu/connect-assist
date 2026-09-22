@@ -23,17 +23,37 @@ concurrency:
 jobs:
   deno:
     runs-on: ubuntu-latest
+    # A bound, so a future genuine hang FAILS instead of merely looking like
+    # this one did. `supabase/tests` took 502s on 2026-09-22 and was read as a
+    # hang, because a step that prints nothing for eight minutes and a step that
+    # is wedged are indistinguishable from the outside. With --parallel the
+    # whole job runs in a few minutes; 15 gives generous headroom and still
+    # turns a real deadlock into a red run within the quarter hour.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v1
         with:
           deno-version: v2.x
 
+      # --parallel runs test FILES concurrently across the runner's cores. Deno
+      # is sequential by default, so one heavy file blocks every other file.
+      #
+      # WHY IT MATTERS HERE: five IPO files are ~95% of the runtime, and the
+      # heaviest is deliberately O(n²) — ipoPaperLifecycle drives the real
+      # runner bar by bar, re-running the whole series at each bar, because
+      # that is precisely what it is proving. Sequentially the other 124 files
+      # queue behind it for nothing.
+      #
+      # This changes SCHEDULING, not coverage: 1,285 and 1,569 tests before and
+      # after, verified across three repeat runs. Nothing is skipped, filtered
+      # or given a shorter series. If a count in a future run is lower than
+      # these, something was dropped — look there first.
       - name: Tests — supabase/tests
-        run: deno test --no-check --allow-read --allow-net --allow-env supabase/tests/
+        run: deno test --parallel --no-check --allow-read --allow-net --allow-env supabase/tests/
 
       - name: Tests — supabase/functions
-        run: deno test --no-check --allow-read --allow-net --allow-env supabase/functions/
+        run: deno test --parallel --no-check --allow-read --allow-net --allow-env supabase/functions/
 
       - name: Type check every edge function
         # --no-check above keeps the suite fast; this is the pass that would
