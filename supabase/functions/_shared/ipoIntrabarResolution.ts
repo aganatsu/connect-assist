@@ -201,3 +201,81 @@ export function compareToHtf(
       return htfExitReason === "NONE" ? "AGREES" : "CONTRADICTED";
   }
 }
+
+// ── forward continuation ─────────────────────────────────────────────────────
+
+/**
+ * What a later HTF bar did to a position that survived its entry bar.
+ *
+ * Bars after the entry bar are already evaluated causally by the production
+ * engine — the audit established the defect is confined to the entry bar. So
+ * continuation reuses the ordinary HTF rules, with one addition: a later bar
+ * that contains BOTH decisive events has the same ordering problem as the entry
+ * bar did, and is flagged rather than silently resolved stop-first.
+ */
+export type ForwardOutcome =
+  | "TARGET" | "S2_CLOSE" | "STILL_OPEN_AT_END_OF_DATA" | "AMBIGUOUS_LATER_BAR";
+
+export interface ForwardResult {
+  outcome: ForwardOutcome;
+  exitBarTime: string | null;
+  exitPrice: number | null;
+  /** HTF bars held, counting the entry bar as 0. */
+  barsHeld: number;
+  grossR: number | null;
+  mfeR: number;
+  maeR: number;
+  /** Set when a later bar reached target AND closed beyond S2 on the same bar. */
+  ambiguousBarTime: string | null;
+}
+
+/**
+ * Continues a position through HTF bars AFTER its entry bar.
+ *
+ * `laterBars` must begin at the bar immediately following the entry bar.
+ * `seedMfeR` / `seedMaeR` carry the post-entry excursion already measured at 1m
+ * inside the entry bar, so the entry bar's PRE-entry range never re-enters the
+ * figures — which is the whole point of the exercise.
+ *
+ * S2 STAYS CLOSE-CONFIRMED: a bar whose low pierces S2 but closes back inside
+ * does not exit.
+ */
+export function continueAfterEntryBar(
+  spec: TradeSpec, laterBars: readonly Candle[],
+  seedMfeR = 0, seedMaeR = 0,
+): ForwardResult {
+  const long = spec.direction === "long";
+  let mfe = seedMfeR, mae = seedMaeR;
+
+  for (let i = 0; i < laterBars.length; i++) {
+    const c = laterBars[i];
+    const favR = (long ? c.high - spec.entry : spec.entry - c.low) / spec.risk;
+    const advR = (long ? spec.entry - c.low : c.high - spec.entry) / spec.risk;
+    if (favR > mfe) mfe = favR;
+    if (advR > mae) mae = advR;
+
+    const hitTarget = long ? c.high >= spec.target : c.low <= spec.target;
+    const closedBeyond = long ? c.close < spec.s2 : c.close > spec.s2;
+    const barsHeld = i + 1;
+
+    // Both on one bar: exactly the ordering problem this research exists to
+    // stop papering over. Flagged, not resolved by convention.
+    if (hitTarget && closedBeyond) {
+      return { outcome: "AMBIGUOUS_LATER_BAR", exitBarTime: c.datetime, exitPrice: null,
+               barsHeld, grossR: null, mfeR: mfe, maeR: mae, ambiguousBarTime: c.datetime };
+    }
+    if (hitTarget) {
+      return { outcome: "TARGET", exitBarTime: c.datetime, exitPrice: spec.target,
+               barsHeld, grossR: Math.abs(spec.target - spec.entry) / spec.risk,
+               mfeR: mfe, maeR: mae, ambiguousBarTime: null };
+    }
+    if (closedBeyond) {
+      const gross = (long ? c.close - spec.entry : spec.entry - c.close) / spec.risk;
+      return { outcome: "S2_CLOSE", exitBarTime: c.datetime, exitPrice: c.close,
+               barsHeld, grossR: gross, mfeR: mfe, maeR: mae, ambiguousBarTime: null };
+    }
+  }
+  return { outcome: "STILL_OPEN_AT_END_OF_DATA", exitBarTime: null, exitPrice: null,
+           barsHeld: laterBars.length, grossR: null, mfeR: mfe, maeR: mae,
+           ambiguousBarTime: null };
+}
