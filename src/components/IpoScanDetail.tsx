@@ -132,8 +132,8 @@ function PathChip({ n }: { n: PathNode }) {
 export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?: Linkage | null }) {
   if (!row) {
     return (
-      <Card className="min-w-0">
-        <CardHeader className="py-2"><CardTitle className="text-xs uppercase tracking-wider">Detail</CardTitle></CardHeader>
+      <Card className="min-w-0 flex flex-col min-h-0 max-h-[60vh] lg:max-h-none overflow-hidden">
+        <CardHeader className="py-2 shrink-0"><CardTitle className="text-xs uppercase tracking-wider">Detail</CardTitle></CardHeader>
         <CardContent className="text-xs text-muted-foreground">Select a row to inspect the IPO.</CardContent>
       </Card>
     );
@@ -145,14 +145,21 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
   const coverage = chainCoverage(chain);
 
   return (
-    <Card className="min-w-0">
-      <CardHeader className="py-2 flex-row items-center justify-between gap-2">
+    /* Own scroll container. `shrink-0` on the header keeps "USD/JPY · 30min ·
+       LONG" pinned while the sections below move, and `overscroll-contain` stops
+       a scroll that reaches the bottom of this pane from continuing into the
+       page behind it. */
+    <Card className="min-w-0 flex flex-col min-h-0 max-h-[60vh] lg:max-h-none overflow-hidden">
+      <CardHeader className="py-2 flex-row items-center justify-between gap-2 shrink-0 border-b border-border">
         <CardTitle className="text-xs uppercase tracking-wider">
           {row.instrument} · {row.timeframe} · {row.direction}
         </CardTitle>
         <Badge variant="outline" className="text-[10px]">observation</Badge>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent
+        className="space-y-3 overflow-y-auto overscroll-contain flex-1 min-h-0 pt-3"
+        data-testid="detail-scroll"
+      >
         {link?.status === "OPEN_POSITION_OWNER" && link.ownedPosition && (
           <section className="border border-primary/50 bg-primary/10 px-2 py-1.5">
             <div className="text-[11px] font-bold uppercase tracking-wider text-primary">

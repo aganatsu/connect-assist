@@ -29,7 +29,7 @@
  * those answer "how has it gone so far" without inventing a feed.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +42,8 @@ import {
   type TradeFilters, type Tone, type Stage, type Group,
 } from "@/lib/ipoDashboard";
 import { readEvent, ENTRY_PROOF_NOTE, ordinalPhrase } from "@/lib/ipoTradeLinkage";
+import { IpoPager } from "@/components/IpoPager";
+import { paginate } from "@/lib/paginate";
 
 export interface RunnerHealth {
   lastRunAt: string;
@@ -246,6 +248,10 @@ const GroupTable = ({ title, rows }: { title: string; rows: Group[] }) => (
  */
 export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperState; now?: number }) {
   const [filters, setFilters] = useState<TradeFilters>(NO_FILTERS);
+  const [eventPage, setEventPage] = useState(1);
+  const [eventSize, setEventSize] = useState(15);
+  const [tradePage, setTradePage] = useState(1);
+  const [tradeSize, setTradeSize] = useState(10);
   const set = (k: keyof TradeFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
 
   const h = state.health;
@@ -265,6 +271,20 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
   }), [state.recentEvents, state.openPositions, state.recentTrades]);
 
   const splits = useMemo(() => exitReasonSplit(state.recentTrades), [state.recentTrades]);
+
+  // Both lists grow without bound as the forward test runs. The decision list
+  // used to be truncated at 40 rows with no way to see row 41 at all; paging it
+  // shows everything the endpoint returned instead of silently dropping the tail.
+  const eventsPage = useMemo(() => paginate(state.recentEvents, eventPage, eventSize),
+                             [state.recentEvents, eventPage, eventSize]);
+  const tradesPage = useMemo(() => paginate(shown, tradePage, tradeSize),
+                             [shown, tradePage, tradeSize]);
+
+  // No clamp-back effect: `paginate` clamps on read and IpoPager steps from the
+  // clamped value, so a stale stored page cannot strand anyone. Writing it back
+  // would race the filter reset below.
+  // A filter change restarts the history at page 1.
+  useEffect(() => { setTradePage(1); }, [filters]);
 
   return (
     <div className="flex flex-col gap-2 min-w-0">
@@ -436,7 +456,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
               {state.recentEvents.length === 0 && (
                 <tr><td colSpan={5} className="text-muted-foreground py-1">No decisions recorded yet.</td></tr>
               )}
-              {state.recentEvents.slice(0, 40).map((e, i) => {
+              {eventsPage.items.map((e, i) => {
                 const costR = e.payload?.costR as number | undefined;
                 const block = e.payload?.blockReason as string | undefined;
                 // The EXECUTION EVENT decides the headline; the strategy verdict is
@@ -469,6 +489,11 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
               })}
             </tbody>
           </table>
+          {state.recentEvents.length > 0 && (
+            <IpoPager page={eventsPage} onPage={setEventPage} size={eventSize}
+                      onSize={(n) => { setEventSize(n); setEventPage(1); }}
+                      sizes={[15, 30, 60]} label="events" />
+          )}
           <p className="text-[9px] text-muted-foreground mt-1">
             <strong>{ENTRY_PROOF_NOTE}</strong> A refused row still shows strategy
             WOULD_ENTER: the IPO signal stays valid and
@@ -608,7 +633,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                     : "No trades match these filters."}
                 </td></tr>
               )}
-              {shown.map((t, i) => {
+              {tradesPage.items.map((t, i) => {
                 const ex = explainStatus(t.exit_reason);
                 return (
                   <tr key={`${t.symbol}-${t.exit_time}-${i}`} className="border-t border-border/50">
@@ -642,6 +667,11 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
               })}
             </tbody>
           </table>
+          {shown.length > 0 && (
+            <IpoPager page={tradesPage} onPage={setTradePage} size={tradeSize}
+                      onSize={(n) => { setTradeSize(n); setTradePage(1); }}
+                      label={pluralTrades(tradeSize)} />
+          )}
           <p className="text-[9px] text-muted-foreground mt-1">
             Target and S2 are on each row through the outcome column; hover it for the raw
             exit_reason. Aborted rows carry no R and are excluded from the summary, but are
