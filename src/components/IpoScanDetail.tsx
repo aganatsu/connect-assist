@@ -19,6 +19,9 @@ import {
   lifecycleChain, candidatePath, contractionNote, chainCoverage, GLOSSARY,
   type Stage, type StageStatus, type PathNode,
 } from "@/lib/ipoLifecycle";
+import {
+  ordinalPhrase, ORDINAL_MEANING, type Linkage,
+} from "@/lib/ipoTradeLinkage";
 
 export interface IpoRow {
   instrument: string;
@@ -53,6 +56,9 @@ export interface IpoRow {
 }
 
 const px = (n: number) => (Math.abs(n) >= 100 ? n.toFixed(2) : n.toFixed(5));
+
+const clockOf = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toISOString().slice(0, 16).replace("T", " ") : "—";
 
 function Line({ label, value, tone }: { label: string; value: React.ReactNode; tone?: string }) {
   return (
@@ -123,7 +129,7 @@ function PathChip({ n }: { n: PathNode }) {
   );
 }
 
-export function IpoScanDetail({ row }: { row: IpoRow | null }) {
+export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?: Linkage | null }) {
   if (!row) {
     return (
       <Card className="min-w-0">
@@ -147,6 +153,92 @@ export function IpoScanDetail({ row }: { row: IpoRow | null }) {
         <Badge variant="outline" className="text-[10px]">observation</Badge>
       </CardHeader>
       <CardContent className="space-y-3">
+        {link?.status === "OPEN_POSITION_OWNER" && link.ownedPosition && (
+          <section className="border border-primary/50 bg-primary/10 px-2 py-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-primary">
+              This IPO triggered the current trade
+            </div>
+            <Line label="symbol" value={link.ownedPosition.symbol} />
+            <Line label="timeframe" value={link.ownedPosition.timeframe} />
+            <Line label="direction" value={link.ownedPosition.direction} />
+            <Line label="IPO candle time" value={clockOf(link.ownedPosition.ipo_candle_time)} />
+            <Line label="entry time" value={clockOf(link.ownedPosition.entry_time)} />
+            <Line label="entry price" value={px(link.ownedPosition.entry_price)} />
+            <Line label="target" value={px(link.ownedPosition.target_price)} tone="text-emerald-600" />
+            <Line label="S2 invalidation" value={px(link.ownedPosition.s2_invalidation_level)} tone="text-destructive" />
+            <Line label="volatility bucket" value={link.ownedPosition.volatility_bucket} />
+            <Line label="setup_id" value={link.ownedPosition.setup_id ?? "—"} />
+            <Line label="intent_id" value={link.ownedPosition.intent_id ?? "—"} />
+            <Line label="zone entry ordinal"
+                  value={`${link.ownedPosition.zone_entry_ordinal ?? "—"} · ${ordinalPhrase(link.ownedPosition.zone_entry_ordinal)}`} />
+            <p className="text-[9px] text-muted-foreground pt-1">{ORDINAL_MEANING}</p>
+          </section>
+        )}
+
+        {link?.status === "BLOCKED_BY_OPEN_POSITION" && link.blockingOwner && (
+          <section className="border border-amber-500/50 bg-amber-500/10 px-2 py-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-amber-600">
+              This IPO did not enter
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Blocked because another IPO on this instrument already owns the open position.
+            </p>
+            <div className="text-[10px] font-mono mt-1">
+              Blocked by existing {link.blockingOwner.symbol}{" "}
+              {link.blockingOwner.direction.toUpperCase()} position
+            </div>
+            <div className="mt-1">
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">the owning trade</div>
+              <Line label="owner direction" value={link.blockingOwner.direction} />
+              <Line label="owner IPO candle time" value={clockOf(link.blockingOwner.ipo_candle_time)} />
+              <Line label="entry time" value={clockOf(link.blockingOwner.entry_time)} />
+              <Line label="entry price" value={px(link.blockingOwner.entry_price)} />
+              <Line label="target" value={px(link.blockingOwner.target_price)} />
+              <Line label="S2" value={px(link.blockingOwner.s2_invalidation_level)} />
+              <Line label="setup_id" value={link.blockingOwner.setup_id ?? "—"} />
+              <Line label="intent_id" value={link.blockingOwner.intent_id ?? "—"} />
+              <Line label="zone entry ordinal"
+                    value={`${link.blockingOwner.zone_entry_ordinal ?? "—"} · ${ordinalPhrase(link.blockingOwner.zone_entry_ordinal)}`} />
+            </div>
+          </section>
+        )}
+
+        {link?.status === "FILLED_CLOSED" && link.closedTrade && (
+          <section className="border border-border bg-muted/40 px-2 py-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider">Closed trade</div>
+            <p className="text-[10px] text-muted-foreground">
+              This exact IPO produced a real filled trade that later closed.
+            </p>
+            <Line label="entry time" value={clockOf(link.closedTrade.entry_time)} />
+            <Line label="exit time" value={clockOf(link.closedTrade.exit_time)} />
+            <Line label="entry price" value={px(link.closedTrade.entry_price)} />
+            <Line label="exit price"
+                  value={link.closedTrade.exit_price === null ? "—" : px(link.closedTrade.exit_price)} />
+            <Line label="exit reason"
+                  value={link.closedTrade.exit_reason === "TARGET_2R" ? "Target hit"
+                    : link.closedTrade.exit_reason === "S2_CLOSE_INVALIDATION" ? "Stopped — S2 invalidation"
+                    : link.closedTrade.exit_reason}
+                  tone={link.closedTrade.exit_reason === "TARGET_2R" ? "text-emerald-600" : "text-destructive"} />
+            <Line label="realized R"
+                  value={link.closedTrade.realized_r === null ? "—" : `${link.closedTrade.realized_r.toFixed(4)}R`}
+                  tone={(link.closedTrade.realized_r ?? 0) > 0 ? "text-emerald-600" : "text-destructive"} />
+            <Line label="realized P&L"
+                  value={link.closedTrade.realized_pnl_usd === null ? "—" : `$${link.closedTrade.realized_pnl_usd.toFixed(2)}`} />
+            <Line label="zone entry ordinal"
+                  value={`${link.closedTrade.zone_entry_ordinal ?? "—"} · ${ordinalPhrase(link.closedTrade.zone_entry_ordinal)}`} />
+            <Line label="setup_id" value={link.closedTrade.setup_id ?? "—"} />
+          </section>
+        )}
+
+        {link && link.status !== "OPEN_POSITION_OWNER" && link.status !== "FILLED_CLOSED"
+          && link.status !== "BLOCKED_BY_OPEN_POSITION" && (
+          <section className="border border-border px-2 py-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Trade status</div>
+            <div className="text-[11px] font-semibold">{link.badge}</div>
+            <p className="text-[10px] text-muted-foreground">{link.meaning}</p>
+          </section>
+        )}
+
         <section>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">IPO candle</div>
           <Line label="candle time" value={row.ipoCandleTime?.slice(0, 16).replace("T", " ") || "—"} />

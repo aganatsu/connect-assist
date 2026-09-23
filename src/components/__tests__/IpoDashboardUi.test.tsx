@@ -154,6 +154,13 @@ describe("small-sample labelling appears when it should", () => {
 
 // ── readable status ──────────────────────────────────────────────────────────
 
+/**
+ * Updated 2026-09-23. The Why-no-trade headline now comes from the EXECUTION
+ * EVENT, not from the most specific status code — a REFUSED row reads "Did not
+ * enter" rather than naming the block in the headline, because a block reason
+ * is not what happened, it is why. The block is still named in the explanation
+ * and in the raw column, which is what these tests now assert.
+ */
 describe("raw statuses are rendered as sentences, with the code preserved", () => {
   it("translates an execution block and keeps the raw code on the row", () => {
     draw(state({
@@ -163,8 +170,11 @@ describe("raw statuses are rendered as sentences, with the code preserved", () =
         reason_codes: [], payload: { costR: 2.4137, blockReason: "ECONOMICALLY_UNTRADEABLE_COST" },
       }],
     }));
-    expect(screen.getByText(/Not taken — costs too much of the edge/)).toBeInTheDocument();
+    expect(screen.getByText("Did not enter")).toBeInTheDocument();
+    expect(screen.getByText(/exceeded the cost ceiling in R/i)).toBeInTheDocument();
     expect(screen.getByText(/costR 2\.4137/)).toBeInTheDocument();
+    // The verdict is present, but demoted — never the headline.
+    expect(screen.getByText("Strategy verdict: WOULD_ENTER")).toBeInTheDocument();
     // The raw code survives for debugging — in the cell and in its tooltip.
     // `getAllBy` because it deliberately appears in both.
     expect(screen.getAllByText(/ECONOMICALLY_UNTRADEABLE_COST/).length).toBeGreaterThan(0);
@@ -179,7 +189,7 @@ describe("raw statuses are rendered as sentences, with the code preserved", () =
         reason_codes: ["COVERAGE_LOST"], payload: {},
       }],
     }));
-    expect(screen.getByText(/Data gap — bars missing/)).toBeInTheDocument();
+    expect(screen.getByText("Suspended — data gap")).toBeInTheDocument();
     // The raw cell splits its codes across text nodes, so the tooltip — which
     // carries every reason code — is the thing to assert on.
     expect(screen.getByTitle(/COVERAGE_LOST/)).toBeInTheDocument();
@@ -200,7 +210,9 @@ describe("raw statuses are rendered as sentences, with the code preserved", () =
         reason_codes: [], payload: {},
       }],
     }));
-    expect(screen.getByText(/Unrecognised code/)).toBeInTheDocument();
+    // An unknown EVENT type is shown raw rather than translated.
+    expect(screen.getByText("SOMETHING_NEW")).toBeInTheDocument();
+    expect(screen.getByText(/Unrecognised execution event/)).toBeInTheDocument();
   });
 });
 

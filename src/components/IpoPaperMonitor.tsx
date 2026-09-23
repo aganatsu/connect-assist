@@ -41,6 +41,7 @@ import {
   filterIsActive, NO_FILTERS, SMALL_SAMPLE_MAX, pluralTrades,
   type TradeFilters, type Tone, type Stage, type Group,
 } from "@/lib/ipoDashboard";
+import { readEvent, ENTRY_PROOF_NOTE, ordinalPhrase } from "@/lib/ipoTradeLinkage";
 
 export interface RunnerHealth {
   lastRunAt: string;
@@ -60,6 +61,9 @@ export interface RunnerHealth {
 
 export interface PaperPositionRow {
   symbol: string; timeframe: string; direction: string; status: string;
+  // Present in the endpoint's `select("*")` since Phase D; declared here so the
+  // scanner can prove which IPO owns a trade instead of matching on symbol.
+  setup_id?: string | null; intent_id?: string | null;
   entry_time: string; entry_price: number; target_price: number;
   s2_invalidation_level: number; cost_r: number;
   nominal_risk_usd: number; nominal_risk_distance: number;
@@ -363,7 +367,8 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                          tone={gap.tone === "good" ? "text-muted-foreground" : "text-amber-600"} />
                   <Field label="best so far" value={`${p.mfe_r.toFixed(2)}R`} tone="text-emerald-600" />
                   <Field label="worst so far" value={`${p.mae_r.toFixed(2)}R`} tone="text-destructive" />
-                  <Field label="zone ordinal" value={p.zone_entry_ordinal ?? "—"} />
+                  <Field label="zone ordinal"
+                         value={`${p.zone_entry_ordinal ?? "—"} · ${ordinalPhrase(p.zone_entry_ordinal)}`} />
                   <Field label="prev zone exit" value={clock(p.zone_previous_exit_time)} />
                   <Field label="IPO candle" value={clock(p.ipo_candle_time)} />
                   <Field label="entry time" value={clock(p.entry_time)} />
@@ -423,7 +428,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                 <th className="pr-3 font-normal">bar</th>
                 <th className="pr-3 font-normal">sym</th>
                 <th className="pr-3 font-normal">what happened</th>
-                <th className="pr-3 font-normal">why</th>
+                <th className="pr-3 font-normal">what it proves</th>
                 <th className="pr-3 font-normal">raw</th>
               </tr>
             </thead>
@@ -434,19 +439,21 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
               {state.recentEvents.slice(0, 40).map((e, i) => {
                 const costR = e.payload?.costR as number | undefined;
                 const block = e.payload?.blockReason as string | undefined;
-                // The most specific code available wins: an execution block, then a
-                // reason code, then the strategy verdict itself.
-                const primary = block ?? e.reason_codes?.[0] ?? e.strategy_decision;
-                const ex = explainStatus(primary);
+                // The EXECUTION EVENT decides the headline; the strategy verdict is
+                // secondary. Reading it the other way round is what rendered a
+                // filled trade as "Strategy would enter".
+                const ev = readEvent(e);
                 return (
                   <tr key={`${e.bar_time}-${e.event_type}-${i}`} className="border-t border-border/50">
                     <td className="pr-3 py-0.5 font-mono text-muted-foreground">{clock(e.bar_time)}</td>
                     <td className="pr-3 font-mono">{e.symbol}</td>
                     <td className="pr-3">
-                      <span className={`px-1 border text-[9px] ${toneClass(ex.tone)}`}>{ex.headline}</span>
+                      <span className={`px-1 border text-[9px] ${toneClass(ev.tone)}`}>{ev.whatHappened}</span>
+                      {/* Never the headline. A verdict is not an entry. */}
+                      <div className="text-[9px] text-muted-foreground/80 mt-0.5">{ev.strategyVerdict}</div>
                     </td>
                     <td className="pr-3 text-muted-foreground whitespace-normal max-w-[28rem]">
-                      {ex.detail}
+                      {ev.meaning}
                       {costR !== undefined && ` (costR ${costR.toFixed(4)})`}
                     </td>
                     {/* The raw code is never discarded — this dashboard monitors a system
@@ -463,7 +470,8 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
             </tbody>
           </table>
           <p className="text-[9px] text-muted-foreground mt-1">
-            A refused row still shows strategy WOULD_ENTER: the IPO signal stays valid and
+            <strong>{ENTRY_PROOF_NOTE}</strong> A refused row still shows strategy
+            WOULD_ENTER: the IPO signal stays valid and
             only execution was blocked, so the cost of that rule stays measurable. Hover
             the raw column for the full event, both verdicts and every reason code.
           </p>
