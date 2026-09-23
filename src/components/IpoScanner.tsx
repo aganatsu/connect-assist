@@ -19,6 +19,10 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { IpoScanDetail, type IpoRow } from "@/components/IpoScanDetail";
+import type { PaperState } from "@/components/IpoPaperMonitor";
+import {
+  linkRows, ownersOf, TRADE_STATUS_BADGE, type Linkage, type LinkedRow,
+} from "@/lib/ipoTradeLinkage";
 
 export interface IpoSnapshot {
   instrument: string;
@@ -39,6 +43,32 @@ async function fetchObservation(): Promise<{ snapshots: IpoSnapshot[]; errors: A
   return { snapshots: data.snapshots ?? [], errors: data.errors ?? [] };
 }
 
+/**
+ * The paper ledger, READ-ONLY, purely to answer "which IPO actually traded".
+ *
+ * A second endpoint on this view, and both are SELECT-only. The observation
+ * snapshot knows the lifecycle but has never heard of a fill; the paper state
+ * knows the fills but not which candidate produced them. Only the pair can say
+ * which of several VALID_TOUCHED rows owns the open position.
+ *
+ * It fails SOFT: a scanner that cannot reach the ledger still renders every
+ * lifecycle row, with trade status simply unknown. Losing the whole scanner
+ * because the ownership decoration is unavailable would be a bad trade.
+ */
+async function fetchPaperLedger(): Promise<PaperState | null> {
+  const { data, error } = await supabase.functions.invoke("ipo-paper-state", { body: {} });
+  if (error || !data?.ok) return null;
+  return data as PaperState;
+}
+
+const linkTone = (l: Linkage | undefined) =>
+  !l ? "bg-muted text-muted-foreground border-border"
+  : l.tone === "info" ? "bg-primary/15 text-primary border-primary/50"
+  : l.tone === "good" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-500 border-emerald-500/40"
+  : l.tone === "warn" ? "bg-amber-500/15 text-amber-600 border-amber-500/40"
+  : l.tone === "bad" ? "bg-destructive/15 text-destructive border-destructive/40"
+  : "bg-muted text-muted-foreground border-border";
+
 const stateTone = (s: string) =>
   s === "VALID_TOUCHED" ? "bg-primary/15 text-primary border-primary/40"
   : s === "VALID_LIVE" ? "bg-emerald-500/15 text-emerald-600 border-emerald-500/40"
@@ -50,6 +80,7 @@ export function IpoScanner() {
   const [selected, setSelected] = useState<IpoRow | null>(null);
   const [instrumentFilter, setInstrumentFilter] = useState("all");
   const [stateFilter, setStateFilter] = useState("all");
+  const [tradeFilter, setTradeFilter] = useState("all");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["ipo-observation"],
@@ -58,12 +89,33 @@ export function IpoScanner() {
     staleTime: 60_000,
   });
 
-  const rows = useMemo(() => {
+  const { data: ledger } = useQuery({
+    queryKey: ["ipo-paper-state"],
+    queryFn: fetchPaperLedger,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const linked = useMemo(() => {
     const all = (data?.snapshots ?? []).flatMap((s) => s.rows);
-    return all
-      .filter((r) => instrumentFilter === "all" || r.instrument === instrumentFilter)
-      .filter((r) => stateFilter === "all" || r.state === stateFilter);
-  }, [data, instrumentFilter, stateFilter]);
+    return linkRows(all, ledger?.openPositions ?? [], ledger?.recentTrades ?? []);
+  }, [data, ledger]);
+
+  const linkOf = useMemo(() => {
+    const m = new Map<string, Linkage>();
+    for (const l of linked) m.set(`${l.row.instrument}|${l.row.ipoIndex}`, l.link);
+    return m;
+  }, [linked]);
+
+  const owners = useMemo(() => ownersOf(linked), [linked]);
+
+  const rows = useMemo(() => linked
+    .map((l) => l.row)
+    .filter((r) => instrumentFilter === "all" || r.instrument === instrumentFilter)
+    .filter((r) => stateFilter === "all" || r.state === stateFilter)
+    .filter((r) => tradeFilter === "all"
+      || linkOf.get(`${r.instrument}|${r.ipoIndex}`)?.status === tradeFilter),
+    [linked, linkOf, instrumentFilter, stateFilter, tradeFilter]);
 
   return (
     <div className="flex flex-col gap-2 min-h-0">
@@ -71,6 +123,12 @@ export function IpoScanner() {
         <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
           Observation only — no orders
         </Badge>
+        {owners.map((o) => (
+          <Badge key={`${o.row.instrument}-${o.row.ipoIndex}`} variant="outline"
+                 className="text-[10px] font-mono bg-primary/15 text-primary border-primary/50">
+            OPEN POSITION · {o.row.instrument} {o.row.direction} · IPO {o.row.ipoCandleTime.slice(0, 16).replace("T", " ")}
+          </Badge>
+        ))}
         {(data?.snapshots ?? []).map((s) => (
           <Badge key={s.instrument} variant="secondary" className="text-[10px] font-mono">
             {s.instrument} · {s.timeframe} · {s.volatilityBucket} ·{" "}
@@ -85,6 +143,15 @@ export function IpoScanner() {
               <SelectItem value="EUR/USD">EUR/USD</SelectItem>
               <SelectItem value="USD/JPY">USD/JPY</SelectItem>
               <SelectItem value="BTC/USD">BTC/USD</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={tradeFilter} onValueChange={setTradeFilter}>
+            <SelectTrigger className="h-7 w-[200px] text-xs" aria-label="Filter by trade status"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All trade states</SelectItem>
+              {(Object.keys(TRADE_STATUS_BADGE) as Array<keyof typeof TRADE_STATUS_BADGE>).map((k) => (
+                <SelectItem key={k} value={k}>{TRADE_STATUS_BADGE[k]}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <Select value={stateFilter} onValueChange={setStateFilter}>
@@ -126,6 +193,7 @@ export function IpoScanner() {
                     <th className="text-left px-2 py-1 font-medium">TF</th>
                     <th className="text-left px-2 py-1 font-medium">Dir</th>
                     <th className="text-left px-2 py-1 font-medium">Lifecycle</th>
+                    <th className="text-left px-2 py-1 font-medium">Trade status</th>
                     <th className="text-left px-2 py-1 font-medium">Signal</th>
                     <th className="text-left px-2 py-1 font-medium">Validation</th>
                     <th className="text-left px-2 py-1 font-medium">Observation</th>
@@ -147,6 +215,19 @@ export function IpoScanner() {
                       <td className="px-2 py-1">
                         <span className={`px-1 py-0.5 border text-[10px] ${stateTone(r.state)}`}>{r.state}</span>
                       </td>
+                      {/* Lifecycle and execution are separate columns on purpose: a
+                          lifecycle state must never be read as an entry. */}
+                      <td className="px-2 py-1">
+                        {(() => {
+                          const l = linkOf.get(`${r.instrument}|${r.ipoIndex}`);
+                          return (
+                            <span className={`px-1 py-0.5 border text-[10px] whitespace-nowrap ${linkTone(l)}`}
+                                  title={l ? `${l.status} — ${l.meaning}` : "trade ledger unavailable"}>
+                              {l ? l.badge : "—"}
+                            </span>
+                          );
+                        })()}
+                      </td>
                       <td className="px-2 py-1">{r.signalValid ? "valid" : "—"}</td>
                       <td className="px-2 py-1 font-mono text-muted-foreground">{r.validationStatus}</td>
                       <td className="px-2 py-1 text-muted-foreground">{r.observationStatus}</td>
@@ -158,7 +239,10 @@ export function IpoScanner() {
           </CardContent>
         </Card>
 
-        <IpoScanDetail row={selected} />
+        <IpoScanDetail
+          row={selected}
+          link={selected ? linkOf.get(`${selected.instrument}|${selected.ipoIndex}`) ?? null : null}
+        />
       </div>
     </div>
   );

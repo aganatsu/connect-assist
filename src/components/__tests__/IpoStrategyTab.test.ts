@@ -52,10 +52,22 @@ describe("IPO observation UI is independent and cannot trade", () => {
     }
   });
 
-  it("reads only the observation endpoint", () => {
+  it("reads only READ-ONLY endpoints, and no table directly", () => {
+    // Widened on 2026-09-23 from `toEqual(["ipo-observation"])`. The scanner now
+    // also reads `ipo-paper-state` so it can say WHICH IPO owns an open
+    // position — the observation snapshot knows the lifecycle but has never
+    // heard of a fill. Both endpoints are SELECT-only, and the property this
+    // test exists for is unchanged and still asserted below: the scanner cannot
+    // mutate anything and cannot reach a broker.
+    const READ_ONLY = ["ipo-observation", "ipo-paper-state"];
     const invoked = [...scanner.matchAll(/functions\.invoke\("([^"]+)"/g)].map((m) => m[1]);
-    expect(invoked).toEqual(["ipo-observation"]);
+    expect(invoked.length).toBeGreaterThan(0);
+    for (const fn of invoked) expect(READ_ONLY).toContain(fn);
+    expect(invoked).toContain("ipo-observation");
     expect(scanner).not.toContain('.from("');
+    for (const mutation of [".insert(", ".update(", ".delete(", ".upsert(", "useMutation"]) {
+      expect(scanner).not.toContain(mutation);
+    }
   });
 
   it("labels execution eligibility as informational", () => {
