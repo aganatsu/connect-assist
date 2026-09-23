@@ -12,13 +12,14 @@
  * whether the rules would admit the setup — it is not an action.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { IpoScanDetail, type IpoRow } from "@/components/IpoScanDetail";
+import { IpoPager } from "@/components/IpoPager";
+import { paginate } from "@/lib/paginate";
 import type { PaperState } from "@/components/IpoPaperMonitor";
 import {
   linkRows, ownersOf, TRADE_STATUS_BADGE, type Linkage, type LinkedRow,
@@ -76,8 +77,22 @@ const stateTone = (s: string) =>
   : s === "INVALIDATED" ? "bg-destructive/15 text-destructive border-destructive/40"
   : "bg-muted text-muted-foreground border-border";
 
+/** Stable identity for a row across refetches. The object itself is replaced every poll. */
+const rowKey = (r: { instrument: string; ipoIndex: number }) => `${r.instrument}|${r.ipoIndex}`;
+
 export function IpoScanner() {
-  const [selected, setSelected] = useState<IpoRow | null>(null);
+  /**
+   * The SELECTED KEY, not the selected row.
+   *
+   * Holding the row object meant every 2-minute refetch replaced it with an
+   * equal-but-different object, so the detail pane showed a snapshot that
+   * quietly stopped updating. Holding the key re-resolves against the current
+   * data: the pane follows the live row, survives paging and refresh, and goes
+   * empty only when the row genuinely leaves the dataset.
+   */
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [instrumentFilter, setInstrumentFilter] = useState("all");
   const [stateFilter, setStateFilter] = useState("all");
   const [tradeFilter, setTradeFilter] = useState("all");
@@ -109,17 +124,43 @@ export function IpoScanner() {
 
   const owners = useMemo(() => ownersOf(linked), [linked]);
 
+  // Derived from what is actually in view rather than a hardcoded three, so
+  // enabling an instrument does not leave an unreachable filter behind.
+  const instruments = useMemo(
+    () => [...new Set(linked.map((l) => l.row.instrument))].sort(), [linked]);
+
+  // A filter change restarts at page 1: staying on page 3 of a freshly narrowed
+  // list shows a result set the user never asked to skip into.
+  useEffect(() => { setPage(1); }, [instrumentFilter, stateFilter, tradeFilter]);
+
   const rows = useMemo(() => linked
     .map((l) => l.row)
     .filter((r) => instrumentFilter === "all" || r.instrument === instrumentFilter)
     .filter((r) => stateFilter === "all" || r.state === stateFilter)
     .filter((r) => tradeFilter === "all"
-      || linkOf.get(`${r.instrument}|${r.ipoIndex}`)?.status === tradeFilter),
+      || linkOf.get(rowKey(r))?.status === tradeFilter),
     [linked, linkOf, instrumentFilter, stateFilter, tradeFilter]);
 
+  // AFTER filtering. Paging a list then filtering it would show page 2 of one
+  // list labelled as page 2 of another.
+  const pageOf = useMemo(() => paginate(rows, page, pageSize), [rows, page, pageSize]);
+
+  // NO CLAMP EFFECT HERE, DELIBERATELY. An effect that wrote the clamped page
+  // back into state raced the filter reset below and won, because it was
+  // declared later: narrowing the list left the user on page 2 instead of
+  // page 1. `paginate` already clamps what it returns, and IpoPager steps from
+  // that clamped value, so a stale stored page is invisible and harmless.
+
+  // Resolved from the FULL set, not the page, so selection survives paging.
+  const selected = useMemo(
+    () => linked.find((l) => rowKey(l.row) === selectedKey)?.row ?? null,
+    [linked, selectedKey],
+  );
+
   return (
-    <div className="flex flex-col gap-2 min-h-0">
-      <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex flex-col gap-2 min-h-0 h-full">
+      {/* Filters stay out of the scroll areas so they are always reachable. */}
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
         <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
           Observation only — no orders
         </Badge>
@@ -135,36 +176,35 @@ export function IpoScanner() {
             {s.sequencingState === "FREE" ? "free" : "blocked"} · {s.barsProcessed} bars
           </Badge>
         ))}
+        {/* Native selects, matching the page-size control below the table.
+            Three plain value lists need nothing more, and native gets keyboard
+            and screen-reader behaviour, a real mobile picker, and testability
+            for free — the Radix version cannot be opened outside a browser. */}
         <div className="ml-auto flex gap-2">
-          <Select value={instrumentFilter} onValueChange={setInstrumentFilter}>
-            <SelectTrigger className="h-7 w-[130px] text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All instruments</SelectItem>
-              <SelectItem value="EUR/USD">EUR/USD</SelectItem>
-              <SelectItem value="USD/JPY">USD/JPY</SelectItem>
-              <SelectItem value="BTC/USD">BTC/USD</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={tradeFilter} onValueChange={setTradeFilter}>
-            <SelectTrigger className="h-7 w-[200px] text-xs" aria-label="Filter by trade status"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All trade states</SelectItem>
-              {(Object.keys(TRADE_STATUS_BADGE) as Array<keyof typeof TRADE_STATUS_BADGE>).map((k) => (
-                <SelectItem key={k} value={k}>{TRADE_STATUS_BADGE[k]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={stateFilter} onValueChange={setStateFilter}>
-            <SelectTrigger className="h-7 w-[190px] text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All states</SelectItem>
-              <SelectItem value="VALID_TOUCHED">Valid — touched</SelectItem>
-              <SelectItem value="VALID_LIVE">Valid — live</SelectItem>
-              <SelectItem value="PENDING_CANDIDATE">Pending</SelectItem>
-              <SelectItem value="SUPPRESSED_IN_CONTRACTION">Suppressed</SelectItem>
-              <SelectItem value="INVALIDATED">Invalidated</SelectItem>
-            </SelectContent>
-          </Select>
+          <select value={instrumentFilter} onChange={(e) => setInstrumentFilter(e.target.value)}
+                  aria-label="Filter by instrument"
+                  className="h-7 w-[130px] text-xs bg-background border border-input text-foreground px-1">
+            <option value="all">All instruments</option>
+            {instruments.map((i) => <option key={i} value={i}>{i}</option>)}
+          </select>
+          <select value={tradeFilter} onChange={(e) => setTradeFilter(e.target.value)}
+                  aria-label="Filter by trade status"
+                  className="h-7 w-[200px] text-xs bg-background border border-input text-foreground px-1">
+            <option value="all">All trade states</option>
+            {(Object.keys(TRADE_STATUS_BADGE) as Array<keyof typeof TRADE_STATUS_BADGE>).map((k) => (
+              <option key={k} value={k}>{TRADE_STATUS_BADGE[k]}</option>
+            ))}
+          </select>
+          <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
+                  aria-label="Filter by lifecycle state"
+                  className="h-7 w-[190px] text-xs bg-background border border-input text-foreground px-1">
+            <option value="all">All states</option>
+            <option value="VALID_TOUCHED">Valid — touched</option>
+            <option value="VALID_LIVE">Valid — live</option>
+            <option value="PENDING_CANDIDATE">Pending</option>
+            <option value="SUPPRESSED_IN_CONTRACTION">Suppressed</option>
+            <option value="INVALIDATED">Invalidated</option>
+          </select>
         </div>
       </div>
 
@@ -174,12 +214,17 @@ export function IpoScanner() {
         </div>
       ))}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] gap-2 min-h-0">
-        <Card className="min-w-0">
-          <CardHeader className="py-2"><CardTitle className="text-xs uppercase tracking-wider">
+      {/* Fixed dashboard height so the two panes scroll independently instead of
+          growing the page. min-h-0 at every level, or a flex child refuses to
+          shrink below its content and the inner overflow never engages.
+          On narrow screens the grid collapses to one column and each pane keeps
+          its own bounded height rather than being forced into a column. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] gap-2 min-h-0 flex-1 overflow-hidden">
+        <Card className="min-w-0 flex flex-col min-h-0 max-h-[60vh] lg:max-h-none overflow-hidden">
+          <CardHeader className="py-2 shrink-0"><CardTitle className="text-xs uppercase tracking-wider">
             IPO Scanner {rows.length > 0 && <span className="text-muted-foreground">({rows.length})</span>}
           </CardTitle></CardHeader>
-          <CardContent className="p-0 overflow-x-auto">
+          <CardContent className="p-0 overflow-auto flex-1 min-h-0" data-testid="scanner-scroll">
             {isLoading && <div className="p-4 text-xs text-muted-foreground">Bootstrapping the IPO engine…</div>}
             {error && <div className="p-4 text-xs text-destructive">{(error as Error).message}</div>}
             {!isLoading && !error && rows.length === 0 && (
@@ -187,7 +232,8 @@ export function IpoScanner() {
             )}
             {rows.length > 0 && (
               <table className="w-full text-[11px]">
-                <thead className="text-muted-foreground border-b border-border">
+                {/* Sticky, so the column meanings stay on screen while the body scrolls. */}
+                <thead className="text-muted-foreground border-b border-border sticky top-0 bg-card z-10">
                   <tr>
                     <th className="text-left px-2 py-1 font-medium">Pair</th>
                     <th className="text-left px-2 py-1 font-medium">TF</th>
@@ -200,12 +246,12 @@ export function IpoScanner() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {pageOf.items.map((r) => (
                     <tr
                       key={`${r.instrument}-${r.ipoIndex}`}
-                      onClick={() => setSelected(r)}
+                      onClick={() => setSelectedKey(rowKey(r))}
                       className={`border-b border-border/50 cursor-pointer hover:bg-muted/50 ${
-                        selected?.ipoIndex === r.ipoIndex && selected?.instrument === r.instrument ? "bg-muted" : ""}`}
+                        selectedKey === rowKey(r) ? "bg-muted" : ""}`}
                     >
                       <td className="px-2 py-1 font-mono">{r.instrument}</td>
                       <td className="px-2 py-1 text-muted-foreground">{r.timeframe}</td>
@@ -237,6 +283,10 @@ export function IpoScanner() {
               </table>
             )}
           </CardContent>
+          {rows.length > 0 && (
+            <IpoPager page={pageOf} onPage={setPage} size={pageSize}
+                      onSize={(n) => { setPageSize(n); setPage(1); }} label="rows" />
+          )}
         </Card>
 
         <IpoScanDetail

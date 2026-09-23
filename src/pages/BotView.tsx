@@ -1377,20 +1377,24 @@ export default function BotView() {
       </div>
         </TabsContent>
 
-        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-y-auto p-2">
+        {/* overflow-hidden, not overflow-y-auto: the Scanner's two panes each own
+            their scrolling, and a scrolling ancestor would let the page move
+            underneath them. The Paper tab keeps its own scroll container below. */}
+        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 flex flex-col">
           {/* Two IPO views, both read-only. Scanner is what the rules see right
               now; Paper is what the forward test has actually done. Neither
               touches SMC, and IPO results are deliberately not merged into the
               SMC Journal or its analytics. */}
-          <Tabs defaultValue="scanner" className="flex flex-col gap-2 min-w-0">
+          <Tabs defaultValue="scanner" className="flex flex-col gap-2 min-w-0 flex-1 min-h-0">
             <TabsList className="h-6 shrink-0 self-start bg-card border border-border rounded-none p-0 gap-0 justify-start">
               <TabsTrigger value="scanner" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Scanner</TabsTrigger>
               <TabsTrigger value="paper" className="h-6 px-2 text-[10px] rounded-none data-[state=active]:bg-muted">Paper</TabsTrigger>
             </TabsList>
-            <TabsContent value="scanner" className="mt-0 min-w-0">
+            <TabsContent value="scanner" className="mt-0 min-w-0 flex-1 min-h-0 overflow-hidden">
               <IpoScanner />
             </TabsContent>
-            <TabsContent value="paper" className="mt-0 min-w-0">
+            {/* The paper dashboard is a long read, so it scrolls as one page. */}
+            <TabsContent value="paper" className="mt-0 min-w-0 flex-1 min-h-0 overflow-y-auto">
               <IpoPaperMonitor />
             </TabsContent>
           </Tabs>
