@@ -116,14 +116,33 @@ instrument-day in `/tmp`, market data only, no credential. Nothing is committed.
 | `UNRESOLVED_AT_1M` | 17 | 11 | 1 | **29** |
 | `FEED_DIVERGENT` / `MISSING_DATA` | 0 | 0 | 0 | **0** |
 
-### Forward replay of the 26 that survived their entry bar (Part F)
+### Final outcome of all 87 same-bar trades
+
+**CORRECTED 2026-09-23 (stage 3, Part 0).** The table below was previously
+headed "forward replay of the 26 that survived their entry bar". That was wrong:
+the 29/29 are totals across all 58 RESOLVED trades, combining those that
+resolved inside the entry bar with those that carried forward. They never
+described the 26-trade carry-forward subset, which cannot sum to 58.
 
 | | EUR/USD | USD/JPY | BTC/USD | total |
 |---|---|---|---|---|
-| eventual `TARGET` | 9 | 17 | 3 | **29** |
-| eventual `S2_CLOSE` | 14 | 5 | 10 | **29** |
+| `TARGET` (all resolved) | 9 | 17 | 3 | **29** |
+| `S2_CLOSE` (all resolved) | 14 | 5 | 10 | **29** |
 | `AMBIGUOUS_LATER_BAR` | 0 | 0 | 0 | **0** |
 | still unresolved | 17 | 11 | 1 | **29** |
+
+Decomposed, so the arithmetic is checkable:
+
+| | TARGET | S2_CLOSE | total |
+|---|---|---|---|
+| resolved INSIDE the entry bar | 18 | 14 | 32 |
+| carried FORWARD from entry bar | 11 | 15 | **26** |
+| **total resolved** | **29** | **29** | **58** |
+
+The carry-forward input was 26 and its outcomes sum to exactly 26: 11 eventual
+targets, 15 eventual S2 closes, 0 still open, 0 later-bar ambiguous, 0 missing
+data. An invariant test now enforces that carry-forward outcomes can never
+exceed the input count.
 
 No later bar contained both decisive events, so the flag never fired. That is a
 measurement, not an assumption — the check exists and reported zero.
