@@ -20,7 +20,8 @@ import {
   type Stage, type StageStatus, type PathNode,
 } from "@/lib/ipoLifecycle";
 import {
-  ordinalPhrase, ORDINAL_MEANING, type Linkage,
+  ordinalPhrase, ORDINAL_MEANING, readNewEntryCheck, primaryReasonCodes,
+  type Linkage,
 } from "@/lib/ipoTradeLinkage";
 
 export interface IpoRow {
@@ -143,6 +144,9 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
   const path = candidatePath(row);
   const note = contractionNote(row);
   const coverage = chainCoverage(chain);
+  // Ownership is established by EXACT identity in `classifyRow` — symbol,
+  // timeframe, direction and IPO candle instant — never from display text.
+  const entry = readNewEntryCheck(link);
 
   return (
     /* Own scroll container. `shrink-0` on the header keeps "USD/JPY · 30min ·
@@ -160,10 +164,32 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
         className="space-y-3 overflow-y-auto overscroll-contain flex-1 min-h-0 pt-3"
         data-testid="detail-scroll"
       >
+        {/* ── 1. CURRENT STATUS ────────────────────────────────────────────
+            One dominant badge. An open position must never look like a
+            rejection, so the owning row leads with OPEN POSITION and nothing
+            competes with it in the primary view. */}
+        <section className="border border-border px-2 py-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[9px] uppercase tracking-wider text-muted-foreground">status</span>
+            <Badge variant="outline"
+                   className={`text-[10px] rounded-none font-semibold ${
+                     entry.ownsOpenPosition
+                       ? "text-primary border-primary/60 bg-primary/10"
+                       : entry.verdict === "BLOCKED_BY_OTHER"
+                         ? "text-amber-600 border-amber-500/50"
+                         : ""}`}>
+              {link ? link.badge : "—"}
+            </Badge>
+            <span className="text-[9px] uppercase tracking-wider text-muted-foreground ml-1">lifecycle</span>
+            <Badge variant="secondary" className="text-[9px] font-mono rounded-none">{row.state}</Badge>
+          </div>
+          <p className="text-[10px] leading-tight pt-1">{entry.headline}</p>
+        </section>
+
         {link?.status === "OPEN_POSITION_OWNER" && link.ownedPosition && (
           <section className="border border-primary/50 bg-primary/10 px-2 py-1.5">
             <div className="text-[11px] font-bold uppercase tracking-wider text-primary">
-              This IPO triggered the current trade
+              This IPO opened the current paper position.
             </div>
             <Line label="symbol" value={link.ownedPosition.symbol} />
             <Line label="timeframe" value={link.ownedPosition.timeframe} />
@@ -332,28 +358,102 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
         </section>
 
         <section>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Plan</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Trade plan</div>
           <Line label="intended entry" value={px(row.intendedEntry)} />
           <Line label="2R target" value={px(row.target2R)} />
           <Line label="S2 invalidation" value={px(row.s2Invalidation)} />
           <Line label="risk (price)" value={px(row.riskPrice)} />
-          <Line label="sequencing" value={row.sequencingState} />
         </section>
 
+        {/* ── EXECUTION / SEQUENCING ───────────────────────────────────────────
+            The engine's sequencing fields answer one question: could a NEW entry
+            be created right now? On an instrument with an open position the
+            answer is always no — including on the row whose own IPO opened it.
+            Rendered verbatim that read "OPEN POSITION / BLOCKED_POSITION_OPEN /
+            would admit: no", which says a live trade is a rejection. The row
+            decides which reading applies; the raw fields stay, one level down. */}
         <section>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-            Execution eligibility <span className="normal-case italic">— informational only</span>
+            Execution &amp; sequencing
           </div>
-          <Line label="would the rules admit it" value={row.executionEligible ? "yes" : "no"}
-                tone={row.executionEligible ? "text-emerald-600" : "text-muted-foreground"} />
-          <div className="flex flex-wrap gap-1 pt-1">
-            {row.reasonCodes.map((c) => (
-              <Badge key={c} variant="secondary" className="text-[9px] font-mono">{c}</Badge>
-            ))}
-          </div>
+
+          {entry.ownsOpenPosition ? (
+            <>
+              <div className="flex items-center gap-1.5 pb-1">
+                <Badge variant="outline"
+                       className="text-[9px] rounded-none font-semibold text-primary border-primary/50 bg-primary/10">
+                  POSITION ACTIVE
+                </Badge>
+              </div>
+              <p className="text-[10px] leading-tight pb-1">{entry.headline}</p>
+              {link?.ownedPosition && (
+                <>
+                  <Line label="position opened" value={clockOf(link.ownedPosition.entry_time)} />
+                  <Line label="position entry" value={px(link.ownedPosition.entry_price)} />
+                  <Line label="position target" value={px(link.ownedPosition.target_price)} />
+                  <Line label="position S2" value={px(link.ownedPosition.s2_invalidation_level)} />
+                </>
+              )}
+            </>
+          ) : entry.verdict === "BLOCKED_BY_OTHER" ? (
+            <>
+              <div className="flex items-center gap-1.5 pb-1">
+                <Badge variant="outline"
+                       className="text-[9px] rounded-none font-semibold text-amber-600 border-amber-500/50">
+                  BLOCKED — POSITION ALREADY OPEN
+                </Badge>
+              </div>
+              <p className="text-[10px] leading-tight pb-1">{entry.headline}</p>
+              <p className="text-[10px] text-muted-foreground leading-tight pb-1">
+                {entry.rawExplanation}
+              </p>
+            </>
+          ) : (
+            <>
+              <Line label="new-entry eligibility"
+                    value={row.executionEligible ? "would enter" : "would not enter"}
+                    tone={row.executionEligible ? "text-emerald-600" : "text-muted-foreground"} />
+              {primaryReasonCodes(row.reasonCodes, entry).length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {primaryReasonCodes(row.reasonCodes, entry).map((c) => (
+                    <Badge key={c} variant="secondary" className="text-[9px] font-mono">{c}</Badge>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
           <p className="text-[10px] text-muted-foreground pt-2">
-            Phase C is observation only. No order is placed from this view.
+            The scanner places no order. Paper execution is shown here for context.
           </p>
+        </section>
+
+        {/* ── RAW ENGINE FIELDS ────────────────────────────────────────────────
+            Kept for audit, collapsed, and never presented as an error on a row
+            they do not reject. */}
+        <section>
+          <details>
+            <summary className="text-[10px] uppercase tracking-wider text-muted-foreground cursor-pointer">
+              Raw engine / new-entry check
+            </summary>
+            <div className="mt-1">
+              <p className="text-[10px] text-muted-foreground leading-tight pb-1">
+                {entry.rawExplanation}
+              </p>
+              <Line label="sequencing" value={row.sequencingState} />
+              <Line label="would the rules admit a NEW entry"
+                    value={row.executionEligible ? "yes" : "no"}
+                    tone={entry.isRejection && !row.executionEligible
+                      ? "text-amber-600" : "text-muted-foreground"} />
+              {row.reasonCodes.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {row.reasonCodes.map((c) => (
+                    <Badge key={c} variant="secondary" className="text-[9px] font-mono">{c}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </details>
         </section>
 
         <section>
