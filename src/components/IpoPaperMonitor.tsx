@@ -39,7 +39,10 @@ import {
   headline, lifecycleStages, explainStatus, planGeometry, gapState,
   bySymbol, byBucket, byOrdinal, exitReasonSplit, filterTrades, filterOptions,
   filterIsActive, NO_FILTERS, SMALL_SAMPLE_MAX, pluralTrades,
+  fmtR, fmtPct, fmtPF, pfTitle, lensTitle, milestoneLabel, exclusionLabel,
+  EXCLUSION_REASONS, AMBIGUOUS_POSITION_NOTE, EMPTY_PERF_VIEW, DASH,
   type TradeFilters, type Tone, type Stage, type Group,
+  type EvidenceLens, type PerfLike,
 } from "@/lib/ipoDashboard";
 import { readEvent, ENTRY_PROOF_NOTE, ordinalPhrase } from "@/lib/ipoTradeLinkage";
 import { IpoPager } from "@/components/IpoPager";
@@ -116,9 +119,49 @@ export interface PaperState {
     causal: { trades: number; totalR: number; expectancyR: number; winRate: number };
     legacy: { trades: number; totalR: number; expectancyR: number; winRate: number };
     causalExecutionVersion: string;
+    forwardCausalStart?: string;
     legacyTrades: number;
     unresolvedExcluded: number;
+    sequenceContaminated?: { trades: number; totalR: number };
   };
+  /**
+   * THE DEFAULT POPULATION. Computed by the backend from one admission rule, so
+   * the headline, the profit factor, the drawdown and every split reconcile by
+   * construction. Optional only so an older endpoint response still renders.
+   */
+  causal?: CausalReportView;
+  legacy?: { trades: number; netR: number; pnlUsd: number; winRate: number | null;
+             notCausallyOrdered: true };
+  /** Every causal-era row, for the audit list. Small by construction. */
+  causalTrades?: PaperTradeRow[];
+}
+
+export interface CausalReportView {
+  boundary: {
+    forwardCausalStart: string;
+    causalExecutionVersion: string;
+    deployedStrategyCommit: string;
+  };
+  headline: PerfLike;
+  open: { total: number; ambiguous: number; legacy: number };
+  byInstrument: Record<string, PerfLike>;
+  byDirection: { long: PerfLike; short: PerfLike };
+  byDailyStructure: Record<"ALIGNED" | "OPPOSED" | "RANGING" | "UNKNOWN", PerfLike>;
+  quality: {
+    resolutionMethods: Record<string, number>;
+    events: Record<string, number>;
+    validatedIncluded: number;
+    excludedUnresolved: number;
+    excludedSequenceContaminated: number;
+    excludedOther: number;
+    causalRowsTotal: number;
+  };
+  candidates: {
+    intentsCreated: number; filled: number; refused: number; closed: number;
+    fillConversion: number | null;
+  };
+  milestones: { current: number; targets: number[]; next: number | null };
+  smallSample: { below: number; n: number } | null;
 }
 
 async function fetchPaperState(): Promise<PaperState> {
@@ -141,6 +184,100 @@ const clock = (iso: string | null | undefined) =>
   iso ? new Date(iso).toISOString().slice(0, 16).replace("T", " ") : "—";
 
 const px = (n: number) => (Math.abs(n) >= 100 ? n.toFixed(2) : n.toFixed(5));
+
+/** Columns the causal runner adds to a position row. Optional: a pre-fix row has none. */
+type PosCausal = {
+  causal_execution_version?: string | null;
+  entry_resolution_method?: string | null;
+  htf_source?: string | null;
+  minute_source?: string | null;
+  daily_structure?: string | null;
+  daily_structure_alignment?: string | null;
+  ambiguity_kind?: string | null;
+  sequence_contaminated?: boolean | null;
+};
+
+/** Columns the causal runner adds to a history row. Optional: a pre-fix row has none. */
+type TradeCausal = {
+  exit_resolution_method?: string | null;
+  daily_structure_alignment?: string | null;
+  causal_execution_version?: string | null;
+  sequence_contaminated?: boolean | null;
+  exit_reason?: string | null;
+  excluded_from_stats?: boolean | null;
+};
+
+const INSTRUMENT_ORDER = ["EUR/USD", "USD/JPY", "BTC/USD"] as const;
+const DAILY_ORDER = ["ALIGNED", "OPPOSED", "RANGING", "UNKNOWN"] as const;
+/** The ordering verdicts a closed trade can carry. */
+const ORDERING_METHODS = [
+  "HTF_UNAMBIGUOUS", "ONE_MINUTE_RESOLVED", "TICK_RESOLVED", "ORDERING_UNRESOLVED",
+] as const;
+/** The audit events that describe ordering, counted over the causal era. */
+const ORDERING_EVENTS = [
+  "ORDERING_AMBIGUOUS", "AMBIGUITY_RESOLVED", "SEQUENCE_FORKED", "CAUSAL_OVERRIDE",
+] as const;
+
+const Row = ({ k, v, strong }: { k: string; v: number; strong?: boolean }) => (
+  <div className="flex justify-between gap-2">
+    <span className="text-muted-foreground truncate">{k}</span>
+    <span className={`font-mono tabular-nums ${strong ? "font-semibold" : ""}`}>{v}</span>
+  </div>
+);
+
+/**
+ * A breakdown table. Every row is the SAME `Perf` shape the backend computed
+ * from the one admission rule, so the rows always sum to the headline — a
+ * property asserted in the backend tests rather than hoped for here.
+ *
+ * No row is coloured as good or bad. These are observations.
+ */
+function PerfTable(
+  { caption, rows, note }:
+  { caption: string; rows: Array<[string, PerfLike]>; note?: string },
+) {
+  return (
+    <div className="min-w-0 overflow-x-auto">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">{caption}</div>
+      {note && <p className="text-[9px] text-muted-foreground mb-1 leading-tight">{note}</p>}
+      <table className="w-full text-[10px] tabular-nums">
+        <thead>
+          <tr className="text-muted-foreground text-left">
+            <th className="font-normal pr-2">&nbsp;</th>
+            <th className="font-normal pr-2 text-right">n</th>
+            <th className="font-normal pr-2 text-right">win%</th>
+            <th className="font-normal pr-2 text-right">net R</th>
+            <th className="font-normal pr-2 text-right">exp R</th>
+            <th className="font-normal text-right">PF</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, p]) => (
+            <tr key={k} className="border-t border-border/40">
+              <td className="pr-2 py-0.5 whitespace-nowrap">{k}</td>
+              <td className="pr-2 text-right font-mono">{p.trades || DASH}</td>
+              <td className="pr-2 text-right font-mono">{fmtPct(p.winRate)}</td>
+              <td className="pr-2 text-right font-mono">{p.trades ? fmtR(p.netR) : DASH}</td>
+              <td className="pr-2 text-right font-mono">{fmtR(p.expectancyR)}</td>
+              <td className="text-right font-mono" title={pfTitle(p)}>{fmtPF(p)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** "Sep 24, 2026 17:36 UTC" — the boundary is quoted in UTC, always. */
+const utcStamp = (iso: string | null | undefined): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()];
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${mon} ${d.getUTCDate()}, ${d.getUTCFullYear()} ${hh}:${mm} UTC`;
+};
 
 /** R drives the colour. Dollars are a view of it, never the other way round. */
 const rTone = (r: number | null) =>
@@ -265,23 +402,58 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
   const [tradeSize, setTradeSize] = useState(10);
   const set = (k: keyof TradeFilters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
 
+  // THE DEFAULT LENS IS CAUSAL. The question this page must answer on sight is
+  // "what has the trustworthy forward strategy done since the fix", and that
+  // cannot be answered from a pooled headline the reader has to mentally
+  // subtract legacy trades from.
+  const [lensChoice, setLensChoice] = useState<EvidenceLens>("causal");
+
   const h = state.health;
   const stale = state.healthStale;
-  const m = useMemo(() => headline(state.openPositions, state.recentTrades),
-                    [state.openPositions, state.recentTrades]);
-  const opts = useMemo(() => filterOptions(state.recentTrades), [state.recentTrades]);
-  const shown = useMemo(() => filterTrades(state.recentTrades, filters), [state.recentTrades, filters]);
+  const causal = state.causal;
+  /**
+   * WITHOUT THE CAUSAL BLOCK THERE IS NO CAUSAL LENS. An endpoint that predates
+   * this panel returns no `causal`, and filtering the trade list to a version
+   * nothing carries would render an empty dashboard and look like an outage.
+   * Degrade to the pooled view — which then labels itself, because its title
+   * says so.
+   */
+  const lens: EvidenceLens = causal ? lensChoice : "all";
+  const setLens = setLensChoice;
+  const version = causal?.boundary.causalExecutionVersion ?? "1m-ordering-v1";
+
+  /** The causal audit population; the pooled feed only when explicitly asked for. */
+  const lensTrades = useMemo(() => {
+    if (lens === "all") return state.recentTrades;
+    const all = state.recentTrades;
+    const causalRows = state.causalTrades ?? all.filter(
+      (t) => (t as { causal_execution_version?: string | null }).causal_execution_version === version);
+    if (lens === "causal") return causalRows;
+    const ids = new Set(causalRows.map((t) => t.intent_id));
+    return all.filter((t) => !ids.has(t.intent_id));
+  }, [lens, state.recentTrades, state.causalTrades, version]);
+
+  const perf: PerfLike = causal && lens === "causal" ? causal.headline : EMPTY_PERF_VIEW;
+
+  // The pooled legacy view keeps its original computation — it is explicitly
+  // labelled not-valid-for-performance, so it is shown as it always was.
+  const m = useMemo(() => headline(state.openPositions, lensTrades),
+                    [state.openPositions, lensTrades]);
+  const opts = useMemo(() => filterOptions(lensTrades), [lensTrades]);
+  const shown = useMemo(() => filterTrades(lensTrades, filters), [lensTrades, filters]);
 
   const stages = useMemo(() => lifecycleStages({
     validCandidates: state.recentEvents.filter((e) => e.event_type === "INTENT_CREATED").length,
     // No TOUCH event exists on this feed; the Scanner tab observes it directly.
     touched: null,
     openPositions: state.openPositions.length,
-    closedAtTarget: state.recentTrades.filter((t) => t.exit_reason === "TARGET_2R").length,
-    closedAtS2: state.recentTrades.filter((t) => t.exit_reason === "S2_CLOSE_INVALIDATION").length,
-  }), [state.recentEvents, state.openPositions, state.recentTrades]);
+    closedAtTarget: lensTrades.filter((t) => t.exit_reason === "TARGET_2R").length,
+    closedAtS2: lensTrades.filter((t) => t.exit_reason === "S2_CLOSE_INVALIDATION").length,
+  }), [state.recentEvents, state.openPositions, lensTrades]);
 
-  const splits = useMemo(() => exitReasonSplit(state.recentTrades), [state.recentTrades]);
+  const splits = useMemo(() => exitReasonSplit(lensTrades), [lensTrades]);
+  // A lens change restarts the history at page 1, like a filter change.
+  useEffect(() => { setTradePage(1); }, [lens]);
 
   // Both lists grow without bound as the forward test runs. The decision list
   // used to be truncated at 40 rows with no way to see row 41 at all; paging it
@@ -303,7 +475,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
       <Card className="rounded-none">
         <CardHeader className="py-1.5 px-2 flex-row items-center justify-between space-y-0">
           <CardTitle className="text-[11px] font-bold uppercase tracking-wider">
-            IPO forward test
+            {lensTitle(lens)}
           </CardTitle>
           <div className="flex items-center gap-1.5">
             {/* Always rendered, in every state of the page. Nothing here can trade,
@@ -319,22 +491,98 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
           </div>
         </CardHeader>
         <CardContent className="px-1 pb-2 pt-0">
-          {/* The contamination boundary, stated before any number is read.
-              Rows recorded before the causal-ordering fix could book a same-bar
-              target whose excursion happened BEFORE the entry, so the headline
-              strip below — which pools both — is not a clean forward result
-              while legacy rows remain. */}
-          {state.evidence && state.evidence.legacyTrades > 0 && (
-            <div className="px-1 pb-1 text-[9px] leading-tight text-muted-foreground">
-              <span className="font-semibold text-amber-600">MIXED EVIDENCE</span>
-              {" · "}causal ({state.evidence.causalExecutionVersion}){" "}
-              {state.evidence.causal.trades} trades {state.evidence.causal.totalR.toFixed(2)}R
-              {" · "}legacy pre-fix {state.evidence.legacy.trades} trades{" "}
-              {state.evidence.legacy.totalR.toFixed(2)}R — not causally ordered
-              {state.evidence.unresolvedExcluded > 0 &&
-                ` · ${state.evidence.unresolvedExcluded} void (event order unprovable)`}
-            </div>
+          {/* THE LENS. Default causal, so the first screen answers "what has the
+              trustworthy forward strategy done since the fix" without anyone
+              mentally subtracting legacy trades. The pooled view is still
+              reachable, and carries its own warning in the title. */}
+          <div className="flex flex-wrap items-center gap-1 px-1 pb-1.5">
+            {(["causal", "legacy", "all"] as EvidenceLens[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setLens(k)}
+                aria-pressed={lens === k}
+                className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border rounded-none ${
+                  lens === k
+                    ? "bg-foreground text-background font-semibold border-foreground"
+                    : "text-muted-foreground border-border hover:bg-muted"
+                }`}
+              >
+                {k === "causal" ? "causal" : k === "legacy" ? "legacy pre-fix" : "all history"}
+              </button>
+            ))}
+            {causal && (
+              <span className="text-[9px] text-muted-foreground ml-1">
+                causal execution <span className="font-mono">{causal.boundary.causalExecutionVersion}</span>
+                {" · forward start "}
+                <span className="font-mono">{utcStamp(causal.boundary.forwardCausalStart)}</span>
+              </span>
+            )}
+          </div>
+
+          {lens !== "causal" && (
+            <p className="px-1 pb-1.5 text-[9px] leading-tight text-amber-600 font-semibold">
+              {lens === "legacy"
+                ? "PRE-FIX / NOT CAUSALLY ORDERED — a same-bar target may have been booked from an excursion that happened before the entry."
+                : "ALL HISTORY — NOT VALID FOR PERFORMANCE EVALUATION. Causal and pre-fix trades are pooled here and must not be read as one result."}
+            </p>
           )}
+          {/* CAUSAL METRICS COME FROM THE BACKEND, computed once from the one
+              admission rule, so the headline, PF, expectancy, drawdown and every
+              split below reconcile by construction. The other two lenses keep
+              the original pooled computation and say so in the title. */}
+          {lens === "causal" && causal ? (
+            <>
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-border/50">
+                <Metric label="open" value={causal.open.total}
+                        sub={causal.open.ambiguous > 0
+                          ? `${causal.open.ambiguous} ordering ambiguous` : undefined} />
+                <Metric label="closed" value={perf.trades} />
+                <Metric label="realized R" value={perf.trades ? fmtR(perf.netR) : DASH}
+                        tone={perf.trades ? rTone(perf.netR) : undefined} />
+                <Metric label="realized P&L"
+                        value={perf.trades ? `$${perf.pnlUsd.toFixed(2)}` : DASH}
+                        tone={perf.trades ? rTone(perf.netR) : undefined} sub="nominal sizing" />
+                <Metric label="win rate" value={fmtPct(perf.winRate)}
+                        sub={perf.trades ? `${perf.wins}W / ${perf.losses}L` : undefined} />
+                <Metric label="expectancy" value={fmtR(perf.expectancyR)}
+                        tone={perf.expectancyR === null ? undefined : rTone(perf.expectancyR)}
+                        sub="net R per trade" />
+                <Metric label="profit factor" value={fmtPF(perf)} sub={pfTitle(perf)} />
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-border/50 border-t border-border/50">
+                <Metric label="max drawdown"
+                        value={perf.trades ? `${perf.maxDrawdownR.toFixed(2)}R` : DASH}
+                        tone={perf.maxDrawdownR > 0 ? "text-amber-600" : undefined} />
+                <Metric label="avg win" value={fmtR(perf.avgWinR)} />
+                <Metric label="avg loss" value={fmtR(perf.avgLossR)} />
+                <Metric label="longest win streak" value={perf.trades ? perf.longestWinStreak : DASH} />
+                <Metric label="longest loss streak" value={perf.trades ? perf.longestLossStreak : DASH} />
+                <Metric label="sample"
+                        value={milestoneLabel(causal.milestones.current, causal.milestones.next)}
+                        sub="monitoring landmark, not a threshold" />
+                <Metric label="candidate → fill"
+                        value={fmtPct(causal.candidates.fillConversion)}
+                        sub={`${causal.candidates.filled} fills / ${causal.candidates.intentsCreated} intents`} />
+              </div>
+              {causal.smallSample && (
+                <p className="text-[10px] text-amber-600 mt-1 px-1">
+                  SMALL SAMPLE — N={causal.smallSample.n}. These are descriptions of{" "}
+                  {causal.smallSample.n} closed {pluralTrades(causal.smallSample.n)}, not
+                  estimates of future performance. No statistical confidence is implied.
+                </p>
+              )}
+              {perf.trades === 0 && (
+                <p className="text-[10px] text-muted-foreground mt-1 px-1">
+                  No causal forward trades have closed yet. The boundary opened{" "}
+                  {utcStamp(causal.boundary.forwardCausalStart)} at strategy commit{" "}
+                  <span className="font-mono">{causal.boundary.deployedStrategyCommit}</span>.
+                  {(state.legacy?.trades ?? 0) > 0 &&
+                    ` ${state.legacy!.trades} pre-fix ${pluralTrades(state.legacy!.trades)} remain on the legacy tab.`}
+                </p>
+              )}
+            </>
+          ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-border/50">
             <Metric label="open" value={m.openPositions} />
             <Metric label="closed" value={m.closedTrades}
@@ -350,7 +598,8 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                     tone={m.drawdown.currentR > 0 ? "text-amber-600" : undefined}
                     sub={`max ${m.drawdown.maxR.toFixed(2)}R · ${m.drawdown.window} trades`} />
           </div>
-          {m.smallSample && (
+          )}
+          {lens !== "causal" && m.smallSample && (
             <p className="text-[10px] text-amber-600 mt-1 px-1">
               <SmallSampleTag n={m.closedTrades} /> Win rate, average R and drawdown are
               descriptions of {m.closedTrades} closed {pluralTrades(m.closedTrades)},
@@ -365,6 +614,69 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
         </CardContent>
       </Card>
 
+      {/* ── 1b. causal breakdowns — observational, never a filter ─────────── */}
+      {lens === "causal" && causal && (
+        <Card className="rounded-none">
+          <CardHeader className="py-1.5 px-2">
+            <CardTitle className="text-[11px] font-bold uppercase tracking-wider">
+              causal breakdown
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-2 pb-2 pt-0 space-y-2">
+            <PerfTable
+              caption="instrument"
+              rows={INSTRUMENT_ORDER.map((k) => [k, causal.byInstrument[k] ?? EMPTY_PERF_VIEW])}
+            />
+            <PerfTable
+              caption="direction"
+              note="Prior IPO research found direction asymmetry that changed by regime. Reported, not filtered on."
+              rows={[["LONG", causal.byDirection.long], ["SHORT", causal.byDirection.short]]}
+            />
+            <PerfTable
+              caption="daily HTF structure"
+              note="OBSERVATIONAL ONLY. The HTF-opposed hypothesis failed unseen validation, so no bucket is preferred and none is used to filter a trade."
+              rows={DAILY_ORDER.map((k) => [k, causal.byDailyStructure[k] ?? EMPTY_PERF_VIEW])}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 1c. causal data quality ───────────────────────────────────────── */}
+      {lens === "causal" && causal && (
+        <Card className="rounded-none">
+          <CardHeader className="py-1.5 px-2">
+            <CardTitle className="text-[11px] font-bold uppercase tracking-wider">
+              causal data quality
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-2 pb-2 pt-0">
+            <p className="text-[9px] text-muted-foreground mb-1.5">
+              How each included trade&apos;s events were ordered, and what was kept out of the
+              headline. A population that cannot explain its own exclusions is not evidence.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-0.5 text-[10px]">
+              {ORDERING_METHODS.map((k) => (
+                <Row key={k} k={k} v={causal.quality.resolutionMethods[k] ?? 0} />
+              ))}
+              {ORDERING_EVENTS.map((k) => (
+                <Row key={k} k={k} v={causal.quality.events[k] ?? 0} />
+              ))}
+            </div>
+            <div className="mt-1.5 pt-1.5 border-t border-border/50 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-0.5 text-[10px]">
+              <Row k="validated in stats" v={causal.quality.validatedIncluded} strong />
+              <Row k="excluded — unresolved" v={causal.quality.excludedUnresolved} />
+              <Row k="excluded — seq. contaminated" v={causal.quality.excludedSequenceContaminated} />
+              <Row k="excluded — other" v={causal.quality.excludedOther} />
+            </div>
+            <p className="text-[9px] text-muted-foreground mt-1">
+              {causal.quality.validatedIncluded} included + {causal.quality.excludedUnresolved}{" "}
+              + {causal.quality.excludedSequenceContaminated} + {causal.quality.excludedOther}{" "}
+              = {causal.quality.causalRowsTotal} causal-era {pluralTrades(causal.quality.causalRowsTotal)}.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── 2. open positions ─────────────────────────────────────────────── */}
       <Card className="rounded-none">
         <CardHeader className="py-1.5 px-2">
@@ -378,6 +690,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
           ) : state.openPositions.map((p) => {
             const plan = planGeometry(p);
             const gap = gapState(p);
+            const amb = (p as PosCausal).ambiguity_kind;
             return (
               <div key={`${p.symbol}-${p.entry_time}`} className="border-t border-border/50 py-1.5 first:border-t-0">
                 <div className="flex items-center gap-1.5 mb-1 flex-wrap">
@@ -393,6 +706,17 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                     <Badge variant="outline" className={`text-[9px] rounded-none ${toneClass(gap.tone)}`}
                            title={`${gap.code} — ${gap.detail}`}>
                       SUSPENDED · {p.gap_reason}
+                    </Badge>
+                  )}
+                  {/* SHOWN, NEVER HIDDEN. It has no validated P&L yet, but it is
+                      holding the instrument's one position slot, and a slot held
+                      by something invisible is how a reader concludes the runner
+                      has stopped working. */}
+                  {p.status === "ordering_ambiguous" && (
+                    <Badge variant="outline"
+                           className="text-[9px] rounded-none text-amber-600 border-amber-500/50 font-semibold"
+                           title={AMBIGUOUS_POSITION_NOTE}>
+                      ORDERING AMBIGUOUS
                     </Badge>
                   )}
                   {(p.zone_entry_ordinal ?? 1) > 1 && (
@@ -416,6 +740,21 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                   <Field label="worst so far" value={`${p.mae_r.toFixed(2)}R`} tone="text-destructive" />
                   <Field label="zone ordinal"
                          value={`${p.zone_entry_ordinal ?? "—"} · ${ordinalPhrase(p.zone_entry_ordinal)}`} />
+                  {/* Causal provenance. Absent on a position that filled before
+                      the boundary, which is itself the useful signal. */}
+                  <Field label="causal version"
+                         value={(p as PosCausal).causal_execution_version ?? "legacy (pre-fix)"} />
+                  <Field label="entry resolution"
+                         value={(p as PosCausal).entry_resolution_method ?? DASH} />
+                  <Field label="HTF source" value={(p as PosCausal).htf_source ?? DASH} />
+                  <Field label="minute source" value={(p as PosCausal).minute_source ?? DASH} />
+                  <Field label="daily structure"
+                         value={(p as PosCausal).daily_structure
+                           ? `${(p as PosCausal).daily_structure} · ${(p as PosCausal).daily_structure_alignment ?? DASH}`
+                           : DASH} />
+                  <Field label="ambiguity"
+                         value={amb ?? "none"}
+                         tone={amb ? "text-amber-600" : undefined} />
                   <Field label="prev zone exit" value={clock(p.zone_previous_exit_time)} />
                   <Field label="IPO candle" value={clock(p.ipo_candle_time)} />
                   <Field label="entry time" value={clock(p.entry_time)} />
@@ -424,6 +763,13 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                   <Field label="managed through" value={clock(p.last_managed_bar_time)} />
                   <Field label="mode" value="paper" />
                 </div>
+                {amb && (
+                  <p className="text-[9px] text-amber-600 mt-1 leading-tight">
+                    {AMBIGUOUS_POSITION_NOTE} No unrealized R is shown — one branch
+                    of this position&apos;s history has already closed and the other has not,
+                    and nothing in the data can say which is real.
+                  </p>
+                )}
               </div>
             );
           })}
@@ -650,13 +996,19 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                 <th className="pr-3 font-normal">vol</th>
                 <th className="pr-3 font-normal text-right">MAE</th>
                 <th className="pr-3 font-normal text-right">MFE</th>
+                <th className="pr-3 font-normal">resolution</th>
+                <th className="pr-3 font-normal">daily</th>
+                <th className="pr-3 font-normal">causal</th>
+                <th className="pr-3 font-normal">excluded</th>
               </tr>
             </thead>
             <tbody>
               {shown.length === 0 && (
-                <tr><td colSpan={13} className="text-muted-foreground py-1">
-                  {state.recentTrades.length === 0
-                    ? "No closed paper trades yet."
+                <tr><td colSpan={17} className="text-muted-foreground py-1">
+                  {lensTrades.length === 0
+                    ? (lens === "causal"
+                        ? "No causal forward trades have closed yet."
+                        : "No closed paper trades yet.")
                     : "No trades match these filters."}
                 </td></tr>
               )}
@@ -689,6 +1041,26 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                     <td className="pr-3">{t.volatility_bucket}</td>
                     <td className="pr-3 text-right text-muted-foreground">{t.mae_r?.toFixed(2)}</td>
                     <td className="pr-3 text-right text-muted-foreground">{t.mfe_r?.toFixed(2)}</td>
+                    {/* Audit columns: how the exit was ordered, the observational
+                        Daily tag, which evidence era the row belongs to, and why
+                        it is or is not in the headline. */}
+                    <td className="pr-3 text-muted-foreground">
+                      {(t as TradeCausal).exit_resolution_method ?? DASH}
+                    </td>
+                    <td className="pr-3 text-muted-foreground">
+                      {(t as TradeCausal).daily_structure_alignment ?? DASH}
+                    </td>
+                    <td className="pr-3 text-muted-foreground font-mono">
+                      {(t as TradeCausal).causal_execution_version ?? "legacy"}
+                    </td>
+                    <td className="pr-3">
+                      {(() => {
+                        const why = exclusionLabel(t as TradeCausal, version);
+                        return why
+                          ? <span className="text-amber-600" title={EXCLUSION_REASONS[why] ?? why}>{why}</span>
+                          : <span className="text-muted-foreground">in stats</span>;
+                      })()}
+                    </td>
                   </tr>
                 );
               })}

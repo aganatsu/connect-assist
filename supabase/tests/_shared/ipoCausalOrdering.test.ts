@@ -738,7 +738,11 @@ Deno.test("E3 — a sequence fork is declared, and only when the futures really 
 
 Deno.test("E4 — contaminated rows are kept out of the validated population", async () => {
   const { splitEvidence } = await import("../../functions/ipo-paper-state/index.ts");
+  // entry_time matters: the canonical rule admits only positions that FILLED at
+  // or after the forward boundary, because a fill before it was resolved under
+  // the old model even if it exited after.
   const row = (over: Record<string, unknown>) => ({
+    entry_time: "2026-09-25T09:00:00Z",
     realized_r: 1, realized_pnl_usd: 200, excluded_from_stats: false,
     exit_reason: "TARGET_2R", causal_execution_version: "1m-ordering-v1",
     sequence_contaminated: false, ...over,
@@ -746,7 +750,7 @@ Deno.test("E4 — contaminated rows are kept out of the validated population", a
   const split = splitEvidence([
     row({}),
     row({ sequence_contaminated: true }),
-    row({ causal_execution_version: null }),
+    row({ causal_execution_version: null, entry_time: "2026-09-20T09:00:00Z" }),
     row({ exit_reason: "ORDERING_UNRESOLVED", realized_r: null, excluded_from_stats: true }),
   ]);
   assertEquals(split.causal.trades, 1, "only the provable, unconditional row counts");

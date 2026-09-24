@@ -499,3 +499,117 @@ export function gapState(p: OpenPositionLike): Explained {
   if (p.status === "data_gap_suspended") return explainStatus(p.gap_reason ?? "GAP_SUSPENDED");
   return { code: "open", headline: "Live", detail: "Managed on every closed bar.", tone: "good" };
 }
+
+// ─── causal forward lens ─────────────────────────────────────────────────────
+//
+// The dashboard's default population is the validated causal forward test. Every
+// number in it is computed by the BACKEND from one admission rule
+// (`ipoCausalEvidence.isValidatedCausalForwardTrade`) — these are formatters
+// only, so no card can quietly disagree with another about what counts.
+
+export type EvidenceLens = "causal" | "legacy" | "all";
+
+export interface PerfLike {
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  netR: number;
+  pnlUsd: number;
+  expectancyR: number | null;
+  avgWinR: number | null;
+  avgLossR: number | null;
+  grossWinR: number;
+  grossLossR: number;
+  profitFactor: number | null;
+  pfNote: "NO_TRADES" | "NO_LOSSES" | null;
+  maxDrawdownR: number;
+  longestWinStreak: number;
+  longestLossStreak: number;
+}
+
+/** An em dash for "no data", never a misleading 0. */
+export const DASH = "—";
+
+export const fmtR = (v: number | null | undefined): string =>
+  v === null || v === undefined || !Number.isFinite(v)
+    ? DASH
+    : `${v >= 0 ? "+" : ""}${v.toFixed(2)}R`;
+
+export const fmtPct = (v: number | null | undefined): string =>
+  v === null || v === undefined || !Number.isFinite(v) ? DASH : `${(v * 100).toFixed(0)}%`;
+
+/**
+ * Profit factor, with the two cases that are NOT numbers stated as words.
+ *
+ * A population with wins and no losses has no finite profit factor. Printing a
+ * huge number there, or 0, would both be lies; "∞" is the honest reading and
+ * carries its own warning.
+ */
+export function fmtPF(p: Pick<PerfLike, "profitFactor" | "pfNote">): string {
+  if (p.profitFactor !== null && Number.isFinite(p.profitFactor)) return p.profitFactor.toFixed(2);
+  if (p.pfNote === "NO_LOSSES") return "∞";
+  return DASH;
+}
+
+/** Long-form for a tooltip, because "∞" alone invites the wrong conclusion. */
+export function pfTitle(p: Pick<PerfLike, "profitFactor" | "pfNote" | "grossWinR" | "grossLossR">): string {
+  if (p.pfNote === "NO_TRADES") return "no closed trades yet";
+  if (p.pfNote === "NO_LOSSES") return `no losses yet — ${p.grossWinR.toFixed(2)}R gross win, 0R gross loss`;
+  return `${p.grossWinR.toFixed(2)}R gross win / ${p.grossLossR.toFixed(2)}R gross loss`;
+}
+
+export const EMPTY_PERF_VIEW: PerfLike = {
+  trades: 0, wins: 0, losses: 0, winRate: null, netR: 0, pnlUsd: 0,
+  expectancyR: null, avgWinR: null, avgLossR: null,
+  grossWinR: 0, grossLossR: 0, profitFactor: null, pfNote: "NO_TRADES",
+  maxDrawdownR: 0, longestWinStreak: 0, longestLossStreak: 0,
+};
+
+/** The heading for each lens. The third one carries its own health warning. */
+export function lensTitle(lens: EvidenceLens): string {
+  if (lens === "causal") return "IPO CAUSAL FORWARD TEST";
+  if (lens === "legacy") return "LEGACY PRE-FIX — NOT CAUSALLY ORDERED";
+  return "ALL HISTORY — NOT VALID FOR PERFORMANCE EVALUATION";
+}
+
+/**
+ * Progress toward the next monitoring landmark.
+ *
+ * A LANDMARK IS NOT A THRESHOLD. Nothing about the strategy becomes true at 25
+ * trades, so this returns a count and a target and deliberately no verdict.
+ */
+export function milestoneLabel(current: number, next: number | null): string {
+  return next === null ? `${current} causal ${pluralTrades(current)}` : `${current} / ${next}`;
+}
+
+/** The short reason an excluded row is excluded, for the audit list. */
+export function exclusionLabel(row: {
+  exit_reason?: string | null;
+  sequence_contaminated?: boolean | null;
+  excluded_from_stats?: boolean | null;
+  causal_execution_version?: string | null;
+}, version: string): string | null {
+  if (row.causal_execution_version !== version) return "LEGACY PRE-FIX";
+  if (row.sequence_contaminated) return "SEQUENCE CONTAMINATED";
+  if (row.exit_reason === "ORDERING_UNRESOLVED") return "ORDERING UNRESOLVED";
+  if (row.exit_reason === "DATA_GAP_ABORTED") return "DATA GAP";
+  if (row.excluded_from_stats) return "EXCLUDED";
+  return null;
+}
+
+/** One sentence explaining each exclusion, so a reader need not know the schema. */
+export const EXCLUSION_REASONS: Record<string, string> = {
+  "LEGACY PRE-FIX":
+    "Recorded before the causal-ordering fix. A same-bar target may have been booked from an excursion that happened before the entry.",
+  "SEQUENCE CONTAMINATED":
+    "Trade existence depends on an unresolved earlier ordering branch.",
+  "ORDERING UNRESOLVED":
+    "No data could establish the order of competing events, so no outcome is claimed.",
+  "DATA GAP":
+    "Bars were missing for long enough that the path was never observed.",
+  "EXCLUDED": "Excluded at source.",
+};
+
+export const AMBIGUOUS_POSITION_NOTE =
+  "At least one causal path remains open. Position slot remains occupied.";
