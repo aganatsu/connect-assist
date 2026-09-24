@@ -66,6 +66,13 @@ export interface EvidenceSplit {
   legacyTrades: number;
   /** Closed with no outcome because nothing could order the events. */
   unresolvedExcluded: number;
+  /**
+   * Rows whose OUTCOME is known but whose EXISTENCE is conditional: an earlier
+   * ambiguity on that instrument freed the slot at different bars on different
+   * branches, so whether this trade happened at all depends on which was real.
+   * Kept out of `causal` and reported separately rather than quietly averaged.
+   */
+  sequenceContaminated: CleanSummary;
 }
 
 /**
@@ -101,16 +108,21 @@ export function splitEvidence(
     realized_r: number | null; realized_pnl_usd: number | null;
     excluded_from_stats: boolean; exit_reason?: string | null;
     causal_execution_version?: string | null;
+    sequence_contaminated?: boolean | null;
   }>,
 ): EvidenceSplit {
-  const causalRows = rows.filter((r) => r.causal_execution_version != null);
+  const causal = rows.filter((r) =>
+    r.causal_execution_version != null && r.sequence_contaminated !== true);
+  const contaminated = rows.filter((r) =>
+    r.causal_execution_version != null && r.sequence_contaminated === true);
   const legacyRows = rows.filter((r) => r.causal_execution_version == null);
   return {
-    causal: summarize(causalRows),
+    causal: summarize(causal),
     legacy: summarize(legacyRows),
     causalExecutionVersion: CAUSAL_EXECUTION_VERSION,
     legacyTrades: legacyRows.length,
     unresolvedExcluded: rows.filter((r) => r.exit_reason === "ORDERING_UNRESOLVED").length,
+    sequenceContaminated: summarize(contaminated),
   };
 }
 

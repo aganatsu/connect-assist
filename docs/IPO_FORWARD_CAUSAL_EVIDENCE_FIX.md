@@ -84,8 +84,8 @@ the FILL bar — nothing before the entry instant may resolve it
      entry minute found, no post-entry target, bar closes beyond S2
                                           -> S2_CLOSE    ONE_MINUTE_RESOLVED
      entry minute found, nothing after it -> HOLD        ONE_MINUTE_RESOLVED
-     entry and target in the SAME minute  -> UNRESOLVED  ORDERING_UNRESOLVED
-     no minute reaches E2 (feeds disagree)-> UNRESOLVED  ORDERING_UNRESOLVED
+     entry and target in the SAME minute  -> AMBIGUOUS_OPEN_OR_CLOSED   (slot HELD, §5)
+     no minute reaches E2 (feeds disagree)-> AMBIGUOUS_OPEN_OR_CLOSED   (slot HELD, §5)
 ```
 
 Excursions follow the same rule: on a tape-resolved fill bar, MAE and MFE are
@@ -116,34 +116,112 @@ same-minute ordering is terminal.
 
 ---
 
-## 5. Unresolved behaviour
+## 5. Unresolved behaviour — and why it must not close the position
 
-When nothing can order the events the observation is **voided, never fabricated**:
+### The mistake an earlier draft made
+
+The first version of this fix closed the position on every unresolvable
+ordering: `ORDERING_UNRESOLVED`, no R, excluded from statistics. That is wrong,
+and wrong in a way that spreads.
+
+When entry and target fall inside one minute there are **two viable paths**:
 
 ```
-exit_reason         ORDERING_UNRESOLVED
-exit_price          NULL
-realized_r          NULL
-realized_pnl_usd    NULL
-excluded_from_stats TRUE
-exclusion_reason    the resolver's own explanation
+entry then target  ->  the trade closed at +2R gross on its fill bar
+target then entry  ->  the target was PRE-ENTRY and the trade is STILL OPEN
 ```
 
-This mirrors the existing `DATA_GAP_ABORTED` treatment, and the schema's
-coherence constraint now enforces it: a row with either void reason **must**
-carry no R, must be excluded, and must say why.
+OHLC cannot separate them. Closing picks the first branch, frees the
+one-position-per-instrument slot, and admits later IPOs that exist **only in
+that branch**. The unresolved trade would have been excluded from statistics
+while silently contaminating every trade after it — the same class of error the
+whole fix exists to remove, moved one step downstream.
 
-The position closes rather than lingering. One branch of the ambiguity means the
-trade is already over, so carrying it forward would invent a different fiction
-from the one being removed — and it keeps the position slot in step with the
-frozen engine.
+### The state model
 
-A plan that still needs a tape is **provisional** and is never written. The
-worker either supplies the tape and re-plans, or declares the tape final so the
-affected bar becomes `ORDERING_UNRESOLVED`. There is no path that falls back to
-the whole-bar reading.
+Two distinct verdicts, because two genuinely different situations were being
+collapsed into one:
 
----
+| resolver kind | meaning | slot |
+|---|---|---|
+| `UNRESOLVED_TERMINAL` | order unknown, but **every** branch exits on this bar | **freed** |
+| `AMBIGUOUS_OPEN_OR_CLOSED` | order unknown and **a branch leaves it open** | **held** |
+
+`UNRESOLVED_TERMINAL` is the later-bar case — a bar carrying both a target and an
+S2 close for a position already running. Whichever came first, the position
+exits on that bar, so only the outcome is unknown. It closes with no R.
+
+`AMBIGUOUS_OPEN_OR_CLOSED` becomes a real position in a third status:
+
+```
+status      ordering_ambiguous          <- an OCCUPIED slot
+ambiguity   { kind, atTime, altBranch, altExitTime, altExitPrice,
+              altNetR, altFreedAtBarTime, detail }
+```
+
+**The open branch IS the position** — it is managed by later bars under the
+ordinary rules, because that branch simply is an open position. The other branch
+is frozen beside it. Three kinds reach this state:
+
+| kind | the other branch says |
+|---|---|
+| `ENTRY_VS_TARGET_SAME_MINUTE` | `CLOSED_AT_TARGET` — entry came first, +2R on the fill bar |
+| `ENTRY_BAR_TARGET_TOUCH_NO_TAPE` | `CLOSED_AT_TARGET` — same, with no tape to check |
+| `ENTRY_NOT_PROVEN_IN_TAPE` | `NO_POSITION` — the minutes never reach E2, so on that reading the fill never happened |
+
+### How the slot is handled
+
+Held, at three levels, because this is the requirement that was broken:
+
+1. The fill loop breaks on `if (live)` and an ambiguous position **is** `live`.
+2. The paper layer now enforces the frozen `touchIndex > previousExitIndex`
+   sequencing itself (§5.1) rather than inheriting it from the engine's list.
+3. The database partial unique index covers `ordering_ambiguous`, so a second
+   row for the instrument is refused by Postgres, not only by code.
+
+### How later bars resolve it
+
+The open branch is managed normally. When it terminates, the branches reconcile:
+
+| open branch ends | other branch | resolution | result |
+|---|---|---|---|
+| `TARGET` | `CLOSED_AT_TARGET` | `CONVERGED_SAME_OUTCOME` | **a real +2R result, counted** |
+| `S2_CLOSE` | `CLOSED_AT_TARGET` | `DIVERGED_TERMINAL` | `ORDERING_UNRESOLVED`, no R, excluded |
+| `UNRESOLVED_TERMINAL` | `CLOSED_AT_TARGET` | `DIVERGED_TERMINAL` | no R, excluded |
+| anything | `NO_POSITION` | `EXISTENCE_UNPROVEN` | no R, excluded |
+| data gap | any | abort | no R, excluded, branches recorded |
+
+The convergence case is real, not a convenience: the target price, entry price,
+risk and cost are all fixed at entry, so both branches are `2 − costR` to the
+last bit. **The R is provable; only the exit timestamp is not.** The row carries
+`exit_time_ambiguous = true` and both candidate times.
+
+### 5.1 The sequence fork, and how far contamination actually reaches
+
+Even a converged *outcome* can leave a forked *future*: the two branches freed
+the slot on different bars, so they were free to trade at different times.
+
+```
+fork  iff  altFreedAtBarTime != the open branch's exit bar
+           AND the other branch took a trade in that gap
+```
+
+The second clause is a genuine convergence test, not a hedge. **The frozen
+engine's own trajectory IS the alternative branch** — it books the whole-bar
+target and frees the slot early — so if it took no trade in the gap, both
+branches are flat at the same bar having seen the same bars, and their futures
+re-converge. An `AMBIGUITY_RESOLVED` event records that. Only when it did take
+one is a `SEQUENCE_FORKED` event emitted.
+
+After a real fork, every later trade on that instrument has its **outcome**
+measured but its **existence** conditional. Those rows carry
+`sequence_contaminated = true`, are reported under their own heading, and are
+kept out of the validated forward population. The flag is persisted in the
+runtime state, so it survives across invocations and is not re-derived.
+
+This is bounded, not complete: the unbounded-correct answer is to simulate every
+branch, which costs 2^n states. Holding the slot conservatively and labelling the
+conditional tail is what is implemented, and §13 says so.
 
 ## 6. S2 semantics — preserved exactly
 
@@ -245,7 +323,7 @@ deploy happens, for narrative reference only.
 
 ## 10. Tests
 
-New file `supabase/tests/_shared/ipoCausalOrdering.test.ts`, 20 tests, built from
+New file `supabase/tests/_shared/ipoCausalOrdering.test.ts`, 31 tests, built from
 the real incident. All ten required cases are covered:
 
 | # | case | test |
@@ -255,14 +333,33 @@ the real incident. All ten required cases are covered:
 | 3 | wick through S2 then recovery → no invalidation | `3` |
 | 4 | target after entry, HTF later closes beyond S2 → target wins | `4` |
 | 5 | HTF closes beyond S2 before any target → S2 close | `5` |
-| 6 | entry and target in one minute → `ORDERING_UNRESOLVED` | `6`, `6b` |
+| 6 | entry and target in one minute → ambiguous, slot HELD | `6`, `6b`, `6c`, `6d` |
 | 7 | position survives the entry bar → later bars manage it | `7` |
 | 8 | re-entry on the same zone preserved | `8` |
 | 9 | one open position per instrument | `9` |
 | 10 | no SMC behaviour, no level/target/stop computed | `10`, `10b`, `10c` |
 
+Plus the ambiguous-position model, A–E:
+
+| # | case | test |
+|---|---|---|
+| A | target extreme first, entry later, no later target → OPEN preserved | `A` |
+| B | entry first, target later in the same minute → CLOSED WIN branch kept | `B` |
+| C | ambiguity then a later target → branches converge, R provable | `C` |
+| D | ambiguity then an S2 close → both terminal, no R claimable | `D`, `D2` |
+| E | no later IPO admitted while a branch holds the position | `E`, `E2`, `E3`, `E4` |
+
+A and B are the same fixture asserted from both sides: nothing in the data
+distinguishes them, so the runner must produce one identical state for both. `E`
+checks the slot at all three levels (fill loop, live assignment, database index);
+`E2` drives `runPaper` end to end and asserts no fill ever follows an ambiguity
+within a plan; `E3` pins the fork test including its convergence clause; `E4`
+asserts contaminated rows stay out of the validated population.
+
 Plus: the forward-evidence stamp defaults to legacy; `minutesInBar` windows
-correctly; a `NEED_MINUTES` result can never be applied as an outcome.
+correctly; a `NEED_MINUTES` result can never be applied as an outcome; a later
+bar that cannot be ordered IS terminal in every branch (`6c`); a feeds-disagree
+fill keeps `NO_POSITION` live (`6d`).
 
 **Oracle equivalence.** `the forward resolver agrees with the research resolver
 on the same tape` restates the walk the causal-validation work used — post-entry
@@ -278,8 +375,9 @@ Research and forward must not answer differently for the same candle sequence.
 | test | change |
 |---|---|
 | `ipoIntrabarOrdering` E3 | pinned the defect (`stepPosition(pos, closedBars[entryIdx], 0)`). Now pins its absence and that every `stepPosition` call supplies an ordering. |
-| `ipoPaperRunner` — central equivalence | was "reproduces the engine exactly". Now: same trades, same entry bars, same exit bars, identical R **wherever the bars could order it**; void where they could not, with an assertion that the resolvable majority remains checkable. |
-| `ipoPaperRunner` — multi-window equivalence | same narrowing, same guard that resolved ≥ voided. |
+| `ipoPaperRunner` — central equivalence | was "reproduces the engine exactly". Now: **paper takes a SUBSET of the engine's trades and never invents one**, and on every trade no override or ambiguity touched, exit bar, exit price and R match exactly. Excursions are compared only where the fill bar was not read from the tape, because post-entry MAE/MFE legitimately differ. |
+| `ipoPaperRunner` — multi-window, volatility-gated, same-bar, gap, divergence | all narrowed the same way. The fixtures now supply a deterministic 4-point-per-bar minute tape, so they exercise the resolved path; the ambiguity path has its own fixtures. The volatility test additionally asserts the gate itself is unchanged — every paper trade is an engine trade in a HIGH_VOL bucket. |
+| `ipoPaperLifecycle` — zone ordinal | the ordinal counts the ENGINE's trades on a zone, which is its stated contract. With paper taking a subset, paper rows can carry ordinals 1 and 3. Now asserted 1-based and strictly increasing rather than densely consecutive. |
 | `ipoPaperLifecycle` — no SMC management | `ORDERING_UNRESOLVED` and `CAUSAL_OVERRIDE` added to the allowed vocabulary, with the assertion that a void carries no R. |
 | `ipoPaperFunctions` — schema guards | now scan **every** IPO migration, since `supabase db push` applies them all and a later file may widen an earlier CHECK. The exit-reason guard now derives the list from the contract's own union rather than a hardcoded three. |
 | `ipoFunctionReachability` | the read path's closure gained `ipoCausalOrdering`; the module is asserted **import-free** so the closure cannot widen further. |
@@ -344,17 +442,31 @@ widened CHECKs cannot affect the currently running function.
 Nothing else deploys. No SMC function, no broker function, no cron statement.
 
 **What happens on the first corrected run.** Existing open positions read back
-with `causal_execution_version` NULL and `engine_exit_overridden` false. They are
-managed from then on under the causal rules, and their history rows stay marked
-legacy — correct, because their fill bar was resolved under the old model.
+with `causal_execution_version` NULL, `engine_exit_overridden` false and no
+ambiguity. They are managed from then on under the causal rules, and their
+history rows stay marked legacy — correct, because their fill bar was resolved
+under the old model.
+
+**The migration changed with this revision** and must be applied as it now
+stands: it adds the `ordering_ambiguous` status, widens the status CHECK, and —
+critically — **recreates the one-open-per-instrument unique index to cover it**.
+Without that recreation the database would permit two rows for one instrument
+whenever a position is ambiguous, which is exactly the double occupancy the
+application layer is refusing.
 
 ---
 
 ## 13. Known limitations
 
-1. **No tick feed.** Entry and target inside the same minute is terminal:
-   `ORDERING_UNRESOLVED`, excluded. How often that happens on forward data is not
-   yet known; the historical corpus ran about 6% (63 of 1,021).
+1. **No tick feed.** Entry and target inside the same minute cannot be ordered,
+   so the position is carried in `ordering_ambiguous` until a later bar settles
+   it. How often that happens on forward data is not yet known; the historical
+   corpus ran about 6% (63 of 1,021).
+1a. **Branch simulation is bounded, not complete.** The correct-in-full answer is
+   to carry every possible state, which costs 2^n with n ambiguities. What is
+   implemented holds the slot conservatively, converges the branches where they
+   provably agree, and labels the conditional tail. An instrument that forks and
+   never re-converges stays labelled from that point on.
 2. **Minute reach is one page.** A bar older than `MINUTE_PAGE_LIMIT` minutes
    cannot be ordered and is voided. On the current cadence that should never
    fire; if the runner is down for hours, bars from the outage window may void.
@@ -368,7 +480,10 @@ legacy — correct, because their fill bar was resolved under the old model.
 5. **The engine/paper sequences can diverge after an override**, permanently, for
    that instrument's forward record. The paper sequence is the correct one, but
    it is no longer comparable trade-for-trade with a research replay of the same
-   window.
+   window. The paper layer therefore now enforces the frozen
+   `touchIndex > previousExitIndex` rule itself instead of inheriting it from the
+   engine's trade list — without that, a multi-bar run could open a candidate
+   whose entry bar fell inside a window paper was still holding.
 6. **The lifecycle funnel does not count voids.** `closedAtTarget` and
    `closedAtS2` simply omit them; the exit-reason split alongside shows them. A
    dedicated funnel bucket would be clearer.
@@ -392,10 +507,10 @@ relabelled. No credential appears in any file, log or diff.
 
 | gate | result |
 |---|---|
-| `deno test supabase/tests` | **1321 passed, 0 failed** (1301 before; +20 new) |
+| `deno test supabase/tests` | **1332 passed, 0 failed** (1301 before; +31 new) |
 | `deno test supabase/functions` | **1569 passed, 0 failed** |
 | `deno check` on all changed modules | clean |
 | `vitest run` | **262 passed** |
 | `tsc --noEmit` | clean |
 | `npm run build` | clean |
-| targeted IPO paper regression | `ipoCausalOrdering` 20/20, `ipoPaperRunner` 23/23, `ipoPaperContract`, `ipoPaperFunctions`, `ipoPaperLifecycle`, `ipoIntrabarOrdering` all green |
+| targeted IPO paper regression | `ipoCausalOrdering` 31/31, `ipoPaperRunner` 23/23, `ipoPaperLifecycle` 16/16, `ipoPaperContract`, `ipoPaperFunctions`, `ipoIntrabarOrdering`, `ipoFunctionReachability` all green |

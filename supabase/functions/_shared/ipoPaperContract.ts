@@ -25,7 +25,8 @@
 import type { Candle } from "./smcAnalysis.ts";
 import type { LiveTrade } from "./ipoLiveEngine.ts";
 import {
-  CAUSAL_EXECUTION_VERSION, type BarOrdering, type ResolutionMethod,
+  CAUSAL_EXECUTION_VERSION,
+  type AltBranch, type BarOrdering, type ResolutionMethod,
 } from "./ipoCausalOrdering.ts";
 
 export { CAUSAL_EXECUTION_VERSION };
@@ -71,7 +72,45 @@ export type ExecutionBlockReason =
   | "POSITION_ALREADY_OPEN"
   | "ACCOUNT_SAFETY";
 
-export type PositionStatus = "open" | "data_gap_suspended";
+export type PositionStatus = "open" | "data_gap_suspended" | "ordering_ambiguous";
+
+/**
+ * A position whose own existence-or-exit cannot be established from the data.
+ *
+ * WHY THIS STATE HAS TO EXIST. When entry and target fall inside one minute
+ * there are two viable paths and OHLC cannot separate them:
+ *
+ *   entry then target  -> the trade closed at +2R gross on its fill bar
+ *   target then entry  -> the target was PRE-ENTRY and the trade is STILL OPEN
+ *
+ * Closing on that ambiguity — which an earlier draft of this fix did — frees the
+ * one-position-per-instrument slot and admits later IPOs that exist in only one
+ * of the two branches. The unresolved trade would have been excluded from
+ * statistics while silently contaminating every trade after it.
+ *
+ * So the OPEN branch is carried as a real position and the other branch is
+ * frozen here beside it. The slot stays held until EVERY branch agrees no
+ * position remains.
+ */
+export interface AmbiguityState {
+  kind: "ENTRY_VS_TARGET_SAME_MINUTE" | "ENTRY_BAR_TARGET_TOUCH_NO_TAPE"
+      | "ENTRY_NOT_PROVEN_IN_TAPE";
+  /** The minute, or the bar, whose internal order is unknown. */
+  atTime: string;
+  /** What the branch that is NOT open asserts. */
+  altBranch: AltBranch;
+  /** Its exit, when it has one. Null for the NO_POSITION branch. */
+  altExitTime: string | null;
+  altExitPrice: number | null;
+  altNetR: number | null;
+  /**
+   * The bar on which the alternative branch freed the slot. Compared against
+   * the open branch's eventual exit bar to decide whether the two futures
+   * actually diverged, or merely took different routes to the same bar.
+   */
+  altFreedAtBarTime: string;
+  detail: string;
+}
 /**
  * `ORDERING_UNRESOLVED` is a DATA verdict, not a strategy outcome. It is emitted
  * when competing events cannot be ordered against the fill — most often entry
@@ -82,6 +121,15 @@ export type PositionStatus = "open" | "data_gap_suspended";
  */
 export type ExitReason =
   | "TARGET_2R" | "S2_CLOSE_INVALIDATION" | "DATA_GAP_ABORTED" | "ORDERING_UNRESOLVED";
+
+/** How an ambiguity ended. Recorded on the closed row; never a strategy input. */
+export type AmbiguityResolution =
+  /** Every branch reached the same outcome with the same R. The result stands. */
+  | "CONVERGED_SAME_OUTCOME"
+  /** Branches ended differently. No R can be claimed; the row is excluded. */
+  | "DIVERGED_TERMINAL"
+  /** The trade ended while a branch disagreed about whether it ever existed. */
+  | "EXISTENCE_UNPROVEN";
 
 /**
  * Repeated-zone exposure telemetry. OBSERVATION ONLY.
@@ -161,6 +209,16 @@ export interface PaperPosition extends ZoneTelemetry {
    */
   engineExitOverridden: boolean;
   engineExitBarTime: string | null;
+  /** Non-null while a branch of this position's history cannot be ruled out. */
+  ambiguity: AmbiguityState | null;
+  /**
+   * Set once an ambiguity on this instrument forked the trade SEQUENCE — the
+   * branches freed the slot on different bars and a candidate existed in the
+   * gap. From then on this instrument's forward trades are conditional on which
+   * branch was real, so they are recorded with their outcomes but kept out of
+   * the validated forward population.
+   */
+  sequenceContaminated: boolean;
   // ── observational context tag. NOT a gate. Never read by any decision. ──
   dailyStructure: string | null;
   dailyStructureAlignment: string | null;
@@ -190,6 +248,19 @@ export interface PaperResult {
   exitResolutionMethod: ResolutionMethod | null;
   /** What whole-bar OHLC alone would have booked, when it differs. Diagnostic. */
   htfWouldHaveBooked: string | null;
+  // ── ambiguity reconciliation ──
+  ambiguityKind: string | null;
+  ambiguityResolution: AmbiguityResolution | null;
+  /** Every branch's ending, as text, so the row explains itself. */
+  branchOutcomes: string | null;
+  /**
+   * TRUE when the outcome is known but WHEN it happened is not. Both branches
+   * of an entry-versus-target ambiguity that later reaches target are +2R with
+   * the same cost, so the R is provable and the exit timestamp is not.
+   */
+  exitTimeAmbiguous: boolean;
+  altExitTime: string | null;
+  sequenceContaminated: boolean;
 }
 
 // ─── identity ────────────────────────────────────────────────────────────────
@@ -303,6 +374,11 @@ export interface CausalProvenance {
   dailyStructureAsOf: string | null;
 }
 
+export const NO_RESULT_AMBIGUITY = {
+  ambiguityKind: null, ambiguityResolution: null, branchOutcomes: null,
+  exitTimeAmbiguous: false, altExitTime: null,
+} as const;
+
 export const NO_PROVENANCE: CausalProvenance = {
   causalExecutionVersion: null, entryMinuteTime: null, entryResolutionMethod: null,
   htfSource: null, minuteSource: null,
@@ -331,7 +407,26 @@ export function openPosition(
     gapFromBarTime: null, gapToBarTime: null, gapReason: null,
     ...provenance,
     engineExitOverridden: false, engineExitBarTime: null,
+    ambiguity: null, sequenceContaminated: false,
   };
+}
+
+/**
+ * Puts a freshly filled position into the ambiguous state.
+ *
+ * The OPEN branch becomes the live position — it is managed by later bars under
+ * the ordinary rules, because that branch simply is an open position. The other
+ * branch is frozen in `ambiguity` and reconciled when the open one terminates.
+ */
+export function openAmbiguous(
+  pos: PaperPosition, ambiguity: AmbiguityState,
+): PaperPosition {
+  return { ...pos, status: "ordering_ambiguous", ambiguity };
+}
+
+/** The +2R the CLOSED_AT_TARGET branch claims, under this position's own cost. */
+export function altTargetNetR(pos: PaperPosition): number {
+  return Math.abs(pos.targetPrice - pos.entryPrice) / pos.nominalRiskDistance - pos.costR;
 }
 
 // ─── management ──────────────────────────────────────────────────────────────
@@ -339,6 +434,60 @@ export function openPosition(
 export type StepOutcome =
   | { kind: "HOLD"; position: PaperPosition }
   | { kind: "CLOSED"; result: PaperResult };
+
+/**
+ * Settles a closed result against the branch that was carried beside it.
+ *
+ * THE ONE CASE WHERE AMBIGUITY STILL YIELDS A REAL RESULT. If the open branch
+ * also ends at the target, both branches are +2R gross under the same cost
+ * fixed at entry, so the realized R is provably identical and only the exit
+ * TIMESTAMP is unknown. That is a converged outcome and it counts. Everything
+ * else ends with no R at all — including the case where a branch says the trade
+ * never existed, because an unprovable trade cannot contribute a number.
+ */
+function reconcile(result: PaperResult, a: AmbiguityState): PaperResult {
+  const withAmbiguity = {
+    ...result,
+    ambiguityKind: a.kind,
+    altExitTime: a.altExitTime,
+  };
+
+  if (a.altBranch === "NO_POSITION") {
+    return {
+      ...withAmbiguity,
+      exitReason: "ORDERING_UNRESOLVED",
+      exitPrice: null, realizedR: null, grossR: null, realizedPnlUsd: null,
+      excludedFromStats: true,
+      ambiguityResolution: "EXISTENCE_UNPROVEN",
+      branchOutcomes: `NO_POSITION | ${result.exitReason}`,
+      exclusionReason:
+        `${a.detail} — one branch has no position at all, so no R can be claimed`,
+    };
+  }
+
+  if (result.exitReason === "TARGET_2R") {
+    return {
+      ...withAmbiguity,
+      ambiguityResolution: "CONVERGED_SAME_OUTCOME",
+      branchOutcomes: "TARGET_2R | TARGET_2R",
+      exitTimeAmbiguous: true,
+      exclusionReason: null,
+      excludedFromStats: false,
+    };
+  }
+
+  return {
+    ...withAmbiguity,
+    exitReason: "ORDERING_UNRESOLVED",
+    exitPrice: null, realizedR: null, grossR: null, realizedPnlUsd: null,
+    excludedFromStats: true,
+    ambiguityResolution: "DIVERGED_TERMINAL",
+    branchOutcomes: `TARGET_2R | ${result.exitReason}`,
+    exclusionReason:
+      `${a.detail} — the branches ended differently (+2R against ${result.exitReason}), ` +
+      `so no R is claimable`,
+  };
+}
 
 /**
  * Advances an open position by exactly one CLOSED bar.
@@ -387,24 +536,24 @@ export function stepPosition(
     extra: Partial<PaperResult> = {},
   ): StepOutcome => {
     const realizedR = grossR === null ? null : grossR - pos.costR;
-    return {
-      kind: "CLOSED",
-      result: {
-        position: advanced, exitTime: bar.datetime, exitPrice, exitReason: reason,
-        realizedR, grossR,
-        realizedPnlUsd: realizedR === null ? null : realizedR * pos.nominalRiskUsd,
-        maeR, mfeR, barsHeld,
-        sameBarAmbiguous: hitTarget && closedBeyond,
-        excludedFromStats: false, exclusionReason: null,
-        causalExecutionVersion: pos.causalExecutionVersion,
-        entryMinuteTime: advanced.entryMinuteTime,
-        targetMinuteTime: ordering?.targetMinute ?? null,
-        s2CloseBarTime: ordering?.s2CloseBarTime ?? null,
-        exitResolutionMethod: ordering?.method ?? null,
-        htfWouldHaveBooked: null,
-        ...extra,
-      },
+    const result: PaperResult = {
+      position: advanced, exitTime: bar.datetime, exitPrice, exitReason: reason,
+      realizedR, grossR,
+      realizedPnlUsd: realizedR === null ? null : realizedR * pos.nominalRiskUsd,
+      maeR, mfeR, barsHeld,
+      sameBarAmbiguous: hitTarget && closedBeyond,
+      excludedFromStats: false, exclusionReason: null,
+      causalExecutionVersion: pos.causalExecutionVersion,
+      entryMinuteTime: advanced.entryMinuteTime,
+      targetMinuteTime: ordering?.targetMinute ?? null,
+      s2CloseBarTime: ordering?.s2CloseBarTime ?? null,
+      exitResolutionMethod: ordering?.method ?? null,
+      htfWouldHaveBooked: null,
+      ...NO_RESULT_AMBIGUITY,
+      sequenceContaminated: pos.sequenceContaminated,
+      ...extra,
     };
+    return { kind: "CLOSED", result: pos.ambiguity ? reconcile(result, pos.ambiguity) : result };
   };
 
   // ── causally ordered path ──────────────────────────────────────────────────
@@ -417,14 +566,17 @@ export function stepPosition(
       const gross = (long ? bar.close - pos.entryPrice : pos.entryPrice - bar.close) / risk;
       return close(bar.close, gross, "S2_CLOSE_INVALIDATION");
     }
-    if (ordering.kind === "UNRESOLVED") {
-      // NO FABRICATED OUTCOME. The observation is void, not a win and not a loss.
+    if (ordering.kind === "UNRESOLVED_TERMINAL") {
+      // The outcome is unknown, but EVERY branch exits on this bar, so the slot
+      // is genuinely free and closing fabricates nothing.
       return close(null, null, "ORDERING_UNRESOLVED", {
         excludedFromStats: true,
         exclusionReason: ordering.detail,
       });
     }
-    // HOLD, or NEED_MINUTES which the caller must never apply as an outcome.
+    // AMBIGUOUS_OPEN_OR_CLOSED: a branch leaves the position running, so the
+    // open branch holds. The caller records the alternative branch beside it;
+    // it must NOT be applied as an exit here. HOLD and NEED_MINUTES likewise.
     return { kind: "HOLD", position: advanced };
   }
 
@@ -476,5 +628,9 @@ export function abortForGap(pos: PaperPosition, at: string, reason: string): Pap
     entryMinuteTime: pos.entryMinuteTime,
     targetMinuteTime: null, s2CloseBarTime: null,
     exitResolutionMethod: null, htfWouldHaveBooked: null,
+    ...NO_RESULT_AMBIGUITY,
+    ambiguityKind: pos.ambiguity?.kind ?? null,
+    branchOutcomes: pos.ambiguity ? `${pos.ambiguity.altBranch} | DATA_GAP_ABORTED` : null,
+    sequenceContaminated: pos.sequenceContaminated,
   };
 }

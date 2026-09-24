@@ -14,12 +14,12 @@
  * worse, it has still worked.
  */
 
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   resolveBar, minutesInBar, htfWouldHaveClosed, CAUSAL_EXECUTION_VERSION,
 } from "../../functions/_shared/ipoCausalOrdering.ts";
 import {
-  stepPosition, openPosition, buildIntent, NO_PROVENANCE,
+  stepPosition, openPosition, openAmbiguous, altTargetNetR, buildIntent, NO_PROVENANCE,
   type PaperPosition,
 } from "../../functions/_shared/ipoPaperContract.ts";
 import { runPaper } from "../../functions/_shared/ipoPaperRunner.ts";
@@ -221,23 +221,19 @@ Deno.test("6 — entry and target inside one minute is unresolved, not a win", (
     // which came first and there is no tick feed to ask.
     minute(7, 84600, 85300, 84300, 85200),
   ];
-  const o = resolveBar({ ...base, bar, isEntryBar: true, minutes });
-  assertEquals(o.kind, "UNRESOLVED");
+  const o = resolveBar({ ...base, bar, isEntryBar: true, minutes, minutesFinal: true });
+  assertEquals(o.kind, "AMBIGUOUS_OPEN_OR_CLOSED",
+    "one branch has the target PRE-ENTRY, which leaves the position running");
+  assertEquals(o.altBranch, "CLOSED_AT_TARGET");
   assertEquals(o.method, "ORDERING_UNRESOLVED");
   assertEquals(o.entryMinute, "2026-09-23T14:07:00Z");
   assert(o.detail.includes("tick"), "the reason must say what would resolve it");
 
-  // And the position it produces carries no outcome.
-  const pos = testPosition();
-  const out = stepPosition(pos, bar, 0, o);
-  assertEquals(out.kind, "CLOSED");
-  if (out.kind !== "CLOSED") return;
-  assertEquals(out.result.exitReason, "ORDERING_UNRESOLVED");
-  assertEquals(out.result.realizedR, null, "no R may be invented");
-  assertEquals(out.result.exitPrice, null, "no exit price may be invented");
-  assertEquals(out.result.realizedPnlUsd, null);
-  assertEquals(out.result.excludedFromStats, true);
-  assert(out.result.exclusionReason);
+  // And it must NOT be applied as an exit. Closing here would free the slot on
+  // the strength of one branch and admit later IPOs that only exist in it.
+  const out = stepPosition(testPosition(), bar, 0, o);
+  assertEquals(out.kind, "HOLD",
+    "an open-or-closed ambiguity must never be booked as a close");
 });
 
 Deno.test("6b — an ambiguous bar with NO tape asks for one rather than guessing", () => {
@@ -245,6 +241,36 @@ Deno.test("6b — an ambiguous bar with NO tape asks for one rather than guessin
   const o = resolveBar({ ...base, bar, isEntryBar: true, minutes: null });
   assertEquals(o.kind, "NEED_MINUTES",
     "the resolver must request a tape, never fall back to whole-bar OHLC");
+  // And when no tape is ever coming, it is still possibly-open, not closed.
+  const fin = resolveBar({ ...base, bar, isEntryBar: true, minutes: null, minutesFinal: true });
+  assertEquals(fin.kind, "AMBIGUOUS_OPEN_OR_CLOSED");
+  assertEquals(fin.altBranch, "CLOSED_AT_TARGET");
+});
+
+Deno.test("6c — a LATER bar that cannot be ordered IS terminal in every branch", () => {
+  // Target and S2 close on one bar, position already running. Whichever came
+  // first, the position exits on this bar — so the outcome is void but the slot
+  // is genuinely free, and that is a different verdict from the fill-bar case.
+  const bar: Candle = { ...ENTRY_BAR, open: 84600, high: 85300, low: 83800, close: 84000 };
+  const o = resolveBar({ ...base, bar, isEntryBar: false, minutes: null, minutesFinal: true });
+  assertEquals(o.kind, "UNRESOLVED_TERMINAL");
+  const out = stepPosition(testPosition(), bar, 1, o);
+  assertEquals(out.kind, "CLOSED");
+  if (out.kind !== "CLOSED") return;
+  assertEquals(out.result.exitReason, "ORDERING_UNRESOLVED");
+  assertEquals(out.result.realizedR, null);
+  assertEquals(out.result.excludedFromStats, true);
+});
+
+Deno.test("6d — feeds disagreeing about the fill leaves NO_POSITION as a live branch", () => {
+  // The HTF bar reaches E2; no minute does. One reading has a position, the
+  // other has none — so the slot must be held, not freed.
+  const bar: Candle = { ...ENTRY_BAR, open: 84400, high: 84700, low: 84300, close: 84600 };
+  const minutes: Candle[] = [minute(0, 84600, 84650, 84550, 84600)];
+  const o = resolveBar({ ...base, bar, isEntryBar: true, minutes, minutesFinal: true });
+  assertEquals(o.kind, "AMBIGUOUS_OPEN_OR_CLOSED");
+  assertEquals(o.altBranch, "NO_POSITION");
+  assertEquals(stepPosition(testPosition(), bar, 0, o).kind, "HOLD");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -501,4 +527,230 @@ Deno.test("the frozen engine is untouched — it still books the contaminated ou
   // And the engines still produce the same trade list they always did.
   const s = market(220);
   assert(replayIncremental(s, cfg()).trades.length > 0);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AMBIGUOUS POSITION STATE — A..E
+//
+// The defect these close: an earlier draft CLOSED the position on a same-minute
+// entry-versus-target ambiguity. That excluded the trade from statistics but
+// freed the one-position-per-instrument slot on the strength of one branch, and
+// every later IPO admitted into that freed slot exists only in that branch. The
+// unresolved trade was excluded while silently contaminating the ones after it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A fill bar whose single minute touches both E2 and the target. */
+const AMBIG_MINUTES: Candle[] = [
+  minute(0, 84600, 84650, 84550, 84600),
+  minute(7, 84600, 85300, 84300, 85200),   // E2 and target, order unknowable
+];
+const AMBIG_BAR: Candle = { ...ENTRY_BAR, open: 84600, high: 85300, low: 84300, close: 85000 };
+
+function ambiguousPosition(): PaperPosition {
+  const o = resolveBar({ ...base, bar: AMBIG_BAR, isEntryBar: true,
+    minutes: AMBIG_MINUTES, minutesFinal: true });
+  assertEquals(o.kind, "AMBIGUOUS_OPEN_OR_CLOSED");
+  const p = testPosition({ entryMinuteTime: o.entryMinute });
+  return openAmbiguous(p, {
+    kind: "ENTRY_VS_TARGET_SAME_MINUTE",
+    atTime: o.entryMinute!,
+    altBranch: "CLOSED_AT_TARGET",
+    altExitTime: AMBIG_BAR.datetime,
+    altExitPrice: TARGET,
+    altNetR: altTargetNetR(p),
+    altFreedAtBarTime: AMBIG_BAR.datetime,
+    detail: o.detail,
+  });
+}
+
+Deno.test("A — target extreme first, entry later, no later target: OPEN must be preserved", () => {
+  // Branch O of the same-minute ambiguity. From OHLC this is indistinguishable
+  // from case B, so the runner must not choose.
+  const pos = ambiguousPosition();
+  assertEquals(pos.status, "ordering_ambiguous");
+  assert(pos.ambiguity, "the alternative branch must be carried, not discarded");
+  assertEquals(pos.ambiguity!.altBranch, "CLOSED_AT_TARGET");
+
+  // A later quiet bar resolves nothing: the open branch simply keeps running.
+  const quiet: Candle = { datetime: "2026-09-23T15:00:00Z",
+    open: 84600, high: 84700, low: 84400, close: 84550, volume: 0 };
+  const o = resolveBar({ ...base, bar: quiet, isEntryBar: false, minutes: null, minutesFinal: true });
+  assertEquals(o.kind, "HOLD");
+  const out = stepPosition(pos, quiet, 1, o);
+  assertEquals(out.kind, "HOLD", "the open branch must survive an unremarkable bar");
+  if (out.kind !== "HOLD") return;
+  assertEquals(out.position.status, "ordering_ambiguous", "the ambiguity must persist");
+  assert(out.position.ambiguity, "the frozen branch must persist with it");
+});
+
+Deno.test("B — entry first, target later in the same minute: the CLOSED WIN branch is kept", () => {
+  const pos = ambiguousPosition();
+  // Branch W is recorded in full, priced under this position's own cost, so it
+  // can be reconciled later without re-deriving anything.
+  assertEquals(pos.ambiguity!.altExitPrice, TARGET);
+  assertEquals(pos.ambiguity!.altExitTime, AMBIG_BAR.datetime);
+  assertAlmostEquals(pos.ambiguity!.altNetR!, 2 - pos.costR, 1e-12);
+  // And A and B produce the SAME state: nothing in the data distinguishes them.
+  assertEquals(pos.ambiguity!.kind, "ENTRY_VS_TARGET_SAME_MINUTE");
+});
+
+Deno.test("C — ambiguity then a later target: branches converge on the same R", () => {
+  // Branch W closed at +2R on the fill bar. Branch O runs on and also reaches
+  // +2R. Same target, same entry, same risk, same cost fixed at entry — so the
+  // realized R is provably identical and only the exit TIMESTAMP is unknown.
+  const pos = ambiguousPosition();
+  const later: Candle = { datetime: "2026-09-23T16:00:00Z",
+    open: 84600, high: 85300, low: 84500, close: 85200, volume: 0 };
+  const o = resolveBar({ ...base, bar: later, isEntryBar: false, minutes: null, minutesFinal: true });
+  assertEquals(o.kind, "TARGET");
+
+  const out = stepPosition(pos, later, 2, o);
+  assertEquals(out.kind, "CLOSED");
+  if (out.kind !== "CLOSED") return;
+  const r = out.result;
+  assertEquals(r.exitReason, "TARGET_2R");
+  assertEquals(r.ambiguityResolution, "CONVERGED_SAME_OUTCOME");
+  assertEquals(r.branchOutcomes, "TARGET_2R | TARGET_2R");
+  assertEquals(r.excludedFromStats, false, "a provable R must count");
+  assertAlmostEquals(r.realizedR!, 2 - pos.costR, 1e-12);
+  assertAlmostEquals(r.realizedR!, pos.ambiguity!.altNetR!, 1e-12);
+  // The R is known; the moment is not.
+  assertEquals(r.exitTimeAmbiguous, true);
+  assertEquals(r.altExitTime, AMBIG_BAR.datetime);
+});
+
+Deno.test("D — ambiguity then an S2 close: both branches terminal, no R claimable", () => {
+  // Branch W was +2R, branch O is a loss. Both have exited, so the slot frees —
+  // but the outcome cannot be claimed either way.
+  const pos = ambiguousPosition();
+  const bust: Candle = { datetime: "2026-09-23T16:00:00Z",
+    open: 84400, high: 84450, low: 83800, close: 84000, volume: 0 };
+  const o = resolveBar({ ...base, bar: bust, isEntryBar: false, minutes: null, minutesFinal: true });
+  assertEquals(o.kind, "S2_CLOSE");
+
+  const out = stepPosition(pos, bust, 2, o);
+  assertEquals(out.kind, "CLOSED");
+  if (out.kind !== "CLOSED") return;
+  const r = out.result;
+  assertEquals(r.exitReason, "ORDERING_UNRESOLVED");
+  assertEquals(r.ambiguityResolution, "DIVERGED_TERMINAL");
+  assertEquals(r.branchOutcomes, "TARGET_2R | S2_CLOSE_INVALIDATION");
+  assertEquals(r.realizedR, null, "a divergent pair cannot yield an R");
+  assertEquals(r.exitPrice, null);
+  assertEquals(r.excludedFromStats, true);
+  assert(r.exclusionReason!.includes("branches ended differently"));
+});
+
+Deno.test("D2 — the NO_POSITION branch can never yield an R, whatever the other does", () => {
+  const p = testPosition();
+  const pos = openAmbiguous(p, {
+    kind: "ENTRY_NOT_PROVEN_IN_TAPE", atTime: ENTRY_BAR.datetime,
+    altBranch: "NO_POSITION", altExitTime: null, altExitPrice: null, altNetR: null,
+    altFreedAtBarTime: ENTRY_BAR.datetime, detail: "feeds disagree about the fill",
+  });
+  const won: Candle = { datetime: "2026-09-23T16:00:00Z",
+    open: 84600, high: 85300, low: 84500, close: 85200, volume: 0 };
+  const o = resolveBar({ ...base, bar: won, isEntryBar: false, minutes: null, minutesFinal: true });
+  const out = stepPosition(pos, won, 2, o);
+  assertEquals(out.kind, "CLOSED");
+  if (out.kind !== "CLOSED") return;
+  assertEquals(out.result.exitReason, "ORDERING_UNRESOLVED");
+  assertEquals(out.result.ambiguityResolution, "EXISTENCE_UNPROVEN");
+  assertEquals(out.result.realizedR, null,
+    "a trade one branch says never existed cannot contribute a number");
+});
+
+Deno.test("E — no later IPO may be admitted while a branch still holds the position", () => {
+  // Structural, at three levels, because this is the requirement the earlier
+  // draft broke.
+  const runner = Deno.readTextFileSync("supabase/functions/_shared/ipoPaperRunner.ts");
+
+  // 1. the fill loop refuses to look at a new candidate while a position object
+  //    exists, and an ambiguous position IS a position object
+  assert(/for \(const t of fresh\) \{\s*\n\s*if \(live\) break;/.test(runner),
+    "the one-position guard in the fill loop is gone");
+  // 2. the ambiguous branch assigns `live` rather than leaving it null
+  assert(/live = m0\.position;/.test(runner),
+    "the ambiguous position is not installed as the live slot holder");
+  // 3. the database refuses a second row for the same instrument in that state
+  const sql = Deno.readTextFileSync(
+    "supabase/migrations/20260924120000_ipo_causal_execution_ordering.sql");
+  assert(/where status in \('open','data_gap_suspended','ordering_ambiguous'\)/.test(sql),
+    "the one-open-per-instrument index does not cover ordering_ambiguous — the " +
+    "database would permit the double occupancy the code is refusing");
+  assert(/check \(status in \('open','data_gap_suspended','ordering_ambiguous'\)\)/.test(sql),
+    "the status CHECK rejects the ambiguous state");
+});
+
+Deno.test("E2 — a live runner holds the slot through an unresolvable fill", () => {
+  // End to end through runPaper: a fill that cannot be ordered must leave a
+  // position behind, not a closed row and an empty slot.
+  const s = market(220);
+  let state = null as Parameters<typeof runPaper>[0]["state"];
+  let position: PaperPosition | null = null;
+  let sawAmbiguous = false;
+  let closedWhileAmbiguousSlotFree = 0;
+
+  for (let i = 100; i < s.length; i++) {
+    const closedBars = s.slice(0, i + 1);
+    const plan = runPaper({
+      cfg: cfg(), barMs: HOUR, closedBars,
+      nowMs: new Date(closedBars[closedBars.length - 1].datetime).getTime() + 2 * HOUR,
+      state, openPosition: position, minHistoryBars: 100,
+    });
+    if (plan.events.some((e) => e.eventType === "ORDERING_AMBIGUOUS")) {
+      sawAmbiguous = true;
+      assert(plan.openPosition, "an ambiguous fill left no position holding the slot");
+      assertEquals(plan.openPosition!.status, "ordering_ambiguous");
+      // No second fill in the same plan after the ambiguity.
+      const idx = plan.events.findIndex((e) => e.eventType === "ORDERING_AMBIGUOUS");
+      const after = plan.events.slice(idx + 1).filter((e) => e.eventType === "FILLED");
+      assertEquals(after.length, 0, "an IPO was admitted while a branch held the slot");
+    }
+    if (position?.status === "ordering_ambiguous" && !plan.openPosition && !plan.closed.length) {
+      closedWhileAmbiguousSlotFree++;
+    }
+    state = plan.state; position = plan.openPosition;
+  }
+  assertEquals(closedWhileAmbiguousSlotFree, 0,
+    "an ambiguous position vanished without producing a result");
+  // The fixture has no minute tape, so every target-touching fill bar is
+  // ambiguous — this path must actually be exercised.
+  assert(sawAmbiguous, "the fixture never produced an ambiguous fill");
+});
+
+Deno.test("E3 — a sequence fork is declared, and only when the futures really differ", async () => {
+  const runner = await Deno.readTextFile("supabase/functions/_shared/ipoPaperRunner.ts");
+  // Same bar for both branches => no fork.
+  assert(/if \(ms\(e\.altFreedAtBarTime\) === ms\(e\.exitBarTime\)\) return false;/.test(runner),
+    "branches freeing the slot on the same bar are no longer treated as converged");
+  // Different bar but the other branch took nothing in the gap => still no fork.
+  assert(/if \(!engineTook\) return true;/.test(runner),
+    "the conservative default without an engine is gone");
+  assert(/return engineTook\(e\.altFreedAtBarTime, e\.exitBarTime\);/.test(runner),
+    "the convergence refinement is gone");
+  // And a real fork contaminates everything after it on that instrument.
+  assert(/contaminatedFrom \?\?= e\.exitBarTime;/.test(runner),
+    "a fork no longer marks the instrument");
+  assert(/contaminatedFrom \? \{ \.\.\.pos0, sequenceContaminated: true \} : pos0/.test(runner),
+    "later trades are no longer tagged as conditional");
+});
+
+Deno.test("E4 — contaminated rows are kept out of the validated population", async () => {
+  const { splitEvidence } = await import("../../functions/ipo-paper-state/index.ts");
+  const row = (over: Record<string, unknown>) => ({
+    realized_r: 1, realized_pnl_usd: 200, excluded_from_stats: false,
+    exit_reason: "TARGET_2R", causal_execution_version: "1m-ordering-v1",
+    sequence_contaminated: false, ...over,
+  });
+  const split = splitEvidence([
+    row({}),
+    row({ sequence_contaminated: true }),
+    row({ causal_execution_version: null }),
+    row({ exit_reason: "ORDERING_UNRESOLVED", realized_r: null, excluded_from_stats: true }),
+  ]);
+  assertEquals(split.causal.trades, 1, "only the provable, unconditional row counts");
+  assertEquals(split.sequenceContaminated.trades, 1);
+  assertEquals(split.legacyTrades, 1);
+  assertEquals(split.unresolvedExcluded, 1);
 });

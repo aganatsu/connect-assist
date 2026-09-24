@@ -67,9 +67,34 @@ export type OrderingKind =
   | "HOLD"
   | "TARGET"
   | "S2_CLOSE"
-  | "UNRESOLVED"
+  /**
+   * Ordering is unknown, but EVERY viable branch has the position exiting on
+   * this bar. The outcome is void; the slot is genuinely free.
+   */
+  | "UNRESOLVED_TERMINAL"
+  /**
+   * Ordering is unknown AND at least one viable branch leaves the position
+   * OPEN. Nothing may be concluded about the outcome and — critically — the
+   * one-position-per-instrument slot must stay held, because a branch in which
+   * the position is still running is a branch in which no later IPO exists.
+   *
+   * Closing here would have fabricated future position state: the entry-versus-
+   * target same-minute case has a "target extreme came first, so it was
+   * pre-entry and the trade is still running" branch that OHLC cannot rule out.
+   */
+  | "AMBIGUOUS_OPEN_OR_CLOSED"
   /** The caller must supply lower-timeframe bars for this span and ask again. */
   | "NEED_MINUTES";
+
+/**
+ * What the OTHER branch asserts, when a branch leaves the position open.
+ *
+ *   CLOSED_AT_TARGET — the entry came first and the target second, so the trade
+ *                      closed at +2R gross on the bar it filled.
+ *   NO_POSITION      — the minute tape never reaches E2, so on that reading the
+ *                      fill never happened and no position exists at all.
+ */
+export type AltBranch = "CLOSED_AT_TARGET" | "NO_POSITION";
 
 export interface BarOrdering {
   kind: OrderingKind;
@@ -80,6 +105,8 @@ export interface BarOrdering {
   targetMinute: string | null;
   /** The HTF bar whose close invalidated, when that is the outcome. */
   s2CloseBarTime: string | null;
+  /** Set only for AMBIGUOUS_OPEN_OR_CLOSED: what the non-open branch claims. */
+  altBranch: AltBranch | null;
   /**
    * Excursions over the POST-ENTRY portion of the bar only, in price units.
    * Null when the bar was not resolved from minutes, in which case the caller
@@ -109,6 +136,14 @@ export interface ResolveInput {
    */
   minutes: readonly Candle[] | null;
   /**
+   * TRUE means no further tape is coming, so a bar that still cannot be ordered
+   * must be classified now rather than requesting more. The resolver — not the
+   * caller — decides WHICH kind of unresolved it becomes, because that depends
+   * on whether a branch can leave the position open, which only the resolver
+   * knows.
+   */
+  minutesFinal?: boolean;
+  /**
    * Tick data, when a feed for it exists. None does today, so this is always
    * null and `TICK_RESOLVED` is unreachable — declared rather than pretended
    * away, so the gap is visible in the type instead of in a comment.
@@ -120,7 +155,7 @@ const ms = (t: string) => new Date(t).getTime();
 
 const hold = (method: ResolutionMethod, detail: string, over: Partial<BarOrdering> = {}): BarOrdering => ({
   kind: "HOLD", method, entryMinute: null, targetMinute: null, s2CloseBarTime: null,
-  postEntryAdverse: null, postEntryFavourable: null, detail, ...over,
+  altBranch: null, postEntryAdverse: null, postEntryFavourable: null, detail, ...over,
 });
 
 /** Minutes whose open instant lies inside [bar.start, bar.start + barMs). */
@@ -166,9 +201,12 @@ export function resolveBar(input: ResolveInput): BarOrdering {
     // reached rather than merely bracketed by the bar's high.
     const mins = input.minutes ? minutesInBar(input.minutes, bar, barMs) : null;
     if (!mins || mins.length === 0) {
+      // EVERY branch exits on this bar — it is target-or-loss, never "still
+      // running" — so the outcome is void but the slot is genuinely free.
       return hold("ORDERING_UNRESOLVED",
-        "target and S2 close on one bar and no minute tape was supplied",
-        { kind: "NEED_MINUTES" });
+        "target and S2 close on one bar and no minute tape could order them; " +
+        "every branch exits on this bar, so only the outcome is unknown",
+        { kind: input.minutesFinal ? "UNRESOLVED_TERMINAL" : "NEED_MINUTES" });
     }
     for (const m of mins) {
       if (long ? m.high >= targetPrice : m.low <= targetPrice) {
@@ -199,10 +237,13 @@ export function resolveBar(input: ResolveInput): BarOrdering {
         kind: "S2_CLOSE", s2CloseBarTime: bar.datetime };
     }
     // The target side was touched somewhere in the fill bar. Whether that was
-    // before or after the entry is exactly the contaminated question.
+    // before or after the entry is exactly the contaminated question — and one
+    // of the two answers leaves the position OPEN.
     return hold("ORDERING_UNRESOLVED",
-      "entry bar touched the target side; ordering against the fill requires a minute tape",
-      { kind: "NEED_MINUTES" });
+      "entry bar touched the target side and no minute tape could order it against " +
+      "the fill: the target may have been pre-entry, leaving the position open",
+      { kind: input.minutesFinal ? "AMBIGUOUS_OPEN_OR_CLOSED" : "NEED_MINUTES",
+        altBranch: "CLOSED_AT_TARGET" });
   }
 
   const eIdx = mins.findIndex((m) => long ? m.low <= entryPrice : m.high >= entryPrice);
@@ -210,18 +251,28 @@ export function resolveBar(input: ResolveInput): BarOrdering {
     // The HTF bar says E2 was reached; the minutes do not. That is a feed
     // disagreement, not an outcome, and inventing one would be the same class
     // of error this module exists to remove.
+    // One reading has a position, the other has none. Holding the slot is the
+    // conservative choice: admitting a later IPO would only be valid on the
+    // reading where this fill never happened.
     return hold("ORDERING_UNRESOLVED",
-      "the HTF bar reaches E2 but no minute in it does — minute and HTF feeds disagree",
-      { kind: "UNRESOLVED" });
+      "the HTF bar reaches E2 but no minute in it does — minute and HTF feeds " +
+      "disagree about whether this fill happened at all",
+      { kind: "AMBIGUOUS_OPEN_OR_CLOSED", altBranch: "NO_POSITION" });
   }
 
   const em = mins[eIdx];
   if (long ? em.high >= targetPrice : em.low <= targetPrice) {
-    // Entry and target inside the same minute. 1m cannot order them, and there
-    // is no tick feed to ask. Do not assume either way.
+    // Entry and target inside the same minute. Two viable paths:
+    //   entry then target  -> the trade closed at +2R on this bar
+    //   target then entry  -> the target was PRE-ENTRY and the trade is running
+    // 1m cannot separate them and no tick feed exists. Assuming the first would
+    // fabricate a closed trade and free the slot; assuming the second would
+    // fabricate an open one. Carry both.
     return hold("ORDERING_UNRESOLVED",
-      `entry and target both occur inside ${em.datetime}; 1m cannot order them and no tick feed exists`,
-      { kind: "UNRESOLVED", entryMinute: em.datetime });
+      `entry and target both occur inside ${em.datetime}; 1m cannot order them and ` +
+      `no tick feed exists, so the position may be closed at target OR still open`,
+      { kind: "AMBIGUOUS_OPEN_OR_CLOSED", altBranch: "CLOSED_AT_TARGET",
+        entryMinute: em.datetime });
   }
 
   // Post-entry excursions only. The pre-entry portion of the bar belongs to a

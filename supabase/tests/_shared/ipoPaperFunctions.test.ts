@@ -255,7 +255,10 @@ Deno.test("every exit reason the contract produces is accepted by the schema", a
   const sql = await allIpoSql();
   const contract = await src("supabase/functions/_shared/ipoPaperContract.ts");
   const declared = contract
-    .slice(contract.indexOf("export type ExitReason"), contract.indexOf("export interface ZoneTelemetry"))
+    // Bounded to the union itself: `AmbiguityResolution` follows it and its
+    // members are not exit reasons.
+    .slice(contract.indexOf("export type ExitReason"),
+           contract.indexOf(";", contract.indexOf("export type ExitReason")))
     .match(/"([A-Z_0-9]+)"/g)!.map((x) => x.replaceAll('"', ""));
   assert(declared.length >= 4, `only ${declared.length} exit reasons parsed`);
   // Anchor on the NAMED enum constraint: "exit_reason in" also appears inside

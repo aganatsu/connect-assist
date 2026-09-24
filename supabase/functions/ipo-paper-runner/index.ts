@@ -115,6 +115,14 @@ export const positionRow = (p: PaperPosition, userId: string) => ({
   daily_structure: p.dailyStructure,
   daily_structure_alignment: p.dailyStructureAlignment,
   daily_structure_as_of: p.dailyStructureAsOf,
+  ambiguity_kind: p.ambiguity?.kind ?? null,
+  ambiguity_at_time: p.ambiguity?.atTime ?? null,
+  alt_branch: p.ambiguity?.altBranch ?? null,
+  alt_exit_time: p.ambiguity?.altExitTime ?? null,
+  alt_exit_price: p.ambiguity?.altExitPrice ?? null,
+  alt_net_r: p.ambiguity?.altNetR ?? null,
+  alt_freed_at_bar_time: p.ambiguity?.altFreedAtBarTime ?? null,
+  sequence_contaminated: p.sequenceContaminated,
 });
 
 export const historyRow = (r: PaperResult, userId: string) => {
@@ -149,6 +157,12 @@ export const historyRow = (r: PaperResult, userId: string) => {
     daily_structure: p.dailyStructure,
     daily_structure_alignment: p.dailyStructureAlignment,
     daily_structure_as_of: p.dailyStructureAsOf,
+    ambiguity_kind: r.ambiguityKind,
+    ambiguity_resolution: r.ambiguityResolution,
+    branch_outcomes: r.branchOutcomes,
+    exit_time_ambiguous: r.exitTimeAmbiguous,
+    alt_exit_time: r.altExitTime,
+    sequence_contaminated: r.sequenceContaminated,
   };
 };
 
@@ -223,6 +237,21 @@ export function rowToPosition(r: Record<string, unknown> | null): PaperPosition 
     dailyStructure: (r.daily_structure as string) ?? null,
     dailyStructureAlignment: (r.daily_structure_alignment as string) ?? null,
     dailyStructureAsOf: (r.daily_structure_as_of as string) ?? null,
+    sequenceContaminated: r.sequence_contaminated === true,
+    // The frozen branch, rebuilt from its columns. Its presence is what keeps
+    // the position slot held across invocations.
+    ambiguity: r.ambiguity_kind
+      ? {
+        kind: r.ambiguity_kind as NonNullable<PaperPosition["ambiguity"]>["kind"],
+        atTime: r.ambiguity_at_time as string,
+        altBranch: r.alt_branch as NonNullable<PaperPosition["ambiguity"]>["altBranch"],
+        altExitTime: (r.alt_exit_time as string) ?? null,
+        altExitPrice: r.alt_exit_price == null ? null : Number(r.alt_exit_price),
+        altNetR: r.alt_net_r == null ? null : Number(r.alt_net_r),
+        altFreedAtBarTime: r.alt_freed_at_bar_time as string,
+        detail: (r.exclusion_reason as string) ?? "ordering ambiguity restored from row",
+      }
+      : null,
   };
 }
 
@@ -306,6 +335,14 @@ export interface InstrumentRun {
   /** Exits the frozen engine would have booked and the tape refused. */
   causalOverrides?: number;
   provisional?: boolean;
+  /** Fills whose ordering could not be settled and that may still be open. */
+  ambiguousOpen?: number;
+  /** Ambiguities that ended this run. */
+  ambiguitiesResolved?: number;
+  /** Ambiguities whose branches freed the slot on different bars. */
+  sequenceForks?: number;
+  /** Set while this instrument's later trades are conditional on a branch. */
+  sequenceContaminatedFrom?: string;
 }
 
 export async function handler(req: Request): Promise<Response> {
@@ -506,6 +543,10 @@ export async function handler(req: Request): Promise<Response> {
         }
 
         out.provisional = plan.provisional;
+        out.ambiguousOpen = plan.events.filter((e) => e.eventType === "ORDERING_AMBIGUOUS").length;
+        out.ambiguitiesResolved = plan.events.filter((e) => e.eventType === "AMBIGUITY_RESOLVED").length;
+        out.sequenceForks = plan.events.filter((e) => e.eventType === "SEQUENCE_FORKED").length;
+        out.sequenceContaminatedFrom = plan.state.sequenceContaminatedFrom ?? undefined;
         out.unresolved = plan.closed.filter((r) => r.exitReason === "ORDERING_UNRESOLVED").length;
         out.causalOverrides = plan.events.filter((e) => e.eventType === "CAUSAL_OVERRIDE").length;
         out.filled = plan.events.filter((e) => e.eventType === "FILLED").length;

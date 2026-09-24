@@ -40,7 +40,41 @@ alter table public.ipo_paper_positions
   -- forward data can answer the question later without re-deriving bars.
   add column if not exists daily_structure           text,
   add column if not exists daily_structure_alignment text,
-  add column if not exists daily_structure_as_of     timestamptz;
+  add column if not exists daily_structure_as_of     timestamptz,
+  -- ── unresolvable ordering that may still be an OPEN position ──
+  -- When entry and target fall inside one minute there are two viable paths and
+  -- OHLC cannot separate them: entry-then-target closed the trade at +2R, or
+  -- target-then-entry means the target was PRE-ENTRY and the trade is still
+  -- running. The open branch is carried as this row; the other is frozen here.
+  -- The slot stays held until every branch agrees no position remains.
+  add column if not exists ambiguity_kind          text,
+  add column if not exists ambiguity_at_time       timestamptz,
+  add column if not exists alt_branch              text,
+  add column if not exists alt_exit_time           timestamptz,
+  add column if not exists alt_exit_price          double precision,
+  add column if not exists alt_net_r               double precision,
+  add column if not exists alt_freed_at_bar_time   timestamptz,
+  -- Set once an ambiguity forked this instrument's trade SEQUENCE. The row's own
+  -- outcome is still measured; its EXISTENCE is conditional, so it is kept out
+  -- of the validated forward population.
+  add column if not exists sequence_contaminated   boolean not null default false;
+
+-- A third status. `ordering_ambiguous` is an OCCUPIED slot: one viable branch
+-- still has a position running, and admitting another IPO would only be correct
+-- on the other branch.
+alter table public.ipo_paper_positions
+  drop constraint if exists ipo_paper_positions_status_check;
+alter table public.ipo_paper_positions
+  add constraint ipo_paper_positions_status_check
+  check (status in ('open','data_gap_suspended','ordering_ambiguous'));
+
+-- THE ONE-OPEN-PER-INSTRUMENT INDEX MUST COVER IT TOO. Without this an
+-- ambiguous position would not block a second insert, and the database would
+-- permit exactly the double-occupancy the application layer is refusing.
+drop index if exists ipo_paper_positions_one_open;
+create unique index if not exists ipo_paper_positions_one_open
+  on public.ipo_paper_positions (strategy_id, symbol)
+  where status in ('open','data_gap_suspended','ordering_ambiguous');
 
 -- ─── closed results ──────────────────────────────────────────────────────────
 alter table public.ipo_paper_trade_history
@@ -56,7 +90,17 @@ alter table public.ipo_paper_trade_history
   add column if not exists htf_would_have_booked    text,
   add column if not exists daily_structure           text,
   add column if not exists daily_structure_alignment text,
-  add column if not exists daily_structure_as_of     timestamptz;
+  add column if not exists daily_structure_as_of     timestamptz,
+  add column if not exists ambiguity_kind            text,
+  add column if not exists ambiguity_resolution      text,
+  -- Every branch's ending, as text, so the row explains itself without a join.
+  add column if not exists branch_outcomes           text,
+  -- The outcome is known but WHEN it happened is not: both branches of an
+  -- entry-versus-target ambiguity that later reaches target are +2R under the
+  -- same cost fixed at entry, so the R is provable and the timestamp is not.
+  add column if not exists exit_time_ambiguous       boolean not null default false,
+  add column if not exists alt_exit_time             timestamptz,
+  add column if not exists sequence_contaminated     boolean not null default false;
 
 -- ─── ORDERING_UNRESOLVED is a DATA verdict, not a strategy outcome ───────────
 -- Emitted when competing events cannot be ordered against the fill — most often
@@ -93,7 +137,8 @@ alter table public.ipo_execution_events
   add constraint ipo_execution_events_event_type_check
   check (event_type in
     ('SETUP_VALID','INTENT_CREATED','FILLED','REFUSED','MANAGED','CLOSED',
-     'GAP_SUSPENDED','GAP_RECOVERED','GAP_ABORTED','CAUSAL_OVERRIDE'));
+     'GAP_SUSPENDED','GAP_RECOVERED','GAP_ABORTED','CAUSAL_OVERRIDE',
+     'ORDERING_AMBIGUOUS','AMBIGUITY_RESOLVED','SEQUENCE_FORKED'));
 
 -- ─── indexes for the forward-evidence boundary ───────────────────────────────
 -- The default analysis population: causally ordered, statistically usable.
@@ -104,6 +149,14 @@ create index if not exists ipo_paper_history_causal_clean
 create index if not exists ipo_paper_history_unresolved
   on public.ipo_paper_trade_history (strategy_id, exit_time desc)
   where exit_reason = 'ORDERING_UNRESOLVED';
+
+-- The VALIDATED forward population: causally ordered, statistically usable, and
+-- not conditional on an unresolvable branch.
+create index if not exists ipo_paper_history_validated
+  on public.ipo_paper_trade_history (strategy_id, exit_time desc)
+  where causal_execution_version is not null
+    and excluded_from_stats = false
+    and sequence_contaminated = false;
 
 -- ─── security posture, restated ──────────────────────────────────────────────
 -- `supabase db push` applies every pending migration, and a table touched here
