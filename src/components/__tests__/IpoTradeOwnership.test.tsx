@@ -48,13 +48,18 @@ describe("the open-position owner is unmistakable", () => {
   it("announces that this exact IPO triggered the current trade", () => {
     const link = classifyRow(asRowLike(row()), [pos()], []);
     render(<IpoScanDetail row={row()} link={link} />);
-    expect(screen.getByText("This IPO triggered the current trade")).toBeInTheDocument();
+    // Stated twice on purpose: once as the CURRENT STATUS headline and once on
+    // the owner banner. Both are the row describing itself, never a rejection.
+    expect(screen.getAllByText("This IPO opened the current paper position.").length)
+      .toBeGreaterThan(0);
   });
 
   it("shows every identifying field of the owned trade", () => {
     const link = classifyRow(asRowLike(row()), [pos()], []);
     render(<IpoScanDetail row={row()} link={link} />);
-    const banner = screen.getByText("This IPO triggered the current trade").closest("section")!;
+    const banner = screen.getAllByText("This IPO opened the current paper position.")
+      .map((el) => el.closest("section")!)
+      .find((sec) => sec.className.includes("border-primary"))!;
     const b = within(banner);
     for (const label of ["symbol", "timeframe", "direction", "IPO candle time", "entry time",
                          "entry price", "target", "S2 invalidation", "volatility bucket",
@@ -70,7 +75,7 @@ describe("the open-position owner is unmistakable", () => {
     const other = row({ ipoCandleTime: "2026-09-22T06:30:00Z", ipoIndex: 400 });
     const link = classifyRow(asRowLike(other), [pos()], []);
     render(<IpoScanDetail row={other} link={link} />);
-    expect(screen.queryByText("This IPO triggered the current trade")).toBeNull();
+    expect(screen.queryAllByText("This IPO opened the current paper position.")).toHaveLength(0);
   });
 });
 
