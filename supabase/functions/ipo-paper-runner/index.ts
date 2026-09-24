@@ -46,6 +46,8 @@ import {
   DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
   type PaperPosition, type PaperResult, type SizingConfig,
 } from "../_shared/ipoPaperContract.ts";
+import { CAUSAL_EXECUTION_VERSION } from "../_shared/ipoCausalOrdering.ts";
+import { analyzeMarketStructure } from "../_shared/smcAnalysis.ts";
 import {
   exportState, serializeState, restoreState, continuityCheck,
   type ExportMeta, type RebuildReason,
@@ -103,6 +105,24 @@ export const positionRow = (p: PaperPosition, userId: string) => ({
   mae_r: p.maeR, mfe_r: p.mfeR, last_managed_bar_time: p.lastManagedBarTime,
   gap_from_bar_time: p.gapFromBarTime, gap_to_bar_time: p.gapToBarTime,
   gap_reason: p.gapReason, updated_at: new Date().toISOString(),
+  // Causal-ordering provenance. See 20260924120000_ipo_causal_execution_ordering.
+  causal_execution_version: p.causalExecutionVersion,
+  entry_minute_time: p.entryMinuteTime,
+  entry_resolution_method: p.entryResolutionMethod,
+  htf_source: p.htfSource, minute_source: p.minuteSource,
+  engine_exit_overridden: p.engineExitOverridden,
+  engine_exit_bar_time: p.engineExitBarTime,
+  daily_structure: p.dailyStructure,
+  daily_structure_alignment: p.dailyStructureAlignment,
+  daily_structure_as_of: p.dailyStructureAsOf,
+  ambiguity_kind: p.ambiguity?.kind ?? null,
+  ambiguity_at_time: p.ambiguity?.atTime ?? null,
+  alt_branch: p.ambiguity?.altBranch ?? null,
+  alt_exit_time: p.ambiguity?.altExitTime ?? null,
+  alt_exit_price: p.ambiguity?.altExitPrice ?? null,
+  alt_net_r: p.ambiguity?.altNetR ?? null,
+  alt_freed_at_bar_time: p.ambiguity?.altFreedAtBarTime ?? null,
+  sequence_contaminated: p.sequenceContaminated,
 });
 
 export const historyRow = (r: PaperResult, userId: string) => {
@@ -127,6 +147,22 @@ export const historyRow = (r: PaperResult, userId: string) => {
     ipo_candle_time: p.ipoCandleTime, volatility_bucket: p.volatilityBucket,
     zone_entry_ordinal: p.zoneEntryOrdinal,
     zone_previous_exit_time: p.zonePreviousExitTime,
+    causal_execution_version: r.causalExecutionVersion,
+    entry_minute_time: r.entryMinuteTime,
+    target_minute_time: r.targetMinuteTime,
+    s2_close_bar_time: r.s2CloseBarTime,
+    exit_resolution_method: r.exitResolutionMethod,
+    htf_would_have_booked: r.htfWouldHaveBooked,
+    htf_source: p.htfSource, minute_source: p.minuteSource,
+    daily_structure: p.dailyStructure,
+    daily_structure_alignment: p.dailyStructureAlignment,
+    daily_structure_as_of: p.dailyStructureAsOf,
+    ambiguity_kind: r.ambiguityKind,
+    ambiguity_resolution: r.ambiguityResolution,
+    branch_outcomes: r.branchOutcomes,
+    exit_time_ambiguous: r.exitTimeAmbiguous,
+    alt_exit_time: r.altExitTime,
+    sequence_contaminated: r.sequenceContaminated,
   };
 };
 
@@ -191,6 +227,69 @@ export function rowToPosition(r: Record<string, unknown> | null): PaperPosition 
     gapFromBarTime: (r.gap_from_bar_time as string) ?? null,
     gapToBarTime: (r.gap_to_bar_time as string) ?? null,
     gapReason: (r.gap_reason as string) ?? null,
+    causalExecutionVersion: (r.causal_execution_version as string) ?? null,
+    entryMinuteTime: (r.entry_minute_time as string) ?? null,
+    entryResolutionMethod: (r.entry_resolution_method as PaperPosition["entryResolutionMethod"]) ?? null,
+    htfSource: (r.htf_source as string) ?? null,
+    minuteSource: (r.minute_source as string) ?? null,
+    engineExitOverridden: r.engine_exit_overridden === true,
+    engineExitBarTime: (r.engine_exit_bar_time as string) ?? null,
+    dailyStructure: (r.daily_structure as string) ?? null,
+    dailyStructureAlignment: (r.daily_structure_alignment as string) ?? null,
+    dailyStructureAsOf: (r.daily_structure_as_of as string) ?? null,
+    sequenceContaminated: r.sequence_contaminated === true,
+    // The frozen branch, rebuilt from its columns. Its presence is what keeps
+    // the position slot held across invocations.
+    ambiguity: r.ambiguity_kind
+      ? {
+        kind: r.ambiguity_kind as NonNullable<PaperPosition["ambiguity"]>["kind"],
+        atTime: r.ambiguity_at_time as string,
+        altBranch: r.alt_branch as NonNullable<PaperPosition["ambiguity"]>["altBranch"],
+        altExitTime: (r.alt_exit_time as string) ?? null,
+        altExitPrice: r.alt_exit_price == null ? null : Number(r.alt_exit_price),
+        altNetR: r.alt_net_r == null ? null : Number(r.alt_net_r),
+        altFreedAtBarTime: r.alt_freed_at_bar_time as string,
+        detail: (r.exclusion_reason as string) ?? "ordering ambiguity restored from row",
+      }
+      : null,
+  };
+}
+
+// ─── causal ordering support ─────────────────────────────────────────────────
+
+/**
+ * How far back a single 1-minute page can reach. A fifteen-minute cron normally
+ * needs the last hour or two; anything older than this cannot be ordered from
+ * minutes and becomes ORDERING_UNRESOLVED rather than a guess.
+ *
+ * (Written out in words on purpose: a slash-star sequence in a JSDoc block ends
+ * the comment, and a cron expression has bitten this repo before.)
+ */
+export const MINUTE_PAGE_LIMIT = 1500;
+
+/**
+ * Observational Daily-structure tag for the forward candidate ledger.
+ *
+ * NOT A GATE. Experiment 3 refuted the HTF-opposed hypothesis on unseen data, so
+ * no context filter is promoted. This only records what the existing SMC
+ * structure read said at the moment of the fill, using ONLY daily candles that
+ * had fully closed before the entry bar opened, so the tag is causal too.
+ */
+export function dailyStructureTagger(daily: Candle[] | null) {
+  if (!daily || daily.length < 20) return null;
+  const DAY_MS = 86_400_000;
+  return (barTime: string, direction: "long" | "short") => {
+    const t = new Date(barTime).getTime();
+    const closed = daily.filter((b) => new Date(b.datetime).getTime() + DAY_MS <= t).slice(-300);
+    if (closed.length < 20) {
+      return { structure: "UNKNOWN", alignment: "UNKNOWN", asOf: null };
+    }
+    const trend = analyzeMarketStructure(closed).trend;
+    const structure = trend === "bullish" ? "BULLISH" : trend === "bearish" ? "BEARISH" : "RANGING";
+    const alignment = structure === "RANGING"
+      ? "RANGING"
+      : (direction === "long") === (structure === "BULLISH") ? "ALIGNED" : "OPPOSED";
+    return { structure, alignment, asOf: closed[closed.length - 1].datetime };
   };
 }
 
@@ -222,6 +321,28 @@ export interface InstrumentRun {
   divergence?: string;
   skipped?: string;
   error?: string;
+  // ── causal ordering observability ──
+  /** Bars whose ordering the HTF data could not settle. */
+  minutesRequested?: number;
+  minuteBarsFetched?: number;
+  minuteFetchMs?: number;
+  minuteSource?: string;
+  minuteSkipReason?: string;
+  dailySource?: string;
+  dailySkipReason?: string;
+  /** Outcomes voided because nothing could order them. */
+  unresolved?: number;
+  /** Exits the frozen engine would have booked and the tape refused. */
+  causalOverrides?: number;
+  provisional?: boolean;
+  /** Fills whose ordering could not be settled and that may still be open. */
+  ambiguousOpen?: number;
+  /** Ambiguities that ended this run. */
+  ambiguitiesResolved?: number;
+  /** Ambiguities whose branches freed the slot on different bars. */
+  sequenceForks?: number;
+  /** Set while this instrument's later trades are conditional on a branch. */
+  sequenceContaminatedFrom?: string;
 }
 
 export async function handler(req: Request): Promise<Response> {
@@ -292,6 +413,7 @@ export async function handler(req: Request): Promise<Response> {
         let engine: IncrementalEngine | null = null;
         let bars: Candle[] = [];
         let rebuild: { reason: RebuildReason; detail: string } | null = null;
+        let htfSource: string | null = null;
 
         const t0 = Date.now();
         const restored = forceRebuild
@@ -300,7 +422,7 @@ export async function handler(req: Request): Promise<Response> {
         out.restoreMs = Date.now() - t0;
 
         if (restored.ok) {
-          const { candles } = await fetchCandlesWithFallback({
+          const { candles, source: htfSrc } = await fetchCandlesWithFallback({
             symbol: cfg.instrument, interval: cfg.timeframe, limit: INCREMENTAL_BARS,
             // READ-ONLY. candleSource otherwise writes a newly discovered symbol
             // mapping back to broker_connections, an SMC-owned table. This
@@ -309,6 +431,7 @@ export async function handler(req: Request): Promise<Response> {
             persistSymbolOverrides: false,
           } as Parameters<typeof fetchCandlesWithFallback>[0]);
           out.barsFetched = candles?.length ?? 0;
+          htfSource = htfSrc ?? null;
           const page = closedBarsOnly((candles ?? []) as Candle[], now, cfg.barMs);
           const cont = continuityCheck(restored.state, page);
           if (cont.ok) {
@@ -341,15 +464,104 @@ export async function handler(req: Request): Promise<Response> {
 
         out.bars = bars.length;
 
-        const plan: RunnerPlan = runPaper({
-          cfg: engineCfg, barMs: cfg.barMs, closedBars: bars, nowMs: now,
-          state, openPosition, sizing, warmEngine: engine,
-        });
+        // The tape lives here, not inside the branch: the Daily-tag re-plan below
+        // must be given IDENTICAL inputs, and an earlier version of this code
+        // dropped the minutes on that third pass — which would have re-decided
+        // the very bars the second pass had just resolved.
+        let minuteBars: Candle[] = [];
+        let minuteSource: string | null = null;
 
+        // ── PASS 1: plan without a tape ──────────────────────────────────────
+        // Most runs resolve entirely from the HTF bars: a bar that reaches
+        // neither the target nor an S2 close, or reaches exactly one of them
+        // after the fill, is unambiguous and costs nothing extra.
+        const baseInput = {
+          cfg: engineCfg, barMs: cfg.barMs, closedBars: bars, nowMs: now,
+          state, openPosition, sizing, warmEngine: engine, htfSource,
+        };
+        // minutesFinal FALSE: this pass is allowed to ask for a tape.
+        let plan: RunnerPlan = runPaper({ ...baseInput, minutesFinal: false });
+
+        // ── PASS 2: fetch the minutes the plan asked for, then decide ────────
+        // A provisional plan is NEVER written. Either the tape arrives and the
+        // run is re-planned against it, or the affected bar is recorded
+        // ORDERING_UNRESOLVED — no silent fall back to whole-bar OHLC.
+        if (plan.provisional) {
+          out.minutesRequested = plan.minutesNeeded.length;
+          try {
+            const earliest = Math.min(...plan.minutesNeeded.map((m) => m.fromMs));
+            const spanMinutes = Math.ceil((now - earliest) / 60_000) + 5;
+            if (spanMinutes > 0 && spanMinutes <= MINUTE_PAGE_LIMIT) {
+              const m0 = Date.now();
+              const res = await fetchCandlesWithFallback({
+                symbol: cfg.instrument, interval: "1min", limit: spanMinutes,
+                persistSymbolOverrides: false,
+              } as Parameters<typeof fetchCandlesWithFallback>[0]);
+              minuteBars = (res.candles ?? []) as Candle[];
+              minuteSource = res.source ?? null;
+              out.minuteBarsFetched = minuteBars.length;
+              out.minuteFetchMs = Date.now() - m0;
+            } else {
+              out.minuteSkipReason = `span ${spanMinutes} minutes exceeds the single-page reach`;
+            }
+          } catch (me) {
+            out.minuteSkipReason = `1m fetch failed: ${(me as Error).message}`;
+          }
+          out.minuteSource = minuteSource ?? undefined;
+
+          // Only bars the tape actually covers can be ordered from it. Anything
+          // still ambiguous after this pass is voided, not assumed.
+          plan = runPaper({ ...baseInput, minuteBars, minuteSource, minutesFinal: true });
+        } else {
+          // Nothing needed a tape, so the run is already final.
+          plan = runPaper({ ...baseInput, minutesFinal: true });
+        }
+
+        // The candidate ledger's Daily tag. Fetched only when a fill happened,
+        // so an idle poll costs nothing. Failure is non-fatal and leaves the tag
+        // null — an observational column must never be able to stop a run.
+        if (plan.events.some((e) => e.eventType === "FILLED")) {
+          try {
+            const d = await fetchCandlesWithFallback({
+              symbol: cfg.instrument, interval: "1d", limit: 300,
+              persistSymbolOverrides: false,
+            } as Parameters<typeof fetchCandlesWithFallback>[0]);
+            const tagger = dailyStructureTagger((d.candles ?? []) as Candle[]);
+            if (tagger) {
+              out.dailySource = d.source ?? undefined;
+              // Same inputs as the pass that produced `plan`, plus the tag. The
+              // only field that may differ in the result is the observational
+              // Daily column.
+              plan = runPaper({
+                ...baseInput, minuteBars, minuteSource, minutesFinal: true,
+                dailyContext: tagger,
+              });
+            }
+          } catch (de) {
+            out.dailySkipReason = `daily fetch failed: ${(de as Error).message}`;
+          }
+        }
+
+        out.provisional = plan.provisional;
+        out.ambiguousOpen = plan.events.filter((e) => e.eventType === "ORDERING_AMBIGUOUS").length;
+        out.ambiguitiesResolved = plan.events.filter((e) => e.eventType === "AMBIGUITY_RESOLVED").length;
+        out.sequenceForks = plan.events.filter((e) => e.eventType === "SEQUENCE_FORKED").length;
+        out.sequenceContaminatedFrom = plan.state.sequenceContaminatedFrom ?? undefined;
+        out.unresolved = plan.closed.filter((r) => r.exitReason === "ORDERING_UNRESOLVED").length;
+        out.causalOverrides = plan.events.filter((e) => e.eventType === "CAUSAL_OVERRIDE").length;
         out.filled = plan.events.filter((e) => e.eventType === "FILLED").length;
         out.refused = plan.events.filter((e) => e.eventType === "REFUSED").length;
         out.closed = plan.closed.length;
         out.events = plan.events.length;
+
+        if (plan.provisional) {
+          // Unreachable by construction — pass 2 always sets minutesFinal — but
+          // writing a plan whose ordering is unsettled is the one outcome this
+          // whole change exists to prevent, so it is refused explicitly.
+          out.skipped = "ORDERING_INCOMPLETE";
+          results.push(out);
+          continue;
+        }
 
         if (plan.divergence) {
           // Nothing is written — not the rows, and not the engine state either.

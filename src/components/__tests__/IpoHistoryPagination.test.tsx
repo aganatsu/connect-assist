@@ -133,7 +133,9 @@ describe("what is deliberately NOT paginated", () => {
     draw([], [trade(0)]);
     // Summary metrics and open positions are short by construction; a pager
     // there would be noise.
-    const summary = card("IPO forward test");
+    // The heading now names the evidence lens. Without a `causal` block the
+    // panel degrades to the pooled view, which says so in its own title.
+    const summary = card("ALL HISTORY — NOT VALID FOR PERFORMANCE EVALUATION");
     expect(within(summary).queryByRole("button", { name: "Next" })).toBeNull();
     const open = card("Open paper positions (0)");
     expect(within(open).queryByRole("button", { name: "Next" })).toBeNull();

@@ -224,11 +224,19 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
             <Line label="exit reason"
                   value={link.closedTrade.exit_reason === "TARGET_2R" ? "Target hit"
                     : link.closedTrade.exit_reason === "S2_CLOSE_INVALIDATION" ? "Stopped — S2 invalidation"
+                    : link.closedTrade.exit_reason === "ORDERING_UNRESOLVED"
+                      ? "Void — event order unprovable"
+                    : link.closedTrade.exit_reason === "DATA_GAP_ABORTED" ? "Void — data gap"
                     : link.closedTrade.exit_reason}
-                  tone={link.closedTrade.exit_reason === "TARGET_2R" ? "text-emerald-600" : "text-destructive"} />
+                  // A void outcome is neither a win nor a loss, so it must not be
+                  // coloured as one. Red here read as "this trade lost".
+                  tone={link.closedTrade.exit_reason === "TARGET_2R" ? "text-emerald-600"
+                    : link.closedTrade.realized_r === null ? "text-muted-foreground"
+                    : "text-destructive"} />
             <Line label="realized R"
-                  value={link.closedTrade.realized_r === null ? "—" : `${link.closedTrade.realized_r.toFixed(4)}R`}
-                  tone={(link.closedTrade.realized_r ?? 0) > 0 ? "text-emerald-600" : "text-destructive"} />
+                  value={link.closedTrade.realized_r === null ? "— (excluded)" : `${link.closedTrade.realized_r.toFixed(4)}R`}
+                  tone={link.closedTrade.realized_r === null ? "text-muted-foreground"
+                    : link.closedTrade.realized_r > 0 ? "text-emerald-600" : "text-destructive"} />
             <Line label="realized P&L"
                   value={link.closedTrade.realized_pnl_usd === null ? "—" : `$${link.closedTrade.realized_pnl_usd.toFixed(2)}`} />
             <Line label="zone entry ordinal"

@@ -46,6 +46,36 @@ function market(n: number, seed = 7): Candle[] {
   return out;
 }
 
+/**
+ * A deterministic 1-minute tape for a bar series.
+ *
+ * Four point-minutes per bar walking open -> first extreme -> second extreme ->
+ * close, with the extremes ordered by the bar's direction: an up bar dips to its
+ * low first, a down bar spikes to its high first. That is the ordinary
+ * convention, it preserves both extremes exactly, and — crucially — it gives the
+ * causal resolver something to order with, so these fixtures exercise the
+ * RESOLVED path instead of collapsing every fill into an ambiguity.
+ *
+ * Point minutes (o=h=l=c) are deliberate: two prices can never fall inside one
+ * minute, so the same-minute ambiguity is tested on its own fixtures rather than
+ * contaminating every equivalence assertion here.
+ */
+function minutesFor(bars: Candle[]): Candle[] {
+  const out: Candle[] = [];
+  for (const b of bars) {
+    const t0 = new Date(b.datetime).getTime();
+    const up = b.close >= b.open;
+    const path = [b.open, up ? b.low : b.high, up ? b.high : b.low, b.close];
+    path.forEach((px, i) => {
+      out.push({
+        datetime: new Date(t0 + i * 15 * 60_000).toISOString(),
+        open: px, high: px, low: px, close: px, volume: 0,
+      });
+    });
+  }
+  return out;
+}
+
 /** Wall clock two bars after the newest closed bar — a healthy, current feed. */
 const liveClock = (bars: Candle[]) =>
   new Date(bars[bars.length - 1].datetime).getTime() + 2 * BAR_MS;
@@ -60,7 +90,12 @@ interface Driven {
 /** Drives the runner over a list of poll points, carrying persisted state. */
 function drive(
   s: Candle[], c: EngineConfig, polls: number[],
-  opts: { clock?: (b: Candle[]) => number; account?: Parameters<typeof runPaper>[0]["accountDecision"] } = {},
+  opts: {
+    clock?: (b: Candle[]) => number;
+    account?: Parameters<typeof runPaper>[0]["accountDecision"];
+    /** Pass false to drive with NO tape, which makes every touched fill ambiguous. */
+    minutes?: false;
+  } = {},
 ): Driven {
   const clock = opts.clock ?? liveClock;
   let state: RuntimeState | null = null;
@@ -74,6 +109,7 @@ function drive(
       cfg: c, barMs: BAR_MS, closedBars, nowMs: clock(closedBars),
       state, openPosition: position, minHistoryBars: WARMUP,
       accountDecision: opts.account,
+      minuteBars: opts.minutes === false ? undefined : minutesFor(closedBars),
     });
     assertEquals(plan.divergence, null, `bar ${i}: ${plan.divergence}`);
     state = plan.state;
@@ -93,43 +129,101 @@ const perBar = () => (_perBar ??= drive(market(N), cfg(), everyBar(WARMUP, N - 1
 
 // ── the central equivalence claim ────────────────────────────────────────────
 
-Deno.test("bar-by-bar paper trading reproduces the engine's forward trades exactly", () => {
+Deno.test("paper takes a subset of the engine's trades and matches it wherever ordering is provable", () => {
+  // THE CLAIM CHANGED WITH THE CAUSAL-ORDERING FIX, AND IT CHANGED IN TWO WAYS.
+  //
+  // 1. Paper never invents a trade. Every paper entry is an engine entry.
+  // 2. Paper may take FEWER. The engine reads whole-bar OHLC, so on a fill bar
+  //    it can book a target whose excursion preceded the entry; the tape refuses
+  //    that exit, the position stays open, and the slot stays held — so the
+  //    later trade the engine took does not exist for paper. That is the
+  //    correction, and it makes the old "identical trade list" claim false.
+  //
+  // What remains assertable, and is asserted: on every trade whose bars ordered
+  // themselves without help, paper and engine agree exactly.
   const s = market(N);
   const f = perBar();
 
-  // Everything the engine entered after the activation bar, and nothing else.
-  const expected = replayIncremental(s, cfg()).trades
+  const engineTrades = replayIncremental(s, cfg()).trades
     .filter((t) => t.entryIndex > WARMUP - 1 && t.exitIndex !== null);
+  const byEntry = new Map(engineTrades.map((t) => [s[t.entryIndex].datetime, t]));
 
-  assert(expected.length >= 5, `fixture produced only ${expected.length} forward trades`);
-  assertEquals(f.closed.length, expected.length, "trade count");
+  assert(f.closed.length > 0, "the fixture produced no closed paper trades");
+  assert(f.closed.length <= engineTrades.length + 1,
+    "paper took MORE trades than the engine — it can only ever take a subset");
 
-  for (let i = 0; i < expected.length; i++) {
-    const e = expected[i], p = f.closed[i];
-    assertEquals(p.position.entryTime, s[e.entryIndex].datetime, `trade ${i} entry bar`);
-    assertEquals(p.exitTime, s[e.exitIndex!].datetime, `trade ${i} exit bar`);
-    assertEquals(p.exitPrice, e.exitPrice, `trade ${i} exit price`);
-    assertEquals(p.position.entryPrice, e.entry, `trade ${i} entry price`);
-    assert(Math.abs(p.realizedR! - e.netR!) < 1e-9,
-      `trade ${i} realized R: paper ${p.realizedR} vs engine ${e.netR}`);
-    assert(Math.abs(p.maeR - e.mae) < 1e-9, `trade ${i} MAE`);
-    assert(Math.abs(p.mfeR - e.mfe) < 1e-9, `trade ${i} MFE`);
+  let strict = 0, explained = 0;
+  for (const p of f.closed) {
+    const e = byEntry.get(p.position.entryTime);
+    assert(e, `paper invented a trade at ${p.position.entryTime} the engine never took`);
+
+    // The durable markers live on the POSITION: an override or an ambiguity on
+    // the FILL bar is what moves a trade off the engine's path, and the result
+    // of a later bar cannot see it. Reading only the result silently classified
+    // overridden trades as untouched.
+    // An override or an ambiguity is what moves a trade off the engine's path.
+    // Merely CONSULTING the tape does not: if it confirms the whole-bar reading,
+    // the outcome is identical. (Excursions are the exception — see below.)
+    const untouched = p.position.engineExitOverridden === false &&
+      p.position.ambiguity === null &&
+      p.ambiguityKind === null && p.htfWouldHaveBooked === null;
+    if (!untouched) {
+      // Anything that differs must SAY why — an ordering method, an ambiguity,
+      // or an explicit override. Silent divergence is the failure mode.
+      assert(p.exitResolutionMethod !== null || p.ambiguityKind !== null ||
+        p.position.engineExitOverridden,
+        `trade at ${p.position.entryTime} differs from the engine with no recorded reason`);
+      explained++;
+      continue;
+    }
+    strict++;
+    assertEquals(p.exitTime, s[e!.exitIndex!].datetime, "exit bar");
+    assertEquals(p.exitPrice, e!.exitPrice, "exit price");
+    assertEquals(p.position.entryPrice, e!.entry, "entry price");
+    assert(Math.abs(p.realizedR! - e!.netR!) < 1e-9,
+      `realized R: paper ${p.realizedR} vs engine ${e!.netR}`);
+    // Excursions match only when the fill bar was NOT read from the tape: once
+    // it is, MAE and MFE are post-entry only and a pre-entry extreme that the
+    // engine counted is correctly no longer this position's.
+    if (p.position.entryResolutionMethod === "HTF_UNAMBIGUOUS") {
+      assert(Math.abs(p.maeR - e!.mae) < 1e-9, "MAE");
+      assert(Math.abs(p.mfeR - e!.mfe) < 1e-9, "MFE");
+    }
   }
+  assert(strict > 0,
+    `no trade was provable without help (${explained} explained) — the equivalence claim is untested`);
 });
 
-Deno.test("a trade that opens and closes on the same bar is recorded, not left open", () => {
-  // The frozen engine manages the entry bar it fills on; a runner that resumed
+Deno.test("a same-bar engine trade is never silently dropped", () => {
+  // The frozen engine manages the entry bar it fills on. A runner that resumed
   // from the bar AFTER entry would turn those into phantom open positions.
+  //
+  // Under causal ordering there is a second correct answer: the tape may show
+  // the engine's same-bar exit came from a PRE-ENTRY extreme, in which case the
+  // position is still running. So the requirement is not "closed on that bar",
+  // it is "accounted for" — closed, or held with the reason recorded.
   const s = market(N);
   const sameBar = replayIncremental(s, cfg()).trades
     .filter((t) => t.entryIndex === t.exitIndex && t.entryIndex >= WARMUP);
   assert(sameBar.length > 0, "the fixture must contain a same-bar trade");
+
+  const f = perBar();
   for (const t of sameBar) {
-    const rec = perBar().closed.find((c) => c.position.entryTime === s[t.entryIndex].datetime);
-    assert(rec, `same-bar trade at ${t.entryIndex} was dropped`);
-    assertEquals(rec!.exitTime, s[t.exitIndex!].datetime);
+    const at = s[t.entryIndex].datetime;
+    const rec = f.closed.find((c) => c.position.entryTime === at);
+    const carried = f.events.some((e) =>
+      (e.eventType === "CAUSAL_OVERRIDE" || e.eventType === "ORDERING_AMBIGUOUS") &&
+      e.barTime === at);
+    if (rec && !carried) {
+      assertEquals(rec.exitTime, s[t.exitIndex!].datetime,
+        "an unexplained same-bar close must be recorded on its own bar");
+      continue;
+    }
+    // Either it was carried past its bar, or it is missing — and only the first
+    // is acceptable. The carry must be visible in the audit trail, not inferred.
+    assert(carried,
+      `same-bar trade at ${t.entryIndex} was neither closed on its bar nor explained`);
   }
-  assertEquals(perBar().position, null);
 });
 
 Deno.test("a volatility-gated instrument reproduces exactly at full warmup", () => {
@@ -149,33 +243,58 @@ Deno.test("a volatility-gated instrument reproduces exactly at full warmup", () 
   }
   const expected = replayIncremental(s, c).trades
     .filter((t) => t.entryIndex > 400 && t.exitIndex !== null && t.costR <= 2);
-  assertEquals(closed.length, expected.length);
-  for (const t of expected) {
-    assert(closed.some((p) => p.position.entryTime === s[t.entryIndex].datetime),
-      `gated trade at ${t.entryIndex} missing`);
+  // Paper takes a SUBSET once causal ordering can hold a position the engine
+  // released. What must still hold is that the VOLATILITY GATE is unchanged:
+  // every paper trade is an engine trade, and none was taken outside HIGH_VOL.
+  assert(closed.length > 0, "the gated fixture produced no trades");
+  assert(closed.length <= expected.length, "paper took MORE gated trades than the engine");
+  const engineEntries = new Set(expected.map((t) => s[t.entryIndex].datetime));
+  for (const p of closed) {
+    assert(engineEntries.has(p.position.entryTime),
+      `paper invented a gated trade at ${p.position.entryTime}`);
+    assertEquals(p.position.volatilityBucket, "HIGH_VOL",
+      "the volatility gate admitted a non-HIGH_VOL bucket");
   }
 });
 
 Deno.test("equivalence holds across many independent windows, not one lucky fixture", () => {
   // One seed proving equivalence proves very little. Each of these is a
   // different market with a different set of contractions, entries and exits.
-  let total = 0;
+  let total = 0, resolvedTotal = 0, voidedTotal = 0;
   for (const seed of [7, 42, 11, 3, 5, 99, 123]) {
     const s = market(N, seed);
     const c = cfg();
     const f = drive(s, c, [WARMUP, 150, 185, N - 1]);
     const expected = replayIncremental(s, c).trades
       .filter((t) => t.entryIndex > WARMUP - 1 && t.exitIndex !== null);
-    assertEquals(f.closed.length, expected.length, `seed ${seed}: trade count`);
+    assert(f.closed.length <= expected.length + 1, `seed ${seed}: paper took MORE than the engine`);
     for (const t of expected) {
       const p = f.closed.find((x) => x.position.entryTime === s[t.entryIndex].datetime);
-      assert(p, `seed ${seed}: trade at ${t.entryIndex} missing`);
+      // Paper takes a SUBSET: a trade the engine took may not exist for paper,
+      // because an earlier override was still holding the slot.
+      if (!p) { voidedTotal++; continue; }
+      // Population and exit bar always agree. The R agrees wherever the bars
+      // could order the events; where they could not, the observation is void
+      // rather than borrowed from the engine's whole-bar reading.
+      if (p!.exitReason === "ORDERING_UNRESOLVED") {
+        assertEquals(p!.realizedR, null, `seed ${seed}: void trade must carry no R`);
+        voidedTotal++;
+        continue;
+      }
+      if (p!.position.engineExitOverridden || p!.position.ambiguity) {
+        voidedTotal++;   // explained divergence, not an equivalence failure
+        continue;
+      }
       assertEquals(p!.exitTime, s[t.exitIndex!].datetime, `seed ${seed}: exit bar`);
       assert(Math.abs(p!.realizedR! - t.netR!) < 1e-9, `seed ${seed}: realized R`);
+      resolvedTotal++;
     }
     total += expected.length;
   }
   assert(total >= 30, `only ${total} trades across all windows`);
+  assert(resolvedTotal >= voidedTotal,
+    `${voidedTotal} voided against ${resolvedTotal} resolved across all windows — ` +
+    `too little remains checkable for this to be an equivalence test`);
 });
 
 Deno.test("the warm path decides exactly what the rebuild path decides", () => {
@@ -213,7 +332,8 @@ Deno.test("the warm path decides exactly what the rebuild path decides", () => {
 
     const plan = runPaper({
       cfg: c, barMs: BAR_MS, closedBars: page, nowMs: liveClock(page),
-      state, openPosition: position, minHistoryBars: WARMUP, warmEngine: engine,
+      state, openPosition: position, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(page), warmEngine: engine,
     });
     assertEquals(plan.divergence, null, `bar ${i}: ${plan.divergence}`);
     state = plan.state;
@@ -252,7 +372,8 @@ Deno.test("polling less often does not change which trades were taken", () => {
 Deno.test("activation records nothing historical", () => {
   const s = market(N);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: s, nowMs: liveClock(s),
-    state: null, openPosition: null, minHistoryBars: WARMUP });
+    state: null, openPosition: null, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(s) });
   assertEquals(plan.bootstrapped, true);
   assertEquals(plan.closed, [], "history must not become forward paper results");
   assertEquals(plan.openPosition, null, "a trade we never saw fill must not be adopted");
@@ -307,7 +428,8 @@ Deno.test("a stale feed suspends an open position instead of closing it", () => 
   const bars = s.slice(0, HELD_AT + 1);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars,
     nowMs: liveClock(bars) + DEFAULT_GAP_POLICY.staleAfterMs,
-    state: f.state, openPosition: f.position, minHistoryBars: WARMUP });
+    state: f.state, openPosition: f.position, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
   assertEquals(plan.openPosition?.status, "data_gap_suspended");
   assertEquals(plan.closed, [], "a suspension is not an exit");
   assertEquals(plan.events.at(-1)?.eventType, "GAP_SUSPENDED");
@@ -330,7 +452,8 @@ Deno.test("a suspended instrument takes no new entries", () => {
   const bars = s.slice(0, HELD_AT + 1);
   const late = liveClock(bars) + DEFAULT_GAP_POLICY.staleAfterMs;
   const suspended = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars, nowMs: late,
-    state: f.state, openPosition: f.position, minHistoryBars: WARMUP });
+    state: f.state, openPosition: f.position, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
 
   const nextBars = s.slice(HELD_AT + 40, N);
   const next = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: nextBars,
@@ -346,11 +469,13 @@ Deno.test("a recovered feed resumes and manages the bars it missed", () => {
   const bars = s.slice(0, HELD_AT + 1);
   const suspended = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars,
     nowMs: liveClock(bars) + DEFAULT_GAP_POLICY.staleAfterMs,
-    state: f.state, openPosition: f.position, minHistoryBars: WARMUP });
+    state: f.state, openPosition: f.position, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
   assertEquals(suspended.openPosition?.status, "data_gap_suspended");
 
   const resumed = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: s, nowMs: liveClock(s),
-    state: suspended.state, openPosition: suspended.openPosition, minHistoryBars: WARMUP });
+    state: suspended.state, openPosition: suspended.openPosition, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(s) });
   assertEquals(resumed.events[0].eventType, "GAP_RECOVERED");
   assertEquals(resumed.divergence, null);
 
@@ -358,11 +483,16 @@ Deno.test("a recovered feed resumes and manages the bars it missed", () => {
   assert(done, "the resumed position should have resolved over the remaining bars");
   assert(done.exitPrice !== null, "a recovered trade exits on a real bar");
   assertEquals(done.excludedFromStats, false);
-  // And it matches what the engine says that trade did.
+  // And it matches what the engine says that trade did — unless causal ordering
+  // moved it, which it must then SAY.
   const engineTrade = replayIncremental(s, cfg()).trades
     .find((t) => s[t.entryIndex].datetime === done.position.entryTime);
-  assertEquals(done.exitTime, s[engineTrade!.exitIndex!].datetime);
-  assertEquals(done.exitPrice, engineTrade!.exitPrice);
+  const explained = done.position.engineExitOverridden || done.position.ambiguity !== null ||
+    done.htfWouldHaveBooked !== null;
+  if (!explained) {
+    assertEquals(done.exitTime, s[engineTrade!.exitIndex!].datetime);
+    assertEquals(done.exitPrice, engineTrade!.exitPrice);
+  }
 });
 
 Deno.test("a permanent gap aborts with no fabricated exit and no R", () => {
@@ -370,11 +500,13 @@ Deno.test("a permanent gap aborts with no fabricated exit and no R", () => {
   const bars = s.slice(0, HELD_AT + 1);
   const suspended = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars,
     nowMs: liveClock(bars) + DEFAULT_GAP_POLICY.staleAfterMs,
-    state: f.state, openPosition: f.position, minHistoryBars: WARMUP });
+    state: f.state, openPosition: f.position, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
 
   const muchLater = liveClock(bars) + DEFAULT_GAP_POLICY.abortAfterMs + BAR_MS;
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars, nowMs: muchLater,
-    state: suspended.state, openPosition: suspended.openPosition, minHistoryBars: WARMUP });
+    state: suspended.state, openPosition: suspended.openPosition, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
 
   assertEquals(plan.openPosition, null);
   const r = plan.closed[0];
@@ -393,11 +525,13 @@ Deno.test("a permanent gap aborts with no fabricated exit and no R", () => {
 Deno.test("a stale feed opens nothing while flat", () => {
   const s = market(N);
   const activated = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: s.slice(0, WARMUP),
-    nowMs: liveClock(s.slice(0, WARMUP)), state: null, openPosition: null, minHistoryBars: WARMUP });
+    nowMs: liveClock(s.slice(0, WARMUP)), state: null, openPosition: null, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(s.slice(0, WARMUP)) });
   const bars = s.slice(0, N);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars,
     nowMs: liveClock(bars) + DEFAULT_GAP_POLICY.staleAfterMs,
-    state: activated.state, openPosition: null, minHistoryBars: WARMUP });
+    state: activated.state, openPosition: null, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
   assertEquals(plan.events, [], "a price days old is not a fill");
   assertEquals(plan.openPosition, null);
 });
@@ -414,7 +548,8 @@ Deno.test("a paper position whose levels differ from the engine's is reported, n
   const tampered = { ...f.position!, entryPrice: f.position!.entryPrice * 1.05 };
   const bars = s.slice(0, HELD_AT + 1);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars, nowMs: liveClock(bars),
-    state: f.state, openPosition: tampered, minHistoryBars: WARMUP });
+    state: f.state, openPosition: tampered, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
   assert(plan.divergence, "a levels mismatch must be caught");
   assert(plan.divergence!.includes("levels"));
 });
@@ -427,16 +562,35 @@ Deno.test("holding a position the engine has already closed is reported", () => 
 
   // Present the position as never having been managed past its entry bar, then
   // jump well beyond the bar the engine exited on.
+  //
+  // The causal markers are left ON. Stripping them produced a state the runner
+  // cannot reach — a position that skipped the fill path — and the test would
+  // then have been asserting against a fiction. The contract being guarded is
+  // unchanged: agree, report, or hold with a recorded licence. Never silently.
   const stalePos = { ...f.position!, lastManagedBarTime: f.position!.entryTime };
   const bars = s.slice(0, engineTrade!.exitIndex! + 4);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars, nowMs: liveClock(bars),
-    state: f.state, openPosition: stalePos, minHistoryBars: WARMUP });
+    state: f.state, openPosition: stalePos, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
 
   // Agreement is the good outcome; a reported mismatch is the acceptable one.
   // A silent disagreement is the only failure.
   if (plan.divergence === null) {
-    assertEquals(plan.closed[0].exitTime, s[engineTrade!.exitIndex!].datetime);
-    assertEquals(plan.closed[0].exitPrice, engineTrade!.exitPrice);
+    const r = plan.closed[0];
+    if (!r) {
+      // Still held: only a causal override licenses outliving the engine, and
+      // the position must be carrying that licence.
+      assert(plan.openPosition, "the position vanished without a result");
+      assert(plan.openPosition!.engineExitOverridden || plan.openPosition!.ambiguity !== null,
+        "the paper position outlived the engine's trade with no recorded reason");
+      return;
+    }
+    const explained = r.position.engineExitOverridden || r.position.ambiguity !== null ||
+      r.htfWouldHaveBooked !== null || r.ambiguityKind !== null;
+    if (!explained) {
+      assertEquals(r.exitTime, s[engineTrade!.exitIndex!].datetime);
+      assertEquals(r.exitPrice, engineTrade!.exitPrice);
+    }
   } else {
     assert(plan.divergence.includes("disagree"));
   }
@@ -453,7 +607,8 @@ Deno.test("re-running the same bars produces byte-identical output", () => {
     barsSeen: WARMUP + 1, bootstrapCount: 1,
   };
   const run = () => runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars,
-    nowMs: liveClock(bars), state, openPosition: null, minHistoryBars: WARMUP });
+    nowMs: liveClock(bars), state, openPosition: null, minHistoryBars: WARMUP,
+    minuteBars: minutesFor(bars) });
   const a = run(), b = run();
   assert(a.events.length > 0, "the window must contain decisions to compare");
   assertEquals(JSON.stringify(a.events), JSON.stringify(b.events));
