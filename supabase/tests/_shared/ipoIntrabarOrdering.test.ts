@@ -231,13 +231,29 @@ Deno.test("E2 — the live and incremental engines manage the entry bar explicit
   }
 });
 
-Deno.test("E3 — the paper runner recomputes it independently, it does not adopt the engine", async () => {
+Deno.test("E3 — the paper runner resolves the entry bar causally and never whole-bar", async () => {
+  // UPDATED WHEN THE FIX LANDED. This assertion used to pin the defect — the
+  // runner stepping the fill bar with its whole OHLC,
+  // `stepPosition(pos, closedBars[entryIdx], 0)`. That call is gone. The entry
+  // bar is now ordered first and the ordering is passed in, so a pre-entry
+  // extreme cannot resolve a position that did not exist.
   const src = await Deno.readTextFile("supabase/functions/_shared/ipoPaperRunner.ts");
-  assert(src.includes("stepPosition(pos, closedBars[entryIdx], 0)"),
-    "the runner's own entry-bar step is gone");
-  // Two independent implementations of one assumption: they agree, so the
-  // divergence guard stays silent. Agreement is not correctness.
+  assert(!/stepPosition\(pos, closedBars\[entryIdx\], 0\)/.test(src),
+    "the whole-bar entry step is back");
+  assert(/order\(pos, entryBar, barMs, true,/.test(src),
+    "the entry bar is no longer resolved with isEntryBar");
+  assert(/stepPosition\(priced, entryBar, 0, o\)/.test(src),
+    "the entry bar is stepped without a resolved ordering");
+  // Every other bar is ordered too — a resolved ordering is always supplied.
+  for (const m of src.matchAll(/stepPosition\(([^)]*)\)/g)) {
+    const args = m[1].split(",").map((x) => x.trim());
+    assert(args.length === 4, `stepPosition called without an ordering: ${m[0]}`);
+  }
+  // Two independent implementations of one assumption: they agree except where
+  // the tape proves the engine wrong, and that exception is explicit.
   assert(src.includes("divergence"), "the runner no longer cross-checks the engine");
+  assert(src.includes("engineExitOverridden"),
+    "the runner no longer records where it refused the engine's whole-bar exit");
 });
 
 // ── F. S2 must remain close-confirmed ────────────────────────────────────────

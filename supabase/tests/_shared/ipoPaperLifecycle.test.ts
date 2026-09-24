@@ -358,8 +358,15 @@ Deno.test("no SMC management touched the lifecycle", () => {
   const s = market(N, 3);
   const f = driveOnce("seed3", () => drive(s, cfg()));
   for (const r of f.closed) {
-    // Only two strategy exits exist. No break-even, no trail, no partial.
-    assert(["TARGET_2R", "S2_CLOSE_INVALIDATION"].includes(r.exitReason));
+    // Only two STRATEGY exits exist. No break-even, no trail, no partial.
+    // ORDERING_UNRESOLVED is not a third exit: it is a data verdict that voids
+    // the observation when nothing can order the events against the fill, and
+    // it carries no realized R at all.
+    assert(["TARGET_2R", "S2_CLOSE_INVALIDATION", "ORDERING_UNRESOLVED"].includes(r.exitReason));
+    if (r.exitReason === "ORDERING_UNRESOLVED") {
+      assertEquals(r.realizedR, null, "an unordered observation must not carry an R");
+      assertEquals(r.excludedFromStats, true);
+    }
     // The stop never moved from the IPO candle's far extreme.
     assertEquals(r.position.s2InvalidationLevel, r.position.s2InvalidationLevel);
     // Size is fixed at entry and never scaled.
@@ -367,7 +374,10 @@ Deno.test("no SMC management touched the lifecycle", () => {
   }
   // Every event type emitted belongs to the IPO vocabulary.
   const allowed = new Set(["SETUP_VALID", "INTENT_CREATED", "FILLED", "REFUSED",
-    "MANAGED", "CLOSED", "GAP_SUSPENDED", "GAP_RECOVERED", "GAP_ABORTED"]);
+    "MANAGED", "CLOSED", "GAP_SUSPENDED", "GAP_RECOVERED", "GAP_ABORTED",
+    // Emitted when the tape refuses an exit whole-bar OHLC would have booked.
+    // It records a disagreement; it manages nothing.
+    "CAUSAL_OVERRIDE"]);
   for (const e of f.events) assert(allowed.has(e.eventType), `unexpected event ${e.eventType}`);
 });
 

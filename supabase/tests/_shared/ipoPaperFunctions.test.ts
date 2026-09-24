@@ -223,12 +223,26 @@ Deno.test("aborted trades are excluded from clean statistics but still counted",
 // ── schema guards ────────────────────────────────────────────────────────────
 
 const MIGRATION = "supabase/migrations/20260921140000_ipo_paper_state.sql";
+/**
+ * Later IPO migrations may WIDEN a CHECK the Phase D file created — a new event
+ * type, a new exit reason. `supabase db push` applies them all, so the question
+ * "does the schema accept this value" has to be asked of the schema as it will
+ * exist, not of one file.
+ */
+const IPO_MIGRATIONS = [
+  MIGRATION,
+  "supabase/migrations/20260922020000_ipo_zone_telemetry.sql",
+  "supabase/migrations/20260924120000_ipo_causal_execution_ordering.sql",
+];
+const allIpoSql = async () =>
+  (await Promise.all(IPO_MIGRATIONS.map(src))).join("\n");
 
 Deno.test("every event type the runner emits is accepted by the schema", async () => {
   // A new event type added in TypeScript and not in the CHECK would fail at
   // INSERT time, in production, on the one row that mattered.
-  const sql = await src(MIGRATION);
-  const listed = sql.slice(sql.indexOf("event_type text not null check"));
+  const sql = await allIpoSql();
+  // The LAST check wins at push time, so that is the one to read.
+  const listed = sql.slice(sql.lastIndexOf("event_type in"));
   const runner = await src("supabase/functions/_shared/ipoPaperRunner.ts");
   const declared = runner
     .slice(runner.indexOf("export type PaperEventType"), runner.indexOf("export interface PaperEvent"))
@@ -238,10 +252,19 @@ Deno.test("every event type the runner emits is accepted by the schema", async (
 });
 
 Deno.test("every exit reason the contract produces is accepted by the schema", async () => {
-  const sql = await src(MIGRATION);
-  for (const r of ["TARGET_2R", "S2_CLOSE_INVALIDATION", "DATA_GAP_ABORTED"]) {
-    assert(sql.includes(`'${r}'`), `schema rejects exit reason ${r}`);
-  }
+  const sql = await allIpoSql();
+  const contract = await src("supabase/functions/_shared/ipoPaperContract.ts");
+  const declared = contract
+    .slice(contract.indexOf("export type ExitReason"), contract.indexOf("export interface ZoneTelemetry"))
+    .match(/"([A-Z_0-9]+)"/g)!.map((x) => x.replaceAll('"', ""));
+  assert(declared.length >= 4, `only ${declared.length} exit reasons parsed`);
+  // Anchor on the NAMED enum constraint: "exit_reason in" also appears inside
+  // the coherence check, where only the two void reasons are listed.
+  const anchor = sql.lastIndexOf("ipo_paper_trade_history_exit_reason_check\n  check (exit_reason in");
+  const check = anchor >= 0
+    ? sql.slice(anchor, sql.indexOf(";", anchor))
+    : sql.slice(sql.indexOf("exit_reason text not null"), sql.indexOf("-- realized_r"));
+  for (const r of declared) assert(check.includes(`'${r}'`), `schema rejects exit reason ${r}`);
 });
 
 Deno.test("the schema cannot hold a live position or two open ones", async () => {
@@ -253,8 +276,8 @@ Deno.test("the schema cannot hold a live position or two open ones", async () =>
 });
 
 Deno.test("the schema refuses an incoherent outcome row", async () => {
-  const sql = await src(MIGRATION);
-  const check = sql.slice(sql.indexOf("ipo_paper_history_outcome_coherent"));
+  const sql = await allIpoSql();
+  const check = sql.slice(sql.lastIndexOf("ipo_paper_history_outcome_coherent"));
   // A real exit must carry a price and an R; an abort must carry neither.
   assert(check.includes("exit_price is not null and realized_r is not null"));
   assert(check.includes("realized_r is null and excluded_from_stats = true"));
@@ -286,6 +309,8 @@ Deno.test("EVERY unapplied IPO table carries the full posture, not just Phase D'
   // REVOKE, which is a table that is empty to a browser rather than unreachable.
   const CASES = [
     ["20260921140000_ipo_paper_state.sql",
+      ["ipo_paper_positions", "ipo_paper_trade_history", "ipo_execution_events"]],
+    ["20260924120000_ipo_causal_execution_ordering.sql",
       ["ipo_paper_positions", "ipo_paper_trade_history", "ipo_execution_events"]],
   ] as const;
 

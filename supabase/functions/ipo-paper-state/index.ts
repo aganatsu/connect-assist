@@ -20,6 +20,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { parseHealth, isStale } from "../_shared/ipoRunnerHealth.ts";
+import { CAUSAL_EXECUTION_VERSION } from "../_shared/ipoCausalOrdering.ts";
 
 /** Enough to render a panel without paging; not a research export. */
 export const RECENT_TRADES = 100;
@@ -48,6 +49,26 @@ export interface CleanSummary {
 }
 
 /**
+ * The forward-evidence boundary.
+ *
+ * Rows recorded before the causal-ordering fix could book a same-bar target
+ * whose excursion happened BEFORE the entry, so their outcomes are not
+ * trustworthy. They are NOT deleted and NOT rewritten — they are separated, and
+ * the default population is the causally ordered one. Pooling the two would
+ * launder the contamination straight back into the headline number.
+ */
+export interface EvidenceSplit {
+  /** The default population: rows produced by the corrected runner. */
+  causal: CleanSummary;
+  /** Pre-fix forward rows. Visible, labelled, and never averaged with the above. */
+  legacy: CleanSummary;
+  causalExecutionVersion: string;
+  legacyTrades: number;
+  /** Closed with no outcome because nothing could order the events. */
+  unresolvedExcluded: number;
+}
+
+/**
  * Summarises closed results.
  *
  * Exported and pure so the exclusion rule is testable without a database.
@@ -66,6 +87,30 @@ export function summarize(
     expectancyR: clean.length ? totalR / clean.length : 0,
     totalPnlUsd: clean.reduce((a, r) => a + (r.realized_pnl_usd ?? 0), 0),
     abortedExcluded: rows.length - clean.length,
+  };
+}
+
+/**
+ * Splits closed results on the forward-evidence boundary.
+ *
+ * Pure and exported so the separation is testable without a database, and so no
+ * future reader has to remember that a NULL version column means contaminated.
+ */
+export function splitEvidence(
+  rows: Array<{
+    realized_r: number | null; realized_pnl_usd: number | null;
+    excluded_from_stats: boolean; exit_reason?: string | null;
+    causal_execution_version?: string | null;
+  }>,
+): EvidenceSplit {
+  const causalRows = rows.filter((r) => r.causal_execution_version != null);
+  const legacyRows = rows.filter((r) => r.causal_execution_version == null);
+  return {
+    causal: summarize(causalRows),
+    legacy: summarize(legacyRows),
+    causalExecutionVersion: CAUSAL_EXECUTION_VERSION,
+    legacyTrades: legacyRows.length,
+    unresolvedExcluded: rows.filter((r) => r.exit_reason === "ORDERING_UNRESOLVED").length,
   };
 }
 
@@ -134,7 +179,12 @@ export async function handler(req: Request): Promise<Response> {
       openPositions: p.data ?? [],
       recentTrades: h.data ?? [],
       recentEvents: e.data ?? [],
+      // Unchanged in meaning: every clean row, legacy and causal together. Kept
+      // so no existing reader silently changes what it is showing.
       summary: summarize((h.data ?? []) as Parameters<typeof summarize>[0]),
+      // The boundary. `evidence.causal` is the population any forward
+      // performance claim should be made from.
+      evidence: splitEvidence((h.data ?? []) as Parameters<typeof splitEvidence>[0]),
     });
   } catch (e) {
     return respond({ ok: false, error: (e as Error).message }, 500);

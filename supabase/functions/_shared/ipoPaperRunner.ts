@@ -34,10 +34,14 @@ import {
   buildIntent, openPosition as openPaperPosition, stepPosition,
   suspendForGap, resumeFromGap, abortForGap,
   eventId, setupId, intentId,
-  DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
-  type AccountDecision, type PaperIntent, type PaperPosition,
+  DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION, NO_PROVENANCE,
+  type AccountDecision, type CausalProvenance, type PaperIntent, type PaperPosition,
   type PaperResult, type SizingConfig, type ZoneTelemetry,
 } from "./ipoPaperContract.ts";
+import {
+  resolveBar, htfWouldHaveClosed, CAUSAL_EXECUTION_VERSION,
+  type BarOrdering,
+} from "./ipoCausalOrdering.ts";
 import type { Candle } from "./smcAnalysis.ts";
 import type { EngineConfig, LiveTrade } from "./ipoLiveEngine.ts";
 
@@ -90,7 +94,13 @@ export interface RuntimeState {
 
 export type PaperEventType =
   | "SETUP_VALID" | "INTENT_CREATED" | "FILLED" | "REFUSED" | "MANAGED" | "CLOSED"
-  | "GAP_SUSPENDED" | "GAP_RECOVERED" | "GAP_ABORTED";
+  | "GAP_SUSPENDED" | "GAP_RECOVERED" | "GAP_ABORTED"
+  /**
+   * The minute tape refused an exit the frozen engine booked from whole-bar
+   * OHLC. Emitted once, when it happens, so the forward record can never
+   * contain a silent disagreement between the two.
+   */
+  | "CAUSAL_OVERRIDE";
 
 export interface PaperEvent {
   eventId: string;
@@ -129,6 +139,42 @@ export interface RunnerInput {
    * place the bootstrap cost is paid. See `ipoEngineState`.
    */
   warmEngine?: IncrementalEngine;
+  /**
+   * Lower-timeframe bars available for ordering. The resolver slices them per
+   * HTF bar, so the caller may pass any superset.
+   */
+  minuteBars?: readonly Candle[];
+  /**
+   * TRUE — the default — means "this is all the tape there will be", so a bar
+   * that still cannot be ordered becomes ORDERING_UNRESOLVED. That is the safe
+   * default for a pure function: a caller who supplies nothing gets a voided
+   * observation, never a whole-bar guess.
+   *
+   * FALSE is an explicit statement that the caller intends to fetch and re-run.
+   * The plan it receives is then PROVISIONAL, records nothing, and must not be
+   * written.
+   */
+  minutesFinal?: boolean;
+  /** Feeds that supplied the bars, recorded so provenance survives into the row. */
+  htfSource?: string | null;
+  minuteSource?: string | null;
+  /**
+   * Observational Daily-structure tag for the candidate ledger. NOT A GATE.
+   * Nothing in this module branches on it; a test asserts it cannot reach the
+   * execution verdict.
+   */
+  dailyContext?: (barTime: string, direction: "long" | "short") => {
+    structure: string; alignment: string; asOf: string | null;
+  } | null;
+}
+
+/** A span of lower-timeframe bars the plan could not proceed without. */
+export interface MinuteRequest {
+  symbol: string;
+  barTime: string;
+  fromMs: number;
+  toMs: number;
+  reason: string;
 }
 
 export interface RunnerPlan {
@@ -145,6 +191,14 @@ export interface RunnerPlan {
    */
   divergence: string | null;
   skipped: "INSUFFICIENT_HISTORY" | null;
+  /**
+   * Spans whose ordering could not be settled from the data supplied. When this
+   * is non-empty the plan is INCOMPLETE and the caller must fetch and re-run
+   * rather than write it.
+   */
+  minutesNeeded: MinuteRequest[];
+  /** True whenever `minutesNeeded` is non-empty. Writing a provisional plan is a bug. */
+  provisional: boolean;
 }
 
 const ms = (t: string) => new Date(t).getTime();
@@ -214,10 +268,42 @@ function identify(t: LiveTrade, bars: Candle[], timeframe: string) {
  * Gap handling happens before any bar is applied: managing across an unproven
  * hole would produce an exit price for a path we never observed.
  */
+/**
+ * Asks the causal resolver about one bar, or records that it cannot be answered.
+ *
+ * Returns null to mean DEFER: the caller must stop, hand back the request and
+ * be re-run with the tape. Deferring is not the same as holding — a deferred bar
+ * has not been evaluated at all, and treating it as a hold would be exactly the
+ * silent fall-back to HTF ambiguity this work removes.
+ */
+function order(
+  pos: PaperPosition, bar: Candle, barMs: number, isEntryBar: boolean,
+  minutes: readonly Candle[] | undefined, minutesFinal: boolean,
+  needs: MinuteRequest[],
+): BarOrdering | null {
+  const o = resolveBar({
+    direction: pos.direction, entryPrice: pos.entryPrice,
+    targetPrice: pos.targetPrice, s2InvalidationLevel: pos.s2InvalidationLevel,
+    bar, barMs, isEntryBar, minutes: minutes ?? null, ticks: null,
+  });
+  if (o.kind !== "NEED_MINUTES") return o;
+  if (minutesFinal) {
+    // The tape was asked for and did not arrive. Void the observation; do not
+    // fall back to the whole-bar reading that caused the contamination.
+    return { ...o, kind: "UNRESOLVED", method: "ORDERING_UNRESOLVED",
+      detail: `${o.detail}; no lower-timeframe tape was available for this bar` };
+  }
+  const from = ms(bar.datetime);
+  needs.push({ symbol: pos.symbol, barTime: bar.datetime, fromMs: from, toMs: from + barMs,
+    reason: o.detail });
+  return null;
+}
+
 function manage(
   pos: PaperPosition, bars: Candle[], nowMs: number, barMs: number, policy: GapPolicy,
   acct: AccountDecision,
-): { position: PaperPosition | null; result: PaperResult | null; events: PaperEvent[] } {
+  minutes: readonly Candle[] | undefined, minutesFinal: boolean, needs: MinuteRequest[],
+): { position: PaperPosition | null; result: PaperResult | null; events: PaperEvent[]; deferred: boolean } {
   const events: PaperEvent[] = [];
   const newest = bars[bars.length - 1];
   const covered = bars.some((b) => sameBar(b.datetime, pos.lastManagedBarTime));
@@ -230,7 +316,7 @@ function manage(
       events.push(ev("GAP_SUSPENDED", pos.symbol, newest.datetime, "HOLD", acct, [reason], {
         gapFrom: pos.lastManagedBarTime, gapTo: newest.datetime,
       }, pos));
-      return { position: suspended, result: null, events };
+      return { position: suspended, result: null, events, deferred: false };
     }
     // Already suspended. A hole that never closes is permanent, not pending.
     const since = pos.gapFromBarTime ? ms(pos.gapFromBarTime) : ms(pos.lastManagedBarTime);
@@ -243,9 +329,9 @@ function manage(
         gapFrom: pos.gapFromBarTime, gapTo: newest.datetime,
         note: "no exit price and no realized R — this is a data failure, not a strategy outcome",
       }, pos));
-      return { position: null, result, events };
+      return { position: null, result, events, deferred: false };
     }
-    return { position: pos, result: null, events };
+    return { position: pos, result: null, events, deferred: false };
   }
 
   let live = pos;
@@ -259,16 +345,25 @@ function manage(
   const start = bars.findIndex((b) => sameBar(b.datetime, live.lastManagedBarTime)) + 1;
   let held = 0;
   for (let i = start; i < bars.length; i++) {
+    // Bars after the fill are wholly post-entry, so `isEntryBar` is false here
+    // even for the bar the position entered on: that one is stepped explicitly
+    // at fill time and `lastManagedBarTime` already points at it.
+    const o = order(live, bars[i], barMs, false, minutes, minutesFinal, needs);
+    if (!o) return { position: live, result: null, events, deferred: true };
     held++;
-    const out = stepPosition(live, bars[i], held);
+    const out = stepPosition(live, bars[i], held, o);
     if (out.kind === "CLOSED") {
       events.push(ev("CLOSED", live.symbol, bars[i].datetime, "WOULD_EXIT", acct,
-        [out.result.exitReason], {
+        [out.result.exitReason, o.method], {
           exitPrice: out.result.exitPrice, realizedR: out.result.realizedR,
           realizedPnlUsd: out.result.realizedPnlUsd,
           sameBarAmbiguous: out.result.sameBarAmbiguous,
+          resolutionMethod: o.method, orderingDetail: o.detail,
+          targetMinute: o.targetMinute, s2CloseBarTime: o.s2CloseBarTime,
+          entryMinute: live.entryMinuteTime,
+          htfSource: live.htfSource, minuteSource: live.minuteSource,
         }, live));
-      return { position: null, result: out.result, events };
+      return { position: null, result: out.result, events, deferred: false };
     }
     live = out.position;
   }
@@ -278,7 +373,7 @@ function manage(
       barsAdvanced: held, maeR: live.maeR, mfeR: live.mfeR,
     }, live));
   }
-  return { position: live, result: null, events };
+  return { position: live, result: null, events, deferred: false };
 }
 
 /**
@@ -293,7 +388,10 @@ export function runPaper(input: RunnerInput): RunnerPlan {
     cfg, barMs, closedBars, nowMs, state, openPosition,
     sizing = DEFAULT_SIZING, accountDecision = "UNAVAILABLE", gap = DEFAULT_GAP_POLICY,
     minHistoryBars = MIN_HISTORY_BARS,
+    minuteBars, minutesFinal = true, htfSource = null, minuteSource = null,
+    dailyContext,
   } = input;
+  const needs: MinuteRequest[] = [];
 
   const base: RuntimeState = state ?? {
     strategyId: STRATEGY_ID, strategyVersion: STRATEGY_VERSION,
@@ -306,6 +404,7 @@ export function runPaper(input: RunnerInput): RunnerPlan {
     return {
       bootstrapped: false, state: base, openPosition, closed: [], events: [],
       divergence: null, skipped: "INSUFFICIENT_HISTORY",
+      minutesNeeded: [], provisional: false,
     };
   }
 
@@ -314,14 +413,6 @@ export function runPaper(input: RunnerInput): RunnerPlan {
   const closed: PaperResult[] = [];
 
   // ── manage first, from bars only ──────────────────────────────────────────
-  let live = openPosition;
-  if (live) {
-    const m = manage(live, closedBars, nowMs, barMs, gap, accountDecision);
-    events.push(...m.events);
-    if (m.result) closed.push(m.result);
-    live = m.position;
-  }
-
   const advance = (bootstrapped: boolean, divergence: string | null): RunnerPlan => ({
     bootstrapped, divergence, closed, events,
     openPosition: live,
@@ -333,7 +424,29 @@ export function runPaper(input: RunnerInput): RunnerPlan {
       bootstrapCount: base.bootstrapCount + (bootstrapped ? 1 : 0),
     },
     skipped: null,
+    minutesNeeded: needs,
+    provisional: needs.length > 0,
   });
+
+  /**
+   * The cursor MUST NOT move on a provisional plan. Returning `base` unchanged
+   * means the next run — the one with the tape — sees exactly the same bars.
+   */
+  const defer = (bootstrapped: boolean): RunnerPlan => ({
+    bootstrapped, divergence: null, closed: [], events: [],
+    openPosition, state: base, skipped: null,
+    minutesNeeded: needs, provisional: true,
+  });
+
+  let live = openPosition;
+  if (live) {
+    const m = manage(live, closedBars, nowMs, barMs, gap, accountDecision,
+      minuteBars, minutesFinal, needs);
+    if (m.deferred) return defer(false);
+    events.push(...m.events);
+    if (m.result) closed.push(m.result);
+    live = m.position;
+  }
 
   // A suspended instrument is not a tradable one. No rebuild, no entries.
   if (live && live.status === "data_gap_suspended") return advance(false, null);
@@ -362,17 +475,29 @@ export function runPaper(input: RunnerInput): RunnerPlan {
   if (live) {
     const et = engine.openTrade;
     const id = et ? identify(et, closedBars, cfg.timeframe) : null;
+    // A CAUSAL OVERRIDE IS AN EXPECTED DISAGREEMENT, AND ONLY THIS ONE IS.
+    //
+    // The frozen engine reads whole-bar OHLC, so on a fill bar it can book a
+    // target whose excursion happened before the entry. When the tape refuses
+    // that exit the paper position legitimately outlives the engine's trade, and
+    // from then on the two sequences differ: the engine's slot freed early and
+    // it may already hold a later trade. That is the correction working, not
+    // drift. It is permitted ONLY while the position carries the flag, which is
+    // set at the moment of the override and persisted with the row.
+    const overridden = live.engineExitOverridden === true;
     if (!et) {
       const engineClosed = engine.trades.find((t) =>
         identify(t, closedBars, cfg.timeframe).intentId === live!.intentId);
-      if (engineClosed) {
+      if (engineClosed && !overridden) {
         return advance(!input.warmEngine,
           `engine closed ${live.intentId} at bar ${engineClosed.exitIndex} but the paper ` +
           `position is still open — contract and engine disagree on the exit`);
       }
     } else if (id!.intentId !== live.intentId) {
-      return advance(!input.warmEngine,
-        `engine holds ${id!.intentId} but paper holds ${live.intentId}`);
+      if (!overridden) {
+        return advance(!input.warmEngine,
+          `engine holds ${id!.intentId} but paper holds ${live.intentId}`);
+      }
     } else if (Math.abs(et.entry - live.entryPrice) > 1e-9 ||
                Math.abs(et.stop - live.s2InvalidationLevel) > 1e-9 ||
                Math.abs(et.target - live.targetPrice) > 1e-9) {
@@ -413,30 +538,92 @@ export function runPaper(input: RunnerInput): RunnerPlan {
       continue;
     }
 
-    const pos = openPaperPosition(intent, sizing);
-    events.push(ev("FILLED", intent.symbol, intent.barTime,
-      intent.strategyDecision, intent.accountDecision, [], {
-        entryPrice: pos.entryPrice, nominalRiskUsd: pos.nominalRiskUsd,
-        referenceBalanceAtEntry: pos.referenceBalanceAtEntry,
-      }, intent));
+    // Observational only. Recorded on the row and in the ledger event; nothing
+    // above or below reads it, and a test asserts it cannot reach the verdict.
+    const daily = dailyContext?.(intent.barTime, intent.direction) ?? null;
+    const provenance: CausalProvenance = {
+      ...NO_PROVENANCE,
+      causalExecutionVersion: CAUSAL_EXECUTION_VERSION,
+      htfSource, minuteSource,
+      dailyStructure: daily?.structure ?? null,
+      dailyStructureAlignment: daily?.alignment ?? null,
+      dailyStructureAsOf: daily?.asOf ?? null,
+    };
+    const pos = openPaperPosition(intent, sizing, provenance);
 
     // The ENTRY BAR ITSELF can close the trade — the frozen engine calls
-    // `manageOpen` on the same bar it fills — so it is stepped explicitly here.
+    // `manageOpen` on the same bar it fills — so it is resolved explicitly here.
     // `manage()` resumes from the bar AFTER `lastManagedBarTime`, which would
     // otherwise skip it and turn a same-bar loss into a phantom open position.
+    //
+    // THIS IS THE BAR THE CONTAMINATION LIVED ON. Nothing before the entry
+    // instant may resolve it, so it is the one bar resolved with isEntryBar.
     const entryIdx = closedBars.findIndex((b) => b.datetime === intent.barTime);
-    const sameBar = stepPosition(pos, closedBars[entryIdx], 0);
-    if (sameBar.kind === "CLOSED") {
-      closed.push(sameBar.result);
+    const entryBar = closedBars[entryIdx];
+    const o = order(pos, entryBar, barMs, true, minuteBars, minutesFinal, needs);
+    if (!o) return defer(!input.warmEngine);
+
+    events.push(ev("FILLED", intent.symbol, intent.barTime,
+      intent.strategyDecision, intent.accountDecision, [o.method], {
+        entryPrice: pos.entryPrice, nominalRiskUsd: pos.nominalRiskUsd,
+        referenceBalanceAtEntry: pos.referenceBalanceAtEntry,
+        entryMinute: o.entryMinute, resolutionMethod: o.method,
+        orderingDetail: o.detail, htfSource, minuteSource,
+        causalExecutionVersion: CAUSAL_EXECUTION_VERSION,
+        dailyStructure: daily?.structure ?? null,
+        dailyStructureAlignment: daily?.alignment ?? null,
+      }, intent));
+
+    const priced = { ...pos, entryResolutionMethod: o.method };
+    const entryStep = stepPosition(priced, entryBar, 0, o);
+    const htfWould = htfWouldHaveClosed({
+      direction: pos.direction, entryPrice: pos.entryPrice, targetPrice: pos.targetPrice,
+      s2InvalidationLevel: pos.s2InvalidationLevel, bar: entryBar, barMs,
+      isEntryBar: true, minutes: null,
+    });
+
+    if (entryStep.kind === "CLOSED") {
+      const r = entryStep.result;
+      const differs = htfWould !== null &&
+        ((htfWould === "TARGET" && r.exitReason !== "TARGET_2R") ||
+         (htfWould === "S2_CLOSE" && r.exitReason !== "S2_CLOSE_INVALIDATION"));
+      closed.push({ ...r, htfWouldHaveBooked: differs ? htfWould : null });
       events.push(ev("CLOSED", intent.symbol, intent.barTime, "WOULD_EXIT", accountDecision,
-        [sameBar.result.exitReason], {
-          exitPrice: sameBar.result.exitPrice, realizedR: sameBar.result.realizedR,
-          sameBarAmbiguous: sameBar.result.sameBarAmbiguous, onEntryBar: true,
+        [r.exitReason, o.method], {
+          exitPrice: r.exitPrice, realizedR: r.realizedR,
+          sameBarAmbiguous: r.sameBarAmbiguous, onEntryBar: true,
+          resolutionMethod: o.method, orderingDetail: o.detail,
+          entryMinute: o.entryMinute, targetMinute: o.targetMinute,
+          htfWouldHaveBooked: differs ? htfWould : null,
         }, intent));
+      if (differs) {
+        events.push(ev("CAUSAL_OVERRIDE", intent.symbol, intent.barTime, "WOULD_EXIT",
+          accountDecision, ["CAUSAL_OVERRIDE", o.method], {
+            engineWouldHaveBooked: htfWould, causalOutcome: r.exitReason,
+            detail: o.detail, entryMinute: o.entryMinute, targetMinute: o.targetMinute,
+          }, intent));
+      }
       continue;
     }
 
-    const m = manage(sameBar.position, closedBars.slice(entryIdx), nowMs, barMs, gap, accountDecision);
+    // The tape says the trade is still running where whole-bar OHLC said it had
+    // already ended. The paper record now outlives the engine's trade, so the
+    // disagreement is flagged on the row and the agreement check is told about it.
+    let open = entryStep.position;
+    if (htfWould !== null) {
+      open = { ...open, engineExitOverridden: true, engineExitBarTime: entryBar.datetime };
+      events.push(ev("CAUSAL_OVERRIDE", intent.symbol, intent.barTime, "HOLD",
+        accountDecision, ["CAUSAL_OVERRIDE", o.method], {
+          engineWouldHaveBooked: htfWould, causalOutcome: "STILL_OPEN",
+          detail: o.detail, entryMinute: o.entryMinute,
+          note: "whole-bar OHLC would have closed this on the entry bar; the tape " +
+                "shows the excursion happened before the fill",
+        }, intent));
+    }
+
+    const m = manage(open, closedBars.slice(entryIdx), nowMs, barMs, gap, accountDecision,
+      minuteBars, minutesFinal, needs);
+    if (m.deferred) return defer(!input.warmEngine);
     events.push(...m.events);
     if (m.result) closed.push(m.result);
     live = m.position;

@@ -93,28 +93,55 @@ const perBar = () => (_perBar ??= drive(market(N), cfg(), everyBar(WARMUP, N - 1
 
 // ── the central equivalence claim ────────────────────────────────────────────
 
-Deno.test("bar-by-bar paper trading reproduces the engine's forward trades exactly", () => {
+Deno.test("bar-by-bar paper trading reproduces the engine wherever the bars can order it", () => {
+  // THE CLAIM CHANGED WITH THE CAUSAL-ORDERING FIX, AND IT CHANGED NARROWLY.
+  //
+  // The paper layer still takes exactly the engine's trades, on exactly the
+  // engine's bars, and still closes them on exactly the engine's exit bars. What
+  // it no longer does is adopt the engine's whole-bar reading of a bar that
+  // cannot order its own events — an entry bar whose target-side extreme may
+  // have happened before the fill, or a bar carrying both a target and an S2
+  // close. With no minute tape those become ORDERING_UNRESOLVED: no price, no R,
+  // excluded. That is the contamination this fix exists to stop, so the
+  // equivalence is asserted on the resolvable trades and the void is asserted to
+  // be genuinely void.
   const s = market(N);
   const f = perBar();
 
-  // Everything the engine entered after the activation bar, and nothing else.
   const expected = replayIncremental(s, cfg()).trades
     .filter((t) => t.entryIndex > WARMUP - 1 && t.exitIndex !== null);
 
   assert(expected.length >= 5, `fixture produced only ${expected.length} forward trades`);
   assertEquals(f.closed.length, expected.length, "trade count");
 
+  let resolved = 0, voided = 0;
   for (let i = 0; i < expected.length; i++) {
     const e = expected[i], p = f.closed[i];
+    // Population and timing are identical. Only the OUTCOME may be withheld.
     assertEquals(p.position.entryTime, s[e.entryIndex].datetime, `trade ${i} entry bar`);
     assertEquals(p.exitTime, s[e.exitIndex!].datetime, `trade ${i} exit bar`);
-    assertEquals(p.exitPrice, e.exitPrice, `trade ${i} exit price`);
     assertEquals(p.position.entryPrice, e.entry, `trade ${i} entry price`);
+
+    if (p.exitReason === "ORDERING_UNRESOLVED") {
+      voided++;
+      assertEquals(p.realizedR, null, `trade ${i} must carry no R`);
+      assertEquals(p.exitPrice, null, `trade ${i} must carry no exit price`);
+      assertEquals(p.excludedFromStats, true, `trade ${i} must be excluded`);
+      assert(p.exclusionReason, `trade ${i} must say why`);
+      continue;
+    }
+    resolved++;
+    assertEquals(p.exitPrice, e.exitPrice, `trade ${i} exit price`);
     assert(Math.abs(p.realizedR! - e.netR!) < 1e-9,
       `trade ${i} realized R: paper ${p.realizedR} vs engine ${e.netR}`);
     assert(Math.abs(p.maeR - e.mae) < 1e-9, `trade ${i} MAE`);
     assert(Math.abs(p.mfeR - e.mfe) < 1e-9, `trade ${i} MFE`);
   }
+  // The test keeps its teeth: most trades must still be provably equivalent, or
+  // the fix has stopped being a correction and become a blanket refusal.
+  assert(resolved > 0, "no trade was resolvable — the equivalence claim is untested");
+  assert(resolved >= voided,
+    `${voided} of ${expected.length} voided against ${resolved} resolved — too few remain checkable`);
 });
 
 Deno.test("a trade that opens and closes on the same bar is recorded, not left open", () => {
@@ -159,7 +186,7 @@ Deno.test("a volatility-gated instrument reproduces exactly at full warmup", () 
 Deno.test("equivalence holds across many independent windows, not one lucky fixture", () => {
   // One seed proving equivalence proves very little. Each of these is a
   // different market with a different set of contractions, entries and exits.
-  let total = 0;
+  let total = 0, resolvedTotal = 0, voidedTotal = 0;
   for (const seed of [7, 42, 11, 3, 5, 99, 123]) {
     const s = market(N, seed);
     const c = cfg();
@@ -171,11 +198,23 @@ Deno.test("equivalence holds across many independent windows, not one lucky fixt
       const p = f.closed.find((x) => x.position.entryTime === s[t.entryIndex].datetime);
       assert(p, `seed ${seed}: trade at ${t.entryIndex} missing`);
       assertEquals(p!.exitTime, s[t.exitIndex!].datetime, `seed ${seed}: exit bar`);
+      // Population and exit bar always agree. The R agrees wherever the bars
+      // could order the events; where they could not, the observation is void
+      // rather than borrowed from the engine's whole-bar reading.
+      if (p!.exitReason === "ORDERING_UNRESOLVED") {
+        assertEquals(p!.realizedR, null, `seed ${seed}: void trade must carry no R`);
+        voidedTotal++;
+        continue;
+      }
       assert(Math.abs(p!.realizedR! - t.netR!) < 1e-9, `seed ${seed}: realized R`);
+      resolvedTotal++;
     }
     total += expected.length;
   }
   assert(total >= 30, `only ${total} trades across all windows`);
+  assert(resolvedTotal >= voidedTotal,
+    `${voidedTotal} voided against ${resolvedTotal} resolved across all windows — ` +
+    `too little remains checkable for this to be an equivalence test`);
 });
 
 Deno.test("the warm path decides exactly what the rebuild path decides", () => {

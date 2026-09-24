@@ -108,6 +108,17 @@ export interface PaperState {
     totalR: number; expectancyR: number; totalPnlUsd: number;
     abortedExcluded: number;
   };
+  /**
+   * The forward-evidence boundary. Optional because the endpoint gained it after
+   * this panel shipped — an older response simply renders no banner.
+   */
+  evidence?: {
+    causal: { trades: number; totalR: number; expectancyR: number; winRate: number };
+    legacy: { trades: number; totalR: number; expectancyR: number; winRate: number };
+    causalExecutionVersion: string;
+    legacyTrades: number;
+    unresolvedExcluded: number;
+  };
 }
 
 async function fetchPaperState(): Promise<PaperState> {
@@ -308,6 +319,22 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
           </div>
         </CardHeader>
         <CardContent className="px-1 pb-2 pt-0">
+          {/* The contamination boundary, stated before any number is read.
+              Rows recorded before the causal-ordering fix could book a same-bar
+              target whose excursion happened BEFORE the entry, so the headline
+              strip below — which pools both — is not a clean forward result
+              while legacy rows remain. */}
+          {state.evidence && state.evidence.legacyTrades > 0 && (
+            <div className="px-1 pb-1 text-[9px] leading-tight text-muted-foreground">
+              <span className="font-semibold text-amber-600">MIXED EVIDENCE</span>
+              {" · "}causal ({state.evidence.causalExecutionVersion}){" "}
+              {state.evidence.causal.trades} trades {state.evidence.causal.totalR.toFixed(2)}R
+              {" · "}legacy pre-fix {state.evidence.legacy.trades} trades{" "}
+              {state.evidence.legacy.totalR.toFixed(2)}R — not causally ordered
+              {state.evidence.unresolvedExcluded > 0 &&
+                ` · ${state.evidence.unresolvedExcluded} void (event order unprovable)`}
+            </div>
+          )}
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-border/50">
             <Metric label="open" value={m.openPositions} />
             <Metric label="closed" value={m.closedTrades}

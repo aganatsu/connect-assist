@@ -24,6 +24,11 @@
 
 import type { Candle } from "./smcAnalysis.ts";
 import type { LiveTrade } from "./ipoLiveEngine.ts";
+import {
+  CAUSAL_EXECUTION_VERSION, type BarOrdering, type ResolutionMethod,
+} from "./ipoCausalOrdering.ts";
+
+export { CAUSAL_EXECUTION_VERSION };
 
 export const STRATEGY_ID = "ipo_cet";
 export const STRATEGY_VERSION = "spec-1.1";
@@ -67,7 +72,16 @@ export type ExecutionBlockReason =
   | "ACCOUNT_SAFETY";
 
 export type PositionStatus = "open" | "data_gap_suspended";
-export type ExitReason = "TARGET_2R" | "S2_CLOSE_INVALIDATION" | "DATA_GAP_ABORTED";
+/**
+ * `ORDERING_UNRESOLVED` is a DATA verdict, not a strategy outcome. It is emitted
+ * when competing events cannot be ordered against the fill — most often entry
+ * and target inside the same minute with no tick feed to separate them. Like
+ * `DATA_GAP_ABORTED` it carries no realized R and is excluded from statistics:
+ * inventing a winner or a loser there is exactly the contamination the causal
+ * ordering work exists to remove.
+ */
+export type ExitReason =
+  | "TARGET_2R" | "S2_CLOSE_INVALIDATION" | "DATA_GAP_ABORTED" | "ORDERING_UNRESOLVED";
 
 /**
  * Repeated-zone exposure telemetry. OBSERVATION ONLY.
@@ -129,6 +143,28 @@ export interface PaperPosition extends ZoneTelemetry {
   gapFromBarTime: string | null;
   gapToBarTime: string | null;
   gapReason: string | null;
+  // ── causal execution provenance (forward evidence boundary) ──
+  /** Identity of the ordering model that produced this row. Null = legacy. */
+  causalExecutionVersion: string | null;
+  /** The minute the position actually came into existence, when 1m proved it. */
+  entryMinuteTime: string | null;
+  /** How the fill bar was ordered. */
+  entryResolutionMethod: ResolutionMethod | null;
+  /** Feed that supplied the HTF bars, and the one that supplied the minutes. */
+  htfSource: string | null;
+  minuteSource: string | null;
+  /**
+   * Set when the tape refused an exit the frozen engine booked from whole-bar
+   * OHLC. The paper record then legitimately outlives the engine's trade, and
+   * the runner's engine/paper agreement check must be told so explicitly rather
+   * than discovering a divergence it cannot explain.
+   */
+  engineExitOverridden: boolean;
+  engineExitBarTime: string | null;
+  // ── observational context tag. NOT a gate. Never read by any decision. ──
+  dailyStructure: string | null;
+  dailyStructureAlignment: string | null;
+  dailyStructureAsOf: string | null;
 }
 
 export interface PaperResult {
@@ -146,6 +182,14 @@ export interface PaperResult {
   sameBarAmbiguous: boolean;
   excludedFromStats: boolean;
   exclusionReason: string | null;
+  // ── causal execution provenance ──
+  causalExecutionVersion: string | null;
+  entryMinuteTime: string | null;
+  targetMinuteTime: string | null;
+  s2CloseBarTime: string | null;
+  exitResolutionMethod: ResolutionMethod | null;
+  /** What whole-bar OHLC alone would have booked, when it differs. Diagnostic. */
+  htfWouldHaveBooked: string | null;
 }
 
 // ─── identity ────────────────────────────────────────────────────────────────
@@ -248,8 +292,26 @@ export function buildIntent(
   };
 }
 
+export interface CausalProvenance {
+  causalExecutionVersion: string | null;
+  entryMinuteTime: string | null;
+  entryResolutionMethod: ResolutionMethod | null;
+  htfSource: string | null;
+  minuteSource: string | null;
+  dailyStructure: string | null;
+  dailyStructureAlignment: string | null;
+  dailyStructureAsOf: string | null;
+}
+
+export const NO_PROVENANCE: CausalProvenance = {
+  causalExecutionVersion: null, entryMinuteTime: null, entryResolutionMethod: null,
+  htfSource: null, minuteSource: null,
+  dailyStructure: null, dailyStructureAlignment: null, dailyStructureAsOf: null,
+};
+
 export function openPosition(
   intent: PaperIntent, sizing: SizingConfig = DEFAULT_SIZING,
+  provenance: CausalProvenance = NO_PROVENANCE,
 ): PaperPosition {
   return {
     strategyId: STRATEGY_ID, strategyVersion: STRATEGY_VERSION,
@@ -267,6 +329,8 @@ export function openPosition(
     executionMode: "paper", status: "open",
     maeR: 0, mfeR: 0, lastManagedBarTime: intent.barTime,
     gapFromBarTime: null, gapToBarTime: null, gapReason: null,
+    ...provenance,
+    engineExitOverridden: false, engineExitBarTime: null,
   };
 }
 
@@ -283,18 +347,29 @@ export type StepOutcome =
  * wick-stop: a wick through S2 does NOT close the position, which is the whole
  * character of the rule and the reason IPO must never enter SMC's breach path.
  *
- * Order matches the frozen engine: S2 is tested BEFORE the target, so a bar
- * doing both is a loss. `sameBarAmbiguous` records it so the optimistic reading
- * stays recoverable without changing the result.
+ * TWO MODES, AND THE DEFAULT IS THE OLD ONE.
+ *
+ * Without `ordering` this is the legacy whole-bar step: S2 tested before the
+ * target, so a bar doing both is a loss, and every extreme of the bar counts
+ * whether or not the position existed when it happened. That reading is
+ * preserved deliberately — the forensic tests pin it, and it is the arithmetic
+ * reference — but the forward runner NEVER calls it that way.
+ *
+ * With `ordering` the outcome has already been established chronologically by
+ * `ipoCausalOrdering.resolveBar`, from the minute tape where the HTF bar alone
+ * was ambiguous. This function then only prices it. Nothing about S2, the target
+ * or the entry level changes: the lower timeframe supplies order, not levels.
  */
 export function stepPosition(
-  pos: PaperPosition, bar: Candle, barsHeld: number,
+  pos: PaperPosition, bar: Candle, barsHeld: number, ordering?: BarOrdering,
 ): StepOutcome {
   const long = pos.direction === "long";
   const risk = pos.nominalRiskDistance;
 
-  const adverse = long ? pos.entryPrice - bar.low : bar.high - pos.entryPrice;
-  const favourable = long ? bar.high - pos.entryPrice : pos.entryPrice - bar.low;
+  // Post-entry excursions when the tape proved them; whole-bar otherwise, which
+  // is correct for every bar after the fill because the position held all of it.
+  const adverse = ordering?.postEntryAdverse ?? (long ? pos.entryPrice - bar.low : bar.high - pos.entryPrice);
+  const favourable = ordering?.postEntryFavourable ?? (long ? bar.high - pos.entryPrice : pos.entryPrice - bar.low);
   const maeR = Math.max(pos.maeR, adverse / risk);
   const mfeR = Math.max(pos.mfeR, favourable / risk);
 
@@ -304,22 +379,56 @@ export function stepPosition(
 
   const advanced: PaperPosition = {
     ...pos, maeR, mfeR, lastManagedBarTime: bar.datetime,
+    entryMinuteTime: pos.entryMinuteTime ?? ordering?.entryMinute ?? null,
   };
 
-  const close = (exitPrice: number, grossR: number, reason: ExitReason): StepOutcome => {
-    const realizedR = grossR - pos.costR;
+  const close = (
+    exitPrice: number | null, grossR: number | null, reason: ExitReason,
+    extra: Partial<PaperResult> = {},
+  ): StepOutcome => {
+    const realizedR = grossR === null ? null : grossR - pos.costR;
     return {
       kind: "CLOSED",
       result: {
         position: advanced, exitTime: bar.datetime, exitPrice, exitReason: reason,
-        realizedR, grossR, realizedPnlUsd: realizedR * pos.nominalRiskUsd,
+        realizedR, grossR,
+        realizedPnlUsd: realizedR === null ? null : realizedR * pos.nominalRiskUsd,
         maeR, mfeR, barsHeld,
         sameBarAmbiguous: hitTarget && closedBeyond,
         excludedFromStats: false, exclusionReason: null,
+        causalExecutionVersion: pos.causalExecutionVersion,
+        entryMinuteTime: advanced.entryMinuteTime,
+        targetMinuteTime: ordering?.targetMinute ?? null,
+        s2CloseBarTime: ordering?.s2CloseBarTime ?? null,
+        exitResolutionMethod: ordering?.method ?? null,
+        htfWouldHaveBooked: null,
+        ...extra,
       },
     };
   };
 
+  // ── causally ordered path ──────────────────────────────────────────────────
+  if (ordering) {
+    if (ordering.kind === "TARGET") {
+      const gross = Math.abs(pos.targetPrice - pos.entryPrice) / risk;
+      return close(pos.targetPrice, gross, "TARGET_2R");
+    }
+    if (ordering.kind === "S2_CLOSE") {
+      const gross = (long ? bar.close - pos.entryPrice : pos.entryPrice - bar.close) / risk;
+      return close(bar.close, gross, "S2_CLOSE_INVALIDATION");
+    }
+    if (ordering.kind === "UNRESOLVED") {
+      // NO FABRICATED OUTCOME. The observation is void, not a win and not a loss.
+      return close(null, null, "ORDERING_UNRESOLVED", {
+        excludedFromStats: true,
+        exclusionReason: ordering.detail,
+      });
+    }
+    // HOLD, or NEED_MINUTES which the caller must never apply as an outcome.
+    return { kind: "HOLD", position: advanced };
+  }
+
+  // ── legacy whole-bar path, stop-first ──────────────────────────────────────
   if (closedBeyond) {
     const gross = (long ? bar.close - pos.entryPrice : pos.entryPrice - bar.close) / risk;
     return close(bar.close, gross, "S2_CLOSE_INVALIDATION");
@@ -363,5 +472,9 @@ export function abortForGap(pos: PaperPosition, at: string, reason: string): Pap
     sameBarAmbiguous: false,
     excludedFromStats: true,
     exclusionReason: reason,
+    causalExecutionVersion: pos.causalExecutionVersion,
+    entryMinuteTime: pos.entryMinuteTime,
+    targetMinuteTime: null, s2CloseBarTime: null,
+    exitResolutionMethod: null, htfWouldHaveBooked: null,
   };
 }

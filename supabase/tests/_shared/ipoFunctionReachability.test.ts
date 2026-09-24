@@ -40,15 +40,25 @@ Deno.test("ipo-paper-state reaches only itself, cors and the health parser", asy
   // a candle, cannot run an engine, and cannot reach infrastructure at all.
   // `ipoRunnerHealth` was added so the view can show whether the runner is
   // alive; it is pure, and the next assertion pins that rather than trusting it.
+  // `ipoCausalOrdering` was added for the forward-evidence boundary constant.
+  // It is IMPORT-FREE on purpose — see its header — so the read path still
+  // cannot reach a candle source, an engine or any infrastructure.
   assertEquals(await closure("supabase/functions/ipo-paper-state/index.ts"), [
     "supabase/functions/_shared/cors.ts",
+    "supabase/functions/_shared/ipoCausalOrdering.ts",
     "supabase/functions/_shared/ipoRunnerHealth.ts",
     "supabase/functions/ipo-paper-state/index.ts",
   ]);
-  const health = strip(await Deno.readTextFile("supabase/functions/_shared/ipoRunnerHealth.ts"));
-  for (const impure of ["createClient", "fetch(", "Deno.env", ".from(", "supabase-js"]) {
-    assert(!health.includes(impure), `the health module is not pure: ${impure}`);
+  for (const mod of ["ipoRunnerHealth", "ipoCausalOrdering"]) {
+    const src = strip(await Deno.readTextFile(`supabase/functions/_shared/${mod}.ts`));
+    for (const impure of ["createClient", "fetch(", "Deno.env", ".from(", "supabase-js"]) {
+      assert(!src.includes(impure), `${mod} is not pure: ${impure}`);
+    }
   }
+  // And it stays import-free, which is what keeps the closure above small.
+  const ordering = await Deno.readTextFile("supabase/functions/_shared/ipoCausalOrdering.ts");
+  assert(!/^\s*import\s/m.test(ordering),
+    "ipoCausalOrdering gained an import — the read path's closure just widened");
 });
 
 Deno.test("no IPO function can reach a broker execution path", async () => {
