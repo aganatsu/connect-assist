@@ -159,7 +159,11 @@ interface Ckpt {
   window: string; instrument: string; from: string; to: string;
   rawBars: number; droppedBars: number; bars: number;
   trades: number; totalR: number; elapsedMs: number; completed: boolean;
-  trades_detail: Array<{ entryIndex: number; exitIndex: number; netR: number; vol: string }>;
+  trades_detail: Array<{
+    entryIndex: number; exitIndex: number; netR: number; vol: string;
+    ipoIndex: number; direction: string; entry: number; stop: number; target: number;
+    risk: number; costR: number; entryBarTime: string; exitBarTime: string; ipoCandleTime: string;
+  }>;
 }
 let ckpts: Record<string, Ckpt> = {};
 try { ckpts = JSON.parse(await Deno.readTextFile(CKPT)); } catch { /* cold */ }
@@ -205,6 +209,10 @@ for (const w of WINDOWS) {
     elapsedMs: elapsed, completed: true,
     trades_detail: e.trades.map((t) => ({
       entryIndex: t.entryIndex, exitIndex: t.exitIndex!, netR: t.netR!, vol: t.vol,
+      ipoIndex: t.ipoIndex, direction: t.direction, entry: t.entry, stop: t.stop,
+      target: t.target, risk: t.risk, costR: t.costR,
+      entryBarTime: bars[t.entryIndex].datetime, exitBarTime: bars[t.exitIndex!].datetime,
+      ipoCandleTime: bars[t.ipoIndex]?.datetime ?? "",
     })),
   };
   await Deno.writeTextFile(CKPT, JSON.stringify(ckpts));
