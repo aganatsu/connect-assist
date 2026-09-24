@@ -11,6 +11,13 @@ No database mutation. No SMC change.** Continues stage 2 (`d3b728c2`). Dated
 **Stage 3's headline deliverable — remeasuring the locked 1,039-trade corpus —
 is BLOCKED, and no metrics are published against a substitute population.**
 
+> **UPDATE 2026-09-24.** The population was subsequently recovered
+> (`66c78cfb`, `docs/IPO_BASELINE_PROVENANCE_RECOVERY.md`) and replayed. EUR/USD
+> and USD/JPY reproduce the locked figures **exactly**; BTC/USD is +3 trades,
+> traced to a two-bar difference in the documented corrupt-bar drop. Verdict
+> `DETERMINISM_MISMATCH`. See §3A. Sections 0–3 below record the state before
+> that recovery and are left unedited.
+
 The locked baseline says it came from *"replaying all 15 untouched validation
 windows"*. **No file in the repository enumerates those 15 windows.** The
 research freeze records several different window sets for different
@@ -165,6 +172,122 @@ One of:
    trust it and do not recommend it.
 
 Option 1 or 2 makes stage 3 a short task. Option 3 does not really solve it.
+
+
+---
+
+## 3A. Locked baseline determinism verification (2026-09-24)
+
+Run after the provenance recovery (`66c78cfb`). Unmodified `ipoLiveEngine`, the
+15 windows from freeze §17, nothing tuned.
+
+### Verdict
+
+```
+DETERMINISM_MISMATCH
+```
+
+…but the mismatch is isolated to a single instrument and a single documented
+data-cleaning step. Two of three instruments reproduce **exactly**.
+
+| instrument | n | locked | expR | locked | PF | locked |
+|---|---|---|---|---|---|---|
+| EUR/USD | **341** | 341 | **0.758** | 0.758 | **2.60** | 2.60 |
+| USD/JPY | **558** | 558 | **0.550** | 0.550 | **1.88** | 1.88 |
+| BTC/USD HIGH_VOL | **143** | 140 | 0.193 | 0.301 | 1.28 | 1.50 |
+| **PORTFOLIO** | **1042** | 1039 | 0.569 | 0.585 | 1.98 | 2.02 |
+
+Portfolio win 72.5% against 72.6; maxDD 21.3R against 18.4R.
+
+**EUR/USD and USD/JPY match on count, expectancy AND profit factor to three
+decimal places.** That is not a coincidence of totals — it is the same trade
+population, trade for trade. The windows are correct.
+
+The entire discrepancy is **+3 BTC trades**, and the portfolio gap (1042 − 1039)
+is exactly those three.
+
+### The likely cause, not corrected
+
+Freeze §17 records 64 corrupt bars in BTC 2023-06..08 (`low` = price / 10000),
+dropped under the primary treatment. **My detector found 62.**
+
+The document states the corruption but not the detection rule, so the rule here
+is a reconstruction: `low < min(open, close) / 100`, the glitch's own signature.
+Two bars presumably carry a milder shift that this threshold does not catch,
+leaving them in the series and permitting three extra BTC trades.
+
+**The threshold was NOT adjusted to reach 64.** Tuning a data filter until the
+trade count matches is precisely the curve-fitting this whole exercise exists to
+avoid. The 62-vs-64 gap is reported as the open item it is.
+
+### Window-level detail
+
+| window | instrument | raw bars | dropped | bars | trades | replay |
+|---|---|---|---|---|---|---|
+| p1 | EUR/USD | 1083 | 0 | 1083 | 69 | 28s |
+| p1 | USD/JPY | 2170 | 0 | 2170 | 107 | 220s |
+| p1 | BTC/USD | 1463 | 0 | 1463 | 40 | 147s |
+| p2 | EUR/USD | 1023 | 0 | 1023 | 44 | 52s |
+| p2 | USD/JPY | 2044 | 0 | 2044 | 92 | 290s |
+| p2 | BTC/USD | 1441 | 0 | 1441 | 40 | 166s |
+| p3 | EUR/USD | 1029 | 0 | 1029 | 44 | 52s |
+| p3 | USD/JPY | 2056 | 0 | 2056 | 114 | 301s |
+| p3 | BTC/USD | 1463 | **62** | 1401 | 21 | 129s |
+| p4 | EUR/USD | 1033 | 0 | 1033 | 91 | 56s |
+| p4 | USD/JPY | 2030 | 0 | 2030 | 119 | 368s |
+| p4 | BTC/USD | 1464 | 0 | 1464 | 27 | 152s |
+| p5 | EUR/USD | 1463 | 0 | 1463 | 93 | 200s |
+| p5 | USD/JPY | 2926 | 0 | 2926 | 126 | 827s |
+| p5 | BTC/USD | 1464 | 0 | 1464 | 15 | 178s |
+
+Total replay 52.8 minutes. 21,690 bars against a documented 24,101 — the 10%
+shortfall sits in periods 1–4, where the provider now returns slightly fewer
+bars than the original run saw; periods 5 returns more. It does not disturb the
+EUR and JPY reproduction.
+
+### Engine semantics verified before the run
+
+Asserted in code, and the run aborts if either is false:
+
+- cost priced at the **ENTRY** bar — `costR: (2 * costPerSide(bar.close)) / risk`
+  at `ipoLiveEngine.ts:165`
+- same-bar re-entry **FORBIDDEN** — `if (this.open || k <= this.lastExitIndex)`
+  at `ipoLiveEngine.ts:130`
+
+**The task brief stated these inverted**, describing the post-fix state as "cost
+priced off EXIT BAR" and "same-bar re-entry permitted". Spec §11 is explicit that
+those were the *bugs*: the superseded 1,109 figure "came from a version of the
+engine with two bugs since fixed — cost priced off the exit bar **rather than the
+entry bar**, and same-bar re-entry permitted **where the frozen `sequential()`
+requires `touchIndex > previousExitIndex`**". Implementing the brief literally
+would have reproduced 1,109, not 1,039.
+
+### BTC HIGH_VOL
+
+`highVolOnly: true` makes the engine refuse non-HIGH_VOL entries at source, so
+generated BTC trades **are** the HIGH_VOL set — there is no post-filter to apply
+and no risk of comparing all BTC trades against 140. 1,579
+`VOLATILITY_NOT_ELIGIBLE` refusals were recorded across the five BTC windows.
+
+### API and runtime
+
+13 requests, 3 cache hits, 12 misses, 1 rate-limit response, 1 retry. Runtime is
+dominated by the O(n²) replay, not the API: the 2,926-bar USD/JPY window alone
+took 827 seconds.
+
+Checkpoints are written per window to
+`/tmp/baseline-determinism-checkpoint.json`, so an interrupted run resumes
+without recomputing.
+
+### What this means for stage 3
+
+The population is **identified and validated** — two instruments reproduce
+exactly, which no wrong window set could do. The residual is a two-bar data
+cleaning detail confined to one BTC window.
+
+Under the stop condition as written this is a MISMATCH and the causal
+remeasurement does not auto-resume. The decision on whether a 3-trade BTC
+difference is acceptable for proceeding is yours, not mine.
 
 ---
 
