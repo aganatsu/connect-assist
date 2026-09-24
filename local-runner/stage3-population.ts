@@ -33,26 +33,41 @@ const LOCKED = { "EUR/USD": 341, "USD/JPY": 558, "BTC/USD": 140 };
 
 interface Win { instrument: string; from: string; to: string; tag: string }
 
-/** Freeze §14 — the untouched A1 validation windows. */
-const S14: Win[] = [
-  { instrument: "EUR/USD", from: "2023-09-01", to: "2023-12-01", tag: "s14" },
-  { instrument: "BTC/USD", from: "2023-09-01", to: "2023-12-01", tag: "s14" },
-  { instrument: "USD/JPY", from: "2023-09-01", to: "2023-11-01", tag: "s14" },
+/**
+ * THE RECOVERED WINDOWS — freeze §17, "Data — 15 windows, five separated
+ * periods, five different years, all untouched".
+ *
+ * Verbatim: "2021-11..2022-01, 2022-10..12, 2023-06..08, 2025-10..12,
+ * 2026-04..06 for each of the three instruments. 24,101 bars."
+ *
+ * Tied to the locked baseline by the documented chain:
+ *   §17 batch      EUR 678 / JPY 1151 / BTC HIGH_VOL 287 / portfolio 2116
+ *   §19 live       EUR 368 / JPY  595 / BTC 146         / portfolio 1109
+ *   spec §11       EUR 341 / JPY  558 / BTC 140         / portfolio 1039
+ * — the last after two fixes the spec names: cost priced at the entry bar
+ * rather than the exit bar, and same-bar re-entry forbidden per `sequential()`.
+ */
+/**
+ * The ".." in "2021-11..2022-01" is START..END-EXCLUSIVE, i.e. two months, not
+ * three. Established from the document's own bar count rather than assumed:
+ * freeze §17 records 24,101 bars over the 15 windows, and period 1 measures
+ * 4,716 bars on the two-month reading (x5 = 23,580, 2.2% off) against 7,000 on
+ * the three-month reading (x5 = 35,000, 45% off). §14 uses the same convention
+ * explicitly, writing "2023-09-01 -> 2023-11-01" for a two-month window.
+ *
+ * This is interpretation of the recovered evidence, NOT fitting to trade counts.
+ */
+const PERIODS = [
+  ["2021-11-01", "2022-01-01"],
+  ["2022-10-01", "2022-12-01"],
+  ["2023-06-01", "2023-08-01"],
+  ["2025-10-01", "2025-12-01"],
+  ["2026-04-01", "2026-06-01"],
 ];
+const RECOVERED: Win[] = PERIODS.flatMap(([from, to]) =>
+  ["EUR/USD", "USD/JPY", "BTC/USD"].map((instrument) => ({ instrument, from, to, tag: "freeze-s17" })));
 
-/** Freeze §15 — the pre-registered volatility validation windows. */
-const S15: Win[] = [
-  ...["2022-04-01|2022-07-01", "2025-01-01|2025-04-01", "2025-04-01|2025-07-01", "2025-08-01|2025-11-01"]
-    .flatMap((r) => ["BTC/USD", "EUR/USD"].map((i) => {
-      const [from, to] = r.split("|");
-      return { instrument: i, from, to, tag: "s15" };
-    })),
-  ...["2022-08-01|2022-11-01", "2025-01-01|2025-04-01", "2025-04-01|2025-07-01", "2025-08-01|2025-11-01"]
-    .map((r) => { const [from, to] = r.split("|");
-                  return { instrument: "USD/JPY", from, to, tag: "s15" }; }),
-];
-
-const CANDIDATE = [...S14, ...S15];
+const CANDIDATE = RECOVERED;
 
 const CACHE = "/tmp/td-htf-windows.json";
 let cache: Record<string, Candle[]> = {};
@@ -126,6 +141,16 @@ for (const w of CANDIDATE) {
     instrument: inst.instrument, timeframe: inst.timeframe,
     highVolOnly: inst.highVolOnly, costPerSide: inst.costPerSide,
   };
+  // Freeze §17 data repair, PRIMARY treatment: BTC 2023-06..08 carried 64 bars
+  // (4.6%) with a decimal-shift glitch, `low` = price / 10000. The document
+  // DROPS them rather than repairing, because repairing leaves corrupted zone
+  // geometry (avg MAE 35.1R against ~1.2R elsewhere). Reproduced here, and
+  // reported, so the count is comparable to the recorded one.
+  const clean = bars.filter((b) => b.low >= Math.min(b.open, b.close) / 100);
+  const dropped = bars.length - clean.length;
+  if (dropped > 0) console.log(`    dropped ${dropped} decimal-shift bars (freeze §17 primary treatment)`);
+  bars = clean;
+
   const e = replay(bars, cfg);
   const label = `${w.instrument} ${w.from}..${w.to}`;
   perWindow.push({ w: `${label} [${w.tag}]`, bars: bars.length, trades: e.trades.length });
