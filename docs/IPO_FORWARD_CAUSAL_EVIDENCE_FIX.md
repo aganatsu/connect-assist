@@ -302,7 +302,15 @@ so it is made explicit rather than discovered:
 
 ## 9. FORWARD_CAUSAL_START
 
-**Not yet set — the fix is committed and not deployed.** See §12.
+```
+FORWARD_CAUSAL_START      2026-09-24T17:36:19Z   (UTC, both functions deployed)
+deployed commit           a67b5099
+causal execution version  1m-ordering-v1
+migration version         20260924120000_ipo_causal_execution_ordering
+migration applied         2026-09-24T17:30:47Z
+first cron run of the
+  deployed code           2026-09-24T17:45:00Z   succeeded
+```
 
 The boundary is defined by the **column**, not by a clock:
 
@@ -424,37 +432,57 @@ moved or deleted, and no SMC table is named.
 
 ## 12. Deployment status
 
-**NOT DEPLOYED.** The work is committed and ready; two steps remain and both need
-an explicit go-ahead.
+**DEPLOYED 2026-09-24.** Migration first, then both functions, in that order —
+the worker writes the new columns, so the reverse would have failed every insert.
 
-The order matters and cannot be inverted: the worker writes the new columns, so
-the migration must land **first** or every insert fails.
+| step | result |
+|---|---|
+| migration `20260924120000` | applied 17:30:47Z, HTTP 201, recorded in `supabase_migrations.schema_migrations` |
+| `ipo-paper-runner` | deployed 17:35Z |
+| `ipo-paper-state` | deployed 17:36:19Z |
+
+`supabase db push` could not be used: the CLI has an access token but no cached
+database password, so `migration list`/`db push` block on a prompt. The migration
+was applied through the Management API instead — the established route for this
+project — as a single transaction containing the file verbatim plus the
+`schema_migrations` insert, so the CLI's view stays in step. Before applying,
+local and remote version lists were compared: **exactly one migration was pending
+and it was the intended one**, with no remote-only drift.
+
+### Post-deploy verification, against the live project
+
+| check | result |
+|---|---|
+| migration recorded | `20260924120000 / ipo_causal_execution_ordering` |
+| new columns | 10 on `ipo_paper_positions`, 10 on `ipo_paper_trade_history` |
+| status CHECK | `open, data_gap_suspended, ordering_ambiguous` |
+| exit-reason CHECK | `TARGET_2R, S2_CLOSE_INVALIDATION, DATA_GAP_ABORTED, ORDERING_UNRESOLVED` |
+| event-type CHECK | the nine originals plus `CAUSAL_OVERRIDE, ORDERING_AMBIGUOUS, AMBIGUITY_RESOLVED, SEQUENCE_FORKED` |
+| coherence CHECK | widened to cover `ORDERING_UNRESOLVED` alongside `DATA_GAP_ABORTED` |
+| **one-open-per-instrument index** | `WHERE status = ANY ('open','data_gap_suspended','ordering_ambiguous')` |
+| runner invocation | `ok: true`, 3 instruments warm, 0 errors, 0 divergences, 0 provisional plans |
+| read path invocation | `ok: true`, evidence split present |
+| cron `ipo-paper-runner-15min` | `*/15`, **active, unchanged**; 17:45Z run succeeded |
+| legacy history | fingerprint `cfee7468b611bf68df5bbd66732415dd` **identical before and after** |
+| SMC tables | not named anywhere in the applied DDL; only `ipo_*` tables altered |
+| broker / live execution | untouched; the function still places no order |
+
+### The first close under the new code
+
+The USD/JPY position open at deploy time exited on the 18:00Z run:
 
 ```
-1.  supabase db push                       # applies 20260924120000 only
-2.  supabase functions deploy ipo-paper-runner
-    supabase functions deploy ipo-paper-state
+entry 17:00Z   exit 17:30Z   TARGET_2R   +1.793R
+exit_resolution_method  HTF_UNAMBIGUOUS
+orderingDetail          "target reached, bar did not close beyond S2"
+causal_execution_version NULL        <- legacy: it ENTERED before the fix
+ambiguity_kind NULL   sequence_contaminated false   htf_would_have_booked NULL
 ```
 
-The migration is safe to apply ahead of the deploy: additive nullable columns and
-widened CHECKs cannot affect the currently running function.
-
-Nothing else deploys. No SMC function, no broker function, no cron statement.
-
-**What happens on the first corrected run.** Existing open positions read back
-with `causal_execution_version` NULL, `engine_exit_overridden` false and no
-ambiguity. They are managed from then on under the causal rules, and their
-history rows stay marked legacy — correct, because their fill bar was resolved
-under the old model.
-
-**The migration changed with this revision** and must be applied as it now
-stands: it adds the `ordering_ambiguous` status, widens the status CHECK, and —
-critically — **recreates the one-open-per-instrument unique index to cover it**.
-Without that recreation the database would permit two rows for one instrument
-whenever a position is ambiguous, which is exactly the double occupancy the
-application layer is refusing.
-
----
+The resolver ran, found exactly one resolving event on a post-fill bar, needed no
+tape, and agreed with the whole-bar reading. The row stays **legacy** because its
+fill bar was resolved under the old model — which is the attribution rule this
+document specifies, working on its first real case.
 
 ## 13. Known limitations
 
