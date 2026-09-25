@@ -88,7 +88,7 @@ import {
   type ResolvedStyle as ZoneStyle,
 } from "../_shared/smcZoneDecision.ts";
 import {
-  newCapture, toRow as decisionRow, slimPositions, sanitizeConfigForCapture,
+  newCapture, toRow as decisionRow, slimPositions, sanitizeConfigForCapture, hashPart,
   type DecisionCapture,
 } from "../_shared/smcDecisionCapture.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
@@ -5725,6 +5725,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (resolvedStyle === "swing_trader" && analysis.direction && dailyCandles.length >= 30 && h4Candles.length >= 20) {
       try {
         const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
+        // Inputs. The four candle arrays are already snapshotted by the zone
+        // capture, so only their gating lengths are recorded here; htfData is
+        // stored verbatim on smc_scan_context, so a digest is enough to prove a
+        // replay rebuilt the same bundle rather than a second copy of it.
+        cap.cascade_input = {
+          direction: cascadeDir,
+          lastPrice: analysis.lastPrice,
+          seriesLengths: {
+            daily: dailyCandles.length, h4: h4Candles.length,
+            hourly: hourlyCandles.length, entry: candles.length,
+          },
+          gating: { style: resolvedStyle, dailyMin30: dailyCandles.length >= 30, h4Min20: h4Candles.length >= 20 },
+          htfDataPresent: !!htfConfluenceData,
+          htfDataHash: hashPart(htfConfluenceData ?? null),
+          zoneEngineOpts: {
+            strictATRMult: pairConfig.marketFillStrictATRMult,
+            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+            fibMaxRetracement: pairConfig.fibMaxRetracement,
+            originOBRetest: pairConfig.originOBRetest,
+          },
+        };
         cascadeResult = findCascadeZone(
           dailyCandles,
           h4Candles,
@@ -5753,10 +5774,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           entry: cascadeResult.entry,
           sl: cascadeResult.sl,
         };
+        // Mirrors what detail records, plus the zone objects themselves —
+        // detail keeps only has* booleans, and "a daily zone existed" is not
+        // enough to replay a decision that used its bounds.
+        cap.cascade_output = {
+          state: cascadeResult.state,
+          reason: cascadeResult.reason,
+          dailyZone: cascadeResult.dailyZone ?? null,
+          confirmation: cascadeResult.confirmation ?? null,
+          entryZone: cascadeResult.entryZone ?? null,
+          priceAtEntry: cascadeResult.priceAtEntry,
+          distancePips: cascadeResult.distancePips,
+          entry: cascadeResult.entry,
+          sl: cascadeResult.sl,
+        };
         console.log(`[scan ${scanCycleId}] ${pair} Cascade Zone [${cascadeResult.state}]: ${cascadeResult.reason.slice(0, 120)}`);
       } catch (cascadeErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Cascade Zone error (non-fatal): ${cascadeErr?.message}`);
         (detail as any).cascadeZone = { state: "error", reason: cascadeErr?.message };
+        // An engine error is a real outcome and must be replayable too.
+        cap.cascade_output = { state: "error", reason: cascadeErr?.message ?? null };
       }
     }
 

@@ -111,6 +111,38 @@ const cases: Record<string, (c: ReturnType<typeof newCapture>) => void> = {
       }),
     };
   },
+  "cascade: null output (the common case — stage never ran)": (c) => {
+    c.cascade_input = null;
+    c.cascade_output = null;
+  },
+  "cascade: non-null zone with nested objects and optionals": (c) => {
+    c.cascade_input = {
+      direction: "bullish", lastPrice: 1.16342,
+      seriesLengths: { daily: 300, h4: 300, hourly: 300, entry: 300 },
+      gating: { style: "swing_trader", dailyMin30: true, h4Min20: true },
+      htfDataPresent: true, htfDataHash: "2d0bc1083f9a1b2c",
+      zoneEngineOpts: {
+        strictATRMult: undefined,      // optional field, must not resurface
+        pipSize: 0.0001,
+        fibMaxRetracement: 0.786,
+        originOBRetest: false,
+      },
+    };
+    c.cascade_output = {
+      state: "triggered",
+      reason: "Daily OB → 4H CHoCH → 1H FVG · entry armed",
+      dailyZone: { poi: { type: "OB", high: 1.16500, low: 1.16100 }, fibLevel: 0.705,
+                   htfLayers: ["D_OB", "HTF_FIB_70.5"], score: 7.5 },
+      confirmation: { type: "CHoCH", index: 287, price: 1.163419999999999, tags: [] },
+      entryZone: { high: 1.1634, low: 1.1628, refined: true, subZones: [
+        { high: 1.1634, low: 1.1631 }, { high: 1.1631, low: 1.1628 },
+      ] },
+      priceAtEntry: true, distancePips: 0, entry: 1.16342, sl: 1.1601,
+    };
+  },
+  "cascade: engine error is an outcome too": (c) => {
+    c.cascade_output = { state: "error", reason: "Cannot read properties of undefined" };
+  },
   "unicode and long prose": (c) => {
     c.final_decision = {
       status: "rejected",
@@ -142,6 +174,7 @@ for (const [name, apply] of Object.entries(cases)) {
     "direction_input", "confluence_input", "gates_input", "portfolio_input",
     "ict_input", "risk_input", "session_news_input",
     "gates_output", "portfolio_output", "final_decision",
+    "cascade_input", "cascade_output",
   ];
   const diffs: string[] = [];
   for (const f of fields) diffs.push(...diff(row[f], read[f], f));
@@ -161,6 +194,8 @@ for (const [name, apply] of Object.entries(cases)) {
     gates_output: "gates_output_hash",
     portfolio_output: "portfolio_output_hash",
     final_decision: "final_hash",
+    cascade_input: "cascade_input_hash",
+    cascade_output: "cascade_output_hash",
   };
   for (const [f, h] of Object.entries(hashOf)) {
     const recomputed = hashPart(read[f]);

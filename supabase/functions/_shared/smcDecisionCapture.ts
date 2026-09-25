@@ -44,8 +44,11 @@ export interface DecisionCapture {
   risk_input: unknown;
   session_news_input: unknown;
 
+  cascade_input: unknown;
+
   gates_output: unknown;
   portfolio_output: unknown;
+  cascade_output: unknown;
   final_decision: unknown;
 
   contract_version: string;
@@ -59,7 +62,8 @@ export function newCapture(
     reached_stage: "unsupported",
     direction_input: null, confluence_input: null, gates_input: null,
     portfolio_input: null, ict_input: null, risk_input: null, session_news_input: null,
-    gates_output: null, portfolio_output: null, final_decision: null,
+    cascade_input: null,
+    gates_output: null, portfolio_output: null, cascade_output: null, final_decision: null,
     contract_version: DECISION_CAPTURE_CONTRACT,
   };
 }
@@ -169,9 +173,11 @@ export function toRow(c: DecisionCapture): Record<string, unknown> {
     ict_input: c.ict_input,
     risk_input: c.risk_input,
     session_news_input: c.session_news_input,
+    cascade_input: c.cascade_input,
 
     gates_output: c.gates_output,
     portfolio_output: c.portfolio_output,
+    cascade_output: c.cascade_output,
     final_decision: c.final_decision,
 
     direction_hash: hashPart(c.direction_input),
@@ -186,6 +192,8 @@ export function toRow(c: DecisionCapture): Record<string, unknown> {
     // one thing in this corpus a replay could not detect drift in.
     gates_output_hash: hashPart(c.gates_output),
     portfolio_output_hash: hashPart(c.portfolio_output),
+    cascade_input_hash: hashPart(c.cascade_input),
+    cascade_output_hash: hashPart(c.cascade_output),
     final_hash: hashPart(c.final_decision),
 
     contract_version: c.contract_version,
@@ -209,6 +217,9 @@ export function readiness(row: Record<string, unknown>): Record<string, boolean>
     ict: has("ict_input"),
     risk: has("risk_input"),
     session_news: has("session_news_input"),
+    // Cascade only runs for swing_trader. Under scalper this is always false,
+    // and that is a true statement about the corpus rather than a defect.
+    cascade: has("cascade_input") && has("cascade_output"),
     final: has("final_decision"),
   };
 }
