@@ -259,9 +259,16 @@ async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report
     const details = (Array.isArray(raw) ? raw : []) as Record<string, unknown>[];
     const meta = details.find((d) => d.__meta === true);
     if (meta && meta.scan_cycle_id && meta.scan_cycle_id !== scanCycleId) continue;
-    if (!meta?.scan_cycle_id) joinedBy = "timestamp_proximity";
     const d = details.find((x) => x.pair === symbol || x.symbol === symbol);
-    if (d) { matched = d; break; }
+    // Set the join method only once a match is actually found. scan_logs is
+    // shared with a game_plan producer whose rows are object-shaped and carry
+    // no __meta; skipping past one used to mark the whole replay as
+    // proximity-joined even though the real row matched on scan_cycle_id.
+    if (d) {
+      matched = d;
+      joinedBy = meta?.scan_cycle_id ? "scan_cycle_id" : "timestamp_proximity";
+      break;
+    }
   }
   const recordedZone = matched?.unifiedZone as Record<string, never> | undefined;
   if (!recordedZone) {
