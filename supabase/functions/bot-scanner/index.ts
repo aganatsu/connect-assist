@@ -5752,15 +5752,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ] as SnapshotInput[],
           });
           if (snap.bars.length) {
-            // Bars are immutable once observed: ignoreDuplicates keeps the first
-            // observation rather than letting a later re-fetch rewrite history.
+            // One row per distinct observed VALUE. An identical re-observation
+            // collapses; a provider revision of an already-closed bar adds a
+            // row rather than overwriting what an earlier scan actually saw.
             const b = await supabase.from("smc_scan_bars")
-              .upsert(snap.bars, { onConflict: "symbol,timeframe,bar_time", ignoreDuplicates: true });
+              .upsert(snap.bars, { onConflict: "symbol,timeframe,bar_time,bar_hash", ignoreDuplicates: true });
             if (b.error) throw new Error(`bars: ${b.error.message}`);
           }
           if (snap.manifest.length) {
             const m = await supabase.from("smc_scan_manifest")
-              .upsert(snap.manifest, { onConflict: "scan_cycle_id,symbol,slot" });
+              .upsert(snap.manifest, { onConflict: "scan_cycle_id,symbol,slot,timeframe" });
             if (m.error) throw new Error(`manifest: ${m.error.message}`);
           }
           // The non-candle arguments. Stage 2E: a replay that rebuilds the
@@ -8716,6 +8717,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const detailsWithMeta = [
     {
       __meta: true,
+      // The join key between this recorded result and the input snapshot in
+      // smc_scan_manifest / smc_scan_context. Without it a determinism replay
+      // can only match inputs to outputs by timestamp proximity, which is a
+      // guess. Observability only — nothing reads it in the scanner.
+      scan_cycle_id: scanCycleId,
       // Observational only. Surfaced so a snapshot writer that has quietly
       // stopped is visible in the scan meta rather than discovered later as an
       // empty table — which is exactly how scan_candle_snapshots went unnoticed.

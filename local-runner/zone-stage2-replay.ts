@@ -38,11 +38,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { findUnifiedZone, type UnifiedZoneResult } from "../supabase/functions/_shared/unifiedZoneEngine.ts";
 import type { HTFConfluenceData, TFSlotLabels } from "../supabase/functions/_shared/impulseZoneEngine.ts";
-import {
-  analyzeMarketStructure, detectFVGs, detectOrderBlocks, detectBreakerBlocks,
-  detectZigZagPivots, computeFibLevels, calculatePremiumDiscount, detectLiquidityPools,
-  type Candle, type LiquidityPool,
-} from "../supabase/functions/_shared/smcAnalysis.ts";
+import type { Candle, LiquidityPool } from "../supabase/functions/_shared/smcAnalysis.ts";
 import {
   reconstruct, hashStructure, type ManifestRow,
 } from "../supabase/functions/_shared/smcScanSnapshot.ts";
@@ -130,55 +126,43 @@ function diff(a: Comparable, b: Comparable): string[] {
   return out;
 }
 
-/** Bars for one (symbol, timeframe) window, oldest first. */
-async function barsFor(symbol: string, timeframe: string, from: string, to: string): Promise<Candle[]> {
+/**
+ * Bars for one (symbol, timeframe) window, AS KNOWN AT `asOf`.
+ *
+ * The store holds one row per distinct observed value, because a provider may
+ * revise a bar that has already closed — measured directly: a 5m bar stored 14
+ * seconds after its close was still provisional, and was settled differently by
+ * the next scan. Reconstruction therefore picks, for each bar_time, the latest
+ * observation that existed when the scan ran. Taking the newest value outright
+ * would rebuild a version of history the scanner never saw.
+ */
+async function barsFor(
+  symbol: string, timeframe: string, from: string, to: string, asOf: string,
+): Promise<Candle[]> {
   const { data, error } = await db.from("smc_scan_bars")
-    .select("bar_time, open, high, low, close, volume")
+    .select("bar_time, open, high, low, close, volume, first_seen_at")
     .eq("symbol", symbol).eq("timeframe", timeframe)
     .gte("bar_time", from).lte("bar_time", to)
-    .order("bar_time", { ascending: true }).limit(5000);
+    .lte("first_seen_at", asOf)
+    .order("bar_time", { ascending: true })
+    .order("first_seen_at", { ascending: true })
+    .limit(20000);
   if (error) throw new Error(`bars ${symbol} ${timeframe}: ${error.message}`);
-  return (data ?? []).map((r: Record<string, unknown>) => ({
+
+  // Ascending first_seen_at means the last write per bar_time wins — the most
+  // recent observation available at scan time.
+  const latest = new Map<string, Candle>();
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
     // Postgres renders timestamptz as "+00", which Date.parse rejects and which
-    // silently emptied every window in the Stage 1 harness. Normalise to Z, and
-    // keep the normalised string as the identity used for hashing.
-    datetime: String(r.bar_time).replace(/([+-]\d{2})(:?\d{2})?$/, "Z").replace(/\s/, "T"),
-    open: Number(r.open), high: Number(r.high), low: Number(r.low), close: Number(r.close),
-    volume: r.volume === null ? undefined : Number(r.volume),
-  })) as Candle[];
-}
-
-/**
- * Re-derives the HTF confluence bundle from stored 4H/Daily arrays using the
- * SAME production detectors the scanner used, then verifies it against the
- * recorded digest. Returns null when it cannot be rebuilt — never a partial
- * bundle, because Stage 2E showed a partial one is worse than an absent one in
- * a way the totals hide.
- */
-function rederiveHtf(h4: Candle[], daily: Candle[], direction: string | null): HTFConfluenceData | null {
-  if (!direction || h4.length < 20) return null;
-  const st = analyzeMarketStructure(h4);
-  const breaks = [...st.bos, ...st.choch];
-  const obs = detectOrderBlocks(h4, breaks);
-  const z4 = detectZigZagPivots(h4, 3, 10);
-  const zD = daily.length >= 20 ? detectZigZagPivots(daily, 3, 10) : null;
-  return {
-    h4OBs: obs,
-    h4FVGs: detectFVGs(h4, breaks),
-    h4Breakers: detectBreakerBlocks(obs, h4, breaks),
-    htfFibLevels: z4.lastTwo ? computeFibLevels(z4.lastTwo[0], z4.lastTwo[1]) : null,
-    dailyFibLevels: zD?.lastTwo ? computeFibLevels(zD.lastTwo[0], zD.lastTwo[1]) : null,
-    htfPD: calculatePremiumDiscount(h4),
-    direction: direction === "long" || direction === "bullish" ? "bullish" : "bearish",
-  } as HTFConfluenceData;
-}
-
-function rederivePools(daily: Candle[], h4: Candle[], h1: Candle[]): LiquidityPool[] {
-  const pools: LiquidityPool[] = [];
-  for (const cs of [daily, h4, h1]) {
-    if (cs.length >= 20) pools.push(...detectLiquidityPools(cs, 0.35, 2));
+    // silently emptied every window in the Stage 1 harness.
+    const dt = String(r.bar_time).replace(/([+-]\d{2})(:?\d{2})?$/, "Z").replace(/\s/, "T");
+    latest.set(dt, {
+      datetime: dt,
+      open: Number(r.open), high: Number(r.high), low: Number(r.low), close: Number(r.close),
+      volume: r.volume === null ? undefined : Number(r.volume),
+    } as Candle);
   }
-  return pools;
+  return [...latest.values()].sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
 }
 
 async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report> {
@@ -189,7 +173,7 @@ async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report
     db.from("smc_scan_manifest").select("*").eq("scan_cycle_id", scanCycleId).eq("symbol", symbol),
   ]);
   const ctx = ctxRows?.[0];
-  const manifests = (manRows ?? []) as unknown as (ManifestRow & { slot: string })[];
+  const manifests = (manRows ?? []) as unknown as (ManifestRow & { slot: string; scanned_at: string })[];
   if (!ctx || manifests.length === 0) {
     return { ...base, verdict: "NO_SNAPSHOT",
       detail: "no snapshot for this scan — it predates the observability patch, or the write failed" };
@@ -199,48 +183,83 @@ async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report
   const slots: Record<string, Candle[]> = {};
   const contextTFs: Record<string, Candle[]> = {};
   for (const m of manifests) {
-    const stored = await barsFor(symbol, m.timeframe, m.first_bar_time, m.last_bar_time);
+    const stored = await barsFor(symbol, m.timeframe, m.first_bar_time, m.last_bar_time, m.scanned_at);
     const built = reconstruct(m, stored);
     if (!built.ok) {
       return { ...base, verdict: "BARS_UNRECOVERABLE",
         detail: `slot ${m.slot} (${m.timeframe}): ${built.reason}` };
     }
+    // Context slots are no longer an input to the replay now that the derived
+    // bundles are stored, but they are still reconstructed and digest-checked:
+    // they are the provenance of those bundles, and a silent failure to store
+    // them would otherwise go unnoticed until someone needed them.
     if (m.slot === "context") contextTFs[m.timeframe] = built.candles;
     else slots[m.slot] = built.candles;
   }
 
-  // ── re-derive the non-candle bundles and verify them ───────────────────────
-  const h4 = contextTFs["4h"] ?? [], daily = contextTFs["1d"] ?? [], h1 = contextTFs["1h"] ?? [];
-  const htf = rederiveHtf(h4, daily, ctx.direction);
-  const pools = rederivePools(daily, h4, h1);
+  // ── the non-candle bundles, as stored ─────────────────────────────────────
+  //
+  // Read back rather than re-derived. They depend on detector parameters that
+  // are config-driven, and an earlier version of this utility guessed them —
+  // producing a mismatch that looked like divergence but was only a wrong
+  // reconstruction. The digests still run, now as an integrity check on the
+  // stored value rather than as a test of the reconstruction.
+  const htf = (ctx.htf_confluence ?? null) as HTFConfluenceData | null;
+  const pools = (ctx.liquidity_pools ?? []) as LiquidityPool[];
 
-  const htfHash = htf == null ? null : hashStructure(htf);
-  const poolHash = hashStructure(pools);
   const inputDiffs: string[] = [];
+  const htfHash = htf == null ? null : hashStructure(htf);
   if (htfHash !== ctx.htf_confluence_hash) {
-    inputDiffs.push(`htf_confluence: recorded=${ctx.htf_confluence_hash} rederived=${htfHash}`);
+    inputDiffs.push(`htf_confluence: recorded=${ctx.htf_confluence_hash} stored=${htfHash}`);
   }
-  if (poolHash !== ctx.liquidity_pool_hash) {
-    inputDiffs.push(`liquidity_pools: recorded=${ctx.liquidity_pool_hash} rederived=${poolHash}`);
+  if (ctx.liquidity_pools != null && hashStructure(pools) !== ctx.liquidity_pool_hash) {
+    inputDiffs.push(`liquidity_pools: recorded=${ctx.liquidity_pool_hash} stored=${hashStructure(pools)}`);
+  }
+  if (ctx.htf_confluence === undefined) {
+    // Rows written before the bundles were stored cannot be replayed, and must
+    // not be silently treated as "no HTF confluence" — that is the Stage 2E
+    // error exactly.
+    return { ...base, verdict: "NO_SNAPSHOT",
+      detail: "context row predates stored derived bundles; inputs unrecoverable" };
   }
   if (inputDiffs.length) {
     // Stop here deliberately. Running the engine on inputs already known to
-    // differ would produce an "engine mismatch" that is nothing of the sort —
-    // exactly the confusion the Stage 1 AUD/USD outlier turned out to be.
+    // differ would produce an "engine mismatch" that is nothing of the sort.
     return { ...base, verdict: "INPUTS_DIVERGED",
-      detail: "re-derived engine inputs do not match the recorded digests; engine not run",
+      detail: "stored engine inputs do not match their recorded digests; engine not run",
       diffs: inputDiffs };
   }
 
   // ── what production recorded ───────────────────────────────────────────────
-  const { data: hist } = await db.from("scan_history")
-    .select("payload").eq("payload->>scan_cycle_id", scanCycleId).limit(1);
-  const detail = (hist?.[0]?.payload?.scan_details ?? [])
-    .find((d: Record<string, unknown>) => d.pair === symbol || d.symbol === symbol);
-  const recordedZone = detail?.unifiedZone;
+  //
+  // A full scan records its per-pair results in `scan_logs.details_json`, NOT
+  // `scan_history` — the latter only gets written on early-return paths
+  // (management_only, prop-firm lock). Reading the wrong one makes every scan
+  // look unrecorded.
+  //
+  // The join key is `__meta.scan_cycle_id`. Rows written before that field
+  // existed fall back to nearest-timestamp within one scan interval, which is
+  // unambiguous at a 5-minute cadence but is a guess — so it is labelled.
+  const { data: logs } = await db.from("scan_logs")
+    .select("scanned_at, details_json")
+    .gte("scanned_at", new Date(Date.parse(ctx.scanned_at) - 150_000).toISOString())
+    .lte("scanned_at", new Date(Date.parse(ctx.scanned_at) + 150_000).toISOString())
+    .order("scanned_at", { ascending: true });
+
+  let matched: Record<string, unknown> | undefined;
+  let joinedBy = "scan_cycle_id";
+  for (const row of logs ?? []) {
+    const details = (row.details_json ?? []) as Record<string, unknown>[];
+    const meta = details.find((d) => d.__meta === true);
+    if (meta && meta.scan_cycle_id && meta.scan_cycle_id !== scanCycleId) continue;
+    if (!meta?.scan_cycle_id) joinedBy = "timestamp_proximity";
+    const d = details.find((x) => x.pair === symbol || x.symbol === symbol);
+    if (d) { matched = d; break; }
+  }
+  const recordedZone = matched?.unifiedZone as Record<string, never> | undefined;
   if (!recordedZone) {
     return { ...base, verdict: "NO_RECORDED_RESULT",
-      detail: "snapshot exists but scan_history has no unifiedZone for this symbol" };
+      detail: "snapshot exists but no scan_logs entry carries a unifiedZone for this symbol" };
   }
 
   // ── re-run the UNMODIFIED engine ───────────────────────────────────────────
@@ -283,7 +302,8 @@ async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report
   return {
     ...base,
     verdict: diffs.length ? "ENGINE_DIVERGED" : "MATCH",
-    detail: diffs.length ? `${diffs.length} field(s) differ on identical inputs` : "identical inputs, identical output",
+    detail: (diffs.length ? `${diffs.length} field(s) differ on identical inputs` :
+      "identical inputs, identical output") + ` (joined by ${joinedBy})`,
     recorded: a, replayed: b, diffs: diffs.length ? diffs : undefined,
   };
 }
@@ -335,11 +355,12 @@ if (import.meta.main) {
   for (const [k, v] of Object.entries(tally).sort((x, y) => y[1] - x[1])) {
     console.log(`  ${k.padEnd(20)} ${String(v).padStart(5)}  ${(100 * v / all.length).toFixed(1)}%`);
   }
-  const bad = all.filter((r) => r.verdict === "ENGINE_DIVERGED" || r.verdict === "INPUTS_DIVERGED");
+  const bad = all.filter((r) => r.verdict !== "MATCH");
   if (bad.length) {
     console.log(`\n── divergences ──`);
     for (const r of bad.slice(0, 40)) {
       console.log(`\n  ${r.symbol}  ${r.scan_cycle_id}  ${r.verdict}`);
+      console.log(`      ${r.detail}`);
       for (const d of r.diffs ?? []) console.log(`      ${d}`);
     }
     if (bad.length > 40) console.log(`\n  … and ${bad.length - 40} more`);

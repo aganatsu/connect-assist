@@ -38,6 +38,12 @@ export interface BarRow {
   symbol: string;
   timeframe: string;
   bar_time: string;
+  /**
+   * Digest of THIS observation's OHLC, and part of the primary key. A provider
+   * that revises an already-closed bar then adds a row instead of silently
+   * losing the value an earlier scan actually scored.
+   */
+  bar_hash: string;
   open: number; high: number; low: number; close: number;
   volume: number | null;
   provider: string | null;
@@ -59,6 +65,19 @@ export interface ManifestRow {
   fetched_at: string | null;
   content_hash: string;
   contract_version: string;
+  /**
+   * The final bar when it was still forming, kept here rather than in the bar
+   * table. Its OHLC changes every scan until the interval closes, so writing it
+   * to an immutable dedup-on-first-write store permanently freezes a partial
+   * bar — which is exactly the defect this column was added to fix.
+   */
+  forming_bar: FormingBar | null;
+}
+
+export interface FormingBar {
+  datetime: string;
+  open: number; high: number; low: number; close: number;
+  volume: number | null;
 }
 
 /**
@@ -135,11 +154,27 @@ export function buildSnapshot(args: BuildArgs): { bars: BarRow[]; manifest: Mani
   const bars: BarRow[] = [];
   const manifest: ManifestRow[] = [];
 
+  // Which (timeframe, bar) pairs are still forming anywhere in this scan.
+  // Collected up front because slots share arrays — the scalper passes the same
+  // 5m array as `low`, `entry` and `ltf_confirm` — and a bar excluded from one
+  // slot must not be admitted through another.
+  const forming = new Set<string>();
+  for (const input of args.inputs) {
+    const cs = input.candles;
+    if (!cs || cs.length === 0) continue;
+    const closed = lastBarClosed(cs, args.nowMs, barMsOf(input.timeframe));
+    // `null` means the interval length is unknown, so the bar is not PROVABLY
+    // closed. Treated as forming: a wrong guess here corrupts the store
+    // permanently, while an unnecessary inline copy costs a few bytes.
+    if (closed !== true) forming.add(`${input.timeframe}|${cs[cs.length - 1].datetime}`);
+  }
+
   for (const input of args.inputs) {
     const cs = input.candles;
     if (!cs || cs.length === 0) continue;
 
     for (const c of cs) {
+      if (forming.has(`${input.timeframe}|${c.datetime}`)) continue;
       // One row per (symbol, timeframe, bar). Two slots sharing a timeframe —
       // the scalper passes 5m as both `low` and `entry` — must not double-write.
       const key = `${input.timeframe}|${c.datetime}`;
@@ -149,12 +184,15 @@ export function buildSnapshot(args: BuildArgs): { bars: BarRow[]; manifest: Mani
         symbol: args.symbol,
         timeframe: input.timeframe,
         bar_time: c.datetime,
+        bar_hash: hashCandles([c]),
         open: c.open, high: c.high, low: c.low, close: c.close,
         volume: typeof c.volume === "number" ? c.volume : null,
         provider: input.provider ?? null,
       });
     }
 
+    const last = cs[cs.length - 1];
+    const isForming = forming.has(`${input.timeframe}|${last.datetime}`);
     manifest.push({
       scan_cycle_id: args.scanCycleId,
       user_id: args.userId,
@@ -171,6 +209,13 @@ export function buildSnapshot(args: BuildArgs): { bars: BarRow[]; manifest: Mani
       fetched_at: args.fetchedAt ?? null,
       content_hash: hashCandles(cs),
       contract_version: SMC_CONTRACT_VERSION,
+      forming_bar: isForming
+        ? {
+          datetime: last.datetime,
+          open: last.open, high: last.high, low: last.low, close: last.close,
+          volume: typeof last.volume === "number" ? last.volume : null,
+        }
+        : null,
     });
   }
 
@@ -189,6 +234,13 @@ export interface ContextRow {
   engine_args: Record<string, unknown>;
   htf_confluence_hash: string | null;
   liquidity_pool_hash: string | null;
+  /**
+   * The derived bundles themselves. Stored, not re-derived: they depend on
+   * detector parameters that are config-driven, and a replay that guesses one
+   * wrong produces a mismatch indistinguishable from an engine defect.
+   */
+  htf_confluence: unknown;
+  liquidity_pools: unknown;
   contract_version: string;
 }
 
@@ -260,6 +312,8 @@ export function buildContext(a: ContextArgs): ContextRow {
     engine_args: a.engineArgs ?? {},
     htf_confluence_hash: a.htfConfluence == null ? null : hashStructure(a.htfConfluence),
     liquidity_pool_hash: a.liquidityPools == null ? null : hashStructure(a.liquidityPools),
+    htf_confluence: a.htfConfluence ?? null,
+    liquidity_pools: a.liquidityPools ?? null,
     contract_version: SMC_CONTRACT_VERSION,
   };
 }
@@ -273,7 +327,8 @@ export function buildContext(a: ContextArgs): ContextRow {
  * than silently score a different array.
  */
 export function reconstruct(
-  manifest: Pick<ManifestRow, "first_bar_time" | "last_bar_time" | "bar_count" | "content_hash">,
+  manifest: Pick<ManifestRow, "first_bar_time" | "last_bar_time" | "bar_count" | "content_hash"> &
+    { forming_bar?: FormingBar | null },
   storedBars: readonly Candle[],
 ): { candles: Candle[]; ok: true } | { candles: null; ok: false; reason: string } {
   const from = Date.parse(manifest.first_bar_time);
@@ -284,6 +339,16 @@ export function reconstruct(
       return t >= from && t <= to;
     })
     .sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
+
+  // The forming bar never entered the bar table; it lives on the manifest.
+  const fb = manifest.forming_bar;
+  if (fb) {
+    slice.push({
+      datetime: fb.datetime,
+      open: fb.open, high: fb.high, low: fb.low, close: fb.close,
+      volume: fb.volume ?? undefined,
+    } as Candle);
+  }
 
   if (slice.length !== manifest.bar_count) {
     return { candles: null, ok: false, reason: `bar_count ${slice.length} != ${manifest.bar_count}` };

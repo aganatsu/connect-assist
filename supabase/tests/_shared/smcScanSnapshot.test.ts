@@ -42,6 +42,7 @@ Deno.test("a bar shared by two slots is stored once, not twice", () => {
     { slot: "entry", timeframe: "5m", candles: m5 },
   ]));
   assertEquals(bars.length, 300, "the shared array was stored twice");
+  assertEquals(manifest[0].forming_bar, null, "at nowMs the last 5m bar has closed");
   assertEquals(manifest.length, 2, "but each slot still gets its own manifest row");
   assertEquals(manifest[0].slot, "low");
   assertEquals(manifest[1].slot, "entry");
@@ -50,8 +51,12 @@ Deno.test("a bar shared by two slots is stored once, not twice", () => {
 Deno.test("consecutive scans add one bar, not three hundred", () => {
   // This is the whole economic argument. A jsonb array per scan costs ~24 KB
   // every five minutes for an array that gained one bar.
-  const first = buildSnapshot(args([{ slot: "low", timeframe: "5m", candles: series(300) }]));
-  const second = buildSnapshot(args([{ slot: "low", timeframe: "5m", candles: series(301) }]));
+  // nowMs is set past the end of each array so every bar is closed and storable;
+  // the forming-bar case is covered separately below.
+  const first = buildSnapshot(args([{ slot: "low", timeframe: "5m", candles: series(300) }],
+    T0 + 300 * 300_000));
+  const second = buildSnapshot(args([{ slot: "low", timeframe: "5m", candles: series(301) }],
+    T0 + 301 * 300_000));
   const firstKeys = new Set(first.bars.map((b) => b.bar_time));
   const novel = second.bars.filter((b) => !firstKeys.has(b.bar_time));
   assertEquals(novel.length, 1, "a five-minute tick should introduce exactly one new bar");
@@ -163,8 +168,15 @@ const ctxArgs = (over: Record<string, unknown> = {}) => ({
 Deno.test("the context row carries the arguments candles cannot reproduce", () => {
   const row = buildContext(ctxArgs());
   // Stage 2E: omitting htfConfluenceData took AUD/USD from 84.9% to 37.3%.
-  assert(row.htf_confluence_hash, "the HTF bundle must be recoverable or verifiable");
+  assert(row.htf_confluence_hash, "the HTF bundle must be verifiable");
   assert(row.liquidity_pool_hash);
+  // And the bundles themselves are stored, not left to be re-derived. The
+  // detector parameters behind them are config-driven and were not recoverable;
+  // a replay that guessed them reported divergence that did not exist.
+  assertEquals(row.htf_confluence, ctxArgs().htfConfluence);
+  assertEquals(row.liquidity_pools, ctxArgs().liquidityPools);
+  assertEquals(hashStructure(row.htf_confluence), row.htf_confluence_hash,
+    "the stored bundle must hash to the recorded digest");
   assertEquals(row.direction, "long");
   assertEquals(row.last_price, 0.6612);
   assertEquals((row.engine_args as Record<string, unknown>).tpRatio, 2);
@@ -278,16 +290,55 @@ Deno.test("both tables are RLS-forced and unreachable from a browser", async () 
   }
 });
 
+Deno.test("no two snapshot inputs collide on the manifest's natural key", () => {
+  // THE BUG THIS PINS. The key was (scan_cycle_id, symbol, slot) and `context`
+  // is a ROLE used three times per scan — 4H, Daily and 1H — so a single upsert
+  // batch collided with itself and Postgres rejected the whole statement:
+  //   23505 Key (scan_cycle_id, symbol, slot)=(..., context) already exists
+  // Live result: 1,500 bars written, 0 manifests. Caught only in production
+  // because nothing checked buildSnapshot's output against the real key.
+  const m5 = series(50), m15 = series(50, 900_000), h1 = series(50, 3_600_000);
+  const { manifest } = buildSnapshot(args([
+    { slot: "top", timeframe: "1h", candles: h1 },
+    { slot: "mid", timeframe: "15m", candles: m15 },
+    { slot: "low", timeframe: "5m", candles: m5 },
+    { slot: "entry", timeframe: "5m", candles: m5 },        // same interval as `low`
+    { slot: "confirm", timeframe: "15m", candles: m15 },
+    { slot: "ltf_confirm", timeframe: "5m", candles: m5 },
+    { slot: "context", timeframe: "4h", candles: series(50, 14_400_000) },
+    { slot: "context", timeframe: "1d", candles: series(50, 86_400_000) },
+    { slot: "context", timeframe: "1h", candles: h1 },      // three `context` rows
+  ]));
+  const keys = manifest.map((m) => `${m.scan_cycle_id}|${m.symbol}|${m.slot}|${m.timeframe}`);
+  assertEquals(new Set(keys).size, keys.length,
+    "two rows share (scan, symbol, slot, timeframe) — the upsert will fail as a whole");
+  // And the old three-part key genuinely would have collided, so this test is
+  // exercising the real failure rather than a hypothetical one.
+  const oldKeys = manifest.map((m) => `${m.scan_cycle_id}|${m.symbol}|${m.slot}`);
+  assert(new Set(oldKeys).size < oldKeys.length,
+    "the pre-fix key must still be demonstrably insufficient");
+});
+
+Deno.test("the scanner upserts on the four-part key", async () => {
+  const src = await Deno.readTextFile("supabase/functions/bot-scanner/index.ts");
+  assert(src.includes('onConflict: "scan_cycle_id,symbol,slot,timeframe"'),
+    "the onConflict target must match the constraint, or every manifest write fails");
+});
+
 Deno.test("the migration is additive and deletes nothing", async () => {
   const sql = await Deno.readTextFile(MIGRATION);
   for (const banned of ["drop table", "truncate", "delete from", "alter table public.scan_candle_snapshots"]) {
     assert(!sql.toLowerCase().includes(banned), `the migration performs "${banned}"`);
   }
   // The dedup key is what makes the storage estimate hold.
-  assert(sql.includes("primary key (symbol, timeframe, bar_time)"),
-    "without the bar key the table degenerates to one row per scan per bar");
-  assert(sql.includes("unique (scan_cycle_id, symbol, slot)"),
-    "a retried scan must converge rather than duplicate");
+  const barSql = await Deno.readTextFile(
+    "supabase/migrations/20260925114000_smc_scan_bars_observation_keyed.sql");
+  assert(barSql.includes("primary key (symbol, timeframe, bar_time, bar_hash)"),
+    "bars are keyed by OBSERVATION — a provider revision must add a row, not vanish");
+  const keySql = sql + await Deno.readTextFile(
+    "supabase/migrations/20260925103000_smc_scan_manifest_key_timeframe.sql");
+  assert(keySql.includes("unique (scan_cycle_id, symbol, slot, timeframe)"),
+    "the manifest key must include the interval — `context` appears three times per scan");
   assert(sql.includes("unique (scan_cycle_id, symbol)"),
     "the context row is one per scan per symbol");
   // No silent retention policy.
@@ -322,6 +373,16 @@ Deno.test("the replay feeds slots in the engine's counter-intuitive positional o
     "defaulting the top slot to [] fabricates an input production withheld");
 });
 
+Deno.test("the replay reads stored bundles and never re-derives them", async () => {
+  const src = await Deno.readTextFile("local-runner/zone-stage2-replay.ts");
+  for (const d of ["detectLiquidityPools", "detectOrderBlocks", "detectFVGs", "detectZigZagPivots"]) {
+    assert(!src.includes(d),
+      `the replay calls ${d} — re-deriving an input whose parameters were not recorded`);
+  }
+  assert(src.includes("ctx.htf_confluence"), "the replay must read the stored HTF bundle");
+  assert(src.includes("ctx.liquidity_pools"), "the replay must read the stored pools");
+});
+
 Deno.test("the replay refuses to run the engine on inputs already known to differ", async () => {
   const src = await Deno.readTextFile("local-runner/zone-stage2-replay.ts");
   const guard = src.indexOf("INPUTS_DIVERGED");
@@ -352,4 +413,103 @@ Deno.test("the replay is read-only", async () => {
   // VALUE is not.
   assert(!src.includes("${key}"), "the key value must never be interpolated");
   assert(!/console\.[a-z]+\([^)]*\bkey\b\s*[,)]/.test(src), "the key value must never be logged");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// the forming bar must never enter the immutable store
+// ─────────────────────────────────────────────────────────────────────────────
+
+Deno.test("a forming bar is held on the manifest, not written to the bar table", () => {
+  // THE BUG THIS PINS. smc_scan_bars dedups on (symbol, timeframe, bar_time)
+  // and writes with ignoreDuplicates, so the FIRST observation of a bar is
+  // permanent. That is right for a closed bar and wrong for the forming one,
+  // whose OHLC changes every scan. Live result: the 15m bar opening 10:15 was
+  // stored partial at 10:25, and at 10:45 the manifest hashed the completed bar
+  // while the table still held the partial one — replay BARS_UNRECOVERABLE.
+  const m5 = series(10);
+  const midBar = T0 + 9 * 300_000 + 60_000;      // 1 min into the last bar
+  const { bars, manifest } = buildSnapshot(args([
+    { slot: "low", timeframe: "5m", candles: m5 },
+  ], midBar));
+
+  assertEquals(manifest[0].last_bar_closed, false);
+  assertEquals(bars.length, 9, "the forming bar must be withheld from the bar table");
+  assert(!bars.some((b) => b.bar_time === m5[9].datetime), "the forming bar leaked into storage");
+  assertEquals(manifest[0].forming_bar?.datetime, m5[9].datetime);
+  assertEquals(manifest[0].forming_bar?.close, m5[9].close);
+  // The manifest still describes the whole array the engine saw.
+  assertEquals(manifest[0].bar_count, 10);
+});
+
+Deno.test("a forming bar excluded from one slot cannot sneak in through another", () => {
+  // The scalper passes the same 5m array as low, entry AND ltf_confirm. If the
+  // exclusion were computed per slot, the second slot would re-admit the bar.
+  const m5 = series(10);
+  const midBar = T0 + 9 * 300_000 + 60_000;
+  const { bars } = buildSnapshot(args([
+    { slot: "low", timeframe: "5m", candles: m5 },
+    { slot: "entry", timeframe: "5m", candles: m5 },
+    { slot: "ltf_confirm", timeframe: "5m", candles: m5 },
+  ], midBar));
+  assertEquals(bars.length, 9);
+  assert(!bars.some((b) => b.bar_time === m5[9].datetime));
+});
+
+Deno.test("reconstruction reunites stored bars with the manifest's forming bar", () => {
+  const m5 = series(10);
+  const midBar = T0 + 9 * 300_000 + 60_000;
+  const { bars, manifest } = buildSnapshot(args([
+    { slot: "low", timeframe: "5m", candles: m5 },
+  ], midBar));
+
+  // What the table would return: the 9 closed bars only.
+  const stored = bars.map((b) => ({
+    datetime: b.bar_time, open: b.open, high: b.high, low: b.low, close: b.close,
+  })) as Candle[];
+
+  const out = reconstruct(manifest[0], stored);
+  assert(out.ok, `reconstruction failed: ${out.ok ? "" : out.reason}`);
+  if (!out.ok) return;
+  assertEquals(out.candles.length, 10, "the forming bar must be restored");
+  assertEquals(out.candles[9].datetime, m5[9].datetime);
+  assertEquals(out.candles[9].close, m5[9].close);
+});
+
+Deno.test("an unknown interval is treated as forming, never as closed", () => {
+  // barMsOf returns null for an unrecognised label, so closure is unprovable.
+  // Guessing "closed" would write a possibly-partial bar into a store that can
+  // never be corrected; guessing "forming" costs a few bytes.
+  const cs = series(5);
+  const { bars, manifest } = buildSnapshot(args([
+    { slot: "confirm", timeframe: "not-an-interval", candles: cs },
+  ]));
+  assertEquals(manifest[0].last_bar_closed, null);
+  assertEquals(bars.length, 4, "the unprovable bar must be withheld");
+  assertEquals(manifest[0].forming_bar?.datetime, cs[4].datetime);
+});
+
+Deno.test("each stored bar carries a digest of its own values", () => {
+  // The key includes bar_hash so an identical re-observation collapses while a
+  // revision of an already-closed bar is preserved. Measured: a 5m bar stored
+  // 14 seconds after its close was still provisional and settled differently
+  // later — "closed by the clock" is not "final from the provider".
+  const { bars } = buildSnapshot(args([
+    { slot: "low", timeframe: "5m", candles: series(5) },
+  ], T0 + 10 * 300_000));
+  assertEquals(bars.length, 5);
+  assertEquals(new Set(bars.map((b) => b.bar_hash)).size, 5, "distinct bars, distinct digests");
+  // Same bar, revised close → different digest → a second row, not a lost value.
+  const revised = series(5).map((c, i) => i === 4 ? { ...c, close: c.close + 0.001 } : c);
+  const after = buildSnapshot(args([
+    { slot: "low", timeframe: "5m", candles: revised },
+  ], T0 + 10 * 300_000));
+  assertEquals(after.bars[4].bar_time, bars[4].bar_time);
+  assert(after.bars[4].bar_hash !== bars[4].bar_hash, "a revised bar must be a new observation");
+});
+
+Deno.test("the replay reconstructs as known at scan time, not as known now", async () => {
+  const src = await Deno.readTextFile("local-runner/zone-stage2-replay.ts");
+  assert(/\.lte\("first_seen_at", asOf\)/.test(src),
+    "observations later than the scan must be excluded, or replay rebuilds a history the scanner never saw");
+  assert(src.includes("m.scanned_at"), "the manifest's own timestamp is the as-of point");
 });
