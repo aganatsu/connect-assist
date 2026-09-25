@@ -21,6 +21,7 @@ import { decideZone, type ResolvedStyle } from "../supabase/functions/_shared/sm
 import {
   decideDirection, buildDirectionConfig, type DirectionStyle,
 } from "../supabase/functions/_shared/smcDirectionDecision.ts";
+import { buildHtfContext, type HtfStyle } from "../supabase/functions/_shared/smcHtfContext.ts";
 import type { HTFConfluenceData } from "../supabase/functions/_shared/impulseZoneEngine.ts";
 import type { Candle, LiquidityPool } from "../supabase/functions/_shared/smcAnalysis.ts";
 import { reconstruct, type ManifestRow } from "../supabase/functions/_shared/smcScanSnapshot.ts";
@@ -199,7 +200,32 @@ async function run(): Promise<Row[]> {
       d3 = diff(rec.simpleDirection, dir.detailShape, "simpleDirection");
     }
 
-    const diffs = [...d1, ...d2, ...d3];
+    // ── HTF context slice ────────────────────────────────────────────────
+    // Ground truth is the bundle production actually passed to the engine,
+    // stored verbatim on smc_scan_context: htf_confluence and liquidity_pools.
+    // This is the slice Stage 2E showed is most dangerous to re-derive — the
+    // liquidity tolerance ladder and the per-timeframe quality thresholds are
+    // exactly what an earlier replay guessed wrong.
+    const htf = buildHtfContext({
+      style: ctx.style as HtfStyle,
+      m15Candles: series.m15Candles, hourlyCandles: series.hourlyCandles,
+      h4Candles: series.h4Candles, dailyCandles: series.dailyCandles,
+      equalHighsLowsSensitivity: FROZEN_PAIR_CONFIG.equalHighsLowsSensitivity as number,
+      liquidityPoolMinTouches: FROZEN_PAIR_CONFIG.liquidityPoolMinTouches as number,
+    });
+    const recHtf = (ctx.htf_confluence ?? null) as Record<string, unknown> | null;
+    const d4: string[] = [];
+    if (recHtf) {
+      d4.push(...diff(recHtf.h4OBs, htf.h4OBs, "htf.h4OBs"));
+      d4.push(...diff(recHtf.h4FVGs, htf.h4FVGs, "htf.h4FVGs"));
+      d4.push(...diff(recHtf.h4Breakers, htf.h4Breakers, "htf.h4Breakers"));
+      d4.push(...diff(recHtf.htfFibLevels, htf.htfFibLevels4H, "htf.htfFibLevels"));
+      d4.push(...diff(recHtf.dailyFibLevels, htf.htfFibLevelsD, "htf.dailyFibLevels"));
+      d4.push(...diff(recHtf.htfPD, htf.htfPD4H, "htf.htfPD"));
+    }
+    d4.push(...diff(ctx.liquidity_pools ?? [], htf.combinedLiquidityPools, "liquidityPools"));
+
+    const diffs = [...d1, ...d2, ...d3, ...d4];
     rows.push({ ...base, verdict: diffs.length ? "MISMATCH" : "EXACT", diffs });
   }
   return rows;
