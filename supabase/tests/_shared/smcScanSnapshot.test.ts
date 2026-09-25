@@ -513,3 +513,27 @@ Deno.test("the replay reconstructs as known at scan time, not as known now", asy
     "observations later than the scan must be excluded, or replay rebuilds a history the scanner never saw");
   assert(src.includes("m.scanned_at"), "the manifest's own timestamp is the as-of point");
 });
+
+Deno.test("bars carry the provider datetime verbatim, not a re-derived one", () => {
+  // timestamptz canonicalises on the way back, dropping ".000" from feeds that
+  // emit sub-second precision (MetaAPI and Polygon both do, via
+  // new Date(t).toISOString()). The digest is over the exact bytes the engine
+  // saw, so identity needs the raw string; bar_time stays the queryable instant.
+  const withMs = [{ datetime: "2026-01-01T00:00:00.000Z", open: 1, high: 1, low: 1, close: 1 }] as Candle[];
+  const { bars } = buildSnapshot(args([{ slot: "low", timeframe: "5m", candles: withMs }],
+    Date.UTC(2026, 0, 2)));
+  assertEquals(bars[0].bar_time_raw, "2026-01-01T00:00:00.000Z",
+    "the provider string must survive verbatim");
+});
+
+Deno.test("OHLC is stored as exact decimal, not rounded float", async () => {
+  // 1.001 + 2e-5 is 1.0010199999999998; double precision renders back 1.00102
+  // at 15 significant digits, losing the last ulp and breaking every digest.
+  const sql = await Deno.readTextFile(
+    "supabase/migrations/20260925123000_smc_scan_bars_exact_numeric.sql");
+  for (const col of ["open", "high", "low", "close"]) {
+    assert(new RegExp(`alter column ${col}\\s+type numeric`).test(sql),
+      `${col} must be numeric — float output rounds and the digest is over exact values`);
+  }
+  assert(1.001 + 2e-5 !== 1.00102, "the precision hazard this guards is real");
+});

@@ -140,7 +140,7 @@ async function barsFor(
   symbol: string, timeframe: string, from: string, to: string, asOf: string,
 ): Promise<Candle[]> {
   const { data, error } = await db.from("smc_scan_bars")
-    .select("bar_time, open, high, low, close, volume, first_seen_at")
+    .select("bar_time, bar_time_raw, open, high, low, close, volume, first_seen_at")
     .eq("symbol", symbol).eq("timeframe", timeframe)
     .gte("bar_time", from).lte("bar_time", to)
     .lte("first_seen_at", asOf)
@@ -155,7 +155,10 @@ async function barsFor(
   for (const r of (data ?? []) as Record<string, unknown>[]) {
     // Postgres renders timestamptz as "+00", which Date.parse rejects and which
     // silently emptied every window in the Stage 1 harness.
-    const dt = String(r.bar_time).replace(/([+-]\d{2})(:?\d{2})?$/, "Z").replace(/\s/, "T");
+    // The verbatim provider string, not the canonicalised timestamptz: the
+    // digest is over the bytes the engine saw, and timestamptz drops ".000".
+    const dt = (r.bar_time_raw as string) ||
+      String(r.bar_time).replace(/([+-]\d{2})(:?\d{2})?$/, "Z").replace(/\s/, "T");
     latest.set(dt, {
       datetime: dt,
       open: Number(r.open), high: Number(r.high), low: Number(r.low), close: Number(r.close),

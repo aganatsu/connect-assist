@@ -39,6 +39,12 @@ export interface BarRow {
   timeframe: string;
   bar_time: string;
   /**
+   * The provider's datetime string, verbatim. `bar_time` is the same instant as
+   * a timestamptz, but that round-trips lossily — a feed emitting ".000Z" comes
+   * back without it, and the digest is over the exact bytes the engine saw.
+   */
+  bar_time_raw: string;
+  /**
    * Digest of THIS observation's OHLC, and part of the primary key. A provider
    * that revises an already-closed bar then adds a row instead of silently
    * losing the value an earlier scan actually scored.
@@ -184,6 +190,7 @@ export function buildSnapshot(args: BuildArgs): { bars: BarRow[]; manifest: Mani
         symbol: args.symbol,
         timeframe: input.timeframe,
         bar_time: c.datetime,
+        bar_time_raw: c.datetime,
         bar_hash: hashCandles([c]),
         open: c.open, high: c.high, low: c.low, close: c.close,
         volume: typeof c.volume === "number" ? c.volume : null,
