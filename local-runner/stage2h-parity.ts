@@ -18,6 +18,9 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { decideZone, type ResolvedStyle } from "../supabase/functions/_shared/smcZoneDecision.ts";
+import {
+  decideDirection, buildDirectionConfig, type DirectionStyle,
+} from "../supabase/functions/_shared/smcDirectionDecision.ts";
 import type { HTFConfluenceData } from "../supabase/functions/_shared/impulseZoneEngine.ts";
 import type { Candle, LiquidityPool } from "../supabase/functions/_shared/smcAnalysis.ts";
 import { reconstruct, type ManifestRow } from "../supabase/functions/_shared/smcScanSnapshot.ts";
@@ -86,6 +89,15 @@ function diff(a: unknown, b: unknown, path = ""): string[] {
 }
 
 interface Row { verdict: string; symbol: string; cycle: string; diffs: string[]; note?: string }
+
+// The live pair config, loaded once. Frozen since 2026-09-21 (fingerprint
+// fc0d441e), which is what makes rebuilding dirConfig from it legitimate.
+const { data: cfgRows } = await db.from("bot_configs").select("config_json").limit(1);
+const RAW_CFG = (cfgRows?.[0]?.config_json ?? {}) as Record<string, any>;
+const FROZEN_PAIR_CONFIG: Record<string, unknown> = {
+  ...(RAW_CFG.strategy ?? {}), ...(RAW_CFG.entry ?? {}), ...(RAW_CFG.exit ?? {}),
+  ...(RAW_CFG.risk ?? {}),
+};
 
 async function run(): Promise<Row[]> {
   const { data: ctxs } = await db.from("smc_scan_context").select("*").order("scanned_at");
@@ -165,7 +177,29 @@ async function run(): Promise<Row[]> {
 
     const d1 = diff(rec.unifiedZone, got.unifiedZone, "unifiedZone");
     const d2 = diff(rec.impulseZone, got.impulseZone, "impulseZone");
-    const diffs = [...d1, ...d2];
+
+    // ── direction slice ──────────────────────────────────────────────────
+    // Its inputs are the same 1h/15m/5m arrays already reconstructed above.
+    // dirConfig was not captured before today's deploy, so it is rebuilt from
+    // bot_configs — sound only because the config is frozen and fingerprinted
+    // (fc0d441e, unchanged since 09-21). If that assumption is wrong the
+    // comparison fails loudly rather than quietly passing.
+    let d3: string[] = [];
+    if (rec.simpleDirection) {
+      const dir = decideDirection({
+        style: ctx.style as DirectionStyle,
+        series: {
+          candles: series.candles, m15Candles: series.m15Candles,
+          hourlyCandles: series.hourlyCandles, h4Candles: series.h4Candles,
+          dailyCandles: series.dailyCandles, weeklyCandles: null,
+        },
+        dirConfig: buildDirectionConfig(FROZEN_PAIR_CONFIG),
+        useSimpleDirection: true,
+      });
+      d3 = diff(rec.simpleDirection, dir.detailShape, "simpleDirection");
+    }
+
+    const diffs = [...d1, ...d2, ...d3];
     rows.push({ ...base, verdict: diffs.length ? "MISMATCH" : "EXACT", diffs });
   }
   return rows;

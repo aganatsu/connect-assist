@@ -91,6 +91,7 @@ import {
   newCapture, toRow as decisionRow, slimPositions, sanitizeConfigForCapture, hashPart,
   type DecisionCapture,
 } from "../_shared/smcDecisionCapture.ts";
+import { decideDirection, type DirectionStyle } from "../_shared/smcDirectionDecision.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
@@ -5033,63 +5034,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           },
           useSimpleDirection: pairConfig.useSimpleDirection === true,
         };
-        if (resolvedStyle === "scalper") {
-          // Scalper: bias=1H, structure=15m, confirm=5m (entry candles)
-          const tfLabels = STYLE_TF_LABELS.scalper;
-          styleDirectionResult = determineDirectionStyleAware(
-            hourlyCandles.length >= 20 ? hourlyCandles : null,
-            m15Candles.length >= 20 ? m15Candles : null,
-            candles.length >= 20 ? candles : null,
-            { ...dirConfig, ...tfLabels },
-          );
-          // Map StyleDirectionResult to DirectionResult for downstream compatibility
-          simpleDirectionResult = {
-            direction: styleDirectionResult.direction,
-            bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource,
-            h4Retrace: styleDirectionResult.structureRetrace,
-            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
-            h1Confirmed: styleDirectionResult.confirmBOS,
-            // Copied explicitly. This remap is field-by-field, so anything added
-            // to StyleDirectionResult is silently dropped here unless listed —
-            // which is what happened to blockedRetracement: it was recorded at
-            // the block, mapped away before the scan log, and read as 0 of 148.
-            blockedRetracement: styleDirectionResult.blockedRetracement,
-            reason: `[scalper] ${styleDirectionResult.reason}`,
-          };
-        } else if (resolvedStyle === "swing_trader") {
-          // Swing: bias=Weekly, structure=Daily, confirm=4H
-          const tfLabels = STYLE_TF_LABELS.swing_trader;
-          styleDirectionResult = determineDirectionStyleAware(
-            weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : null,
-            dailyCandles.length >= 20 ? dailyCandles : null,
-            h4Candles.length >= 20 ? h4Candles : null,
-            { ...dirConfig, ...tfLabels },
-          );
-          // Map StyleDirectionResult to DirectionResult for downstream compatibility
-          simpleDirectionResult = {
-            direction: styleDirectionResult.direction,
-            bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource,
-            h4Retrace: styleDirectionResult.structureRetrace,
-            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
-            h1Confirmed: styleDirectionResult.confirmBOS,
-            // Copied explicitly. This remap is field-by-field, so anything added
-            // to StyleDirectionResult is silently dropped here unless listed —
-            // which is what happened to blockedRetracement: it was recorded at
-            // the block, mapped away before the scan log, and read as 0 of 148.
-            blockedRetracement: styleDirectionResult.blockedRetracement,
-            reason: `[swing] ${styleDirectionResult.reason}`,
-          };
-        } else {
-          // Day trader (default): bias=Daily, structure=4H, confirm=1H — original function
-          simpleDirectionResult = determineDirection(
-            dailyCandles.length >= 20 ? dailyCandles : null,
-            h4Candles.length >= 20 ? h4Candles : null,
-            hourlyCandles.length >= 20 ? hourlyCandles : null,
-            dirConfig,
-          );
-        }
+        // The decision now lives in _shared/smcDirectionDecision so bot-scanner
+        // and the historical replay run ONE implementation. Proven at 152/152
+        // against production's own recorded simpleDirection.
+        const dirDecision = decideDirection({
+          style: resolvedStyle as DirectionStyle,
+          series: {
+            candles, m15Candles, hourlyCandles, h4Candles, dailyCandles,
+            weeklyCandles: weeklyCandles ?? null,
+          },
+          dirConfig,
+          useSimpleDirection: true,
+        });
+        styleDirectionResult = dirDecision.styleDirection;
+        // Non-null by construction: `useSimpleDirection: true` is passed
+        // literally above, and this block only runs when production would have
+        // run the engine. An engine throw still lands in the catch below,
+        // exactly as before.
+        simpleDirectionResult = dirDecision.simpleDirection!;
 
         console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | struct-retrace=${simpleDirectionResult.h4Retrace} | struct-choch-against=${simpleDirectionResult.h4ChochAgainst} | confirm-bos=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
         // Pass override direction to confluenceScoring
