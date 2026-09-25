@@ -87,6 +87,10 @@ import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
 } from "../_shared/smcZoneDecision.ts";
+import {
+  newCapture, toRow as decisionRow, slimPositions, sanitizeConfigForCapture,
+  type DecisionCapture,
+} from "../_shared/smcDecisionCapture.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
@@ -2878,6 +2882,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // snapshot writer is visible rather than inferred from an empty table.
   let snapshotsWritten = 0;
   let snapshotFailures = 0;
+  let decisionsWritten = 0;
+  let decisionFailures = 0;
   if (stagingEnabled) {
     try {
       const { data: staged } = await supabase
@@ -4666,7 +4672,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Track which daily/weekly candles were freshly fetched (to persist after scan)
   const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
 
+  // Decision-input capture, one per symbol. Pushed once at the top of the loop
+  // and MUTATED as stages run — held by reference, so the 24 different exit
+  // paths below need no changes and a pair that stops early simply has fewer
+  // stages filled in. Observational only; every write is a plain assignment.
+  const decisionCaptures: DecisionCapture[] = [];
+
   for (const pair of scanOrder) {
+    const cap = newCapture(scanCycleId, userId, BOT_ID, pair, null);
+    decisionCaptures.push(cap);
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
@@ -4682,6 +4696,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
     const offHoursImplicitlyAllowed = normalizedSession === "offhours" && coreSessionsEnabled;
     if (!pairAssetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions) && !offHoursImplicitlyAllowed) {
+      cap.reached_stage = "session_skipped";
+      cap.session_news_input = { session: session.name, enabled: false, weekday: new Date().getUTCDay() };
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
       continue;
     }
@@ -4691,6 +4707,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // e.g. Thursday 9PM NY = Friday 01:00 UTC → utcDay was 5 (Fri), triggering false weekend close
     const fxIsClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
     if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
+      cap.reached_stage = "market_closed";
       scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
     }
@@ -5001,6 +5018,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           priceAwareStructureBlocks: pairConfig.priceAwareStructureBlocks === true,
         };
 
+        cap.style = resolvedStyle;
+        cap.reached_stage = "direction";
+        // The three candle arrays are already captured by the zone snapshot
+        // (1h / 15m / 5m), so only the config and the null-gating are recorded
+        // here — storing the bars twice would be a second copy that can drift.
+        cap.direction_input = {
+          style: resolvedStyle,
+          dirConfig,
+          tfLabels: STYLE_TF_LABELS[resolvedStyle as keyof typeof STYLE_TF_LABELS] ?? null,
+          seriesLengths: {
+            hourly: hourlyCandles.length, m15: m15Candles.length, entry: candles.length,
+            daily: dailyCandles.length, h4: h4Candles.length, weekly: weeklyCandles?.length ?? 0,
+          },
+          useSimpleDirection: pairConfig.useSimpleDirection === true,
+        };
         if (resolvedStyle === "scalper") {
           // Scalper: bias=1H, structure=15m, confirm=5m (entry candles)
           const tfLabels = STYLE_TF_LABELS.scalper;
@@ -5096,6 +5128,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
      }
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
+    // Confluence inputs. The candle arrays are already snapshotted; what was
+    // never recorded is the resolved pairConfig the scorer actually saw,
+    // including the _htf* fields injected into it a few lines above.
+    cap.reached_stage = "confluence";
+    cap.confluence_input = {
+      dailyPassed: dailyCandles.length >= 10,
+      hourlyPassed: hourlyCandles.length > 0,
+      pairConfig: sanitizeConfigForCapture(pairConfig),
+    };
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
 
     // ── Structure shadow telemetry (flag: STRUCTURE_CANONICAL_SHADOW) ──
@@ -5839,6 +5880,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
         const judasMSSIndex = candles.length - 1;
+        cap.ict_input = { ...(cap.ict_input as Record<string, unknown> ?? {}),
+          judas: { mssIndex: judasMSSIndex, direction: judasDirection, config: judasConfig } };
         ictJudasResult = detectICTJudasSwing(candles, judasMSSIndex, judasDirection, judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
         const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
@@ -5902,7 +5945,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
           enablePMSession: pairConfig.ictKillZonePMSession,
         };
-        ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
+        // `new Date()` makes this the one stage a bar-only replay can never
+        // reproduce. Recording the instant is what makes it replayable at all.
+        const kzNow = new Date();
+        cap.reached_stage = "ict";
+        cap.ict_input = {
+          killZone: { at: kzNow.toISOString(), config: kzConfig },
+          ...(cap.ict_input as Record<string, unknown> ?? {}),
+        };
+        ictKZResult = evaluateICTKillZone(kzNow, kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
         const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.currentWindow})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
@@ -5957,6 +6008,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const weeklyPnLPercent = (recentTrades || [])
           .filter((t: any) => t.closed_at && new Date(t.closed_at) >= weekStart)
           .reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        // Counters come from trade history, not from bars — unrecoverable later.
+        cap.risk_input = { consecutiveLosses, tradesToday, dailyPnLPercent, weeklyPnLPercent, config: riskConfig };
         ictRiskResult = assessRisk({ consecutiveLosses, tradesToday, dailyPnLPercent, weeklyPnLPercent, config: riskConfig });
         const modeTag = "OFF"; // Risk is always informational for now
         const reasonText = ictRiskResult.reasons.join("; ") || "ok";
@@ -6742,12 +6795,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
         : null;
 
+      // runSafetyGates reads paper_trade_history mid-decision, so its inputs
+      // are not a pure function of anything snapshotted. Recorded here because
+      // no replay could otherwise reconstruct them.
+      cap.reached_stage = "gates";
+      cap.gates_input = {
+        direction: analysis.direction,
+        account: account ? {
+          balance: account.balance, peak_balance: account.peak_balance,
+          daily_pnl_base: account.daily_pnl_base, daily_pnl_base_date: account.daily_pnl_base_date,
+          execution_mode: account.execution_mode, scan_count: account.scan_count,
+        } : null,
+        openPositions: slimPositions(openPosArr),
+        dailyPassed: dailyCandles.length >= 10,
+        rateMap,
+        convictionCandleCount: convictionCandles?.length ?? null,
+        directionVerdict,
+        propFirmActive: propFirmGateResult?.enabled || false,
+      };
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
       );
+      cap.gates_output = {
+        gates: (gates ?? []).map((g: any) => ({ passed: g.passed, reason: g.reason })),
+        blocking: (gates ?? []).filter((g: any) => !g.passed).map((g: any) => g.reason),
+        allPassed: (gates ?? []).every((g: any) => g.passed),
+      };
       // ── Game Plan Filter Gate ──
       // Was a binary veto, converted to info-only by the Phase 7 migration on
       // the grounds that GP Bias Confidence scoring would carry the load. It has
@@ -6811,6 +6887,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const newsImpacts = (activeGamePlan as any)?.newsImpacts;
       if (newsImpacts && newsImpacts.length > 0 && (config as any).newsFilterEnabled !== false) {
         try {
+          cap.session_news_input = { ...(cap.session_news_input as Record<string, unknown> ?? {}),
+            newsImpacts, direction: analysis.direction };
           const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
           if (newsAlignment.conflicting) {
             // Strong news conflict — block the trade
@@ -7189,6 +7267,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Runs AFTER all 21 gates pass. Does NOT block trades — logs exposure and optionally reduces size.
         let correlationSizeMultiplier = 1.0;
         try {
+          cap.reached_stage = "portfolio";
+          cap.portfolio_input = {
+            candidate: { symbol: pair, direction: analysis.direction, size: 0.01 },
+            openPositions: slimPositions(openPosArr.filter((p: any) => p.position_status === "open")),
+            options: { staticOnly: true },
+            maxOpenPositions: config.maxOpenPositions,
+            maxPositionsPerSymbol: (config as any).maxPositionsPerSymbol ?? null,
+            maxCorrelatedPositions: (config as any).maxCorrelatedPositions ?? null,
+            maxCorrelation: (config as any).maxCorrelation ?? null,
+            maxPortfolioHeat: (config as any).maxPortfolioHeat ?? null,
+            allowSameDirectionStacking: (config as any).allowSameDirectionStacking ?? null,
+            openCount: openPosArr.length,
+          };
           const portfolioCheck = checkPortfolioConflict(
             { symbol: pair, direction: analysis.direction as "long" | "short", size: 0.01 }, // size doesn't matter for correlation check
             openPosArr.filter((p: any) => p.position_status === "open").map((p: any) => ({
@@ -7197,6 +7288,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             })),
             { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
           );
+          cap.portfolio_output = {
+            concentrationScore: portfolioCheck.concentrationScore,
+            conflicts: portfolioCheck.conflicts.map((c: any) => ({ type: c.type, pairs: c.conflictsWith, detail: c.detail })),
+            currencyExposure: portfolioCheck.currencyExposure,
+          };
           if (portfolioCheck.concentrationScore > 0.5) {
             // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
             correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
@@ -8466,6 +8562,56 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     scanDetails.push(detail);
   }
 
+  // ── OBSERVABILITY: persist the per-symbol decision inputs ────────────────
+  //
+  // One batched write AFTER the pair loop, from objects accumulated by
+  // reference during it. Nothing here is read by any gate, score or execution
+  // path; the loop has already finished and every trade decision is made.
+  //
+  // Fail-open by construction: its own try/catch, warns and counts, never
+  // rethrows. A snapshot must not be able to fail a trading cycle.
+  //
+  // This exists so the remaining decision stages can be extracted and proved
+  // the way the zone slice was — against recorded production truth rather than
+  // against another copy of the same code.
+  try {
+    // The final verdict per symbol, read off the detail the scan just built.
+    // Derived rather than duplicated: `detail` is what scan_logs records, so
+    // taking the verdict from it keeps the two from disagreeing.
+    const detailBySymbol = new Map<string, any>();
+    for (const d of scanDetails) if (d && (d as any).pair) detailBySymbol.set((d as any).pair, d);
+    for (const c of decisionCaptures) {
+      const d = detailBySymbol.get(c.symbol);
+      if (!d) continue;
+      c.final_decision = {
+        status: d.status ?? null,
+        skipReason: d.skipReason ?? null,
+        reason: d.reason ?? null,
+        signalSource: d.signalSource ?? null,
+        score: d.score ?? null,
+        direction: d.direction ?? null,
+        entry: d.entry ?? d.suggestedEntry ?? null,
+        stopLoss: d.stopLoss ?? d.sl ?? null,
+        takeProfit: d.takeProfit ?? d.tp ?? null,
+        riskPips: d.riskPips ?? null,
+        tradePlaced: d.status === "signal" || d.status === "entered",
+        correlationAdvisory: d.correlationAdvisory ?? null,
+        staging: d.staging ?? null,
+      };
+      if (c.reached_stage === "portfolio" || c.reached_stage === "gates") c.reached_stage = "final";
+    }
+    const rows = decisionCaptures.map(decisionRow);
+    if (rows.length) {
+      const { error } = await supabase.from("smc_scan_decision")
+        .upsert(rows, { onConflict: "scan_cycle_id,symbol" });
+      if (error) throw new Error(error.message);
+      decisionsWritten += rows.length;
+    }
+  } catch (e: any) {
+    decisionFailures++;
+    console.warn(`[scan ${scanCycleId}] decision capture write failed (non-fatal): ${e?.message}`);
+  }
+
   // Update counters — scope to this bot's account
   const counterUpdate = supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
@@ -8578,6 +8724,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // stopped is visible in the scan meta rather than discovered later as an
       // empty table — which is exactly how scan_candle_snapshots went unnoticed.
       scanSnapshots: { written: snapshotsWritten, failed: snapshotFailures },
+      decisionCapture: { written: decisionsWritten, failed: decisionFailures },
       candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "polygon" | "none"
       sourceBreakdown: {
         metaapi: sourceTally.metaapi,
