@@ -83,10 +83,13 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { buildSnapshot, buildContext, type SnapshotInput } from "../_shared/smcScanSnapshot.ts";
+import {
+  decideZone, buildHtfConfluence, hasMinZoneCandles,
+  type ResolvedStyle as ZoneStyle,
+} from "../_shared/smcZoneDecision.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
-import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { observeStructureLag } from "../_shared/structureLagObserver.ts";
 import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
@@ -5496,226 +5499,75 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
 
-    // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
-    const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
-      h4OBs: h4OBs ?? [],
-      h4FVGs: h4FVGs ?? [],
-      h4Breakers: h4Breakers ?? [],
-      htfFibLevels: htfFibLevels4H ?? null,
-      dailyFibLevels: htfFibLevelsD ?? null,
-      htfPD: htfPD4H ?? null,
-      direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
-    } : null;
+    // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine).
+    // Assembly lives in _shared/smcZoneDecision so the historical backtester
+    // builds it identically instead of re-deriving it from guessed parameters.
+    const htfConfluenceData: HTFConfluenceData | null = buildHtfConfluence({
+      direction: analysis.direction as "long" | "short" | null,
+      h4OBs, h4FVGs, h4Breakers, htfFibLevels4H, htfFibLevelsD, htfPD4H,
+    });
 
-    // ── Consolidated Zone Engine (story-driven waterfall with liquidity + confirmation) ──
-    // Style-aware candle mapping for findUnifiedZone:
-    //   findUnifiedZone(h1Candles, h4Candles, entryCandles, ..., dailyCandles?, confirmCandles?, ltfConfirmCandles?)
-    //   Scalper:     h1=5m(entry), h4=15m, entry=5m, daily=1H, confirm=15m, ltfConfirm=5m
-    //   Day Trader:  h1=1H, h4=4H, entry=15m, daily=Daily, confirm=4H/1H, ltfConfirm=1H/15m
-    //   Swing:       h1=4H, h4=Daily, entry=1H, daily=Weekly, confirm=Daily, ltfConfirm=4H
-    // The slot names (h1, h4, daily) are just positional — the engine is TF-agnostic.
-    const hasMinZoneCandles = resolvedStyle === "scalper"
-      ? candles.length >= 20
-      : resolvedStyle === "swing_trader"
-        ? h4Candles.length >= 20
-        : hourlyCandles.length >= 20;
-    if (analysis.direction && hasMinZoneCandles) {
+    // ── Consolidated Zone Engine ────────────────────────────────────────────
+    // The decision itself now lives in _shared/smcZoneDecision so bot-scanner
+    // and the historical backtester run ONE implementation. This block keeps
+    // only what a caller owns: assembling inputs from what was fetched, and
+    // writing the results onto `detail`.
+    const zoneSeries = {
+      candles, m15Candles, hourlyCandles, h4Candles, dailyCandles,
+      weeklyCandles: weeklyCandles ?? null,
+    };
+    if (analysis.direction && hasMinZoneCandles(resolvedStyle as ZoneStyle, zoneSeries)) {
       try {
-        // Same two-layer floor bot-scanner applies to the real stop at :5787.
-        // Duplicated rather than hoisted because that block runs much later and
-        // only on the entry path, while this is needed for every evaluation.
-        // Display only — feeds EntryStory.executable, never a gate.
+        // Two-layer stop floor. Display only — feeds EntryStory.executable,
+        // never a gate.
         const zoneSpec = SPECS[pair] || SPECS["EUR/USD"];
         const zoneStaticMinSlPips = resolveStaticFloorPips(pairConfig, pair);
         const zoneAtrVal = atrForConsumers;
         const zoneAtrFloorPips = zoneAtrVal > 0
           ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
         const effectiveMinSlPipsForZone = Math.max(zoneStaticMinSlPips, zoneAtrFloorPips);
-        // Hoisted rather than inlined at the engine config, so the snapshot
-        // records the same number the engine was given instead of recomputing
-        // it — and so this stays one floor call site, not two.
+        // Hoisted so the snapshot records the same number the engine was given.
         const zoneMaxSlPips = zoneStaticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
-        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
-        // Combine liquidity pools from the relevant timeframes
+        // Combine liquidity pools from the relevant timeframes. Order matters.
         const combinedLiqPools = [
           ...htfLiquidityPoolsD,
           ...htfLiquidityPools4H,
           ...htfLiquidityPools1H,
         ];
 
-        // Style-aware candle slot mapping
-        let zoneH1Candles: Candle[];
-        let zoneH4Candles: Candle[];
-        let zoneEntryCandles: Candle[];
-        let zoneDailyCandles: Candle[] | undefined;
-        let zoneConfirmCandles: Candle[];
-        let zoneLtfConfirmCandles: Candle[];
+        const zoneDecision = decideZone({
+          symbol: pair,
+          style: resolvedStyle as ZoneStyle,
+          series: zoneSeries,
+          direction: analysis.direction as "long" | "short",
+          lastPrice: analysis.lastPrice,
+          htfConfluence: htfConfluenceData,
+          liquidityPools: combinedLiqPools,
+          minSlPips: effectiveMinSlPipsForZone,
+          maxSlPips: zoneMaxSlPips,
+          tpRatio: config.tpRatio,
+          entryDepth: (pairConfig as any).zoneEntryDepth,
+          pipSize: zoneSpec.pipSize,
+          strictATRMult: pairConfig.marketFillStrictATRMult,
+          fibMaxRetracement: pairConfig.fibMaxRetracement,
+          originOBRetest: pairConfig.originOBRetest,
+          impulseZoneEnabled: pairConfig.impulseZoneEnabled !== false,
+        });
 
-        // Style-aware TF labels for the zone engine
-        let zoneTFLabels: TFSlotLabels;
-        // Canonical interval per slot, for the observability snapshot only.
-        // Distinct from zoneTFLabels, which is display text the engine echoes
-        // ("1H", "D", "W"); bars are keyed by interval, so they need one
-        // spelling — otherwise the same 15m bar is stored twice under "15m"
-        // and "confirm" and the deduplication that justifies this design fails.
-        let zoneSlotTFs: Record<string, string>;
-        if (resolvedStyle === "scalper") {
-          zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
-          // Scalper waterfall: 1H → 15m → 5m (entry)
-          zoneH1Candles = candles;              // 5m = lowest structural TF slot
-          zoneH4Candles = m15Candles;           // 15m = mid structural TF slot
-          zoneEntryCandles = candles;           // 5m entry
-          zoneDailyCandles = hourlyCandles.length >= 20 ? hourlyCandles : undefined; // 1H = highest TF slot
-          zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
-          zoneLtfConfirmCandles = candles;
-          zoneSlotTFs = { top: "1h", mid: "15m", low: "5m", entry: "5m",
-            confirm: m15Candles.length >= 15 ? "15m" : "5m", ltf_confirm: "5m" };
-        } else if (resolvedStyle === "swing_trader") {
-          zoneTFLabels = { top: "W", mid: "D", low: "4H" };
-          // Swing waterfall: Weekly → Daily → 4H (entry=1H)
-          zoneH1Candles = h4Candles;            // 4H = lowest structural TF slot
-          zoneH4Candles = dailyCandles;         // Daily = mid structural TF slot
-          zoneEntryCandles = candles;           // 1H entry
-          zoneDailyCandles = weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : undefined; // Weekly = highest TF slot
-          zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
-          zoneLtfConfirmCandles = h4Candles;
-          zoneSlotTFs = { top: "1w", mid: "1d", low: "4h", entry: "1h",
-            confirm: dailyCandles.length >= 15 ? "1d" : "4h", ltf_confirm: "4h" };
-        } else {
-          zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
-          // Day trader (default): Daily → 4H → 1H (entry=15m)
-          zoneH1Candles = hourlyCandles;
-          zoneH4Candles = h4Candles;
-          zoneEntryCandles = candles;           // 15m entry
-          zoneDailyCandles = dailyCandles.length >= 30 ? dailyCandles : undefined;
-          zoneConfirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
-          zoneLtfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
-          zoneSlotTFs = { top: "1d", mid: "4h", low: "1h", entry: "15m",
-            confirm: dailyCandles.length >= 30 ? "4h" : "1h",
-            ltf_confirm: dailyCandles.length >= 30 ? "1h" : "15m" };
-        }
+        const unifiedResult = zoneDecision.unified!;
+        const zoneTFLabels = zoneDecision.slots!.labels;
+        const zoneSlotTFs = zoneDecision.slots!.intervals;
+        const zoneH1Candles = zoneDecision.slots!.h1;
+        const zoneH4Candles = zoneDecision.slots!.h4;
+        const zoneEntryCandles = zoneDecision.slots!.entry;
+        const zoneDailyCandles = zoneDecision.slots!.daily;
+        const zoneConfirmCandles = zoneDecision.slots!.confirm;
+        const zoneLtfConfirmCandles = zoneDecision.slots!.ltfConfirm;
+        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
 
-        const unifiedResult: UnifiedZoneResult = findUnifiedZone(
-          zoneH1Candles,
-          zoneH4Candles,
-          zoneEntryCandles,
-          unifiedDir as "bullish" | "bearish",
-          analysis.lastPrice,
-          combinedLiqPools,
-          htfConfluenceData ?? undefined,
-          {
-            strictATRMult: pairConfig.marketFillStrictATRMult,
-            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-            fibMaxRetracement: pairConfig.fibMaxRetracement,
-            originOBRetest: pairConfig.originOBRetest,
-          },
-          zoneDailyCandles,
-          zoneConfirmCandles,
-          zoneLtfConfirmCandles,
-          // UnifiedZoneConfig. minRR and requireConfirmation stay at their
-          // defaults — both gate whether an entry object exists at all, so
-          // moving them changes trade selection. minSlPips and tpRatio are
-          // supplied only so the engine can report what execution WOULD place
-          // (EntryStory.executable); they feed no gate.
-          {
-            minSlPips: effectiveMinSlPipsForZone,
-            // Same cap the Unified Zone SL Override enforces at :5838. A zone
-            // stop above it is discarded and execution uses its own structural
-            // stop instead, so the engine needs the bound to report that.
-            maxSlPips: zoneMaxSlPips,
-            tpRatio: config.tpRatio,
-            entryDepth: (pairConfig as any).zoneEntryDepth,
-          },
-          zoneTFLabels,
-        );
-
-        // Store the full unified story for the frontend narrative panel
-        (detail as any).unifiedZone = {
-          hasZone: unifiedResult.hasZone,
-          state: unifiedResult.state,
-          selectedTF: unifiedResult.selectedTF,
-          unifiedScore: unifiedResult.unifiedScore,
-          scoreBreakdown: unifiedResult.scoreBreakdown,
-          impulse: unifiedResult.impulse,
-          zone: unifiedResult.zone,
-          price: unifiedResult.price,
-          liquidity: unifiedResult.liquidity ? {
-            liquidityScore: unifiedResult.liquidity.liquidityScore,
-            summary: unifiedResult.liquidity.summary,
-            nearbyPools: unifiedResult.liquidity.nearbyPools.length,
-            sweepEvent: unifiedResult.liquidity.sweepEvent ? {
-              level: unifiedResult.liquidity.sweepEvent.level,
-              type: unifiedResult.liquidity.sweepEvent.type,
-              rejected: unifiedResult.liquidity.sweepEvent.rejected,
-            } : null,
-          } : null,
-          confirmation: unifiedResult.confirmation ? {
-            type: unifiedResult.confirmation.type,
-            score: unifiedResult.confirmation.score,
-            entryReady: unifiedResult.confirmation.entryReady,
-            direction: unifiedResult.confirmation.direction,
-            detail: unifiedResult.confirmation.detail,
-          } : null,
-          entry: unifiedResult.entry,
-          storySummary: unifiedResult.storySummary,
-          reason: unifiedResult.reason,
-        };
-
-        // Derive izData (detail.impulseZone) from the unified result's multiTFResult
-        // for backward compatibility with the 58 downstream references to izData.*
+        (detail as any).unifiedZone = zoneDecision.unifiedZone;
+        (detail as any).impulseZone = zoneDecision.impulseZone;
         const multiTF = unifiedResult.multiTFResult;
-        (detail as any).impulseZone = {
-          hasZone: !!multiTF.bestZone,
-          selectedTF: multiTF.selectedTF,
-          reason: multiTF.reason,
-          impulse: multiTF.bestZone?.impulse ? {
-            high: multiTF.bestZone.impulse.high,
-            low: multiTF.bestZone.impulse.low,
-            direction: multiTF.bestZone.impulse.direction,
-          } : null,
-          bestZone: multiTF.bestZone ? {
-            type: multiTF.bestZone.zone.poi.type,
-            high: multiTF.bestZone.zone.poi.high,
-            low: multiTF.bestZone.zone.poi.low,
-            fibLevel: multiTF.bestZone.zone.fibLevel,
-            fibDepth: multiTF.bestZone.zone.fibDepth,
-            totalScore: multiTF.bestZone.zone.totalScore,
-            srConfirmed: multiTF.bestZone.zone.srConfirmed,
-            ltfRefined: multiTF.bestZone.zone.ltfRefined,
-            ltfType: multiTF.bestZone.zone.ltfType || null,
-            refinedEntry: multiTF.bestZone.zone.refinedEntry || null,
-            refinedSL: multiTF.bestZone.zone.refinedSL || null,
-            htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
-            htfLayers: multiTF.bestZone.zone.htfLayers,
-            priceAtZone: multiTF.bestZone.priceAtZone,
-            priceInsideZone: multiTF.bestZone.priceInsideZone,
-            priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
-            sideOk: multiTF.bestZone.sideOk,
-            distanceToZone: multiTF.bestZone.distanceToZone,
-            distancePips: multiTF.bestZone.distancePips,
-            // How deep into the zone price has actually come, as a fraction of
-            // zone width from the NEAR edge. This is the number that decides
-            // what `zoneEntryDepth` should be: an entry at depth D fills only
-            // when penetration reaches D, and today D is pinned at 1.
-            //   <0 price has not entered the zone
-            //    0 just touched the near edge
-            //    1 reached the far edge  (what the entry currently requires)
-            //   >1 traded clean through
-            zonePenetration: (() => {
-              const zw = multiTF.bestZone.zone.poi.high - multiTF.bestZone.zone.poi.low;
-              if (!(zw > 0)) return null;
-              return analysis.direction === "long"
-                ? (multiTF.bestZone.zone.poi.high - analysis.lastPrice) / zw
-                : (analysis.lastPrice - multiTF.bestZone.zone.poi.low) / zw;
-            })(),
-            entryDepthInUse: (pairConfig as any).zoneEntryDepth ?? 1,
-          } : null,
-          allZonesCount: multiTF.allZones.length,
-          h1HasZone: !!multiTF.h1Result.bestZone,
-          h4HasZone: !!multiTF.h4Result?.bestZone,
-          dailyHasZone: !!multiTF.dailyResult?.bestZone,
-          scoringEnabled: pairConfig.impulseZoneEnabled !== false,
-        };
 
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
 

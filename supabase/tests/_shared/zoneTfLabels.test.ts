@@ -17,10 +17,14 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
  *
  * Ported from 59a7b8b7 (PR #75, "use style-aware TF labels in zone engine
  * instead of hardcoded D/4H/1H"), removed by the 2026-09-01 revert.
+ *
+ * The mapping moved out of bot-scanner into _shared/smcZoneDecision in Stage 2H
+ * so the historical backtester runs the same one. These assertions follow it —
+ * the invariant is unchanged, only its address is.
  */
 
 const scanner = await Deno.readTextFile(
-  new URL("../../functions/bot-scanner/index.ts", import.meta.url),
+  new URL("../../functions/_shared/smcZoneDecision.ts", import.meta.url),
 );
 const panel = await Deno.readTextFile(
   new URL("../../../src/components/ZoneStoryPanel.tsx", import.meta.url),
@@ -28,9 +32,9 @@ const panel = await Deno.readTextFile(
 
 Deno.test("each style declares its own slot labels", () => {
   const expected: Array<[string, string]> = [
-    ["scalper", '{ top: "1H", mid: "15m", low: "5m" }'],
-    ["swing", '{ top: "W", mid: "D", low: "4H" }'],
-    ["day_trader", '{ top: "D", mid: "4H", low: "1H" }'],
+    ["scalper", 'labels: { top: "1H", mid: "15m", low: "5m" }'],
+    ["swing", 'labels: { top: "W", mid: "D", low: "4H" }'],
+    ["day_trader", 'labels: { top: "D", mid: "4H", low: "1H" }'],
   ];
   for (const [style, literal] of expected) {
     assert(
@@ -44,18 +48,17 @@ Deno.test("the labels match the candle arrays actually passed", () => {
   // The label is only true if the slot really holds that timeframe. Scalper
   // fills top with hourlyCandles, mid with m15Candles, low with the 5m entry
   // candles; if that assignment changes, the label silently starts lying again.
-  const at = scanner.indexOf('zoneTFLabels = { top: "1H", mid: "15m", low: "5m" }');
-  assert(at > -1, "scalper labels not found");
-  // Assignments follow the label declaration, not precede it.
-  const block = scanner.slice(at, at + 700);
-  assert(/zoneH1Candles = candles;/.test(block), "scalper low slot should be the 5m entry candles");
-  assert(/zoneH4Candles = m15Candles;/.test(block), "scalper mid slot should be 15m");
-  assert(/zoneDailyCandles = hourlyCandles/.test(block), "scalper top slot should be 1H");
+  const at = scanner.indexOf('if (style === "scalper")');
+  assert(at > -1, "scalper branch not found");
+  const block = scanner.slice(at, at + 900);
+  assert(/h1: s\.candles,/.test(block), "scalper low slot should be the 5m entry candles");
+  assert(/h4: s\.m15Candles,/.test(block), "scalper mid slot should be 15m");
+  assert(/daily: s\.hourlyCandles\.length >= 20/.test(block), "scalper top slot should be 1H");
 });
 
 Deno.test("labels are threaded into the zone engine", () => {
   assert(
-    /findUnifiedZone\([\s\S]{0,1800}zoneTFLabels,/.test(scanner),
+    /findUnifiedZone\([\s\S]{0,1800}slots\.labels,/.test(scanner),
     "zoneTFLabels must be passed to findUnifiedZone or the engine falls back to defaults",
   );
 });

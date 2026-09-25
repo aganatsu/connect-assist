@@ -214,12 +214,12 @@ Deno.test("every zone-engine slot gets a real interval, never a slot name", asyn
   // Bars are keyed (symbol, timeframe, bar_time). Writing "confirm" into the
   // timeframe column would store the same 15m bar twice and destroy the
   // deduplication the whole design rests on.
-  const src = await Deno.readTextFile("supabase/functions/bot-scanner/index.ts");
-  const at = src.indexOf("let zoneSlotTFs: Record<string, string>;");
-  assert(at > 0, "the canonical slot-interval map is gone");
-  const tail = src.slice(at, src.indexOf("buildSnapshot({"));
-  // Three style branches must each define all six slots.
-  const assignments = [...tail.matchAll(/zoneSlotTFs = \{([\s\S]*?)\};/g)];
+  // The map moved to _shared/smcZoneDecision in Stage 2H; the invariant that
+  // every slot carries a real interval is unchanged.
+  const src = await Deno.readTextFile("supabase/functions/_shared/smcZoneDecision.ts");
+  // Indentation differs between the early-return branches and the final one,
+  // so match on the block contents rather than on trailing whitespace.
+  const assignments = [...src.matchAll(/intervals: \{([^}]*)\}/g)];
   assertEquals(assignments.length, 3, "scalper, swing and day_trader must each map their slots");
   for (const a of assignments) {
     for (const slot of ["top", "mid", "low", "entry", "confirm", "ltf_confirm"]) {
@@ -268,10 +268,12 @@ Deno.test("the scanner's snapshot write is fail-open and reaches no decision", a
 
 Deno.test("the write happens AFTER the engine has run, so inputs are already fixed", async () => {
   const src = await Deno.readTextFile("supabase/functions/bot-scanner/index.ts");
-  const engine = src.indexOf("const unifiedResult: UnifiedZoneResult = findUnifiedZone(");
+  // findUnifiedZone now runs inside decideZone, so the ordering invariant is
+  // that the snapshot is built after the decision call returns.
+  const engine = src.indexOf("const zoneDecision = decideZone({");
   const snap = src.indexOf("buildSnapshot({");
   assert(engine > 0 && snap > engine,
-    "the snapshot must be built after findUnifiedZone, or it could influence what is scored");
+    "the snapshot must be built after the zone decision, or it could influence what is scored");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
