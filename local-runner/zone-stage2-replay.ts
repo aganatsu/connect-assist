@@ -252,7 +252,11 @@ async function replaySymbol(scanCycleId: string, symbol: string): Promise<Report
   let matched: Record<string, unknown> | undefined;
   let joinedBy = "scan_cycle_id";
   for (const row of logs ?? []) {
-    const details = (row.details_json ?? []) as Record<string, unknown>[];
+    // scan_logs.details_json is usually an array of per-pair details with a
+    // leading __meta element, but some rows store an object instead. Coercing
+    // rather than assuming — a throw here would abort the whole audit run.
+    const raw = row.details_json;
+    const details = (Array.isArray(raw) ? raw : []) as Record<string, unknown>[];
     const meta = details.find((d) => d.__meta === true);
     if (meta && meta.scan_cycle_id && meta.scan_cycle_id !== scanCycleId) continue;
     if (!meta?.scan_cycle_id) joinedBy = "timestamp_proximity";
