@@ -281,6 +281,40 @@ price never reaching the zone (2,462) and no impulse existing at all (2,166).
 
 ---
 
+## 9a. Stage 2 amendments (2026-09-25)
+
+Three facts established in `SMC_ZONE_IMPULSE_CAUSAL_REPLAY_STAGE2.md` change how
+this specification must be read. Nothing in production moved.
+
+1. **The last bar is FORMING, not closed.** `closedBarsOnly` is imported only by
+   `ipo-paper-runner`; the SMC path never calls it. Measured over 1,200 scans,
+   the recorded `currentPrice` sat strictly inside the then-forming 5m bar in
+   **61.2%** of cases and equalled the last closed bar's close in only 14.5%.
+   Every proximity read in §4.1 — `priceAtZone`, `priceAtZoneStrict`, and
+   therefore the state machine — is evaluated against a running mid-bar price.
+   A further **21.6%** priced outside the forming bar's range entirely, which
+   points at `cachedFetch` staleness and is unexplained.
+
+2. **§2.2 V7 is not a marginal lookahead.** Of 56,136 impulses accepted by a
+   causal replay, **30,801 (54.9%) had their origin broken by a later close**,
+   and all 30,801 had already produced a zone. A whole-history replay of this
+   engine sees fewer than half the impulses that existed, selected on having
+   survived. Any historical figure derived that way describes a different
+   strategy.
+
+3. **The zone score depends on `htfConfluenceData`**, built from 4H OBs, FVGs,
+   breakers, 4H/Daily fib levels and the 4H premium/discount read
+   (`bot-scanner` L5495). It is not optional context: omitting it changes which
+   POI wins inside the same impulse, and restoring it moved re-derivation from
+   82.7% to 92.1% overall and from 37.3% to 84.9% on AUD/USD. §3.2 should be
+   read as "zone selection is HTF-coupled", not as a self-contained ranking.
+
+**Proposed research control label for this frozen behaviour:**
+`smc-zone-impulse-control-v1` at commit `8530eef4`. A label, not a validation
+claim, and not yet added to production.
+
+---
+
 ## 10. Gaps this specification must record
 
 1. **No strategy version constant.** Nothing in the zone path declares a version,
@@ -291,3 +325,6 @@ price never reaching the zone (2,462) and no impulse existing at all (2,166).
    "what happened to the zones we saw" from stored data alone.
 4. **`scan_candle_snapshots` is empty** — the table designed to make replay
    possible has never been written to. This is what blocks determinism (audit §M).
+   A deduplicated observability design that costs ~2.5 MB/day instead of the
+   ~249 MB/day the existing jsonb shape would cost is specified in Stage 2 §2F
+   and implemented on `feat/smc-scan-snapshot-observability`. Not deployed.
