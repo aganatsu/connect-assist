@@ -82,6 +82,7 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
+import { buildSnapshot, buildContext, type SnapshotInput } from "../_shared/smcScanSnapshot.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
@@ -2870,6 +2871,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let stagedExpired = 0;
   let stagedInvalidated = 0;
   let stagedNew = 0;
+  // Observability counters. Reported in the scan meta so a silently failing
+  // snapshot writer is visible rather than inferred from an empty table.
+  let snapshotsWritten = 0;
+  let snapshotFailures = 0;
   if (stagingEnabled) {
     try {
       const { data: staged } = await supabase
@@ -5526,6 +5531,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const zoneAtrFloorPips = zoneAtrVal > 0
           ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
         const effectiveMinSlPipsForZone = Math.max(zoneStaticMinSlPips, zoneAtrFloorPips);
+        // Hoisted rather than inlined at the engine config, so the snapshot
+        // records the same number the engine was given instead of recomputing
+        // it — and so this stays one floor call site, not two.
+        const zoneMaxSlPips = zoneStaticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
         const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
         // Combine liquidity pools from the relevant timeframes
         const combinedLiqPools = [
@@ -5544,6 +5553,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
         // Style-aware TF labels for the zone engine
         let zoneTFLabels: TFSlotLabels;
+        // Canonical interval per slot, for the observability snapshot only.
+        // Distinct from zoneTFLabels, which is display text the engine echoes
+        // ("1H", "D", "W"); bars are keyed by interval, so they need one
+        // spelling — otherwise the same 15m bar is stored twice under "15m"
+        // and "confirm" and the deduplication that justifies this design fails.
+        let zoneSlotTFs: Record<string, string>;
         if (resolvedStyle === "scalper") {
           zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
           // Scalper waterfall: 1H → 15m → 5m (entry)
@@ -5553,6 +5568,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles = hourlyCandles.length >= 20 ? hourlyCandles : undefined; // 1H = highest TF slot
           zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
           zoneLtfConfirmCandles = candles;
+          zoneSlotTFs = { top: "1h", mid: "15m", low: "5m", entry: "5m",
+            confirm: m15Candles.length >= 15 ? "15m" : "5m", ltf_confirm: "5m" };
         } else if (resolvedStyle === "swing_trader") {
           zoneTFLabels = { top: "W", mid: "D", low: "4H" };
           // Swing waterfall: Weekly → Daily → 4H (entry=1H)
@@ -5562,6 +5579,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles = weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : undefined; // Weekly = highest TF slot
           zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
           zoneLtfConfirmCandles = h4Candles;
+          zoneSlotTFs = { top: "1w", mid: "1d", low: "4h", entry: "1h",
+            confirm: dailyCandles.length >= 15 ? "1d" : "4h", ltf_confirm: "4h" };
         } else {
           zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
           // Day trader (default): Daily → 4H → 1H (entry=15m)
@@ -5571,6 +5590,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles = dailyCandles.length >= 30 ? dailyCandles : undefined;
           zoneConfirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
           zoneLtfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
+          zoneSlotTFs = { top: "1d", mid: "4h", low: "1h", entry: "15m",
+            confirm: dailyCandles.length >= 30 ? "4h" : "1h",
+            ltf_confirm: dailyCandles.length >= 30 ? "1h" : "15m" };
         }
 
         const unifiedResult: UnifiedZoneResult = findUnifiedZone(
@@ -5600,7 +5622,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // Same cap the Unified Zone SL Override enforces at :5838. A zone
             // stop above it is discarded and execution uses its own structural
             // stop instead, so the engine needs the bound to report that.
-            maxSlPips: resolveStaticFloorPips(pairConfig, pair) * (pairConfig.impulseSlCapMultiplier ?? 4),
+            maxSlPips: zoneMaxSlPips,
             tpRatio: config.tpRatio,
             entryDepth: (pairConfig as any).zoneEntryDepth,
           },
@@ -5696,6 +5718,78 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
 
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
+
+        // ── OBSERVABILITY: persist the exact arrays that were just scored ────
+        //
+        // AFTER the engine has run, so nothing here can reach a decision. No
+        // gate, score, entry, stop or target reads these tables, and a failure
+        // is a logging problem — the scan continues either way. Deliberately
+        // fire-and-forget with its own try/catch: a snapshot must never be able
+        // to fail a trading cycle.
+        //
+        // Without this, no SMC engine can be determinism-tested. Stage 2
+        // measured the ceiling without it at 92.1%.
+        try {
+          const snap = buildSnapshot({
+            scanCycleId, userId, botId: BOT_ID, symbol: pair,
+            style: resolvedStyle, nowMs: Date.now(),
+            fetchedAt: new Date().toISOString(),
+            inputs: [
+              { slot: "top", timeframe: zoneSlotTFs.top, candles: zoneDailyCandles ?? [] },
+              { slot: "mid", timeframe: zoneSlotTFs.mid, candles: zoneH4Candles },
+              { slot: "low", timeframe: zoneSlotTFs.low, candles: zoneH1Candles },
+              { slot: "entry", timeframe: zoneSlotTFs.entry, candles: zoneEntryCandles },
+              { slot: "confirm", timeframe: zoneSlotTFs.confirm, candles: zoneConfirmCandles },
+              { slot: "ltf_confirm", timeframe: zoneSlotTFs.ltf_confirm, candles: zoneLtfConfirmCandles },
+              // The HTF-confluence and liquidity derivation sources. Not passed
+              // to the engine directly, but h4OBs / h4FVGs / breakers / fib /
+              // premium-discount / pools are pure functions of these three, so
+              // storing the arrays lets a replay re-derive instead of paying to
+              // keep a second copy of every detected structure.
+              { slot: "context", timeframe: "4h", candles: h4Candles ?? [] },
+              { slot: "context", timeframe: "1d", candles: dailyCandles ?? [] },
+              { slot: "context", timeframe: "1h", candles: hourlyCandles ?? [] },
+            ] as SnapshotInput[],
+          });
+          if (snap.bars.length) {
+            // Bars are immutable once observed: ignoreDuplicates keeps the first
+            // observation rather than letting a later re-fetch rewrite history.
+            const b = await supabase.from("smc_scan_bars")
+              .upsert(snap.bars, { onConflict: "symbol,timeframe,bar_time", ignoreDuplicates: true });
+            if (b.error) throw new Error(`bars: ${b.error.message}`);
+          }
+          if (snap.manifest.length) {
+            const m = await supabase.from("smc_scan_manifest")
+              .upsert(snap.manifest, { onConflict: "scan_cycle_id,symbol,slot" });
+            if (m.error) throw new Error(`manifest: ${m.error.message}`);
+          }
+          // The non-candle arguments. Stage 2E: a replay that rebuilds the
+          // candles perfectly but omits htfConfluenceData agreed with
+          // production on 37.3% of AUD/USD scans instead of 84.9%.
+          const c = await supabase.from("smc_scan_context").upsert(buildContext({
+            scanCycleId, userId, botId: BOT_ID, symbol: pair, style: resolvedStyle,
+            direction: unifiedDir,
+            lastPrice: analysis.lastPrice,
+            tfLabels: { display: zoneTFLabels, slots: zoneSlotTFs },
+            engineArgs: {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              pipSize: zoneSpec.pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+              minSlPips: effectiveMinSlPipsForZone,
+              maxSlPips: zoneMaxSlPips,
+              tpRatio: config.tpRatio,
+              entryDepth: (pairConfig as any).zoneEntryDepth,
+            },
+            htfConfluence: htfConfluenceData,
+            liquidityPools: combinedLiqPools,
+          }), { onConflict: "scan_cycle_id,symbol" });
+          if (c.error) throw new Error(`context: ${c.error.message}`);
+          snapshotsWritten++;
+        } catch (snapErr: any) {
+          snapshotFailures++;
+          console.warn(`[scan ${scanCycleId}] ${pair} snapshot write failed (non-fatal): ${snapErr?.message}`);
+        }
       } catch (zoneErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Zone Engine error (non-fatal): ${zoneErr?.message}`);
         (detail as any).unifiedZone = { hasZone: false, state: "error", reason: `Error: ${zoneErr?.message}` };
@@ -8622,6 +8716,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const detailsWithMeta = [
     {
       __meta: true,
+      // Observational only. Surfaced so a snapshot writer that has quietly
+      // stopped is visible in the scan meta rather than discovered later as an
+      // empty table — which is exactly how scan_candle_snapshots went unnoticed.
+      scanSnapshots: { written: snapshotsWritten, failed: snapshotFailures },
       candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "polygon" | "none"
       sourceBreakdown: {
         metaapi: sourceTally.metaapi,
