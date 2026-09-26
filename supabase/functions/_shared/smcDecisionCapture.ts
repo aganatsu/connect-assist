@@ -143,7 +143,15 @@ export function slimPositions(rows: unknown[]): unknown[] {
 export function sanitizeConfigForCapture(cfg: unknown): Record<string, unknown> {
   const c = { ...(cfg as Record<string, unknown>) };
   const out: Record<string, unknown> = {};
-  const heavy = ["_htfFibLevels", "_htfPD", "_htfLiquidityPools", "_h4Candles", "_fotsi"];
+  // `_structureCandles` is a 300-bar array and `_h4Candles` another — both are
+  // already snapshotted as bars, so storing them inline would multiply the row
+  // for a second copy. `_fotsiResult` and `_smtResult` are deliberately NOT
+  // here: they are small, market-derived, and nothing else records them, so a
+  // replay of confluence needs them kept in full.
+  const heavy = [
+    "_htfFibLevels", "_htfPD", "_htfLiquidityPools",
+    "_h4Candles", "_structureCandles", "_fotsi",
+  ];
   for (const k of heavy) {
     if (k in c) { out[`${k}__hash`] = hashPart(c[k]); delete c[k]; }
   }

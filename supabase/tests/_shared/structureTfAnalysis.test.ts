@@ -34,6 +34,9 @@ const scoring = await Deno.readTextFile(
 const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
+const htfModule = await Deno.readTextFile(
+  new URL("../../functions/_shared/smcHtfContext.ts", import.meta.url),
+);
 const mapper = await Deno.readTextFile(
   new URL("../../functions/_shared/configMapper.ts", import.meta.url),
 );
@@ -139,9 +142,12 @@ Deno.test("the scanner picks the structure series from STYLE_TF_LABELS", () => {
   // for day_trader ("15min" vs 1H) and swing_trader ("1h" vs 4H). Only scalper
   // agrees. The structure slot must come from the mapping the direction engine
   // already trusts rather than from the one that contradicts it.
-  assert(/resolvedStyle === "scalper"\s*\n\s*\? \(m15Candles\.length >= 20 \? m15Candles : null\)/.test(scanner));
-  assert(/resolvedStyle === "swing_trader"\s*\n\s*\? \(dailyCandles\.length >= 20 \? dailyCandles : null\)/.test(scanner));
-  assert(/: \(h4Candles\.length >= 20 \? h4Candles : null\);/.test(scanner));
+  // The pick moved into _shared/smcHtfContext in Stage 2H-B so the historical
+  // replay resolves it identically. Same invariant, new address — and the
+  // scanner must still be the thing that injects the result.
+  assert(/style === "scalper"\s*\n?\s*\? \(i\.m15Candles\.length >= 20 \? i\.m15Candles : null\)/.test(htfModule));
+  assert(/style === "swing_trader"\s*\n?\s*\? \(i\.dailyCandles\.length >= 20 \? i\.dailyCandles : null\)/.test(htfModule));
+  assert(/: \(i\.h4Candles\.length >= 20 \? i\.h4Candles : null\);/.test(htfModule));
   assert(/\(pairConfig as any\)\._structureCandles = structureSeries;/.test(scanner));
 });
 

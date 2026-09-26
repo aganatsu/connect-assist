@@ -92,6 +92,7 @@ import {
   type DecisionCapture,
 } from "../_shared/smcDecisionCapture.ts";
 import { decideDirection, type DirectionStyle } from "../_shared/smcDirectionDecision.ts";
+import { buildHtfContext, type HtfStyle } from "../_shared/smcHtfContext.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
@@ -4843,161 +4844,42 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // only style where the two agree. Rather than silently pick a winner the
     // structure slot comes from STYLE_TF_LABELS, and the mismatch is left for a
     // separate decision.
-    const structureSeries: Candle[] | null =
-      resolvedStyle === "scalper"
-        ? (m15Candles.length >= 20 ? m15Candles : null)
-        : resolvedStyle === "swing_trader"
-        ? (dailyCandles.length >= 20 ? dailyCandles : null)
-        : (h4Candles.length >= 20 ? h4Candles : null);
-    (pairConfig as any)._structureCandles = structureSeries;
-    (pairConfig as any)._structureTfLabel = STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? null;
-    if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
-      // Falling back silently would look like the flag was on and doing
-      // nothing — the failure mode this whole session kept running into.
-      console.warn(`[${pair}] structureTfAnalysis ON but no ${STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? "structure"} candles — using the entry timeframe`);
-    }
+    // structureSeries + its label now come from _shared/smcHtfContext, below.
+    // ── HTF context (POIs, Fib, Premium/Discount, Liquidity on D + 4H + 1H) ──
+    // Assembly lives in _shared/smcHtfContext so the historical replay builds
+    // it identically instead of re-deriving it from guessed parameters — the
+    // Stage 2E failure. Proven at 152/152 against the bundle production
+    // actually passed to the engine.
+    const htfCtx = buildHtfContext({
+      style: resolvedStyle as HtfStyle,
+      m15Candles, hourlyCandles, h4Candles, dailyCandles,
+      equalHighsLowsSensitivity: pairConfig.equalHighsLowsSensitivity,
+      liquidityPoolMinTouches: pairConfig.liquidityPoolMinTouches,
+    });
+    const h4FVGs = htfCtx.h4FVGs, h4OBs = htfCtx.h4OBs, h4Breakers = htfCtx.h4Breakers;
+    const htfFibLevelsD = htfCtx.htfFibLevelsD, htfFibLevels4H = htfCtx.htfFibLevels4H,
+      htfFibLevels1H = htfCtx.htfFibLevels1H;
+    const htfPDD = htfCtx.htfPDD, htfPD4H = htfCtx.htfPD4H, htfPD1H = htfCtx.htfPD1H;
+    const htfLiquidityPoolsD = htfCtx.htfLiquidityPoolsD,
+      htfLiquidityPools4H = htfCtx.htfLiquidityPools4H,
+      htfLiquidityPools1H = htfCtx.htfLiquidityPools1H;
 
-    // ── HTF POI Detection (Phase 1: FVGs, OBs, Breakers on 4H + 1H) ──
-    // Run structure detection on HTF candles and inject results for scoring boost.
-    console.log(`[scan ${scanCycleId}] ${pair} HTF candles: 4H=${h4Candles.length}, 1H=${hourlyCandles.length}`);
-    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] = [];
-    let h4FVGs: any[] = [];
-    let h4OBs: any[] = [];
-    let h4Breakers: any[] = [];
-    if (h4Candles.length >= 20) {
-      const h4Structure = analyzeMarketStructure(h4Candles);
-      const h4StructureBreaks = [...h4Structure.bos, ...h4Structure.choch];
-      h4FVGs = detectFVGs(h4Candles, h4StructureBreaks);
-      h4OBs = detectOrderBlocks(h4Candles, h4StructureBreaks);
-      h4Breakers = detectBreakerBlocks(h4OBs, h4Candles, h4StructureBreaks);
-      for (const fvg of h4FVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
-          htfPOIs.push({ timeframe: "4H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of h4OBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "4H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of h4Breakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "4H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    if (hourlyCandles.length >= 20) {
-      const h1Structure = analyzeMarketStructure(hourlyCandles);
-      const h1StructureBreaks = [...h1Structure.bos, ...h1Structure.choch];
-      const h1FVGs = detectFVGs(hourlyCandles, h1StructureBreaks);
-      const h1OBs = detectOrderBlocks(hourlyCandles, h1StructureBreaks);
-      const h1Breakers = detectBreakerBlocks(h1OBs, hourlyCandles, h1StructureBreaks);
-      for (const fvg of h1FVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
-          htfPOIs.push({ timeframe: "1H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of h1OBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "1H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of h1Breakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "1H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    // ── Daily POI Detection ──
-    // Daily candles have fewer structure breaks, so quality threshold is lower (>= 2 vs >= 3 for intraday).
-    // The BOOST_MAP already assigns highest weights to "D" timeframe (fvg: 1.0, ob: 0.8, breaker: 0.6).
-    let dFVGs: any[] = [];
-    let dOBs: any[] = [];
-    let dBreakers: any[] = [];
-    if (dailyCandles.length >= 10) {
-      const dStructure = analyzeMarketStructure(dailyCandles);
-      const dStructureBreaks = [...dStructure.bos, ...dStructure.choch];
-      dFVGs = detectFVGs(dailyCandles, dStructureBreaks);
-      dOBs = detectOrderBlocks(dailyCandles, dStructureBreaks);
-      dBreakers = detectBreakerBlocks(dOBs, dailyCandles, dStructureBreaks);
-      for (const fvg of dFVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 2) {
-          htfPOIs.push({ timeframe: "D", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of dOBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "D", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of dBreakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "D", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    // Inject HTF POIs for confluence scoring boost
-    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfPOIs.length} (D: ${htfPOIs.filter(p => p.timeframe === "D").length}, 4H: ${htfPOIs.filter(p => p.timeframe === "4H").length}, 1H: ${htfPOIs.filter(p => p.timeframe === "1H").length})`);
-    (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
-
-    // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on D + 4H + 1H ──
-    // Run Fib, PD, and Liquidity detection on HTF candles for multi-TF scoring.
-    let htfFibLevelsD: any = null;
-    let htfFibLevels4H: any = null;
-    let htfFibLevels1H: any = null;
-    let htfPDD: any = null;
-    let htfPD4H: any = null;
-    let htfPD1H: any = null;
-    let htfLiquidityPoolsD: LiquidityPool[] = [];
-    let htfLiquidityPools4H: LiquidityPool[] = [];
-    let htfLiquidityPools1H: LiquidityPool[] = [];
-
-    // Liquidity-pool sensitivity (hoisted so all three TF blocks below can use them)
-    const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
-    const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
-    const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
-
-    if (dailyCandles.length >= 10) {
-      // Daily Fibonacci: ZigZag pivots → Fib levels
-      const dZigzag = detectZigZagPivots(dailyCandles, 5, 20);
-      if (dZigzag.lastTwo) {
-        htfFibLevelsD = computeFibLevels(dZigzag.lastTwo[0], dZigzag.lastTwo[1]);
-      }
-      // Daily Premium/Discount zone
-      htfPDD = calculatePremiumDiscount(dailyCandles);
-      // Daily Liquidity Pools — sensitivity-driven tolerance + TF bump for daily
-      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, Math.min(liqTolBase + 0.10, 0.40), liqMinTouches);
-    }
-
-    if (h4Candles.length >= 20) {
-      // 4H Fibonacci: ZigZag pivots → Fib levels
-      const h4Zigzag = detectZigZagPivots(h4Candles, 3, 10);
-      if (h4Zigzag.lastTwo) {
-        htfFibLevels4H = computeFibLevels(h4Zigzag.lastTwo[0], h4Zigzag.lastTwo[1]);
-      }
-      // 4H Premium/Discount zone
-      htfPD4H = calculatePremiumDiscount(h4Candles);
-      // 4H Liquidity Pools — sensitivity base + 0.05 bump for 4H
-      htfLiquidityPools4H = detectLiquidityPools(h4Candles, Math.min(liqTolBase + 0.05, 0.35), liqMinTouches);
-    }
-
-    if (hourlyCandles.length >= 20) {
-      // 1H Fibonacci: ZigZag pivots → Fib levels
-      const h1Zigzag = detectZigZagPivots(hourlyCandles, 3, 10);
-      if (h1Zigzag.lastTwo) {
-        htfFibLevels1H = computeFibLevels(h1Zigzag.lastTwo[0], h1Zigzag.lastTwo[1]);
-      }
-      // 1H Premium/Discount zone
-      htfPD1H = calculatePremiumDiscount(hourlyCandles);
-      // 1H Liquidity Pools — sensitivity base (no bump for 1H)
-      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, liqTolBase, liqMinTouches);
-    }
-
-    // Inject HTF Phase 2 data for confluence scoring
-    console.log(`[scan ${scanCycleId}] ${pair} HTF Phase 2: FibD=${htfFibLevelsD ? "yes" : "no"}, Fib4H=${htfFibLevels4H ? "yes" : "no"}, Fib1H=${htfFibLevels1H ? "yes" : "no"}, PDD=${htfPDD?.currentZone ?? "none"}, PD4H=${htfPD4H?.currentZone ?? "none"}, PD1H=${htfPD1H?.currentZone ?? "none"}, LiqD=${htfLiquidityPoolsD.length}, Liq4H=${htfLiquidityPools4H.length}, Liq1H=${htfLiquidityPools1H.length}`);
+    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfCtx.htfPOIs?.length ?? 0}`);
+    (pairConfig as any)._htfPOIs = htfCtx.htfPOIs;
     (pairConfig as any)._htfFibLevels = { d: htfFibLevelsD, h4: htfFibLevels4H, h1: htfFibLevels1H };
     (pairConfig as any)._htfPD = { d: htfPDD, h4: htfPD4H, h1: htfPD1H };
     (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
+    // Still referenced by the chart-overlay and structure-intel payloads below.
+    const htfPOIs = htfCtx.htfPOIs ?? [];
+    const dFVGs = htfCtx.dFVGs, dOBs = htfCtx.dOBs, dBreakers = htfCtx.dBreakers;
+    const structureSeries = htfCtx.structureSeries;
+    (pairConfig as any)._structureCandles = structureSeries;
+    (pairConfig as any)._structureTfLabel = htfCtx.structureTfLabel;
+    if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
+      // Falling back silently would look like the flag was on and doing
+      // nothing — the failure mode this whole session kept running into.
+      console.warn(`[${pair}] structureTfAnalysis ON but no ${htfCtx.structureTfLabel ?? "structure"} candles — using the entry timeframe`);
+    }
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
     // Style-aware: scalper uses 1H/15m/5m, swing uses Weekly/Daily/4H, day_trader uses Daily/4H/1H (original)
@@ -5604,6 +5486,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               { slot: "context", timeframe: "4h", candles: h4Candles ?? [] },
               { slot: "context", timeframe: "1d", candles: dailyCandles ?? [] },
               { slot: "context", timeframe: "1h", candles: hourlyCandles ?? [] },
+              // Weekly. runICTHTFAnalysis reads it, so without this the ICT
+              // stage cannot be replayed at all — the gap that blocked it in
+              // Stage 2H-B. Cheap: ~300 bars per symbol, written once.
+              { slot: "context", timeframe: "1w", candles: weeklyCandles ?? [] },
             ] as SnapshotInput[],
           });
           if (snap.bars.length) {

@@ -110,6 +110,38 @@ export interface StatefulInputs {
   propFirmActive: boolean | null;
 
   /**
+   * The game-plan context production had available at the decision.
+   *
+   * STATEFUL, not market-derived — decided 2026-09-25. A game plan is CACHED in
+   * scan_logs and reused while `isSameSession && hoursSinceLastGP <
+   * gamePlanRefreshHours`, so which plan was live at time t is a database read
+   * plus a refresh clock, not a function of the candles at t. Regenerating one
+   * from historical bars would produce a plan production never held, so a
+   * replay must consume the recorded context or declare it unknown.
+   *
+   * Fields listed are exactly those the consumers read, verified by inspection:
+   *   runConfluenceAnalysis  -> bias, biasConfidence, keyLevels, dol
+   *   computeDirectionVerdict -> bias, biasConfidence
+   * The remaining fields travel with the object in production and are carried
+   * so a recorded context round-trips intact.
+   */
+  gamePlanContext: {
+    bias: string | null;
+    biasConfidence: number | null;
+    keyLevels: unknown[] | null;
+    dol: unknown;
+    regime: string | null;
+    tradeable: boolean | null;
+    htfTrend: string | null;
+    h4Trend: string | null;
+    atr: number | null;
+    isFocusPair: boolean | null;
+  } | null;
+  /** When that plan was generated, and whether it was a reuse. */
+  gamePlanGeneratedAtMs: number | null;
+  gamePlanWasCachedReuse: boolean | null;
+
+  /**
    * Economic calendar. There is NO historical news store in this project, so
    * for any past timestamp this is unknowable rather than empty. An empty array
    * would assert "no news", which is a claim the data cannot support.
@@ -145,6 +177,7 @@ export function missingStatefulInputs(s: Partial<StatefulInputs>): string[] {
     "recentClosesPortfolioWide", "consecutiveLosses", "todayClosesPnl",
     "utcDayBoundary", "dailyPnLPercent", "weeklyPnLPercent", "tradesToday",
     "accountBalance", "accountPeakBalance", "propFirmActive",
+    "gamePlanContext", "gamePlanGeneratedAtMs", "gamePlanWasCachedReuse",
     "newsEvents", "newsKnownAt",
   ];
   return required.filter((k) => s[k] === undefined || s[k] === null);
