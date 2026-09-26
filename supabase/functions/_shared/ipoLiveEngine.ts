@@ -65,6 +65,26 @@ export interface EngineConfig {
     ipoIndex: number;
     direction: "demand" | "supply";
   }) => boolean;
+  /**
+   * RESEARCH ONLY, opt-in. Absent for every production caller, and when absent
+   * the frozen invalidation level is used exactly as before.
+   *
+   * Added for IPO_STRUCTURAL_S2_V1, which asks whether an S2 placed at the
+   * structural swing supporting the IPO beats the IPO candle's own far edge.
+   * Returning a level REPLACES the stop, and because the engine derives risk
+   * and the 2R target from the stop, the whole risk geometry moves with it —
+   * which is the point. Returning null keeps the frozen level.
+   *
+   * The replacement is still CLOSE-CONFIRMED on the strategy timeframe; this
+   * moves the level, it does not turn S2 into a wick stop.
+   */
+  stopOverride?: (g: {
+    barsBefore: Candle[];
+    touchIndex: number;
+    ipoIndex: number;
+    direction: "demand" | "supply";
+    frozenStop: number;
+  }) => number | null;
 }
 
 export type LiveEvent =
@@ -198,7 +218,17 @@ export class LiveEngine {
       return out;
     }
 
-    const stop = hit.invalidationLevel;
+    let stop = hit.invalidationLevel;
+    if (this.cfg.stopOverride) {
+      const alt = this.cfg.stopOverride({
+        barsBefore: this.bars.slice(0, k),
+        touchIndex: k,
+        ipoIndex: hit.candidateIndex,
+        direction: hit.direction,
+        frozenStop: hit.invalidationLevel,
+      });
+      if (alt !== null && Number.isFinite(alt)) stop = alt;
+    }
     const risk = Math.abs(entry - stop);
     if (risk <= 0) { out.push({ kind: "NO_CANDIDATE", index: k }); return out; }
 

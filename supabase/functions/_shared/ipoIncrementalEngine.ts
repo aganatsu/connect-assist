@@ -348,7 +348,17 @@ export class IncrementalEngine {
       return out;
     }
 
-    const stop = hit.invalidationLevel;
+    let stop = hit.invalidationLevel;
+    if (this.cfg.stopOverride) {
+      const alt = this.cfg.stopOverride({
+        barsBefore: this.bars.slice(0, K),
+        touchIndex: K,
+        ipoIndex: hit.k,
+        direction: hit.direction,
+        frozenStop: hit.invalidationLevel,
+      });
+      if (alt !== null && Number.isFinite(alt)) stop = alt;
+    }
     const risk = Math.abs(entry - stop);
     if (risk <= 0) { out.push({ kind: "NO_CANDIDATE", index: K }); return out; }
 
