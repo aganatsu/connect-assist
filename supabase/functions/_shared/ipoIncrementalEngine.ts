@@ -315,6 +315,24 @@ export class IncrementalEngine {
       (t.invalidatedAt === null || t.invalidatedAt > K));
     if (!hit) { out.push({ kind: "NO_CANDIDATE", index: K }); return out; }
 
+    // Research gate. Must sit at the SAME point as the oracle's — after the
+    // lifecycle has produced a touch, before the frozen eligibility checks —
+    // or the two engines would refuse different bars and the equivalence
+    // report would be measuring the hook rather than the strategy.
+    if (this.cfg.entryGate) {
+      const allowed = this.cfg.entryGate({
+        barsBefore: this.bars.slice(0, K),
+        touchIndex: K,
+        ipoIndex: hit.k,          // Tracked names the IPO candle `k`
+        direction: hit.direction,
+      });
+      if (!allowed) {
+        this.refusals.push({ index: K, reason: "ENTRY_GATE_REFUSED" });
+        out.push({ kind: "REFUSED", index: K, reason: "ENTRY_GATE_REFUSED", vol: bucket });
+        return out;
+      }
+    }
+
     if (!isEligible(bucket, this.cfg.highVolOnly)) {
       this.refusals.push({ index: K, reason: "VOLATILITY_NOT_ELIGIBLE" });
       out.push({ kind: "REFUSED", index: K, reason: "VOLATILITY_NOT_ELIGIBLE", vol: bucket });
