@@ -134,14 +134,21 @@ export default function Dashboard() {
       .sort((a: any, b: any) => b.score - a.score);
   }, [currencyStrength]);
 
-  // Latest scan signals
+  // Latest scan signals.
+  //
+  // scannerApi.logs() no longer carries details_json — 300 scans of it timed
+  // out the request — so the newest scan's detail is fetched on its own.
+  const latestScanId = (Array.isArray(scanLogs) ? scanLogs : [])[0]?.id;
+  const { data: latestDetails } = useQuery({
+    queryKey: ["scan-detail", latestScanId],
+    queryFn: () => scannerApi.scanDetail(latestScanId),
+    enabled: !!latestScanId,
+    staleTime: Infinity,   // a written scan never changes
+  });
   const latestSignals = useMemo(() => {
-    const logs = Array.isArray(scanLogs) ? scanLogs : [];
-    if (logs.length === 0) return [];
-    const latest = logs[0];
-    const details = Array.isArray(latest?.details_json) ? latest.details_json : [];
+    const details = Array.isArray(latestDetails) ? latestDetails : [];
     return details.filter((d: any) => d.score >= 4).slice(0, 5);
-  }, [scanLogs]);
+  }, [latestDetails]);
 
   // Bot activity timeline
   const activityLog = useMemo(() => {

@@ -313,15 +313,19 @@ export default function BotView() {
   // Pull the candle-source meta entry that the scanner prepends to details_json
   // (so we can show which feed served the selected scan), and produce a filtered
   // list that excludes the meta row from rendering as a fake "pair".
-  const latestRawDetails: any[] = (() => {
-    if (!currentScan) return [];
-    let dj = currentScan.details_json;
-    // Supabase may return details_json as a JSON string — parse it safely
-    if (typeof dj === "string") {
-      try { dj = JSON.parse(dj); } catch { return []; }
-    }
-    return Array.isArray(dj) ? dj : [];
-  })();
+  //
+  // details_json is fetched for the SELECTED scan only. The list query stopped
+  // carrying it when 300 scans x ~33 kB began timing out the request, leaving
+  // the panel frozen on cached data. Keyed by id so paging with < older / newer >
+  // loads that scan's detail and nothing else.
+  const { data: currentScanDetails } = useQuery({
+    queryKey: ["scan-detail", currentScan?.id],
+    queryFn: () => scannerApi.scanDetail(currentScan?.id),
+    enabled: !!currentScan?.id,
+    // Scans are immutable once written, so a fetched detail never goes stale.
+    staleTime: Infinity,
+  });
+  const latestRawDetails: any[] = Array.isArray(currentScanDetails) ? currentScanDetails : [];
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
   const latestDetailsCleanRaw: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   // Group/sort by status so the most actionable rows surface first.

@@ -409,30 +409,104 @@ export const backtestApi = {
 };
 
 // ── Bot Scanner (Bot #1 — SMC) ──
+/** One per-pair entry inside a scan's details_json. Shape varies by status. */
+type ScanDetailEntry = Record<string, unknown>;
+/**
+ * The generated Supabase types do not cover jsonb-path selects or the older
+ * tables this file reaches, and the rest of the module already casts for the
+ * same reason. Named rather than inlined so the reason is stated once.
+ */
+type SupabaseLoose = {
+  from: (t: string) => {
+    select: (c: string) => Record<string, (...a: unknown[]) => unknown>;
+  };
+};
+
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   logs: async () => {
-    // Over-fetch, then drop management-cycle rows before slicing to 100.
+    // METADATA ONLY — details_json is deliberately NOT selected here.
+    //
+    // This used to `select("*")` over 300 scans. Each row's details_json is
+    // ~33 kB, so the response grew to ~28 MB and Postgres began killing the
+    // query outright:
+    //   57014 canceling statement due to statement timeout
+    // Measured on the live table at 3,255 rows / 110 MB: limit 150 returned
+    // 13.4 MB and survived, limit 300 timed out. The scan panel then showed
+    // whatever the last successful fetch had cached and never updated again.
+    //
+    // The list only renders timestamps and counts, so the payload it was
+    // carrying was never displayed. Fetching metadata instead takes the same
+    // 300 scans from ~28 MB to ~49 kB. `details_json` for the ONE scan being
+    // viewed is loaded separately by `scanDetail`.
+    //
+    // Management-cycle and game-plan rows are excluded SERVER-SIDE on
+    // pairs_scanned, which separates them exactly and costs nothing to read.
     //
     // bot-scanner writes a scan_logs row from management-only cycles to carry
     // pending-order diagnostics (the confirmation hunt is invisible otherwise).
     // Those are not scans: pairs_scanned 0, no per-pair detail, and they arrive
-    // every minute rather than every scanIntervalMinutes. Rendering them in the
-    // scan viewer made it look like the scan interval had dropped to 60s, with
-    // blank panels and "undefined/10".
+    // every minute rather than every scanIntervalMinutes. Rendering them made
+    // the scan interval look like 60s, with blank panels and "undefined/10".
+    // A separate producer writes game-plan rows, whose details_json is an
+    // OBJECT rather than an array; those rendered as blank scans too.
     //
-    // Filtered client-side rather than with a jsonb PostgREST filter because
-    // `neq` on a missing path excludes the row instead of keeping it, which
-    // would silently drop older scans whose details_json is not an array.
+    // Measured on the live table: 1,728 management_cycle rows and 75 game_plan
+    // rows all have pairs_scanned = 0, and all 1,452 real scans have 1-8. The
+    // previous client-side filter read details_json[0].type, which forced every
+    // row's jsonb to be detoasted just to classify it — 5 seconds for 300 rows,
+    // and it missed the game-plan rows entirely.
     const { data, error } = await (supabase as any)
       .from("scan_logs")
-      .select("*")
+      .select("id, user_id, bot_id, scanned_at, created_at, pairs_scanned, signals_found, trades_placed")
+      .gte("pairs_scanned", 1)
       .order("scanned_at", { ascending: false })
-      .limit(300);
+      .limit(100);
     if (error) throw new Error(error.message);
-    const scans = (data || []).filter((r: any) =>
-      !(Array.isArray(r.details_json) && r.details_json[0]?.type === "management_cycle"));
-    return scans.slice(0, 100);
+    return data || [];
+  },
+
+  /**
+   * Recent scans WITH their `details_json`. The heavy variant.
+   *
+   * Only for callers that must search across scans rather than render one, and
+   * deliberately capped low: at ~33 kB per row this is the payload that made
+   * the 300-row list query time out. 25 scans is ~825 kB.
+   */
+  logsWithDetails: async (limit = 25) => {
+    const { data, error } = await (supabase as SupabaseLoose)
+      .from("scan_logs")
+      .select("id, scanned_at, pairs_scanned, signals_found, trades_placed, details_json")
+      .order("scanned_at", { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+    return (data || []).filter((r: { details_json?: unknown }) => {
+      const dj = r.details_json;
+      return !(Array.isArray(dj) && (dj[0] as { type?: string })?.type === "management_cycle");
+    });
+  },
+
+  /**
+   * `details_json` for a single scan.
+   *
+   * Split out from `logs` so the viewer pays for one scan (~110 kB) instead of
+   * three hundred. Returns [] for a missing id rather than throwing, because a
+   * selection can outlive the row it pointed at.
+   */
+  scanDetail: async (id?: string): Promise<ScanDetailEntry[]> => {
+    if (!id) return [];
+    const { data, error } = await (supabase as SupabaseLoose)
+      .from("scan_logs")
+      .select("details_json")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    let dj: unknown = data?.details_json;
+    // Supabase may hand jsonb back as a string.
+    if (typeof dj === "string") {
+      try { dj = JSON.parse(dj); } catch { return []; }
+    }
+    return Array.isArray(dj) ? dj : [];
   },
   // Setup Staging / Watchlist
   activeStaged: async (): Promise<StagedSetup[]> => {
