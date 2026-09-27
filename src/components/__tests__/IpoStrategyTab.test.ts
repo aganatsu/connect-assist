@@ -70,10 +70,13 @@ describe("IPO observation UI is independent and cannot trade", () => {
     }
   });
 
-  it("labels execution eligibility as informational", () => {
-    expect(detail).toContain("informational only");
-    expect(detail.toLowerCase()).toContain("no order is placed");
-    expect(scanner).toContain("Observation only");
+  it("states that the scanner places no order, without implying no positions exist", () => {
+    expect(detail).toContain("places no order");
+    expect(detail.toLowerCase()).toContain("paper execution is shown here for context");
+    // The banner used to read "Observation only — no orders", which on a page
+    // that can display a live paper position read as "no positions exist".
+    expect(scanner).toContain("Scanner view — paper execution shown for context");
+    expect(scanner).not.toContain("Observation only — no orders");
   });
 
   it("renders research-only lifecycle states as not tracked", () => {

@@ -384,3 +384,123 @@ export function ordinalPhrase(n: number | null | undefined): string {
 
 export const ORDINAL_MEANING =
   "How many times this same IPO zone has generated an entry. Not the first trade of the day, not the first IPO on the chart, and not the first trade on the symbol.";
+
+// ── new-entry eligibility vs. the state of the trade that already exists ──────
+
+/**
+ * What the engine's raw sequencing fields MEAN for one particular row.
+ *
+ * THE CONTRADICTION THIS REMOVES. `sequencingState`, `executionEligible` and the
+ * reason codes all answer one question: *could a NEW entry be created on this
+ * instrument right now?* When a position is open the answer is always no, and
+ * the engine correctly reports `BLOCKED_POSITION_OPEN` / `POSITION_ALREADY_OPEN`
+ * / `executionEligible: false` on EVERY row for that instrument — including the
+ * row whose own IPO opened that position.
+ *
+ * Rendered verbatim, the owning row therefore read:
+ *
+ *     Trade status              OPEN POSITION
+ *     sequencing                BLOCKED_POSITION_OPEN
+ *     would the rules admit it  no
+ *     POSITION_ALREADY_OPEN
+ *
+ * which says a live trade is a rejection. It is not: the slot is occupied BY
+ * THIS TRADE. Those fields describe a hypothetical second entry.
+ *
+ * So the same raw data reads three different ways and the row decides which:
+ *
+ *   owner   — the block is self-referential. Not a rejection. Audit only.
+ *   blocked — someone else holds the slot. A real rejection, and the owner is named.
+ *   free    — no position; ordinary eligibility semantics, unchanged.
+ */
+export type NewEntryVerdict = "OWNS_POSITION" | "BLOCKED_BY_OTHER" | "ORDINARY";
+
+export interface NewEntryCheck {
+  verdict: NewEntryVerdict;
+  /** True only when this row's own IPO opened the position that is open now. */
+  ownsOpenPosition: boolean;
+  /** The one dominant status for the primary view. */
+  primaryBadge: string;
+  /** Headline sentence for the CURRENT STATUS block. */
+  headline: string;
+  /** What the raw engine fields mean here, in words. */
+  rawExplanation: string;
+  /**
+   * TRUE only when the raw block is a genuine rejection OF THIS ROW. False for
+   * the owning row, whose "block" is its own position.
+   */
+  isRejection: boolean;
+  /** Who holds the slot, when it is not this row. */
+  blockingOwner: PositionLike | null;
+}
+
+const stamp = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toISOString().slice(0, 16).replace("T", " ") : "an earlier bar";
+
+/**
+ * Reads the engine's new-entry fields in the context of one row.
+ *
+ * Derived from `Linkage`, which establishes ownership by EXACT identity —
+ * symbol, timeframe, direction and IPO candle instant. Never from display text,
+ * never from "this row is VALID_TOUCHED", and never from the reason codes
+ * themselves, which are identical for the owner and for a bystander.
+ */
+export function readNewEntryCheck(link: Linkage | null | undefined): NewEntryCheck {
+  if (link?.status === "OPEN_POSITION_OWNER") {
+    const p = link.ownedPosition;
+    return {
+      verdict: "OWNS_POSITION",
+      ownsOpenPosition: true,
+      primaryBadge: "POSITION ACTIVE",
+      headline: "This IPO opened the current paper position.",
+      rawExplanation:
+        "A second entry would be blocked because this IPO already owns the active position" +
+        (p ? ` (opened ${stamp(p.entry_time)}).` : ".") +
+        " The engine's sequencing fields describe that hypothetical new entry, not this trade.",
+      isRejection: false,
+      blockingOwner: null,
+    };
+  }
+
+  if (link?.status === "BLOCKED_BY_OPEN_POSITION" && link.blockingOwner) {
+    const p = link.blockingOwner;
+    return {
+      verdict: "BLOCKED_BY_OTHER",
+      ownsOpenPosition: false,
+      primaryBadge: "BLOCKED — POSITION ALREADY OPEN",
+      headline:
+        `Blocked because ${p.symbol} already has an open IPO position from ${stamp(p.entry_time)}.`,
+      rawExplanation:
+        "One position per instrument is a frozen rule. A different IPO holds the slot, so this " +
+        "setup could not be entered even though the strategy signal stayed valid.",
+      isRejection: true,
+      blockingOwner: p,
+    };
+  }
+
+  return {
+    verdict: "ORDINARY",
+    ownsOpenPosition: false,
+    primaryBadge: link?.badge ?? "—",
+    headline: link?.meaning ?? "No trade ledger available for this row.",
+    rawExplanation:
+      "No position is open on this instrument, so the sequencing fields report ordinary " +
+      "new-entry eligibility.",
+    isRejection: false,
+    blockingOwner: null,
+  };
+}
+
+/**
+ * Should a raw reason code be shown as a rejection in the primary view?
+ *
+ * `POSITION_ALREADY_OPEN` on the owning row is the row describing itself, and
+ * showing it beside OPEN POSITION is the contradiction this module exists to
+ * end. It stays available under the raw audit section, never above it.
+ */
+export const SELF_REFERENTIAL_CODES = ["POSITION_ALREADY_OPEN", "BLOCKED_POSITION_OPEN"];
+
+export function primaryReasonCodes(codes: readonly string[], check: NewEntryCheck): string[] {
+  if (!check.ownsOpenPosition) return [...codes];
+  return codes.filter((c) => !SELF_REFERENTIAL_CODES.includes(c));
+}

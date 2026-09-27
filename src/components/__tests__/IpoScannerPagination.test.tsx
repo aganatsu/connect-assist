@@ -134,7 +134,7 @@ describe("filtering and pagination interact correctly", () => {
     setData(rows(40));   // 20 EUR/USD, 20 USD/JPY
     draw();
     await waitFor(() => expect(screen.getByText("Page 1 of 4")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("Filter by trade status"),
+    fireEvent.change(screen.getByLabelText("Trade status"),
                      { target: { value: "NO_TRADE" } });
     // Every row here is NO_TRADE, so the count must be unchanged — had paging
     // run first, the filter would only have seen the 10 rows on screen.
@@ -151,7 +151,7 @@ describe("filtering and pagination interact correctly", () => {
 
     // 40 rows across two instruments; narrowing to one halves the list to two
     // pages, so page 3 no longer exists.
-    fireEvent.change(screen.getByLabelText("Filter by instrument"),
+    fireEvent.change(screen.getByLabelText("Instrument"),
                      { target: { value: "EUR/USD" } });
     await waitFor(() => expect(screen.getByText("Page 1 of 2")).toBeInTheDocument());
     expect(screen.getByText("Showing 1–10 of 20")).toBeInTheDocument();
@@ -161,11 +161,14 @@ describe("filtering and pagination interact correctly", () => {
     setData(rows(40));
     draw();
     await waitFor(() => expect(screen.getByText("Page 1 of 4")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("Filter by trade status"),
+    fireEvent.change(screen.getByLabelText("Trade status"),
                      { target: { value: "OPEN_POSITION_OWNER" } });
     // No rows, so no pager to strand — and the empty state says so plainly
     // rather than showing "Page 1 of 1" over nothing.
-    await waitFor(() => expect(screen.getByText("No IPO candidates in view.")).toBeInTheDocument());
+    // A filter emptied the list, which is a different situation from an empty
+    // dataset and now says so, with a way out.
+    await waitFor(() => expect(screen.getByText("No IPOs match the current filters."))
+      .toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
   });
 
@@ -175,7 +178,7 @@ describe("filtering and pagination interact correctly", () => {
     await waitFor(() => expect(screen.getByText("Page 1 of 4")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByText("Page 2 of 4")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("Filter by trade status"),
+    fireEvent.change(screen.getByLabelText("Trade status"),
                      { target: { value: "NO_TRADE" } });
     await waitFor(() => expect(screen.getByText(/Page 1 of 4/)).toBeInTheDocument());
     expect(screen.queryByText(/of 0/)).toBeNull();

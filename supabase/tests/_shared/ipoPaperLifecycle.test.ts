@@ -70,6 +70,25 @@ interface Driven {
 }
 
 /** Drives the REAL runner bar by bar, exactly as a scheduled worker would. */
+/**
+ * A deterministic 1-minute tape: four point-minutes per bar walking
+ * open -> first extreme -> second extreme -> close, extremes ordered by the
+ * bar's direction. Without it every target-touching fill is an unorderable
+ * ambiguity and these lifecycle scenarios never reach their second bar.
+ */
+function minutesFor(bars: Candle[]): Candle[] {
+  const out: Candle[] = [];
+  for (const b of bars) {
+    const t0 = new Date(b.datetime).getTime();
+    const up = b.close >= b.open;
+    [b.open, up ? b.low : b.high, up ? b.high : b.low, b.close].forEach((px, i) => {
+      out.push({ datetime: new Date(t0 + i * 15 * 60_000).toISOString(),
+        open: px, high: px, low: px, close: px, volume: 0 });
+    });
+  }
+  return out;
+}
+
 function drive(s: Candle[], c: EngineConfig, from = WARMUP, to = -1): Driven {
   let state: RuntimeState | null = null;
   let position: PaperPosition | null = null;
@@ -81,6 +100,7 @@ function drive(s: Candle[], c: EngineConfig, from = WARMUP, to = -1): Driven {
     const plan = runPaper({
       cfg: c, barMs: BAR_MS, closedBars: bars, nowMs: clock(bars),
       state, openPosition: position, minHistoryBars: WARMUP,
+      minuteBars: minutesFor(bars),
     });
     assertEquals(plan.divergence, null, `bar ${i}: ${plan.divergence}`);
     state = plan.state; position = plan.openPosition;
@@ -358,8 +378,15 @@ Deno.test("no SMC management touched the lifecycle", () => {
   const s = market(N, 3);
   const f = driveOnce("seed3", () => drive(s, cfg()));
   for (const r of f.closed) {
-    // Only two strategy exits exist. No break-even, no trail, no partial.
-    assert(["TARGET_2R", "S2_CLOSE_INVALIDATION"].includes(r.exitReason));
+    // Only two STRATEGY exits exist. No break-even, no trail, no partial.
+    // ORDERING_UNRESOLVED is not a third exit: it is a data verdict that voids
+    // the observation when nothing can order the events against the fill, and
+    // it carries no realized R at all.
+    assert(["TARGET_2R", "S2_CLOSE_INVALIDATION", "ORDERING_UNRESOLVED"].includes(r.exitReason));
+    if (r.exitReason === "ORDERING_UNRESOLVED") {
+      assertEquals(r.realizedR, null, "an unordered observation must not carry an R");
+      assertEquals(r.excludedFromStats, true);
+    }
     // The stop never moved from the IPO candle's far extreme.
     assertEquals(r.position.s2InvalidationLevel, r.position.s2InvalidationLevel);
     // Size is fixed at entry and never scaled.
@@ -367,7 +394,12 @@ Deno.test("no SMC management touched the lifecycle", () => {
   }
   // Every event type emitted belongs to the IPO vocabulary.
   const allowed = new Set(["SETUP_VALID", "INTENT_CREATED", "FILLED", "REFUSED",
-    "MANAGED", "CLOSED", "GAP_SUSPENDED", "GAP_RECOVERED", "GAP_ABORTED"]);
+    "MANAGED", "CLOSED", "GAP_SUSPENDED", "GAP_RECOVERED", "GAP_ABORTED",
+    // Emitted when the tape refuses an exit whole-bar OHLC would have booked,
+    // when a fill cannot be ordered at all, when such an ambiguity ends, and
+    // when its branches freed the slot on different bars. Every one records a
+    // disagreement or its resolution; none of them manages anything.
+    "CAUSAL_OVERRIDE", "ORDERING_AMBIGUOUS", "AMBIGUITY_RESOLVED", "SEQUENCE_FORKED"]);
   for (const e of f.events) assert(allowed.has(e.eventType), `unexpected event ${e.eventType}`);
 });
 
@@ -409,16 +441,23 @@ Deno.test("TELEMETRY — re-entries on one zone are counted and ordered", () => 
 
   for (const trades of byZone.values()) {
     trades.sort((a, b) => a.position.entryTime.localeCompare(b.position.entryTime));
+    // THE ORDINAL COUNTS THE ENGINE'S TRADES ON THIS ZONE, NOT THE PAPER ROWS —
+    // that is the module's stated contract, and it is the honest answer to "how
+    // often has this zone been traded". Once causal ordering lets paper hold a
+    // position the engine released, paper takes a SUBSET, so paper's rows can
+    // carry ordinals 1 and 3. What must still hold is that they are 1-based,
+    // strictly increasing, and never precede the exit they followed.
     trades.forEach((r, i) => {
-      // The ordinal is 1-based and strictly increasing within a zone.
-      assertEquals(r.position.zoneEntryOrdinal, i + 1,
-        `zone ${r.position.setupId} entry ${i + 1} carries ordinal ${r.position.zoneEntryOrdinal}`);
-      if (i === 0) {
+      assert(r.position.zoneEntryOrdinal >= i + 1,
+        `zone ${r.position.setupId} row ${i + 1} carries ordinal ${r.position.zoneEntryOrdinal}`);
+      if (i > 0) {
+        assert(r.position.zoneEntryOrdinal > trades[i - 1].position.zoneEntryOrdinal,
+          "the re-entry ordinal did not advance");
+      }
+      if (r.position.zoneEntryOrdinal === 1) {
         assertEquals(r.position.zonePreviousExitTime, null, "a first entry has no predecessor");
       } else {
-        // The previous exit must be the previous trade's exit, and must precede
-        // this entry — which is the frozen rule touchIndex > previousExitIndex.
-        assertEquals(r.position.zonePreviousExitTime, trades[i - 1].exitTime);
+        assert(r.position.zonePreviousExitTime, "a re-entry must name the exit it followed");
         assert(r.position.zonePreviousExitTime! <= r.position.entryTime,
           "a re-entry preceded the exit it followed");
       }

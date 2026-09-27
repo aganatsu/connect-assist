@@ -93,9 +93,14 @@ export function IpoScanner() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  // One piece of state per CONCEPT, named after the concept. The two selects
+  // previously read "All trade states" and "All states", which is two generic
+  // labels for two different things.
   const [instrumentFilter, setInstrumentFilter] = useState("all");
-  const [stateFilter, setStateFilter] = useState("all");
-  const [tradeFilter, setTradeFilter] = useState("all");
+  const [stateFilter, setStateFilter] = useState("all");        // lifecycle
+  const [tradeFilter, setTradeFilter] = useState("all");        // trade status
+  const [validationFilter, setValidationFilter] = useState("all");
+  const [observationFilter, setObservationFilter] = useState("all");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["ipo-observation"],
@@ -131,15 +136,56 @@ export function IpoScanner() {
 
   // A filter change restarts at page 1: staying on page 3 of a freshly narrowed
   // list shows a result set the user never asked to skip into.
-  useEffect(() => { setPage(1); }, [instrumentFilter, stateFilter, tradeFilter]);
+  useEffect(() => { setPage(1); },
+    [instrumentFilter, stateFilter, tradeFilter, validationFilter, observationFilter]);
 
+  // Option lists are DERIVED from what is in view, so a filter can never offer a
+  // value that matches nothing, and enabling a new instrument or state does not
+  // leave an unreachable option behind.
+  const validations = useMemo(
+    () => [...new Set(linked.map((l) => l.row.validationStatus).filter(Boolean))].sort(), [linked]);
+  const observations = useMemo(
+    () => [...new Set(linked.map((l) => l.row.observationStatus).filter(Boolean))].sort(), [linked]);
+  const lifecycles = useMemo(
+    () => [...new Set(linked.map((l) => l.row.state).filter(Boolean))].sort(), [linked]);
+
+  // EVERY filter applies to the FULL dataset. Pagination happens afterwards, so
+  // the count in the header and the pager both describe the filtered set.
   const rows = useMemo(() => linked
     .map((l) => l.row)
     .filter((r) => instrumentFilter === "all" || r.instrument === instrumentFilter)
     .filter((r) => stateFilter === "all" || r.state === stateFilter)
+    .filter((r) => validationFilter === "all" || r.validationStatus === validationFilter)
+    .filter((r) => observationFilter === "all" || r.observationStatus === observationFilter)
     .filter((r) => tradeFilter === "all"
       || linkOf.get(rowKey(r))?.status === tradeFilter),
-    [linked, linkOf, instrumentFilter, stateFilter, tradeFilter]);
+    [linked, linkOf, instrumentFilter, stateFilter, tradeFilter, validationFilter, observationFilter]);
+
+  /** Active filters, for the chips and the clear-all control. */
+  const active = useMemo(() => {
+    const out: Array<{ key: string; label: string; clear: () => void }> = [];
+    if (instrumentFilter !== "all") {
+      out.push({ key: "instrument", label: instrumentFilter, clear: () => setInstrumentFilter("all") });
+    }
+    if (tradeFilter !== "all") {
+      out.push({ key: "trade",
+        label: TRADE_STATUS_BADGE[tradeFilter as keyof typeof TRADE_STATUS_BADGE] ?? tradeFilter,
+        clear: () => setTradeFilter("all") });
+    }
+    if (stateFilter !== "all") out.push({ key: "lifecycle", label: stateFilter, clear: () => setStateFilter("all") });
+    if (validationFilter !== "all") {
+      out.push({ key: "validation", label: validationFilter, clear: () => setValidationFilter("all") });
+    }
+    if (observationFilter !== "all") {
+      out.push({ key: "observation", label: observationFilter, clear: () => setObservationFilter("all") });
+    }
+    return out;
+  }, [instrumentFilter, tradeFilter, stateFilter, validationFilter, observationFilter]);
+
+  const clearAll = () => {
+    setInstrumentFilter("all"); setTradeFilter("all"); setStateFilter("all");
+    setValidationFilter("all"); setObservationFilter("all");
+  };
 
   // AFTER filtering. Paging a list then filtering it would show page 2 of one
   // list labelled as page 2 of another.
@@ -161,8 +207,11 @@ export function IpoScanner() {
     <div className="flex flex-col gap-2 min-h-0 h-full">
       {/* Filters stay out of the scroll areas so they are always reachable. */}
       <div className="flex items-center gap-2 flex-wrap shrink-0">
+        {/* The scanner itself places no order, but it DOES display a live paper
+            position, so "observation only — no orders" read as "no positions
+            exist". It says what it is instead. */}
         <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
-          Observation only — no orders
+          Scanner view — paper execution shown for context
         </Badge>
         {owners.map((o) => (
           <Badge key={`${o.row.instrument}-${o.row.ipoIndex}`} variant="outline"
@@ -180,33 +229,60 @@ export function IpoScanner() {
             Three plain value lists need nothing more, and native gets keyboard
             and screen-reader behaviour, a real mobile picker, and testability
             for free — the Radix version cannot be opened outside a browser. */}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex gap-2 flex-wrap">
           <select value={instrumentFilter} onChange={(e) => setInstrumentFilter(e.target.value)}
-                  aria-label="Filter by instrument"
+                  aria-label="Instrument"
                   className="h-7 w-[130px] text-xs bg-background border border-input text-foreground px-1">
-            <option value="all">All instruments</option>
+            <option value="all">Instrument: any</option>
             {instruments.map((i) => <option key={i} value={i}>{i}</option>)}
           </select>
           <select value={tradeFilter} onChange={(e) => setTradeFilter(e.target.value)}
-                  aria-label="Filter by trade status"
+                  aria-label="Trade status"
                   className="h-7 w-[200px] text-xs bg-background border border-input text-foreground px-1">
-            <option value="all">All trade states</option>
+            <option value="all">Trade status: any</option>
             {(Object.keys(TRADE_STATUS_BADGE) as Array<keyof typeof TRADE_STATUS_BADGE>).map((k) => (
               <option key={k} value={k}>{TRADE_STATUS_BADGE[k]}</option>
             ))}
           </select>
           <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
-                  aria-label="Filter by lifecycle state"
+                  aria-label="Lifecycle"
                   className="h-7 w-[190px] text-xs bg-background border border-input text-foreground px-1">
-            <option value="all">All states</option>
-            <option value="VALID_TOUCHED">Valid — touched</option>
-            <option value="VALID_LIVE">Valid — live</option>
-            <option value="PENDING_CANDIDATE">Pending</option>
-            <option value="SUPPRESSED_IN_CONTRACTION">Suppressed</option>
-            <option value="INVALIDATED">Invalidated</option>
+            <option value="all">Lifecycle: any</option>
+            {lifecycles.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+          <select value={validationFilter} onChange={(e) => setValidationFilter(e.target.value)}
+                  aria-label="Validation"
+                  className="h-7 w-[170px] text-xs bg-background border border-input text-foreground px-1">
+            <option value="all">Validation: any</option>
+            {validations.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+          <select value={observationFilter} onChange={(e) => setObservationFilter(e.target.value)}
+                  aria-label="Observation"
+                  className="h-7 w-[170px] text-xs bg-background border border-input text-foreground px-1">
+            <option value="all">Observation: any</option>
+            {observations.map((k) => <option key={k} value={k}>{k}</option>)}
           </select>
         </div>
       </div>
+
+      {/* Active filters, individually removable. Without this a narrowed list
+          and an empty one look the same. */}
+      {active.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap shrink-0" data-testid="active-filters">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">filters</span>
+          {active.map((f) => (
+            <button key={f.key} type="button" onClick={f.clear}
+                    aria-label={`Remove filter ${f.label}`}
+                    className="text-[10px] font-mono border border-input px-1.5 py-0.5 hover:bg-muted">
+              {f.label} <span aria-hidden="true">×</span>
+            </button>
+          ))}
+          <button type="button" onClick={clearAll}
+                  className="text-[10px] uppercase tracking-wider underline text-muted-foreground hover:text-foreground ml-1">
+            Clear filters
+          </button>
+        </div>
+      )}
 
       {(data?.errors ?? []).map((e) => (
         <div key={e.instrument} className="text-[11px] text-destructive border border-destructive/40 px-2 py-1">
@@ -227,8 +303,20 @@ export function IpoScanner() {
           <CardContent className="p-0 overflow-auto flex-1 min-h-0" data-testid="scanner-scroll">
             {isLoading && <div className="p-4 text-xs text-muted-foreground">Bootstrapping the IPO engine…</div>}
             {error && <div className="p-4 text-xs text-destructive">{(error as Error).message}</div>}
+            {/* A filtered-to-nothing list and a genuinely empty one are
+                different situations and used to render the same sentence. */}
             {!isLoading && !error && rows.length === 0 && (
-              <div className="p-4 text-xs text-muted-foreground">No IPO candidates in view.</div>
+              <div className="p-4 text-xs text-muted-foreground">
+                {active.length > 0 ? (
+                  <>
+                    <p>No IPOs match the current filters.</p>
+                    <button type="button" onClick={clearAll}
+                            className="mt-1 text-[11px] uppercase tracking-wider underline hover:text-foreground">
+                      Clear filters
+                    </button>
+                  </>
+                ) : "No IPO candidates in view."}
+              </div>
             )}
             {rows.length > 0 && (
               <table className="w-full text-[11px]">

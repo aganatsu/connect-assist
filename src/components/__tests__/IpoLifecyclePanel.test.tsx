@@ -145,7 +145,7 @@ describe("the glossary and the read-only contract", () => {
 
   it("still says it cannot trade", () => {
     render(<IpoScanDetail row={row()} />);
-    expect(screen.getByText(/No order is placed from this view/)).toBeInTheDocument();
+    expect(screen.getByText(/The scanner places no order/)).toBeInTheDocument();
     for (const name of [/buy/i, /sell/i, /place order/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
