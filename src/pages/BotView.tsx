@@ -1384,7 +1384,16 @@ export default function BotView() {
         {/* overflow-hidden, not overflow-y-auto: the Scanner's two panes each own
             their scrolling, and a scrolling ancestor would let the page move
             underneath them. The Paper tab keeps its own scroll container below. */}
-        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 flex flex-col">
+        {/* `data-[state=inactive]:hidden` is REQUIRED here, not cosmetic.
+            Radix hides an inactive tab panel with the `hidden` ATTRIBUTE, which
+            relies on the browser's `[hidden] { display: none }`. That is a
+            user-agent rule, so Tailwind's `flex` — an author rule — wins, and
+            the panel keeps `display: flex`. It then stays laid out at `flex-1`,
+            invisible but on top, and swallows every click and scroll meant for
+            the SMC panel underneath. Any TabsContent whose className sets
+            `display` needs this guard; `flex-1` alone does not, since it only
+            sets flex-grow. Covered by tabsContentHidden.test.ts. */}
+        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 flex flex-col data-[state=inactive]:hidden">
           {/* Two IPO views, both read-only. Scanner is what the rules see right
               now; Paper is what the forward test has actually done. Neither
               touches SMC, and IPO results are deliberately not merged into the
