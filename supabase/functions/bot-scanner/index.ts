@@ -1381,7 +1381,7 @@ function _legacyLoadConfigMapping(_raw: any) {
 
 // ─── Safety Gates ───────────────────────────────────────────────────
 
-async function runSafetyGates(
+export async function runSafetyGates(
   supabase: any, userId: string, symbol: string, direction: string,
   analysis: any, config: any, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
@@ -2040,7 +2040,13 @@ async function runSafetyGates(
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
-Deno.serve(async (req) => {
+//
+// Guarded so this module can be IMPORTED by an offline research harness to
+// call `runSafetyGates` with the exact production implementation instead of a
+// hand-rewritten copy. Supabase Edge Functions execute index.ts as the entry
+// module, so `import.meta.main` is true in deployment and the server starts
+// exactly as before. Behaviour under deployment is unchanged.
+if (import.meta.main) Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
