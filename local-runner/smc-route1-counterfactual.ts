@@ -212,6 +212,21 @@ if (import.meta.main) {
 
       // Confluence + safety gates are only needed where a trade could exist.
       if (row.armed) {
+        // FULL PRODUCTION CONTEXT, mirroring bot-scanner:4831-4882.
+        // Everything here is derived from the causal prefixes already built.
+        // NOT injected, and therefore still unreachable:
+        //   _fotsiResult      needs a 28-pair cross-currency fetch, and is
+        //                     itself a 4h-cached runtime value
+        //   _gamePlanContext  never persisted historically (architecture audit)
+        //   _smtResult        needs the correlated pair, outside this corpus
+        const ctx = cfg as Record<string, unknown>;
+        ctx._currentSymbol = sym;
+        ctx._h4Candles = s.h4Candles.length >= 20 ? s.h4Candles : null;
+        ctx._htfPOIs = htf.htfPOIs;
+        ctx._htfFibLevels = { d: htf.htfFibLevelsD, h4: htf.htfFibLevels4H, h1: htf.htfFibLevels1H };
+        ctx._htfPD = { d: htf.htfPDD, h4: htf.htfPD4H, h1: htf.htfPD1H };
+        ctx._htfLiquidityPools = { d: htf.htfLiquidityPoolsD, h4: htf.htfLiquidityPools4H, h1: htf.htfLiquidityPools1H };
+        ctx._structureCandles = htf.structureSeries;
         const analysis = runConfluenceAnalysis(
           s.candles, s.dailyCandles.length >= 10 ? s.dailyCandles : null, cfg,
           s.hourlyCandles.length ? s.hourlyCandles : undefined, tMs,
