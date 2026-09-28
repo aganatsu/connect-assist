@@ -21,6 +21,32 @@ import type { Candle } from "../supabase/functions/_shared/smcAnalysis.ts";
 export const SYMBOLS = ["EUR/USD", "USD/JPY", "GBP/USD", "AUD/USD",
                         "USD/CAD", "USD/CHF", "NZD/USD"];
 
+/** The 8 production-eligible instruments (bot_configs config_json.instruments). */
+export const PRODUCTION_UNIVERSE = ["EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD",
+                                    "ETH/USD", "CHF/JPY", "NZD/CAD", "NZD/CHF"];
+
+/** Instruments still needing a corpus. */
+export const NEW_SYMBOLS = ["BTC/USD", "ETH/USD", "CHF/JPY", "NZD/CAD", "NZD/CHF"];
+
+/**
+ * TwelveData returns a CONTINUOUS 24/7 tape for spot FX: the cached EUR/USD 1m
+ * corpus is 28.2% Saturday/Sunday bars, with no gap at all across the Friday
+ * close (3,241 bars in a Fri-20:00 to Mon-02:00 window where continuous 1m is
+ * 3,240). Those bars move — 99.9% have high != low — at about 40% of weekday
+ * range. Spot FX is shut then, so they cannot be traded.
+ *
+ * Crypto genuinely IS 24/7, so the filter is asset-class aware, not global.
+ */
+export const isCrypto = (sym: string) => sym === "BTC/USD" || sym === "ETH/USD";
+export const tradeableAt = (sym: string, tMs: number): boolean => {
+  if (isCrypto(sym)) return true;
+  const d = new Date(tMs).getUTCDay();          // 0 Sun .. 6 Sat
+  if (d === 6) return false;                     // Saturday: shut
+  if (d === 0) return new Date(tMs).getUTCHours() >= 22;  // Sun open ~22:00 UTC
+  if (d === 5) return new Date(tMs).getUTCHours() < 22;   // Fri close ~22:00 UTC
+  return true;
+};
+
 export const WINDOWS = {
   primary:   { from: "2026-06-27", to: "2026-09-25", days: 90 },
   secondary: { from: "2026-03-29", to: "2026-09-25", days: 180 },

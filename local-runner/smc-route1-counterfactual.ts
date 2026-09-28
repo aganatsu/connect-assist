@@ -33,7 +33,7 @@ import { decideZone, hasMinZoneCandles, buildHtfConfluence } from "../supabase/f
 import { runConfluenceAnalysis } from "../supabase/functions/_shared/confluenceScoring.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../supabase/functions/_shared/configMapper.ts";
 import type { Candle } from "../supabase/functions/_shared/smcAnalysis.ts";
-import { loadCorpus, SYMBOLS, WINDOWS } from "./smc-corpus-fetch.ts";
+import { loadCorpus, PRODUCTION_UNIVERSE, WINDOWS, tradeableAt, isCrypto } from "./smc-corpus-fetch.ts";
 import { COSTS } from "./smc-zone-replay.ts";
 
 const SCALPER = {
@@ -44,9 +44,25 @@ const SCALPER = {
   partialTPEnabled: false, maxHoldEnabled: true, maxHoldHours: 4,
 };
 const TP_RATIO = 2.0, MIN_CONFLUENCE = 40, MIN_ZONE_SCORE = 4, SCAN_MIN = 5;
+/**
+ * smcAnalysis.MIN_SL_PIPS via resolveStaticFloorPips (fallback 15).
+ * ETH/USD is ABSENT from the production table, so it inherits the 15-pip
+ * fallback — 15 x 0.01 = $0.15 on a ~$3,000 instrument, 0.005% of price. That
+ * is the same defect class the code's own XAU/USD comment documents. Recorded
+ * as production behaviour, not corrected here.
+ */
 const MIN_SL_PIPS: Record<string, number> = {
   "EUR/USD": 20, "USD/JPY": 25, "GBP/USD": 25,
   "AUD/USD": 18, "NZD/USD": 18, "USD/CAD": 18, "USD/CHF": 18,
+  "CHF/JPY": 25, "NZD/CAD": 20, "NZD/CHF": 20, "BTC/USD": 150,
+};
+/** SPECS pipSize + typicalSpread, for instruments outside the FX-major COSTS map. */
+const SPEC_COST: Record<string, { spread: number; slip: number; pip: number }> = {
+  "CHF/JPY": { spread: 2.5, slip: 0.5, pip: 0.01 },
+  "NZD/CAD": { spread: 2.5, slip: 0.5, pip: 0.0001 },
+  "NZD/CHF": { spread: 3.0, slip: 0.6, pip: 0.0001 },
+  "BTC/USD": { spread: 20.0, slip: 4.0, pip: 1 },
+  "ETH/USD": { spread: 2.0, slip: 0.4, pip: 0.01 },
 };
 const ZONE_ENTRY_DEPTH: Record<string, number> = { "EUR/USD": 0.5, "AUD/USD": 0.5 };
 const DEPTH = { m5: 1440, m15: 480, h1: 120, h4: 300, d1: 260, w1: 52 };
@@ -125,8 +141,8 @@ if (import.meta.main) {
     return { from: () => h };
   })();
 
-  for (const sym of (only ? [only] : SYMBOLS)) {
-    const out = new URL(`./.cache/cf_${sym.replace("/", "")}.json`, import.meta.url);
+  for (const sym of (only ? [only] : PRODUCTION_UNIVERSE)) {
+    const out = new URL(`./.cache/u8_${sym.replace("/", "")}.json`, import.meta.url);
     try { Deno.readTextFileSync(out); console.log(`${sym}: cached`); continue; } catch { /* run */ }
 
     const m1 = loadCorpus(sym, "1m"), m5 = loadCorpus(sym, "5m"), m15 = loadCorpus(sym, "15m");
@@ -135,7 +151,7 @@ if (import.meta.main) {
     if (!m1.length || !m5.length) { console.log(`${sym}: NO CORPUS`); continue; }
 
     const cfg = applyPairOverrides({ ...baseCfg } as never, sym) as Record<string, unknown>;
-    const cost = COSTS[sym], pip = cost.pip;
+    const cost = COSTS[sym] ?? SPEC_COST[sym], pip = cost.pip;
     const half = (cost.spread / 2) * pip, slip = cost.slip * pip;
     const floor = MIN_SL_PIPS[sym] ?? 15;
     const from = Date.parse(WINDOWS.secondary.from), to = Date.parse(WINDOWS.secondary.to) + 86_400_000;
@@ -149,6 +165,10 @@ if (import.meta.main) {
       const tMs = Date.parse(m1[k].datetime);
       if (tMs < from || tMs > to) continue;
       if (new Date(tMs).getUTCMinutes() % SCAN_MIN !== 0) continue;
+      // Spot FX is SHUT at weekends; the provider returns a continuous 24/7
+      // tape anyway. 39.1% of previously-armed setups fell in closed hours and
+      // could never have been executed. Crypto is genuinely 24/7.
+      if (!tradeableAt(sym, tMs)) continue;
       while (mi < m1.length && Date.parse(m1[mi].datetime) < tMs) mi++;
 
       const s = {
