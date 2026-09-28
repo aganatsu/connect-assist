@@ -286,3 +286,214 @@ zone's geometry — `entry_zone_low/high`, `refined_zone_low/high`,
 order-creation time, not against a freshly recomputed zone. Zone state is
 therefore durable **only for the lifetime of a pending order**, and only as
 bounds, never as identity.
+
+---
+
+# CLOSURE ADDENDUM — SMC_IMPULSE_ZONE_ARCHITECTURE_CLOSURE_V1
+
+Closes the five paths left unresolved by the first audit.
+
+## 13. CONFLUENCE — the fourth, separate score
+
+`runConfluenceAnalysis(candles, dailyCandles, pairConfig, hourlyCandles, atMs?)`
+— bot-scanner:4984, `_shared/confluenceScoring.ts:274`. Note it accepts an
+`atMs` historical-evaluation parameter, so it is injectable for replay.
+
+25 weighted factors, `DEFAULT_FACTOR_WEIGHTS` (:61), **32.5 raw points total**,
+emitted as a **percentage**:
+
+| factor | w | factor | w | factor | w |
+|---|---|---|---|---|---|
+| marketStructure | 2.5 | htfFibPdLiquidity | 2.5 | orderBlock | 2.0 |
+| fairValueGap | 2.0 | premiumDiscountFib | 2.0 | htfPoiAlignment | 2.0 |
+| sessionQuality | 1.5 | reversalCandle | 1.5 | liquiditySweep | 1.5 |
+| unicornModel | 1.5 | currencyStrength | 1.5 | confluenceStack | 1.5 |
+| sessionAffinity | 1.5 | pdPwLevels | 1.0 | displacement | 1.0 |
+| breakerBlock | 1.0 | smtDivergence | 1.0 | amdPhase | 1.0 |
+| dailyBias | 1.0 | gamePlanKeyLevel | 1.0 | judasSwing | 0.75 |
+| volumeProfile | 0.75 | pullbackHealth | 0.5 | | |
+
+### The FOUR scores are unrelated scales — do not conflate
+
+| score | scale | source | gate |
+|---|---|---|---|
+| **Confluence Score** | **%** of 32.5 pts | `runConfluenceAnalysis` | `strategy.confluenceThreshold = 40` (live) |
+| **Zone Story Score** | **/14** | `unifiedZoneEngine` `unifiedScore` | none directly; display + logs |
+| **Gate Score** | **/9** | `RankedPOI.totalScore` | `minZoneScore = 4` |
+| **Direction** | verdict + confidence % | `computeDirectionVerdict` | Gate 1 |
+
+`effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal`, then
+compared against `minConfluence`. The zone scores feed it only through the
+**credit** stages (:6204–6447), which add Tier-1 / P-D-Fib / stack / HTF-POI
+points — they never gate directly.
+
+## 14. THE 22 SAFETY GATES — `runSafetyGates` (:1384)
+
+Execution order, with absolute lines. **Numbering is not execution order**:
+Gate 22 runs before 19–21, and the label "Gate 4" is used twice.
+
+| # | Gate | Line | Blocks | Stateful | Replayable |
+|---|---|---|---|---|---|
+| 1 | Direction Verdict | 1395 | YES | no | YES |
+| 2 | Premium/Discount filter | 1454 | YES | no | YES |
+| 3 | Structural Conviction | 1506 | YES | no | YES |
+| 3b | Reaction Confirmation (ranging) | 1548 | YES | no | YES |
+| 4a | Instrument enabled | 1578 | YES | config | YES |
+| 4b | Max open positions | 1585 | YES | **YES** | NO |
+| 5 | Max per symbol + same-direction dup | 1592 | YES | **YES** | NO |
+| 6 | Portfolio heat | 1603 | YES | **YES** | NO |
+| 7 | Daily loss limit | 1628 | YES | **YES** | NO |
+| 8 | Max drawdown | 1646 | YES | **YES** | NO |
+| 9 | Min confluence | 1661 | YES | no | YES |
+| 9b | SMT Opposite Veto | 1668 | YES | no | YES |
+| 10 | Min R:R (spread+commission adj) | 1678 | YES | broker | partial |
+| 11 | Opening Range completion | 1704 | YES | clock | YES |
+| 12 | Kill Zone Only | 1720 | YES | clock | YES |
+| 13 | Cooldown | 1742 | YES | **YES** | NO |
+| 14 | Max Consecutive Losses (+4h reset) | 1759 | YES | **YES** | NO |
+| 15 | Dollar daily loss (net P&L) | 1788 | YES | **YES** | NO |
+| 16 | News Event Filter | 1804 | YES | **YES** | NO |
+| 17 | FOTSI OB/OS | 1843 | penalty | feed | partial |
+| 18 | ATR Volatility Filter | 1873 | YES | no | YES |
+| 22 | Correlation Filter | 1894 | YES | **YES** | NO |
+| 19 | Tier 1 Minimum (≥2 core factors) | 2006 | YES | no | YES |
+| 20 | Regime Alignment | 2018 | subsumed by G1 | no | YES |
+| 21 | Spread Quality | 2032 | **NO — info only** | broker | no |
+
+**13 of 24 are market-derivable and replayable; 10 require account/portfolio
+state that is not persisted; 1 never blocks.**
+
+## 15. PHASE A STATE MACHINE — proven transitions
+
+| from | to | condition | line | price basis | reversible |
+|---|---|---|---|---|---|
+| `pending` | `awaiting_confirmation` | price touched zone | 3759 | forming | — |
+| `awaiting_confirmation` | `cancelled` | `isImpulseBroken` | 3806 | forming | no |
+| `awaiting_confirmation` | **`pending`** | `resetsHunt` — price left zone, `confirmation_attempts++` | 3854 | forming | **YES — the one reversal** |
+| `awaiting_confirmation` | `cancelled` | tier gate / other | 3955 | forming | no |
+| `awaiting_confirmation` | `filled` | `detectZoneConfirmation` returns a signal | 4087 | **closed** (`requireCloseBased`) | no |
+| any | `invalidated` | SL breach | 3512 | **closed bar** via `lastClosedCandle` | no |
+| any | `expired` | `expires_at` | — | clock | no |
+
+`confirmation_attempts` counts **abandonments, not hunts** — the code says so
+explicitly. Reading it as hunting activity inverts its meaning.
+
+## 16. computeLimitEntryPrice IS DEAD IN PRODUCTION
+
+Line 1 of the body: `if (!config.limitOrderEnabled) return null;`
+Live `limitOrderEnabled` = **false** (default, not overridden). It returns
+null on every live call. Proven by data flow, not inference.
+
+**Consequence — the route tree collapses to a clean binary.** With legacy
+always null, `limitEntry` comes only from the zone overrides, and with
+`izGateMode="hard"` the midpoint fallback guarantees a non-null `limitEntry`
+whenever a `bestZone` exists. So:
+
+```
+effectiveLimitEnabled = !useMarketFillAtZone && (false || (true && true))
+                      = !useMarketFillAtZone
+```
+
+**Exactly two live routes. No third, no overlap, no dedup problem.**
+
+## 17. PRICE-AT-ZONE — resolved, with data
+
+```
+priceInsideZone   = price >= zoneLow && price <= zoneHigh
+priceAtZone       = insideZone || |price - edge| <= looseThreshold   (1.5x ATR)
+sideOk            = true, unless price is beyond the far edge by > strictThreshold
+priceAtZoneStrict = insideZone ? TRUE (unconditional, :1389-1391)
+                               : (nearStrict && sideOk)              (0.3x ATR)
+```
+
+**`priceInsideZone` implies `priceAtZoneStrict`.** Measured over 513 real
+historical zone observations across 7 pairs: **0 violations.**
+
+| combination | share |
+|---|---|
+| inside=F strict=F loose=F sideOk=F | 56.3% |
+| inside=F strict=F loose=T sideOk=F | 20.3% |
+| inside=T strict=T loose=T sideOk=T | 11.5% |
+| inside=F strict=T loose=T sideOk=T | 6.6% |
+| inside=F strict=F loose=T sideOk=T | 2.9% |
+| inside=F strict=F loose=F sideOk=T | 2.3% |
+
+## 18. UI / EXECUTOR — the divergence is NOT where the first audit guessed
+
+Badge condition is `priceInsideZone || priceAtZoneStrict`, which collapses to
+`priceAtZoneStrict`. Market-fill arming is `priceAtZoneStrict && sideOk`.
+
+| | share of 513 |
+|---|---|
+| BOTH_IDLE | 81.9% |
+| BADGE_AND_EXEC_BOTH_ARMED | 18.1% |
+| BADGE_ON_EXEC_OFF | **0** |
+| BADGE_OFF_EXEC_ON | **0** |
+
+**The badge and the executor agree 100% of the time.** The first audit
+speculated they read different flags; they do not.
+
+The real divergence is the **story line**: `EXEC_ARMED_BUT_ENTRY_STORY_NULL`
+occurred in **39 of 513** observations = **41.9% of all armed cases**. In those,
+the panel prints `Entry: Not yet` (EntryStory is null because state is
+`at_zone`) while market fill is armed and will enter on the next scan.
+
+So the misleading surfaces are: (a) the badge *wording* — "Hunting 5m CHoCH"
+when the system is armed to enter **without** a CHoCH; and (b) `Entry: Not yet`
+in 42% of armed cases.
+
+## 19. FORMING-BAR SEMANTICS
+
+`lastClosedCandle` exists and documents the problem precisely — but it has
+**exactly ONE caller in all of production**: bot-scanner:3525, the pending-order
+SL-invalidation check. `grep` for other callers returns nothing.
+
+Everything else reads `candles[last]`, the **forming** bar:
+impulse, zone, BOS/CHoCH, FVG, OB, `priceAtZone*`, `sideOk`, Layer 3,
+confluence, and the market-fill price itself.
+
+## 20. MARKET-FILL EXECUTION PRICE — frozen
+
+```
+bot-scanner:7664   const marketEntryPrice = analysis.lastPrice;
+                   // "Market orders ALWAYS fill at current price"
+```
+
+`analysis.lastPrice = candles[last].close` = the **forming 5m bar's running
+close at scan instant**.
+
+**The unified `entry.entryPrice` does NOT set the market fill price.** It sets
+the pending-order price only (`entry_price: limitEntry.price`, :7557). The two
+routes therefore enter at different prices by construction.
+
+| route | entry price |
+|---|---|
+| MARKET FILL AT ZONE | `analysis.lastPrice` (forming-bar close at scan) |
+| PENDING LIMIT | `limitEntry.price` = unified `entry.entryPrice`, else zone refined entry, else zone midpoint |
+
+## 21. FINAL ROUTE SPEC — exactly two
+
+**ROUTE 1 — DIRECT MARKET FILL AT ZONE**
+Condition `izGateMode==="hard" && priceAtZoneStrict && sideOk && Layer3 && marketFillAtZone`.
+No confirmation, no CHoCH, no EntryStory required. Entry `analysis.lastPrice`.
+SL/TP from scanner overrides. Order: market. No expiry. Invalidation: n/a (immediate).
+
+**ROUTE 2 — PENDING LIMIT + PHASE-A CONFIRMATION**
+Condition `!useMarketFillAtZone && limitEntry != null` (always true when a zone
+exists under the hard gate). Entry `limitEntry.price`. Order: pending limit,
+`stylePendingExpiryMinutes`. Confirmation **required** in Phase A
+(`detectZoneConfirmation`, close-based). Invalidation: impulse break, zone exit
+(→ reverts to `pending`), SL breach (closed-bar), expiry. **Persisted.**
+
+Cascade is a third route in code but `swing_trader`-gated → inactive live.
+
+## 22. REPLAYABILITY
+
+| route / component | class | why |
+|---|---|---|
+| Zone, impulse, Fib, Gate/9, liquidity, confluence | **A — exactly replayable** | pure OHLC prefixes; `runConfluenceAnalysis` even takes `atMs` |
+| `priceAtZone*`, `sideOk`, Layer 3 | **B — 1m proxy** | need the forming-bar close at scan instant; 1m approximates it |
+| ROUTE 1 market fill | **B — 1m proxy** | entry is forming-bar close; exact value not persisted |
+| ROUTE 2 pending lifecycle | **D — not replayable** | needs `pending_orders` history; statuses/timestamps not reconstructable |
+| 10 stateful safety gates | **C — simulated state only** | balance, heat, cooldown, losses, news, correlation not persisted |
+| Zone invalidation / previous touch | **D** | no zone identity (0 `zone_id`) |
