@@ -1,0 +1,4 @@
+gate,loss_avoided,losses_removed,net_removed,profit_removed,rejection_efficiency,tradeable_removed
+ZONE_SCORE_LT_4,16942.37,15791,-1359.25,15583.12,0.6615,23870
+CONFLUENCE_LT_40,12035.1,11218,1134.99,13170.09,0.6219,18037
+SAFETY_GATE_REJECT,479.29,448,45.93,525.22,0.6222,720
