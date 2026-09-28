@@ -29,6 +29,8 @@
  * production bugs in this codebase; it is not a hypothetical.
  */
 
+import { entryInstant } from "./ipoEntryTime";
+
 // ── execution events ─────────────────────────────────────────────────────────
 
 export type ExecutionEventKind =
@@ -232,7 +234,12 @@ export interface RowLike extends ObservationIdentity {
 }
 
 export interface PositionLike extends TradeIdentity {
+  /** The causal entry INSTANT, not the bar open. See lib/ipoEntryTime.ts. */
   entry_time: string;
+  /** The HTF bar that contained the fill. Absent on pre-2026-09-27 rows. */
+  strategy_bar_time?: string | null;
+  /** Non-null only when the 1m tape proved the minute. Null = bar precision. */
+  entry_minute_time?: string | null;
   entry_price: number;
   target_price: number;
   s2_invalidation_level: number;
@@ -455,7 +462,7 @@ export function readNewEntryCheck(link: Linkage | null | undefined): NewEntryChe
       headline: "This IPO opened the current paper position.",
       rawExplanation:
         "A second entry would be blocked because this IPO already owns the active position" +
-        (p ? ` (opened ${stamp(p.entry_time)}).` : ".") +
+        (p ? ` (opened ${stamp(entryInstant(p))}).` : ".") +
         " The engine's sequencing fields describe that hypothetical new entry, not this trade.",
       isRejection: false,
       blockingOwner: null,
@@ -469,7 +476,7 @@ export function readNewEntryCheck(link: Linkage | null | undefined): NewEntryChe
       ownsOpenPosition: false,
       primaryBadge: "BLOCKED — POSITION ALREADY OPEN",
       headline:
-        `Blocked because ${p.symbol} already has an open IPO position from ${stamp(p.entry_time)}.`,
+        `Blocked because ${p.symbol} already has an open IPO position from ${stamp(entryInstant(p))}.`,
       rawExplanation:
         "One position per instrument is a frozen rule. A different IPO holds the slot, so this " +
         "setup could not be entered even though the strategy signal stayed valid.",

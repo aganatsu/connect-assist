@@ -53,7 +53,11 @@ const position = (over: Partial<PaperPosition> = {}): PaperPosition => ({
   strategyId: "ipo_cet", strategyVersion: "spec-1.1",
   setupId: "stp_e2de7d52866bc5fa", intentId: "int_f5ad2103b054210a",
   symbol: "BTC/USD", timeframe: "1h", direction: "long",
-  entryTime: "2026-09-23T14:00:00Z", entryPrice: ENTRY,
+  // The BTC 1h bar that OPENS at 14:00. Its entry did not happen at 14:00 —
+  // see ipoEntryTimestamp.test.ts. strategyBarTime is the bar; entryTime is
+  // the instant, and this unstamped fixture has them equal by fallback only.
+  entryTime: "2026-09-23T14:00:00Z", strategyBarTime: "2026-09-23T14:00:00Z",
+  entryPrice: ENTRY,
   targetPrice: TARGET, s2InvalidationLevel: S2,
   nominalRiskDistance: RISK, costR: COST_R,
   referenceBalanceAtEntry: 100_000, nominalRiskPct: 0.2, nominalRiskUsd: 200,

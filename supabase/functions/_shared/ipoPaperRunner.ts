@@ -728,7 +728,14 @@ export function runPaper(input: RunnerInput): RunnerPlan {
         dailyStructureAlignment: daily?.alignment ?? null,
       }, intent));
 
-    const priced = { ...pos, entryResolutionMethod: o.method };
+    // `o.entryMinute` was computed and then thrown away here: the row kept the
+    // method but not the minute, so a tape-resolved fill still displayed its
+    // bar open. Timestamp attribution only — nothing below reads entryTime.
+    const priced: PaperPosition = {
+      ...pos, entryResolutionMethod: o.method,
+      entryMinuteTime: pos.entryMinuteTime ?? o.entryMinute ?? null,
+      entryTime: pos.entryMinuteTime ?? o.entryMinute ?? pos.entryTime,
+    };
 
     // ── the fill itself could not be ordered, and a branch leaves it OPEN ────
     //
@@ -754,7 +761,10 @@ export function runPaper(input: RunnerInput): RunnerPlan {
         altFreedAtBarTime: entryBar.datetime,
         detail: o.detail,
       };
-      const ambiguous = openAmbiguous({ ...priced, entryMinuteTime: o.entryMinute ?? null }, ambiguity);
+      const ambiguous = openAmbiguous({
+        ...priced, entryMinuteTime: o.entryMinute ?? null,
+        entryTime: o.entryMinute ?? priced.strategyBarTime,
+      }, ambiguity);
       events.push(ev("ORDERING_AMBIGUOUS", intent.symbol, intent.barTime, "HOLD",
         accountDecision, ["ORDERING_UNRESOLVED_OPEN_OR_CLOSED", ambiguity.kind], {
           altBranch: ambiguity.altBranch, altExitTime: ambiguity.altExitTime,

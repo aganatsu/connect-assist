@@ -47,6 +47,9 @@ import {
 import { readEvent, ENTRY_PROOF_NOTE, ordinalPhrase } from "@/lib/ipoTradeLinkage";
 import { IpoPager } from "@/components/IpoPager";
 import { paginate } from "@/lib/paginate";
+import {
+  entryInstant, strategyBar, entryDiffersFromBar, entryPrecision, formatInstant,
+} from "@/lib/ipoEntryTime";
 
 export interface RunnerHealth {
   lastRunAt: string;
@@ -69,7 +72,11 @@ export interface PaperPositionRow {
   // Present in the endpoint's `select("*")` since Phase D; declared here so the
   // scanner can prove which IPO owns a trade instead of matching on symbol.
   setup_id?: string | null; intent_id?: string | null;
-  entry_time: string; entry_price: number; target_price: number;
+  // entry_time is the causal entry INSTANT; strategy_bar_time is the bar that
+  // contained it. See src/lib/ipoEntryTime.ts — they used to be the same value.
+  entry_time: string; strategy_bar_time?: string | null;
+  entry_minute_time?: string | null;
+  entry_price: number; target_price: number;
   s2_invalidation_level: number; cost_r: number;
   nominal_risk_usd: number; nominal_risk_distance: number;
   ipo_candle_time: string; volatility_bucket: string;
@@ -725,7 +732,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                     </Badge>
                   )}
                   <span className="ml-auto text-[10px] text-muted-foreground font-mono">
-                    opened {ago(p.entry_time, now)}
+                    opened {ago(entryInstant(p), now)}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-3 gap-y-1">
@@ -757,7 +764,12 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                          tone={amb ? "text-amber-600" : undefined} />
                   <Field label="prev zone exit" value={clock(p.zone_previous_exit_time)} />
                   <Field label="IPO candle" value={clock(p.ipo_candle_time)} />
-                  <Field label="entry time" value={clock(p.entry_time)} />
+                  {/* The moment price reached the entry, NOT the bar open. */}
+                  <Field label="entry time" value={formatInstant(entryInstant(p))}
+                         tone={entryPrecision(p) === "minute" ? undefined : "text-amber-600"} />
+                  {entryDiffersFromBar(p) && (
+                    <Field label="strategy bar" value={formatInstant(strategyBar(p))} />
+                  )}
                   <Field label="risk $" value={`$${p.nominal_risk_usd}`} />
                   <Field label="costR" value={p.cost_r.toFixed(4)} />
                   <Field label="managed through" value={clock(p.last_managed_bar_time)} />
@@ -983,6 +995,10 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
           <table className="w-full text-[11px] font-mono whitespace-nowrap">
             <thead className="text-[9px] uppercase tracking-wider text-muted-foreground">
               <tr className="text-left">
+                {/* The minute price reached the entry. Amber = never proven, so
+                    this is still the strategy bar. See lib/ipoEntryTime.ts. */}
+                <th className="pr-3 font-normal">entry time</th>
+                <th className="pr-3 font-normal">strategy bar</th>
                 <th className="pr-3 font-normal">exit</th>
                 <th className="pr-3 font-normal">sym</th>
                 <th className="pr-3 font-normal">side</th>
@@ -1004,7 +1020,7 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
             </thead>
             <tbody>
               {shown.length === 0 && (
-                <tr><td colSpan={17} className="text-muted-foreground py-1">
+                <tr><td colSpan={19} className="text-muted-foreground py-1">
                   {lensTrades.length === 0
                     ? (lens === "causal"
                         ? "No causal forward trades have closed yet."
@@ -1016,7 +1032,14 @@ export function IpoPaperDashboard({ state, now = Date.now() }: { state: PaperSta
                 const ex = explainStatus(t.exit_reason);
                 return (
                   <tr key={`${t.symbol}-${t.exit_time}-${i}`} className="border-t border-border/50">
-                    <td className="pr-3 py-0.5">{clock(t.exit_time)}</td>
+                    <td className={`pr-3 py-0.5 ${entryPrecision(t) === "minute" ? "" : "text-amber-600"}`}
+                        title={entryPrecision(t) === "minute"
+                          ? "first 1m candle that reached the entry price"
+                          : "no 1m tape was resolved for this fill — this is the strategy bar, not the exact entry minute"}>
+                      {formatInstant(entryInstant(t))}
+                    </td>
+                    <td className="pr-3 text-muted-foreground">{formatInstant(strategyBar(t))}</td>
+                    <td className="pr-3">{clock(t.exit_time)}</td>
                     <td className="pr-3">{t.symbol}</td>
                     <td className={`pr-3 ${t.direction === "long" ? "text-emerald-600" : "text-destructive"}`}>
                       {t.direction}
