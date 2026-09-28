@@ -170,6 +170,33 @@ export function minutesInBar(
 }
 
 /**
+ * THE fill predicate: is `entryPrice` executable somewhere inside this minute?
+ *
+ * A long fills on a dip to the level, a short on a rally to it. This is the one
+ * definition in the codebase — `resolveBar` and the entry-time stamper both call
+ * it, so a fill and its recorded timestamp can never disagree about what
+ * "reached the entry" means.
+ */
+export const minuteReachesEntry = (
+  m: Candle, direction: "long" | "short", entryPrice: number,
+): boolean => (direction === "long" ? m.low <= entryPrice : m.high >= entryPrice);
+
+/**
+ * The FIRST minute inside `bar` at which the entry became executable.
+ *
+ * Null means the tape covers the bar but no minute in it reaches the level —
+ * a feed disagreement, not a fill at the bar open. Callers must not substitute
+ * the bar time for null; that is the exact error this function exists to stop.
+ */
+export function firstEntryMinute(
+  minutes: readonly Candle[], bar: Candle, barMs: number,
+  direction: "long" | "short", entryPrice: number,
+): Candle | null {
+  return minutesInBar(minutes, bar, barMs)
+    .find((m) => minuteReachesEntry(m, direction, entryPrice)) ?? null;
+}
+
+/**
  * Resolves one HTF bar against one open (or filling) position.
  *
  * Returns `NEED_MINUTES` rather than guessing whenever the HTF bar is genuinely
@@ -246,7 +273,7 @@ export function resolveBar(input: ResolveInput): BarOrdering {
         altBranch: "CLOSED_AT_TARGET" });
   }
 
-  const eIdx = mins.findIndex((m) => long ? m.low <= entryPrice : m.high >= entryPrice);
+  const eIdx = mins.findIndex((m) => minuteReachesEntry(m, direction, entryPrice));
   if (eIdx < 0) {
     // The HTF bar says E2 was reached; the minutes do not. That is a feed
     // disagreement, not an outcome, and inventing one would be the same class

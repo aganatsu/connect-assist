@@ -112,16 +112,42 @@ Deno.test("it writes only for pending-order diagnostics, not management actions"
 });
 
 Deno.test("the scan viewer does not render diagnostic rows as scans", () => {
+  // THE GUARANTEE IS UNCHANGED; THE MECHANISM IS NOT.
+  //
+  // This used to pin a CLIENT-side filter: fetch 300 rows with details_json,
+  // drop those whose `details_json[0].type === "management_cycle"`, slice to
+  // 100. That was replaced because it could not survive its own cost — each
+  // row's details_json is ~33 kB, so classifying 300 rows meant detoasting
+  // ~28 MB of jsonb the list never renders, and Postgres started killing the
+  // query with 57014. The panel then showed a stale cache forever.
+  //
+  // The filter is now SERVER-side on `pairs_scanned`, which is strictly
+  // stronger: diagnostic rows have 0 and every real scan has 1-8, it cannot be
+  // defeated by pagination, and it also excludes the game-plan rows the old
+  // type check missed entirely (their details_json is an OBJECT, so
+  // `details_json[0]?.type` was undefined and they rendered as blank scans).
   const api = Deno.readTextFileSync(
     new URL("../../../src/lib/api.ts", import.meta.url),
   );
   const i = api.indexOf("logs: async () => {");
   assert(i > -1, "the scan list fetch");
-  const block = api.slice(i, i + 1600);
-  assert(/details_json\[0\]\?\.type === "management_cycle"/.test(block), "filter them out");
-  assert(/Array\.isArray\(r\.details_json\)/.test(block), "guarding older non-array details_json");
-  assert(/\.limit\(300\)/.test(block) && /slice\(0, 100\)/.test(block),
-    "over-fetch then slice, so 100 real scans still reach the viewer");
+  const block = api.slice(i, i + 2600);
+
+  assert(/\.gte\("pairs_scanned", 1\)/.test(block),
+    "diagnostic rows are excluded server-side on pairs_scanned");
+
+  // The payload fix is part of the same guarantee: a list that selects
+  // details_json is a list that times out and stops updating, which is how
+  // diagnostic rows became visible to the user in the first place.
+  const select = /\.select\(([^)]*)\)/.exec(block)?.[1] ?? "";
+  assert(select.length > 0, "the list still names its columns explicitly");
+  assert(!/\*/.test(select), "never select(*) here — details_json comes back with it");
+  assert(!/details_json/.test(select),
+    "details_json must not be in the LIST query; scanDetail loads it per scan");
+
+  // And the detail fetch that replaced it still exists, or the panel has
+  // nothing to render when a scan is opened.
+  assert(/scanDetail/.test(api), "per-scan detail fetch");
 });
 
 Deno.test("a failed write cannot break the management cycle", () => {

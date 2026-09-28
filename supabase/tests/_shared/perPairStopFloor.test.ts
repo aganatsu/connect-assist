@@ -66,13 +66,20 @@ Deno.test("the resolver rejects values that would silently disable the floor", (
 });
 
 Deno.test("every floor call site honours the override, including the cap", () => {
-  // Four sites read this. The impulse SL cap is expressed as a MULTIPLE of the
-  // floor, so leaving it on the constant would reject stops the raised floor
-  // had just widened — a pair could be given more room and then blocked for
-  // using it.
+  // Three sites call the resolver directly: market entry, the zone route, and
+  // the shadow instrumentation. The impulse SL cap is a MULTIPLE of the floor
+  // and used to be a fourth call; it now reads `zoneStaticMinSlPips`, which is
+  // that same call in the same scope. Single-sourced deliberately — the scan
+  // snapshot records the cap, and a recomputed copy could drift from the number
+  // the engine was actually given.
   assertEquals(
-    (scanner.match(/resolveStaticFloorPips\(pairConfig, pair\)/g) ?? []).length, 4,
-    "market entry, zone route, impulse SL cap, and the shadow instrumentation",
+    (scanner.match(/resolveStaticFloorPips\(pairConfig, pair\)/g) ?? []).length, 3,
+    "market entry, zone route, and the shadow instrumentation",
+  );
+  // The cap must still be derived from the resolved floor, never the constant.
+  assertEquals(
+    (scanner.match(/zoneStaticMinSlPips \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/g) ?? []).length, 1,
+    "the impulse SL cap must be one expression built on the resolved floor",
   );
   // The constant may survive in exactly one place — the resolver's own
   // fallback. Anywhere else is a call site that would ignore the override.
@@ -84,9 +91,16 @@ Deno.test("every floor call site honours the override, including the cap", () =>
     scanner.slice(fn, fnEnd).includes("MIN_SL_PIPS[pair] ?? 15"),
     "and that one read must be the resolver's fallback",
   );
+  // The cap reaches the engine as `zoneMaxSlPips`, which is the resolved floor
+  // times the multiplier — checked as one expression just above.
   assert(
-    /maxSlPips: resolveStaticFloorPips\(pairConfig, pair\) \* \(pairConfig\.impulseSlCapMultiplier/.test(scanner),
+    /maxSlPips: zoneMaxSlPips,/.test(scanner),
     "the cap must scale with the floor",
+  );
+  assert(
+    /const zoneMaxSlPips = zoneStaticMinSlPips \*/.test(scanner) &&
+    /const zoneStaticMinSlPips = resolveStaticFloorPips\(pairConfig, pair\)/.test(scanner),
+    "and zoneMaxSlPips must be built from the RESOLVED floor, not the constant",
   );
 });
 

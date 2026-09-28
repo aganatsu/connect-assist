@@ -23,6 +23,28 @@ import {
   ordinalPhrase, ORDINAL_MEANING, readNewEntryCheck, primaryReasonCodes,
   type Linkage,
 } from "@/lib/ipoTradeLinkage";
+import {
+  entryInstant, strategyBar, entryDiffersFromBar, entryPrecision, formatInstant,
+  precisionNote, type EntryTimeFields,
+} from "@/lib/ipoEntryTime";
+
+/**
+ * "ENTRY TIME" = the minute price reached the entry, with the parent bar shown
+ * beside it whenever the two differ. A bar open under this label is exactly the
+ * misreport this pair of lines exists to prevent.
+ */
+const EntryTimeLines = ({ row }: { row: EntryTimeFields }) => (
+  <>
+    <Line label="entry time" value={formatInstant(entryInstant(row))}
+          tone={entryPrecision(row) === "minute" ? undefined : "text-amber-600"} />
+    {entryDiffersFromBar(row) && (
+      <Line label="strategy bar" value={formatInstant(strategyBar(row))} />
+    )}
+    {entryPrecision(row) !== "minute" && (
+      <p className="text-[9px] text-amber-600 leading-tight">{precisionNote(row)}</p>
+    )}
+  </>
+);
 
 export interface IpoRow {
   instrument: string;
@@ -195,7 +217,7 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
             <Line label="timeframe" value={link.ownedPosition.timeframe} />
             <Line label="direction" value={link.ownedPosition.direction} />
             <Line label="IPO candle time" value={clockOf(link.ownedPosition.ipo_candle_time)} />
-            <Line label="entry time" value={clockOf(link.ownedPosition.entry_time)} />
+            <EntryTimeLines row={link.ownedPosition} />
             <Line label="entry price" value={px(link.ownedPosition.entry_price)} />
             <Line label="target" value={px(link.ownedPosition.target_price)} tone="text-emerald-600" />
             <Line label="S2 invalidation" value={px(link.ownedPosition.s2_invalidation_level)} tone="text-destructive" />
@@ -224,7 +246,7 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
               <div className="text-[9px] uppercase tracking-wider text-muted-foreground">the owning trade</div>
               <Line label="owner direction" value={link.blockingOwner.direction} />
               <Line label="owner IPO candle time" value={clockOf(link.blockingOwner.ipo_candle_time)} />
-              <Line label="entry time" value={clockOf(link.blockingOwner.entry_time)} />
+              <EntryTimeLines row={link.blockingOwner} />
               <Line label="entry price" value={px(link.blockingOwner.entry_price)} />
               <Line label="target" value={px(link.blockingOwner.target_price)} />
               <Line label="S2" value={px(link.blockingOwner.s2_invalidation_level)} />
@@ -242,7 +264,7 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
             <p className="text-[10px] text-muted-foreground">
               This exact IPO produced a real filled trade that later closed.
             </p>
-            <Line label="entry time" value={clockOf(link.closedTrade.entry_time)} />
+            <EntryTimeLines row={link.closedTrade} />
             <Line label="exit time" value={clockOf(link.closedTrade.exit_time)} />
             <Line label="entry price" value={px(link.closedTrade.entry_price)} />
             <Line label="exit price"
@@ -388,7 +410,7 @@ export function IpoScanDetail({ row, link = null }: { row: IpoRow | null; link?:
               <p className="text-[10px] leading-tight pb-1">{entry.headline}</p>
               {link?.ownedPosition && (
                 <>
-                  <Line label="position opened" value={clockOf(link.ownedPosition.entry_time)} />
+                  <Line label="position opened" value={formatInstant(entryInstant(link.ownedPosition))} />
                   <Line label="position entry" value={px(link.ownedPosition.entry_price)} />
                   <Line label="position target" value={px(link.ownedPosition.target_price)} />
                   <Line label="position S2" value={px(link.ownedPosition.s2_invalidation_level)} />

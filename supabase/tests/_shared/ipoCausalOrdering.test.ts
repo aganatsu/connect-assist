@@ -320,10 +320,10 @@ function drive(s: Candle[], from: number) {
 Deno.test("7 — a position that survives its entry bar is managed by the later bars", () => {
   const s = market(220);
   const f = drive(s, 100);
-  const multiBar = f.closed.filter((r) => r.exitTime !== r.position.entryTime);
+  const multiBar = f.closed.filter((r) => r.exitTime !== r.position.strategyBarTime);
   assert(multiBar.length > 0, "the fixture produced no multi-bar trade");
   for (const r of multiBar) {
-    assert(new Date(r.exitTime).getTime() > new Date(r.position.entryTime).getTime());
+    assert(new Date(r.exitTime).getTime() > new Date(r.position.strategyBarTime).getTime());
     assert(r.barsHeld >= 1, "a multi-bar trade must report bars held");
   }
 });
@@ -453,7 +453,8 @@ function testPosition(over: Partial<PaperPosition> = {}): PaperPosition {
     strategyId: "ipo_cet", strategyVersion: "spec-1.1",
     setupId: "stp_test", intentId: "int_test",
     symbol: "BTC/USD", timeframe: "1h", direction: "long",
-    entryTime: ENTRY_BAR.datetime, entryPrice: ENTRY,
+    entryTime: ENTRY_BAR.datetime, strategyBarTime: ENTRY_BAR.datetime,
+    entryPrice: ENTRY,
     targetPrice: TARGET, s2InvalidationLevel: S2,
     nominalRiskDistance: RISK, costR: 0.1,
     referenceBalanceAtEntry: 100_000, nominalRiskPct: 0.2, nominalRiskUsd: 200,

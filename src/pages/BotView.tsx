@@ -313,15 +313,19 @@ export default function BotView() {
   // Pull the candle-source meta entry that the scanner prepends to details_json
   // (so we can show which feed served the selected scan), and produce a filtered
   // list that excludes the meta row from rendering as a fake "pair".
-  const latestRawDetails: any[] = (() => {
-    if (!currentScan) return [];
-    let dj = currentScan.details_json;
-    // Supabase may return details_json as a JSON string — parse it safely
-    if (typeof dj === "string") {
-      try { dj = JSON.parse(dj); } catch { return []; }
-    }
-    return Array.isArray(dj) ? dj : [];
-  })();
+  //
+  // details_json is fetched for the SELECTED scan only. The list query stopped
+  // carrying it when 300 scans x ~33 kB began timing out the request, leaving
+  // the panel frozen on cached data. Keyed by id so paging with < older / newer >
+  // loads that scan's detail and nothing else.
+  const { data: currentScanDetails } = useQuery({
+    queryKey: ["scan-detail", currentScan?.id],
+    queryFn: () => scannerApi.scanDetail(currentScan?.id),
+    enabled: !!currentScan?.id,
+    // Scans are immutable once written, so a fetched detail never goes stale.
+    staleTime: Infinity,
+  });
+  const latestRawDetails: any[] = Array.isArray(currentScanDetails) ? currentScanDetails : [];
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
   const latestDetailsCleanRaw: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   // Group/sort by status so the most actionable rows surface first.
@@ -1380,7 +1384,16 @@ export default function BotView() {
         {/* overflow-hidden, not overflow-y-auto: the Scanner's two panes each own
             their scrolling, and a scrolling ancestor would let the page move
             underneath them. The Paper tab keeps its own scroll container below. */}
-        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 flex flex-col">
+        {/* `data-[state=inactive]:hidden` is REQUIRED here, not cosmetic.
+            Radix hides an inactive tab panel with the `hidden` ATTRIBUTE, which
+            relies on the browser's `[hidden] { display: none }`. That is a
+            user-agent rule, so Tailwind's `flex` — an author rule — wins, and
+            the panel keeps `display: flex`. It then stays laid out at `flex-1`,
+            invisible but on top, and swallows every click and scroll meant for
+            the SMC panel underneath. Any TabsContent whose className sets
+            `display` needs this guard; `flex-1` alone does not, since it only
+            sets flex-grow. Covered by tabsContentHidden.test.ts. */}
+        <TabsContent value="ipo" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 flex flex-col data-[state=inactive]:hidden">
           {/* Two IPO views, both read-only. Scanner is what the rules see right
               now; Paper is what the forward test has actually done. Neither
               touches SMC, and IPO results are deliberately not merged into the

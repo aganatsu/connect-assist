@@ -82,10 +82,20 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
+import { buildSnapshot, buildContext, type SnapshotInput } from "../_shared/smcScanSnapshot.ts";
+import {
+  decideZone, buildHtfConfluence, hasMinZoneCandles,
+  type ResolvedStyle as ZoneStyle,
+} from "../_shared/smcZoneDecision.ts";
+import {
+  newCapture, toRow as decisionRow, slimPositions, sanitizeConfigForCapture, hashPart,
+  type DecisionCapture,
+} from "../_shared/smcDecisionCapture.ts";
+import { decideDirection, type DirectionStyle } from "../_shared/smcDirectionDecision.ts";
+import { buildHtfContext, type HtfStyle } from "../_shared/smcHtfContext.ts";
 // V2 structural order blocks — SHADOW MODE. Detected, scored and stored; no
 // gate, entry, exit or score reads them. See structuralOrderBlocks.ts.
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
-import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { observeStructureLag } from "../_shared/structureLagObserver.ts";
 import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
@@ -2870,6 +2880,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let stagedExpired = 0;
   let stagedInvalidated = 0;
   let stagedNew = 0;
+  // Observability counters. Reported in the scan meta so a silently failing
+  // snapshot writer is visible rather than inferred from an empty table.
+  let snapshotsWritten = 0;
+  let snapshotFailures = 0;
+  let decisionsWritten = 0;
+  let decisionFailures = 0;
   if (stagingEnabled) {
     try {
       const { data: staged } = await supabase
@@ -4658,7 +4674,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Track which daily/weekly candles were freshly fetched (to persist after scan)
   const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
 
+  // Decision-input capture, one per symbol. Pushed once at the top of the loop
+  // and MUTATED as stages run — held by reference, so the 24 different exit
+  // paths below need no changes and a pair that stops early simply has fewer
+  // stages filled in. Observational only; every write is a plain assignment.
+  const decisionCaptures: DecisionCapture[] = [];
+
   for (const pair of scanOrder) {
+    const cap = newCapture(scanCycleId, userId, BOT_ID, pair, null);
+    decisionCaptures.push(cap);
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
@@ -4674,6 +4698,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
     const offHoursImplicitlyAllowed = normalizedSession === "offhours" && coreSessionsEnabled;
     if (!pairAssetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions) && !offHoursImplicitlyAllowed) {
+      cap.reached_stage = "session_skipped";
+      cap.session_news_input = { session: session.name, enabled: false, weekday: new Date().getUTCDay() };
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
       continue;
     }
@@ -4683,6 +4709,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // e.g. Thursday 9PM NY = Friday 01:00 UTC → utcDay was 5 (Fri), triggering false weekend close
     const fxIsClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
     if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
+      cap.reached_stage = "market_closed";
       scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
     }
@@ -4817,161 +4844,42 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // only style where the two agree. Rather than silently pick a winner the
     // structure slot comes from STYLE_TF_LABELS, and the mismatch is left for a
     // separate decision.
-    const structureSeries: Candle[] | null =
-      resolvedStyle === "scalper"
-        ? (m15Candles.length >= 20 ? m15Candles : null)
-        : resolvedStyle === "swing_trader"
-        ? (dailyCandles.length >= 20 ? dailyCandles : null)
-        : (h4Candles.length >= 20 ? h4Candles : null);
-    (pairConfig as any)._structureCandles = structureSeries;
-    (pairConfig as any)._structureTfLabel = STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? null;
-    if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
-      // Falling back silently would look like the flag was on and doing
-      // nothing — the failure mode this whole session kept running into.
-      console.warn(`[${pair}] structureTfAnalysis ON but no ${STYLE_TF_LABELS[resolvedStyle]?.structureTFLabel ?? "structure"} candles — using the entry timeframe`);
-    }
+    // structureSeries + its label now come from _shared/smcHtfContext, below.
+    // ── HTF context (POIs, Fib, Premium/Discount, Liquidity on D + 4H + 1H) ──
+    // Assembly lives in _shared/smcHtfContext so the historical replay builds
+    // it identically instead of re-deriving it from guessed parameters — the
+    // Stage 2E failure. Proven at 152/152 against the bundle production
+    // actually passed to the engine.
+    const htfCtx = buildHtfContext({
+      style: resolvedStyle as HtfStyle,
+      m15Candles, hourlyCandles, h4Candles, dailyCandles,
+      equalHighsLowsSensitivity: pairConfig.equalHighsLowsSensitivity,
+      liquidityPoolMinTouches: pairConfig.liquidityPoolMinTouches,
+    });
+    const h4FVGs = htfCtx.h4FVGs, h4OBs = htfCtx.h4OBs, h4Breakers = htfCtx.h4Breakers;
+    const htfFibLevelsD = htfCtx.htfFibLevelsD, htfFibLevels4H = htfCtx.htfFibLevels4H,
+      htfFibLevels1H = htfCtx.htfFibLevels1H;
+    const htfPDD = htfCtx.htfPDD, htfPD4H = htfCtx.htfPD4H, htfPD1H = htfCtx.htfPD1H;
+    const htfLiquidityPoolsD = htfCtx.htfLiquidityPoolsD,
+      htfLiquidityPools4H = htfCtx.htfLiquidityPools4H,
+      htfLiquidityPools1H = htfCtx.htfLiquidityPools1H;
 
-    // ── HTF POI Detection (Phase 1: FVGs, OBs, Breakers on 4H + 1H) ──
-    // Run structure detection on HTF candles and inject results for scoring boost.
-    console.log(`[scan ${scanCycleId}] ${pair} HTF candles: 4H=${h4Candles.length}, 1H=${hourlyCandles.length}`);
-    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] = [];
-    let h4FVGs: any[] = [];
-    let h4OBs: any[] = [];
-    let h4Breakers: any[] = [];
-    if (h4Candles.length >= 20) {
-      const h4Structure = analyzeMarketStructure(h4Candles);
-      const h4StructureBreaks = [...h4Structure.bos, ...h4Structure.choch];
-      h4FVGs = detectFVGs(h4Candles, h4StructureBreaks);
-      h4OBs = detectOrderBlocks(h4Candles, h4StructureBreaks);
-      h4Breakers = detectBreakerBlocks(h4OBs, h4Candles, h4StructureBreaks);
-      for (const fvg of h4FVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
-          htfPOIs.push({ timeframe: "4H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of h4OBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "4H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of h4Breakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "4H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    if (hourlyCandles.length >= 20) {
-      const h1Structure = analyzeMarketStructure(hourlyCandles);
-      const h1StructureBreaks = [...h1Structure.bos, ...h1Structure.choch];
-      const h1FVGs = detectFVGs(hourlyCandles, h1StructureBreaks);
-      const h1OBs = detectOrderBlocks(hourlyCandles, h1StructureBreaks);
-      const h1Breakers = detectBreakerBlocks(h1OBs, hourlyCandles, h1StructureBreaks);
-      for (const fvg of h1FVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
-          htfPOIs.push({ timeframe: "1H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of h1OBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "1H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of h1Breakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "1H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    // ── Daily POI Detection ──
-    // Daily candles have fewer structure breaks, so quality threshold is lower (>= 2 vs >= 3 for intraday).
-    // The BOOST_MAP already assigns highest weights to "D" timeframe (fvg: 1.0, ob: 0.8, breaker: 0.6).
-    let dFVGs: any[] = [];
-    let dOBs: any[] = [];
-    let dBreakers: any[] = [];
-    if (dailyCandles.length >= 10) {
-      const dStructure = analyzeMarketStructure(dailyCandles);
-      const dStructureBreaks = [...dStructure.bos, ...dStructure.choch];
-      dFVGs = detectFVGs(dailyCandles, dStructureBreaks);
-      dOBs = detectOrderBlocks(dailyCandles, dStructureBreaks);
-      dBreakers = detectBreakerBlocks(dOBs, dailyCandles, dStructureBreaks);
-      for (const fvg of dFVGs) {
-        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 2) {
-          htfPOIs.push({ timeframe: "D", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
-        }
-      }
-      for (const ob of dOBs) {
-        if (ob.state !== "broken" && ob.state !== "mitigated") {
-          htfPOIs.push({ timeframe: "D", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
-        }
-      }
-      for (const bb of dBreakers) {
-        if (bb.isActive && bb.state !== "broken") {
-          htfPOIs.push({ timeframe: "D", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
-        }
-      }
-    }
-    // Inject HTF POIs for confluence scoring boost
-    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfPOIs.length} (D: ${htfPOIs.filter(p => p.timeframe === "D").length}, 4H: ${htfPOIs.filter(p => p.timeframe === "4H").length}, 1H: ${htfPOIs.filter(p => p.timeframe === "1H").length})`);
-    (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
-
-    // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on D + 4H + 1H ──
-    // Run Fib, PD, and Liquidity detection on HTF candles for multi-TF scoring.
-    let htfFibLevelsD: any = null;
-    let htfFibLevels4H: any = null;
-    let htfFibLevels1H: any = null;
-    let htfPDD: any = null;
-    let htfPD4H: any = null;
-    let htfPD1H: any = null;
-    let htfLiquidityPoolsD: LiquidityPool[] = [];
-    let htfLiquidityPools4H: LiquidityPool[] = [];
-    let htfLiquidityPools1H: LiquidityPool[] = [];
-
-    // Liquidity-pool sensitivity (hoisted so all three TF blocks below can use them)
-    const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
-    const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
-    const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
-
-    if (dailyCandles.length >= 10) {
-      // Daily Fibonacci: ZigZag pivots → Fib levels
-      const dZigzag = detectZigZagPivots(dailyCandles, 5, 20);
-      if (dZigzag.lastTwo) {
-        htfFibLevelsD = computeFibLevels(dZigzag.lastTwo[0], dZigzag.lastTwo[1]);
-      }
-      // Daily Premium/Discount zone
-      htfPDD = calculatePremiumDiscount(dailyCandles);
-      // Daily Liquidity Pools — sensitivity-driven tolerance + TF bump for daily
-      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, Math.min(liqTolBase + 0.10, 0.40), liqMinTouches);
-    }
-
-    if (h4Candles.length >= 20) {
-      // 4H Fibonacci: ZigZag pivots → Fib levels
-      const h4Zigzag = detectZigZagPivots(h4Candles, 3, 10);
-      if (h4Zigzag.lastTwo) {
-        htfFibLevels4H = computeFibLevels(h4Zigzag.lastTwo[0], h4Zigzag.lastTwo[1]);
-      }
-      // 4H Premium/Discount zone
-      htfPD4H = calculatePremiumDiscount(h4Candles);
-      // 4H Liquidity Pools — sensitivity base + 0.05 bump for 4H
-      htfLiquidityPools4H = detectLiquidityPools(h4Candles, Math.min(liqTolBase + 0.05, 0.35), liqMinTouches);
-    }
-
-    if (hourlyCandles.length >= 20) {
-      // 1H Fibonacci: ZigZag pivots → Fib levels
-      const h1Zigzag = detectZigZagPivots(hourlyCandles, 3, 10);
-      if (h1Zigzag.lastTwo) {
-        htfFibLevels1H = computeFibLevels(h1Zigzag.lastTwo[0], h1Zigzag.lastTwo[1]);
-      }
-      // 1H Premium/Discount zone
-      htfPD1H = calculatePremiumDiscount(hourlyCandles);
-      // 1H Liquidity Pools — sensitivity base (no bump for 1H)
-      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, liqTolBase, liqMinTouches);
-    }
-
-    // Inject HTF Phase 2 data for confluence scoring
-    console.log(`[scan ${scanCycleId}] ${pair} HTF Phase 2: FibD=${htfFibLevelsD ? "yes" : "no"}, Fib4H=${htfFibLevels4H ? "yes" : "no"}, Fib1H=${htfFibLevels1H ? "yes" : "no"}, PDD=${htfPDD?.currentZone ?? "none"}, PD4H=${htfPD4H?.currentZone ?? "none"}, PD1H=${htfPD1H?.currentZone ?? "none"}, LiqD=${htfLiquidityPoolsD.length}, Liq4H=${htfLiquidityPools4H.length}, Liq1H=${htfLiquidityPools1H.length}`);
+    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfCtx.htfPOIs?.length ?? 0}`);
+    (pairConfig as any)._htfPOIs = htfCtx.htfPOIs;
     (pairConfig as any)._htfFibLevels = { d: htfFibLevelsD, h4: htfFibLevels4H, h1: htfFibLevels1H };
     (pairConfig as any)._htfPD = { d: htfPDD, h4: htfPD4H, h1: htfPD1H };
     (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
+    // Still referenced by the chart-overlay and structure-intel payloads below.
+    const htfPOIs = htfCtx.htfPOIs ?? [];
+    const dFVGs = htfCtx.dFVGs, dOBs = htfCtx.dOBs, dBreakers = htfCtx.dBreakers;
+    const structureSeries = htfCtx.structureSeries;
+    (pairConfig as any)._structureCandles = structureSeries;
+    (pairConfig as any)._structureTfLabel = htfCtx.structureTfLabel;
+    if ((pairConfig as any).structureTfAnalysis === true && !structureSeries) {
+      // Falling back silently would look like the flag was on and doing
+      // nothing — the failure mode this whole session kept running into.
+      console.warn(`[${pair}] structureTfAnalysis ON but no ${htfCtx.structureTfLabel ?? "structure"} candles — using the entry timeframe`);
+    }
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
     // Style-aware: scalper uses 1H/15m/5m, swing uses Weekly/Daily/4H, day_trader uses Daily/4H/1H (original)
@@ -4993,63 +4901,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           priceAwareStructureBlocks: pairConfig.priceAwareStructureBlocks === true,
         };
 
-        if (resolvedStyle === "scalper") {
-          // Scalper: bias=1H, structure=15m, confirm=5m (entry candles)
-          const tfLabels = STYLE_TF_LABELS.scalper;
-          styleDirectionResult = determineDirectionStyleAware(
-            hourlyCandles.length >= 20 ? hourlyCandles : null,
-            m15Candles.length >= 20 ? m15Candles : null,
-            candles.length >= 20 ? candles : null,
-            { ...dirConfig, ...tfLabels },
-          );
-          // Map StyleDirectionResult to DirectionResult for downstream compatibility
-          simpleDirectionResult = {
-            direction: styleDirectionResult.direction,
-            bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource,
-            h4Retrace: styleDirectionResult.structureRetrace,
-            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
-            h1Confirmed: styleDirectionResult.confirmBOS,
-            // Copied explicitly. This remap is field-by-field, so anything added
-            // to StyleDirectionResult is silently dropped here unless listed —
-            // which is what happened to blockedRetracement: it was recorded at
-            // the block, mapped away before the scan log, and read as 0 of 148.
-            blockedRetracement: styleDirectionResult.blockedRetracement,
-            reason: `[scalper] ${styleDirectionResult.reason}`,
-          };
-        } else if (resolvedStyle === "swing_trader") {
-          // Swing: bias=Weekly, structure=Daily, confirm=4H
-          const tfLabels = STYLE_TF_LABELS.swing_trader;
-          styleDirectionResult = determineDirectionStyleAware(
-            weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : null,
-            dailyCandles.length >= 20 ? dailyCandles : null,
-            h4Candles.length >= 20 ? h4Candles : null,
-            { ...dirConfig, ...tfLabels },
-          );
-          // Map StyleDirectionResult to DirectionResult for downstream compatibility
-          simpleDirectionResult = {
-            direction: styleDirectionResult.direction,
-            bias: styleDirectionResult.bias,
-            biasSource: styleDirectionResult.biasSource,
-            h4Retrace: styleDirectionResult.structureRetrace,
-            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
-            h1Confirmed: styleDirectionResult.confirmBOS,
-            // Copied explicitly. This remap is field-by-field, so anything added
-            // to StyleDirectionResult is silently dropped here unless listed —
-            // which is what happened to blockedRetracement: it was recorded at
-            // the block, mapped away before the scan log, and read as 0 of 148.
-            blockedRetracement: styleDirectionResult.blockedRetracement,
-            reason: `[swing] ${styleDirectionResult.reason}`,
-          };
-        } else {
-          // Day trader (default): bias=Daily, structure=4H, confirm=1H — original function
-          simpleDirectionResult = determineDirection(
-            dailyCandles.length >= 20 ? dailyCandles : null,
-            h4Candles.length >= 20 ? h4Candles : null,
-            hourlyCandles.length >= 20 ? hourlyCandles : null,
-            dirConfig,
-          );
-        }
+        cap.style = resolvedStyle;
+        cap.reached_stage = "direction";
+        // The three candle arrays are already captured by the zone snapshot
+        // (1h / 15m / 5m), so only the config and the null-gating are recorded
+        // here — storing the bars twice would be a second copy that can drift.
+        cap.direction_input = {
+          style: resolvedStyle,
+          dirConfig,
+          tfLabels: STYLE_TF_LABELS[resolvedStyle as keyof typeof STYLE_TF_LABELS] ?? null,
+          seriesLengths: {
+            hourly: hourlyCandles.length, m15: m15Candles.length, entry: candles.length,
+            daily: dailyCandles.length, h4: h4Candles.length, weekly: weeklyCandles?.length ?? 0,
+          },
+          useSimpleDirection: pairConfig.useSimpleDirection === true,
+        };
+        // The decision now lives in _shared/smcDirectionDecision so bot-scanner
+        // and the historical replay run ONE implementation. Proven at 152/152
+        // against production's own recorded simpleDirection.
+        const dirDecision = decideDirection({
+          style: resolvedStyle as DirectionStyle,
+          series: {
+            candles, m15Candles, hourlyCandles, h4Candles, dailyCandles,
+            weeklyCandles: weeklyCandles ?? null,
+          },
+          dirConfig,
+          useSimpleDirection: true,
+        });
+        styleDirectionResult = dirDecision.styleDirection;
+        // Non-null by construction: `useSimpleDirection: true` is passed
+        // literally above, and this block only runs when production would have
+        // run the engine. An engine throw still lands in the catch below,
+        // exactly as before.
+        simpleDirectionResult = dirDecision.simpleDirection!;
 
         console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | struct-retrace=${simpleDirectionResult.h4Retrace} | struct-choch-against=${simpleDirectionResult.h4ChochAgainst} | confirm-bos=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
         // Pass override direction to confluenceScoring
@@ -5088,6 +4972,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
      }
     // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
     (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
+    // Confluence inputs. The candle arrays are already snapshotted; what was
+    // never recorded is the resolved pairConfig the scorer actually saw,
+    // including the _htf* fields injected into it a few lines above.
+    cap.reached_stage = "confluence";
+    cap.confluence_input = {
+      dailyPassed: dailyCandles.length >= 10,
+      hourlyPassed: hourlyCandles.length > 0,
+      pairConfig: sanitizeConfigForCapture(pairConfig),
+    };
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
 
     // ── Structure shadow telemetry (flag: STRUCTURE_CANONICAL_SHADOW) ──
@@ -5491,211 +5384,154 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
 
-    // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
-    const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
-      h4OBs: h4OBs ?? [],
-      h4FVGs: h4FVGs ?? [],
-      h4Breakers: h4Breakers ?? [],
-      htfFibLevels: htfFibLevels4H ?? null,
-      dailyFibLevels: htfFibLevelsD ?? null,
-      htfPD: htfPD4H ?? null,
-      direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
-    } : null;
+    // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine).
+    // Assembly lives in _shared/smcZoneDecision so the historical backtester
+    // builds it identically instead of re-deriving it from guessed parameters.
+    const htfConfluenceData: HTFConfluenceData | null = buildHtfConfluence({
+      direction: analysis.direction as "long" | "short" | null,
+      h4OBs, h4FVGs, h4Breakers, htfFibLevels4H, htfFibLevelsD, htfPD4H,
+    });
 
-    // ── Consolidated Zone Engine (story-driven waterfall with liquidity + confirmation) ──
-    // Style-aware candle mapping for findUnifiedZone:
-    //   findUnifiedZone(h1Candles, h4Candles, entryCandles, ..., dailyCandles?, confirmCandles?, ltfConfirmCandles?)
-    //   Scalper:     h1=5m(entry), h4=15m, entry=5m, daily=1H, confirm=15m, ltfConfirm=5m
-    //   Day Trader:  h1=1H, h4=4H, entry=15m, daily=Daily, confirm=4H/1H, ltfConfirm=1H/15m
-    //   Swing:       h1=4H, h4=Daily, entry=1H, daily=Weekly, confirm=Daily, ltfConfirm=4H
-    // The slot names (h1, h4, daily) are just positional — the engine is TF-agnostic.
-    const hasMinZoneCandles = resolvedStyle === "scalper"
-      ? candles.length >= 20
-      : resolvedStyle === "swing_trader"
-        ? h4Candles.length >= 20
-        : hourlyCandles.length >= 20;
-    if (analysis.direction && hasMinZoneCandles) {
+    // ── Consolidated Zone Engine ────────────────────────────────────────────
+    // The decision itself now lives in _shared/smcZoneDecision so bot-scanner
+    // and the historical backtester run ONE implementation. This block keeps
+    // only what a caller owns: assembling inputs from what was fetched, and
+    // writing the results onto `detail`.
+    const zoneSeries = {
+      candles, m15Candles, hourlyCandles, h4Candles, dailyCandles,
+      weeklyCandles: weeklyCandles ?? null,
+    };
+    if (analysis.direction && hasMinZoneCandles(resolvedStyle as ZoneStyle, zoneSeries)) {
       try {
-        // Same two-layer floor bot-scanner applies to the real stop at :5787.
-        // Duplicated rather than hoisted because that block runs much later and
-        // only on the entry path, while this is needed for every evaluation.
-        // Display only — feeds EntryStory.executable, never a gate.
+        // Two-layer stop floor. Display only — feeds EntryStory.executable,
+        // never a gate.
         const zoneSpec = SPECS[pair] || SPECS["EUR/USD"];
         const zoneStaticMinSlPips = resolveStaticFloorPips(pairConfig, pair);
         const zoneAtrVal = atrForConsumers;
         const zoneAtrFloorPips = zoneAtrVal > 0
           ? (zoneAtrVal * ATR_SL_FLOOR_MULTIPLIER) / zoneSpec.pipSize : 0;
         const effectiveMinSlPipsForZone = Math.max(zoneStaticMinSlPips, zoneAtrFloorPips);
-        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
-        // Combine liquidity pools from the relevant timeframes
+        // Hoisted so the snapshot records the same number the engine was given.
+        const zoneMaxSlPips = zoneStaticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
+        // Combine liquidity pools from the relevant timeframes. Order matters.
         const combinedLiqPools = [
           ...htfLiquidityPoolsD,
           ...htfLiquidityPools4H,
           ...htfLiquidityPools1H,
         ];
 
-        // Style-aware candle slot mapping
-        let zoneH1Candles: Candle[];
-        let zoneH4Candles: Candle[];
-        let zoneEntryCandles: Candle[];
-        let zoneDailyCandles: Candle[] | undefined;
-        let zoneConfirmCandles: Candle[];
-        let zoneLtfConfirmCandles: Candle[];
+        const zoneDecision = decideZone({
+          symbol: pair,
+          style: resolvedStyle as ZoneStyle,
+          series: zoneSeries,
+          direction: analysis.direction as "long" | "short",
+          lastPrice: analysis.lastPrice,
+          htfConfluence: htfConfluenceData,
+          liquidityPools: combinedLiqPools,
+          minSlPips: effectiveMinSlPipsForZone,
+          maxSlPips: zoneMaxSlPips,
+          tpRatio: config.tpRatio,
+          entryDepth: (pairConfig as any).zoneEntryDepth,
+          pipSize: zoneSpec.pipSize,
+          strictATRMult: pairConfig.marketFillStrictATRMult,
+          fibMaxRetracement: pairConfig.fibMaxRetracement,
+          originOBRetest: pairConfig.originOBRetest,
+          impulseZoneEnabled: pairConfig.impulseZoneEnabled !== false,
+        });
 
-        // Style-aware TF labels for the zone engine
-        let zoneTFLabels: TFSlotLabels;
-        if (resolvedStyle === "scalper") {
-          zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
-          // Scalper waterfall: 1H → 15m → 5m (entry)
-          zoneH1Candles = candles;              // 5m = lowest structural TF slot
-          zoneH4Candles = m15Candles;           // 15m = mid structural TF slot
-          zoneEntryCandles = candles;           // 5m entry
-          zoneDailyCandles = hourlyCandles.length >= 20 ? hourlyCandles : undefined; // 1H = highest TF slot
-          zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
-          zoneLtfConfirmCandles = candles;
-        } else if (resolvedStyle === "swing_trader") {
-          zoneTFLabels = { top: "W", mid: "D", low: "4H" };
-          // Swing waterfall: Weekly → Daily → 4H (entry=1H)
-          zoneH1Candles = h4Candles;            // 4H = lowest structural TF slot
-          zoneH4Candles = dailyCandles;         // Daily = mid structural TF slot
-          zoneEntryCandles = candles;           // 1H entry
-          zoneDailyCandles = weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : undefined; // Weekly = highest TF slot
-          zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
-          zoneLtfConfirmCandles = h4Candles;
-        } else {
-          zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
-          // Day trader (default): Daily → 4H → 1H (entry=15m)
-          zoneH1Candles = hourlyCandles;
-          zoneH4Candles = h4Candles;
-          zoneEntryCandles = candles;           // 15m entry
-          zoneDailyCandles = dailyCandles.length >= 30 ? dailyCandles : undefined;
-          zoneConfirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
-          zoneLtfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
-        }
+        const unifiedResult = zoneDecision.unified!;
+        const zoneTFLabels = zoneDecision.slots!.labels;
+        const zoneSlotTFs = zoneDecision.slots!.intervals;
+        const zoneH1Candles = zoneDecision.slots!.h1;
+        const zoneH4Candles = zoneDecision.slots!.h4;
+        const zoneEntryCandles = zoneDecision.slots!.entry;
+        const zoneDailyCandles = zoneDecision.slots!.daily;
+        const zoneConfirmCandles = zoneDecision.slots!.confirm;
+        const zoneLtfConfirmCandles = zoneDecision.slots!.ltfConfirm;
+        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
 
-        const unifiedResult: UnifiedZoneResult = findUnifiedZone(
-          zoneH1Candles,
-          zoneH4Candles,
-          zoneEntryCandles,
-          unifiedDir as "bullish" | "bearish",
-          analysis.lastPrice,
-          combinedLiqPools,
-          htfConfluenceData ?? undefined,
-          {
-            strictATRMult: pairConfig.marketFillStrictATRMult,
-            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
-            fibMaxRetracement: pairConfig.fibMaxRetracement,
-            originOBRetest: pairConfig.originOBRetest,
-          },
-          zoneDailyCandles,
-          zoneConfirmCandles,
-          zoneLtfConfirmCandles,
-          // UnifiedZoneConfig. minRR and requireConfirmation stay at their
-          // defaults — both gate whether an entry object exists at all, so
-          // moving them changes trade selection. minSlPips and tpRatio are
-          // supplied only so the engine can report what execution WOULD place
-          // (EntryStory.executable); they feed no gate.
-          {
-            minSlPips: effectiveMinSlPipsForZone,
-            // Same cap the Unified Zone SL Override enforces at :5838. A zone
-            // stop above it is discarded and execution uses its own structural
-            // stop instead, so the engine needs the bound to report that.
-            maxSlPips: resolveStaticFloorPips(pairConfig, pair) * (pairConfig.impulseSlCapMultiplier ?? 4),
-            tpRatio: config.tpRatio,
-            entryDepth: (pairConfig as any).zoneEntryDepth,
-          },
-          zoneTFLabels,
-        );
-
-        // Store the full unified story for the frontend narrative panel
-        (detail as any).unifiedZone = {
-          hasZone: unifiedResult.hasZone,
-          state: unifiedResult.state,
-          selectedTF: unifiedResult.selectedTF,
-          unifiedScore: unifiedResult.unifiedScore,
-          scoreBreakdown: unifiedResult.scoreBreakdown,
-          impulse: unifiedResult.impulse,
-          zone: unifiedResult.zone,
-          price: unifiedResult.price,
-          liquidity: unifiedResult.liquidity ? {
-            liquidityScore: unifiedResult.liquidity.liquidityScore,
-            summary: unifiedResult.liquidity.summary,
-            nearbyPools: unifiedResult.liquidity.nearbyPools.length,
-            sweepEvent: unifiedResult.liquidity.sweepEvent ? {
-              level: unifiedResult.liquidity.sweepEvent.level,
-              type: unifiedResult.liquidity.sweepEvent.type,
-              rejected: unifiedResult.liquidity.sweepEvent.rejected,
-            } : null,
-          } : null,
-          confirmation: unifiedResult.confirmation ? {
-            type: unifiedResult.confirmation.type,
-            score: unifiedResult.confirmation.score,
-            entryReady: unifiedResult.confirmation.entryReady,
-            direction: unifiedResult.confirmation.direction,
-            detail: unifiedResult.confirmation.detail,
-          } : null,
-          entry: unifiedResult.entry,
-          storySummary: unifiedResult.storySummary,
-          reason: unifiedResult.reason,
-        };
-
-        // Derive izData (detail.impulseZone) from the unified result's multiTFResult
-        // for backward compatibility with the 58 downstream references to izData.*
+        (detail as any).unifiedZone = zoneDecision.unifiedZone;
+        (detail as any).impulseZone = zoneDecision.impulseZone;
         const multiTF = unifiedResult.multiTFResult;
-        (detail as any).impulseZone = {
-          hasZone: !!multiTF.bestZone,
-          selectedTF: multiTF.selectedTF,
-          reason: multiTF.reason,
-          impulse: multiTF.bestZone?.impulse ? {
-            high: multiTF.bestZone.impulse.high,
-            low: multiTF.bestZone.impulse.low,
-            direction: multiTF.bestZone.impulse.direction,
-          } : null,
-          bestZone: multiTF.bestZone ? {
-            type: multiTF.bestZone.zone.poi.type,
-            high: multiTF.bestZone.zone.poi.high,
-            low: multiTF.bestZone.zone.poi.low,
-            fibLevel: multiTF.bestZone.zone.fibLevel,
-            fibDepth: multiTF.bestZone.zone.fibDepth,
-            totalScore: multiTF.bestZone.zone.totalScore,
-            srConfirmed: multiTF.bestZone.zone.srConfirmed,
-            ltfRefined: multiTF.bestZone.zone.ltfRefined,
-            ltfType: multiTF.bestZone.zone.ltfType || null,
-            refinedEntry: multiTF.bestZone.zone.refinedEntry || null,
-            refinedSL: multiTF.bestZone.zone.refinedSL || null,
-            htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
-            htfLayers: multiTF.bestZone.zone.htfLayers,
-            priceAtZone: multiTF.bestZone.priceAtZone,
-            priceInsideZone: multiTF.bestZone.priceInsideZone,
-            priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
-            sideOk: multiTF.bestZone.sideOk,
-            distanceToZone: multiTF.bestZone.distanceToZone,
-            distancePips: multiTF.bestZone.distancePips,
-            // How deep into the zone price has actually come, as a fraction of
-            // zone width from the NEAR edge. This is the number that decides
-            // what `zoneEntryDepth` should be: an entry at depth D fills only
-            // when penetration reaches D, and today D is pinned at 1.
-            //   <0 price has not entered the zone
-            //    0 just touched the near edge
-            //    1 reached the far edge  (what the entry currently requires)
-            //   >1 traded clean through
-            zonePenetration: (() => {
-              const zw = multiTF.bestZone.zone.poi.high - multiTF.bestZone.zone.poi.low;
-              if (!(zw > 0)) return null;
-              return analysis.direction === "long"
-                ? (multiTF.bestZone.zone.poi.high - analysis.lastPrice) / zw
-                : (analysis.lastPrice - multiTF.bestZone.zone.poi.low) / zw;
-            })(),
-            entryDepthInUse: (pairConfig as any).zoneEntryDepth ?? 1,
-          } : null,
-          allZonesCount: multiTF.allZones.length,
-          h1HasZone: !!multiTF.h1Result.bestZone,
-          h4HasZone: !!multiTF.h4Result?.bestZone,
-          dailyHasZone: !!multiTF.dailyResult?.bestZone,
-          scoringEnabled: pairConfig.impulseZoneEnabled !== false,
-        };
 
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
+
+        // ── OBSERVABILITY: persist the exact arrays that were just scored ────
+        //
+        // AFTER the engine has run, so nothing here can reach a decision. No
+        // gate, score, entry, stop or target reads these tables, and a failure
+        // is a logging problem — the scan continues either way. Deliberately
+        // fire-and-forget with its own try/catch: a snapshot must never be able
+        // to fail a trading cycle.
+        //
+        // Without this, no SMC engine can be determinism-tested. Stage 2
+        // measured the ceiling without it at 92.1%.
+        try {
+          const snap = buildSnapshot({
+            scanCycleId, userId, botId: BOT_ID, symbol: pair,
+            style: resolvedStyle, nowMs: Date.now(),
+            fetchedAt: new Date().toISOString(),
+            inputs: [
+              { slot: "top", timeframe: zoneSlotTFs.top, candles: zoneDailyCandles ?? [] },
+              { slot: "mid", timeframe: zoneSlotTFs.mid, candles: zoneH4Candles },
+              { slot: "low", timeframe: zoneSlotTFs.low, candles: zoneH1Candles },
+              { slot: "entry", timeframe: zoneSlotTFs.entry, candles: zoneEntryCandles },
+              { slot: "confirm", timeframe: zoneSlotTFs.confirm, candles: zoneConfirmCandles },
+              { slot: "ltf_confirm", timeframe: zoneSlotTFs.ltf_confirm, candles: zoneLtfConfirmCandles },
+              // The HTF-confluence and liquidity derivation sources. Not passed
+              // to the engine directly, but h4OBs / h4FVGs / breakers / fib /
+              // premium-discount / pools are pure functions of these three, so
+              // storing the arrays lets a replay re-derive instead of paying to
+              // keep a second copy of every detected structure.
+              { slot: "context", timeframe: "4h", candles: h4Candles ?? [] },
+              { slot: "context", timeframe: "1d", candles: dailyCandles ?? [] },
+              { slot: "context", timeframe: "1h", candles: hourlyCandles ?? [] },
+              // Weekly. runICTHTFAnalysis reads it, so without this the ICT
+              // stage cannot be replayed at all — the gap that blocked it in
+              // Stage 2H-B. Cheap: ~300 bars per symbol, written once.
+              { slot: "context", timeframe: "1w", candles: weeklyCandles ?? [] },
+            ] as SnapshotInput[],
+          });
+          if (snap.bars.length) {
+            // One row per distinct observed VALUE. An identical re-observation
+            // collapses; a provider revision of an already-closed bar adds a
+            // row rather than overwriting what an earlier scan actually saw.
+            const b = await supabase.from("smc_scan_bars")
+              .upsert(snap.bars, { onConflict: "symbol,timeframe,bar_time,bar_hash", ignoreDuplicates: true });
+            if (b.error) throw new Error(`bars: ${b.error.message}`);
+          }
+          if (snap.manifest.length) {
+            const m = await supabase.from("smc_scan_manifest")
+              .upsert(snap.manifest, { onConflict: "scan_cycle_id,symbol,slot,timeframe" });
+            if (m.error) throw new Error(`manifest: ${m.error.message}`);
+          }
+          // The non-candle arguments. Stage 2E: a replay that rebuilds the
+          // candles perfectly but omits htfConfluenceData agreed with
+          // production on 37.3% of AUD/USD scans instead of 84.9%.
+          const c = await supabase.from("smc_scan_context").upsert(buildContext({
+            scanCycleId, userId, botId: BOT_ID, symbol: pair, style: resolvedStyle,
+            direction: unifiedDir,
+            lastPrice: analysis.lastPrice,
+            tfLabels: { display: zoneTFLabels, slots: zoneSlotTFs },
+            engineArgs: {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              pipSize: zoneSpec.pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+              minSlPips: effectiveMinSlPipsForZone,
+              maxSlPips: zoneMaxSlPips,
+              tpRatio: config.tpRatio,
+              entryDepth: (pairConfig as any).zoneEntryDepth,
+            },
+            htfConfluence: htfConfluenceData,
+            liquidityPools: combinedLiqPools,
+          }), { onConflict: "scan_cycle_id,symbol" });
+          if (c.error) throw new Error(`context: ${c.error.message}`);
+          snapshotsWritten++;
+        } catch (snapErr: any) {
+          snapshotFailures++;
+          console.warn(`[scan ${scanCycleId}] ${pair} snapshot write failed (non-fatal): ${snapErr?.message}`);
+        }
       } catch (zoneErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Zone Engine error (non-fatal): ${zoneErr?.message}`);
         (detail as any).unifiedZone = { hasZone: false, state: "error", reason: `Error: ${zoneErr?.message}` };
@@ -5737,6 +5573,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (resolvedStyle === "swing_trader" && analysis.direction && dailyCandles.length >= 30 && h4Candles.length >= 20) {
       try {
         const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
+        // Inputs. The four candle arrays are already snapshotted by the zone
+        // capture, so only their gating lengths are recorded here; htfData is
+        // stored verbatim on smc_scan_context, so a digest is enough to prove a
+        // replay rebuilt the same bundle rather than a second copy of it.
+        cap.cascade_input = {
+          direction: cascadeDir,
+          lastPrice: analysis.lastPrice,
+          seriesLengths: {
+            daily: dailyCandles.length, h4: h4Candles.length,
+            hourly: hourlyCandles.length, entry: candles.length,
+          },
+          gating: { style: resolvedStyle, dailyMin30: dailyCandles.length >= 30, h4Min20: h4Candles.length >= 20 },
+          htfDataPresent: !!htfConfluenceData,
+          htfDataHash: hashPart(htfConfluenceData ?? null),
+          zoneEngineOpts: {
+            strictATRMult: pairConfig.marketFillStrictATRMult,
+            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+            fibMaxRetracement: pairConfig.fibMaxRetracement,
+            originOBRetest: pairConfig.originOBRetest,
+          },
+        };
         cascadeResult = findCascadeZone(
           dailyCandles,
           h4Candles,
@@ -5765,10 +5622,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           entry: cascadeResult.entry,
           sl: cascadeResult.sl,
         };
+        // Mirrors what detail records, plus the zone objects themselves —
+        // detail keeps only has* booleans, and "a daily zone existed" is not
+        // enough to replay a decision that used its bounds.
+        cap.cascade_output = {
+          state: cascadeResult.state,
+          reason: cascadeResult.reason,
+          dailyZone: cascadeResult.dailyZone ?? null,
+          confirmation: cascadeResult.confirmation ?? null,
+          entryZone: cascadeResult.entryZone ?? null,
+          priceAtEntry: cascadeResult.priceAtEntry,
+          distancePips: cascadeResult.distancePips,
+          entry: cascadeResult.entry,
+          sl: cascadeResult.sl,
+        };
         console.log(`[scan ${scanCycleId}] ${pair} Cascade Zone [${cascadeResult.state}]: ${cascadeResult.reason.slice(0, 120)}`);
       } catch (cascadeErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Cascade Zone error (non-fatal): ${cascadeErr?.message}`);
         (detail as any).cascadeZone = { state: "error", reason: cascadeErr?.message };
+        // An engine error is a real outcome and must be replayable too.
+        cap.cascade_output = { state: "error", reason: cascadeErr?.message ?? null };
       }
     }
 
@@ -5892,6 +5765,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
         const judasMSSIndex = candles.length - 1;
+        cap.ict_input = { ...(cap.ict_input as Record<string, unknown> ?? {}),
+          judas: { mssIndex: judasMSSIndex, direction: judasDirection, config: judasConfig } };
         ictJudasResult = detectICTJudasSwing(candles, judasMSSIndex, judasDirection, judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
         const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
@@ -5955,7 +5830,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
           enablePMSession: pairConfig.ictKillZonePMSession,
         };
-        ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
+        // `new Date()` makes this the one stage a bar-only replay can never
+        // reproduce. Recording the instant is what makes it replayable at all.
+        const kzNow = new Date();
+        cap.reached_stage = "ict";
+        cap.ict_input = {
+          killZone: { at: kzNow.toISOString(), config: kzConfig },
+          ...(cap.ict_input as Record<string, unknown> ?? {}),
+        };
+        ictKZResult = evaluateICTKillZone(kzNow, kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
         const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.currentWindow})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
@@ -6010,6 +5893,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const weeklyPnLPercent = (recentTrades || [])
           .filter((t: any) => t.closed_at && new Date(t.closed_at) >= weekStart)
           .reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        // Counters come from trade history, not from bars — unrecoverable later.
+        cap.risk_input = { consecutiveLosses, tradesToday, dailyPnLPercent, weeklyPnLPercent, config: riskConfig };
         ictRiskResult = assessRisk({ consecutiveLosses, tradesToday, dailyPnLPercent, weeklyPnLPercent, config: riskConfig });
         const modeTag = "OFF"; // Risk is always informational for now
         const reasonText = ictRiskResult.reasons.join("; ") || "ok";
@@ -6795,12 +6680,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
         : null;
 
+      // runSafetyGates reads paper_trade_history mid-decision, so its inputs
+      // are not a pure function of anything snapshotted. Recorded here because
+      // no replay could otherwise reconstruct them.
+      cap.reached_stage = "gates";
+      cap.gates_input = {
+        direction: analysis.direction,
+        account: account ? {
+          balance: account.balance, peak_balance: account.peak_balance,
+          daily_pnl_base: account.daily_pnl_base, daily_pnl_base_date: account.daily_pnl_base_date,
+          execution_mode: account.execution_mode, scan_count: account.scan_count,
+        } : null,
+        openPositions: slimPositions(openPosArr),
+        dailyPassed: dailyCandles.length >= 10,
+        rateMap,
+        convictionCandleCount: convictionCandles?.length ?? null,
+        directionVerdict,
+        propFirmActive: propFirmGateResult?.enabled || false,
+      };
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
       );
+      cap.gates_output = {
+        gates: (gates ?? []).map((g: any) => ({ passed: g.passed, reason: g.reason })),
+        blocking: (gates ?? []).filter((g: any) => !g.passed).map((g: any) => g.reason),
+        allPassed: (gates ?? []).every((g: any) => g.passed),
+      };
       // ── Game Plan Filter Gate ──
       // Was a binary veto, converted to info-only by the Phase 7 migration on
       // the grounds that GP Bias Confidence scoring would carry the load. It has
@@ -6864,6 +6772,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const newsImpacts = (activeGamePlan as any)?.newsImpacts;
       if (newsImpacts && newsImpacts.length > 0 && (config as any).newsFilterEnabled !== false) {
         try {
+          cap.session_news_input = { ...(cap.session_news_input as Record<string, unknown> ?? {}),
+            newsImpacts, direction: analysis.direction };
           const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
           if (newsAlignment.conflicting) {
             // Strong news conflict — block the trade
@@ -7242,6 +7152,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Runs AFTER all 21 gates pass. Does NOT block trades — logs exposure and optionally reduces size.
         let correlationSizeMultiplier = 1.0;
         try {
+          cap.reached_stage = "portfolio";
+          cap.portfolio_input = {
+            candidate: { symbol: pair, direction: analysis.direction, size: 0.01 },
+            openPositions: slimPositions(openPosArr.filter((p: any) => p.position_status === "open")),
+            options: { staticOnly: true },
+            maxOpenPositions: config.maxOpenPositions,
+            maxPositionsPerSymbol: (config as any).maxPositionsPerSymbol ?? null,
+            maxCorrelatedPositions: (config as any).maxCorrelatedPositions ?? null,
+            maxCorrelation: (config as any).maxCorrelation ?? null,
+            maxPortfolioHeat: (config as any).maxPortfolioHeat ?? null,
+            allowSameDirectionStacking: (config as any).allowSameDirectionStacking ?? null,
+            openCount: openPosArr.length,
+          };
           const portfolioCheck = checkPortfolioConflict(
             { symbol: pair, direction: analysis.direction as "long" | "short", size: 0.01 }, // size doesn't matter for correlation check
             openPosArr.filter((p: any) => p.position_status === "open").map((p: any) => ({
@@ -7250,6 +7173,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             })),
             { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
           );
+          cap.portfolio_output = {
+            concentrationScore: portfolioCheck.concentrationScore,
+            conflicts: portfolioCheck.conflicts.map((c: any) => ({ type: c.type, pairs: c.conflictsWith, detail: c.detail })),
+            currencyExposure: portfolioCheck.currencyExposure,
+          };
           if (portfolioCheck.concentrationScore > 0.5) {
             // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
             correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
@@ -8519,6 +8447,56 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     scanDetails.push(detail);
   }
 
+  // ── OBSERVABILITY: persist the per-symbol decision inputs ────────────────
+  //
+  // One batched write AFTER the pair loop, from objects accumulated by
+  // reference during it. Nothing here is read by any gate, score or execution
+  // path; the loop has already finished and every trade decision is made.
+  //
+  // Fail-open by construction: its own try/catch, warns and counts, never
+  // rethrows. A snapshot must not be able to fail a trading cycle.
+  //
+  // This exists so the remaining decision stages can be extracted and proved
+  // the way the zone slice was — against recorded production truth rather than
+  // against another copy of the same code.
+  try {
+    // The final verdict per symbol, read off the detail the scan just built.
+    // Derived rather than duplicated: `detail` is what scan_logs records, so
+    // taking the verdict from it keeps the two from disagreeing.
+    const detailBySymbol = new Map<string, any>();
+    for (const d of scanDetails) if (d && (d as any).pair) detailBySymbol.set((d as any).pair, d);
+    for (const c of decisionCaptures) {
+      const d = detailBySymbol.get(c.symbol);
+      if (!d) continue;
+      c.final_decision = {
+        status: d.status ?? null,
+        skipReason: d.skipReason ?? null,
+        reason: d.reason ?? null,
+        signalSource: d.signalSource ?? null,
+        score: d.score ?? null,
+        direction: d.direction ?? null,
+        entry: d.entry ?? d.suggestedEntry ?? null,
+        stopLoss: d.stopLoss ?? d.sl ?? null,
+        takeProfit: d.takeProfit ?? d.tp ?? null,
+        riskPips: d.riskPips ?? null,
+        tradePlaced: d.status === "signal" || d.status === "entered",
+        correlationAdvisory: d.correlationAdvisory ?? null,
+        staging: d.staging ?? null,
+      };
+      if (c.reached_stage === "portfolio" || c.reached_stage === "gates") c.reached_stage = "final";
+    }
+    const rows = decisionCaptures.map(decisionRow);
+    if (rows.length) {
+      const { error } = await supabase.from("smc_scan_decision")
+        .upsert(rows, { onConflict: "scan_cycle_id,symbol" });
+      if (error) throw new Error(error.message);
+      decisionsWritten += rows.length;
+    }
+  } catch (e: any) {
+    decisionFailures++;
+    console.warn(`[scan ${scanCycleId}] decision capture write failed (non-fatal): ${e?.message}`);
+  }
+
   // Update counters — scope to this bot's account
   const counterUpdate = supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
@@ -8622,6 +8600,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const detailsWithMeta = [
     {
       __meta: true,
+      // The join key between this recorded result and the input snapshot in
+      // smc_scan_manifest / smc_scan_context. Without it a determinism replay
+      // can only match inputs to outputs by timestamp proximity, which is a
+      // guess. Observability only — nothing reads it in the scanner.
+      scan_cycle_id: scanCycleId,
+      // Observational only. Surfaced so a snapshot writer that has quietly
+      // stopped is visible in the scan meta rather than discovered later as an
+      // empty table — which is exactly how scan_candle_snapshots went unnoticed.
+      scanSnapshots: { written: snapshotsWritten, failed: snapshotFailures },
+      decisionCapture: { written: decisionsWritten, failed: decisionFailures },
       candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "polygon" | "none"
       sourceBreakdown: {
         metaapi: sourceTally.metaapi,

@@ -113,21 +113,28 @@ Deno.test("depth defaults to 1 in the live mapper and bot-scanner agrees", () =>
   const b = mapper.match(/^  zoneEntryDepth: (\d+),/m);
   assert(a && b, "missing from one defaults object");
   assertEquals(a[1], b[1]);
-  assert(/entryDepth: \(pairConfig as any\)\.zoneEntryDepth/.test(scanner), "must be passed in");
+  assert(/entryDepth: \(pairConfig as any\)\.zoneEntryDepth/.test(scanner),
+    "bot-scanner must still pass the configured depth into the decision");
 });
+
+// The penetration maths moved to _shared/smcZoneDecision in Stage 2H so the
+// backtester computes it identically. Same invariant, new address.
+const zoneMod = await Deno.readTextFile(
+  new URL("../../functions/_shared/smcZoneDecision.ts", import.meta.url),
+);
 
 Deno.test("penetration is recorded so the right depth is measurable", () => {
   // An entry at depth D fills only when penetration reaches D. Recording the
   // distribution answers "what depth would have filled" from data instead of
   // from an argument about zones being areas.
-  assert(/zonePenetration:/.test(scanner), "penetration must be in scan detail");
-  assert(/entryDepthInUse:/.test(scanner), "and the depth it is being judged against");
+  assert(/zonePenetration:/.test(zoneMod), "penetration must be in scan detail");
+  assert(/entryDepthInUse:/.test(zoneMod), "and the depth it is being judged against");
   assert(
-    /\(multiTF\.bestZone\.zone\.poi\.high - analysis\.lastPrice\) \/ zw/.test(scanner),
+    /\(multiTF\.bestZone\.zone\.poi\.high - input\.lastPrice\) \/ zw/.test(zoneMod),
     "a long's penetration is measured down from the high",
   );
   assert(
-    /\(analysis\.lastPrice - multiTF\.bestZone\.zone\.poi\.low\) \/ zw/.test(scanner),
+    /\(input\.lastPrice - multiTF\.bestZone\.zone\.poi\.low\) \/ zw/.test(zoneMod),
     "a short's penetration is measured up from the low",
   );
 });
@@ -142,5 +149,5 @@ Deno.test("penetration matches the depth that would have filled", () => {
 });
 
 Deno.test("a zero-width zone does not divide by zero", () => {
-  assert(/if \(!\(zw > 0\)\) return null;/.test(scanner), "guard missing");
+  assert(/if \(!\(zw > 0\)\) return null;/.test(zoneMod), "guard missing");
 });

@@ -30,6 +30,9 @@ const mapper = await Deno.readTextFile(
 const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
+const dirModule = await Deno.readTextFile(
+  new URL("../../functions/_shared/smcDirectionDecision.ts", import.meta.url),
+);
 
 Deno.test("the waiver exists and is still gated on priceAwareStructureBlocks", () => {
   assert(/const skipTrendBlock = priceAware && structCheck\.retracing;/.test(engine),
@@ -103,19 +106,21 @@ Deno.test("the style-aware mapping carries the flag through", () => {
   // Both style branches must copy it. The day_trader branch calls
   // determineDirection directly and returns a DirectionResult, so it is
   // unaffected.
-  const mappings = [...scanner.matchAll(
-    /simpleDirectionResult = \{[\s\S]{0,900}?reason: `\[(scalper|swing)\]/g,
-  )];
-  assertEquals(mappings.length, 2, "both style branches remap");
-  for (const m of mappings) {
-    assert(/blockedRetracement: styleDirectionResult\.blockedRetracement,/.test(m[0]),
-      `the ${m[1]} mapping must carry blockedRetracement`);
-  }
+  // The remap moved to _shared/smcDirectionDecision in Stage 2H-B, where the
+  // two style branches collapsed into ONE parameterised remap — strictly safer,
+  // since there is no longer a second copy to forget. Same invariant, and both
+  // tags must still route through it.
+  const m = dirModule.match(/simpleDirection = \{[\s\S]{0,900}?reason: `\[\$\{tag\}\]/);
+  assert(m, "the style-aware remap is gone from the direction module");
+  assert(/blockedRetracement: styleDirection\.blockedRetracement,/.test(m![0]),
+    "the remap must carry blockedRetracement");
+  assert(/const tag = input\.style === "scalper" \? "scalper" : "swing";/.test(dirModule),
+    "both scalper and swing must route through that one remap");
 });
 
 Deno.test("the annotation survives in the reason, as a second route to the truth", () => {
   // reason IS copied by the mapping, so the "[RETRACEMENT — ...]" marker
   // reaches scan_logs even when a structured field does not. Worth keeping:
   // it is how the dropped flag was detectable at all.
-  assert(/\$\{styleDirectionResult\.reason\}/.test(scanner), "reason is passed through verbatim");
+  assert(/\$\{styleDirection\.reason\}/.test(dirModule), "reason is passed through verbatim");
 });

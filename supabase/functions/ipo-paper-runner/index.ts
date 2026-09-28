@@ -44,6 +44,7 @@ import {
 } from "../_shared/ipoPaperRunner.ts";
 import {
   DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
+  stampEntryMinute, stampResultEntry,
   type PaperPosition, type PaperResult, type SizingConfig,
 } from "../_shared/ipoPaperContract.ts";
 import { CAUSAL_EXECUTION_VERSION } from "../_shared/ipoCausalOrdering.ts";
@@ -93,7 +94,8 @@ export const positionRow = (p: PaperPosition, userId: string) => ({
   strategy_id: p.strategyId, strategy_version: p.strategyVersion,
   setup_id: p.setupId, intent_id: p.intentId, user_id: userId,
   symbol: p.symbol, timeframe: p.timeframe, direction: p.direction,
-  entry_time: p.entryTime, entry_price: p.entryPrice,
+  entry_time: p.entryTime, strategy_bar_time: p.strategyBarTime,
+  entry_price: p.entryPrice,
   target_price: p.targetPrice, s2_invalidation_level: p.s2InvalidationLevel,
   nominal_risk_distance: p.nominalRiskDistance, cost_r: p.costR,
   reference_balance_at_entry: p.referenceBalanceAtEntry,
@@ -131,7 +133,8 @@ export const historyRow = (r: PaperResult, userId: string) => {
     strategy_id: p.strategyId, strategy_version: p.strategyVersion,
     setup_id: p.setupId, intent_id: p.intentId, user_id: userId,
     symbol: p.symbol, timeframe: p.timeframe, direction: p.direction,
-    entry_time: p.entryTime, entry_price: p.entryPrice,
+    entry_time: p.entryTime, strategy_bar_time: p.strategyBarTime,
+    entry_price: p.entryPrice,
     target_price: p.targetPrice, s2_invalidation_level: p.s2InvalidationLevel,
     nominal_risk_distance: p.nominalRiskDistance, cost_r: p.costR,
     reference_balance_at_entry: p.referenceBalanceAtEntry,
@@ -213,7 +216,11 @@ export function rowToPosition(r: Record<string, unknown> | null): PaperPosition 
     setupId: r.setup_id as string, intentId: r.intent_id as string,
     symbol: r.symbol as string, timeframe: r.timeframe as string,
     direction: r.direction as "long" | "short",
-    entryTime: r.entry_time as string, entryPrice: Number(r.entry_price),
+    entryTime: r.entry_time as string,
+    // Legacy rows predate the column; their entry_time IS the bar, which is
+    // exactly what the fallback says.
+    strategyBarTime: (r.strategy_bar_time as string) ?? (r.entry_time as string),
+    entryPrice: Number(r.entry_price),
     targetPrice: Number(r.target_price), s2InvalidationLevel: Number(r.s2_invalidation_level),
     nominalRiskDistance: Number(r.nominal_risk_distance), costR: Number(r.cost_r),
     referenceBalanceAtEntry: Number(r.reference_balance_at_entry),
@@ -330,6 +337,13 @@ export interface InstrumentRun {
   minuteSkipReason?: string;
   dailySource?: string;
   dailySkipReason?: string;
+  // ── entry-time attribution (bar open → the minute the entry was reached) ──
+  /** Rows whose entryTime is the proven minute rather than the strategy bar. */
+  entryStamped?: number;
+  entryStampSource?: string;
+  entryStampSkipReason?: string;
+  /** Rows whose bar predates the 1m page reach: unstampable, kept bar-precision. */
+  entryStampOutOfReach?: number;
   /** Outcomes voided because nothing could order them. */
   unresolved?: number;
   /** Exits the frozen engine would have booked and the tape refused. */
@@ -539,6 +553,75 @@ export async function handler(req: Request): Promise<Response> {
             }
           } catch (de) {
             out.dailySkipReason = `daily fetch failed: ${(de as Error).message}`;
+          }
+        }
+
+        // ── ENTRY-TIME STAMPING: bar open → the minute price reached the entry ──
+        //
+        // Runs AFTER ordering is final and writes only `entryTime` /
+        // `entryMinuteTime`. It is deliberately NOT done by handing these
+        // minutes to resolveBar: that would move the fill bar off its
+        // HTF_UNAMBIGUOUS branch and change post-entry MAE/MFE, and in the
+        // feed-disagreement and entry-and-target-in-one-minute cases it would
+        // change the OUTCOME. Attribution must not be able to do that.
+        //
+        // Gated on a fill, so an idle poll costs nothing, and attempted once:
+        // the tape is available in the minutes after the fill, and a stamp that
+        // fails then leaves the row honestly marked as bar-precision forever
+        // rather than re-fetching against a tape that has since rolled off.
+        if (plan.events.some((e) => e.eventType === "FILLED")) {
+          const candidates = [
+            ...(plan.openPosition && !plan.openPosition.entryMinuteTime
+              ? [plan.openPosition] : []),
+            ...plan.closed.filter((r) => !r.entryMinuteTime).map((r) => r.position),
+          ];
+          // A row whose bar is already past the single-page reach can never be
+          // stamped, and must not set the window: one stale open position from
+          // days ago would push the span over the limit and silently cancel the
+          // stamp for the fresh fill that is the whole point of this pass.
+          const reach = (MINUTE_PAGE_LIMIT - 5) * 60_000;
+          const needsStamp = candidates.filter(
+            (p) => now - Date.parse(p.strategyBarTime) < reach);
+          const unreachable = candidates.length - needsStamp.length;
+          if (unreachable > 0) {
+            out.entryStampOutOfReach = unreachable;
+          }
+          if (needsStamp.length > 0) {
+            let tape = minuteBars;
+            try {
+              const earliest = Math.min(...needsStamp.map((p) => Date.parse(p.strategyBarTime)));
+              const spanMinutes = Math.ceil((now - earliest) / 60_000) + 5;
+              // Not tape[0]: the provider's order is not guaranteed ascending,
+              // and a newest-first page would read as covering everything.
+              const tapeFrom = tape.length > 0
+                ? Math.min(...tape.map((m) => Date.parse(m.datetime))) : Infinity;
+              const covered = tapeFrom <= earliest;
+              if (!covered && spanMinutes > 0 && spanMinutes <= MINUTE_PAGE_LIMIT) {
+                const res = await fetchCandlesWithFallback({
+                  symbol: cfg.instrument, interval: "1min", limit: spanMinutes,
+                  persistSymbolOverrides: false,
+                } as Parameters<typeof fetchCandlesWithFallback>[0]);
+                tape = (res.candles ?? []) as Candle[];
+                out.entryStampSource = res.source ?? undefined;
+              } else if (!covered) {
+                out.entryStampSkipReason =
+                  `span ${spanMinutes} minutes exceeds the single-page reach`;
+              }
+              if (tape.length > 0) {
+                plan = {
+                  ...plan,
+                  openPosition: plan.openPosition
+                    ? stampEntryMinute(plan.openPosition, tape, cfg.barMs)
+                    : plan.openPosition,
+                  closed: plan.closed.map((r) => stampResultEntry(r, tape, cfg.barMs)),
+                };
+              }
+            } catch (se) {
+              // Never fatal: a missing stamp costs precision, not correctness.
+              out.entryStampSkipReason = `entry stamp fetch failed: ${(se as Error).message}`;
+            }
+            out.entryStamped = (plan.openPosition?.entryMinuteTime ? 1 : 0)
+              + plan.closed.filter((r) => r.entryMinuteTime).length;
           }
         }
 

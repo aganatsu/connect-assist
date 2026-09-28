@@ -25,7 +25,7 @@
 import type { Candle } from "./smcAnalysis.ts";
 import type { LiveTrade } from "./ipoLiveEngine.ts";
 import {
-  CAUSAL_EXECUTION_VERSION,
+  CAUSAL_EXECUTION_VERSION, firstEntryMinute,
   type AltBranch, type BarOrdering, type ResolutionMethod,
 } from "./ipoCausalOrdering.ts";
 
@@ -172,7 +172,15 @@ export interface PaperPosition extends ZoneTelemetry {
   symbol: string;
   timeframe: string;
   direction: "long" | "short";
+  /**
+   * THE causal entry instant: the first minute the tape proved the entry level
+   * executable. Falls back to `strategyBarTime` only when no tape could be
+   * resolved — `entryMinuteTime` is what says which of the two this is, and
+   * `entryTimePrecision()` reads it. A bar OPEN is not an entry time.
+   */
   entryTime: string;
+  /** The HTF bar that contained the fill. Bar-aligned, always. */
+  strategyBarTime: string;
   entryPrice: number;
   targetPrice: number;
   s2InvalidationLevel: number;
@@ -393,7 +401,11 @@ export function openPosition(
     strategyId: STRATEGY_ID, strategyVersion: STRATEGY_VERSION,
     setupId: intent.setupId, intentId: intent.intentId,
     symbol: intent.symbol, timeframe: intent.timeframe, direction: intent.direction,
-    entryTime: intent.barTime, entryPrice: intent.entryPrice,
+    // Provisional: the bar, until the tape stamps the minute. `stampEntryMinute`
+    // is the only thing that may narrow it, and it runs after resolution.
+    entryTime: provenance.entryMinuteTime ?? intent.barTime,
+    strategyBarTime: intent.barTime,
+    entryPrice: intent.entryPrice,
     targetPrice: intent.targetPrice, s2InvalidationLevel: intent.s2InvalidationLevel,
     nominalRiskDistance: intent.nominalRiskDistance, costR: intent.costR,
     referenceBalanceAtEntry: sizing.referenceBalance,
@@ -409,6 +421,55 @@ export function openPosition(
     engineExitOverridden: false, engineExitBarTime: null,
     ambiguity: null, sequenceContaminated: false,
   };
+}
+
+/** Whether `entryTime` is the proven minute or merely the bar that contained it. */
+export type EntryTimePrecision = "minute" | "strategy_bar";
+
+/**
+ * What `entryTime` on this row actually is.
+ *
+ * `strategy_bar` is the honest answer for every legacy row and for any fill
+ * whose tape could not be fetched: the entry happened SOMEWHERE in that bar and
+ * the minute is unknown. The UI must say so rather than render a bar open as if
+ * it were an execution time.
+ */
+export const entryTimePrecision = (
+  p: { entryMinuteTime: string | null },
+): EntryTimePrecision => (p.entryMinuteTime ? "minute" : "strategy_bar");
+
+/**
+ * Narrows a position's `entryTime` from its strategy bar to the minute the tape
+ * proves the entry became executable.
+ *
+ * TIMESTAMP ATTRIBUTION ONLY. It writes `entryTime` and `entryMinuteTime` and
+ * nothing else — no price, no outcome, no MAE/MFE, no resolution method. It
+ * runs AFTER ordering is final precisely so it cannot influence it: handing the
+ * same minutes to `resolveBar` instead would move the entry bar off its
+ * `HTF_UNAMBIGUOUS` branch and change post-entry excursions and, in the
+ * feed-disagreement and same-minute cases, the trade's outcome.
+ *
+ * Already stamped, or no minute reaches the level, and the position is returned
+ * UNCHANGED — a bar open is never promoted to an entry time by default.
+ */
+export function stampEntryMinute(
+  pos: PaperPosition, minutes: readonly Candle[], barMs: number,
+): PaperPosition {
+  if (pos.entryMinuteTime) return pos;
+  const bar = { datetime: pos.strategyBarTime } as Candle;
+  const m = firstEntryMinute(minutes, bar, barMs, pos.direction, pos.entryPrice);
+  if (!m) return pos;
+  return { ...pos, entryTime: m.datetime, entryMinuteTime: m.datetime };
+}
+
+/** `stampEntryMinute` for a closed trade, keeping result and position in step. */
+export function stampResultEntry(
+  r: PaperResult, minutes: readonly Candle[], barMs: number,
+): PaperResult {
+  if (r.entryMinuteTime) return r;
+  const position = stampEntryMinute(r.position, minutes, barMs);
+  if (position === r.position) return r;
+  return { ...r, position, entryMinuteTime: position.entryMinuteTime };
 }
 
 /**
@@ -526,9 +587,13 @@ export function stepPosition(
   const closedBeyond = long ? bar.close < pos.s2InvalidationLevel
                             : bar.close > pos.s2InvalidationLevel;
 
+  // A late-arriving entry minute narrows `entryTime` with it. Leaving entryTime
+  // on the bar while entryMinuteTime held the minute is how the two fields
+  // drifted apart in the first place.
+  const entryMinuteTime = pos.entryMinuteTime ?? ordering?.entryMinute ?? null;
   const advanced: PaperPosition = {
-    ...pos, maeR, mfeR, lastManagedBarTime: bar.datetime,
-    entryMinuteTime: pos.entryMinuteTime ?? ordering?.entryMinute ?? null,
+    ...pos, maeR, mfeR, lastManagedBarTime: bar.datetime, entryMinuteTime,
+    entryTime: entryMinuteTime ?? pos.entryTime,
   };
 
   const close = (

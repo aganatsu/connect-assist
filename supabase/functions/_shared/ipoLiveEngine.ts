@@ -41,6 +41,50 @@ export interface EngineConfig {
   highVolOnly: boolean;
   /** One-way cost in price units, from the bar's own price. */
   costPerSide: (price: number) => number;
+  /**
+   * RESEARCH ONLY, opt-in. When absent — which is every production caller —
+   * the engine behaves exactly as before and this parameter costs nothing.
+   *
+   * Added for IPO_BOS_REQUIRED_V1, which tests whether requiring a
+   * direction-matching close-confirmed BOS before the IPO return improves the
+   * causal baseline. It is a hook rather than a rule so that the frozen
+   * lifecycle, geometry, entry, S2, target and ordering stay untouched and the
+   * BOS requirement is provably the only difference between arms.
+   *
+   * Called ONLY after the frozen lifecycle has already produced a touch, so it
+   * can subtract candidates and never add one. Returning false refuses the
+   * entry on this bar; because the refusal is evaluated per touch, a BOS that
+   * confirms later cannot resurrect an entry that was missed here.
+   *
+   * `barsBefore` is the closed-bar prefix STRICTLY before the touch bar, so a
+   * gate cannot consult the touch bar's own close.
+   */
+  entryGate?: (g: {
+    barsBefore: Candle[];
+    touchIndex: number;
+    ipoIndex: number;
+    direction: "demand" | "supply";
+  }) => boolean;
+  /**
+   * RESEARCH ONLY, opt-in. Absent for every production caller, and when absent
+   * the frozen invalidation level is used exactly as before.
+   *
+   * Added for IPO_STRUCTURAL_S2_V1, which asks whether an S2 placed at the
+   * structural swing supporting the IPO beats the IPO candle's own far edge.
+   * Returning a level REPLACES the stop, and because the engine derives risk
+   * and the 2R target from the stop, the whole risk geometry moves with it —
+   * which is the point. Returning null keeps the frozen level.
+   *
+   * The replacement is still CLOSE-CONFIRMED on the strategy timeframe; this
+   * moves the level, it does not turn S2 into a wick stop.
+   */
+  stopOverride?: (g: {
+    barsBefore: Candle[];
+    touchIndex: number;
+    ipoIndex: number;
+    direction: "demand" | "supply";
+    frozenStop: number;
+  }) => number | null;
 }
 
 export type LiveEvent =
@@ -52,7 +96,9 @@ export type LiveEvent =
 export type RefusalReason =
   | "VOLATILITY_NOT_ELIGIBLE"
   | "PRICE_DID_NOT_REACH_50_PERCENT"
-  | "POSITION_ALREADY_OPEN";
+  | "POSITION_ALREADY_OPEN"
+  /** Research gate declined. Unreachable unless `entryGate` is supplied. */
+  | "ENTRY_GATE_REFUSED";
 
 export interface LiveTrade {
   instrument: string;
@@ -140,6 +186,23 @@ export class LiveEngine {
     const hit = life.find((x) => x.touches.includes(k));
     if (!hit) { out.push({ kind: "NO_CANDIDATE", index: k }); return out; }
 
+    // Research gate, if one was supplied. Placed AFTER the frozen lifecycle has
+    // produced a touch and BEFORE the frozen eligibility checks, so it can only
+    // remove candidates. Given the closed-bar prefix strictly before this bar.
+    if (this.cfg.entryGate) {
+      const allowed = this.cfg.entryGate({
+        barsBefore: this.bars.slice(0, k),
+        touchIndex: k,
+        ipoIndex: hit.candidateIndex,
+        direction: hit.direction,
+      });
+      if (!allowed) {
+        this.refusals.push({ index: k, reason: "ENTRY_GATE_REFUSED" });
+        out.push({ kind: "REFUSED", index: k, reason: "ENTRY_GATE_REFUSED", vol: bucket });
+        return out;
+      }
+    }
+
     if (!isEligible(bucket, this.cfg.highVolOnly)) {
       this.refusals.push({ index: k, reason: "VOLATILITY_NOT_ELIGIBLE" });
       out.push({ kind: "REFUSED", index: k, reason: "VOLATILITY_NOT_ELIGIBLE", vol: bucket });
@@ -155,7 +218,17 @@ export class LiveEngine {
       return out;
     }
 
-    const stop = hit.invalidationLevel;
+    let stop = hit.invalidationLevel;
+    if (this.cfg.stopOverride) {
+      const alt = this.cfg.stopOverride({
+        barsBefore: this.bars.slice(0, k),
+        touchIndex: k,
+        ipoIndex: hit.candidateIndex,
+        direction: hit.direction,
+        frozenStop: hit.invalidationLevel,
+      });
+      if (alt !== null && Number.isFinite(alt)) stop = alt;
+    }
     const risk = Math.abs(entry - stop);
     if (risk <= 0) { out.push({ kind: "NO_CANDIDATE", index: k }); return out; }
 

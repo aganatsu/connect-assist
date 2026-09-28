@@ -68,7 +68,10 @@ export default function TradeReplay() {
   /* ─── Fetch scan logs for analysis snapshots ─── */
   const { data: scanLogs } = useQuery({
     queryKey: ["scan-logs-replay"],
-    queryFn: () => scannerApi.logs(),
+    // Searches back through scans for one containing the selected symbol, so it
+    // needs details_json. Uses the capped heavy variant rather than the list
+    // query, which stopped carrying details_json to avoid a 28 MB response.
+    queryFn: () => scannerApi.logsWithDetails(25),
     refetchInterval: 60000,
   });
 

@@ -224,9 +224,18 @@ Deno.test("the scanner passes the same cap the override enforces", () => {
   // The floor became per-pair overridable on 2026-09-10, and the cap is a
   // MULTIPLE of it — so it has to read the resolved floor. Leaving it on the
   // constant would hand a pair a wider stop and then reject it for being wide.
+  // Since the scan snapshot also has to record this number, the expression is
+  // single-sourced as `zoneMaxSlPips` — a recomputed copy could drift from the
+  // value the engine was actually handed. The chain still has to end at the
+  // RESOLVED floor, which is what this checks.
   assert(
-    /maxSlPips: resolveStaticFloorPips\(pairConfig, pair\) \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/.test(scanner),
-    "the cap must match maxUnifiedSlPips in the override guard, and scale with the floor",
+    /maxSlPips: zoneMaxSlPips,/.test(scanner),
+    "the cap must match maxUnifiedSlPips in the override guard",
+  );
+  assert(
+    /const zoneMaxSlPips = zoneStaticMinSlPips \* \(pairConfig\.impulseSlCapMultiplier \?\? 4\)/.test(scanner) &&
+    /const zoneStaticMinSlPips = resolveStaticFloorPips\(pairConfig, pair\)/.test(scanner),
+    "and scale with the resolved floor, not the constant",
   );
 });
 

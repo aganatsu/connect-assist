@@ -154,8 +154,8 @@ Deno.test("paper takes a subset of the engine's trades and matches it wherever o
 
   let strict = 0, explained = 0;
   for (const p of f.closed) {
-    const e = byEntry.get(p.position.entryTime);
-    assert(e, `paper invented a trade at ${p.position.entryTime} the engine never took`);
+    const e = byEntry.get(p.position.strategyBarTime);
+    assert(e, `paper invented a trade at ${p.position.strategyBarTime} the engine never took`);
 
     // The durable markers live on the POSITION: an override or an ambiguity on
     // the FILL bar is what moves a trade off the engine's path, and the result
@@ -172,7 +172,7 @@ Deno.test("paper takes a subset of the engine's trades and matches it wherever o
       // or an explicit override. Silent divergence is the failure mode.
       assert(p.exitResolutionMethod !== null || p.ambiguityKind !== null ||
         p.position.engineExitOverridden,
-        `trade at ${p.position.entryTime} differs from the engine with no recorded reason`);
+        `trade at ${p.position.strategyBarTime} differs from the engine with no recorded reason`);
       explained++;
       continue;
     }
@@ -210,7 +210,7 @@ Deno.test("a same-bar engine trade is never silently dropped", () => {
   const f = perBar();
   for (const t of sameBar) {
     const at = s[t.entryIndex].datetime;
-    const rec = f.closed.find((c) => c.position.entryTime === at);
+    const rec = f.closed.find((c) => c.position.strategyBarTime === at);
     const carried = f.events.some((e) =>
       (e.eventType === "CAUSAL_OVERRIDE" || e.eventType === "ORDERING_AMBIGUOUS") &&
       e.barTime === at);
@@ -250,8 +250,8 @@ Deno.test("a volatility-gated instrument reproduces exactly at full warmup", () 
   assert(closed.length <= expected.length, "paper took MORE gated trades than the engine");
   const engineEntries = new Set(expected.map((t) => s[t.entryIndex].datetime));
   for (const p of closed) {
-    assert(engineEntries.has(p.position.entryTime),
-      `paper invented a gated trade at ${p.position.entryTime}`);
+    assert(engineEntries.has(p.position.strategyBarTime),
+      `paper invented a gated trade at ${p.position.strategyBarTime}`);
     assertEquals(p.position.volatilityBucket, "HIGH_VOL",
       "the volatility gate admitted a non-HIGH_VOL bucket");
   }
@@ -269,7 +269,7 @@ Deno.test("equivalence holds across many independent windows, not one lucky fixt
       .filter((t) => t.entryIndex > WARMUP - 1 && t.exitIndex !== null);
     assert(f.closed.length <= expected.length + 1, `seed ${seed}: paper took MORE than the engine`);
     for (const t of expected) {
-      const p = f.closed.find((x) => x.position.entryTime === s[t.entryIndex].datetime);
+      const p = f.closed.find((x) => x.position.strategyBarTime === s[t.entryIndex].datetime);
       // Paper takes a SUBSET: a trade the engine took may not exist for paper,
       // because an earlier override was still holding the slot.
       if (!p) { voidedTotal++; continue; }
@@ -486,7 +486,7 @@ Deno.test("a recovered feed resumes and manages the bars it missed", () => {
   // And it matches what the engine says that trade did — unless causal ordering
   // moved it, which it must then SAY.
   const engineTrade = replayIncremental(s, cfg()).trades
-    .find((t) => s[t.entryIndex].datetime === done.position.entryTime);
+    .find((t) => s[t.entryIndex].datetime === done.position.strategyBarTime);
   const explained = done.position.engineExitOverridden || done.position.ambiguity !== null ||
     done.htfWouldHaveBooked !== null;
   if (!explained) {
@@ -557,7 +557,7 @@ Deno.test("a paper position whose levels differ from the engine's is reported, n
 Deno.test("holding a position the engine has already closed is reported", () => {
   const { s, f } = held();
   const engineTrade = replayIncremental(s, cfg()).trades
-    .find((t) => s[t.entryIndex].datetime === f.position!.entryTime);
+    .find((t) => s[t.entryIndex].datetime === f.position!.strategyBarTime);
   assert(engineTrade?.exitIndex, "fixture trade should close");
 
   // Present the position as never having been managed past its entry bar, then
@@ -567,7 +567,7 @@ Deno.test("holding a position the engine has already closed is reported", () => 
   // cannot reach — a position that skipped the fill path — and the test would
   // then have been asserting against a fiction. The contract being guarded is
   // unchanged: agree, report, or hold with a recorded licence. Never silently.
-  const stalePos = { ...f.position!, lastManagedBarTime: f.position!.entryTime };
+  const stalePos = { ...f.position!, lastManagedBarTime: f.position!.strategyBarTime };
   const bars = s.slice(0, engineTrade!.exitIndex! + 4);
   const plan = runPaper({ cfg: cfg(), barMs: BAR_MS, closedBars: bars, nowMs: liveClock(bars),
     state: f.state, openPosition: stalePos, minHistoryBars: WARMUP,
