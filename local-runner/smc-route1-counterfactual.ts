@@ -100,6 +100,14 @@ export interface CfRow {
   cfOutcome: string; cfNetR: number | null; cfGrossR: number | null;
   entry: number | null; sl: number | null; tp: number | null;
   exitTime: string | null; holdMinutes: number | null;
+  /**
+   * Per-factor capture. `w` is the RUNTIME contribution, not the static
+   * DEFAULT_FACTOR_WEIGHTS value — production flips it negative for opposing
+   * evidence ("Reversal Candle OPPOSES short — penalty"), so a present factor
+   * can subtract. Sign analysis must read w, not the config weight.
+   */
+  fNames: string[]; fPresent: number[]; fWeight: number[];
+  rawScore: number | null; enabledMax: number | null;
 }
 
 if (import.meta.main) {
@@ -161,6 +169,7 @@ if (import.meta.main) {
         passZoneScore: false, passConfluence: false, passSafety: false, safetyFails: [],
         primaryReject: "", cfOutcome: "", cfNetR: null, cfGrossR: null,
         entry: null, sl: null, tp: null, exitTime: null, holdMinutes: null,
+        fNames: [], fPresent: [], fWeight: [], rawScore: null, enabledMax: null,
       };
 
       const dir = decideDirection({ style: "scalper", series: s, dirConfig: dirCfg, useSimpleDirection: true });
@@ -208,6 +217,12 @@ if (import.meta.main) {
           s.hourlyCandles.length ? s.hourlyCandles : undefined, tMs,
         ) as Record<string, unknown>;
         row.confluence = (analysis.score as number) ?? null;
+        row.rawScore = (analysis.rawScore as number) ?? null;
+        row.enabledMax = (analysis.enabledMax as number) ?? null;
+        const fs = (analysis.factors ?? []) as Array<{ name: string; present: boolean; weight: number }>;
+        row.fNames = fs.map((f) => f.name);
+        row.fPresent = fs.map((f) => (f.present ? 1 : 0));
+        row.fWeight = fs.map((f) => Number(f.weight) || 0);
         row.passConfluence = (row.confluence ?? -1) >= MIN_CONFLUENCE;
 
         const entry = lastPrice + (long ? half + slip : -(half + slip));

@@ -1,0 +1,19 @@
+factor,dexp_ALL,dexp_EUR/USD,dexp_GBP/USD,dexp_USD/JPY,dexp_TF_1H,dexp_TF_not1H,sign_stable
+Market Structure,-0.1883,-0.5945,-0.6116,0.2684,-0.1165,-0.5945,False
+Order Block,-0.1256,-0.1676,-0.1446,0.0061,-0.1113,-0.1958,False
+Fair Value Gap,-0.2391,,,0.1105,-0.1886,-0.3648,False
+Premium/Discount & Fib,0.0293,0.2633,0.1789,-0.091,-0.0159,0.25,False
+Session Quality,0.0034,0.0702,0.2215,0.0376,-0.0124,0.057,False
+Judas Swing,0.0961,0.2137,0.3913,-0.1947,0.1068,0.0107,False
+PD/PW Levels,-0.128,,,,-0.2798,0.0557,False
+Reversal Candle,0.0212,0.1091,0.0735,-0.1262,0.0003,0.1282,False
+Liquidity Sweep,0.0045,0.1114,0.1728,-0.0161,-0.0426,0.2331,False
+Displacement,0.0139,-0.2014,-0.0218,0.0918,0.0331,-0.0854,False
+Breaker Block,0.0176,0.0202,0.1276,-0.1419,0.0394,-0.0978,False
+Unicorn Model,-0.0861,,,,-0.0838,,True
+Volume Profile,-0.0212,0.0464,0.3113,-0.3331,-0.0538,0.1057,False
+AMD Phase,0.0543,0.1129,0.2674,-0.0933,0.0129,0.2669,False
+Daily Bias,-0.0035,-0.1044,0.2484,-0.0878,0.0036,-0.0407,False
+Confluence Stack,-0.043,-0.3112,-0.8009,0.5261,0.0283,-0.4576,False
+Pullback Health,-0.1037,-0.278,-0.3593,0.0443,-0.0923,-0.1602,False
+Power of 3 Combo,-0.0208,-0.2056,0.0864,0.0238,-0.0068,-0.0964,False
