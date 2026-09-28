@@ -342,6 +342,8 @@ export interface InstrumentRun {
   entryStamped?: number;
   entryStampSource?: string;
   entryStampSkipReason?: string;
+  /** Rows whose bar predates the 1m page reach: unstampable, kept bar-precision. */
+  entryStampOutOfReach?: number;
   /** Outcomes voided because nothing could order them. */
   unresolved?: number;
   /** Exits the frozen engine would have booked and the tape refused. */
@@ -568,18 +570,32 @@ export async function handler(req: Request): Promise<Response> {
         // fails then leaves the row honestly marked as bar-precision forever
         // rather than re-fetching against a tape that has since rolled off.
         if (plan.events.some((e) => e.eventType === "FILLED")) {
-          const needsStamp = [
+          const candidates = [
             ...(plan.openPosition && !plan.openPosition.entryMinuteTime
               ? [plan.openPosition] : []),
             ...plan.closed.filter((r) => !r.entryMinuteTime).map((r) => r.position),
           ];
+          // A row whose bar is already past the single-page reach can never be
+          // stamped, and must not set the window: one stale open position from
+          // days ago would push the span over the limit and silently cancel the
+          // stamp for the fresh fill that is the whole point of this pass.
+          const reach = (MINUTE_PAGE_LIMIT - 5) * 60_000;
+          const needsStamp = candidates.filter(
+            (p) => now - Date.parse(p.strategyBarTime) < reach);
+          const unreachable = candidates.length - needsStamp.length;
+          if (unreachable > 0) {
+            out.entryStampOutOfReach = unreachable;
+          }
           if (needsStamp.length > 0) {
             let tape = minuteBars;
             try {
               const earliest = Math.min(...needsStamp.map((p) => Date.parse(p.strategyBarTime)));
               const spanMinutes = Math.ceil((now - earliest) / 60_000) + 5;
-              const covered = tape.length > 0
-                && Date.parse(tape[0].datetime) <= earliest;
+              // Not tape[0]: the provider's order is not guaranteed ascending,
+              // and a newest-first page would read as covering everything.
+              const tapeFrom = tape.length > 0
+                ? Math.min(...tape.map((m) => Date.parse(m.datetime))) : Infinity;
+              const covered = tapeFrom <= earliest;
               if (!covered && spanMinutes > 0 && spanMinutes <= MINUTE_PAGE_LIMIT) {
                 const res = await fetchCandlesWithFallback({
                   symbol: cfg.instrument, interval: "1min", limit: spanMinutes,

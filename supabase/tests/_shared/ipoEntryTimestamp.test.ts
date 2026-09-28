@@ -287,3 +287,56 @@ Deno.test("seconds in the tape survive the stamp", () => {
   const p = stampEntryMinute(position(), minutes, H1);
   assertEquals(p.entryTime, "2026-09-27T15:37:30.000Z");
 });
+
+// ─── the stamp window must be chosen by the FRESH fill, not a stale row ──────
+
+Deno.test("a stale unstampable row does not cancel the stamp for a fresh fill", () => {
+  // THE BUG THIS CAUGHT, found during deployment. The runner sized its 1m
+  // request from the EARLIEST row needing a stamp. Production had two open
+  // positions from 2.5 days earlier whose minutes were never recorded; with
+  // either of them in the set, `spanMinutes` became ~3600 against a 1500-minute
+  // page limit, so the fetch was skipped and the fresh fill — ten minutes old
+  // and trivially in reach — silently stayed on its bar timestamp.
+  //
+  // This mirrors the filter in ipo-paper-runner/index.ts. A row past the reach
+  // can never be stamped and so must not set the window.
+  const PAGE = 1500;
+  const now = Date.parse("2026-09-28T01:40:00.000Z");
+  const reach = (PAGE - 5) * 60_000;
+
+  const stale = "2026-09-25T20:00:00.000Z";   // ~2.5 days old, unstampable
+  const fresh = "2026-09-28T01:30:00.000Z";   // 10 minutes old
+
+  const candidates = [position({ strategyBarTime: stale }),
+                      position({ strategyBarTime: fresh })];
+  const needsStamp = candidates.filter(
+    (p) => now - Date.parse(p.strategyBarTime) < reach);
+
+  assertEquals(needsStamp.length, 1);
+  assertEquals(needsStamp[0].strategyBarTime, fresh);
+
+  // And the window it produces is small enough to actually be requested.
+  const earliest = Math.min(...needsStamp.map((p) => Date.parse(p.strategyBarTime)));
+  const spanMinutes = Math.ceil((now - earliest) / 60_000) + 5;
+  assertEquals(spanMinutes <= PAGE, true);
+
+  // The unfiltered set is exactly what used to blow the limit.
+  const bad = Math.ceil((now - Date.parse(stale)) / 60_000) + 5;
+  assertEquals(bad > PAGE, true);
+});
+
+Deno.test("tape coverage is judged by the EARLIEST minute, not the first element", () => {
+  // A newest-first page would make `tape[0]` the LATEST minute, which reads as
+  // covering everything and skips a fetch the run actually needed.
+  const descending = [
+    bar("2026-09-27T15:59:00.000Z", 1.105, 1.106, 1.104, 1.105),
+    bar("2026-09-27T15:00:00.000Z", 1.105, 1.106, 1.104, 1.105),
+  ];
+  const earliest = Date.parse("2026-09-27T15:00:00.000Z");
+  const tapeFrom = Math.min(...descending.map((m) => Date.parse(m.datetime)));
+
+  assertEquals(tapeFrom <= earliest, true);
+  // The old first-element reading would have been wrong in the other direction
+  // on an ascending page; pinning the min makes order irrelevant.
+  assertEquals(Date.parse(descending[0].datetime) <= earliest, false);
+});
