@@ -32,7 +32,7 @@ import { buildHtfContext } from "../supabase/functions/_shared/smcHtfContext.ts"
 import { decideZone, hasMinZoneCandles, buildHtfConfluence } from "../supabase/functions/_shared/smcZoneDecision.ts";
 import { runConfluenceAnalysis } from "../supabase/functions/_shared/confluenceScoring.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../supabase/functions/_shared/configMapper.ts";
-import type { Candle } from "../supabase/functions/_shared/smcAnalysis.ts";
+import { calculateATR, analyzeMarketStructure, type Candle } from "../supabase/functions/_shared/smcAnalysis.ts";
 import { loadCorpus, PRODUCTION_UNIVERSE, WINDOWS, tradeableAt, isCrypto } from "./smc-corpus-fetch.ts";
 import { COSTS } from "./smc-zone-replay.ts";
 
@@ -124,6 +124,8 @@ export interface CfRow {
    */
   fNames: string[]; fPresent: number[]; fWeight: number[];
   rawScore: number | null; enabledMax: number | null;
+  /** Candidate feature vector, all computed from the scan-instant prefix. */
+  feat: Record<string, number | null>;
 }
 
 if (import.meta.main) {
@@ -142,7 +144,7 @@ if (import.meta.main) {
   })();
 
   for (const sym of (only ? [only] : PRODUCTION_UNIVERSE)) {
-    const out = new URL(`./.cache/u8_${sym.replace("/", "")}.json`, import.meta.url);
+    const out = new URL(`./.cache/fs_${sym.replace("/", "")}.json`, import.meta.url);
     try { Deno.readTextFileSync(out); console.log(`${sym}: cached`); continue; } catch { /* run */ }
 
     const m1 = loadCorpus(sym, "1m"), m5 = loadCorpus(sym, "5m"), m15 = loadCorpus(sym, "15m");
@@ -189,7 +191,7 @@ if (import.meta.main) {
         passZoneScore: false, passConfluence: false, passSafety: false, safetyFails: [],
         primaryReject: "", cfOutcome: "", cfNetR: null, cfGrossR: null,
         entry: null, sl: null, tp: null, exitTime: null, holdMinutes: null,
-        fNames: [], fPresent: [], fWeight: [], rawScore: null, enabledMax: null,
+        fNames: [], fPresent: [], fWeight: [], rawScore: null, enabledMax: null, feat: {},
       };
 
       const dir = decideDirection({ style: "scalper", series: s, dirConfig: dirCfg, useSimpleDirection: true });
@@ -266,6 +268,79 @@ if (import.meta.main) {
         const sl = long ? entry - risk : entry + risk;
         const tp = long ? entry + risk * TP_RATIO : entry - risk * TP_RATIO;
         analysis.stopLoss = sl; analysis.takeProfit = tp; analysis.direction = direction;
+
+        // ── CANDIDATE FEATURES, scan-instant only ────────────────────────
+        const u = z.unified!;
+        const imp = u.impulse as never as (Record<string, unknown> | null);
+        const zst = u.zone as never as (Record<string, unknown> | null);
+        const liq = u.liquidity as never as (Record<string, unknown> | null);
+        const disp = (imp?.displacement ?? null) as Record<string, unknown> | null;
+        const c5 = s.candles;
+        const atr = calculateATR(c5, 14) || 0;
+        const atrLong = calculateATR(c5.slice(-200), 50) || 0;
+        // ATR percentile within the instrument's own recent history (causal).
+        const atrHist: number[] = [];
+        for (let q = c5.length - 1; q >= 60 && atrHist.length < 200; q -= 5) {
+          atrHist.push(calculateATR(c5.slice(0, q + 1), 14) || 0);
+        }
+        const atrPct = atrHist.length
+          ? atrHist.filter((v) => v < atr).length / atrHist.length : null;
+        const st = analyzeMarketStructure(c5);
+        const nowMs = tMs;
+        const endT = (imp?.endTime ?? imp?.endDate ?? null) as string | null;
+        const zw = zh - zl;
+        const mid = (zh + zl) / 2;
+        const prox = long ? zh : zl;
+        const dist = long ? zl : zh;
+        const F: Record<string, number | null> = {
+          // A session / time
+          hourUTC: new Date(tMs).getUTCHours(),
+          minuteOfDay: new Date(tMs).getUTCHours() * 60 + new Date(tMs).getUTCMinutes(),
+          isCryptoAsset: isCrypto(sym) ? 1 : 0,
+          // B zone / impulse age
+          minsSinceImpulseEnd: endT ? (nowMs - Date.parse(endT)) / 60000 : null,
+          impulseSpanBars: (imp?.spanBars as number) ?? null,
+          // C zone geometry
+          zoneWidthPips: zw / pip,
+          zoneWidthOverATR: atr > 0 ? zw / atr : null,
+          distMidOverATR: atr > 0 ? Math.abs(lastPrice - mid) / atr : null,
+          distProxOverATR: atr > 0 ? Math.abs(lastPrice - prox) / atr : null,
+          distDistalOverATR: atr > 0 ? Math.abs(lastPrice - dist) / atr : null,
+          fibLevel: (zst?.fibLevel as number) ?? null,
+          zonesFound: (zst?.zonesFound as number) ?? null,
+          zoneIsOB: zst?.type === "OB" ? 1 : 0,
+          srConfirmed: zst?.srConfirmed ? 1 : 0,
+          ltfRefined: zst?.ltfRefined ? 1 : 0,
+          htfLayerCount: Array.isArray(zst?.htfLayers) ? (zst!.htfLayers as unknown[]).length : null,
+          // D impulse quality
+          impulsePips: (imp?.pips as number) ?? null,
+          impulseOverATR: atr > 0 && imp?.pips != null ? ((imp.pips as number) * pip) / atr : null,
+          avgBodyRatio: (disp?.avgBodyRatio as number) ?? null,
+          maxRangeMultiple: (disp?.maxRangeMultiple as number) ?? null,
+          displacementCandles: (disp?.displacementCandles as number) ?? null,
+          displacementRatio: (disp?.displacementRatio as number) ?? null,
+          rangePerBarOverATR: atr > 0 && disp?.rangePerBar != null ? (disp.rangePerBar as number) / atr : null,
+          // E liquidity / touch
+          nearbyPoolCount: (liq?.nearbyPools as number) ?? null,
+          liquidityScore: (liq?.liquidityScore as number) ?? null,
+          sweepPresent: liq?.sweepEvent ? 1 : 0,
+          // F volatility
+          atrPercentile: atrPct,
+          atrShortOverLong: atrLong > 0 ? atr / atrLong : null,
+          barRangeOverATR: atr > 0 ? (c5[c5.length - 1].high - c5[c5.length - 1].low) / atr : null,
+          // G execution / cost
+          stopPips: Math.abs(entry - sl) / pip,
+          stopOverATR: atr > 0 ? Math.abs(entry - sl) / atr : null,
+          spreadOverStop: Math.abs(entry - sl) > 0 ? (cost.spread * pip) / Math.abs(entry - sl) : null,
+          spreadOverATR: atr > 0 ? (cost.spread * pip) / atr : null,
+          costR: Math.abs(entry - sl) > 0 ? (2 * (half + slip)) / Math.abs(entry - sl) : null,
+          entryVsZoneMidATR: atr > 0 ? (lastPrice - mid) / atr * (long ? 1 : -1) : null,
+          // H structure
+          bosCount: Array.isArray(st?.bos) ? st.bos.length : null,
+          chochCount: Array.isArray(st?.choch) ? st.choch.length : null,
+          trendAligned: st?.trend === (long ? "bullish" : "bearish") ? 1 : 0,
+        };
+        row.feat = F;
 
         try {
           const gates = await runSafetyGates(
