@@ -1,0 +1,88 @@
+{
+  "contract": "SMC_IMPULSE_ZONE_ROUTE1_CORPUS_V1",
+  "commit": "197c28231534b85ead934dd84f6e1fb827e4650d",
+  "kind": "CAUSAL MARKET-LOGIC EVIDENCE \u2014 Route 1 only; Route 2 and account-state gates excluded",
+  "route": "ROUTE 1 DIRECT MARKET FILL AT ZONE (priceAtZoneStrict && sideOk && Layer3 && marketFillAtZone)",
+  "productionChain": [
+    "smcDirectionDecision.decideDirection",
+    "smcHtfContext.buildHtfContext",
+    "smcZoneDecision.decideZone -> unifiedZoneEngine.findUnifiedZone",
+    "confluenceScoring.runConfluenceAnalysis(atMs injected)"
+  ],
+  "notUsed": [
+    "backtest-engine",
+    "Route 2 pending lifecycle",
+    "EntryStory SL/TP",
+    "CHoCH/confirmation"
+  ],
+  "scanCadence": "every 5 minutes (STYLE_OVERRIDES.scalper.scanIntervalMinutes=5), aligned to the 1m grid",
+  "formingBarReconstruction": "bar closed when the NEXT bar opened at/before t; in-progress bar rebuilt from sub-bars (1m for 5m/15m/1h, 1h for 4h/1d/1w) as open-of-first, running high/low, latest close",
+  "frozenParams": {
+    "tpRatio": 2.0,
+    "impulseSlCapMultiplier": 1.5,
+    "minConfluence": 40,
+    "minZoneScore": 4,
+    "MIN_SL_PIPS": {
+      "EUR/USD": 20,
+      "USD/JPY": 25,
+      "GBP/USD": 25,
+      "AUD/USD": 18,
+      "NZD/USD": 18,
+      "USD/CAD": 18,
+      "USD/CHF": 18
+    },
+    "atrDerivedFloorsEnabled": false,
+    "maxPositionsPerSymbol": 1
+  },
+  "costModel": "frozen per-symbol spread + slippage, one-way pips (unchanged from prior corpus)",
+  "windows": {
+    "primary": "2026-06-27..2026-09-25",
+    "secondary": "2026-03-29..2026-09-25"
+  },
+  "provider": "twelvedata",
+  "timezone": "UTC",
+  "symbols": [
+    "AUD/USD",
+    "EUR/USD",
+    "GBP/USD",
+    "NZD/USD",
+    "USD/CAD",
+    "USD/CHF",
+    "USD/JPY"
+  ],
+  "gatesApplied": [
+    "direction (decideDirection)",
+    "zone existence",
+    "Zone Score >= 4",
+    "Confluence >= 40 (Gate 9, production fn)",
+    "Route1 arming: priceAtZoneStrict, sideOk, Layer3",
+    "SL sanity guard",
+    "maxPositionsPerSymbol=1"
+  ],
+  "gatesExcluded_unreplayable": [
+    "G4b max open positions",
+    "G5 max per symbol (portfolio)",
+    "G6 portfolio heat",
+    "G7 daily loss",
+    "G8 max drawdown",
+    "G13 cooldown",
+    "G14 consecutive losses",
+    "G15 dollar daily loss",
+    "G16 news",
+    "G22 correlation"
+  ],
+  "gatesExcluded_notReimplemented": [
+    "G1 direction verdict (used decideDirection instead)",
+    "G2 P/D filter",
+    "G3 structural conviction",
+    "G3b reaction confirmation",
+    "G10 min R:R",
+    "G11 opening range",
+    "G12 kill zone",
+    "G17 FOTSI",
+    "G18 ATR filter",
+    "G19 Tier1 min",
+    "G20 regime",
+    "G21 spread (never blocks)"
+  ]
+}
