@@ -1,0 +1,122 @@
+name: Apply ONE migration (Management API)
+
+# Applies a SINGLE, named migration file from supabase/migrations/ using the
+# Management API, which authenticates with SUPABASE_ACCESS_TOKEN over HTTPS.
+#
+# WHY THIS EXISTS. apply-migrations.yml needs SUPABASE_DB_PASSWORD — `supabase
+# link`, `migration list` and `db push` all open a direct Postgres connection —
+# and that secret is not set on this repo. inspect-live-schema.yml already
+# proves the Management API can reach the database without it, but is
+# deliberately read-only.
+#
+# WHY IT IS NOT THE "RUN ANY SQL" PRIMITIVE set-shadow-flag REFUSED TO BE.
+# It takes a VERSION, not SQL. The body is read from a file that is committed,
+# reviewed and diffable; nothing typed into the dispatch form reaches the
+# database. It applies exactly one file, refuses one already recorded as
+# applied, and records the version itself so `db push` stays consistent.
+#
+# IT IS STILL A WRITE. Dry-run prints the file and the applied-state check and
+# changes nothing. A real run requires `confirm` to equal APPLY.
+#
+# NO TRANSACTION WRAPPER. The Management API runs the body as submitted;
+# CREATE INDEX and some DDL cannot run inside an explicit transaction block.
+# Write migrations so a partial application is survivable — this repo's
+# convention of `IF NOT EXISTS` plus `exception when duplicate_object` makes a
+# re-run safe, which is the practical substitute for rollback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '14-digit migration version, e.g. 20260929120000'
+        required: true
+        type: string
+      dry_run:
+        description: 'Print the plan without applying'
+        required: true
+        default: true
+        type: boolean
+      confirm:
+        description: 'Type APPLY to actually apply (ignored when dry_run is true)'
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: apply-one-migration
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate the migration file
+        id: resolve
+        run: |
+          set -euo pipefail
+          V='${{ inputs.version }}'
+          case "$V" in
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *) echo "::error::version must be exactly 14 digits"; exit 1 ;;
+          esac
+          # Glob, then require exactly one match. Two files sharing a version
+          # prefix is a real failure mode in this repo: the second never runs
+          # and nothing logs it.
+          shopt -s nullglob
+          files=(supabase/migrations/${V}_*.sql)
+          if [ ${#files[@]} -ne 1 ]; then
+            echo "::error::expected exactly 1 file matching ${V}_*.sql, found ${#files[@]}"; exit 1
+          fi
+          echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${files[0]}"
+
+      - name: Apply
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          FILE: ${{ steps.resolve.outputs.file }}
+          V: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ] || [ -z "${REF:-}" ]; then
+            echo '::error::SUPABASE_ACCESS_TOKEN or SUPABASE_PROJECT_REF is missing'; exit 1
+          fi
+          API="https://api.supabase.com/v1/projects/$REF/database/query"
+
+          post() { curl -sS --fail-with-body -X POST "$API" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            --data "$(jq -nc --arg q "$1" '{query:$q}')"; }
+
+          echo "# Apply migration $V" >> "$GITHUB_STEP_SUMMARY"
+
+          APPLIED=$(post "select exists(select 1 from supabase_migrations.schema_migrations where version='$V') as a" | jq -r '.[0].a')
+          echo "already applied: $APPLIED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$APPLIED" = "true" ]; then
+            echo "::notice::$V is already recorded as applied — nothing to do"; exit 0
+          fi
+
+          echo '<details><summary>migration body</summary>' >> "$GITHUB_STEP_SUMMARY"
+          echo '```sql' >> "$GITHUB_STEP_SUMMARY"
+          cat "$FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '</details>' >> "$GITHUB_STEP_SUMMARY"
+
+          if [ '${{ inputs.dry_run }}' = 'true' ]; then
+            echo "::notice::dry run — nothing applied"; exit 0
+          fi
+          if [ '${{ inputs.confirm }}' != 'APPLY' ]; then
+            echo "::error::confirm must be the literal string APPLY"; exit 1
+          fi
+
+          echo "Applying $FILE ..."
+          post "$(cat "$FILE")" > /tmp/apply.json
+          jq '.' /tmp/apply.json | tail -20
+
+          # Record it, so a future `db push` does not try to apply it again.
+          post "insert into supabase_migrations.schema_migrations (version, name)
+                values ('$V', '$(basename "$FILE" .sql)')
+                on conflict (version) do nothing" > /dev/null
+          echo "::notice::$V applied and recorded"
+          echo "applied and recorded" >> "$GITHUB_STEP_SUMMARY"
