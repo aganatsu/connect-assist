@@ -24,6 +24,9 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot,
+} from "../_shared/smcTradeTelemetry.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
@@ -514,12 +517,36 @@ Deno.serve(async (req) => {
         };
 
         // Insert paper position
+        // TELEMETRY ONLY. Route 2: this scanner fills pending orders after the
+        // zone-confirmation hunt, so the route is the same as bot-scanner's
+        // pending-fill path.
+        const zcSpec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+        const zcTelemetry = buildEntryTelemetry({
+          route: "route2_pending",
+          direction: pending.direction as "long" | "short",
+          entryPrice: actualFillPrice,
+          entryStopLoss: Number(pending.stop_loss),
+          entryTakeProfit: pending.take_profit != null ? Number(pending.take_profit) : null,
+          entryTime: nowStr,
+          strategyBarTime: null,
+          pipSize: zcSpec.pipSize,
+          tradingStyle: null,
+          zoneTimeframe: (pending as any).entry_zone_type ?? null,
+          configSnapshot: entryConfigSnapshot({}),
+          decisionSnapshot: entryDecisionSnapshot({
+            zoneHigh: (pending as any).entry_zone_high ?? null,
+            zoneLow: (pending as any).entry_zone_low ?? null,
+            zoneType: (pending as any).entry_zone_type ?? null,
+            setupId: (pending as any).order_id ?? null,
+          }),
+        });
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
           symbol: pending.symbol,
           direction: pending.direction,
           size: pending.size.toString(),
+          ...zcTelemetry,
           // Inherited from the pending order — the decision was made at
           // placement. See docs/FROZEN_DECISION_RECORD.md.
           frozen_strategy_context: (pending as any).frozen_strategy_context ?? null,

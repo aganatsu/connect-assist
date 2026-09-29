@@ -84,6 +84,9 @@ import {
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { buildSnapshot, buildContext, type SnapshotInput } from "../_shared/smcScanSnapshot.ts";
 import {
+  buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot, carryToHistory,
+} from "../_shared/smcTradeTelemetry.ts";
+import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
 } from "../_shared/smcZoneDecision.ts";
@@ -3155,6 +3158,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           })(),
           bot_id: BOT_ID,
           stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+          // Immutable entry block carried verbatim, plus realized R computed
+          // from initial_risk_price — never from stop_loss, which by this
+          // point is the stop at close.
+          ...carryToHistory(pos as Record<string, unknown>, {
+            exitPrice: hitPrice,
+            direction: pos.direction as "long" | "short",
+            costR: null,
+          }),
         });
         if (historyErr) {
           // Loud. The position is already gone, so this is an unrecoverable
@@ -4053,12 +4064,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             },
           };
 
+          const r2Spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+          const r2Telemetry = buildEntryTelemetry({
+            route: "route2_pending",
+            direction: pending.direction as "long" | "short",
+            entryPrice: actualFillPrice,
+            entryStopLoss: Number(pending.stop_loss),
+            entryTakeProfit: pending.take_profit != null ? Number(pending.take_profit) : null,
+            entryTime: nowStr,
+            strategyBarTime: null,
+            pipSize: r2Spec.pipSize,
+            tradingStyle: (config as any)?.tradingStyle?.mode ?? null,
+            zoneTimeframe: (pending as any).entry_zone_type ?? null,
+            configSnapshot: entryConfigSnapshot(config as Record<string, unknown>),
+            decisionSnapshot: entryDecisionSnapshot({
+              zoneHigh: (pending as any).entry_zone_high ?? null,
+              zoneLow: (pending as any).entry_zone_low ?? null,
+              zoneType: (pending as any).entry_zone_type ?? null,
+              setupId: (pending as any).order_id ?? null,
+            }),
+          });
           await supabase.from("paper_positions").insert({
             user_id: userId,
             position_id: positionId,
             symbol: pending.symbol,
             direction: pending.direction,
             size: pending.size.toString(),
+            ...r2Telemetry,
             // Inherited, not rebuilt. The decision was made when the order was
             // placed; rebuilding here would record the market at fill time and
             // quietly answer a different question.
@@ -7816,6 +7848,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             : null,
         });
 
+        // TELEMETRY ONLY — written after the decision, read only by analysis.
+        // `sl`/`tp` are captured here because management mutates the live
+        // columns and the archive's copy of stop_loss is the stop at close.
+        const r1Telemetry = buildEntryTelemetry({
+          route: "route1_market",
+          direction: analysis.direction as "long" | "short",
+          entryPrice: marketEntryPrice,
+          entryStopLoss: sl,
+          entryTakeProfit: tp ?? null,
+          entryTime: nowStr,
+          strategyBarTime: candles[candles.length - 1]?.datetime ?? null,
+          pipSize: spec.pipSize,
+          tradingStyle: resolvedStyle,
+          zoneTimeframe: (detail as any).unifiedZone?.selectedTF ?? null,
+          configSnapshot: entryConfigSnapshot(pairConfig as Record<string, unknown>),
+          decisionSnapshot: entryDecisionSnapshot({
+            zoneScore: (detail as any).impulseZone?.bestZone?.totalScore ?? null,
+            confluenceScore: analysis.score ?? null,
+            directionVerdict: (detail as any).directionVerdict?.verdict ?? null,
+            directionConfidence: (detail as any).directionVerdict?.confidence ?? null,
+            zoneTimeframe: (detail as any).unifiedZone?.selectedTF ?? null,
+            zoneHigh: (detail as any).impulseZone?.bestZone?.high ?? null,
+            zoneLow: (detail as any).impulseZone?.bestZone?.low ?? null,
+            zoneType: (detail as any).unifiedZone?.zone?.type ?? null,
+            impulseDirection: (detail as any).unifiedZone?.impulse?.direction ?? null,
+            displacementCandles: (detail as any).unifiedZone?.impulse?.displacement?.displacementCandles ?? null,
+            priceAtZoneStrict: (detail as any).impulseZone?.bestZone?.priceAtZoneStrict ?? null,
+            sideOk: (detail as any).impulseZone?.bestZone?.sideOk ?? null,
+            signalSource: (detail as any).signalSource ?? null,
+          }),
+        });
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -7823,6 +7886,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           direction: analysis.direction,
           size: size.toString(),
           entry_price: marketEntryPrice.toString(),
+          ...r1Telemetry,
           frozen_strategy_context: frozenDecision,
           current_price: analysis.lastPrice.toString(),
           stop_loss: sl.toString(),
