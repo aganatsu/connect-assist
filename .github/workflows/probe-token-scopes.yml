@@ -1,0 +1,21 @@
+name: Probe token scopes (read-only)
+on: { workflow_dispatch: {} }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+          hit() { printf '%-34s ' "$1"; curl -sS -o /tmp/b -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" "$2"; echo " $(head -c 140 /tmp/b)"; }
+          hit "GET /v1/projects"            "https://api.supabase.com/v1/projects"
+          hit "GET /v1/projects/REF/functions" "https://api.supabase.com/v1/projects/$REF/functions"
+          printf '%-34s ' "POST database/query"
+          curl -sS -o /tmp/q -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            --data '{"query":"select 1 as ok"}' \
+            "https://api.supabase.com/v1/projects/$REF/database/query"; echo " $(head -c 200 /tmp/q)"
