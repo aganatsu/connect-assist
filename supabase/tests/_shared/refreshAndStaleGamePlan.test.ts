@@ -23,13 +23,19 @@ const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 
-Deno.test("a refreshed order gets fresh risk levels, not just a fresh clock", () => {
+Deno.test("a refreshed order gets fresh risk levels, and NO fresh clock", () => {
+  // `expires_at` was dropped from this list on 2026-09-29. Refreshing the
+  // clock made a re-detected zone immortal, which is unacceptable at Route
+  // 2's 8h TTL. The risk levels must still be refreshed — carrying a stale
+  // stop into a fill is the defect this test originally caught.
   const i = scanner.indexOf("if (samePriceOrders.length > 0) {");
   assert(i > -1, "the refresh branch was not found");
   const block = scanner.slice(i, scanner.indexOf(".in(\"order_id\", samePriceOrders", i));
-  for (const f of ["signal_score", "expires_at", "current_price", "stop_loss", "take_profit", "size"]) {
+  for (const f of ["signal_score", "current_price", "stop_loss", "take_profit", "size"]) {
     assert(new RegExp(`${f}:`).test(block), `the refresh must update ${f}`);
   }
+  assert(!/expires_at/.test(block.replace(/\/\/.*$/gm, "")),
+    "but must NOT extend the expiry window");
 });
 
 Deno.test("the refresh writes the values from THIS scan", () => {

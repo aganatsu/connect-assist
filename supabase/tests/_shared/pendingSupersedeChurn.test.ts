@@ -77,12 +77,21 @@ Deno.test("comparison is numeric, not string", () => {
   );
 });
 
-Deno.test("the refresh extends expires_at, so lifetime is unchanged", () => {
-  // Bounded to the refresh branch's own update call. A fixed byte window
-  // reached into the movedOrders branch below, which legitimately cancels.
+Deno.test("the refresh does NOT extend expires_at — the window is fixed", () => {
+  // REVERSED 2026-09-29, deliberately. This used to require the refresh to
+  // reset expires_at, matching a reinsert. That makes lifetime unbounded: a
+  // zone the scanner keeps re-detecting is refreshed every cycle and never
+  // expires. Survivable at the old 60-minute TTL, not at Route 2's 8 hours.
+  //
+  // The 8h TTL was also selected on arrival measured from the FIRST
+  // detection, so a fixed window is the only policy that matches the
+  // population it was validated on. Max lifetime is now exactly the TTL.
   const i = scanner.indexOf("if (samePriceOrders.length > 0) {");
   const block = scanner.slice(i, scanner.indexOf('.in("order_id", samePriceOrders', i));
-  assert(/expires_at: expiresAt/.test(block), "a reinsert would have set a fresh TTL; so must this");
+  // Comments stripped: the block explains WHY expires_at is absent, and that
+  // prose would otherwise match as if it were code.
+  const code = block.replace(/\/\/.*$/gm, "");
+  assert(!/expires_at/.test(code), "refresh must not touch expires_at");
   assert(/signal_score: analysis\.score/.test(block), "the newer score should win");
   assert(!/status:/.test(block), "the refresh must not touch status");
   assert(

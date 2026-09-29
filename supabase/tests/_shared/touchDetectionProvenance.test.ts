@@ -98,7 +98,9 @@ Deno.test("the zone-touch write finally has its error checked", () => {
   const i = scanner.indexOf('status: "awaiting_confirmation"');
   const before = scanner.slice(Math.max(0, i - 300), i);
   assert(/const \{ error: touchErr \}/.test(before), "the update must capture its error");
-  const after = scanner.slice(i, i + 900);
+  // Widened 2026-09-29: market_touch_* / system_detection_time and the poll
+  // -log push now sit between the update and its error check.
+  const after = scanner.slice(i, i + 2200);
   assert(/if \(touchErr\)/.test(after), "and test it");
   assert(/ZONE TOUCH WRITE FAILED/.test(after), "and say so loudly");
   assert(/writeError = touchErr\.message/.test(after), "and attach it to the record");

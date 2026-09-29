@@ -27,6 +27,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot,
 } from "../_shared/smcTradeTelemetry.ts";
+import { buildPollRecord, type TerminalReason } from "../_shared/route2Forward.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
@@ -290,6 +291,15 @@ Deno.serve(async (req) => {
     let resetToPending = 0;
     let cancelled = 0;
     let stillHunting = 0;
+    /**
+     * APPEND-ONLY poll log, same shape as bot-scanner's.
+     *
+     * This poller runs a DIFFERENT check-set on the same rows — no expiry, no
+     * SL invalidation, no thesis validation — so which function handled a
+     * transition is part of the causal record, not a detail.
+     */
+    const pollRows: Record<string, unknown>[] = [];
+    const pollAt = new Date().toISOString();
 
     for (const pending of huntingOrders) {
       try {
@@ -310,6 +320,12 @@ Deno.serve(async (req) => {
         const confirmCandles = await fetchCandles(pending.symbol, confirmTF);
         if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
           console.log(`[zone-confirm] ${pending.symbol} — insufficient ${confirmTF} candles (${confirmCandles.length})`);
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice: null, statusBefore: pending.status,
+            branchTaken: "insufficient_candles", statusAfter: pending.status,
+          }));
           stillHunting++;
           continue;
         }
@@ -330,10 +346,17 @@ Deno.serve(async (req) => {
         if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
           await supabase.from("pending_orders").update({
             status: "cancelled",
+            terminal_reason: "CANCELLED_IMPULSE_BROKEN" as TerminalReason,
             cancel_reason: `[fast-confirm] Impulse broken — price ${currentPrice} exceeded origin`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
             .eq("status", "awaiting_confirmation");
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice, statusBefore: pending.status, impulseBroken: true,
+            branchTaken: "impulse_broken", statusAfter: "cancelled",
+          }));
           cancelled++;
           console.log(`[zone-confirm] CANCELLED ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
           continue;
@@ -375,6 +398,12 @@ Deno.serve(async (req) => {
             confirmation_attempts: attempts,
           }).eq("order_id", pending.order_id).eq("user_id", userId)
             .eq("status", "awaiting_confirmation");
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice, statusBefore: pending.status, zoneExit,
+            branchTaken: "zone_exit_reset", statusAfter: "pending",
+          }));
           resetToPending++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
           continue;
@@ -393,10 +422,19 @@ Deno.serve(async (req) => {
           if (closedThrough) {
             await supabase.from("pending_orders").update({
               status: "cancelled",
+              terminal_reason: "CANCELLED_REFINED_ZONE_FAILURE" as TerminalReason,
+              structural_invalidation: "refined_zone_close_through",
               cancel_reason: `[zone-confirm] Refined zone failed — ${confirmTF} close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId)
             .eq("status", "awaiting_confirmation");
+            pollRows.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt,
+              pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+              currentPrice, statusBefore: pending.status,
+              structuralInvalidation: "refined_zone_close_through",
+              branchTaken: "refined_zone_failure", statusAfter: "cancelled",
+            }));
             cancelled++;
             console.log(`[zone-confirm] CANCELLED ${pending.symbol} ${pending.direction} — refined zone failed (close: ${lastCandle.close}, zone: ${rawRefinedLow}-${rawRefinedHigh})`);
             continue;
@@ -423,6 +461,13 @@ Deno.serve(async (req) => {
         );
 
         if (!confirmationSignal) {
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice, statusBefore: pending.status, confirmationChecked: true,
+            confirmationResult: "no_tier_passed",
+            branchTaken: "awaiting_confirmation", statusAfter: pending.status,
+          }));
           stillHunting++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
           continue;
@@ -434,6 +479,14 @@ Deno.serve(async (req) => {
         // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
         // enough evidence that the level is holding.
         if (!hasRefinedZone && confirmationSignal.tier !== 1) {
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice, statusBefore: pending.status, confirmationChecked: true,
+            confirmationResult: `tier_rejected_no_refined_zone:${confirmationSignal.type}`,
+            confirmationTier: confirmationSignal.tier,
+            branchTaken: "tier_rejected", statusAfter: pending.status,
+          }));
           stillHunting++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
           continue;
@@ -454,6 +507,7 @@ Deno.serve(async (req) => {
         if (currentOpenCount >= maxOpenPositions) {
           await supabase.from("pending_orders").update({
             status: "cancelled",
+            terminal_reason: "CANCELLED_POSITION_CAP" as TerminalReason,
             cancel_reason: `[fast-confirm] Max open positions reached (${currentOpenCount}/${maxOpenPositions})`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
@@ -465,6 +519,7 @@ Deno.serve(async (req) => {
         if (currentSymbolCount >= maxPerSymbol) {
           await supabase.from("pending_orders").update({
             status: "cancelled",
+            terminal_reason: "CANCELLED_POSITION_CAP" as TerminalReason,
             cancel_reason: `[fast-confirm] Max per symbol reached (${currentSymbolCount}/${maxPerSymbol})`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
@@ -580,11 +635,30 @@ Deno.serve(async (req) => {
         // Update pending order to filled
         await supabase.from("pending_orders").update({
           status: "filled",
+          terminal_reason: "FILLED" as TerminalReason,
+          confirmation_checked_at: nowStr,
+          confirmation_timeframe: confirmTF,
+          confirmation_type: confirmationSignal.type,
+          confirmation_tier: confirmationSignal.tier,
+          confirmation_accepted: true,
+          confirmation_accepted_at: nowStr,
+          trigger_timestamp: nowStr,
+          fill_timestamp: nowStr,
+          fill_price: actualFillPrice,
+          zone_story_at_confirmation: (pending as any).zone_story_at_creation ?? null,
+          zone_story_at_fill: (pending as any).zone_story_at_creation ?? null,
           fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
           filled_at: nowStr,
           resolved_at: nowStr,
         }).eq("order_id", pending.order_id).eq("user_id", userId)
         .eq("status", "awaiting_confirmation");
+        pollRows.push(buildPollRecord({
+          pendingId: pending.order_id, pollTimestamp: pollAt,
+          pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+          currentPrice, statusBefore: pending.status, confirmationChecked: true,
+          confirmationResult: confirmationSignal.type, confirmationTier: confirmationSignal.tier,
+          branchTaken: "confirmed_fill", statusAfter: "filled",
+        }));
 
         confirmed++;
 
@@ -696,8 +770,21 @@ Deno.serve(async (req) => {
 
       } catch (e: any) {
         console.warn(`[zone-confirm] Error processing ${pending.symbol}: ${e?.message}`);
+        pollRows.push(buildPollRecord({
+          pendingId: pending.order_id, pollTimestamp: pollAt,
+          pollerName: "zone-confirmation-scanner", candlesAvailable: 0, currentPrice: null,
+          statusBefore: pending.status,
+          branchTaken: `error:${String(e?.message ?? "unknown").slice(0, 80)}`,
+          statusAfter: pending.status,
+        }));
         stillHunting++;
       }
+    }
+
+    // Flush the poll log. Observability only — never blocks a fill.
+    if (pollRows.length > 0) {
+      const { error: pollErr } = await supabase.from("route2_poll_log").insert(pollRows);
+      if (pollErr) console.error(`[route2-poll-log] zone-confirm insert failed (${pollRows.length}): ${pollErr.message}`);
     }
 
     const elapsed = Date.now() - startTime;
