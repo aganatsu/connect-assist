@@ -3845,8 +3845,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // The market event and the system noticing it are different
               // instants. Only the wall clock was recorded before, so poll
               // detection latency was invisible.
+              //
+              // `market_touch_bar_time` is the ENTRY-TF bar that contained the
+              // touch — its OPEN stamp, so up to one bar interval before the
+              // touch itself. Verified on NZD/CAD b64d4d7b: bar stamp 21:45,
+              // true 1m touch 21:48, detection 21:51 — the bar stamp
+              // overstates latency by 3 of the 6 minutes it implies.
+              //
+              // `market_touch_time` is therefore left NULL. The scanner does
+              // not fetch 1m on this path and cannot observe the instant, and
+              // a value that reads as the touch time but is really the bar
+              // open makes every latency figure wrong. The tight bound comes
+              // from route2_poll_log instead: the touch lies between the last
+              // poll that saw none and the poll that detected it.
               market_touch_bar_time: lastCandle.datetime ?? null,
-              market_touch_time: lastCandle.datetime ?? null,
+              market_touch_time: null,
               system_detection_time: nowStr,
               zone_story_at_touch: (pending as any).zone_story_at_creation ?? null,
               confirmation_attempts: 0,

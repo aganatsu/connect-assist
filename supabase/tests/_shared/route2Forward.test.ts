@@ -212,6 +212,20 @@ Deno.test("8c · EVERY poll emits a row, enforced by finally", () => {
   }
 });
 
+Deno.test("9b · the unobservable touch instant is NULL, not the bar open", () => {
+  // Verified live on NZD/CAD b64d4d7b: the entry-TF bar stamp was 21:45, the
+  // true 1m touch 21:48 and detection 21:51. Writing the bar stamp into
+  // market_touch_time made latency read 6 minutes when it was 3. The scanner
+  // has no 1m data on this path, so the instant is not observable and must
+  // not be implied; the bound comes from route2_poll_log.
+  const i = SCANNER.indexOf("market_touch_bar_time: lastCandle.datetime");
+  assert(i > -1, "the touch write must record the containing bar");
+  const block = SCANNER.slice(i, i + 240);
+  assert(/market_touch_time: null/.test(block),
+    "market_touch_time must be NULL — the bar open is not the touch instant");
+  assert(/system_detection_time: nowStr/.test(block), "detection instant must still be recorded");
+});
+
 Deno.test("the poll log is append-only at the database level", () => {
   assert(/route2_poll_log is append-only/.test(MIGRATION), "trigger must raise on mutation");
   assert(/before update or delete on public\.route2_poll_log/.test(MIGRATION));
