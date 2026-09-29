@@ -255,6 +255,7 @@ Deno.test("11 · the creation record carries every required field", () => {
     entrySource: "refinedEntry", pendingEntryPrice: 1.1010, currentPriceAtCreation: 1.1000,
     h1Atr: 0.0010, distanceAtr: 1.0, initialStopLoss: 1.0990, initialTakeProfit: 1.1050,
     configHash: "deadbeefdeadbeef", zoneStory: { state: "triggered" },
+    wouldHaveBeenRoute1: false,
   });
   assertEquals(t.zone_age_minutes, 480);          // 8h old at creation
   assertEquals(t.entry_source, "refinedEntry");
@@ -269,8 +270,21 @@ Deno.test("11 · the creation record carries every required field", () => {
     pendingCreatedAt: "2026-09-29T08:00:00.000Z", entrySource: "zoneMid",
     pendingEntryPrice: 1, currentPriceAtCreation: 1, h1Atr: null, distanceAtr: null,
     initialStopLoss: null, initialTakeProfit: null, configHash: "x", zoneStory: null,
+    wouldHaveBeenRoute1: true,
   });
   assertEquals(u.zone_age_minutes, null);
+  assertEquals(u.would_have_been_route1, true);
+});
+
+Deno.test("the two strata stay separable once Route 1 is switched off", () => {
+  // Disabling marketFillAtZone does not delete Route 1's setups; it reroutes
+  // them into Route 2, where they sit at ~0 ATR and arrive almost at once.
+  // Measured over 180 days they are ~45% of the forward-eligible population,
+  // so without this flag they would silently inflate the fill rate relative
+  // to what the TTL research predicts.
+  assert(/wouldHaveBeenRoute1: priceIsAtValidatedZone && priceOnCorrectSide/.test(SCANNER),
+    "the Route 1 arming condition must be recorded at creation");
+  assert(/would_have_been_route1/.test(MIGRATION), "and persisted");
 });
 
 Deno.test("zone id is stable across re-detection of the same zone", () => {

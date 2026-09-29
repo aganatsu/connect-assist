@@ -30,6 +30,14 @@ alter table public.pending_orders
   add column if not exists config_hash                text,
   add column if not exists strategy_version           text,
   add column if not exists expiry_policy              text,
+  -- Route 1 is disabled for this experiment, so setups that WOULD have been
+  -- taken as a direct market-fill-at-zone now flow into Route 2 instead.
+  -- Measured over 180 days they are ~45% of the forward-eligible population
+  -- and sit at ~0 ATR, so they arrive almost immediately and would otherwise
+  -- silently inflate the fill rate the TTL research predicts. Recorded at
+  -- creation so the two strata can be separated exactly rather than inferred
+  -- from distance.
+  add column if not exists would_have_been_route1     boolean,
   add column if not exists terminal_reason            text,
   -- touch telemetry: the market event and the system's detection of it are
   -- different instants. `zone_touch_time` is a wall clock at the noticing

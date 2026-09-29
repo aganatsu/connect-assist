@@ -157,6 +157,9 @@ export interface Route2OrderTelemetryInput {
   initialTakeProfit: number | null;
   configHash: string;
   zoneStory: Record<string, unknown> | null;
+  /** True when price was strictly at the zone, i.e. Route 1 would have taken
+   *  this setup as a market fill had it not been disabled. */
+  wouldHaveBeenRoute1: boolean;
 }
 
 /**
@@ -182,6 +185,7 @@ export function buildRoute2OrderTelemetry(i: Route2OrderTelemetryInput): Record<
     config_hash: i.configHash,
     strategy_version: SMC_CONTRACT_VERSION,
     expiry_policy: "fixed_from_creation",
+    would_have_been_route1: i.wouldHaveBeenRoute1,
     zone_story_at_creation: i.zoneStory,
   };
 }

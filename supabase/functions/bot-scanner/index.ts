@@ -7776,6 +7776,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             initialStopLoss: limitSL,
             initialTakeProfit: limitTP,
             configHash: _configHash,
+            // The Route 1 arming condition minus the config flag, so the two
+            // strata stay separable once Route 1 is switched off.
+            wouldHaveBeenRoute1: priceIsAtValidatedZone && priceOnCorrectSide,
             // Zone Story: OBSERVATIONAL ONLY. Recorded here, never consulted.
             zoneStory: (detail as any).unifiedZone ?? null,
           });
