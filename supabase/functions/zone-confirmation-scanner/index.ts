@@ -302,6 +302,11 @@ Deno.serve(async (req) => {
     const pollAt = new Date().toISOString();
 
     for (const pending of huntingOrders) {
+      // Same guarantee as bot-scanner: ONE row per order per poll, enforced
+      // by `finally` so a `continue` added later cannot escape the log.
+      const pollMark = pollRows.length;
+      const pollCtx: { candles: number; price: number | null; branch: string; after: string } =
+        { candles: 0, price: null, branch: "hunting_no_change", after: pending.status };
       try {
         const userId = pending.user_id;
         const userData = userDataMap[userId];
@@ -332,6 +337,8 @@ Deno.serve(async (req) => {
 
         // Get current price from latest candle
         const currentPrice = confirmCandles[confirmCandles.length - 1].close;
+        pollCtx.candles = confirmCandles.length;
+        pollCtx.price = currentPrice;
 
         // ── Check impulse invalidation ──
         let impulseData: { high: number; low: number } | null = null;
@@ -512,6 +519,7 @@ Deno.serve(async (req) => {
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
           .eq("status", "awaiting_confirmation");
+          pollCtx.branch = "blocked_max_open_positions"; pollCtx.after = "cancelled";
           cancelled++;
           console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max positions (${currentOpenCount}/${maxOpenPositions})`);
           continue;
@@ -524,6 +532,7 @@ Deno.serve(async (req) => {
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
           .eq("status", "awaiting_confirmation");
+          pollCtx.branch = "blocked_max_per_symbol"; pollCtx.after = "cancelled";
           cancelled++;
           console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max per symbol (${currentSymbolCount}/${maxPerSymbol})`);
           continue;
@@ -778,6 +787,15 @@ Deno.serve(async (req) => {
           statusAfter: pending.status,
         }));
         stillHunting++;
+      } finally {
+        if (pollRows.length === pollMark) {
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: pollCtx.candles,
+            currentPrice: pollCtx.price, statusBefore: pending.status,
+            branchTaken: pollCtx.branch, statusAfter: pollCtx.after,
+          }));
+        }
       }
     }
 

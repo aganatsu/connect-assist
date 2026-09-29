@@ -3516,6 +3516,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   if (activePendingOrders && activePendingOrders.length > 0) {
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
     for (const pending of activePendingOrders) {
+      // Guarantees ONE poll row per order per cycle. The loop has ~14 exit
+      // points and the specific branches below only cover the interesting
+      // ones; the commonest outcome by far — still pending, price has not
+      // reached the zone — used to emit nothing, so an order under active
+      // watch looked identical to one nothing ever looked at. That ambiguity
+      // is the whole reason Route 2 could not be replayed.
+      //
+      // A `finally` is what makes this airtight: every `continue` inside the
+      // try runs it on the way out, so a branch added later cannot silently
+      // escape the log.
+      const pollMark = route2PollRows.length;
+      const pollCtx: { candles: number; price: number | null; branch: string; after: string } =
+        { candles: 0, price: null, branch: "watching_no_change", after: pending.status };
       try {
         // Check expiry first
         if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
@@ -3565,6 +3578,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
         const lastCandle = pendingCandles[pendingCandles.length - 1];
+        pollCtx.candles = pendingCandles.length;
+        pollCtx.price = currentPrice;
 
         // Update current price on the pending order
         await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -3618,6 +3633,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             resolved_at: new Date().toISOString(),
             ...(stampTouch ? { zone_touch_time: new Date().toISOString() } : {}),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pollCtx.branch = "sl_invalidation"; pollCtx.after = "cancelled";
           pendingCancelled++;
           console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — closed bar ${slPrice} past SL ${slLevel}${reachedEntry ? " (had reached entry)" : ""}`);
           continue;
@@ -3727,6 +3743,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 thesis_cancel_reason: thesisResult.cancelReason,
                 resolved_at: new Date().toISOString(),
               }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pollCtx.branch = "thesis_invalid"; pollCtx.after = "cancelled";
               pendingCancelled++;
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
@@ -3888,6 +3905,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cancel_reason: `Impulse broken — price ${currentPrice} exceeded origin (high: ${impulseData.high}, low: ${impulseData.low})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pollCtx.branch = "impulse_broken"; pollCtx.after = "cancelled";
             pendingCancelled++;
             console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
             continue;
@@ -4342,6 +4360,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           branchTaken: `error:${String(e?.message ?? "unknown").slice(0, 80)}`,
           statusAfter: pending.status,
         }));
+      } finally {
+        if (route2PollRows.length === pollMark) {
+          route2PollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            candlesAvailable: pollCtx.candles, currentPrice: pollCtx.price,
+            statusBefore: pending.status, branchTaken: pollCtx.branch,
+            statusAfter: pollCtx.after,
+          }));
+        }
       }
     }
     console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled, ${pendingConfirmationHunting} awaiting confirmation`);

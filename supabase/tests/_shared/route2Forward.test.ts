@@ -197,6 +197,21 @@ Deno.test("8b · both pollers write the log, on every lifecycle branch", () => {
   assert(/pollerName: "zone-confirmation-scanner"/.test(ZCS));
 });
 
+Deno.test("8c · EVERY poll emits a row, enforced by finally", () => {
+  // The interesting branches are wired individually, but the commonest
+  // outcome — still pending, price has not reached the zone — emitted
+  // nothing, so an order under active watch was indistinguishable from one
+  // nothing looked at. Verified live: one pending order, 0 poll rows.
+  //
+  // `finally` is what makes it airtight: a `continue` runs it on the way out,
+  // so a branch added later cannot silently escape the log.
+  for (const [name, src] of [["bot-scanner", SCANNER], ["zone-confirm", ZCS]] as const) {
+    assert(/const pollMark = \w+\.length;/.test(src), `${name}: must mark the row count per order`);
+    assert(/\} finally \{[\s\S]{0,400}?length === pollMark[\s\S]{0,400}?buildPollRecord\(/.test(src),
+      `${name}: finally must emit a fallback row when no branch did`);
+  }
+});
+
 Deno.test("the poll log is append-only at the database level", () => {
   assert(/route2_poll_log is append-only/.test(MIGRATION), "trigger must raise on mutation");
   assert(/before update or delete on public\.route2_poll_log/.test(MIGRATION));
