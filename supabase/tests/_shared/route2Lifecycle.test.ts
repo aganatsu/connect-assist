@@ -252,6 +252,32 @@ Deno.test("J · the 8h TTL is still fixed from creation and independent of V2", 
 
 // ─── versioning and schema ──────────────────────────────────────────────────
 
+Deno.test("every poll row is stamped with the lifecycle version", () => {
+  // Including the fallback row in `finally`, which is the majority of rows.
+  // A poll log where most rows cannot say which lifecycle produced them
+  // cannot be used to audit the V1 -> V2 change.
+  for (const [name, src] of [["bot-scanner", SCANNER], ["zone-confirm", ZCS]] as const) {
+    const i = src.indexOf("length === pollMark");
+    const block = src.slice(i, i + 700);
+    assert(/lifecycleVersion: ROUTE2_LIFECYCLE_VERSION/.test(block),
+      `${name}: the fallback poll row must carry the lifecycle version`);
+  }
+});
+
+Deno.test("the arm gate is reachable — `filled` and barReachesEntry agree", () => {
+  // classifyTouch returns null when the bar never reaches the entry. If that
+  // disagreed with production's own `filled` test, the arm path would be
+  // dead and no order could ever hunt.
+  const i = SCANNER.indexOf("const filled = pending.direction");
+  const block = SCANNER.slice(i, i + 160);
+  assert(/lastCandle\.low <= entryPrice/.test(block) && /lastCandle\.high >= entryPrice/.test(block),
+    "production's touch test must be low<=entry (long) / high>=entry (short)");
+  assertEquals(barReachesEntry("long", 1.2, 1.0999, 1.1), true);
+  assertEquals(barReachesEntry("long", 1.2, 1.1001, 1.1), false);
+  assertEquals(barReachesEntry("short", 1.1001, 1.0, 1.1), true);
+  assertEquals(barReachesEntry("short", 1.0999, 1.0, 1.1), false);
+});
+
 Deno.test("V2 has its own strategy version, distinct from V1", () => {
   assertEquals(ROUTE2_LIFECYCLE_VERSION, "smc-route2-confirmation-lifecycle-v2");
   assert(ROUTE2_LIFECYCLE_VERSION !== "smc-zone-impulse-control-v1");

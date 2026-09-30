@@ -840,6 +840,9 @@ Deno.serve(async (req) => {
             pollerName: "zone-confirmation-scanner", candlesAvailable: pollCtx.candles,
             currentPrice: pollCtx.price, statusBefore: pending.status,
             branchTaken: pollCtx.branch, statusAfter: pollCtx.after,
+            touchId: (pending as any).last_consumed_touch_id ?? null,
+            minObservationUntil: (pending as any).confirmation_min_observation_until ?? null,
+            lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
           }));
         }
       }
