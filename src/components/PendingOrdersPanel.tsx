@@ -1,7 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
 import { generatePendingOrderNarrative } from "@/lib/narrative";
 import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
+import {
+  readConfirmation, entryDifference, cohortLabel, lifecycleShort, outcomeLabel,
+  tierLabel, typeLabel, huntingCaption, HUNT_TIERS_TEXT,
+} from "@/lib/route2Display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle, Eye, Crosshair } from "lucide-react";
@@ -17,6 +21,13 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) =>
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   const { toast } = useToast();
 
   const fetchOrders = useCallback(async () => {
@@ -150,6 +161,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 HUNTING
               </Badge>
             )}
+            <CohortChip value={order.would_have_been_route1} />
             {!isHunting && order.from_watchlist && (
               <Badge
                 variant="outline"
@@ -174,16 +186,21 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Row 2: Status-specific info */}
         {isHunting ? (
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-warn font-medium">
-              <Crosshair className="w-3 h-3 inline mr-1" />
-              Price in zone — waiting for {order.direction === "short" ? "bearish" : "bullish"} CHoCH on 5m
-            </span>
-            <span className="text-muted-foreground">
-              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
-              {" · "}
-              TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
-            </span>
+          <div className="text-[11px] space-y-0.5">
+            <div className="flex items-center justify-between">
+              {/* Three tiers, not "CHoCH": a Tier 3 reversal fills with no
+                  CHoCH at all, which the old caption made invisible. */}
+              <span className="text-warn font-medium">
+                <Crosshair className="w-3 h-3 inline mr-1" />
+                {huntingCaption(order.direction, huntTimeframe(order))}:
+              </span>
+              <span className="text-muted-foreground">
+                SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+                {" · "}
+                TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
+              </span>
+            </div>
+            <div className="text-[10px] text-warn/80 font-mono pl-4">{HUNT_TIERS_TEXT}</div>
           </div>
         ) : (
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -213,7 +230,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {/* Narrative sentence */}
         <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
           {isHunting
-            ? `Price has entered the ${order.entry_zone_type} zone. Watching 5m candles for ${order.direction === "short" ? "bearish" : "bullish"} CHoCH confirmation before entry.`
+            ? `Price has entered the ${order.entry_zone_type} zone. Watching ${huntTimeframe(order)} candles for a ${order.direction === "short" ? "bearish" : "bullish"} confirmation (${HUNT_TIERS_TEXT}) before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>
@@ -245,19 +262,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Hunting stage: show confirmation info instead of expiry */}
         {isHunting && (
-          <div className="flex items-center justify-between text-[10px]">
-            <div className="flex items-center gap-1">
-              <Crosshair className="w-3 h-3 text-warn animate-pulse" />
-              <span className="text-warn">
-                Confirmation active — no time limit
+          <div className="space-y-0.5 text-[10px]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <Crosshair className="w-3 h-3 text-warn animate-pulse" />
+                {/* Was "no time limit" — wrong: the order still expires on
+                    its fixed TTL while hunting. */}
+                <span className="text-warn">Confirmation active · {getTimeRemaining(order.expires_at)}</span>
+              </div>
+              <span className="text-muted-foreground/60">
+                Zone touched: {order.zone_touch_time ? fmtTime(order.zone_touch_time) : "—"}
               </span>
             </div>
-            <span className="text-muted-foreground/60">
-              Zone touched: {(order as any).zone_touch_time
-                ? new Date((order as any).zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                : "just now"
-              }
-            </span>
+            <HuntFacts order={order} />
           </div>
         )}
       </div>
@@ -333,43 +350,214 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           </button>
 
           {showHistory && (
-            <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto">
+            <div className="mt-2 space-y-1.5 max-h-96 overflow-y-auto">
               {history.slice(0, 20).map((order) => (
-                <div
+                <HistoryRow
                   key={order.order_id}
-                  className="flex items-center justify-between text-[11px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
-                >
-                  <div className="flex items-center gap-2">
-                    {statusIcon(order.status)}
-                    <span className="font-mono text-foreground">{order.symbol}</span>
-                    <Badge
-                      variant="outline"
-                      className={`text-[9px] px-1 py-0 ${
-                        order.direction === "long"
-                          ? "border-success/30 text-profit"
-                          : "border-destructive/30 text-loss"
-                      }`}
-                    >
-                      {order.direction.toUpperCase()}
-                    </Badge>
-                    <span className="text-muted-foreground">@ {Number(order.entry_price).toFixed(5)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`capitalize ${statusColor(order.status)}`}>
-                      {order.status === "filled" ? "confirmed" : order.status}
-                    </span>
-                    <span className="text-muted-foreground/50">
-                      {order.resolved_at
-                        ? new Date(order.resolved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                        : ""}
-                    </span>
-                  </div>
-                </div>
+                  order={order}
+                  open={expanded.has(order.order_id)}
+                  onToggle={() => toggleExpanded(order.order_id)}
+                  icon={statusIcon(order.status)}
+                  color={statusColor(order.status)}
+                />
               ))}
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+const fmtTime = (iso: string | null | undefined, seconds = false): string =>
+  iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) }) : "—";
+
+const px = (v: unknown): string | null => {
+  const n = Number(v);
+  return v === null || v === undefined || v === "" || !Number.isFinite(n) ? null : n.toFixed(5);
+};
+
+/**
+ * Confirmation timeframe for an ACTIVE hunt. The pending row records it only
+ * at fill, so a live hunt uses the style's confirmation TF — 5m for the
+ * scalper style (supabase/functions/_shared/styleTimeframes.ts), which is
+ * what the hunt is actually checking.
+ */
+function huntTimeframe(order: PendingOrder): string {
+  return order.confirmation_timeframe || "5m";
+}
+
+/** A labelled value, or nothing at all. Never renders a placeholder as data. */
+function Fact({ label, value }: { label: string; value: ReactNode }) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-foreground font-mono text-right">{value}</span>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-0.5">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground/70 font-semibold">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function CohortChip({ value }: { value: boolean | null | undefined }) {
+  const label = cohortLabel(value);
+  if (!label) return null;
+  return (
+    <Badge
+      variant="outline"
+      title="Research cohort only — does not affect execution"
+      className={`text-[9px] px-1 py-0 ${value ? "border-muted/40 text-muted-foreground" : "border-emerald-500/40 text-emerald-300"}`}
+    >
+      {value ? "EX-R1" : "PRIMARY"}
+    </Badge>
+  );
+}
+
+/** Live hunt state, only the fields that exist. */
+function HuntFacts({ order }: { order: PendingOrder }) {
+  const facts: string[] = [];
+  if (order.confirmation_arm_count != null) facts.push(`Arms ${order.confirmation_arm_count}`);
+  if (order.confirmation_checks_count != null) facts.push(`Checks ${order.confirmation_checks_count}`);
+  if (order.confirmation_min_observation_until) facts.push(`Protected until ${fmtTime(order.confirmation_min_observation_until)}`);
+  if (order.pending_distance_atr != null) facts.push(`${Number(order.pending_distance_atr).toFixed(2)} ATR`);
+  const lc = lifecycleShort(order.strategy_version);
+  if (lc) facts.push(`Lifecycle ${lc}`);
+  if (facts.length === 0) return null;
+  return <div data-testid="hunt-facts" className="text-muted-foreground/70 font-mono pl-4">{facts.join(" · ")}</div>;
+}
+
+function HistoryRow({ order, open, onToggle, icon, color }: {
+  order: PendingOrder; open: boolean; onToggle: () => void;
+  icon: ReactNode; color: string;
+}) {
+  const conf = readConfirmation(order);
+  const outcome = outcomeLabel(order);
+  const filled = order.status === "filled";
+  const shownPrice = filled && order.fill_price != null ? order.fill_price : order.entry_price;
+  const tier = conf ? tierLabel(conf.tier) : null;
+
+  return (
+    <div className="rounded bg-muted/10 border border-muted/20 text-[11px]">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-2 py-1.5 text-left"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {icon}
+          <span className="font-mono text-foreground">{order.symbol}</span>
+          <Badge
+            variant="outline"
+            className={`text-[9px] px-1 py-0 ${
+              order.direction === "long" ? "border-success/30 text-profit" : "border-destructive/30 text-loss"
+            }`}
+          >
+            {order.direction.toUpperCase()}
+          </Badge>
+          <span className={`font-semibold ${color}`}>{outcome.primary}</span>
+          {filled && tier && (
+            <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-500/40 text-emerald-300 uppercase">
+              {tier}
+            </Badge>
+          )}
+          {!filled && outcome.detail && (
+            <span className="text-muted-foreground/70 truncate">{outcome.detail.toLowerCase()}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-muted-foreground font-mono">
+            {filled ? "Entry" : "@"} {px(shownPrice) ?? "—"}
+          </span>
+          <span className="text-muted-foreground/50">{fmtTime(order.resolved_at)}</span>
+          {open ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {open && (
+        <div data-testid="history-detail" className="px-2 pb-2 pt-1 space-y-2 border-t border-muted/20">
+          {filled ? <FilledDetail order={order} conf={conf} /> : <UnfilledDetail order={order} />}
+          <LifecycleDetail order={order} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilledDetail({ order, conf }: { order: PendingOrder; conf: ReturnType<typeof readConfirmation> }) {
+  const diff = entryDifference(order);
+  return (
+    <>
+      <Section title="Confirmation">
+        {conf ? (
+          <>
+            <Fact label="Tier" value={conf.tier != null ? `T${conf.tier}` : null} />
+            <Fact label="Type" value={typeLabel(conf.type)} />
+            <Fact label="TF" value={conf.timeframe} />
+            <Fact label="Confirmation price" value={px(conf.price)} />
+            <Fact label="Displacement" value={conf.displacement != null ? `${(conf.displacement * 100).toFixed(0)}%` : null} />
+            <Fact label="Close based" value={conf.closeBased == null ? null : conf.closeBased ? "Yes" : "No"} />
+            <Fact label="Significance" value={conf.significance} />
+            <Fact label="Signals" value={conf.supportingSignals.length ? conf.supportingSignals.join(", ") : null} />
+          </>
+        ) : (
+          <div className="text-muted-foreground/60 italic">Not recorded for this order.</div>
+        )}
+        <Fact label="Zone touched" value={order.zone_touch_time ? fmtTime(order.zone_touch_time, true) : null} />
+        <Fact label="Filled" value={fmtTime(order.fill_timestamp ?? order.filled_at, true)} />
+      </Section>
+      <Section title="Execution">
+        <Fact label="Pending entry" value={px(order.entry_price)} />
+        <Fact label="Actual fill" value={px(order.fill_price)} />
+        <Fact
+          label="Entry difference"
+          value={diff ? `${diff.display} (${diff.favourable ? "favourable" : "adverse"})` : null}
+        />
+        <Fact label="SL" value={px(order.stop_loss)} />
+        <Fact label="TP" value={px(order.take_profit)} />
+        <Fact label="Size" value={order.size != null ? `${order.size} lots` : null} />
+      </Section>
+    </>
+  );
+}
+
+function UnfilledDetail({ order }: { order: PendingOrder }) {
+  return (
+    <Section title="Outcome">
+      <Fact label="Terminal reason" value={order.terminal_reason} />
+      <Fact label="Reset reason" value={order.reset_reason} />
+      <Fact label="Structural invalidation" value={order.structural_invalidation} />
+      <Fact label="Hard invalidation" value={order.hard_invalidation == null ? null : order.hard_invalidation ? "Yes" : "No"} />
+      <Fact label="Last touch" value={order.zone_touch_time ? fmtTime(order.zone_touch_time, true) : null} />
+      {/* Free text, shown as written — never mapped into a guessed category. */}
+      <Fact label="Note" value={order.cancel_reason} />
+    </Section>
+  );
+}
+
+function LifecycleDetail({ order }: { order: PendingOrder }) {
+  const lc = lifecycleShort(order.strategy_version);
+  return (
+    <Section title="Lifecycle">
+      <Fact label="Route" value="Route 2 Pending" />
+      <Fact label="Lifecycle" value={lc} />
+      <Fact label="Strategy version" value={order.strategy_version} />
+      <Fact label="Cohort" value={cohortLabel(order.would_have_been_route1)} />
+      <Fact label="Distance" value={order.pending_distance_atr != null ? `${Number(order.pending_distance_atr).toFixed(2)} ATR` : null} />
+      <Fact label="Placed" value={fmtTime(order.placed_at, true)} />
+      <Fact label="Expires" value={fmtTime(order.expires_at, true)} />
+      <Fact label="Confirmation arms" value={order.confirmation_arm_count} />
+      <Fact label="Confirmation checks" value={order.confirmation_checks_count} />
+    </Section>
   );
 }

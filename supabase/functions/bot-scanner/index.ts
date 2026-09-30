@@ -98,6 +98,10 @@ import {
   confirmationMinObservationUntil, mayResetNow,
 } from "../_shared/route2Lifecycle.ts";
 import {
+  buildConfirmationRecord, buildRoute2Provenance, tierLabel, typeLabel,
+} from "../_shared/route2Confirmation.ts";
+import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
+import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
 } from "../_shared/smcZoneDecision.ts";
@@ -2143,8 +2147,13 @@ if (import.meta.main) Deno.serve(async (req) => {
     // ── Pending Orders: Get only active pending orders ──
     if (action === "active_pending") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
+      // Includes awaiting_confirmation. This selected `status = "pending"`
+      // only, so an order that had touched its zone vanished from the panel
+      // for exactly the stage worth watching — the Hunting section rendered
+      // from this list and could never populate. Read-only; no lifecycle
+      // behaviour depends on it.
       const { data } = await adminClient.from("pending_orders").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).in("status", ["pending", "awaiting_confirmation"])
         .order("placed_at", { ascending: false });
       return respond(data || []);
     }
@@ -4249,20 +4258,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Build signal_reason with limit order provenance + confirmation data
           let parsedSignalReason: any = {};
           try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+          // ONE canonical record — see route2Confirmation.ts. Pending row,
+          // position snapshot, signal_reason and Telegram all read this.
+          const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF);
+          const route2Provenance = buildRoute2Provenance(pending as Record<string, unknown>);
           const signalReason = {
             ...parsedSignalReason,
             filledFromLimitOrder: true,
             confirmationEntry: true,
             confirmation: {
-              type: confirmationSignal.type,
-              tier: confirmationSignal.tier,
-              price: confirmationSignal.price,
-              displacement: confirmationSignal.displacement,
-              significance: confirmationSignal.significance,
-              closeBased: confirmationSignal.closeBased,
-              supportingSignals: confirmationSignal.supportingSignals,
+              ...confirmationRecord,
               zoneTouchTime: pending.zone_touch_time,
+              // Counts ABANDONMENTS, not hunts; kept for existing readers.
               confirmationAttempts: pending.confirmation_attempts || 0,
+              confirmationArmCount: route2Provenance.confirmationArmCount,
+              confirmationChecksCount: route2Provenance.confirmationChecksCount,
             },
             limitOrderOrigin: {
               orderType: pending.order_type,
@@ -4295,9 +4305,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               zoneLow: (pending as any).entry_zone_low ?? null,
               zoneType: (pending as any).entry_zone_type ?? null,
               setupId: (pending as any).order_id ?? null,
+              route2: route2Provenance as unknown as Record<string, unknown>,
+              confirmation: confirmationRecord as unknown as Record<string, unknown>,
             }),
+            // From the ORIGINATING pending order, not a hard-coded default.
+            strategyVersion: (pending as any).strategy_version ?? null,
+            sourcePendingOrderId: (pending as any).id ?? null,
           });
-          await supabase.from("paper_positions").insert({
+          // ── ATOMIC FILL (route2_claim_and_fill) ──
+          //
+          // This path used to INSERT the position (error discarded) and then
+          // mark the order filled with NO status guard at all. The claim and
+          // the insert now commit in ONE transaction, guarded on
+          // awaiting_confirmation AND the arm count this poll read; only a
+          // `filled` result may continue to reasoning, counters, Telegram and
+          // the broker mirror.
+          const positionRow = {
             user_id: userId,
             position_id: positionId,
             symbol: pending.symbol,
@@ -4320,22 +4343,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             bot_id: BOT_ID,
             order_type: "limit",
             trigger_price: entryPrice.toString(),
-          });
+          };
 
-          await supabase.from("trade_reasonings").insert({
-            user_id: userId,
-            position_id: positionId,
-            symbol: pending.symbol,
-            direction: pending.direction,
-            confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
-            bias: pending.direction === "long" ? "bullish" : "bearish",
-            session: "confirmation_fill",
-            timeframe: "5m",
-          });
-
-          await supabase.from("pending_orders").update({
-            status: "filled",
+          const pendingFillPatch = {
             terminal_reason: "FILLED" as TerminalReason,
             confirmation_checked_at: nowStr,
             confirmation_timeframe: confirmTF,
@@ -4349,12 +4359,49 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             trigger_timestamp: nowStr,
             fill_timestamp: nowStr,
             fill_price: actualFillPrice,
+            entry_confirmation: confirmationRecord,
             zone_story_at_confirmation: (pending as any).zone_story_at_creation ?? null,
             zone_story_at_fill: (pending as any).zone_story_at_creation ?? null,
             fill_reason: `Confirmed ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
             filled_at: nowStr,
             resolved_at: nowStr,
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          };
+
+          const claim = await claimRoute2Fill(supabase, {
+            pendingRowId: (pending as any).id,
+            userId,
+            expectedArmCount: (pending as any).confirmation_arm_count ?? null,
+            pendingPatch: pendingFillPatch,
+            position: positionRow,
+          });
+          if (claim.outcome !== "filled") {
+            // No position was created and nothing committed. Do not notify,
+            // mirror, count a trade, or add to openPosArr.
+            const why = describeClaimMiss(claim);
+            if (claim.outcome === "failed") console.error(`[pending] ${pending.symbol} ${pending.direction} — ${why}`);
+            else console.warn(`[pending] ${pending.symbol} ${pending.direction} — ${why}`);
+            pollCtx.branch = `fill_${claim.outcome}`;
+            pollCtx.after = claim.outcome === "lost_race" ? (claim.currentStatus ?? pending.status) : pending.status;
+            confirmationHunt.push({
+              symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
+              outcome: `FILL_${claim.outcome.toUpperCase()}`, tier: confirmationSignal.tier,
+            });
+            continue;
+          }
+
+          await supabase.from("trade_reasonings").insert({
+            user_id: userId,
+            position_id: positionId,
+            symbol: pending.symbol,
+            direction: pending.direction,
+            confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
+            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+            bias: pending.direction === "long" ? "bullish" : "bearish",
+            session: "confirmation_fill",
+            timeframe: "5m",
+          });
+
+          // Marked filled by the claim, atomically with the insert.
           route2PollRows.push(buildPollRecord({
             pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
             candlesAvailable: confirmCandles.length, currentPrice, statusBefore: pending.status,
@@ -4377,9 +4424,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            const confTierLabel = confirmationSignal.tier ? ` T${confirmationSignal.tier}` : "";
-            const confSupporting = Array.isArray(confirmationSignal.supportingSignals) && confirmationSignal.supportingSignals.length > 0
-              ? `\n<b>Supporting:</b> ${confirmationSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
+            // Labels come from the stored record, via the same module the
+            // dashboard uses, so the two cannot disagree about the tier.
+            const confTierLabel = tierLabel(confirmationRecord.tier) ? ` ${tierLabel(confirmationRecord.tier)}` : "";
+            const confSupporting = confirmationRecord.supportingSignals.length > 0
+              ? `\n<b>Supporting:</b> ${confirmationRecord.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
               : "";
             const confAttempts = (pending.confirmation_attempts || 0) > 0
               ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
@@ -4393,7 +4442,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>TP:</b> ${pending.take_profit}\n` +
               `<b>Score:</b> ${pending.signal_score}\n\n` +
               `🎯 <b>Confirmation</b>\n` +
-              `<b>Signal:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)}×${confirmationSignal.significance ? ", " + confirmationSignal.significance : ""})${confAttempts}` +
+              `<b>Signal:</b> ${typeLabel(confirmationRecord.type) ?? confirmationRecord.type} · ${confirmationRecord.timeframe ?? ""}` +
+              (confirmationRecord.displacement !== null ? ` (disp: ${(confirmationRecord.displacement * 100).toFixed(0)}%${confirmationRecord.significance ? ", " + confirmationRecord.significance : ""})` : "") +
+              confAttempts +
               confSupporting + `\n` +
               `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
@@ -8092,6 +8143,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
             await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
             await supabase.from("paper_trade_history").insert({
+              // Immutable entry block + provenance. This path archived without
+              // it, so a Route 2 trade closed on a reverse signal lost its
+              // strategy version, route and pending-order link.
+              ...carryToHistory(opp as Record<string, unknown>, {
+                exitPrice: analysis.lastPrice, direction: opp.direction as "long" | "short",
+              }),
               user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
               symbol: pair, direction: opp.direction, size: opp.size,
               entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),

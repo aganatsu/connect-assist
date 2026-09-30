@@ -28,7 +28,11 @@ import {
   buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot,
 } from "../_shared/smcTradeTelemetry.ts";
 import { buildPollRecord, type TerminalReason } from "../_shared/route2Forward.ts";
+import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { ROUTE2_LIFECYCLE_VERSION, mayResetNow } from "../_shared/route2Lifecycle.ts";
+import {
+  buildConfirmationRecord, buildRoute2Provenance, tierLabel, typeLabel,
+} from "../_shared/route2Confirmation.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
@@ -597,21 +601,26 @@ Deno.serve(async (req) => {
         // Build signal_reason with confirmation data
         let parsedSignalReason: any = {};
         try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+        // ONE canonical record for why this order entered. It is written to
+        // the pending row, the position's immutable decision snapshot and
+        // signal_reason, and it is what the Telegram message is built from —
+        // so none of them can describe the confirmation differently.
+        const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF);
+        const route2Provenance = buildRoute2Provenance(pending as Record<string, unknown>);
         const signalReason = {
           ...parsedSignalReason,
           filledFromLimitOrder: true,
           confirmationEntry: true,
           fastConfirmScanner: true, // Flag that this was filled by the fast-confirm scanner
           confirmation: {
-            type: confirmationSignal.type,
-            tier: confirmationSignal.tier,
-            price: confirmationSignal.price,
-            displacement: confirmationSignal.displacement,
-            significance: confirmationSignal.significance,
-            closeBased: confirmationSignal.closeBased,
-            supportingSignals: confirmationSignal.supportingSignals,
+            ...confirmationRecord,
             zoneTouchTime: pending.zone_touch_time,
+            // confirmation_attempts counts ABANDONMENTS (zone-exit resets),
+            // not hunts. Kept under its old name for existing readers; the
+            // arm and check counts are the ones that describe the hunt.
             confirmationAttempts: pending.confirmation_attempts || 0,
+            confirmationArmCount: route2Provenance.confirmationArmCount,
+            confirmationChecksCount: route2Provenance.confirmationChecksCount,
           },
           limitOrderOrigin: {
             orderType: pending.order_type,
@@ -648,9 +657,27 @@ Deno.serve(async (req) => {
             zoneLow: (pending as any).entry_zone_low ?? null,
             zoneType: (pending as any).entry_zone_type ?? null,
             setupId: (pending as any).order_id ?? null,
+            route2: route2Provenance as unknown as Record<string, unknown>,
+            confirmation: confirmationRecord as unknown as Record<string, unknown>,
           }),
+          // Provenance from the ORIGINATING pending order. Previously this was
+          // hard-coded inside buildEntryTelemetry, so a V2 order filled as V1.
+          strategyVersion: (pending as any).strategy_version ?? null,
+          sourcePendingOrderId: (pending as any).id ?? null,
         });
-        await supabase.from("paper_positions").insert({
+        // ── ATOMIC FILL (route2_claim_and_fill) ──
+        //
+        // This used to INSERT the position first and mark the order filled
+        // second, with the insert's error discarded and the update's zero-row
+        // result ignored. On a439f5bc (2026-09-29) bot-scanner reset the order
+        // between the two steps: the position existed and the order stayed
+        // live and fillable for 58 more minutes.
+        //
+        // Now the claim (guarded on awaiting_confirmation AND the arm count
+        // this poll read) and the insert commit in ONE transaction. Only the
+        // poller whose claim returns `filled` may continue; everything after
+        // this block — reasoning, Telegram, broker mirror — is gated on it.
+        const positionRow = {
           user_id: userId,
           position_id: positionId,
           symbol: pending.symbol,
@@ -672,9 +699,49 @@ Deno.serve(async (req) => {
           bot_id: BOT_ID,
           order_type: "limit",
           trigger_price: entryPrice.toString(),
-        });
+        };
 
-        // Insert trade reasoning
+        const pendingFillPatch = {
+          terminal_reason: "FILLED" as TerminalReason,
+          confirmation_checked_at: nowStr,
+          confirmation_timeframe: confirmTF,
+          confirmation_type: confirmationSignal.type,
+          confirmation_tier: confirmationSignal.tier,
+          confirmation_accepted: true,
+          confirmation_accepted_at: nowStr,
+          trigger_timestamp: nowStr,
+          fill_timestamp: nowStr,
+          fill_price: actualFillPrice,
+          // The column existed and was NULL on every row. It now carries the
+          // canonical record, which is what the Zone Setups panel renders.
+          entry_confirmation: confirmationRecord,
+          zone_story_at_confirmation: (pending as any).zone_story_at_creation ?? null,
+          zone_story_at_fill: (pending as any).zone_story_at_creation ?? null,
+          fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
+          filled_at: nowStr,
+          resolved_at: nowStr,
+        };
+
+        const claim = await claimRoute2Fill(supabase, {
+          pendingRowId: (pending as any).id,
+          userId,
+          expectedArmCount: (pending as any).confirmation_arm_count ?? null,
+          pendingPatch: pendingFillPatch,
+          position: positionRow,
+        });
+        if (claim.outcome !== "filled") {
+          // NOT a fill. No position was created and nothing was committed,
+          // so there is nothing to notify, mirror or count.
+          const why = describeClaimMiss(claim);
+          if (claim.outcome === "failed") console.error(`[zone-confirm] ${pending.symbol} ${pending.direction} — ${why}`);
+          else console.warn(`[zone-confirm] ${pending.symbol} ${pending.direction} — ${why}`);
+          pollCtx.branch = `fill_${claim.outcome}`;
+          pollCtx.after = claim.outcome === "lost_race" ? (claim.currentStatus ?? pending.status) : pending.status;
+          stillHunting++;
+          continue;
+        }
+
+        // Insert trade reasoning — only for a fill this poller owns.
         await supabase.from("trade_reasonings").insert({
           user_id: userId,
           position_id: positionId,
@@ -687,26 +754,8 @@ Deno.serve(async (req) => {
           timeframe: confirmTF,
         });
 
-        // Update pending order to filled
-        await supabase.from("pending_orders").update({
-          status: "filled",
-          terminal_reason: "FILLED" as TerminalReason,
-          confirmation_checked_at: nowStr,
-          confirmation_timeframe: confirmTF,
-          confirmation_type: confirmationSignal.type,
-          confirmation_tier: confirmationSignal.tier,
-          confirmation_accepted: true,
-          confirmation_accepted_at: nowStr,
-          trigger_timestamp: nowStr,
-          fill_timestamp: nowStr,
-          fill_price: actualFillPrice,
-          zone_story_at_confirmation: (pending as any).zone_story_at_creation ?? null,
-          zone_story_at_fill: (pending as any).zone_story_at_creation ?? null,
-          fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
-          filled_at: nowStr,
-          resolved_at: nowStr,
-        }).eq("order_id", pending.order_id).eq("user_id", userId)
-        .eq("status", "awaiting_confirmation");
+        // The order was marked filled by the claim above, in the same
+        // transaction as the position insert — no separate update.
         pollRows.push(buildPollRecord({
           pendingId: pending.order_id, pollTimestamp: pollAt,
           pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
@@ -728,12 +777,14 @@ Deno.serve(async (req) => {
             `<b>Symbol:</b> ${pending.symbol}\n` +
             `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
             `<b>Size:</b> ${pending.size} lots\n` +
-            `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (${confirmationSignal.type})\n` +
+            `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (${typeLabel(confirmationRecord.type) ?? confirmationRecord.type})\n` +
             `<b>Zone Level:</b> ${entryPrice}\n` +
             `<b>SL:</b> ${pending.stop_loss}\n` +
             `<b>TP:</b> ${pending.take_profit}\n` +
             `<b>Score:</b> ${pending.signal_score}\n` +
-            `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
+            `<b>Confirmation:</b> ${tierLabel(confirmationRecord.tier) ?? `T${confirmationRecord.tier}`} · ${typeLabel(confirmationRecord.type) ?? confirmationRecord.type} · ${confirmationRecord.timeframe ?? ""}` +
+            (confirmationRecord.displacement !== null ? ` (disp: ${(confirmationRecord.displacement * 100).toFixed(0)}%)` : "") + `\n` +
+            (confirmationRecord.supportingSignals.length ? `<b>Signals:</b> ${confirmationRecord.supportingSignals.join(", ")}\n` : "") +
             `<b>Scanner:</b> Fast-confirm (60s poll)\n` +
             `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
             (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");

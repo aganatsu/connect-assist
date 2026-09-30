@@ -8,6 +8,10 @@ import {
   type RateProvenance,
 } from "../_shared/rateMapPolicy.ts";
 import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
+// Every archive path must carry the immutable entry block, or a trade closed
+// here loses its route, strategy version and pending-order link — the fields
+// that decide which analysis cohort it belongs to.
+import { carryToHistory } from "../_shared/smcTradeTelemetry.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -1350,6 +1354,7 @@ Deno.serve(async (req) => {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
             const closeBotId = pos.bot_id || "smc";
             await supabase.from("paper_trade_history").insert({
+              ...carryToHistory(pos as Record<string, unknown>, { exitPrice, direction: pos.direction }),
               user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
               direction: pos.direction, size: size.toString(), entry_price: pos.entry_price,
               exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
@@ -1712,6 +1717,7 @@ Deno.serve(async (req) => {
 
       // Record in history
       await supabase.from("paper_trade_history").insert({
+        ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
         user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
         direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
         exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
@@ -1789,6 +1795,7 @@ Deno.serve(async (req) => {
             totalPnl += pnl;
 
             await supabase.from("paper_trade_history").insert({
+              ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
               user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
               direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
               exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
