@@ -30,7 +30,11 @@ Deno.test("EVERY paper_positions insert writes a frozen context", () => {
   const missing: string[] = [];
   for (const f of files) {
     const src = FN(f);
-    for (const m of src.matchAll(/from\("paper_positions"\)\.insert\(\{/g)) {
+    // Route 2 fills no longer insert directly: they build `positionRow` and
+    // hand it to route2_claim_and_fill, which inserts it atomically with the
+    // claim (2026-09-30). That payload IS the insert, so it counts as a route
+    // and must carry the frozen context exactly like a direct insert.
+    for (const m of src.matchAll(/from\("paper_positions"\)\.insert\(\{|const positionRow = \{/g)) {
       total++;
       const block = src.slice(m.index!, m.index! + 1600);
       if (!block.includes("frozen_strategy_context")) {

@@ -40,6 +40,16 @@ export interface EntryTelemetryInput {
   zoneTimeframe: string | null;
   configSnapshot: Record<string, unknown> | null;
   decisionSnapshot: Record<string, unknown> | null;
+  /**
+   * The version that actually produced the trade. Route 2 passes the
+   * ORIGINATING PENDING ORDER's version: this used to be hard-coded, so a
+   * fill from a `smc-route2-confirmation-lifecycle-v2` order was stamped
+   * `smc-zone-impulse-control-v1` and fell into the wrong cohort. Absent means
+   * the contract default, which is what Route 1 has always recorded.
+   */
+  strategyVersion?: string | null;
+  /** `pending_orders.id` (uuid) for a Route 2 fill; absent for Route 1. */
+  sourcePendingOrderId?: string | null;
 }
 
 export interface EntryTelemetry {
@@ -57,6 +67,7 @@ export interface EntryTelemetry {
   entry_zone_timeframe: string | null;
   entry_config_snapshot: Record<string, unknown> | null;
   entry_decision_snapshot: Record<string, unknown> | null;
+  source_pending_order_id: string | null;
 }
 
 /**
@@ -94,11 +105,12 @@ export function buildEntryTelemetry(i: EntryTelemetryInput): EntryTelemetry {
     entry_time: i.entryTime,
     strategy_bar_time: i.strategyBarTime,
     strategy_name: "smc",
-    strategy_version: SMC_CONTRACT_VERSION,
+    strategy_version: i.strategyVersion || SMC_CONTRACT_VERSION,
     trading_style: i.tradingStyle,
     entry_zone_timeframe: i.zoneTimeframe,
     entry_config_snapshot: i.configSnapshot,
     entry_decision_snapshot: i.decisionSnapshot,
+    source_pending_order_id: i.sourcePendingOrderId ?? null,
   };
 }
 
@@ -136,6 +148,10 @@ export function entryDecisionSnapshot(i: {
   displacementCandles?: number | null;
   priceAtZoneStrict?: boolean | null; sideOk?: boolean | null;
   signalSource?: string | null; setupId?: string | null;
+  /** Route 2 only: which pending-order lifecycle produced the fill. */
+  route2?: Record<string, unknown> | null;
+  /** Route 2 only: the canonical confirmation record (route2Confirmation.ts). */
+  confirmation?: Record<string, unknown> | null;
 }): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(i)) if (v !== undefined) out[k] = v;
@@ -176,6 +192,9 @@ export const IMMUTABLE_COLUMNS = [
   "initial_risk_price", "initial_risk_pips", "entry_time", "strategy_bar_time",
   "strategy_name", "strategy_version", "trading_style", "entry_zone_timeframe",
   "entry_config_snapshot", "entry_decision_snapshot",
+  // The link back to the pending order. Was a column nobody wrote, so a
+  // closed Route 2 trade could not be joined to the lifecycle that made it.
+  "source_pending_order_id",
 ] as const;
 
 /**

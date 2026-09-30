@@ -45,8 +45,13 @@ Deno.test("every exit from the hunt is recorded, including the fill", () => {
       `the hunt must record ${outcome}`,
     );
   }
+  // 8 since 2026-09-30: losing the atomic fill claim (another poller won,
+  // the order was reset/re-armed, or the RPC failed) is a new exit from the
+  // hunt and is recorded as FILL_<outcome>.
+  assert(/outcome: `FILL_\$\{claim\.outcome\.toUpperCase\(\)\}`/.test(scanner),
+    "a lost fill claim must be recorded, not silent");
   assertEquals(
-    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 7,
+    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 8,
     "one push per exit, and no path left silent",
   );
 });
