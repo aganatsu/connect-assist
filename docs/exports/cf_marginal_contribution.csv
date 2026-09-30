@@ -1,0 +1,4 @@
+after,before,losses_removed,netR_removed,removed,stage,survivor_exp,survivor_pf,wins_removed
+18780,42650,15791,-1359.25,23870,zone score >= 4,0.0629,1.0942,8079
+743,18780,11218,1134.99,18037,confluence >= 40,0.0618,1.0927,6819
+23,743,448,45.93,720,safety gates,-0.0018,0.9973,272

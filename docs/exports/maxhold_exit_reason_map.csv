@@ -1,0 +1,9 @@
+raw,normalized,n
+sl_hit,SL,356
+tp_hit,TP,74
+partial_tp,OTHER,21
+reverse_signal,OTHER,14
+prop_firm_emergency,OTHER,2
+manual,MANUAL,2
+broker_closed,OTHER,1
+cancelled_unmirrored,OTHER,1

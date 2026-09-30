@@ -1,0 +1,33 @@
+{
+  "contract": "SMC_IMPULSE_ZONE_CORPUS_BACKTEST_V1",
+  "kind": "CAUSAL MARKET-LOGIC BACKTEST — not a live portfolio simulation",
+  "productionChain": [
+    "smcDirectionDecision.decideDirection",
+    "smcHtfContext.buildHtfContext",
+    "smcZoneDecision.decideZone",
+    "unifiedZoneEngine.findUnifiedZone"
+  ],
+  "notUsed": [
+    "backtest-engine",
+    "findBestEntryZoneMultiTF (called directly)"
+  ],
+  "style": "scalper",
+  "provider": "twelvedata",
+  "timezone": "UTC",
+  "windows": {
+    "primary": "2026-06-27..2026-09-25",
+    "secondary": "2026-03-29..2026-09-25"
+  },
+  "depths": {
+    "m5": 1440,
+    "m15": 480,
+    "h1": 120,
+    "h4": 300,
+    "d1": 260,
+    "w1": 52
+  },
+  "costModel": "frozen per-symbol spread + slippage, one-way, in pips",
+  "tpRatio": 1.5,
+  "sequencing": "ARM A — one open position per symbol",
+  "statefulGatesReconstructed": false
+}

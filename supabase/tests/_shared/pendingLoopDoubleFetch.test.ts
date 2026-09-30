@@ -79,7 +79,9 @@ Deno.test("a missing-candle cycle is reported, not silent", () => {
   // so one refused fetch skips the order for the whole cycle. A bare `continue`
   // made that indistinguishable from a healthy no-op.
   const i = scanner.indexOf("const pendingCandles = await cachedFetch");
-  const block = scanner.slice(i, i + 700);
+  // Widened 2026-09-29: the Route 2 poll-log write now sits between the
+  // guard and the warning, so 700 bytes no longer reached the message.
+  const block = scanner.slice(i, i + 1400);
   assert(/pendingCandles\.length === 0/.test(block));
   assert(/console\.warn/.test(block), "the skip must be logged");
   assert(

@@ -1,0 +1,106 @@
+factor_a,factor_b,jaccard,both_n
+Volume Profile,Daily Bias,0.8363,31127
+Market Structure,Confluence Stack,0.7599,29406
+Daily Bias,Confluence Stack,0.7444,31213
+Session Quality,Daily Bias,0.7174,29932
+Market Structure,Daily Bias,0.7006,28591
+Session Quality,Confluence Stack,0.7001,28972
+Session Quality,Volume Profile,0.6242,25194
+Market Structure,Session Quality,0.6234,25578
+Volume Profile,Confluence Stack,0.6073,25333
+Market Structure,Volume Profile,0.5718,23029
+Session Quality,Liquidity Sweep,0.5294,20576
+Liquidity Sweep,Confluence Stack,0.5048,20442
+Liquidity Sweep,Daily Bias,0.5005,20759
+AMD Phase,Power of 3 Combo,0.474,7408
+Market Structure,Liquidity Sweep,0.4649,18149
+Liquidity Sweep,Volume Profile,0.4572,17614
+AMD Phase,Daily Bias,0.4199,15630
+Breaker Block,Daily Bias,0.3971,14780
+Volume Profile,AMD Phase,0.3903,13127
+Session Quality,AMD Phase,0.3662,13419
+Breaker Block,Volume Profile,0.3638,12246
+AMD Phase,Confluence Stack,0.3429,13164
+Market Structure,Breaker Block,0.3362,11815
+Market Structure,AMD Phase,0.3223,11652
+Breaker Block,Confluence Stack,0.3183,12243
+Market Structure,Pullback Health,0.3149,10591
+Liquidity Sweep,AMD Phase,0.2914,9170
+Session Quality,Breaker Block,0.291,11094
+Confluence Stack,Pullback Health,0.2894,10765
+Liquidity Sweep,Breaker Block,0.2626,8277
+Session Quality,Pullback Health,0.2594,9572
+Liquidity Sweep,Power of 3 Combo,0.2594,6677
+Breaker Block,AMD Phase,0.2576,6229
+Premium/Discount & Fib,Daily Bias,0.254,9689
+Premium/Discount & Fib,Volume Profile,0.2497,8340
+Premium/Discount & Fib,Session Quality,0.2361,8606
+Liquidity Sweep,Pullback Health,0.2361,7076
+Market Structure,Power of 3 Combo,0.2302,7408
+Premium/Discount & Fib,Liquidity Sweep,0.2277,6609
+Premium/Discount & Fib,Confluence Stack,0.2231,8489
+Premium/Discount & Fib,AMD Phase,0.2197,4729
+Daily Bias,Pullback Health,0.2172,8789
+Session Quality,Judas Swing,0.2098,7223
+Market Structure,Premium/Discount & Fib,0.2044,7264
+Daily Bias,Power of 3 Combo,0.199,7408
+Volume Profile,Pullback Health,0.1979,7130
+Reversal Candle,Daily Bias,0.1895,7257
+Reversal Candle,Confluence Stack,0.1873,6979
+Reversal Candle,Volume Profile,0.1849,6158
+Volume Profile,Power of 3 Combo,0.1841,5992
+Session Quality,Reversal Candle,0.1831,6618
+Market Structure,Reversal Candle,0.1822,6244
+Displacement,Daily Bias,0.1798,6692
+Confluence Stack,Power of 3 Combo,0.1795,6593
+Session Quality,Power of 3 Combo,0.1789,6348
+Displacement,Confluence Stack,0.1761,6382
+Judas Swing,Volume Profile,0.1741,5687
+Market Structure,Displacement,0.1728,5727
+Reversal Candle,Liquidity Sweep,0.1714,4879
+Breaker Block,Power of 3 Combo,0.1692,3211
+Judas Swing,Daily Bias,0.1668,6353
+Displacement,Volume Profile,0.1656,5372
+Session Quality,Displacement,0.1598,5666
+Breaker Block,Pullback Health,0.1567,3633
+Judas Swing,Liquidity Sweep,0.1557,4342
+Reversal Candle,AMD Phase,0.1527,3174
+Displacement,AMD Phase,0.1505,2920
+Reversal Candle,Breaker Block,0.1486,2989
+Judas Swing,Confluence Stack,0.143,5398
+Premium/Discount & Fib,Breaker Block,0.1421,3161
+Judas Swing,AMD Phase,0.1381,2773
+AMD Phase,Pullback Health,0.1374,3343
+Market Structure,Judas Swing,0.1334,4637
+Premium/Discount & Fib,Power of 3 Combo,0.133,2116
+Liquidity Sweep,Displacement,0.1326,3713
+Reversal Candle,Pullback Health,0.1319,2373
+Judas Swing,Power of 3 Combo,0.1306,1690
+Premium/Discount & Fib,Pullback Health,0.125,2517
+Displacement,Power of 3 Combo,0.1235,1550
+Premium/Discount & Fib,Reversal Candle,0.1232,2078
+Displacement,Breaker Block,0.1183,2272
+Premium/Discount & Fib,Judas Swing,0.115,1840
+Judas Swing,Breaker Block,0.111,2199
+Premium/Discount & Fib,Displacement,0.1109,1728
+Reversal Candle,Power of 3 Combo,0.105,1495
+Judas Swing,Reversal Candle,0.1031,1454
+Pullback Health,Power of 3 Combo,0.1019,1799
+Judas Swing,Pullback Health,0.1,1751
+Displacement,Pullback Health,0.0956,1635
+Reversal Candle,Displacement,0.0812,1128
+Order Block,Confluence Stack,0.0794,2854
+Market Structure,Order Block,0.0732,2391
+Judas Swing,Displacement,0.0729,946
+Order Block,Pullback Health,0.0721,1003
+Order Block,Reversal Candle,0.0715,748
+Order Block,Breaker Block,0.068,1125
+Order Block,Session Quality,0.0672,2351
+Order Block,Liquidity Sweep,0.0652,1708
+Order Block,Daily Bias,0.057,2164
+Order Block,Volume Profile,0.054,1742
+Order Block,AMD Phase,0.0494,872
+Order Block,Power of 3 Combo,0.0453,446
+Order Block,Premium/Discount & Fib,0.0436,564
+Order Block,Judas Swing,0.0426,413
+Order Block,Displacement,0.0413,380
