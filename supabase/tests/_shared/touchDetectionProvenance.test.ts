@@ -34,9 +34,13 @@ Deno.test("the check is recorded on every evaluation, not only on a touch", () =
   // Recording only successes would show nothing at all, which is the current
   // state of knowledge.
   const push = scanner.indexOf("touchChecks.push({");
-  const filled = scanner.indexOf("if (filled) {", scanner.indexOf("const filled = pending.direction"));
+  // The arm branch became conditional on the V2 touch classification
+  // (`filled && touchVerdict ...`), so anchor on the classification itself.
+  const armGate = scanner.indexOf("const touchVerdict = filled",
+    scanner.indexOf("const filled = pending.direction"));
   assert(push > -1, "touchChecks.push missing");
-  assert(push < filled, "the record must be written BEFORE the filled branch");
+  assert(armGate > -1, "the V2 arm gate was not found");
+  assert(push < armGate, "the record must be written BEFORE the arm branch");
 });
 
 Deno.test("both sides of the comparison are captured", () => {
@@ -100,11 +104,12 @@ Deno.test("the zone-touch write finally has its error checked", () => {
   // source counts explanation as distance. Stripping comments first makes the
   // window mean what it says.
   const code = scanner.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const i = code.indexOf('status: "awaiting_confirmation"');
-  assert(i > -1, "the touch write was not found");
-  const before = code.slice(Math.max(0, i - 300), i);
-  assert(/const \{ error: touchErr \}/.test(before), "the update must capture its error");
-  const after = code.slice(i, i + 1200);
+  // Anchor on the capture and read to the end of its handling. A fixed
+  // window from the status literal grows stale every time the update gains
+  // fields — V2 added twelve.
+  const i = code.indexOf("const { error: touchErr }");
+  assert(i > -1, "the update must capture its error");
+  const after = code.slice(i, code.indexOf("continue;", i));
   assert(/if \(touchErr\)/.test(after), "and test it");
   assert(/ZONE TOUCH WRITE FAILED/.test(after), "and say so loudly");
   assert(/writeError = touchErr\.message/.test(after), "and attach it to the record");

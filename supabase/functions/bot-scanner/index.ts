@@ -94,6 +94,10 @@ import {
   type Route2EntrySource, type TerminalReason,
 } from "../_shared/route2Forward.ts";
 import {
+  ROUTE2_LIFECYCLE_VERSION, classifyTouch, touchId as route2TouchId, touchExtreme,
+  confirmationMinObservationUntil, mayResetNow,
+} from "../_shared/route2Lifecycle.ts";
+import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
 } from "../_shared/smcZoneDecision.ts";
@@ -3629,6 +3633,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           await supabase.from("pending_orders").update({
             status: "cancelled",
             terminal_reason: "CANCELLED_SL_INVALIDATION" as TerminalReason,
+            reset_reason: "sl_invalidation",
+            hard_invalidation: true,
             cancel_reason: `Price ${slPrice} breached SL ${slLevel}${reachedEntry ? " (entry reached first)" : ""}`,
             resolved_at: new Date().toISOString(),
             ...(stampTouch ? { zone_touch_time: new Date().toISOString() } : {}),
@@ -3739,6 +3745,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 status: "cancelled",
                 terminal_reason: (thesisResult.checkType === "direction_flip"
                   ? "CANCELLED_DIRECTION_FLIP" : "CANCELLED_THESIS_FOTSI") as TerminalReason,
+                reset_reason: thesisResult.checkType === "direction_flip" ? "direction_flip" : "thesis_invalid",
+                hard_invalidation: true,
                 cancel_reason: thesisResult.reason,
                 thesis_cancel_reason: thesisResult.cancelReason,
                 resolved_at: new Date().toISOString(),
@@ -3836,9 +3844,48 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             filled,
           });
 
-          if (filled) {
+          // ── V2 ARM GATE (route2Lifecycle) ──
+          // `filled` above is the bar-state test: lastCandle.high >= entry on
+          // the FORMING bar, which stays true for the rest of that bar once it
+          // spikes through. On b64d4d7b that re-armed the hunt 60 s after a
+          // reset with no new market touch — the 1m tape showed highs 7.8 pips
+          // short of the entry. Classify the touch as an event instead.
+          const touchVerdict = filled
+            ? classifyTouch({
+              direction: pending.direction as "long" | "short",
+              entryPrice,
+              barTime: lastCandle.datetime ?? null,
+              barHigh: lastCandle.high, barLow: lastCandle.low,
+              lastConsumedBarTime: pending.last_touch_bar_time ?? null,
+              lastConsumedExtreme: pending.last_consumed_touch_extreme != null
+                ? Number(pending.last_consumed_touch_extreme) : null,
+            })
+            : null;
+          if (filled && touchVerdict === "ALREADY_CONSUMED_TOUCH") {
+            pollCtx.branch = "rearm_suppressed_stale_bar";
+            route2PollRows.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+              candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
+              zoneTouchDetected: false, zoneTouchBarTime: lastCandle.datetime ?? null,
+              branchTaken: "rearm_suppressed_stale_bar", statusAfter: pending.status,
+              touchId: route2TouchId(pending.order_id, lastCandle.datetime ?? null, pending.confirmation_arm_count ?? 0),
+              touchVerdict, lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
+            }));
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — re-arm suppressed: touch on bar ${lastCandle.datetime} already consumed (no new crossing)`);
+            continue;
+          }
+
+          if (filled && touchVerdict !== null) {
             // Price touched the zone! Transition to confirmation hunting mode.
             const nowStr = new Date().toISOString();
+            const armCount = (pending.confirmation_arm_count ?? 0) + 1;
+            const tId = route2TouchId(pending.order_id, lastCandle.datetime ?? null, armCount);
+            // The protected window: ORDINARY zone departures cannot end the
+            // hunt before one complete confirm-TF candle has closed after the
+            // touch. Measured hunts before this were 3.4 s and 60.0 s against
+            // a 5m confirmation requirement — the two clocks were in
+            // incompatible units.
+            const minUntil = confirmationMinObservationUntil(nowStr, styleConfirmationTimeframe(resolvedStyle));
             const { error: touchErr } = await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
               zone_touch_time: nowStr,
@@ -3863,12 +3910,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               system_detection_time: nowStr,
               zone_story_at_touch: (pending as any).zone_story_at_creation ?? null,
               confirmation_attempts: 0,
+              // ── V2 lifecycle state ──
+              last_touch_bar_time: lastCandle.datetime ?? null,
+              last_touch_detection_time: nowStr,
+              last_consumed_touch_id: tId,
+              last_consumed_touch_extreme: touchExtreme(
+                pending.direction as "long" | "short", lastCandle.high, lastCandle.low),
+              confirmation_arm_count: armCount,
+              confirmation_armed_at: nowStr,
+              confirmation_min_observation_until: minUntil,
+              rearm_reason: touchVerdict,
+              touch_consumed: true,
+              strategy_version: ROUTE2_LIFECYCLE_VERSION,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             route2PollRows.push(buildPollRecord({
               pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneTouchDetected: true, zoneTouchBarTime: lastCandle.datetime ?? null,
               branchTaken: "zone_touched", statusAfter: "awaiting_confirmation",
+              touchId: tId, touchVerdict, minObservationUntil: minUntil,
+              lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
             }));
             if (touchErr) {
               // This write has never been checked. If the database rejects it
@@ -3915,6 +3976,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             await supabase.from("pending_orders").update({
               status: "cancelled",
               terminal_reason: "CANCELLED_IMPULSE_BROKEN" as TerminalReason,
+              reset_reason: "impulse_broken",
+              hard_invalidation: true,
               cancel_reason: `Impulse broken — price ${currentPrice} exceeded origin (high: ${impulseData.high}, low: ${impulseData.low})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -3949,9 +4012,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // near the zone. Beyond zoneChaseMaxZoneWidths it resets like any
           // other exit — filling at market that far away is a chase against a
           // zone-derived stop, not the setup that was staged.
-          const resetsHunt = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
-          if (zoneExit !== "inside" && !resetsHunt) {
+          const resetsHuntRaw = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
+          if (zoneExit !== "inside" && !resetsHuntRaw) {
             console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
+          }
+          // ── V2: ORDINARY departures cannot pre-empt the first confirm close ──
+          // A zone departure is normal retest texture across a refined zone
+          // whose median width is 1.60 pips (0.094 H1 ATR); it is not evidence
+          // against the setup. Terminating on it in seconds made a close-based
+          // CHoCH unreachable. HARD invalidations are unaffected and still
+          // fire immediately — see route2Lifecycle.RESET_SEVERITY.
+          const r2Gate = mayResetNow(zoneExit, pollAt,
+            pending.confirmation_min_observation_until ?? null);
+          const resetsHunt = resetsHuntRaw && r2Gate.allowed;
+          if (resetsHuntRaw && r2Gate.deferred) {
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — ${zoneExit} DEFERRED until ${pending.confirmation_min_observation_until} (V2 min confirmation window)`);
+            route2PollRows.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+              candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
+              zoneExit, branchTaken: "reset_deferred_min_window", statusAfter: pending.status,
+              touchId: pending.last_consumed_touch_id ?? null,
+              minObservationUntil: pending.confirmation_min_observation_until ?? null,
+              resetDeferred: true, resetSeverity: r2Gate.severity,
+              lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
+            }));
           }
           if (resetsHunt) {
             // Price left zone without confirming — reset to pending, wait for next approach
@@ -3966,11 +4050,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               status: "pending",
               zone_touch_time: null,
               confirmation_attempts: attempts,
+              // last_touch_bar_time / last_consumed_touch_extreme are
+              // DELIBERATELY retained: they are what stops this same bar from
+              // re-arming. They are overwritten by the next genuine touch.
+              reset_reason: zoneExit,
+              hard_invalidation: false,
+              confirmation_min_observation_until: null,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             route2PollRows.push(buildPollRecord({
               pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneExit, branchTaken: "zone_exit_reset", statusAfter: "pending",
+              touchId: pending.last_consumed_touch_id ?? null,
+              resetDeferred: false, resetSeverity: r2Gate.severity,
+              lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
             }));
             pendingConfirmationHunting--;
             console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
@@ -4034,7 +4127,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               candlesAvailable: confirmCandles.length, currentPrice, statusBefore: pending.status,
               confirmationChecked: true, confirmationResult: "no_tier_passed",
               branchTaken: "awaiting_confirmation", statusAfter: pending.status,
+              touchId: pending.last_consumed_touch_id ?? null,
+              minObservationUntil: pending.confirmation_min_observation_until ?? null,
+              lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
             }));
+            await supabase.from("pending_orders").update({
+              confirmation_checks_count: (pending.confirmation_checks_count ?? 0) + 1,
+              // Compare-and-set. The other poller can cancel this row in the
+              // same minute; an unguarded counter bump would write to an order
+              // that is already resolved. Under contention the counter may
+              // under-count, which is the safe direction — route2_poll_log
+              // holds the authoritative per-check record either way.
+            }).eq("order_id", pending.order_id).eq("user_id", userId)
+              .eq("status", "awaiting_confirmation");
             confirmationHunt.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "no_tier_passed", hasRefZone,

@@ -267,6 +267,13 @@ export interface PollRecordInput {
   structuralInvalidation?: string | null;
   branchTaken: string;
   statusAfter: string;
+  /** V2 lifecycle (route2Lifecycle.ts). Absent on V1 rows. */
+  touchId?: string | null;
+  touchVerdict?: string | null;
+  minObservationUntil?: string | null;
+  resetDeferred?: boolean | null;
+  resetSeverity?: string | null;
+  lifecycleVersion?: string | null;
 }
 
 /**
@@ -295,5 +302,11 @@ export function buildPollRecord(i: PollRecordInput): Record<string, unknown> {
     structural_invalidation: i.structuralInvalidation ?? null,
     branch_taken: i.branchTaken,
     status_after: i.statusAfter,
+    touch_id: i.touchId ?? null,
+    touch_verdict: i.touchVerdict ?? null,
+    min_observation_until: i.minObservationUntil ?? null,
+    reset_deferred: i.resetDeferred ?? null,
+    reset_severity: i.resetSeverity ?? null,
+    lifecycle_version: i.lifecycleVersion ?? null,
   };
 }

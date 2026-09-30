@@ -28,6 +28,7 @@ import {
   buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot,
 } from "../_shared/smcTradeTelemetry.ts";
 import { buildPollRecord, type TerminalReason } from "../_shared/route2Forward.ts";
+import { ROUTE2_LIFECYCLE_VERSION, mayResetNow } from "../_shared/route2Lifecycle.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
@@ -354,6 +355,8 @@ Deno.serve(async (req) => {
           await supabase.from("pending_orders").update({
             status: "cancelled",
             terminal_reason: "CANCELLED_IMPULSE_BROKEN" as TerminalReason,
+            reset_reason: "impulse_broken",
+            hard_invalidation: true,
             cancel_reason: `[fast-confirm] Impulse broken — price ${currentPrice} exceeded origin`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId)
@@ -386,9 +389,30 @@ Deno.serve(async (req) => {
             undefined, strategyConfig.zoneChaseMaxZoneWidths,
           )
           : "inside";
-        const resetsHunt = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
-        if (zoneExit !== "inside" && !resetsHunt) {
+        const resetsHuntRaw = zoneExitAware ? zoneExit !== "inside" && zoneExit !== "left_favourable" : zoneExit !== "inside";
+        if (zoneExit !== "inside" && !resetsHuntRaw) {
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone favourably (${currentPrice}), keeping the hunt alive`);
+        }
+        // ── V2: identical gate to bot-scanner, from the same shared module ──
+        // This poller ended hunt 1 on b64d4d7b after 3.4 seconds with
+        // `left_breach`. Both pollers now defer ORDINARY departures until the
+        // first confirm-TF candle has closed; HARD invalidations are
+        // unaffected and still terminate immediately.
+        const r2Gate = mayResetNow(zoneExit, pollAt,
+          (pending as any).confirmation_min_observation_until ?? null);
+        const resetsHunt = resetsHuntRaw && r2Gate.allowed;
+        if (resetsHuntRaw && r2Gate.deferred) {
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — ${zoneExit} DEFERRED until ${(pending as any).confirmation_min_observation_until} (V2 min confirmation window)`);
+          pollRows.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt,
+            pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
+            currentPrice, statusBefore: pending.status, zoneExit,
+            branchTaken: "reset_deferred_min_window", statusAfter: pending.status,
+            touchId: (pending as any).last_consumed_touch_id ?? null,
+            minObservationUntil: (pending as any).confirmation_min_observation_until ?? null,
+            resetDeferred: true, resetSeverity: r2Gate.severity,
+            lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
+          }));
         }
         if (resetsHunt) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
@@ -403,6 +427,11 @@ Deno.serve(async (req) => {
             status: "pending",
             zone_touch_time: null,
             confirmation_attempts: attempts,
+            // Consumed-touch state is retained on purpose — it is what stops
+            // bot-scanner re-arming this same bar on its next poll.
+            reset_reason: zoneExit,
+            hard_invalidation: false,
+            confirmation_min_observation_until: null,
           }).eq("order_id", pending.order_id).eq("user_id", userId)
             .eq("status", "awaiting_confirmation");
           pollRows.push(buildPollRecord({
@@ -410,6 +439,9 @@ Deno.serve(async (req) => {
             pollerName: "zone-confirmation-scanner", candlesAvailable: confirmCandles.length,
             currentPrice, statusBefore: pending.status, zoneExit,
             branchTaken: "zone_exit_reset", statusAfter: "pending",
+            touchId: (pending as any).last_consumed_touch_id ?? null,
+            resetDeferred: false, resetSeverity: r2Gate.severity,
+            lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
           }));
           resetToPending++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
@@ -431,6 +463,8 @@ Deno.serve(async (req) => {
               status: "cancelled",
               terminal_reason: "CANCELLED_REFINED_ZONE_FAILURE" as TerminalReason,
               structural_invalidation: "refined_zone_close_through",
+              reset_reason: "refined_zone_close_through",
+              hard_invalidation: true,
               cancel_reason: `[zone-confirm] Refined zone failed — ${confirmTF} close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId)
@@ -474,7 +508,19 @@ Deno.serve(async (req) => {
             currentPrice, statusBefore: pending.status, confirmationChecked: true,
             confirmationResult: "no_tier_passed",
             branchTaken: "awaiting_confirmation", statusAfter: pending.status,
+            touchId: (pending as any).last_consumed_touch_id ?? null,
+            minObservationUntil: (pending as any).confirmation_min_observation_until ?? null,
+            lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
           }));
+          await supabase.from("pending_orders").update({
+            confirmation_checks_count: ((pending as any).confirmation_checks_count ?? 0) + 1,
+            // Compare-and-set. The other poller can cancel this row in the
+            // same minute; an unguarded counter bump would write to an order
+            // that is already resolved. Under contention the counter may
+            // under-count, which is the safe direction — route2_poll_log
+            // holds the authoritative per-check record either way.
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
           stillHunting++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
           continue;
