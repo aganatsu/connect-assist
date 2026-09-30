@@ -621,6 +621,31 @@ export interface PendingOrder {
   placed_at: string;
   created_at: string;
   updated_at: string;
+
+  // ── Route 2 forward telemetry. ALL OPTIONAL: legacy rows predate them, and
+  // the panel must render a missing value as missing, never as a default.
+  strategy_version?: string | null;
+  config_hash?: string | null;
+  would_have_been_route1?: boolean | null;
+  pending_distance_atr?: number | null;
+  zone_id?: string | null;
+  zone_touch_time?: string | null;
+  last_touch_detection_time?: string | null;
+  confirmation_arm_count?: number | null;
+  confirmation_checks_count?: number | null;
+  confirmation_min_observation_until?: string | null;
+  confirmation_type?: string | null;
+  confirmation_tier?: number | null;
+  confirmation_timeframe?: string | null;
+  confirmation_accepted_at?: string | null;
+  /** Canonical record — see supabase/functions/_shared/route2Confirmation.ts. */
+  entry_confirmation?: Record<string, unknown> | null;
+  fill_price?: number | null;
+  fill_timestamp?: string | null;
+  terminal_reason?: string | null;
+  reset_reason?: string | null;
+  structural_invalidation?: string | null;
+  hard_invalidation?: boolean | null;
 }
 
 // Bot #2 (FOTSI Mean Reversion) has been removed — FOTSI currency strength
