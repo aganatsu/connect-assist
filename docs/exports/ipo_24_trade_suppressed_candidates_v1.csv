@@ -1,0 +1,3 @@
+pair,tf,strategy_bar,ipo_time,direction,entry,target,s2,cost_r,cost_blocked,fill_minute,touch_bar_closed_beyond_s2,production_excluded_by,tape_target_minute,tape_s2_bar,causal_outcome,causal_r,open_branch_exit
+USD/JPY,30min,2026-09-30T20:00:00Z,2026-09-29T23:30:00Z,short,157.407185,157.298055,157.46175,0.2932,false,2026-09-30T20:00:00Z,true,TOUCH_BAR_CLOSED_BEYOND_S2,,2026-09-30T20:00:00Z,S2_CLOSE_INVALIDATION,-1.4032,
+USD/JPY,30min,2026-10-01T11:30:00Z,2026-10-01T03:30:00Z,long,158.140665,158.23375500000003,158.09412,0.3438,false,2026-10-01T11:35:00Z,true,TOUCH_BAR_CLOSED_BEYOND_S2,,2026-10-01T11:30:00Z,S2_CLOSE_INVALIDATION,-6.004,
