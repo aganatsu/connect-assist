@@ -107,6 +107,16 @@ export function readEvent(e: EventLike): EventReading {
         raw,
       };
     case "REFUSED":
+      // A configured pause is an operating state, not a failure: say so plainly.
+      if (block === "ENTRIES_PAUSED") {
+        return {
+          whatHappened: "Not entered — entries paused", strategyVerdict: verdict, provesEntry: false, tone: "info",
+          meaning: "New IPO paper entries are paused by configuration (IPO_PAPER_NEW_ENTRIES). The strategy " +
+            "signal stayed valid and was recorded; existing positions are still managed. This is not a " +
+            "strategy, data or broker failure.",
+          raw,
+        };
+      }
       return {
         whatHappened: "Did not enter", strategyVerdict: verdict, provesEntry: false, tone: "warn",
         meaning: block === "POSITION_ALREADY_OPEN"

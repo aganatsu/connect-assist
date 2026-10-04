@@ -162,6 +162,15 @@ describe("status codes become readable without losing the code", () => {
     "COVERAGE_LOST", "GAP_SUSPENDED", "DATA_GAP_ABORTED",
   ];
 
+  it("explains a configured entry pause as an operating state, not a fault", () => {
+    const e = explainStatus("ENTRIES_PAUSED");
+    expect(e.code).toBe("ENTRIES_PAUSED");
+    expect(e.headline).toMatch(/new entries paused/i);
+    expect(e.detail).toMatch(/IPO_PAPER_NEW_ENTRIES/);
+    expect(e.detail).toMatch(/still managed/i);
+    expect(e.tone).toBe("info");
+  });
+
   it("covers every code the dashboard is required to explain", () => {
     for (const c of REQUIRED) expect(explainableCodes()).toContain(c);
   });

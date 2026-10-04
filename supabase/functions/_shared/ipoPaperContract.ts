@@ -70,9 +70,23 @@ export type ExecutionDecision = "EXECUTED" | "BLOCKED";
 export type ExecutionBlockReason =
   | "ECONOMICALLY_UNTRADEABLE_COST"
   | "POSITION_ALREADY_OPEN"
-  | "ACCOUNT_SAFETY";
+  | "ACCOUNT_SAFETY"
+  /** New paper entries are switched off by configuration. The signal stays VALID. */
+  | "ENTRIES_PAUSED";
 
 export type PositionStatus = "open" | "data_gap_suspended" | "ordering_ambiguous";
+
+/**
+ * Every status that OCCUPIES the instrument's slot and must be reloaded and
+ * managed on each run. It is exactly the set the one-open-per-instrument index
+ * covers (20260924120000_ipo_causal_execution_ordering.sql); a test pins the two
+ * together. `ordering_ambiguous` is in it because one branch of an unorderable
+ * fill still has the position running — it is not closed, not forgettable, and
+ * not a free slot. Leaving it out of the reload query is what stranded the
+ * 2026-10-01 USD/JPY position (IPO_PAPER_RUNNER_LIFECYCLE_FIX_V1).
+ */
+export const ACTIVE_POSITION_STATUSES: readonly PositionStatus[] =
+  ["open", "data_gap_suspended", "ordering_ambiguous"];
 
 /**
  * A position whose own existence-or-exit cannot be established from the data.

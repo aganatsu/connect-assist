@@ -222,6 +222,13 @@ const EXPLANATIONS: Record<string, Omit<Explained, "code">> = {
     detail: "An account-level guard declined the execution. The strategy signal was unaffected.",
     tone: "warn",
   },
+  ENTRIES_PAUSED: {
+    headline: "Not taken — new entries paused",
+    detail: "New IPO paper entries are switched off by configuration (IPO_PAPER_NEW_ENTRIES). " +
+      "The signal is recorded unchanged and existing positions are still managed. Nothing failed — " +
+      "not the strategy, the data or a broker.",
+    tone: "info",
+  },
   COVERAGE_LOST: {
     headline: "Data gap — bars missing",
     detail: "The feed skipped bars the position needed, so management was suspended rather than guessed at.",

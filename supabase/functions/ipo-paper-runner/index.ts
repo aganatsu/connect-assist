@@ -39,11 +39,11 @@ import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { closedBarsOnly } from "../_shared/ipoObservation.ts";
 import {
-  runPaper,
+  runPaper, RUNNER_LIFECYCLE_VERSION,
   type PaperEvent, type RunnerPlan, type RuntimeState,
 } from "../_shared/ipoPaperRunner.ts";
 import {
-  DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
+  ACTIVE_POSITION_STATUSES, DEFAULT_SIZING, STRATEGY_ID, STRATEGY_VERSION,
   stampEntryMinute, stampResultEntry,
   type PaperPosition, type PaperResult, type SizingConfig,
 } from "../_shared/ipoPaperContract.ts";
@@ -359,6 +359,22 @@ export interface InstrumentRun {
   sequenceContaminatedFrom?: string;
 }
 
+/**
+ * NEW-ENTRY SWITCH. IPO_PAPER_RUNNER_LIFECYCLE_FIX_V1.
+ *
+ * FAIL-SAFE: new paper entries are PAUSED unless the function secret
+ * `IPO_PAPER_NEW_ENTRIES` is exactly `enabled`. Absent, empty or any other value
+ * means paused — a missing configuration can never silently resume trading.
+ * Paused, the runner still restores and advances the engine, still manages every
+ * active position to a terminal state, and records each would-be entry as
+ * INTENT_CREATED + REFUSED (ENTRIES_PAUSED). Nothing is deleted.
+ *
+ * Toggle without a deploy: `supabase secrets set IPO_PAPER_NEW_ENTRIES=enabled`
+ * (or unset it to pause again); new invocations read it.
+ */
+export const entriesPausedFromEnv = (env: (k: string) => string | undefined): boolean =>
+  (env("IPO_PAPER_NEW_ENTRIES") ?? "").trim().toLowerCase() !== "enabled";
+
 export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const respond = (body: unknown, status = 200) =>
@@ -382,6 +398,7 @@ export async function handler(req: Request): Promise<Response> {
       { auth: { persistSession: false } },
     );
     const sizing = sizingFromEnv((k) => Deno.env.get(k));
+    const entriesPaused = entriesPausedFromEnv((k) => Deno.env.get(k));
     const url = new URL(req.url);
     const only = url.searchParams.get("instrument");
     // An explicit administrative re-anchor. Recorded like any other rebuild.
@@ -418,7 +435,9 @@ export async function handler(req: Request): Promise<Response> {
           db.from("kv_cache").select("value").eq("key", engineStateKey(cfg.instrument)).maybeSingle(),
           db.from("ipo_paper_positions").select("*")
             .eq("strategy_id", STRATEGY_ID).eq("symbol", cfg.instrument)
-            .in("status", ["open", "data_gap_suspended"]).maybeSingle(),
+            // Every slot-occupying status, ordering_ambiguous included: the same
+            // set the one-open-per-instrument index covers.
+            .in("status", [...ACTIVE_POSITION_STATUSES]).maybeSingle(),
         ]);
         const state = parseState(stateRow?.value ?? null);
         const openPosition = rowToPosition(posRow ?? null);
@@ -491,7 +510,7 @@ export async function handler(req: Request): Promise<Response> {
         // after the fill, is unambiguous and costs nothing extra.
         const baseInput = {
           cfg: engineCfg, barMs: cfg.barMs, closedBars: bars, nowMs: now,
-          state, openPosition, sizing, warmEngine: engine, htfSource,
+          state, openPosition, sizing, warmEngine: engine, htfSource, entriesPaused,
         };
         // minutesFinal FALSE: this pass is allowed to ask for a tape.
         let plan: RunnerPlan = runPaper({ ...baseInput, minutesFinal: false });
@@ -686,6 +705,8 @@ export async function handler(req: Request): Promise<Response> {
       mode: "PAPER_ONLY",
       note: "No broker execution. IPO-owned tables only. realized_r is canonical; " +
             "realized_pnl_usd is a view of it under the configured nominal sizing.",
+      runnerLifecycleVersion: RUNNER_LIFECYCLE_VERSION,
+      newEntries: entriesPaused ? "PAUSED" : "ENABLED",
       sizing, results,
     });
   } catch (e) {
