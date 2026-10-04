@@ -39,9 +39,22 @@ import {
   type PaperPosition, type PaperResult, type SizingConfig, type ZoneTelemetry,
 } from "./ipoPaperContract.ts";
 import {
-  resolveBar, htfWouldHaveClosed, CAUSAL_EXECUTION_VERSION,
+  resolveBar, htfWouldHaveClosed, minutesInBar, CAUSAL_EXECUTION_VERSION,
   type BarOrdering,
 } from "./ipoCausalOrdering.ts";
+
+/**
+ * Lifecycle bug-fix version of THIS RUNNER — not a strategy version. Entry, S2,
+ * target, zones and ordering rules are untouched; STRATEGY_VERSION is unchanged
+ * on purpose (moving it would invalidate the persisted engine state).
+ *
+ *   - an ordering_ambiguous position is reloaded and managed every run
+ *     (the reload filter lives in ipo-paper-runner; see ACTIVE_POSITION_STATUSES)
+ *   - its open branch is stepped over the REST of its own entry bar, which was
+ *     previously skipped (`openBranchRemainder`)
+ *   - new entries can be paused by configuration while management continues
+ */
+export const RUNNER_LIFECYCLE_VERSION = "IPO_PAPER_RUNNER_LIFECYCLE_FIX_V1";
 import type { Candle } from "./smcAnalysis.ts";
 import type { EngineConfig, LiveTrade } from "./ipoLiveEngine.ts";
 
@@ -148,6 +161,14 @@ export interface RunnerInput {
   sizing?: SizingConfig;
   /** Phase D has no live account, so the default records the absence honestly. */
   accountDecision?: AccountDecision;
+  /**
+   * TRUE stops NEW paper entries: an engine trade that would have opened a
+   * position is recorded as INTENT_CREATED + REFUSED (blockReason
+   * ENTRIES_PAUSED), exactly like any other execution block. Management of an
+   * existing position — open, gap-suspended or ordering-ambiguous — is not
+   * affected, because it runs before entries are considered.
+   */
+  entriesPaused?: boolean;
   gap?: GapPolicy;
   minHistoryBars?: number;
   /**
@@ -318,6 +339,86 @@ function order(
   return null;
 }
 
+/**
+ * The open branch's share of its own entry bar. IPO_PAPER_RUNNER_LIFECYCLE_FIX_V1.
+ *
+ * THE GAP THIS CLOSES. When a fill cannot be ordered (`AMBIGUOUS_OPEN_OR_CLOSED`)
+ * the resolver stops at the ambiguous minute, the position is held, and
+ * management resumed at the NEXT bar — so everything the open branch lived
+ * through in the rest of its entry bar was never evaluated. A target touched
+ * three minutes later, or the entry bar's own close beyond S2, simply vanished.
+ *
+ * Nothing is decided here; the frozen resolver decides. The minutes AFTER the
+ * ambiguous minute are presented to `resolveBar` as an ordinary post-entry bar
+ * that ends at the entry bar's real close: a target touch is a TARGET, a close
+ * beyond S2 is an S2 exit (the close is the bar's last event), both are ordered
+ * from the tape, neither is a HOLD.
+ *
+ * Without a tape for that span only the close is certain: a close beyond S2
+ * ends every branch on this bar (UNRESOLVED_TERMINAL — slot free, no R),
+ * anything else holds. Returns null to DEFER when the caller can still fetch.
+ */
+export function openBranchRemainder(
+  pos: PaperPosition, entryBar: Candle, barMs: number,
+  minutes: readonly Candle[] | undefined, minutesFinal: boolean, needs: MinuteRequest[],
+): { bar: Candle; ordering: BarOrdering } | null {
+  const a = pos.ambiguity!;
+  const long = pos.direction === "long";
+  const closeOnly: Candle = {
+    datetime: entryBar.datetime, open: entryBar.close, high: entryBar.close,
+    low: entryBar.close, close: entryBar.close,
+  };
+  const quiet = (kind: "HOLD" | "UNRESOLVED_TERMINAL", detail: string): BarOrdering => ({
+    kind, method: kind === "HOLD" ? "HTF_UNAMBIGUOUS" : "ORDERING_UNRESOLVED",
+    entryMinute: null, targetMinute: null,
+    s2CloseBarTime: kind === "UNRESOLVED_TERMINAL" ? entryBar.datetime : null,
+    altBranch: null, postEntryAdverse: null, postEntryFavourable: null, detail,
+  });
+  const closeOnlyVerdict = (why: string) => {
+    const beyond = long ? entryBar.close < pos.s2InvalidationLevel : entryBar.close > pos.s2InvalidationLevel;
+    return {
+      bar: closeOnly,
+      ordering: beyond
+        ? quiet("UNRESOLVED_TERMINAL", `${why}; the entry bar closed beyond S2, so every branch exits on it`)
+        : quiet("HOLD", `${why}; the entry bar did not close beyond S2, so the open branch holds`),
+    };
+  };
+
+  if (a.kind === "ENTRY_VS_TARGET_SAME_MINUTE") {
+    const inBar = minutes ? minutesInBar(minutes, entryBar, barMs) : [];
+    if (!inBar.length) {
+      if (!minutesFinal) {
+        const from = ms(entryBar.datetime);
+        needs.push({ symbol: pos.symbol, barTime: entryBar.datetime, fromMs: from, toMs: from + barMs,
+          reason: "open branch: the rest of the entry bar after the ambiguous minute" });
+        return null;
+      }
+      return closeOnlyVerdict("no tape for the rest of the entry bar");
+    }
+    const rest = inBar.filter((m) => ms(m.datetime) > ms(a.atTime));
+    const bar: Candle = rest.length
+      ? { datetime: entryBar.datetime, open: rest[0].open,
+          high: Math.max(...rest.map((m) => m.high)), low: Math.min(...rest.map((m) => m.low)),
+          close: entryBar.close }
+      : closeOnly;
+    const o = resolveBar({
+      direction: pos.direction, entryPrice: pos.entryPrice,
+      targetPrice: pos.targetPrice, s2InvalidationLevel: pos.s2InvalidationLevel,
+      bar, barMs, isEntryBar: false, minutes: rest, ticks: null, minutesFinal: true,
+    });
+    // The resolver settles an unambiguous target without naming the minute; the
+    // tape is right here, so record it.
+    if (o.kind === "TARGET" && !o.targetMinute) {
+      const tm = rest.find((m) => (long ? m.high >= pos.targetPrice : m.low <= pos.targetPrice));
+      return { bar, ordering: { ...o, targetMinute: tm?.datetime ?? null } };
+    }
+    return { bar, ordering: o };
+  }
+  // ENTRY_BAR_TARGET_TOUCH_NO_TAPE / ENTRY_NOT_PROVEN_IN_TAPE: there was never a
+  // tape that places the entry inside the bar, so only the close is certain.
+  return closeOnlyVerdict("the entry's position inside its bar is unknown");
+}
+
 function manage(
   pos: PaperPosition, bars: Candle[], nowMs: number, barMs: number, policy: GapPolicy,
   acct: AccountDecision,
@@ -365,6 +466,48 @@ function manage(
     }, live));
   }
 
+  const closeEvents = (at: PaperPosition, bar: Candle, result: PaperResult, o: BarOrdering) => {
+    if (at.ambiguity) {
+      events.push(ev("AMBIGUITY_RESOLVED", at.symbol, bar.datetime, "WOULD_EXIT", acct,
+        [result.ambiguityResolution ?? "UNKNOWN", at.ambiguity.kind], {
+          branchOutcomes: result.branchOutcomes,
+          openBranchExit: bar.datetime,
+          altBranchFreedAt: at.ambiguity.altFreedAtBarTime,
+          realizedR: result.realizedR,
+          exitTimeAmbiguous: result.exitTimeAmbiguous,
+          detail: at.ambiguity.detail,
+        }, at));
+    }
+    events.push(ev("CLOSED", at.symbol, bar.datetime, "WOULD_EXIT", acct,
+      [result.exitReason, o.method], {
+        exitPrice: result.exitPrice, realizedR: result.realizedR,
+        realizedPnlUsd: result.realizedPnlUsd,
+        sameBarAmbiguous: result.sameBarAmbiguous,
+        resolutionMethod: o.method, orderingDetail: o.detail,
+        targetMinute: o.targetMinute, s2CloseBarTime: o.s2CloseBarTime,
+        entryMinute: at.entryMinuteTime,
+        htfSource: at.htfSource, minuteSource: at.minuteSource,
+      }, at));
+  };
+
+  // ── an ambiguous position that has not yet left its entry bar ─────────────
+  // Its open branch has lived through the rest of that bar; step it over that
+  // span before any later bar. Idempotent: a HOLD leaves the cursor on the entry
+  // bar, and re-applying the same span yields the same HOLD.
+  if (live.ambiguity && sameBar(live.lastManagedBarTime, live.strategyBarTime)) {
+    const entryBar = bars.find((b) => sameBar(b.datetime, live.strategyBarTime));
+    if (entryBar) {
+      const r = openBranchRemainder(live, entryBar, barMs, minutes, minutesFinal, needs);
+      if (!r) return { position: live, result: null, events, deferred: true };
+      const out = stepPosition(live, r.bar, 0, r.ordering);
+      if (out.kind === "CLOSED") {
+        closeEvents(live, entryBar, out.result, r.ordering);
+        return { position: null, result: out.result, events, deferred: false };
+      }
+      live = out.position;
+    }
+  }
+
   const start = bars.findIndex((b) => sameBar(b.datetime, live.lastManagedBarTime)) + 1;
   let held = 0;
   for (let i = start; i < bars.length; i++) {
@@ -376,27 +519,7 @@ function manage(
     held++;
     const out = stepPosition(live, bars[i], held, o);
     if (out.kind === "CLOSED") {
-      if (live.ambiguity) {
-        events.push(ev("AMBIGUITY_RESOLVED", live.symbol, bars[i].datetime, "WOULD_EXIT", acct,
-          [out.result.ambiguityResolution ?? "UNKNOWN", live.ambiguity.kind], {
-            branchOutcomes: out.result.branchOutcomes,
-            openBranchExit: bars[i].datetime,
-            altBranchFreedAt: live.ambiguity.altFreedAtBarTime,
-            realizedR: out.result.realizedR,
-            exitTimeAmbiguous: out.result.exitTimeAmbiguous,
-            detail: live.ambiguity.detail,
-          }, live));
-      }
-      events.push(ev("CLOSED", live.symbol, bars[i].datetime, "WOULD_EXIT", acct,
-        [out.result.exitReason, o.method], {
-          exitPrice: out.result.exitPrice, realizedR: out.result.realizedR,
-          realizedPnlUsd: out.result.realizedPnlUsd,
-          sameBarAmbiguous: out.result.sameBarAmbiguous,
-          resolutionMethod: o.method, orderingDetail: o.detail,
-          targetMinute: o.targetMinute, s2CloseBarTime: o.s2CloseBarTime,
-          entryMinute: live.entryMinuteTime,
-          htfSource: live.htfSource, minuteSource: live.minuteSource,
-        }, live));
+      closeEvents(live, bars[i], out.result, o);
       return { position: null, result: out.result, events, deferred: false };
     }
     live = out.position;
@@ -423,7 +546,7 @@ export function runPaper(input: RunnerInput): RunnerPlan {
     sizing = DEFAULT_SIZING, accountDecision = "UNAVAILABLE", gap = DEFAULT_GAP_POLICY,
     minHistoryBars = MIN_HISTORY_BARS,
     minuteBars, minutesFinal = true, htfSource = null, minuteSource = null,
-    dailyContext,
+    dailyContext, entriesPaused = false,
   } = input;
   const needs: MinuteRequest[] = [];
   /**
@@ -666,8 +789,13 @@ export function runPaper(input: RunnerInput): RunnerPlan {
       // exited on, so under the frozen rule it does not exist.
       continue;
     }
-    const intent: PaperIntent = buildIntent(t, closedBars, cfg.timeframe, accountDecision,
+    const built: PaperIntent = buildIntent(t, closedBars, cfg.timeframe, accountDecision,
       zoneTelemetry(t, engine, closedBars));
+    // A paused runner records the signal and refuses the execution — the same
+    // audited path a cost or account block takes. Nothing else changes.
+    const intent: PaperIntent = entriesPaused && built.execution === "EXECUTED"
+      ? { ...built, execution: "BLOCKED", blockReason: "ENTRIES_PAUSED" }
+      : built;
     events.push(ev("INTENT_CREATED", intent.symbol, intent.barTime,
       intent.strategyDecision, intent.accountDecision, intent.reasonCodes, {
         entry: intent.entryPrice, target: intent.targetPrice,

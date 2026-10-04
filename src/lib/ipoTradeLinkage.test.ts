@@ -89,6 +89,17 @@ describe("strategy decision and execution event are never collapsed", () => {
     expect(r.raw).toContain("block POSITION_ALREADY_OPEN");
   });
 
+  it("a configured pause reads as paused, not as a failure", () => {
+    const r = readEvent(ev({ event_type: "REFUSED", strategy_decision: "WOULD_ENTER",
+                             payload: { blockReason: "ENTRIES_PAUSED" } }));
+    expect(r.whatHappened).toBe("Not entered — entries paused");
+    expect(r.tone).toBe("info");
+    expect(r.provesEntry).toBe(false);
+    expect(r.meaning).toMatch(/paused by configuration/i);
+    expect(r.meaning).toMatch(/not a strategy, data or broker failure/i);
+    expect(r.raw).toContain("block ENTRIES_PAUSED");
+  });
+
   it("keeps the raw codes on every reading", () => {
     const r = readEvent(ev({ event_type: "FILLED", strategy_decision: "WOULD_ENTER" }));
     expect(r.raw).toContain("event FILLED");
