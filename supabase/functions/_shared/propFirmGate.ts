@@ -23,6 +23,7 @@ import {
   type PropFirmEventType,
   type EventSeverity,
 } from "./propFirmRisk.ts";
+import { settlePaperPosition, describeSettlementMiss } from "./paperSettlement.ts";
 
 export interface PropFirmGateResult {
   enabled: boolean;
@@ -269,6 +270,17 @@ export async function runPropFirmGate(
 /**
  * Emergency close all open positions.
  * Called when prop firm compliance triggers shouldCloseAll.
+ *
+ * Each position settles on its own through settle_paper_position, so the
+ * balance moves by exactly the P&L of the positions that actually closed.
+ * Previously the balance update re-summed P&L over EVERY open position —
+ * including FX positions skipped on a weekend and any whose close failed —
+ * and credited it in one unconditional write.
+ *
+ * `pnlFor` lets the caller supply the instrument-aware P&L (contract size and
+ * quote->USD conversion). Without it the legacy `diff * size * 100_000`
+ * approximation is used, which is wrong for JPY-quoted pairs, metals and
+ * crypto.
  */
 export async function propFirmEmergencyClose(
   supabase: any,
@@ -277,7 +289,7 @@ export async function propFirmEmergencyClose(
   openPositions: any[],
   reason: string,
   scanCycleId: string,
-  opts?: { fxMarketClosed?: boolean },
+  opts?: { fxMarketClosed?: boolean; pnlFor?: (pos: any, exitPrice: number) => number },
 ): Promise<number> {
   // Weekend guard: when FX market is closed, only close crypto positions.
   // FX positions can't be executed on weekends anyway, and stale prices
@@ -304,61 +316,33 @@ export async function propFirmEmergencyClose(
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
       const size = parseFloat(pos.size || "0");
       const diff = pos.direction === "long" ? current - entry : entry - current;
-      const pnl = diff * size * 100_000; // Simplified P&L
+      const pnl = opts?.pnlFor ? opts.pnlFor(pos, current) : diff * size * 100_000; // Simplified P&L fallback
 
-      // Close the paper position
-      await supabase.from("paper_positions").delete().eq("id", pos.id);
-
-      // Record in trade history
-      await supabase.from("paper_trade_history").insert({
-        user_id: userId,
-        position_id: pos.position_id,
-        order_id: pos.order_id || crypto.randomUUID().slice(0, 8),
-        symbol: pos.symbol,
-        direction: pos.direction,
-        size: pos.size,
-        entry_price: pos.entry_price,
-        exit_price: current.toString(),
-        open_time: pos.open_time || new Date().toISOString(),
-        closed_at: new Date().toISOString(),
-        close_reason: "prop_firm_emergency",
-        pnl: pnl.toFixed(2),
-        signal_score: pos.signal_score || "0",
-        bot_id: botId,
+      const settlement = await settlePaperPosition(supabase, {
+        positionRowId: pos.id, userId, botId, source: "prop_firm_emergency",
+        history: {
+          order_id: pos.order_id || crypto.randomUUID().slice(0, 8),
+          symbol: pos.symbol,
+          direction: pos.direction,
+          size: pos.size,
+          entry_price: pos.entry_price,
+          exit_price: current.toString(),
+          open_time: pos.open_time || new Date().toISOString(),
+          closed_at: new Date().toISOString(),
+          close_reason: "prop_firm_emergency",
+          pnl: pnl.toFixed(2),
+          signal_score: pos.signal_score || "0",
+        },
       });
+      if (settlement.outcome !== "settled") {
+        console.warn(`[prop-firm-emergency] ${pos.symbol} ${pos.position_id} — ${describeSettlementMiss(settlement)}`);
+        continue;
+      }
 
       closedCount++;
       console.log(`[prop-firm-emergency] Closed ${pos.symbol} ${pos.direction} — PnL: $${pnl.toFixed(2)} — reason: ${reason}`);
     } catch (e: any) {
       console.warn(`[prop-firm-emergency] Failed to close ${pos.symbol}: ${e?.message}`);
-    }
-  }
-
-  // Update account balance after all closes
-  if (closedCount > 0) {
-    // Recalculate balance from trade history (most accurate)
-    const { data: acct } = await supabase
-      .from("paper_accounts")
-      .select("balance")
-      .eq("user_id", userId)
-      .eq("bot_id", botId)
-      .maybeSingle();
-
-    if (acct) {
-      let totalPnL = 0;
-      for (const pos of openPositions) {
-        const entry = parseFloat(pos.entry_price || "0");
-        const current = parseFloat(pos.current_price || pos.entry_price || "0");
-        const size = parseFloat(pos.size || "0");
-        const diff = pos.direction === "long" ? current - entry : entry - current;
-        totalPnL += diff * size * 100_000;
-      }
-      const newBalance = parseFloat(acct.balance) + totalPnL;
-      await supabase
-        .from("paper_accounts")
-        .update({ balance: newBalance.toFixed(2) })
-        .eq("user_id", userId)
-        .eq("bot_id", botId);
     }
   }
 

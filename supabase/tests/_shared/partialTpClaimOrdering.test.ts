@@ -38,47 +38,32 @@ function partialBlock(): string {
   return src.slice(start, end);
 }
 
-Deno.test("the claim is a compare-and-set on partial_tp_fired", () => {
+// The claim, the history row and the credit now commit in ONE transaction:
+// settle_paper_partial (migration 20261006010000) checks partial_tp_fired
+// under a row lock, sets it, writes history and posts the ledger entry keyed
+// partial:<bot>:<position_id>:1. Sixteen fires book once — proven against
+// real Postgres in paperSettlementLedger.test.ts. These assertions keep the
+// edge function from booking anything outside that call.
+
+Deno.test("the partial is claimed and booked by settle_paper_partial", () => {
   const block = partialBlock();
-  assert(
-    /\.eq\("partial_tp_fired",\s*false\)/.test(block),
-    "the update must be conditional on partial_tp_fired = false, so a second " +
-      "caller claims nothing",
-  );
-  assert(
-    /\.select\("id"\)/.test(block),
-    "the claim must return the row so the caller can tell whether it won",
-  );
+  assert(/await settlePaperPartial\(supabase, \{/.test(block), "the partial settles through the RPC");
+  assert(/remainingSize: remainSize/.test(block), "the size reduction rides in the same call");
+  assert(/positionSignalReason: claimedSignalReason/.test(block), "and so does the exit-flag update");
 });
 
-Deno.test("nothing is booked before the claim succeeds", () => {
+Deno.test("nothing is booked outside the settlement", () => {
   const block = partialBlock();
-  const claimAt = block.indexOf('.eq("partial_tp_fired", false)');
-  const historyAt = block.indexOf('from("paper_trade_history").insert');
-  const balanceAt = block.indexOf('from("paper_accounts").update');
-
-  assert(claimAt > -1, "claim not found");
-  assert(historyAt > -1, "history insert not found");
-  assert(balanceAt > -1, "balance update not found");
-
-  assert(
-    claimAt < historyAt,
-    "the position must be claimed BEFORE the partial is written to history — " +
-      "this ordering is the whole bug",
-  );
-  assert(
-    claimAt < balanceAt,
-    "the position must be claimed BEFORE the balance is credited",
-  );
+  assert(!/from\("paper_trade_history"\)/.test(block), "no direct history write");
+  assert(!/from\("paper_accounts"\)/.test(block), "no direct balance write");
 });
 
-Deno.test("a failed or lost claim books nothing", () => {
+Deno.test("a lost or failed settlement books nothing and changes no local state", () => {
   const block = partialBlock();
-  assert(
-    /claimErr\s*\|\|\s*!claimed\s*\|\|\s*claimed\.length === 0/.test(block),
-    "an errored claim and an empty claim must both skip the booking",
-  );
-  assert(/claimErr/.test(block), "the claim error must be inspected, not discarded");
+  const guardAt = block.indexOf('if (partialSettlement.outcome !== "settled")');
+  assert(guardAt > -1, "the outcome is checked");
+  const syncAt = block.indexOf("exitFlags.partialTPActivated = true");
+  assert(syncAt > guardAt, "local flags change only in the settled branch");
 });
 
 Deno.test("an unparseable signal_reason cannot cost us the guard", () => {
@@ -93,13 +78,9 @@ Deno.test("an unparseable signal_reason cannot cost us the guard", () => {
   );
 });
 
-Deno.test("the position is not updated twice", () => {
-  // The original code wrote the flag in a second update after booking. With the
-  // claim doing it up front, a second write would reopen the same window.
+Deno.test("the position is not updated outside the settlement", () => {
+  // The original code wrote the flag in a second update after booking.
   const block = partialBlock();
   const writes = block.match(/from\("paper_positions"\)\s*\n?\s*\.update|from\("paper_positions"\)\.update/g) ?? [];
-  assert(
-    writes.length === 1,
-    `expected exactly one paper_positions update in the partial path, found ${writes.length}`,
-  );
+  assert(writes.length === 0, `expected no direct paper_positions update in the partial path, found ${writes.length}`);
 });

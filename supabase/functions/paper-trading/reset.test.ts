@@ -23,8 +23,10 @@ const scannerSource = Deno.readTextFileSync(
 // Helper: extract a code block by action name
 // ═══════════════════════════════════════════════════════════════════════
 function extractBlock(source: string, actionName: string): string {
+  // Through the SUCCESS response: each reset now has an early
+  // `return respond({ error })` when the ledger refuses it.
   const regex = new RegExp(
-    `if\\s*\\(action\\s*===\\s*"${actionName}"\\)\\s*\\{[\\s\\S]*?return respond\\(`,
+    `if\\s*\\(action\\s*===\\s*"${actionName}"\\)\\s*\\{[\\s\\S]*?return respond\\(\\{\\s*success`,
     "g",
   );
   const matches = [...source.matchAll(regex)];
@@ -35,19 +37,33 @@ function extractBlock(source: string, actionName: string): string {
   return match[0];
 }
 
+
+// The balance, peak and daily baseline are set by reset_paper_account
+// (migration 20261006010000) — one ledger entry and a new epoch — not by a
+// direct update the balance guard would refuse.
+const LEDGER_SQL = Deno.readTextFileSync(
+  new URL("../../migrations/20261006010000_paper_settlement_ledger.sql", import.meta.url).pathname,
+);
+function resetFunctionSql(): string {
+  const start = LEDGER_SQL.indexOf("CREATE OR REPLACE FUNCTION public.reset_paper_account(");
+  assert(start > -1, "reset_paper_account not found in the ledger migration");
+  return LEDGER_SQL.slice(start, LEDGER_SQL.indexOf("$function$;", start));
+}
+function assertLedgerReset(block: string, amountExpr: RegExp, name: string) {
+  assert(amountExpr.test(block), `${name} must reset through resetPaperAccount with the right amount`);
+  const fn = resetFunctionSql();
+  assert(/daily_pnl_base = p_new_balance/.test(fn), "reset_paper_account sets daily_pnl_base to the new balance");
+  assert(/daily_pnl_base_date = /.test(fn), "reset_paper_account sets daily_pnl_base_date");
+  assert(!/daily_pnl_date\b/.test(fn), "reset_paper_account must NOT use legacy daily_pnl_date");
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Test 1: reset_balance_only — daily_pnl_base equals startBal
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("reset_balance_only: daily_pnl_base equals startBal", () => {
   const block = extractBlock(paperSource, "reset_balance_only");
-  assert(
-    block.includes("daily_pnl_base: startBal"),
-    "reset_balance_only must set daily_pnl_base to startBal",
-  );
-  assert(
-    !block.includes('daily_pnl_base: "0"'),
-    "reset_balance_only must NOT set daily_pnl_base to '0'",
-  );
+  assertLedgerReset(block, /resetPaperAccount\(parseFloat\(startBal\)/, "reset_balance_only");
+  assert(!block.includes('daily_pnl_base: "0"'), "reset_balance_only must NOT set daily_pnl_base to '0'");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -55,14 +71,8 @@ Deno.test("reset_balance_only: daily_pnl_base equals startBal", () => {
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("reset_balance_only: uses daily_pnl_base_date column", () => {
   const block = extractBlock(paperSource, "reset_balance_only");
-  assert(
-    block.includes("daily_pnl_base_date:"),
-    "reset_balance_only must use daily_pnl_base_date column",
-  );
-  assert(
-    !block.includes("daily_pnl_date:"),
-    "reset_balance_only must NOT use legacy daily_pnl_date column",
-  );
+  assertLedgerReset(block, /resetPaperAccount\(parseFloat\(startBal\)/, "reset_balance_only");
+  assert(!block.includes("daily_pnl_date:"), "reset_balance_only must NOT use legacy daily_pnl_date column");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -83,12 +93,13 @@ Deno.test("reset_account: is_paused is true, not false", () => {
 // ═══════════════════════════════════════════════════════════════════════
 // Test 4: reset_account — deletes from trades table
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("reset_account: deletes from trades table", () => {
+Deno.test("reset_account: keeps the trade record", () => {
+  // It used to delete history, reasonings, post-mortems, scan logs and trades.
+  // The ledger epoch separates the periods now; the record is evidence.
   const block = extractBlock(paperSource, "reset_account");
-  assert(
-    block.includes('.from("trades").delete()'),
-    "reset_account must delete from trades table",
-  );
+  for (const table of ["paper_trade_history", "trade_reasonings", "trade_post_mortems", "scan_logs", "trades"]) {
+    assert(!block.includes(`.from("${table}").delete()`), `reset_account must NOT delete ${table}`);
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -96,14 +107,8 @@ Deno.test("reset_account: deletes from trades table", () => {
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("reset_account: daily_pnl_base equals startBal", () => {
   const block = extractBlock(paperSource, "reset_account");
-  assert(
-    block.includes("daily_pnl_base: startBal"),
-    "reset_account must set daily_pnl_base to startBal",
-  );
-  assert(
-    !block.includes('daily_pnl_base: "0"'),
-    "reset_account must NOT set daily_pnl_base to '0'",
-  );
+  assertLedgerReset(block, /resetPaperAccount\(parseFloat\(startBal\)/, "reset_account");
+  assert(!block.includes('daily_pnl_base: "0"'), "reset_account must NOT set daily_pnl_base to '0'");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -111,14 +116,8 @@ Deno.test("reset_account: daily_pnl_base equals startBal", () => {
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("reset_account: uses daily_pnl_base_date column", () => {
   const block = extractBlock(paperSource, "reset_account");
-  assert(
-    block.includes("daily_pnl_base_date:"),
-    "reset_account must use daily_pnl_base_date column",
-  );
-  assert(
-    !block.includes("daily_pnl_date:"),
-    "reset_account must NOT use legacy daily_pnl_date column",
-  );
+  assertLedgerReset(block, /resetPaperAccount\(parseFloat\(startBal\)/, "reset_account");
+  assert(!block.includes("daily_pnl_date:"), "reset_account must NOT use legacy daily_pnl_date column");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -151,20 +150,9 @@ Deno.test("reset_account: response includes paused: true", () => {
 // Test 9: set_balance — uses daily_pnl_base_date column
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("set_balance: uses daily_pnl_base_date column", () => {
-  // Match the full set_balance block (past the early error return)
-  const setBalBlock = paperSource.match(
-    /if\s*\(action\s*===\s*"set_balance"\)\s*\{[\s\S]*return respond\(\{\s*success:\s*true/,
-  );
-  assert(setBalBlock, "set_balance block not found");
-  const block = setBalBlock![0];
-  assert(
-    block.includes("daily_pnl_base_date:"),
-    "set_balance must use daily_pnl_base_date column",
-  );
-  assert(
-    !block.includes("daily_pnl_date:"),
-    "set_balance must NOT use legacy daily_pnl_date column",
-  );
+  const block = extractBlock(paperSource, "set_balance");
+  assertLedgerReset(block, /resetPaperAccount\(newBalance,/, "set_balance");
+  assert(!block.includes("daily_pnl_date:"), "set_balance must NOT use legacy daily_pnl_date column");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -186,22 +174,12 @@ Deno.test("global: no references to wrong column daily_pnl_date in paper-trading
 // ═══════════════════════════════════════════════════════════════════════
 // Test 11: reset_account — deletes from all 6 required tables
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("reset_account: deletes from all 6 required tables", () => {
+Deno.test("reset_account: clears open positions, after the ledger reset", () => {
   const block = extractBlock(paperSource, "reset_account");
-  const requiredTables = [
-    "paper_positions",
-    "paper_trade_history",
-    "trade_reasonings",
-    "trade_post_mortems",
-    "scan_logs",
-    "trades",
-  ];
-  for (const table of requiredTables) {
-    assert(
-      block.includes(`.from("${table}").delete()`),
-      `reset_account must delete from ${table}`,
-    );
-  }
+  const resetAt = block.indexOf("resetPaperAccount(");
+  const deleteAt = block.indexOf('.from("paper_positions").delete()');
+  assert(resetAt > -1 && deleteAt > -1, "both present");
+  assert(resetAt < deleteAt, "a refused reset leaves the positions alone");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
