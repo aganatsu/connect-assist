@@ -37,6 +37,7 @@ const FREEZE_FIX = read("../../migrations/20260916010000_history_insert_ignores_
 const TELEMETRY = read("../../migrations/20260928140000_smc_trade_telemetry_parity.sql");
 const MIGRATION_TIMESTAMPS = read("../../migrations/20261006000000_trade_history_timestamps.sql");
 const MIGRATION_LEDGER = read("../../migrations/20261006010000_paper_settlement_ledger.sql");
+const MIGRATION_MONITOR = read("../../migrations/20261006020000_settlement_monitor_runs.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -122,6 +123,7 @@ async function baseDb(opts: { preFix?: boolean } = {}): Promise<PGlite> {
 async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_TIMESTAMPS);
   await db.exec(MIGRATION_LEDGER);
+  await db.exec(MIGRATION_MONITOR);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -593,4 +595,32 @@ Deno.test("interpretSettlement: unrecognised replies fail closed; transport erro
   const r = await settlePaperPosition(throwing, { positionRowId: "x", userId: USER, botId: "smc", history: {}, source: "t" });
   assertEquals(r.outcome, "failed");
   assert(describeSettlementMiss(r as Exclude<typeof r, { outcome: "settled" }>).includes("nothing committed"));
+});
+
+// ─── settlement_monitor_runs ────────────────────────────────────────────────
+
+Deno.test("monitor results: insertable, append-only, one final verdict per epoch", async () => {
+  const db = await freshDb();
+  const epoch = (await db.query<{ e: string }>(`select ledger_epoch_id::text as e from public.paper_accounts`)).rows[0].e;
+  const ins = (mode: string) => db.query(
+    `insert into public.settlement_monitor_runs (mode, epoch_id, pass, checks) values ($1, $2::uuid, true, '[]'::jsonb)`, [mode, epoch]);
+  await ins("periodic"); await ins("periodic"); await ins("final");
+  await assertRejects(() => ins("final"), Error, "duplicate key");
+  await assertRejects(() => db.query(`update public.settlement_monitor_runs set pass = false`), Error, "append-only");
+  await assertRejects(() => db.query(`delete from public.settlement_monitor_runs`), Error, "append-only");
+  assertEquals(await count(db, "public.settlement_monitor_runs"), 3);
+  await db.close();
+});
+
+Deno.test("every column the settlement-monitor function selects exists", async () => {
+  const db = await freshDb();
+  const src = Deno.readTextFileSync(new URL("../../functions/settlement-monitor/index.ts", import.meta.url));
+  for (const m of src.matchAll(/from\("([a-z_]+)"\)\s*\n?\s*\.select\("([^"]+)"\)/g)) {
+    const [, table, list] = m;
+    const cols = new Set((await db.query<{ c: string }>(
+      `select column_name as c from information_schema.columns where table_schema in ('public') and table_name = $1`, [table])).rows.map((r) => r.c));
+    if (cols.size === 0) continue; // tables outside this harness (user_settings, close_audit_log)
+    for (const c of list.split(",").map((x) => x.trim())) assert(cols.has(c), `${table}.${c} missing`);
+  }
+  await db.close();
 });
