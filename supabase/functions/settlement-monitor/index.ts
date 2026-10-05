@@ -18,7 +18,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { evaluateSettlementHealth, evaluateWindow, formatAlert, isServiceRole, type MonitorInput } from "../_shared/settlementMonitor.ts";
+import { evaluateSettlementHealth, evaluateWindow, formatAlert, isServiceRole } from "../_shared/settlementMonitor.ts";
+import { loadMonitorInput } from "../_shared/settlementMonitorLoad.ts";
 
 const BOT_ID = "smc";
 const WINDOW_HOURS = 24;
@@ -51,46 +52,8 @@ Deno.serve(async (req) => {
   const now = new Date().toISOString();
 
   try {
-    const account = await must<any>("paper_accounts", supabase.from("paper_accounts")
-      .select("id, user_id, bot_id, balance, ledger_epoch_id, ledger_epoch_started_at, ledger_reset_at")
-      .eq("bot_id", BOT_ID).single());
+    const { input, account } = await loadMonitorInput(supabase, now);
     const epoch = account.ledger_epoch_started_at as string;
-    const [recon, ledger, unledgered, history, audit] = await Promise.all([
-      must<any>("paper_account_reconciliation", supabase.from("paper_account_reconciliation")
-        .select("drift, ledger_balance, history_rows_without_settlement_this_epoch").eq("account_id", account.id).single()),
-      must<any[]>("paper_account_ledger", supabase.from("paper_account_ledger")
-        .select("seq, kind, amount, balance_before, balance_after, settlement_key, position_id, history_id, source, detail, created_at")
-        .eq("account_id", account.id).order("seq", { ascending: true }).limit(10000)),
-      must<any[]>("paper_balance_unledgered_writes", supabase.from("paper_balance_unledgered_writes")
-        .select("id, old_balance, new_balance, request_role, created_at").eq("account_id", account.id).order("id", { ascending: true })),
-      must<any[]>("paper_trade_history", supabase.from("paper_trade_history")
-        .select("id, position_id, close_reason, pnl, closed_at, bot_id").eq("user_id", account.user_id).gte("closed_at", epoch)),
-      must<any[]>("close_audit_log", supabase.from("close_audit_log")
-        .select("position_id, close_source, pnl, created_at").eq("user_id", account.user_id).gte("created_at", epoch)),
-    ]);
-
-    const historyIds = [...new Set(ledger.map((e) => e.history_id).filter(Boolean))] as string[];
-    const linked = historyIds.length
-      ? await must<any[]>("linked history", supabase.from("paper_trade_history").select("id, closed_at").in("id", historyIds))
-      : [];
-
-    const input: MonitorInput = {
-      now,
-      account: {
-        id: account.id, balance: Number(account.balance), ledger_epoch_id: account.ledger_epoch_id,
-        ledger_epoch_started_at: epoch, ledger_reset_at: account.ledger_reset_at,
-      },
-      reconciliation: {
-        drift: recon.drift === null ? null : Number(recon.drift),
-        ledger_balance: recon.ledger_balance === null ? null : Number(recon.ledger_balance),
-        history_rows_without_settlement_this_epoch: Number(recon.history_rows_without_settlement_this_epoch),
-      },
-      ledger: ledger.map((e) => ({ ...e, amount: Number(e.amount), balance_before: Number(e.balance_before), balance_after: Number(e.balance_after) })),
-      unledgeredWrites: unledgered,
-      historySinceEpoch: history,
-      auditSinceEpoch: audit,
-      linkedHistoryClosedAt: Object.fromEntries(linked.map((h) => [h.id, h.closed_at])),
-    };
     const result = evaluateSettlementHealth(input);
 
     let window: ReturnType<typeof evaluateWindow> | undefined;

@@ -2,8 +2,9 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, ShieldAlert,
 } from "lucide-react";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/contexts/ThemeContext";
 
@@ -31,6 +32,10 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, setTheme } = useTheme();
+  const isAdmin = useIsAdmin();
+  const items = isAdmin
+    ? [...NAV_ITEMS, { title: "System Reset & Ledger Health", url: "/system", icon: ShieldAlert, shortcut: undefined as string | undefined }]
+    : NAV_ITEMS;
 
   const cycleTheme = () => {
     const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
@@ -84,7 +89,7 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
       <div className="w-6 border-t border-sidebar-border my-1" />
 
       {/* Nav items */}
-      {NAV_ITEMS.map((item) => {
+      {items.map((item) => {
         const isActive =
           item.url === "/"
             ? location.pathname === "/"

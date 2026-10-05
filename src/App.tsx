@@ -23,6 +23,7 @@ import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
 import PropFirm from "./pages/PropFirm";
+import SystemHealth from "./pages/SystemHealth";
 import RejectedSetups from "./pages/RejectedSetups";
 import ScheduledTasks from "./pages/ScheduledTasks";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -55,6 +56,7 @@ const App = () => (
                 <Route path="/trade-replay" element={<ProtectedRoute><ErrorBoundary><TradeReplay /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
+                <Route path="/system" element={<ProtectedRoute><ErrorBoundary><SystemHealth /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/rejected-setups" element={<ProtectedRoute><RejectedSetups /></ProtectedRoute>} />
                 <Route path="/scheduled-tasks" element={<ProtectedRoute><ScheduledTasks /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
