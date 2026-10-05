@@ -218,3 +218,19 @@ Deno.test("isServiceRole: the exact key or a service_role JWT; nothing else", ()
   assertEquals(isServiceRole(null, "secret"), false);
   assertEquals(isServiceRole("Bearer garbage", "secret"), false);
 });
+
+Deno.test("after a reset: the reset's own old-period flatten closes (settled before the boundary) pass", () => {
+  const flatten = close(2, 105879.62, -800, "2527bfa5", {
+    source: "account_reset_flatten", detail: { position_created_at: "2026-10-05T11:04:02Z" }, created_at: "2026-10-07T11:59:00Z",
+  });
+  const resetEntry: LedgerEntry = {
+    seq: 3, kind: "reset", amount: 100000 - 105079.62, balance_before: 105079.62, balance_after: 100000,
+    settlement_key: "reset:e2", position_id: null, history_id: null, source: "reset_paper_account", detail: {}, created_at: "2026-10-07T12:00:00Z",
+  };
+  const r = evaluateSettlementHealth(input({
+    account: { ...input().account, balance: 100000, ledger_reset_at: "2026-10-07T12:00:00Z", ledger_epoch_started_at: "2026-10-07T12:00:00Z" },
+    reconciliation: { drift: 0, ledger_balance: 100000, history_rows_without_settlement_this_epoch: 0 },
+    ledger: [opening, flatten, resetEntry],
+  }));
+  assertEquals(r.pass, true, JSON.stringify(r.failures));
+});

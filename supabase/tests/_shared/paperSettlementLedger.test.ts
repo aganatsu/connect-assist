@@ -38,6 +38,7 @@ const TELEMETRY = read("../../migrations/20260928140000_smc_trade_telemetry_pari
 const MIGRATION_TIMESTAMPS = read("../../migrations/20261006000000_trade_history_timestamps.sql");
 const MIGRATION_LEDGER = read("../../migrations/20261006010000_paper_settlement_ledger.sql");
 const MIGRATION_MONITOR = read("../../migrations/20261006020000_settlement_monitor_runs.sql");
+const MIGRATION_RESET = read("../../migrations/20261006030000_system_reset_workflow.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -124,6 +125,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_TIMESTAMPS);
   await db.exec(MIGRATION_LEDGER);
   await db.exec(MIGRATION_MONITOR);
+  await db.exec(MIGRATION_RESET);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -612,15 +614,68 @@ Deno.test("monitor results: insertable, append-only, one final verdict per epoch
   await db.close();
 });
 
-Deno.test("every column the settlement-monitor function selects exists", async () => {
+Deno.test("every column the monitor and reset functions select exists", async () => {
   const db = await freshDb();
-  const src = Deno.readTextFileSync(new URL("../../functions/settlement-monitor/index.ts", import.meta.url));
+  const src = ["../../functions/settlement-monitor/index.ts", "../../functions/_shared/settlementMonitorLoad.ts", "../../functions/system-reset/index.ts"]
+    .map((f) => Deno.readTextFileSync(new URL(f, import.meta.url))).join("\n");
   for (const m of src.matchAll(/from\("([a-z_]+)"\)\s*\n?\s*\.select\("([^"]+)"\)/g)) {
     const [, table, list] = m;
     const cols = new Set((await db.query<{ c: string }>(
       `select column_name as c from information_schema.columns where table_schema in ('public') and table_name = $1`, [table])).rows.map((r) => r.c));
     if (cols.size === 0) continue; // tables outside this harness (user_settings, close_audit_log)
-    for (const c of list.split(",").map((x) => x.trim())) assert(cols.has(c), `${table}.${c} missing`);
+    for (const c of list.split(",").map((x) => x.trim()).filter((x) => x !== "*")) assert(cols.has(c), `${table}.${c} missing`);
   }
+  await db.close();
+});
+
+// ─── system reset workflow objects ──────────────────────────────────────────
+
+Deno.test("reset workflow: only app_admins are admins; execution ships disabled", async () => {
+  const db = await freshDb();
+  const admin = async (u: string | null) => (await db.query<{ a: boolean }>(`select public.is_app_admin($1::uuid) as a`, [u])).rows[0].a;
+  assertEquals(await admin(USER), true);
+  assertEquals(await admin(OTHER_USER), false);
+  assertEquals(await admin(null), false);
+  const can = async (role: string, fn: string) =>
+    (await db.query<{ ok: boolean }>(`select has_function_privilege($1, $2, 'execute') as ok`, [role, fn])).rows[0].ok;
+  assertEquals(await can("anon", "public.is_app_admin(uuid)"), false);
+  assertEquals(await can("authenticated", "public.accounting_objects_present()"), false);
+  const ctl = (await db.query<{ e: boolean }>(`select execute_enabled as e from public.system_reset_controls`)).rows[0].e;
+  assertEquals(ctl, false, "the destructive action ships OFF");
+  await db.close();
+});
+
+Deno.test("reset workflow: every accounting object reports present", async () => {
+  const db = await freshDb();
+  const o = (await db.query<{ o: Record<string, boolean> }>(`select public.accounting_objects_present() as o`)).rows[0].o;
+  assertEquals(Object.entries(o).filter(([, v]) => !v), [], JSON.stringify(o));
+  await db.close();
+});
+
+Deno.test("reset audit trail: one running at a time, immutable once terminal, never deletable", async () => {
+  const db = await freshDb();
+  const acct = (await db.query<{ id: string }>(`select id from public.paper_accounts`)).rows[0].id;
+  const ins = (status: string) => db.query<{ r: string }>(
+    `insert into public.account_reset_runs (account_id, requested_by, requested_at, status) values ($1, $2, now(), $3) returning reset_id as r`,
+    [acct, USER, status]);
+  const run = (await ins("running")).rows[0].r;
+  await assertRejects(() => ins("running"), Error, "duplicate key");
+  await db.query(`update public.account_reset_runs set steps = '[{"step":"pause_entries"}]', status = 'failed', failed_step = 'x' where reset_id = $1`, [run]);
+  await assertRejects(() => db.query(`update public.account_reset_runs set failure_reason = 'rewrite' where reset_id = $1`, [run]), Error, "immutable");
+  await assertRejects(() => db.query(`delete from public.account_reset_runs`), Error, "permanent");
+  await assertRejects(() => db.query(`truncate public.account_reset_runs cascade`), Error, "permanent");
+  await ins("aborted");
+  assertEquals(await count(db, "public.account_reset_runs"), 2);
+  await db.close();
+});
+
+Deno.test("reset snapshots: append-only", async () => {
+  const db = await freshDb();
+  const acct = (await db.query<{ id: string }>(`select id from public.paper_accounts`)).rows[0].id;
+  const run = (await db.query<{ r: string }>(`insert into public.account_reset_runs (account_id, requested_by, requested_at, status) values ($1,$2,now(),'running') returning reset_id as r`, [acct, USER])).rows[0].r;
+  await db.query(`insert into public.account_reset_snapshots (reset_id, account, ledger, reconciliation, period_history, closed_positions, cancelled_orders, cancelled_setups)
+    values ($1, '{}', '[]', '{}', '[]', '[]', '[]', '[]')`, [run]);
+  await assertRejects(() => db.query(`update public.account_reset_snapshots set config_hash = 'x'`), Error, "append-only");
+  await assertRejects(() => db.query(`delete from public.account_reset_snapshots`), Error, "append-only");
   await db.close();
 });

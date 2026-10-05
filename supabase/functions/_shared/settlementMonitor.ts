@@ -56,7 +56,7 @@ export const KNOWN_LEDGER_SOURCES = new Set([
   "migration:20261006010000", "account_insert", "reset_paper_account",
   "scanner_breach_check", "scanner_reverse_signal",
   "paper_trading_auto", "paper_trading_manual", "paper_trading_partial_tp", "kill_switch",
-  "prop_firm_emergency", "finalize_paper_position_close",
+  "prop_firm_emergency", "finalize_paper_position_close", "account_reset_flatten",
 ]);
 
 const cents = (n: number) => Math.round(n * 100);
@@ -143,7 +143,9 @@ export function evaluateSettlementHealth(i: MonitorInput): MonitorResult {
   const resetAt = t(i.account.ledger_reset_at);
   const preEpochMoved = ledger.filter((e) => e.kind.startsWith("pre_epoch") && cents(e.amount) !== 0).map((e) => e.seq);
   const openedBeforeReset = Number.isNaN(resetAt) ? [] : ledger.filter((e) => {
-    if (e.kind !== "close" || cents(e.amount) === 0) return false;
+    // Only settlements made AFTER the reset. The reset's own flatten closes
+    // settle old-period positions BEFORE the boundary, legitimately.
+    if (e.kind !== "close" || cents(e.amount) === 0 || t(e.created_at) < resetAt) return false;
     const opened = t((e.detail?.position_created_at as string) ?? null);
     return !Number.isNaN(opened) && opened < resetAt;
   }).map((e) => e.seq);
