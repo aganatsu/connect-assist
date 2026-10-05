@@ -125,22 +125,25 @@ Full suite: `deno test --no-check … supabase/tests/ supabase/functions/` — s
 
 ## 5. Deployment
 
-Merging to `main` applies migrations (Supabase GitHub integration) **and** deploys functions (`deploy-functions.yml`) at nearly the same time. Both orders are safe:
-
-- **Migrations first:** the old functions keep working. Their direct balance writes are allowed in `observe` and recorded; their ISO-string history inserts parse into `timestamptz`.
-- **Functions first:** the RPCs don't exist for a minute, so every settlement returns `failed`, **nothing commits**, and positions stay open until the next cycle. Closes are delayed, never doubled.
+> **Correction (2026-10-05 incident).** The original text here said merging
+> applies migrations and that either order was safe. Both were wrong: merging
+> deploys functions only (see `docs/DEPLOYMENT.md`), and in the
+> functions-first order **no paper position can close** — every settlement
+> fails closed (nothing commits, nothing double-credits) until the migrations
+> exist. That is what happened after #627 merged at 17:03 UTC. Migrations must
+> be applied and verified BEFORE dependent functions go live.
 
 Steps:
 
-1. **Before merge:** take a fresh snapshot (`local-runner/recon/snapshot.py`). Pausing the bot (`is_paused = true`) is recommended but not required.
-2. **Merge.** Confirm both the migration check and the deploy-functions run are green.
+1. **Before merge:** take a fresh snapshot (`local-runner/recon/snapshot.py`), pause new entries (`is_paused = true`), and apply both migrations by hand as one transaction (`docs/DEPLOYMENT.md` step 4).
+2. **Verify** PostgREST exposes `settle_paper_position` etc., **then merge**, and confirm the deploy-functions run is green.
 3. **Read-only verification:**
    - `select * from paper_account_reconciliation;` → `drift = 0`;
    - `select count(*) from paper_account_ledger;` → one `opening` row per account;
    - `select data_type from information_schema.columns where table_name='paper_trade_history' and column_name='closed_at';` → `timestamp with time zone`;
    - `select count(*) from paper_trade_history where closed_at_raw is null;` → 0 at deploy time.
 4. **Observe for 24h of normal trading.** `paper_balance_unledgered_writes` must stay **empty** and `drift` must stay 0. Any row there names a writer this change missed.
-5. **Enforce:** a one-line migration, `update paper_ledger_guard set mode = 'enforce' where id = 1;`. From then on a direct balance write raises.
+5. **Enforce:** a one-line migration, `update paper_ledger_guard set mode = 'enforce' where id = 1;`, applied by hand like any other (`docs/DEPLOYMENT.md`). From then on a direct balance write raises.
 6. **Then** the approved clean reset (`docs/SMC_RESET_SCOPE_PROPOSAL_V1.md`) runs `reset_paper_account(…, 100000, …)`.
 
 Rollback:
