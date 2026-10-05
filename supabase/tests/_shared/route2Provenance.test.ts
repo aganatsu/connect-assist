@@ -200,22 +200,24 @@ Deno.test("both Route 2 fill paths pass the originating version and the source i
 Deno.test("every history archive path carries the immutable block", () => {
   // A Route 2 trade closed by reverse signal, manually, by kill switch or by
   // the paper engine's SL/TP used to lose its route, version and source link.
-  const inserts = (src: string) =>
-    // Read each insert to its own closing `})` — not a byte window, which
-    // mis-reads the main archive because its signal_reason IIFE comes first.
-    // `(?!\()` skips the IIFE's own `})()`.
-    [...src.matchAll(/from\("paper_trade_history"\)\.insert\(\{([\s\S]*?)\n\s*\}\)(?!\()/g)].map(m => m[1]);
-  for (const body of inserts(SCANNER)) {
+  // History is written by settle_paper_position now; each call's `history`
+  // object, up to its outcome check, must carry the block.
+  const settlements = (src: string) =>
+    [...src.matchAll(/settlePaperPosition\(supabase, \{/g)].map((m) => {
+      const end = src.indexOf('.outcome !== "settled"', m.index!);
+      return src.slice(m.index!, end);
+    });
+  const scanner = settlements(SCANNER);
+  assertEquals(scanner.length, 2, "breach close + reverse-signal close");
+  for (const body of scanner) {
     assert(/\.\.\.carryToHistory\(/.test(body), `bot-scanner archive missing carryToHistory:\n${body.slice(0, 200)}`);
   }
-  const paper = inserts(PAPER);
-  const partials = paper.filter(b => /_partial`/.test(b));
-  const full = paper.filter(b => !/_partial`/.test(b));
-  assertEquals(partials.length, 1, "exactly one partial-close insert is expected");
-  assert(full.length >= 3, `expected >=3 full-close inserts in paper-trading, found ${full.length}`);
-  for (const body of full) {
+  const paper = settlements(PAPER);
+  assert(paper.length >= 3, `expected >=3 full-close settlements in paper-trading, found ${paper.length}`);
+  for (const body of paper) {
     assert(/\.\.\.carryToHistory\(/.test(body), `paper-trading archive missing carryToHistory:\n${body.slice(0, 200)}`);
   }
+  assertEquals([...PAPER.matchAll(/settlePaperPartial\(supabase, \{/g)].length, 1, "exactly one partial-close settlement");
 });
 
 Deno.test("the Hunting section can now receive awaiting_confirmation orders", () => {

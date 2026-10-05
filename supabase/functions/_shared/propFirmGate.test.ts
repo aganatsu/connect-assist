@@ -221,51 +221,32 @@ Deno.test("propFirmGate: equity at 60% of initial_balance passes sanity check", 
 
 // ─── Test: Weekend FX guard in emergency close ───────────────────────────────
 
-Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypto", async () => {
-  const deletedPositions: string[] = [];
-  const insertedHistory: any[] = [];
-  const supabase = makeMockSupabase({ deletedPositions, insertedHistory, accountBalance: "100000" });
-
-  // Override the delete mock to track which positions get closed
-  let closedSymbols: string[] = [];
-  (supabase as any).from = (table: string) => {
-    if (table === "paper_positions") {
-      return {
-        delete: () => ({
-          eq: async (_: string, id: string) => {
-            deletedPositions.push(id);
-            return { error: null };
-          },
-        }),
-      };
-    }
-    if (table === "paper_trade_history") {
-      return {
-        insert: async (data: any) => {
-          insertedHistory.push(data);
-          closedSymbols.push(data.symbol);
-          return { error: null };
-        },
-      };
-    }
-    if (table === "paper_accounts") {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({ data: { balance: "100000" }, error: null }),
-            }),
-          }),
-        }),
-        update: () => ({
-          eq: () => ({
-            eq: () => Promise.resolve({ error: null }),
-          }),
-        }),
-      };
-    }
-    return {};
+/**
+ * Emergency closes settle through the settle_paper_position RPC. This mock
+ * records each settlement and fails the test on any direct table write — the
+ * old path updated paper_accounts.balance itself.
+ */
+function makeSettlementMock(opts: { refuse?: Set<string> } = {}) {
+  const settled: { rowId: string; symbol: string; pnl: number; source: string }[] = [];
+  const supabase = {
+    rpc: async (fn: string, args: any) => {
+      assertEquals(fn, "settle_paper_position");
+      if (opts.refuse?.has(args.p_position_row_id)) {
+        return { data: { settled: false, code: "already_settled" }, error: null };
+      }
+      const pnl = parseFloat(args.p_history.pnl);
+      settled.push({ rowId: args.p_position_row_id, symbol: args.p_history.symbol, pnl, source: args.p_source });
+      return { data: { settled: true, code: "settled", amount: pnl, balance: 100000 + pnl, history_id: "h", ledger_id: "l" }, error: null };
+    },
+    from: (table: string) => {
+      throw new Error(`emergency close must not write ${table} directly`);
+    },
   };
+  return { supabase, settled };
+}
+
+Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypto", async () => {
+  const { supabase, settled } = makeSettlementMock();
 
   const positions = [
     { id: "1", symbol: "EURUSD", direction: "long", entry_price: "1.1000", current_price: "1.0950", size: "0.01", position_id: "p1" },
@@ -282,51 +263,15 @@ Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypt
 
   // Only BTCUSD should be closed (crypto)
   assertEquals(closedCount, 1);
-  assertEquals(closedSymbols.length, 1);
-  assertEquals(closedSymbols[0], "BTCUSD");
+  assertEquals(settled.map((s) => s.symbol), ["BTCUSD"]);
+  assertEquals(settled[0].source, "prop_firm_emergency");
+  // The skipped FX positions' P&L is NOT booked. The old code re-summed P&L
+  // over every open position and credited it in one write.
+  assertEquals(settled.reduce((a, s) => a + s.pnl, 0), settled[0].pnl);
 });
 
 Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
-  const insertedHistory: any[] = [];
-  let closedSymbols: string[] = [];
-
-  const supabase = {
-    from: (table: string) => {
-      if (table === "paper_positions") {
-        return {
-          delete: () => ({
-            eq: async () => ({ error: null }),
-          }),
-        };
-      }
-      if (table === "paper_trade_history") {
-        return {
-          insert: async (data: any) => {
-            insertedHistory.push(data);
-            closedSymbols.push(data.symbol);
-            return { error: null };
-          },
-        };
-      }
-      if (table === "paper_accounts") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: { balance: "100000" }, error: null }),
-              }),
-            }),
-          }),
-          update: () => ({
-            eq: () => ({
-              eq: () => Promise.resolve({ error: null }),
-            }),
-          }),
-        };
-      }
-      return {};
-    },
-  };
+  const { supabase, settled } = makeSettlementMock();
 
   const positions = [
     { id: "1", symbol: "EURUSD", direction: "long", entry_price: "1.1000", current_price: "1.0950", size: "0.01", position_id: "p1" },
@@ -341,53 +286,14 @@ Deno.test("propFirmEmergencyClose: weekday closes all positions", async () => {
   );
 
   assertEquals(closedCount, 3);
-  assertEquals(closedSymbols.length, 3);
+  const closedSymbols = settled.map((s) => s.symbol);
   assert(closedSymbols.includes("EURUSD"));
   assert(closedSymbols.includes("BTCUSD"));
   assert(closedSymbols.includes("USDCAD"));
 });
 
 Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async () => {
-  const insertedHistory: any[] = [];
-  let closedSymbols: string[] = [];
-
-  const supabase = {
-    from: (table: string) => {
-      if (table === "paper_positions") {
-        return {
-          delete: () => ({
-            eq: async () => ({ error: null }),
-          }),
-        };
-      }
-      if (table === "paper_trade_history") {
-        return {
-          insert: async (data: any) => {
-            insertedHistory.push(data);
-            closedSymbols.push(data.symbol);
-            return { error: null };
-          },
-        };
-      }
-      if (table === "paper_accounts") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: { balance: "100000" }, error: null }),
-              }),
-            }),
-          }),
-          update: () => ({
-            eq: () => ({
-              eq: () => Promise.resolve({ error: null }),
-            }),
-          }),
-        };
-      }
-      return {};
-    },
-  };
+  const { supabase, settled } = makeSettlementMock();
 
   const positions = [
     { id: "1", symbol: "EURUSD", direction: "long", entry_price: "1.1000", current_price: "1.0950", size: "0.01", position_id: "p1" },
@@ -400,5 +306,27 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
   );
 
   assertEquals(closedCount, 2);
-  assertEquals(closedSymbols.length, 2);
+  assertEquals(settled.length, 2);
+});
+
+Deno.test("propFirmEmergencyClose: a position settled elsewhere first is not counted or credited", async () => {
+  const { supabase, settled } = makeSettlementMock({ refuse: new Set(["1"]) });
+  const positions = [
+    { id: "1", symbol: "EURUSD", direction: "long", entry_price: "1.1000", current_price: "1.0950", size: "0.01", position_id: "p1" },
+    { id: "2", symbol: "USDCAD", direction: "short", entry_price: "1.3700", current_price: "1.3750", size: "0.01", position_id: "p4" },
+  ];
+  const closedCount = await propFirmEmergencyClose(supabase as any, "test-user", "smc", positions, "x", "scan-008");
+  assertEquals(closedCount, 1);
+  assertEquals(settled.map((s) => s.symbol), ["USDCAD"]);
+});
+
+Deno.test("propFirmEmergencyClose: pnlFor replaces the flat 100,000 approximation", async () => {
+  const { supabase, settled } = makeSettlementMock();
+  // USD/JPY long 1 lot, +0.5 yen. Flat formula: 0.5 * 1 * 100000 = 50,000.
+  // Real: 0.5 * 100,000 units / 155.5 JPY per USD = ~321.54 USD.
+  const positions = [{ id: "1", symbol: "USD/JPY", direction: "long", entry_price: "155.0", current_price: "155.5", size: "1", position_id: "p1" }];
+  await propFirmEmergencyClose(supabase as any, "test-user", "smc", positions, "x", "scan-009", {
+    pnlFor: (p, exit) => (exit - parseFloat(p.entry_price)) * 100_000 * parseFloat(p.size) / exit,
+  });
+  assertEquals(settled[0].pnl, 321.54);
 });

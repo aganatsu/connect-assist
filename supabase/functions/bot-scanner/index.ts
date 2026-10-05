@@ -101,6 +101,7 @@ import {
   buildConfirmationRecord, buildRoute2Provenance, tierLabel, typeLabel,
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
+import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -1757,10 +1758,18 @@ export async function runSafetyGates(
     }
   }
 
+  // Gates 13-15 derive cooldown, loss streak and daily loss from trade
+  // history. History survives an account reset now (the ledger epoch separates
+  // the periods), so these read only trades closed since the last reset —
+  // otherwise a pre-reset losing streak would block the clean account.
+  // ledger_reset_at is null until the first reset: no floor, as before.
+  const historyFloor: string | null = account?.ledger_reset_at ?? null;
+  const sinceReset = (q: any) => historyFloor ? q.gte("closed_at", historyFloor) : q;
+
   // Gate 13: Cooldown
   if (config.cooldownMinutes > 0) {
-    const { data: recentTrades } = await supabase.from("paper_trade_history").select("closed_at")
-      .eq("user_id", userId).eq("symbol", symbol).order("closed_at", { ascending: false }).limit(1);
+    const { data: recentTrades } = await sinceReset(supabase.from("paper_trade_history").select("closed_at")
+      .eq("user_id", userId).eq("symbol", symbol)).order("closed_at", { ascending: false }).limit(1);
     if (recentTrades && recentTrades.length > 0) {
       const lastClose = new Date(recentTrades[0].closed_at).getTime();
       const elapsed = (Date.now() - lastClose) / 60000;
@@ -1776,8 +1785,8 @@ export async function runSafetyGates(
 
   // Gate 14: Max Consecutive Losses (with 4-hour auto-reset cooldown)
   if (config.maxConsecutiveLosses > 0) {
-    const { data: recentHistory } = await supabase.from("paper_trade_history").select("pnl, closed_at")
-      .eq("user_id", userId).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
+    const { data: recentHistory } = await sinceReset(supabase.from("paper_trade_history").select("pnl, closed_at")
+      .eq("user_id", userId)).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
     if (recentHistory && recentHistory.length > 0) {
       let consecutiveLosses = 0;
       for (const t of recentHistory) {
@@ -1806,8 +1815,8 @@ export async function runSafetyGates(
   // Gate 15: Dollar-based daily loss (net P&L)
   if (config.protectionMaxDailyLossDollar > 0) {
     const todayStr = new Date().toISOString().slice(0, 10);
-    const { data: todayTrades } = await supabase.from("paper_trade_history").select("pnl")
-      .eq("user_id", userId).gte("closed_at", todayStr);
+    const { data: todayTrades } = await sinceReset(supabase.from("paper_trade_history").select("pnl")
+      .eq("user_id", userId).gte("closed_at", todayStr));
     const trades = todayTrades || [];
     const netPnl = trades.reduce((sum: number, t: any) => sum + parseFloat(t.pnl || "0"), 0);
     const grossLoss = trades.reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
@@ -3141,88 +3150,73 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const pnlPips = diff / spec.pipSize;
         const nowClose = new Date().toISOString();
 
-        // 1. Delete from paper_positions — and TREAT THE DELETE AS THE CLAIM.
+        // 1-3. Settle: history, ledger, balance and position delete in ONE
+        // transaction (settle_paper_position, migration 20261006010000).
         //
-        // Two scan cycles can select the same breach candidate and both close
-        // it. Measured 2026-09-16: four positions closed twice, 0.7s apart,
-        // and the balance update below ran for each — USD/JPY credited
-        // 1742.38 for an 871.19 win, XAU 1138.92 for 569.46. Net +361 of
-        // profit that never happened, the same mechanism behind the phantom
-        // partial-TP inflation in the account history.
+        // Two scan cycles can select the same breach candidate. Measured
+        // 2026-09-16: four positions closed twice, 0.7s apart — USD/JPY
+        // credited 1742.38 for an 871.19 win, XAU 1138.92 for 569.46. #554
+        // made the DELETE the claim here, but the balance was still a separate
+        // read-modify-write and paper-trading's own close of the same position
+        // credited with no claim at all. The settlement key
+        // close:<bot>:<position_id> is unique in paper_account_ledger, so a
+        // second settlement — from this cycle, another cycle, or paper-trading
+        // — books nothing.
         //
-        // DELETE ... RETURNING is atomic, so exactly one cycle gets the row
-        // back. Whoever gets nothing has lost the race and must not touch the
-        // balance.
-        const { data: claimed } = await supabase.from("paper_positions").delete()
-          .eq("position_id", pos.position_id).eq("user_id", userId)
-          .select("position_id");
-        if (!claimed || claimed.length === 0) {
-          console.log(`[close] ${pos.symbol} ${pos.position_id} — already closed by another cycle, skipping`);
+        // The history row is written inside the same transaction, so a refused
+        // insert can no longer lose the trade while the balance moves: if it
+        // fails, nothing commits and the position stays open for the next cycle.
+        const settlement = await settlePaperPosition(supabase, {
+          positionRowId: pos.id, userId, botId: BOT_ID, source: "scanner_breach_check",
+          history: {
+            order_id: pos.order_id || "",
+            symbol: pos.symbol, direction: pos.direction, size: pos.size,
+            entry_price: pos.entry_price, exit_price: hitPrice.toString(),
+            open_time: pos.open_time || nowClose, closed_at: nowClose,
+            close_reason: closeReason,
+            pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+            signal_score: pos.signal_score || "0",
+            // NOT streamlined_decision_origin. That column belongs to the
+            // streamlined-decision-lifecycle.v1 contract and its trigger refuses
+            // anything else, so writing the position's frozen-decision.v1 blob
+            // there discarded the whole trade. The decision rides in
+            // signal_reason instead, alongside sizing and slFloor.
+            signal_reason: (() => {
+              const fc = (pos as any).frozen_strategy_context;
+              if (!fc) return pos.signal_reason || "";
+              try {
+                const base = typeof pos.signal_reason === "string" && pos.signal_reason
+                  ? JSON.parse(pos.signal_reason)
+                  : (pos.signal_reason ?? {});
+                return JSON.stringify({ ...base, frozenDecision: fc });
+              } catch {
+                return pos.signal_reason || "";
+              }
+            })(),
+            stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+            // Immutable entry block carried verbatim, plus realized R computed
+            // from initial_risk_price — never from stop_loss, which by this
+            // point is the stop at close.
+            ...carryToHistory(pos as Record<string, unknown>, {
+              exitPrice: hitPrice,
+              direction: pos.direction as "long" | "short",
+              costR: null,
+            }),
+          },
+        });
+        if (settlement.outcome !== "settled") {
+          const msg = `[close] ${pos.symbol} ${pos.position_id} — ${describeSettlementMiss(settlement)}`;
+          if (settlement.outcome === "failed") console.error(msg); else console.log(msg);
           continue;
         }
-
-        // 2. Insert into paper_trade_history (matches close-on-reverse field set)
-        //
-        // The error is CHECKED. The position row is deleted above, so a silent
-        // failure here loses the trade outright — which is what happened when
-        // streamlined_decision_origin carried a foreign contract: the insert
-        // RAISEd, this line ignored it, and step 3 updated the balance anyway.
-        const { error: historyErr } = await supabase.from("paper_trade_history").insert({
-          user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
-          symbol: pos.symbol, direction: pos.direction, size: pos.size,
-          entry_price: pos.entry_price, exit_price: hitPrice.toString(),
-          open_time: pos.open_time || nowClose, closed_at: nowClose,
-          close_reason: closeReason,
-          pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
-          signal_score: pos.signal_score || "0",
-          // NOT streamlined_decision_origin. That column belongs to the
-          // streamlined-decision-lifecycle.v1 contract and its trigger refuses
-          // anything else, so writing the position's frozen-decision.v1 blob
-          // there discarded the whole trade. The decision rides in
-          // signal_reason instead, alongside sizing and slFloor.
-          signal_reason: (() => {
-            const fc = (pos as any).frozen_strategy_context;
-            if (!fc) return pos.signal_reason || "";
-            try {
-              const base = typeof pos.signal_reason === "string" && pos.signal_reason
-                ? JSON.parse(pos.signal_reason)
-                : (pos.signal_reason ?? {});
-              return JSON.stringify({ ...base, frozenDecision: fc });
-            } catch {
-              return pos.signal_reason || "";
-            }
-          })(),
-          bot_id: BOT_ID,
-          stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
-          // Immutable entry block carried verbatim, plus realized R computed
-          // from initial_risk_price — never from stop_loss, which by this
-          // point is the stop at close.
-          ...carryToHistory(pos as Record<string, unknown>, {
-            exitPrice: hitPrice,
-            direction: pos.direction as "long" | "short",
-            costR: null,
-          }),
-        });
-        if (historyErr) {
-          // Loud. The position is already gone, so this is an unrecoverable
-          // trade record and must never be swallowed again.
-          console.error(`[close] HISTORY INSERT FAILED for ${pos.symbol} ${pos.position_id} — TRADE RECORD LOST: ${historyErr.message}`);
+        if (settlement.historyFallbackError) {
+          console.error(`[close] ${pos.symbol} ${pos.position_id} — history stored WITHOUT decision snapshot: ${settlement.historyFallbackError}`);
         }
-
-        // 3. Update paper_accounts balance + peak_balance (scoped to bot)
-        const balQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", userId);
-        if (account.bot_id) balQ.eq("bot_id", BOT_ID);
-        const curBal = parseFloat((await balQ.single()).data?.balance || "10000");
-        const newBal = curBal + pnl;
-        const newPeak = Math.max(newBal, parseFloat(account.peak_balance || "10000"));
-        const balUpd = supabase.from("paper_accounts").update({
-          balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
-        }).eq("user_id", userId);
-        if (account.bot_id) balUpd.eq("bot_id", BOT_ID);
-        await balUpd;
         // Keep in-memory account in sync for subsequent position sizing
-        account.balance = newBal.toFixed(2);
-        account.peak_balance = newPeak.toFixed(2);
+        if (settlement.balance !== null) {
+          account.balance = settlement.balance.toFixed(2);
+          account.peak_balance = Math.max(settlement.balance, parseFloat(account.peak_balance || "0")).toFixed(2);
+        }
 
         // 4. Audit log
         const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
@@ -4684,7 +4678,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
         const closedCount = await propFirmEmergencyClose(
           supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
-          { fxMarketClosed },
+          {
+            fxMarketClosed,
+            // Same P&L as the breach close: contract size and quote->USD
+            // conversion per instrument, not the flat 100,000 approximation.
+            pnlFor: (p: any, exitPrice: number) => {
+              const pSpec = SPECS[p.symbol] || SPECS["EUR/USD"];
+              const d = p.direction === "long" ? exitPrice - parseFloat(p.entry_price) : parseFloat(p.entry_price) - exitPrice;
+              return d * pSpec.lotUnits * parseFloat(p.size) * getQuoteToUSDRate(p.symbol, rateMap);
+            },
+          },
         );
         // Notify via Telegram
         if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
@@ -8141,31 +8144,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
             const oppPnlPips = oppDiff / oppSpec.pipSize;
 
-            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
-            await supabase.from("paper_trade_history").insert({
-              // Immutable entry block + provenance. This path archived without
-              // it, so a Route 2 trade closed on a reverse signal lost its
-              // strategy version, route and pending-order link.
-              ...carryToHistory(opp as Record<string, unknown>, {
-                exitPrice: analysis.lastPrice, direction: opp.direction as "long" | "short",
-              }),
-              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
-              symbol: pair, direction: opp.direction, size: opp.size,
-              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
-              open_time: opp.open_time || nowStr, closed_at: nowStr,
-              close_reason: "reverse_signal",
-              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
-              signal_score: opp.signal_score || "0",
-              bot_id: BOT_ID,
+            // One transaction: history, ledger, balance, position delete. This
+            // path deleted without a claim and credited unconditionally, so a
+            // breach close of the same position in the same moment credited
+            // twice. A second settlement now books nothing.
+            const oppSettlement = await settlePaperPosition(supabase, {
+              positionRowId: opp.id, userId, botId: BOT_ID, source: "scanner_reverse_signal",
+              history: {
+                // Immutable entry block + provenance. This path archived without
+                // it, so a Route 2 trade closed on a reverse signal lost its
+                // strategy version, route and pending-order link.
+                ...carryToHistory(opp as Record<string, unknown>, {
+                  exitPrice: analysis.lastPrice, direction: opp.direction as "long" | "short",
+                }),
+                order_id: opp.order_id || orderId,
+                symbol: pair, direction: opp.direction, size: opp.size,
+                entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
+                open_time: opp.open_time || nowStr, closed_at: nowStr,
+                close_reason: "reverse_signal",
+                pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
+                signal_score: opp.signal_score || "0",
+              },
             });
-            // Update balance with actual PnL — scope to this bot's account
-            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
-            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
-            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
-            const newBal = curBal + oppPnl;
-            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
-            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
-            await balUpdate;;
+            if (oppSettlement.outcome !== "settled") {
+              const msg = `[close] reverse_signal ${pair} ${opp.position_id} — ${describeSettlementMiss(oppSettlement)}`;
+              if (oppSettlement.outcome === "failed") console.error(msg); else console.log(msg);
+              continue;
+            }
+            if (oppSettlement.balance !== null) {
+              account.balance = oppSettlement.balance.toFixed(2);
+              account.peak_balance = Math.max(oppSettlement.balance, parseFloat(account.peak_balance || "0")).toFixed(2);
+            }
 
             // Audit log entry for the reverse-signal close
             const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];

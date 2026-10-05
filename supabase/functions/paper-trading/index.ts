@@ -12,6 +12,7 @@ import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 // here loses its route, strategy version and pending-order link — the fields
 // that decide which analysis cohort it belongs to.
 import { carryToHistory } from "../_shared/smcTradeTelemetry.ts";
+import { settlePaperPosition, settlePaperPartial, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -1294,58 +1295,38 @@ Deno.serve(async (req) => {
                 claimedSignalReason = pos.signal_reason || "";
               }
 
-              const { data: claimed, error: claimErr } = await supabase
-                .from("paper_positions")
-                .update({
-                  size: remainSize.toString(),
-                  partial_tp_fired: true,
-                  signal_reason: claimedSignalReason,
-                })
-                .eq("id", pos.id)
-                .eq("partial_tp_fired", false)
-                .select("id");
-
-              if (claimErr) {
-                console.error(`[paper] partial TP claim failed for ${pos.position_id}: ${claimErr.message} — not booking`);
-              }
-              if (claimErr || !claimed || claimed.length === 0) {
-                if (!claimErr) {
-                  console.warn(`[paper] partial TP already claimed for ${pos.position_id} — skipping duplicate fire`);
-                }
-              } else {
-              // Record partial close in history
-              await supabase.from("paper_trade_history").insert({
-                user_id: user.id, position_id: `${pos.position_id}_partial`, symbol: pos.symbol,
-                direction: pos.direction, size: closeSize.toString(), entry_price: pos.entry_price,
-                exit_price: currentPrice.toString(), pnl: partialPnl.toFixed(2), pnl_pips: partialPnlPips.toFixed(1),
-                open_time: pos.open_time, closed_at: new Date().toISOString(),
-                close_reason: "partial_tp", signal_reason: pos.signal_reason || "",
-                signal_score: pos.signal_score, order_id: pos.order_id,
-                stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+              // The claim, the history row and the balance credit now commit
+              // together in settle_paper_partial (migration 20261006010000),
+              // under the ledger key partial:<bot>:<position_id>:1. The
+              // compare-and-set on partial_tp_fired is inside the RPC; a second
+              // caller gets already_settled and books nothing.
+              const partialSettlement = await settlePaperPartial(supabase, {
+                positionRowId: pos.id, userId: user.id, botId: pos.bot_id || "smc",
+                source: "paper_trading_partial_tp",
+                remainingSize: remainSize,
+                positionSignalReason: claimedSignalReason,
+                history: {
+                  symbol: pos.symbol, direction: pos.direction, size: closeSize.toString(),
+                  entry_price: pos.entry_price, exit_price: currentPrice.toString(),
+                  pnl: partialPnl.toFixed(2), pnl_pips: partialPnlPips.toFixed(1),
+                  open_time: pos.open_time, closed_at: new Date().toISOString(),
+                  signal_reason: pos.signal_reason || "",
+                  signal_score: pos.signal_score, order_id: pos.order_id,
+                  stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+                },
               });
-              // Position row was already updated by the claim above — size,
-              // partial_tp_fired and signal_reason are persisted before any
-              // money moves. Nothing left to write here.
+
+              if (partialSettlement.outcome !== "settled") {
+                const msg = `[paper] partial TP ${pos.position_id} — ${describeSettlementMiss(partialSettlement)}`;
+                if (partialSettlement.outcome === "failed") console.error(msg); else console.warn(msg);
+              } else {
               exitFlags.partialTPActivated = true; // keep local in sync (unblocks trailing)
               size = remainSize; // FIX: sync local size so same-cycle SL/TP close uses reduced size
-              // Determine which bot's account to update based on position's bot_id
-              const posBotId = pos.bot_id || "smc";
-              const acctQuery = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
-              if (account?.bot_id) acctQuery.eq("bot_id", posBotId);
-              const { data: posAcct } = await acctQuery.maybeSingle();
-              const curBal = parseFloat(posAcct?.balance || account?.balance || "10000");
-              const newBal = curBal + partialPnl;
-              const newPeak = Math.max(parseFloat(posAcct?.peak_balance || account?.peak_balance || "10000"), newBal);
-              const balUpd = supabase.from("paper_accounts").update({
-                balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
-              }).eq("user_id", user.id);
-              if (account?.bot_id) balUpd.eq("bot_id", posBotId);
-              await balUpd;
               console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)} (flag set, won't re-fire)`);
               // FIX 2: Mirror partial close to broker
               const partialBrokerResults = await partialCloseBroker(supabase, user.id, pos.position_id, pos.symbol, exitFlags.partialTPPercent / 100, pos.mirrored_connection_ids);
               console.log(`Partial TP broker mirror [${pos.position_id}]: ${partialBrokerResults.join("; ")}`);
-              } // end claimed branch
+              } // end settled branch
             }
           }
 
@@ -1353,29 +1334,30 @@ Deno.serve(async (req) => {
           if (closeReason) {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
             const closeBotId = pos.bot_id || "smc";
-            await supabase.from("paper_trade_history").insert({
-              ...carryToHistory(pos as Record<string, unknown>, { exitPrice, direction: pos.direction }),
-              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-              direction: pos.direction, size: size.toString(), entry_price: pos.entry_price,
-              exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
-              open_time: pos.open_time, closed_at: new Date().toISOString(),
-              close_reason: closeReason, signal_reason: pos.signal_reason || "",
-              signal_score: pos.signal_score, order_id: pos.order_id,
-              bot_id: closeBotId,
-              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+            // One transaction: history, ledger, balance, position delete. This
+            // path wrote history and credited BEFORE deleting the position,
+            // with no claim, so a bot-scanner breach close of the same
+            // position in the same moment credited twice.
+            const closeSettlement = await settlePaperPosition(supabase, {
+              positionRowId: pos.id, userId: user.id, botId: closeBotId, source: "paper_trading_auto",
+              history: {
+                ...carryToHistory(pos as Record<string, unknown>, { exitPrice, direction: pos.direction }),
+                symbol: pos.symbol,
+                direction: pos.direction, size: size.toString(), entry_price: pos.entry_price,
+                exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+                open_time: pos.open_time, closed_at: new Date().toISOString(),
+                close_reason: closeReason, signal_reason: pos.signal_reason || "",
+                signal_score: pos.signal_score, order_id: pos.order_id,
+                stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+              },
             });
-            // Update balance — route to the correct bot's account
-            const closeAcctQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
-            if (account?.bot_id) closeAcctQ.eq("bot_id", closeBotId);
-            const { data: closeAcct } = await closeAcctQ.maybeSingle();
-            const curBal = parseFloat(closeAcct?.balance || account?.balance || "10000");
-            const newBal = curBal + pnl;
-            const newPeak = Math.max(parseFloat(closeAcct?.peak_balance || account?.peak_balance || "10000"), newBal);
-            const closeBalUpd = supabase.from("paper_accounts").update({
-              balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
-            }).eq("user_id", user.id);
-            if (account?.bot_id) closeBalUpd.eq("bot_id", closeBotId);
-            await closeBalUpd;
+            if (closeSettlement.outcome !== "settled") {
+              const msg = `[paper] close ${pos.position_id} ${closeReason} — ${describeSettlementMiss(closeSettlement)}`;
+              if (closeSettlement.outcome === "failed") console.error(msg); else console.log(msg);
+              // Gone either way; re-fetch below so the response doesn't show it.
+              if (closeSettlement.outcome === "already_settled") closedIds.push(pos.id);
+              continue;
+            }
 
             // Generate post-mortem
             const postMortem = generatePostMortem(pos, exitPrice, pnl, pnlPips, closeReason);
@@ -1386,7 +1368,6 @@ Deno.serve(async (req) => {
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
 
-            await supabase.from("paper_positions").delete().eq("id", pos.id);
             closedIds.push(pos.id);
 
             await logClose(supabase, user.id, pos, {
@@ -1408,7 +1389,13 @@ Deno.serve(async (req) => {
         }
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
-      const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
+      // Since the last account reset only. History is kept across resets now
+      // (the ledger epoch separates periods), so without this floor the win
+      // rate, daily P&L and equity curve of a fresh account would show the
+      // previous period's trades. Null until the first reset: unchanged.
+      let historyQ = supabase.from("paper_trade_history").select("*").eq("user_id", user.id);
+      if (account?.ledger_reset_at) historyQ = historyQ.gte("closed_at", account.ledger_reset_at);
+      const { data: history } = await historyQ.order("created_at", { ascending: false }).limit(50);
 
       const balance = parseFloat(account?.balance || "10000");
       const peakBalance = parseFloat(account?.peak_balance || "10000");
@@ -1715,26 +1702,23 @@ Deno.serve(async (req) => {
       const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
       const closeReason = payload.reason || "manual";
 
-      // Record in history
-      await supabase.from("paper_trade_history").insert({
-        ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
-        user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-        direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
-        exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
-        open_time: pos.open_time, closed_at: new Date().toISOString(),
-        close_reason: closeReason, signal_reason: pos.signal_reason || "",
-        signal_score: pos.signal_score, order_id: pos.order_id,
-        stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+      // History, ledger, balance and position delete in one transaction.
+      const manualSettlement = await settlePaperPosition(supabase, {
+        positionRowId: pos.id, userId: user.id, botId: pos.bot_id || "smc", source: "paper_trading_manual",
+        history: {
+          ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
+          symbol: pos.symbol,
+          direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+          exit_price: ep.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toString(),
+          open_time: pos.open_time, closed_at: new Date().toISOString(),
+          close_reason: closeReason, signal_reason: pos.signal_reason || "",
+          signal_score: pos.signal_score, order_id: pos.order_id,
+          stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+        },
       });
-
-      // Update balance
-      const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
-      const newBalance = parseFloat(account.balance) + pnl;
-      const newPeak = Math.max(parseFloat(account.peak_balance), newBalance);
-      await supabase.from("paper_accounts").update({
-        balance: newBalance.toString(),
-        peak_balance: newPeak.toString(),
-      }).eq("user_id", user.id);
+      if (manualSettlement.outcome !== "settled") {
+        return respond({ success: false, error: describeSettlementMiss(manualSettlement) });
+      }
 
       // Generate post-mortem
       const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, closeReason);
@@ -1750,9 +1734,6 @@ Deno.serve(async (req) => {
         lesson_learned: postMortem.lessonLearned,
         detail_json: postMortem,
       });
-
-      // Remove position
-      await supabase.from("paper_positions").delete().eq("id", pos.id);
 
       await logClose(supabase, user.id, pos, {
         closeReason, closeSource: "user", pnl, exitPrice: ep,
@@ -1784,26 +1765,33 @@ Deno.serve(async (req) => {
         // Close all open positions
         const { data: positions } = await supabase.from("paper_positions").select("*")
           .eq("user_id", user.id).eq("position_status", "open");
-        const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
 
         if (positions && positions.length > 0) {
           await ensureRates(user.id, positions.map((p: any) => p.symbol), true);
-          let totalPnl = 0;
           for (const pos of positions) {
             const ep = parseFloat(pos.current_price);
             const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
-            totalPnl += pnl;
 
-            await supabase.from("paper_trade_history").insert({
-              ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
-              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
-              exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
-              open_time: pos.open_time, closed_at: new Date().toISOString(),
-              close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
-              signal_score: pos.signal_score, order_id: pos.order_id,
-              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+            // Settled one at a time: the balance moves only for positions that
+            // actually closed. This used to bulk-delete every position and
+            // credit the summed P&L in one write, whatever had happened.
+            const killSettlement = await settlePaperPosition(supabase, {
+              positionRowId: pos.id, userId: user.id, botId: pos.bot_id || "smc", source: "kill_switch",
+              history: {
+                ...carryToHistory(pos as Record<string, unknown>, { exitPrice: ep, direction: pos.direction }),
+                symbol: pos.symbol,
+                direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+                exit_price: ep.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toString(),
+                open_time: pos.open_time, closed_at: new Date().toISOString(),
+                close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
+                signal_score: pos.signal_score, order_id: pos.order_id,
+                stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+              },
             });
+            if (killSettlement.outcome !== "settled") {
+              console.warn(`Kill switch [${pos.position_id}]: ${describeSettlementMiss(killSettlement)}`);
+              continue;
+            }
 
             const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, "kill_switch");
             await supabase.from("trade_post_mortems").insert({
@@ -1818,16 +1806,6 @@ Deno.serve(async (req) => {
             // Mirror close ONLY to brokers this position was mirrored to at open time
             const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
-          }
-
-          await supabase.from("paper_positions").delete().eq("user_id", user.id);
-
-          if (account) {
-            const newBal = parseFloat(account.balance) + totalPnl;
-            await supabase.from("paper_accounts").update({
-              balance: newBal.toString(),
-              peak_balance: Math.max(parseFloat(account.peak_balance), newBal).toString(),
-            }).eq("user_id", user.id);
           }
         }
 
@@ -1851,6 +1829,18 @@ Deno.serve(async (req) => {
       return "10000";
     }
 
+    // The only way to set the balance outright: reset_paper_account posts a
+    // reset entry to the ledger and starts a new epoch.
+    async function resetPaperAccount(amount: number, reason: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      const { data: acct } = await supabase.from("paper_accounts").select("bot_id").eq("user_id", user.id).maybeSingle();
+      const { data, error } = await supabase.rpc("reset_paper_account", {
+        p_user_id: user.id, p_bot_id: acct?.bot_id || "smc", p_new_balance: amount, p_reason: reason,
+      });
+      if (error) return { ok: false, error: error.message };
+      if ((data as any)?.reset !== true) return { ok: false, error: `reset refused: ${(data as any)?.code ?? "unknown"}` };
+      return { ok: true };
+    }
+
     // ── Set Balance: set account balance to any custom amount ──
     if (action === "set_balance") {
       const newBalance = parseFloat(payload.balance);
@@ -1858,42 +1848,42 @@ Deno.serve(async (req) => {
         return respond({ error: "Invalid balance amount" });
       }
       const balStr = newBalance.toFixed(2);
-      // Reset peak_balance to the new balance — this is a fresh starting point
-      // Prevents drawdown gate from triggering (e.g., setting $100 with old peak of $10k = 99% drawdown)
-      const todayDate = new Date().toISOString().split("T")[0];
-      await supabase.from("paper_accounts").update({
-        balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
-        daily_pnl_base_date: todayDate, kill_switch_active: false,
-      }).eq("user_id", user.id);
+      // A ledger reset: balance, peak_balance and daily_pnl_base all become the
+      // new amount (a fresh starting point, so the drawdown gate doesn't read
+      // $100 against an old $10k peak as 99% down), and a new epoch begins —
+      // positions opened before it can no longer move the balance.
+      const reset = await resetPaperAccount(newBalance, "set_balance");
+      if (!reset.ok) return respond({ error: reset.error });
+      await supabase.from("paper_accounts").update({ kill_switch_active: false }).eq("user_id", user.id);
       return respond({ success: true, balance: balStr });
     }
 
     // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
     if (action === "reset_balance_only") {
       const startBal = await getConfiguredStartingBalance();
-      const todayDate = new Date().toISOString().split("T")[0];
+      const reset = await resetPaperAccount(parseFloat(startBal), "reset_balance_only");
+      if (!reset.ok) return respond({ error: reset.error });
       await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
-        daily_pnl_base_date: todayDate, scan_count: 0, signal_count: 0, rejected_count: 0,
-        kill_switch_active: false,
+        scan_count: 0, signal_count: 0, rejected_count: 0, kill_switch_active: false,
       }).eq("user_id", user.id);
       return respond({ success: true, startingBalance: startBal });
     }
 
-    // ── Full Reset: wipes everything and resets balance to configured starting balance ──
+    // ── Full Reset: clears open positions, resets balance to configured starting balance ──
+    //
+    // Trade history, reasonings, post-mortems, scan logs and trades are KEPT.
+    // This used to delete them, which destroyed the record any later
+    // reconciliation or performance study depends on. The ledger epoch is
+    // what separates the new period from the old one now.
     if (action === "reset_account") {
       const startBal = await getConfiguredStartingBalance();
-      const todayDate = new Date().toISOString().split("T")[0];
+      const reset = await resetPaperAccount(parseFloat(startBal), "reset_account");
+      if (!reset.ok) return respond({ error: reset.error });
       await supabase.from("paper_positions").delete().eq("user_id", user.id);
-      await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
-      await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
-      await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
-      await supabase.from("scan_logs").delete().eq("user_id", user.id);
-      await supabase.from("trades").delete().eq("user_id", user.id);
       await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, is_running: false, is_paused: true,
-        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
-        daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
+        is_running: false, is_paused: true,
+        scan_count: 0, signal_count: 0, rejected_count: 0,
+        kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
       return respond({ success: true, startingBalance: startBal, paused: true });
     }

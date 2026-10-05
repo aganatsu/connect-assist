@@ -3,10 +3,11 @@ import { assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 /**
  * A close must never lose the trade.
  *
- * bot-scanner closes in this order:
+ * bot-scanner used to close in this order:
  *   1. DELETE the paper_positions row
  *   2. INSERT into paper_trade_history
  *   3. UPDATE the balance
+ * (now one transaction: settle_paper_position, migration 20261006010000)
  *
  * Step 2's error was not captured, so when freeze_streamlined_decision_origin()
  * RAISEd on the foreign contract PR #539 wrote there, the insert failed
@@ -23,11 +24,13 @@ const src = Deno.readTextFileSync(
 );
 const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-Deno.test("the close path checks whether the history insert succeeded", () => {
-  assert(/const \{ error: historyErr \} = await supabase\.from\("paper_trade_history"\)\.insert\(/
-    .test(code), "the insert result is captured");
-  assert(/if \(historyErr\)/.test(code), "and acted on");
-  assert(/TRADE RECORD LOST/.test(src), "and says plainly what was lost");
+Deno.test("the close path cannot move money without the history row", () => {
+  // History, ledger and balance commit in one transaction now
+  // (settle_paper_position). A refused insert is retried without the decision
+  // blobs; if that fails too, nothing commits and the position stays open.
+  assert(/const settlement = await settlePaperPosition\(supabase, \{/.test(code), "the close settles atomically");
+  assert(/settlement\.historyFallbackError/.test(code), "a stripped history row is reported");
+  assert(/WITHOUT decision snapshot/.test(src), "and says plainly what was dropped");
 });
 
 Deno.test("nothing writes a foreign contract into streamlined_decision_origin", () => {
