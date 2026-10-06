@@ -236,23 +236,15 @@ function makeDeps(db: any): ResetDeps {
       return { health: evaluateSettlementHealth(input), balance: input.account.balance, realizedThisEpoch: Number(recon.realized_pnl_this_epoch ?? 0) };
     },
     async takeSnapshot(resetId, data) {
-      const acct = await account();
-      const [ledger, recon, history, config, lastHash] = await Promise.all([
-        must<any[]>("ledger", db.from("paper_account_ledger").select("*").eq("account_id", acct.id).order("seq", { ascending: true }).limit(10000)),
-        must<any>("recon", db.from("paper_account_reconciliation").select("*").eq("account_id", acct.id).single()),
-        must<any[]>("history", (acct.ledger_reset_at
-          ? db.from("paper_trade_history").select("*").eq("user_id", acct.user_id).gte("closed_at", acct.ledger_reset_at)
-          : db.from("paper_trade_history").select("*").eq("user_id", acct.user_id)).order("closed_at", { ascending: true }).limit(10000)),
-        db.from("bot_configs").select("id, config_json, updated_at").eq("user_id", acct.user_id).is("connection_id", null).maybeSingle(),
-        db.from("bot_config_change_log").select("next_hash, changed_at").eq("user_id", acct.user_id).order("changed_at", { ascending: false }).limit(1).maybeSingle(),
-      ]);
-      const row = await must<any>("snapshot", db.from("account_reset_snapshots").insert({
-        reset_id: resetId, account: acct, ledger, reconciliation: recon, period_history: history,
-        closed_positions: data.closed_positions, cancelled_orders: data.cancelled_orders, cancelled_setups: data.cancelled_setups,
-        config: config?.data ?? null, config_hash: lastHash?.data?.next_hash ?? null,
-        row_counts: { ledger: ledger.length, period_history: history.length },
-      }).select("id").single());
-      return row.id;
+      // Built inside the database (take_account_reset_snapshot, migration
+      // 20261006070000). Shipping every history row through the API and back
+      // as one jsonb row hit the statement timeout.
+      return must<number>("snapshot", db.rpc("take_account_reset_snapshot", {
+        p_reset_id: resetId,
+        p_closed_positions: data.closed_positions,
+        p_cancelled_orders: data.cancelled_orders,
+        p_cancelled_setups: data.cancelled_setups,
+      }));
     },
     async resetAccount(amount, reason) {
       const acct = await account();

@@ -313,3 +313,11 @@ Deno.test("the entries lock is honoured by every new-entry and fill path (source
   const reset = Deno.readTextFileSync(new URL("../../functions/_shared/systemReset.ts", import.meta.url));
   assert(!/setPaused\(false\)/.test(reset.replace(/^\s*(\/\/|\*).*$/gm, "")), "the reset sequence never unpauses");
 });
+
+Deno.test("the reset snapshot is built in the database, not shipped through the API (source)", () => {
+  const src = Deno.readTextFileSync(new URL("../../functions/system-reset/index.ts", import.meta.url));
+  const i = src.indexOf("async takeSnapshot(");
+  const body = src.slice(i, src.indexOf("async resetAccount(", i));
+  assert(/db\.rpc\("take_account_reset_snapshot"/.test(body), "uses the in-DB function");
+  assert(!/from\("paper_trade_history"\)/.test(body), "never selects history rows through the API");
+});

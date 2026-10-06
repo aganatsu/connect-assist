@@ -41,6 +41,7 @@ const MIGRATION_MONITOR = read("../../migrations/20261006020000_settlement_monit
 const MIGRATION_RESET = read("../../migrations/20261006030000_system_reset_workflow.sql");
 const MIGRATION_LOCK = read("../../migrations/20261006040000_post_reset_entries_lock.sql");
 const MIGRATION_ROLE_FIX = read("../../migrations/20261006060000_fix_jwt_role_detection.sql");
+const MIGRATION_SNAPSHOT_FN = read("../../migrations/20261006070000_reset_snapshot_function.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -134,6 +135,8 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_RESET);
   await db.exec(MIGRATION_LOCK);
   await db.exec(MIGRATION_ROLE_FIX);
+  await db.exec(`${tableDdl("bot_configs")} ${tableDdl("bot_config_change_log")}`);
+  await db.exec(MIGRATION_SNAPSHOT_FN);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -740,4 +743,44 @@ Deno.test("role-dependent triggers decide on auth.role(), never on the legacy GU
   const fix = read("../../migrations/20261006060000_fix_jwt_role_detection.sql").replace(/^--.*$/gm, "");
   assert(!/request\.jwt\.claim\.role/.test(fix), "the fix uses auth.role(), not the legacy GUC");
   assert(/COALESCE\(auth\.role\(\), ''\) <> 'service_role'/.test(fix));
+});
+
+// ─── in-database reset snapshot ─────────────────────────────────────────────
+
+Deno.test("reset snapshot: built in-DB, compact history with an integrity hash, refuses a non-running run, service-role only", async () => {
+  const db = await freshDb();
+  const acct = (await db.query<{ id: string }>(`select id from public.paper_accounts`)).rows[0].id;
+  // 500 history rows with ~40 KB signal_reason each (~20 MB) — the shape that timed out through the API.
+  await db.exec(`alter table public.paper_trade_history disable trigger trg_freeze_streamlined_decision`);
+  await db.query(`insert into public.paper_trade_history (user_id, bot_id, position_id, symbol, direction, open_time, closed_at, close_reason, order_id, pnl, signal_reason)
+    select $1, 'smc', 'p' || g, 'EUR/USD', 'long', now() - interval '2 days', now() - (g || ' minutes')::interval, 'tp_hit', '', g, repeat('x', 40000)
+      from generate_series(1, 500) g`, [USER]);
+  await db.exec(`alter table public.paper_trade_history enable trigger trg_freeze_streamlined_decision`);
+  await db.query(`insert into public.bot_configs (user_id, config_json) values ($1, '{"tradingStyle":{"mode":"scalper"}}')`, [USER]);
+  const run = (await db.query<{ r: string }>(`insert into public.account_reset_runs (account_id, requested_by, requested_at, status) values ($1,$2,now(),'running') returning reset_id as r`, [acct, USER])).rows[0].r;
+
+  const t0 = Date.now();
+  const id = (await db.query<{ id: number }>(`select public.take_account_reset_snapshot($1::uuid, '[{"position_id":"x"}]', '[]', '[]') as id`, [run])).rows[0].id;
+  const ms = Date.now() - t0;
+  const snap = (await db.query<{ n: number; md5: string; bytes: number; has_blob: boolean; cfg: string }>(`
+    select (row_counts->>'period_history')::int as n, row_counts->>'period_history_md5' as md5,
+           octet_length(period_history::text) as bytes, period_history::text like '%xxxxxxxx%' as has_blob,
+           config->'config_json'->'tradingStyle'->>'mode' as cfg
+      from public.account_reset_snapshots where id = $1`, [id])).rows[0];
+  assertEquals(snap.n, 500, "every history row listed");
+  assert(/^[0-9a-f]{32}$/.test(snap.md5), "integrity hash present");
+  assertEquals(snap.has_blob, false, "the large text blobs are NOT copied");
+  assert(snap.bytes < 500 * 1000, `compact: ${snap.bytes} bytes for 500 rows`);
+  assertEquals(snap.cfg, "scalper", "config captured");
+  assert(ms < 20000, `fast enough for the API statement timeout: ${ms} ms`);
+
+  await db.query(`update public.account_reset_runs set status = 'failed' where reset_id = $1`, [run]);
+  await assertRejects(() => db.query(`select public.take_account_reset_snapshot($1::uuid, '[]', '[]', '[]')`, [run]), Error, "not running");
+
+  const can = async (role: string) => (await db.query<{ ok: boolean }>(
+    `select has_function_privilege($1, 'public.take_account_reset_snapshot(uuid, jsonb, jsonb, jsonb)', 'execute') as ok`, [role])).rows[0].ok;
+  assertEquals(await can("service_role"), true);
+  assertEquals(await can("authenticated"), false);
+  assertEquals(await can("anon"), false);
+  await db.close();
 });
