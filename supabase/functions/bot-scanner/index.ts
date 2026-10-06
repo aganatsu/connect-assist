@@ -104,6 +104,7 @@ import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.t
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import { applyLoggedOnlyGates, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
+import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -7322,6 +7323,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
         // This gives structural protection: SL is below where the impulse started (for longs)
         // or above where it started (for shorts). The impulse origin is the invalidation level.
+        // Step 10: the Impulse-origin stop candidate and its cap, kept so the
+        // Route 2 order can re-run the same rules from its own limit entry.
+        let impulseStopCandidate: { sl: number; capPips: number } | null = null;
         if (izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone) {
           const impulseData = izData.impulse;
           if (impulseData) {
@@ -7368,6 +7372,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const legCapPips = (impulseRange * legCapMultiple) / spec.pipSize;
             const maxImpulseSlPips = Math.max(floorCapPips, legCapPips);
             const impulseSlPips = impulseSlDistance / spec.pipSize;
+            impulseStopCandidate = { sl: impulseSL, capPips: maxImpulseSlPips };
             if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
               sl = impulseSL;
@@ -7922,6 +7927,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             limitTP = limitEntry.price + riskFromLimit * config.tpRatio;
           } else {
             limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
+          }
+          // Step 10: the same stop rules measured from the ORDER's entry (the
+          // market-anchored chain left 33 of 53 FX orders inside the floor).
+          // Both geometries are recorded; the switch picks the one used.
+          {
+            const anchored = route2StopFromLimit({
+              direction: analysis.direction as "long" | "short",
+              limit: limitEntry.price,
+              swingSL: typeof slFloorTrace.slBeforeFloor === "number" ? slFloorTrace.slBeforeFloor : null,
+              impulseSL: impulseStopCandidate?.sl ?? null,
+              impulseCapPips: impulseStopCandidate?.capPips ?? null,
+              minSlPips: effectiveMinSlPips,
+              pipSize: spec.pipSize,
+              tpRatio: config.tpRatio,
+            });
+            (detail as any).route2Stop = {
+              anchor: simp.stopAnchor,
+              market: { sl: limitSL, tp: limitTP, riskPipsFromLimit: riskFromLimit / spec.pipSize, belowFloor: riskFromLimit / spec.pipSize < effectiveMinSlPips },
+              limit: anchored,
+              floorPips: effectiveMinSlPips,
+            };
+            if (simp.stopAnchor === "limit") {
+              if (!anchored.ok) {
+                detail.status = "zone_setup_rejected_stop";
+                detail.skipReason = `Route 2 stop geometry unavailable: ${anchored.reason}`;
+                scanDetails.push(detail);
+                continue;
+              }
+              limitSL = anchored.sl;
+              limitTP = anchored.tp;
+            }
           }
 
           // Step 8: effective R:R of the order as actually placed (after spread +
