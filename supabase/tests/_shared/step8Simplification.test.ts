@@ -30,7 +30,9 @@ Deno.test("the approved minimal switches resolve exactly", () => {
     // step 9 sizing switches are not part of the step 8 config → legacy defaults
     sizingMode: "legacy", riskPercent: 0.5, maxLotsPerTrade: 20,
     // step 10 stop anchor is not part of the step 8 config → legacy default
-    stopAnchor: "market" });
+    stopAnchor: "market",
+    // step 11 poller switch is not part of the step 8 config → legacy default
+    secondPollerEnabled: true });
 });
 
 const gates: GateResult[] = [

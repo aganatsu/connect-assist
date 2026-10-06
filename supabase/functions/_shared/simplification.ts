@@ -40,6 +40,10 @@ export interface SimplificationSwitches {
   /** Step 10: measure the Route 2 stop chain from the "market" price at scan
    *  time (legacy) or from the order's own "limit" entry. */
   stopAnchor: "market" | "limit";
+  /** Step 11: zone-confirmation-scanner (the second Route 2 poller). When
+   *  false it does nothing for the account; every Route 2 lifecycle action
+   *  (arm, reset, cancel, expire, confirm, fill) comes from the bot-scanner hunt. */
+  secondPollerEnabled: boolean;
 }
 
 export const LEGACY_SWITCHES: SimplificationSwitches = {
@@ -54,6 +58,7 @@ export const LEGACY_SWITCHES: SimplificationSwitches = {
   riskPercent: 0.5,
   maxLotsPerTrade: 20,
   stopAnchor: "market",
+  secondPollerEnabled: true,
 };
 
 const mode = (v: unknown, fallback: GateMode): GateMode => (v === "gate" || v === "log" ? v : fallback);
@@ -74,6 +79,7 @@ export function resolveSimplification(raw: Record<string, unknown> | null | unde
     riskPercent: typeof s.riskPercent === "number" && s.riskPercent > 0 && s.riskPercent <= 5 ? s.riskPercent : LEGACY_SWITCHES.riskPercent,
     maxLotsPerTrade: typeof s.maxLotsPerTrade === "number" && s.maxLotsPerTrade > 0 ? s.maxLotsPerTrade : LEGACY_SWITCHES.maxLotsPerTrade,
     stopAnchor: s.stopAnchor === "limit" ? "limit" : "market",
+    secondPollerEnabled: s.secondPollerEnabled === false ? false : true,
   };
 }
 
