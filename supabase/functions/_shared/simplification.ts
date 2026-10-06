@@ -37,6 +37,9 @@ export interface SimplificationSwitches {
   riskPercent: number;
   /** Safety ceiling in lots (the 10× leverage cap also applies). */
   maxLotsPerTrade: number;
+  /** Step 10: measure the Route 2 stop chain from the "market" price at scan
+   *  time (legacy) or from the order's own "limit" entry. */
+  stopAnchor: "market" | "limit";
 }
 
 export const LEGACY_SWITCHES: SimplificationSwitches = {
@@ -50,6 +53,7 @@ export const LEGACY_SWITCHES: SimplificationSwitches = {
   sizingMode: "legacy",
   riskPercent: 0.5,
   maxLotsPerTrade: 20,
+  stopAnchor: "market",
 };
 
 const mode = (v: unknown, fallback: GateMode): GateMode => (v === "gate" || v === "log" ? v : fallback);
@@ -69,6 +73,7 @@ export function resolveSimplification(raw: Record<string, unknown> | null | unde
     sizingMode: s.sizingMode === "fill_time" ? "fill_time" : "legacy",
     riskPercent: typeof s.riskPercent === "number" && s.riskPercent > 0 && s.riskPercent <= 5 ? s.riskPercent : LEGACY_SWITCHES.riskPercent,
     maxLotsPerTrade: typeof s.maxLotsPerTrade === "number" && s.maxLotsPerTrade > 0 ? s.maxLotsPerTrade : LEGACY_SWITCHES.maxLotsPerTrade,
+    stopAnchor: s.stopAnchor === "limit" ? "limit" : "market",
   };
 }
 

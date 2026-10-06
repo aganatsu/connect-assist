@@ -28,7 +28,9 @@ Deno.test("the approved minimal switches resolve exactly", () => {
   const s = resolveSimplification(MINIMAL);
   assertEquals(s, { scoreGateMode: "log", reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0, newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true,
     // step 9 sizing switches are not part of the step 8 config → legacy defaults
-    sizingMode: "legacy", riskPercent: 0.5, maxLotsPerTrade: 20 });
+    sizingMode: "legacy", riskPercent: 0.5, maxLotsPerTrade: 20,
+    // step 10 stop anchor is not part of the step 8 config → legacy default
+    stopAnchor: "market" });
 });
 
 const gates: GateResult[] = [
