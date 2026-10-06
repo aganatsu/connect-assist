@@ -39,6 +39,7 @@ const MIGRATION_TIMESTAMPS = read("../../migrations/20261006000000_trade_history
 const MIGRATION_LEDGER = read("../../migrations/20261006010000_paper_settlement_ledger.sql");
 const MIGRATION_MONITOR = read("../../migrations/20261006020000_settlement_monitor_runs.sql");
 const MIGRATION_RESET = read("../../migrations/20261006030000_system_reset_workflow.sql");
+const MIGRATION_LOCK = read("../../migrations/20261006040000_post_reset_entries_lock.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -126,6 +127,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_LEDGER);
   await db.exec(MIGRATION_MONITOR);
   await db.exec(MIGRATION_RESET);
+  await db.exec(MIGRATION_LOCK);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -677,5 +679,28 @@ Deno.test("reset snapshots: append-only", async () => {
     values ($1, '{}', '[]', '{}', '[]', '[]', '[]', '[]')`, [run]);
   await assertRejects(() => db.query(`update public.account_reset_snapshots set config_hash = 'x'`), Error, "append-only");
   await assertRejects(() => db.query(`delete from public.account_reset_snapshots`), Error, "append-only");
+  await db.close();
+});
+
+// ─── post-reset entries lock ────────────────────────────────────────────────
+
+Deno.test("entries lock: ships off; a signed-in user cannot lift it; the server can set it", async () => {
+  const db = await freshDb();
+  const lockedOf = async () => (await db.query<{ l: boolean }>(`select entries_locked as l from public.paper_accounts where user_id = $1`, [USER])).rows[0].l;
+  assertEquals(await lockedOf(), false, "no behaviour change before the reset");
+
+  // The server (service role) sets it, as the reset does.
+  await db.query(`select set_config('request.jwt.claim.role', 'service_role', false)`);
+  await db.exec(`set session authorization authenticated`);
+  await db.query(`update public.paper_accounts set entries_locked = true, entries_locked_reason = 'reset' where user_id = $1`, [USER]);
+  assertEquals(await lockedOf(), true);
+
+  // The account owner, signed in through the API, cannot lift it.
+  await db.query(`select set_config('request.jwt.claim.role', 'authenticated', false), set_config('request.jwt.claim.sub', $1, false)`, [USER]);
+  await assertRejects(() => db.query(`update public.paper_accounts set entries_locked = false where user_id = $1`, [USER]), Error, "entries lock");
+  // …while ordinary fields stay editable (e.g. the app's pause button).
+  await db.query(`update public.paper_accounts set is_paused = false where user_id = $1`, [USER]);
+  await db.exec(`reset session authorization`);
+  assertEquals(await lockedOf(), true, "unpausing does not unlock");
   await db.close();
 });

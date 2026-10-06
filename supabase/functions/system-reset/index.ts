@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
           close_at_market: plan,
           old_period_pnl_from_closes: Number(plan.reduce((s, p) => s + p.pnl, 0).toFixed(2)),
           cancel_orders: readiness.old_period.pending, cancel_setups: readiness.old_period.setups,
-          then: ["verify old-period settlements", "in-DB snapshot", "reset_paper_account(100000)", "clear active state", "verify", "resume only if verified"],
+          then: ["verify old-period settlements", "in-DB snapshot", "reset_paper_account(100000)", "clear active state", "verify", "stay PAUSED and entries-LOCKED until the new configuration is approved"],
         },
       });
     }
@@ -193,6 +193,11 @@ function makeDeps(db: any): ResetDeps {
     async setPaused(paused) {
       await must("pause", db.from("paper_accounts").update({ is_paused: paused }).eq("bot_id", SMC_BOT_ID));
     },
+    async lockEntries(reason) {
+      await must("lock entries", db.from("paper_accounts")
+        .update({ entries_locked: true, entries_locked_reason: reason, entries_locked_at: new Date().toISOString() })
+        .eq("bot_id", SMC_BOT_ID));
+    },
     async cancelOldPending(boundary) {
       return must<any[]>("cancel pending", db.from("pending_orders")
         .update({ status: "cancelled", cancel_reason: "account_reset", resolved_at: new Date().toISOString(), updated_at: new Date().toISOString() })
@@ -283,6 +288,7 @@ function makeDeps(db: any): ResetDeps {
         drift: recon.drift === null ? null : Number(recon.drift),
         unledgered_writes_this_epoch: Number(recon.unledgered_writes_this_epoch ?? 0),
         last_ledger_kind: last.kind, ledger_reset_at: acct.ledger_reset_at,
+        is_paused: acct.is_paused === true, entries_locked: acct.entries_locked === true,
       };
     },
   };

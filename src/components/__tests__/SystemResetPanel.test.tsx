@@ -115,7 +115,7 @@ describe("System Reset & Ledger Health", () => {
     expect(onExecute).not.toHaveBeenCalled();
 
     const dialog = screen.getByTestId("confirm-dialog");
-    for (const text of ["$105,879.62", "$105,335.66", "closed at market", "cancelled", "will be reset", "preserved", "RESET 100000"]) {
+    for (const text of ["$105,879.62", "$105,335.66", "closed at market", "cancelled", "will be reset", "preserved", "RESET 100000", "will NOT resume", "separately approved"]) {
       expect(dialog.textContent).toContain(text);
     }
     const input = screen.getByTestId("confirm-input");

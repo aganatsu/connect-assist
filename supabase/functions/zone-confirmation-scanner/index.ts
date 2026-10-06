@@ -236,6 +236,15 @@ Deno.serve(async (req) => {
         .from("paper_accounts").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
+      // Post-reset lock (migration 20261006040000): no fills while the account
+      // is between the reset and the approved new configuration. Only the lock
+      // is checked here, not is_paused, so behaviour before the reset is
+      // unchanged.
+      if (account?.entries_locked === true) {
+        console.warn(`[zone-confirm] entries locked (post-reset) for ${userId} — no fills`);
+        continue;
+      }
+
       // Bot config.
       //
       // bot_configs has no bot_id column — SQL_MIGRATION_BOT_ID.sql added it to

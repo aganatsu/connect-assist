@@ -198,6 +198,7 @@ export function SystemResetPanel({ readiness: r, onRefresh, onDryRun, onExecute,
             <div className="text-sm rounded-md border p-2" data-testid="reset-result">
               <div className="font-medium">Reset {result.status.toUpperCase()} {result.resetId ? `(${result.resetId})` : ""}</div>
               {result.failedStep && <div className="text-red-500">Stopped at {result.failedStep}: {result.reason} — bot left paused.</div>}
+              {result.status === "succeeded" && <div>Trading remains paused and entries locked until the new configuration is approved.</div>}
               {result.error && <div className="text-red-500">{result.error}</div>}
               {result.verification && (
                 <ul>{result.verification.map((v) => <li key={v.key}>{v.pass ? "✓" : "✗"} {v.label} ({v.detail})</li>)}</ul>
@@ -230,7 +231,8 @@ export function SystemResetPanel({ readiness: r, onRefresh, onDryRun, onExecute,
                 <div>Current balance: <b>{usd(m.balance)}</b> · Current equity: <b>{usd(m.equity)}</b></div>
                 <div>Open positions: <b>{m.open_positions}</b> · Pending orders: <b>{m.pending_orders}</b> · Watched/armed setups: <b>{m.active_setups}</b></div>
                 <div className="text-red-500">All old-period positions will be closed at market and settled to the OLD period; all old-period pending orders and setups will be cancelled.</div>
-                <div className="text-red-500">Active trading state (balance, equity baseline, daily P/L, drawdown baseline, counters) will be reset. Trading is paused during the reset and resumes only if every post-reset check passes.</div>
+                <div className="text-red-500">Active trading state (balance, equity baseline, daily P/L, drawdown baseline, counters) will be reset.</div>
+                <div className="font-medium">Trading will NOT resume after the reset. The account stays paused and new entries stay locked until the simplified configuration is built, verified and separately approved.</div>
                 <div>Historical trades, research data, the ledger, the pre-reset snapshots and this audit trail are preserved.</div>
                 <div>Type <code className="font-mono">{CONFIRMATION_PHRASE}</code> to enable the final button.</div>
                 <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={CONFIRMATION_PHRASE} data-testid="confirm-input" autoComplete="off" />

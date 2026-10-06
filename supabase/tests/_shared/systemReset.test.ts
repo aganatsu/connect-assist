@@ -130,12 +130,14 @@ const postOk: PostResetState = {
   balance: 100000, peak_balance: 100000, daily_pnl_base: 100000, equity: 100000, realized_pnl_this_epoch: 0, unrealized_pnl: 0,
   open_positions: 0, positions_opened_before_reset: 0, pending_orders: 0, active_setups: 0, daily_pnl: 0, drift: 0,
   unledgered_writes_this_epoch: 0, last_ledger_kind: "reset", ledger_reset_at: "2026-10-06T18:00:05Z",
+  is_paused: true, entries_locked: true,
 };
 
 class Fake implements ResetDeps {
   calls: string[] = [];
   runs = new Map<string, Record<string, any>>();
   paused = false;
+  locked = false;
   positions: OldPosition[] = [gbp, chf];
   pending: OldOrder[] = [usdjpy, btc];
   ready = evaluateResetReadiness(greenAt24h());
@@ -151,6 +153,7 @@ class Fake implements ResetDeps {
   async insertRun(row: Record<string, unknown>) { const id = `r${this.runs.size + 1}`; this.runs.set(id, { ...row }); this.calls.push(`insertRun:${row.status}`); return id; }
   async updateRun(id: string, patch: Record<string, unknown>) { Object.assign(this.runs.get(id)!, patch); }
   async setPaused(p: boolean) { this.paused = p; this.calls.push(`paused:${p}`); }
+  async lockEntries() { this.locked = true; this.calls.push("lockEntries"); }
   async cancelOldPending() {
     this.calls.push("cancelPending");
     const c = this.pending; this.pending = [];
@@ -196,13 +199,13 @@ Deno.test("wrong phrase, execution disabled, not ready, or changed state → abo
   }
 });
 
-Deno.test("happy path: cancel orders first, flatten through the ledger, snapshot, reset, verify, resume", async () => {
+Deno.test("happy path: cancel orders first, flatten through the ledger, snapshot, reset, verify — and STAY paused + locked", async () => {
   const f = new Fake();
   const r = await request(f);
   assertEquals(r.status, "succeeded", r.reason);
   assertEquals(mutations(f), [
-    "paused:true", "cancelPending", "cancelSetups", "settle:GBP/USD", "settle:CHF/JPY",
-    "ledgerHealth", "snapshot", "resetAccount", "clearActiveState", "postResetState", "paused:false",
+    "paused:true", "lockEntries", "cancelPending", "cancelSetups", "settle:GBP/USD", "settle:CHF/JPY",
+    "ledgerHealth", "snapshot", "resetAccount", "clearActiveState", "postResetState",
   ]);
   const run = f.runs.get(r.resetId!)!;
   assertEquals(run.status, "succeeded");
@@ -214,7 +217,10 @@ Deno.test("happy path: cancel orders first, flatten through the ledger, snapshot
   assertEquals(run.pre_reset_balance, 105879.62);
   assertEquals(run.post_reset_balance, 100000);
   assert(run.verification.every((v: any) => v.pass));
-  assertEquals(f.paused, false, "trading resumes only after verification");
+  assertEquals(f.paused, true, "the reset is a boundary, not a restart: trading stays paused");
+  assertEquals(f.locked, true, "and new entries stay locked until the new configuration is approved");
+  assert(!f.calls.includes("paused:false"), "nothing in the reset ever unpauses");
+  assertEquals(run.steps.at(-1).step, "left_paused_and_locked");
 });
 
 Deno.test("an old order that fills during the reset is closed as an old-period position", async () => {
@@ -232,6 +238,7 @@ Deno.test("a failed settlement STOPS before any reset; the bot stays paused; the
   assertEquals(r.failedStep, "close_old_positions");
   assert(!f.calls.includes("resetAccount") && !f.calls.includes("snapshot"));
   assertEquals(f.paused, true);
+  assertEquals(f.locked, true, "a failed reset is locked too");
   const run = f.runs.get(r.resetId!)!;
   assertEquals(run.status, "failed");
   assertEquals(run.positions_closed.map((p: any) => p.symbol), ["GBP/USD"], "what DID close is on the record");
@@ -267,12 +274,13 @@ Deno.test("post-reset verification failure leaves the bot paused and the run fai
 
 Deno.test("verifyPostReset: the full required list", () => {
   const v = verifyPostReset(postOk);
-  assertEquals(v.length, 13);
+  assertEquals(v.length, 15);
   assert(v.every((x) => x.pass));
   const labels = v.map((x) => x.label).join(" | ");
   for (const need of ["Balance = $100,000.00", "Equity = $100,000.00", "Realized P/L = $0", "Unrealized P/L = $0", "Open positions = 0",
     "Pending orders = 0", "Old watched/armed setups = 0", "Daily P/L = $0", "Drawdown baseline = $100,000",
-    "No old position can affect", "No old backfill can affect", "drift = $0", "No unledgered writes"]) {
+    "No old position can affect", "No old backfill can affect", "drift = $0", "No unledgered writes",
+    "Trading paused", "New entries locked"]) {
     assert(labels.includes(need), need);
   }
 });
@@ -285,4 +293,23 @@ Deno.test("the reset function refuses service-role and non-admin callers (source
   assert(/if \(adminErr \|\| isAdmin !== true\) return respond\(\{ error: "admin only" \}, 403\)/.test(src));
   // Admin check precedes any action.
   assert(src.indexOf("is_app_admin") < src.indexOf('body.action === "readiness"'));
+});
+
+Deno.test("post-reset verification fails if trading is not paused or entries are not locked", () => {
+  const unpaused = verifyPostReset({ ...postOk, is_paused: false });
+  assert(unpaused.some((v) => v.key === "paused" && !v.pass));
+  const unlocked = verifyPostReset({ ...postOk, entries_locked: false });
+  assert(unlocked.some((v) => v.key === "entries_locked" && !v.pass));
+});
+
+Deno.test("the entries lock is honoured by every new-entry and fill path (source)", () => {
+  const scanner = Deno.readTextFileSync(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
+  assert(/const isPaused = account\.is_paused \|\| account\.entries_locked === true;/.test(scanner), "locked counts as paused for staging/promotion/placement");
+  const hunt = scanner.indexOf("if (account.entries_locked === true) {");
+  assert(hunt > 0 && hunt < scanner.indexOf("const claim = await claimRoute2Fill(supabase, {"), "the hunt refuses to fill while locked");
+  const zcs = Deno.readTextFileSync(new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url));
+  const lock = zcs.indexOf("if (account?.entries_locked === true) {");
+  assert(lock > 0 && lock < zcs.indexOf("claimRoute2Fill(supabase, {"), "the fast-fill poller refuses to fill while locked");
+  const reset = Deno.readTextFileSync(new URL("../../functions/_shared/systemReset.ts", import.meta.url));
+  assert(!/setPaused\(false\)/.test(reset.replace(/^\s*(\/\/|\*).*$/gm, "")), "the reset sequence never unpauses");
 });
