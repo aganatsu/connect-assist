@@ -42,6 +42,7 @@ const MIGRATION_RESET = read("../../migrations/20261006030000_system_reset_workf
 const MIGRATION_LOCK = read("../../migrations/20261006040000_post_reset_entries_lock.sql");
 const MIGRATION_ROLE_FIX = read("../../migrations/20261006060000_fix_jwt_role_detection.sql");
 const MIGRATION_SNAPSHOT_FN = read("../../migrations/20261006070000_reset_snapshot_function.sql");
+const MIGRATION_DRY_RUN = read("../../migrations/20261007000000_step8_dry_run_orders.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -137,6 +138,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_ROLE_FIX);
   await db.exec(`${tableDdl("bot_configs")} ${tableDdl("bot_config_change_log")}`);
   await db.exec(MIGRATION_SNAPSHOT_FN);
+  await db.exec(MIGRATION_DRY_RUN);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -782,5 +784,47 @@ Deno.test("reset snapshot: built in-DB, compact history with an integrity hash, 
   assertEquals(await can("service_role"), true);
   assertEquals(await can("authenticated"), false);
   assertEquals(await can("anon"), false);
+  await db.close();
+});
+
+// ─── step 8: dry-run orders + database entries-lock safety net ───────────────
+
+const pendingRow = (over: Record<string, unknown> = {}) => ({
+  user_id: USER, bot_id: "smc", order_id: crypto.randomUUID().slice(0, 8), symbol: "EUR/USD", direction: "long",
+  order_type: "limit", entry_price: 1.1, current_price: 1.101, stop_loss: 1.098, take_profit: 1.1022,
+  status: "pending", expires_at: new Date(Date.now() + 8 * 3600_000).toISOString(), ...over,
+});
+async function insertPending(db: PGlite, row: Record<string, unknown>): Promise<string> {
+  const cols = Object.keys(row);
+  return (await db.query<{ id: string }>(
+    `insert into public.pending_orders (${cols.join(",")}) values (${cols.map((_, i) => `$${i + 1}`).join(",")}) returning id`,
+    cols.map((c) => row[c]))).rows[0].id;
+}
+const lock = (db: PGlite, on: boolean) => db.query(`update public.paper_accounts set entries_locked = $1 where user_id = $2`, [on, USER]);
+
+Deno.test("step 8 safety net: while locked, no position and no real order — only dry-run orders", async () => {
+  const db = await freshDb();
+  await lock(db, true);
+  await assertRejects(() => openPosition(db), Error, "entries locked: no new positions");
+  await assertRejects(() => insertPending(db, pendingRow()), Error, "only dry-run orders");
+  const dryId = await insertPending(db, pendingRow({ dry_run: true, dry_run_context: { legacyWouldAdmit: false } }));
+  assert(dryId);
+  // The hunt's hypothetical fill is an UPDATE on the dry-run order — allowed.
+  await db.query(`update public.pending_orders set status = 'filled', filled_at = now() where id = $1`, [dryId]);
+  assertEquals(await count(db, "public.paper_positions"), 0);
+  await db.close();
+});
+
+Deno.test("step 8 safety net: a dry-run order can never become a position or a real order, even unlocked", async () => {
+  const db = await freshDb();
+  await lock(db, true);
+  const dryId = await insertPending(db, pendingRow({ dry_run: true }));
+  await lock(db, false);
+  await assertRejects(() => openPosition(db, { source_pending_order_id: dryId }), Error, "dry-run order can never become a position");
+  await assertRejects(() => db.query(`update public.pending_orders set dry_run = false where id = $1`, [dryId]), Error, "immutable");
+  // Unlocked, ordinary orders and positions work again.
+  await insertPending(db, pendingRow());
+  await openPosition(db, { position_id: "real0001" });
+  assertEquals(await count(db, "public.paper_positions"), 1);
   await db.close();
 });

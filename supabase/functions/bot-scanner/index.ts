@@ -102,6 +102,7 @@ import {
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
+import { applyLoggedOnlyGates, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -1582,15 +1583,15 @@ export async function runSafetyGates(
         f.present && reactionFactors.some(rf => f.name?.includes(rf))
       );
       if (!hasReaction) {
-        gates.push({ passed: false, reason: `Reaction Confirmation BLOCKED: Ranging market with no reaction factor (need Displacement, Reversal, Sweep, or AMD)` });
+        gates.push({ gateId: "reaction", passed: false, reason: `Reaction Confirmation BLOCKED: Ranging market with no reaction factor (need Displacement, Reversal, Sweep, or AMD)` });
       } else {
         const presentReactions = factors
           .filter((f: any) => f.present && reactionFactors.some(rf => f.name?.includes(rf)))
           .map((f: any) => f.name);
-        gates.push({ passed: true, reason: `Reaction confirmed in ranging market: ${presentReactions.join(", ")}` });
+        gates.push({ gateId: "reaction", passed: true, reason: `Reaction confirmed in ranging market: ${presentReactions.join(", ")}` });
       }
     } else {
-      gates.push({ passed: true, reason: `Reaction gate skipped: trend is ${entryTrend} (not ranging)` });
+      gates.push({ gateId: "reaction", passed: true, reason: `Reaction gate skipped: trend is ${entryTrend} (not ranging)` });
     }
   }
 
@@ -1679,9 +1680,9 @@ export async function runSafetyGates(
 
   // Gate 9: Min confluence (redundant but per spec)
   if (analysis.score < config.minConfluence) {
-    gates.push({ passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
+    gates.push({ gateId: "score", passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
   } else {
-    gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
+    gates.push({ gateId: "score", passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
   // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
@@ -1712,12 +1713,12 @@ export async function runSafetyGates(
     const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
     const costDetail = avgCommPerLot > 0 ? `spread ${pairSpec.typicalSpread}p + comm $${avgCommPerLot.toFixed(1)}/lot` : `spread ${pairSpec.typicalSpread}p`;
     if (effectiveRR < config.minRiskReward) {
-      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${config.minRiskReward} min` });
+      gates.push({ gateId: "rr_legacy", passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${config.minRiskReward} min` });
     } else {
-      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})` });
+      gates.push({ gateId: "rr_legacy", passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})` });
     }
   } else {
-    gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
+    gates.push({ gateId: "rr_legacy", passed: false, reason: "No valid SL/TP for R:R check" });
   }
 
   // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
@@ -1850,20 +1851,20 @@ export async function runSafetyGates(
           const newsData: any = await newsRes.json();
           if (newsData.hasHighImpact) {
             const eventNames = (newsData.events || []).map((e: any) => e.name || e.title || "event").join(", ");
-            gates.push({ passed: false, reason: `News filter: high-impact event within ${config.newsFilterPauseMinutes}min — ${eventNames}` });
+            gates.push({ gateId: "news_event", passed: false, reason: `News filter: high-impact event within ${config.newsFilterPauseMinutes}min — ${eventNames}` });
           } else {
-            gates.push({ passed: true, reason: `No high-impact news within ${config.newsFilterPauseMinutes}min for ${symbol}` });
+            gates.push({ gateId: "news_event", passed: true, reason: `No high-impact news within ${config.newsFilterPauseMinutes}min for ${symbol}` });
           }
         } else {
           // Don't block trades if the news API is temporarily unavailable
-          gates.push({ passed: true, reason: "News filter: API unavailable — skipped" });
+          gates.push({ gateId: "news_event", passed: true, reason: "News filter: API unavailable — skipped" });
         }
       } else {
-        gates.push({ passed: true, reason: "News filter: env not configured — skipped" });
+        gates.push({ gateId: "news_event", passed: true, reason: "News filter: env not configured — skipped" });
       }
     } catch (e: any) {
       console.warn(`News filter error for ${symbol}: ${e?.message}`);
-      gates.push({ passed: true, reason: `News filter error: ${e?.message} — skipped` });
+      gates.push({ gateId: "news_event", passed: true, reason: `News filter error: ${e?.message} — skipped` });
     }
   }
 
@@ -2522,7 +2523,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // the $100k reset the account must not trade the old configuration, and the
   // app's Resume button only clears `is_paused`. Locked counts as paused for
   // every new-entry path (staging, promotion, placement).
-  const isPaused = account.is_paused || account.entries_locked === true;
+  //
+  // Step 8 switches (config_json.simplification; absent = legacy behaviour).
+  // DRY RUN: while entries are locked and dryRunWhenLocked is set, the full
+  // pipeline runs and Route 2 orders are inserted flagged dry_run — they go
+  // through the real dedupe / supersede / expiry / cancel / confirmation path
+  // but are never filled into positions (hunt marks a hypothetical fill; the
+  // database refuses any position or non-dry-run order while locked).
+  const simp = resolveSimplification((config as any).__rawConfigJson);
+  const dryRunActive = account.entries_locked === true && simp.dryRunWhenLocked;
+  const isPaused = dryRunActive ? false : (account.is_paused || account.entries_locked === true);
 
   // ── Compute average commission per lot across active broker connections ──
   // Used in R:R gating and lot sizing. Reads commission_per_lot (user-set) or detected_commission_per_lot (auto-learned).
@@ -4365,12 +4375,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             resolved_at: nowStr,
           };
 
+          // DRY RUN order: record a hypothetical fill at the confirmation price.
+          // Never a position — not even after unlock.
+          if ((pending as any).dry_run === true) {
+            const { error: dryErr } = await supabase.from("pending_orders").update({
+              ...pendingFillPatch,
+              status: "filled",
+              fill_reason: `[DRY RUN — hypothetical] ${pendingFillPatch.fill_reason}`,
+            }).eq("id", (pending as any).id).eq("status", pending.status);
+            if (dryErr) console.warn(`[pending] dry-run fill record failed for ${pending.order_id}: ${dryErr.message}`);
+            pollCtx.branch = "dry_run_fill";
+            pollCtx.after = "filled";
+            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "DRY_RUN_FILL", tier: confirmationSignal.tier });
+            continue;
+          }
           // Post-reset lock: no fills at all, not even of an order that
           // somehow survived the reset's cancellation.
           if (account.entries_locked === true) {
             console.warn(`[pending] ${pending.symbol} ${pending.direction} — entries locked (post-reset), not filling ${pending.order_id}`);
             pollCtx.branch = "entries_locked";
             pollCtx.after = pending.status;
+            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "ENTRIES_LOCKED", tier: confirmationSignal.tier });
             continue;
           }
 
@@ -6445,9 +6470,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: CASCADE GATE PASSED [triggered] \u2014 Daily\u21924H\u21921H cascade complete, entry=${cascadeResult.entry?.toFixed(5)}, SL=${cascadeResult.sl?.toFixed(5)}`);
     } else if (unifiedZoneData?.hasZone &&
         (unifiedZoneData.state === "triggered" || unifiedZoneData.state === "confirmed") &&
+        unifiedZoneData.confirmation?.entryReady === true && !simp.unifiedModifiersEnabled) {
+      // Step 8: Unified detected but NOT allowed to modify entry/SL/size or bypass
+      // the Impulse gate. Detection, attribution and the Unified-vs-Impulse
+      // comparison are recorded; the trade proceeds as standalone Impulse.
+      (detail as any).signalSource = "standalone";
+      (detail as any).unifiedDetected = { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore ?? null, confirmation: unifiedZoneData.confirmation?.type ?? null, modifiersApplied: false };
+      console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Unified ${unifiedZoneData.state} detected — modifiers OFF (logged only)`);
+    } else if (unifiedZoneData?.hasZone &&
+        (unifiedZoneData.state === "triggered" || unifiedZoneData.state === "confirmed") &&
         unifiedZoneData.confirmation?.entryReady === true) {
       unifiedGatePassed = true;
       (detail as any).signalSource = "unified";
+      (detail as any).unifiedDetected = { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore ?? null, confirmation: unifiedZoneData.confirmation?.type ?? null, modifiersApplied: true };
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: UNIFIED GATE PASSED [${unifiedZoneData.state}] \u2014 score ${unifiedZoneData.unifiedScore}/14, confirmation: ${unifiedZoneData.confirmation.type}`);
     } else {
       (detail as any).signalSource = "standalone";
@@ -6460,6 +6495,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
+    if ((detail as any).unifiedDetected) {
+      // Unified's entry/SL/TP/risk vs the Impulse values for the same setup.
+      (detail as any).unifiedComparison = unifiedVsImpulse({
+        direction: analysis.direction ?? null,
+        tpRatio: config.tpRatio,
+        pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+        unified: unifiedZoneData?.entry ? { entryPrice: unifiedZoneData.entry.entryPrice, slPrice: unifiedZoneData.entry.slPrice, state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore } : null,
+        impulse: izData?.bestZone ? {
+          refinedEntry: izData.bestZone.refinedEntry ?? null, high: izData.bestZone.high ?? null, low: izData.bestZone.low ?? null,
+          originSL: analysis.direction === "long" ? izData.impulse?.low ?? null : izData.impulse?.high ?? null,
+        } : null,
+      });
+    }
     if (unifiedGatePassed) {
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
@@ -6975,7 +7023,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
-    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && fvgTotal > 0 && fvgInvalidated + fvgExhausted === fvgTotal) {
+    const ictFvgWouldBlock = !!ictFVGResult && fvgTotal > 0 && fvgInvalidated + fvgExhausted === fvgTotal;
+    (detail as any).ictFVGGate = { mode: pairConfig.ictFVGInvalidationGateMode, wouldBlock: ictFvgWouldBlock, total: fvgTotal, invalidated: fvgInvalidated, exhausted: fvgExhausted };
+    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFvgWouldBlock) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT FVG BLOCKED: All ${fvgTotal} FVGs invalidated/exhausted`];
       detail.reason = `All FVGs invalidated (${fvgInvalidated} closed, ${fvgExhausted} exhausted)`;
@@ -7003,7 +7053,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-    if (effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused) {
+    const scoreWouldBlock = !(effectiveScore >= conflictAdjustedMinConfluence);
+    (detail as any).scoreGate = { mode: simp.scoreGateMode, wouldBlock: scoreWouldBlock, score: effectiveScore, threshold: conflictAdjustedMinConfluence };
+    if ((simp.scoreGateMode === "log" || !scoreWouldBlock) && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -7147,20 +7199,29 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
           if (newsAlignment.conflicting) {
             // Strong news conflict — block the trade
-            gates.push({ passed: false, reason: `News conflict: ${newsAlignment.advisory}` });
+            gates.push({ gateId: "news_alignment", passed: false, reason: `News conflict: ${newsAlignment.advisory}` });
             console.log(`[scan ${scanCycleId}] ❌ ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
           } else if (!newsAlignment.aligned && newsAlignment.strength >= 25) {
             // Moderate conflict — log warning but allow
-            gates.push({ passed: true, reason: `News caution: ${newsAlignment.advisory}` });
+            gates.push({ gateId: "news_alignment", passed: true, reason: `News caution: ${newsAlignment.advisory}` });
             console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: News mildly opposes ${analysis.direction} (${newsAlignment.strength}% strength) — allowing`);
           } else if (newsAlignment.aligned && newsAlignment.strength >= 30) {
             // News supports the trade — log confirmation
-            gates.push({ passed: true, reason: `News confirms: ${newsAlignment.advisory}` });
+            gates.push({ gateId: "news_alignment", passed: true, reason: `News confirms: ${newsAlignment.advisory}` });
             console.log(`[scan ${scanCycleId}] ✅ ${pair}: News supports ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
           }
         } catch (naErr: any) {
           console.warn(`[scan ${scanCycleId}] News alignment check error (non-fatal): ${naErr?.message}`);
         }
+      }
+      // Step 8: gates switched to "log" still ran; their blocks become logged passes.
+      {
+        const t = applyLoggedOnlyGates(gates as any, simp);
+        gates.splice(0, gates.length, ...(t.gates as any));
+        (detail as any).loggedOnlyGates = t.wouldHaveBlocked;
+        cap.gates_output = { ...(cap.gates_output as Record<string, unknown> ?? {}),
+          switches: simp, loggedOnlyWouldBlock: t.wouldHaveBlocked,
+          allPassedAfterSwitches: gates.every((g: any) => g.passed) };
       }
       const allPassed = gates.every(g => g.passed);
       // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
@@ -7778,6 +7839,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
         // or when marketFillAtZone is explicitly disabled.
         const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
+        if (dryRunActive && !(effectiveLimitEnabled && limitEntry)) {
+          // Dry run measures Route 2 only. A market entry would be a real
+          // position — refused here (and by the database while locked).
+          detail.status = "dry_run_market_skipped";
+          detail.skipReason = "Dry run (entries locked): market entry path not simulated";
+          scanDetails.push(detail);
+          continue;
+        }
         if (effectiveLimitEnabled && limitEntry) {
           // ── ROUTE 2 DISTANCE GUARD (research-registered, 1.5 H1 ATR) ──────
           //
@@ -7834,6 +7903,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             limitTP = limitEntry.price + riskFromLimit * config.tpRatio;
           } else {
             limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
+          }
+
+          // Step 8: effective R:R of the order as actually placed (after spread +
+          // commission). Recorded always; blocks only in order_geometry mode.
+          {
+            const orr = orderEffectiveRR({ entry: limitEntry.price, stop: limitSL, target: limitTP, symbol: pair, rateMap, commissionPerLot: avgCommissionPerLot });
+            const orrBlocks = orr.effectiveRR < simp.orderRRMin;
+            (detail as any).orderRR = { ...orr, min: simp.orderRRMin, mode: simp.rrGateMode, wouldBlock: orrBlocks };
+            if (simp.rrGateMode === "order_geometry" && orrBlocks) {
+              detail.status = "zone_setup_rejected_rr";
+              detail.skipReason = `Order R:R ${orr.effectiveRR.toFixed(2)} effective (${orr.rawRR.toFixed(2)} raw, spread ${orr.spreadPips}p) < ${simp.orderRRMin} min`;
+              console.log(`[pending] ${pair} ${analysis.direction} — REJECTED by order R:R: ${detail.skipReason}`);
+              scanDetails.push(detail);
+              continue;
+            }
           }
 
           // Recalculate position size based on limit entry price (unified sizing)
@@ -8030,6 +8114,23 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
             placed_at: r2PlacedAt,
+            dry_run: dryRunActive,
+            dry_run_context: dryRunActive ? {
+              switches: simp,
+              loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+              scoreGate: (detail as any).scoreGate ?? null,
+              ictFVGGate: (detail as any).ictFVGGate ?? null,
+              orderRR: (detail as any).orderRR ?? null,
+              unifiedDetected: (detail as any).unifiedDetected ?? null,
+              unifiedComparison: (detail as any).unifiedComparison ?? null,
+              // Would the pre-step-8 (legacy) rules have placed this order too?
+              // (legacy config: score gate on, R:R/reaction/news gating, ICT FVG "hard").
+              legacyWouldAdmit: ((detail as any).loggedOnlyGates ?? []).length === 0
+                && !((detail as any).scoreGate?.wouldBlock)
+                && !((detail as any).ictFVGGate?.wouldBlock),
+              // Legacy would have used Unified's entry/SL/size for this setup.
+              legacyGeometryDiffers: !!(detail as any).unifiedDetected,
+            } : null,
           });
 
           if (pendingInsertErr) {
@@ -8044,7 +8145,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
 
           pendingPlaced++;
-          detail.status = isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
+          detail.status = dryRunActive ? "dry_run_setup_active" : isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
           detail.limitOrder = {
             orderId: pendingOrderId,
             entryPrice: limitEntry.price,

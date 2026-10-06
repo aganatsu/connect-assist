@@ -316,6 +316,9 @@ Deno.serve(async (req) => {
     const pollAt = new Date().toISOString();
 
     for (const pending of huntingOrders) {
+      // Dry-run orders (step 8 funnel measurement) are hypothetical: this poller
+      // never fills them — the bot-scanner hunt records their hypothetical fill.
+      if ((pending as any).dry_run === true) continue;
       // Same guarantee as bot-scanner: ONE row per order per poll, enforced
       // by `finally` so a `continue` added later cannot escape the log.
       const pollMark = pollRows.length;
