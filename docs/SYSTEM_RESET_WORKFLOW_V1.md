@@ -49,7 +49,7 @@ The card lists every condition with its evidence and names the ones blocking. Th
 
 1. Recompute readiness from scratch; check the phrase, the execution switch, READY and the fingerprint. On any failure → **aborted**, recorded, nothing touched.
 2. Insert a `running` row with a unique `reset_id`. The unique index allows one running reset at a time.
-3. Pause new entries (`is_paused`). The management cron keeps running, so prices stay fresh.
+3. Pause new entries (`is_paused`) **and set the entries lock** (`entries_locked`). The management cron keeps running, so prices stay fresh.
 4. Cancel old-period pending orders (`placed_at` < start). This deliberately happens **before** closing positions, so an old order can't fill mid-flatten. An order a filler had already claimed becomes a position, and the next pass closes it.
 5. Cancel old watched or armed setups.
 6. Close every old-period position at market through `settle_paper_position`:
@@ -70,9 +70,47 @@ The card lists every condition with its evidence and names the ones blocking. Th
     - no pre-reset positions remain;
     - the latest ledger entry is `reset`;
     - drift is $0 and there are no unledgered writes.
-12. Resume trading **only if** step 11 passes.
+    - trading is paused and new entries are locked.
+12. **Do NOT resume.** A successful reset ends paused and entries-locked.
 
-Any failure from step 3 on → status `failed`, `failed_step` and `failure_reason` recorded, the bot **left paused**, and no further steps run.
+Any failure from step 3 on → status `failed`, `failed_step` and `failure_reason` recorded, the bot **left paused and locked**, and no further steps run.
+
+## After the reset: PAUSED and LOCKED until the new configuration is approved
+
+The reset is the accounting boundary that closes the old experiment, not a restart:
+
+```
+OLD PERIOD → SNAPSHOT → RESET → PAUSE → CLEAN BOT → VERIFY → NEW EXPERIMENT
+```
+
+`paper_accounts.entries_locked` (migration `20261006040000`):
+
+- The scanner treats a locked account as paused (no staging, promotion or Route 2 placement), whatever `is_paused` says.
+- **Both** Route 2 fill pollers refuse to fill while locked.
+- A database trigger lets only the service role or a database administrator change it. The app's Start/Resume button clears `is_paused` but **cannot** lift the lock.
+
+Steps 8–18 of the agreed sequence happen with the account locked:
+
+- simplification;
+- Route 2 sizing at fill;
+- Route 2 stop anchor;
+- one fill poller;
+- unified caps;
+- FTMO daily loss / drawdown;
+- explicit config;
+- attribution;
+- the minimal frozen config;
+- the full test suite;
+- your review of the effective configuration and trading path.
+
+**Unlock (step 19, only after your approval)** is one hand-applied statement, like the other production switches:
+
+```sql
+update public.paper_accounts
+   set entries_locked = false, entries_locked_reason = 'new experiment approved by <you> on <date>, config <hash>',
+       entries_locked_at = now(), is_paused = false
+ where bot_id = 'smc';
+```
 
 ## Enabling execution (separate approval)
 
@@ -87,7 +125,7 @@ Even then, the reset needs READY + admin + typed phrase + matching fingerprint.
 
 ## Release order
 
-1. Apply migrations `20261006020000` (monitor) and `20261006030000` (this) by hand, in one transaction.
+1. Apply migrations `20261006020000` (monitor) and `20261006030000` (this) by hand, in one transaction. Then `20261006040000` (entries lock) the same way, before merging the code that reads it.
 2. Merge #629, then this PR. Functions deploy, with execution off.
 3. Run `supabase/cron/settlement_monitor_cron.sql`.
 4. Open `/system` and review.

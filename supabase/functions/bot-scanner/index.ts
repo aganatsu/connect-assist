@@ -2518,7 +2518,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const shouldNotify = (category: string): boolean => notifyCategories[category] !== false;
 
   const balance = parseFloat(account.balance || "10000");
-  const isPaused = account.is_paused;
+  // `entries_locked` is the post-reset lock (migration 20261006040000): after
+  // the $100k reset the account must not trade the old configuration, and the
+  // app's Resume button only clears `is_paused`. Locked counts as paused for
+  // every new-entry path (staging, promotion, placement).
+  const isPaused = account.is_paused || account.entries_locked === true;
 
   // ── Compute average commission per lot across active broker connections ──
   // Used in R:R gating and lot sizing. Reads commission_per_lot (user-set) or detected_commission_per_lot (auto-learned).
@@ -4360,6 +4364,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             filled_at: nowStr,
             resolved_at: nowStr,
           };
+
+          // Post-reset lock: no fills at all, not even of an order that
+          // somehow survived the reset's cancellation.
+          if (account.entries_locked === true) {
+            console.warn(`[pending] ${pending.symbol} ${pending.direction} — entries locked (post-reset), not filling ${pending.order_id}`);
+            pollCtx.branch = "entries_locked";
+            pollCtx.after = pending.status;
+            continue;
+          }
 
           const claim = await claimRoute2Fill(supabase, {
             pendingRowId: (pending as any).id,

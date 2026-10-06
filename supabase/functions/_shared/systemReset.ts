@@ -11,6 +11,11 @@
  *
  * Any failed step STOPS the sequence, leaves the bot paused, and records the
  * step and reason on the permanent account_reset_runs row.
+ *
+ * A SUCCESSFUL reset also leaves the bot paused AND entries-locked. The reset
+ * is an accounting boundary, not a restart: the old configuration must never
+ * trade the new $100,000. Unlocking is a separate, explicitly approved step
+ * after the simplified configuration is built and verified.
  */
 import type { MonitorResult } from "./settlementMonitor.ts";
 import { getQuoteToUSDRate, SPECS } from "./smcAnalysis.ts";
@@ -202,6 +207,8 @@ export interface ResetDeps {
   insertRun(row: Record<string, unknown>): Promise<string>;
   updateRun(resetId: string, patch: Record<string, unknown>): Promise<void>;
   setPaused(paused: boolean): Promise<void>;
+  /** Post-reset entries lock (paper_accounts.entries_locked). Never cleared here. */
+  lockEntries(reason: string): Promise<void>;
   cancelOldPending(boundary: string): Promise<OldOrder[]>;
   cancelOldSetups(boundary: string): Promise<OldSetup[]>;
   openPositions(): Promise<OldPosition[]>;
@@ -221,6 +228,7 @@ export interface PostResetState {
   open_positions: number; positions_opened_before_reset: number; pending_orders: number; active_setups: number;
   daily_pnl: number; drift: number | null; unledgered_writes_this_epoch: number;
   last_ledger_kind: string | null; ledger_reset_at: string | null;
+  is_paused: boolean; entries_locked: boolean;
 }
 
 export function verifyPostReset(s: PostResetState): Condition[] {
@@ -242,6 +250,8 @@ export function verifyPostReset(s: PostResetState): Condition[] {
       `latest ledger entry: ${s.last_ledger_kind} (backfill never posts to the ledger; a pre-reset position settles for 0)`),
     c("drift", "Ledger reconciliation drift = $0", s.drift === 0, `${s.drift}`),
     c("unledgered", "No unledgered writes", s.unledgered_writes_this_epoch === 0, `${s.unledgered_writes_this_epoch}`),
+    c("paused", "Trading paused", s.is_paused === true, `is_paused ${s.is_paused}`),
+    c("entries_locked", "New entries locked until the new configuration is approved", s.entries_locked === true, `entries_locked ${s.entries_locked}`),
   ];
 }
 
@@ -281,6 +291,7 @@ export async function runSystemReset(deps: ResetDeps, req: ResetRequest): Promis
   };
   const fail = async (step: string, reason: string, extra: Record<string, unknown> = {}): Promise<ResetResult> => {
     try { await deps.setPaused(true); } catch { /* recorded below regardless */ }
+    try { await deps.lockEntries(`reset ${resetId} failed at ${step}`); } catch { /* recorded below regardless */ }
     steps.push({ step, at: deps.now(), ok: false, detail: reason });
     await deps.updateRun(resetId, {
       ...extra, status: "failed", failed_step: step, failure_reason: reason, success: false, completed_at: deps.now(), steps,
@@ -294,9 +305,11 @@ export async function runSystemReset(deps: ResetDeps, req: ResetRequest): Promis
   let cancelledSetups: OldSetup[] = [];
 
   try {
-    // 4. No new entries while resetting.
+    // 4. No new entries while resetting — and none afterwards until the new
+    // configuration is approved. The lock is never lifted by this sequence.
     await deps.setPaused(true);
-    await record("pause_entries", true);
+    await deps.lockEntries(`post-reset lock set by reset ${resetId}`);
+    await record("pause_and_lock_entries", true);
 
     // 6 before 5 on purpose: cancelling pending orders first stops an old
     // order from filling into a position mid-flatten. An order a filler had
@@ -381,9 +394,9 @@ export async function runSystemReset(deps: ResetDeps, req: ResetRequest): Promis
     }
     await record("verify_post_reset", true, { checks: verification.length }, { verification, post_reset_balance: post.balance });
 
-    // 14. Resume only after successful verification.
-    await deps.setPaused(false);
-    steps.push({ step: "resume_trading", at: deps.now(), ok: true });
+    // 14. Do NOT resume. The account stays paused and entries-locked until
+    // the simplified configuration is built, verified and approved.
+    steps.push({ step: "left_paused_and_locked", at: deps.now(), ok: true, detail: "trading resumes only after separate approval" });
     await deps.updateRun(resetId, { status: "succeeded", success: true, completed_at: deps.now(), steps });
     return { status: "succeeded", resetId, verification };
   } catch (e) {
