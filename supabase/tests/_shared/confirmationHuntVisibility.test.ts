@@ -50,8 +50,12 @@ Deno.test("every exit from the hunt is recorded, including the fill", () => {
   // hunt and is recorded as FILL_<outcome>.
   assert(/outcome: `FILL_\$\{claim\.outcome\.toUpperCase\(\)\}`/.test(scanner),
     "a lost fill claim must be recorded, not silent");
+  // 10 since step 8: the dry-run hypothetical fill and the post-reset
+  // entries-locked skip are exits too.
+  assert(/outcome: "DRY_RUN_FILL"/.test(scanner), "a dry-run fill must be recorded");
+  assert(/outcome: "ENTRIES_LOCKED"/.test(scanner), "a locked skip must be recorded");
   assertEquals(
-    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 8,
+    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 10,
     "one push per exit, and no path left silent",
   );
 });

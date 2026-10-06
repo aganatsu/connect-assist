@@ -456,8 +456,11 @@ Deno.test("both pollers fill ONLY through the atomic claim, keyed on the row and
     assert(/pendingRowId: \(pending as any\)\.id,/.test(src), `${name} must claim by primary key`);
     assert(/expectedArmCount: \(pending as any\)\.confirmation_arm_count \?\? null,/.test(src),
       `${name} must guard on the arm count it read (stale-confirmation protection)`);
-    // No residual two-step fill anywhere in the file.
-    assert(!/status:\s*"filled"/.test(src), `${name} still writes status "filled" outside the claim`);
+    // No residual two-step fill anywhere in the file — except bot-scanner's
+    // step-8 DRY-RUN branch, which marks a hypothetical fill on a dry_run order
+    // and never creates a position (the database also refuses one).
+    const stripped = src.replace(/if \(\(pending as any\)\.dry_run === true\) \{[\s\S]*?\n {10}\}/, "");
+    assert(!/status:\s*"filled"/.test(stripped), `${name} still writes status "filled" outside the claim`);
   }
 });
 

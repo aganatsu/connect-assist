@@ -304,7 +304,8 @@ Deno.test("post-reset verification fails if trading is not paused or entries are
 
 Deno.test("the entries lock is honoured by every new-entry and fill path (source)", () => {
   const scanner = Deno.readTextFileSync(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
-  assert(/const isPaused = account\.is_paused \|\| account\.entries_locked === true;/.test(scanner), "locked counts as paused for staging/promotion/placement");
+  assert(/const isPaused = dryRunActive \? false : \(account\.is_paused \|\| account\.entries_locked === true\);/.test(scanner),
+    "locked counts as paused for staging/promotion/placement (unless dry run, where the DB refuses real orders)");
   const hunt = scanner.indexOf("if (account.entries_locked === true) {");
   assert(hunt > 0 && hunt < scanner.indexOf("const claim = await claimRoute2Fill(supabase, {"), "the hunt refuses to fill while locked");
   const zcs = Deno.readTextFileSync(new URL("../../functions/zone-confirmation-scanner/index.ts", import.meta.url));

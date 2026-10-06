@@ -184,6 +184,10 @@ export interface ReasoningFactor {
 export interface GateResult {
   passed: boolean;
   reason: string;
+  /** Step 8: stable id for switchable gates (see _shared/simplification.ts). */
+  gateId?: string;
+  loggedOnly?: boolean;
+  wouldBlock?: boolean;
 }
 
 // ─── ZigZag Pivot & Fibonacci Types ────────────────────────────────
