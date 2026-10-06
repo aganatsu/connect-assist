@@ -26,7 +26,9 @@ Deno.test("absent or malformed switches resolve to LEGACY behaviour (deploying c
 
 Deno.test("the approved minimal switches resolve exactly", () => {
   const s = resolveSimplification(MINIMAL);
-  assertEquals(s, { scoreGateMode: "log", reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0, newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true });
+  assertEquals(s, { scoreGateMode: "log", reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0, newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true,
+    // step 9 sizing switches are not part of the step 8 config → legacy defaults
+    sizingMode: "legacy", riskPercent: 0.5, maxLotsPerTrade: 20 });
 });
 
 const gates: GateResult[] = [

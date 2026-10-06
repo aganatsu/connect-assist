@@ -54,8 +54,9 @@ Deno.test("every exit from the hunt is recorded, including the fill", () => {
   // entries-locked skip are exits too.
   assert(/outcome: "DRY_RUN_FILL"/.test(scanner), "a dry-run fill must be recorded");
   assert(/outcome: "ENTRIES_LOCKED"/.test(scanner), "a locked skip must be recorded");
+  assert(/outcome: "FILL_SIZING_UNAVAILABLE"/.test(scanner), "a refused fill-time sizing must be recorded (step 9)");
   assertEquals(
-    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 10,
+    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 11,
     "one push per exit, and no path left silent",
   );
 });

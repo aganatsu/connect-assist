@@ -103,6 +103,7 @@ import {
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import { applyLoggedOnlyGates, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
+import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -4270,7 +4271,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // position snapshot, signal_reason and Telegram all read this.
           const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF);
           const route2Provenance = buildRoute2Provenance(pending as Record<string, unknown>);
+          // Step 9: size at the ACTUAL fill — fill price, the order's stop, the
+          // balance now, one fixed risk %. If it cannot be computed exactly
+          // (missing FX rate), do not fill this cycle; the order stays armed.
+          const fillSizing = simp.sizingMode === "fill_time"
+            ? fillTimeSize({
+                balance, riskPercent: simp.riskPercent, fillPrice: actualFillPrice, stop: Number(pending.stop_loss),
+                symbol: pending.symbol, rateMap, commissionPerLot: avgCommissionPerLot, maxLotsPerTrade: simp.maxLotsPerTrade,
+              })
+            : null;
+          if (fillSizing && !fillSizing.ok) {
+            console.warn(`[pending] ${pending.symbol} ${pending.direction} — fill-time sizing unavailable (${fillSizing.reason}); not filling ${pending.order_id} this cycle`);
+            pollCtx.branch = "fill_sizing_unavailable";
+            pollCtx.after = pending.status;
+            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "FILL_SIZING_UNAVAILABLE", tier: confirmationSignal.tier });
+            continue;
+          }
           const signalReason = {
+            ...(fillSizing ? { fillSizing } : {}),
             ...parsedSignalReason,
             filledFromLimitOrder: true,
             confirmationEntry: true,
@@ -4333,7 +4351,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             position_id: positionId,
             symbol: pending.symbol,
             direction: pending.direction,
-            size: pending.size.toString(),
+            size: (fillSizing ? fillSizing.lots : Number(pending.size)).toString(),
             ...r2Telemetry,
             // Inherited, not rebuilt. The decision was made when the order was
             // placed; rebuilding here would record the market at fill time and
@@ -4382,6 +4400,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               ...pendingFillPatch,
               status: "filled",
               fill_reason: `[DRY RUN — hypothetical] ${pendingFillPatch.fill_reason}`,
+              dry_run_context: { ...((pending as any).dry_run_context ?? {}), fillSizing, fillPrice: actualFillPrice },
             }).eq("id", (pending as any).id).eq("status", pending.status);
             if (dryErr) console.warn(`[pending] dry-run fill record failed for ${pending.order_id}: ${dryErr.message}`);
             pollCtx.branch = "dry_run_fill";
@@ -7945,6 +7964,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             limitSize = Math.round(limitSize * 0.5 * 100) / 100;
             if (limitSize < 0.01) limitSize = 0.01;
           }
+          // Step 9: under fill_time sizing the order carries a PLANNED size at
+          // the limit price (one rule, no 0.5× cut); the fill re-sizes it.
+          let plannedSizing: ReturnType<typeof fillTimeSize> | null = null;
+          if (simp.sizingMode === "fill_time") {
+            plannedSizing = fillTimeSize({
+              balance, riskPercent: simp.riskPercent, fillPrice: limitEntry.price, stop: limitSL,
+              symbol: pair, rateMap, commissionPerLot: avgCommissionPerLot, maxLotsPerTrade: simp.maxLotsPerTrade,
+            });
+            if (plannedSizing.ok) limitSize = plannedSizing.lots;
+            (detail as any).plannedSizing = plannedSizing;
+          }
 
           // ── Replace stale pending: expire any existing pending order for same symbol+direction ──
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
@@ -8105,7 +8135,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: plannedSizing ? { mode: "fill_time_planned", ...plannedSizing } : sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,

@@ -319,6 +319,10 @@ Deno.serve(async (req) => {
       // Dry-run orders (step 8 funnel measurement) are hypothetical: this poller
       // never fills them — the bot-scanner hunt records their hypothetical fill.
       if ((pending as any).dry_run === true) continue;
+      // Step 9: under fill-time sizing only the bot-scanner hunt fills — it has
+      // the FX rate map needed to size exactly at the fill. This poller does
+      // not fill (it is removed outright in step 11).
+      if ((userDataMap[(pending as any).user_id]?.config as any)?.simplification?.sizingMode === "fill_time") continue;
       // Same guarantee as bot-scanner: ONE row per order per poll, enforced
       // by `finally` so a `continue` added later cannot escape the log.
       const pollMark = pollRows.length;
