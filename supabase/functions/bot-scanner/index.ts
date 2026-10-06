@@ -7944,9 +7944,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             });
             (detail as any).route2Stop = {
               anchor: simp.stopAnchor,
-              market: { sl: limitSL, tp: limitTP, riskPipsFromLimit: riskFromLimit / spec.pipSize, belowFloor: riskFromLimit / spec.pipSize < effectiveMinSlPips },
-              limit: anchored,
+              limitEntry: limitEntry.price,
+              market: {
+                sl: limitSL, tp: limitTP, riskPipsFromLimit: riskFromLimit / spec.pipSize,
+                targetPips: Math.abs(limitTP - limitEntry.price) / spec.pipSize,
+                belowFloor: riskFromLimit / spec.pipSize < effectiveMinSlPips,
+              },
+              limit: anchored.ok
+                ? { ...anchored, targetPips: Math.abs(anchored.tp - limitEntry.price) / spec.pipSize, belowFloor: anchored.riskPips < effectiveMinSlPips - 1e-9 }
+                : anchored,
               floorPips: effectiveMinSlPips,
+              capPips: impulseStopCandidate?.capPips ?? null,
             };
             if (simp.stopAnchor === "limit") {
               if (!anchored.ok) {
@@ -8187,6 +8195,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               scoreGate: (detail as any).scoreGate ?? null,
               ictFVGGate: (detail as any).ictFVGGate ?? null,
               orderRR: (detail as any).orderRR ?? null,
+              // Step 10: old (market-anchored) vs corrected (limit-anchored) stop,
+              // floor, cap, distances — and the step 9 planned 0.5% size.
+              route2Stop: (detail as any).route2Stop ?? null,
+              plannedSizing: (detail as any).plannedSizing ?? null,
               unifiedDetected: (detail as any).unifiedDetected ?? null,
               unifiedComparison: (detail as any).unifiedComparison ?? null,
               // Would the pre-step-8 (legacy) rules have placed this order too?

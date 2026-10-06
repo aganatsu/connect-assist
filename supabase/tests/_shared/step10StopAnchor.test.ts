@@ -67,10 +67,23 @@ Deno.test("wiring: anchored geometry computed from the limit, before the order R
   const rr = scanner.indexOf("const orr = orderEffectiveRR({ entry: limitEntry.price, stop: limitSL, target: limitTP");
   const plan = scanner.indexOf("plannedSizing = fillTimeSize({");
   assert(a > 0 && a < rr && rr < plan);
-  const block = scanner.slice(a, a + 1800);
+  const block = scanner.slice(a, a + 3200);
   assert(/limit: limitEntry\.price,/.test(block));
   assert(/minSlPips: effectiveMinSlPips,/.test(block));
-  assert(/\(detail as any\)\.route2Stop = \{/.test(block) && /market: \{ sl: limitSL/.test(block) && /limit: anchored/.test(block));
+  assert(/\(detail as any\)\.route2Stop = \{/.test(block) && /market: \{\s*sl: limitSL/.test(block) && /limit: anchored/.test(block));
   assert(/if \(simp\.stopAnchor === "limit"\) \{[\s\S]*limitSL = anchored\.sl;[\s\S]*limitTP = anchored\.tp;/.test(block));
   assert(/impulseStopCandidate = \{ sl: impulseSL, capPips: maxImpulseSlPips \};/.test(scanner), "the impulse candidate is captured from the existing chain");
+});
+
+Deno.test("dry-run orders record both stop geometries, floor, cap, distances and the planned 0.5% size", () => {
+  const i = scanner.indexOf("(detail as any).route2Stop = {");
+  const rec = scanner.slice(i, i + 1400);
+  for (const f of ["limitEntry: limitEntry.price", "targetPips:", "belowFloor:", "floorPips: effectiveMinSlPips", "capPips: impulseStopCandidate?.capPips ?? null"]) {
+    assert(rec.includes(f), `route2Stop records ${f}`);
+  }
+  const d = scanner.indexOf("dry_run_context: dryRunActive ? {");
+  const ctx = scanner.slice(d, d + 1800);
+  assert(/route2Stop: \(detail as any\)\.route2Stop \?\? null,/.test(ctx));
+  assert(/plannedSizing: \(detail as any\)\.plannedSizing \?\? null,/.test(ctx));
+  assert(/orderRR: \(detail as any\)\.orderRR \?\? null,/.test(ctx));
 });
