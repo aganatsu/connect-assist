@@ -40,6 +40,7 @@ const MIGRATION_LEDGER = read("../../migrations/20261006010000_paper_settlement_
 const MIGRATION_MONITOR = read("../../migrations/20261006020000_settlement_monitor_runs.sql");
 const MIGRATION_RESET = read("../../migrations/20261006030000_system_reset_workflow.sql");
 const MIGRATION_LOCK = read("../../migrations/20261006040000_post_reset_entries_lock.sql");
+const MIGRATION_ROLE_FIX = read("../../migrations/20261006060000_fix_jwt_role_detection.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -96,8 +97,12 @@ async function baseDb(opts: { preFix?: boolean } = {}): Promise<PGlite> {
     -- Supabase's own definitions read the PostgREST request claims.
     create function auth.uid() returns uuid language sql stable as
       $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+    -- Supabase's real auth.role(): the legacy GUC OR request.jwt.claims->>'role'.
+    -- Current PostgREST sets ONLY request.jwt.claims; a stub that read only the
+    -- legacy GUC hid the 2026-10-06 entries-lock guard bug.
     create function auth.role() returns text language sql stable as
-      $$ select nullif(current_setting('request.jwt.claim.role', true), '') $$;
+      $$ select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''),
+                         (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')) $$;
     grant usage on schema auth to anon, authenticated, service_role;
     ${tableDdl("paper_accounts")}
     ${tableDdl("paper_positions")}
@@ -128,6 +133,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_MONITOR);
   await db.exec(MIGRATION_RESET);
   await db.exec(MIGRATION_LOCK);
+  await db.exec(MIGRATION_ROLE_FIX);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -404,7 +410,7 @@ Deno.test("enforce mode: a direct balance write is refused — from the API role
     () => db.query(`update public.paper_accounts set balance = 1e9 where user_id = $1`, [USER]),
     Error, "settlement ledger",
   );
-  await db.exec(`reset session authorization`);
+  await db.exec(`set session authorization postgres`);
   // Non-money columns stay writable.
   await db.query(`update public.paper_accounts set scan_count = scan_count + 1, is_paused = true where user_id = $1`, [USER]);
   assertEquals(await balance(db), 100000);
@@ -496,7 +502,7 @@ Deno.test("a signed-in user cannot settle or reset another user's account", asyn
   // The owner can.
   await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [USER]);
   assertEquals((await settle(db, rowId, usdJpyClose())).outcome, "settled");
-  await db.exec(`reset session authorization`);
+  await db.exec(`set session authorization postgres`);
   assertEquals(await balance(db), 100871.19);
   await db.close();
 });
@@ -700,7 +706,38 @@ Deno.test("entries lock: ships off; a signed-in user cannot lift it; the server 
   await assertRejects(() => db.query(`update public.paper_accounts set entries_locked = false where user_id = $1`, [USER]), Error, "entries lock");
   // …while ordinary fields stay editable (e.g. the app's pause button).
   await db.query(`update public.paper_accounts set is_paused = false where user_id = $1`, [USER]);
-  await db.exec(`reset session authorization`);
+  await db.exec(`set session authorization postgres`);
   assertEquals(await lockedOf(), true, "unpausing does not unlock");
   await db.close();
+});
+
+Deno.test("entries lock: service role recognised as PostgREST sends it today (request.jwt.claims JSON only) — the 2026-10-06 reset failure", async () => {
+  const db = await baseDb();
+  await db.query(`insert into public.paper_accounts (user_id, bot_id, balance, peak_balance, daily_pnl_base) values ($1,'smc',100000,100000,100000)`, [USER]);
+  await db.exec(MIGRATION_TIMESTAMPS); await db.exec(MIGRATION_LEDGER); await db.exec(MIGRATION_MONITOR); await db.exec(MIGRATION_RESET); await db.exec(MIGRATION_LOCK);
+  // NB: in PGlite, `set session authorization postgres` returns to the last role set,
+  // not the login role — switch back to postgres explicitly.
+  const asApi = async (claims: Record<string, unknown>, sql: string) => {
+    await db.exec(`set session authorization authenticated`);
+    await db.query(`select set_config('request.jwt.claim.role', '', false), set_config('request.jwt.claims', $1, false)`, [JSON.stringify(claims)]);
+    try { await db.query(sql, [USER]); }
+    finally { await db.exec(`set session authorization postgres`); }
+  };
+  const lockSql = `update public.paper_accounts set entries_locked = true, entries_locked_reason = 'reset' where user_id = $1`;
+  // Before the fix: exactly the production error, for a service-role request.
+  await assertRejects(() => asApi({ role: "service_role" }, lockSql), Error, "entries lock can only be changed by the server");
+  // After the fix: the reset's lock call succeeds…
+  await db.exec(MIGRATION_ROLE_FIX);
+  await asApi({ role: "service_role" }, lockSql);
+  assertEquals((await db.query<{ l: boolean }>(`select entries_locked as l from public.paper_accounts`)).rows[0].l, true);
+  // …and a signed-in user, in the same modern form, is still refused.
+  await assertRejects(() => asApi({ role: "authenticated", sub: USER }, `update public.paper_accounts set entries_locked = false where user_id = $1`), Error, "entries lock");
+  assertEquals((await db.query<{ l: boolean }>(`select entries_locked as l from public.paper_accounts`)).rows[0].l, true);
+  await db.close();
+});
+
+Deno.test("role-dependent triggers decide on auth.role(), never on the legacy GUC alone", () => {
+  const fix = read("../../migrations/20261006060000_fix_jwt_role_detection.sql").replace(/^--.*$/gm, "");
+  assert(!/request\.jwt\.claim\.role/.test(fix), "the fix uses auth.role(), not the legacy GUC");
+  assert(/COALESCE\(auth\.role\(\), ''\) <> 'service_role'/.test(fix));
 });
