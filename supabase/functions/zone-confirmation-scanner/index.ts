@@ -30,6 +30,7 @@ import {
 import { buildPollRecord, type TerminalReason } from "../_shared/route2Forward.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { resolveSimplification } from "../_shared/simplification.ts";
+import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { ROUTE2_LIFECYCLE_VERSION, mayResetNow } from "../_shared/route2Lifecycle.ts";
 import {
   buildConfirmationRecord, buildRoute2Provenance, tierLabel, typeLabel,
@@ -580,9 +581,9 @@ Deno.serve(async (req) => {
         console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
         console.log(`[zone-confirm] Tier: ${confirmationSignal.tier}, Type: ${confirmationSignal.type}`);
 
-        // Check max positions gate
-        const maxOpenPositions = parseInt(String(config.risk?.maxOpenPositions || config.maxOpenPositions || 3), 10);
-        const maxPerSymbol = config.risk?.maxPerSymbol || config.maxPerSymbol || 2;
+        // Check max positions gate. Same caps as bot-scanner (step 12 single
+        // owner); `config` here is the raw nested config_json.
+        const { maxOpenPositions, maxPerSymbol } = resolvePositionCaps(config, "second_poller");
         const currentOpenCount = openPositions.length;
         const currentSymbolCount = openPositions.filter((p: any) => p.symbol === pending.symbol).length;
 

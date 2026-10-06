@@ -104,6 +104,7 @@ import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.t
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import { applyLoggedOnlyGates, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
+import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
@@ -1604,22 +1605,24 @@ export async function runSafetyGates(
     gates.push({ passed: true, reason: `${symbol} enabled` });
   }
 
-  // Gate 4: Max open positions
-  if (openPositions.length >= config.maxOpenPositions) {
-    gates.push({ passed: false, reason: `Max positions (${config.maxOpenPositions}) reached` });
+  // Gate 4: Max open positions. Caps come from the single owner (step 12);
+  // `config` here is the pair-overridden copy, used only in legacy mode.
+  const caps = resolvePositionCaps((config as any).__rawConfigJson, "placement", config);
+  if (openPositions.length >= caps.maxOpenPositions) {
+    gates.push({ passed: false, reason: `Max positions (${caps.maxOpenPositions}) reached` });
   } else {
-    gates.push({ passed: true, reason: `${openPositions.length}/${config.maxOpenPositions} positions` });
+    gates.push({ passed: true, reason: `${openPositions.length}/${caps.maxOpenPositions} positions` });
   }
 
-  // Gate 5: Max per symbol + same-direction duplicate check
+  // Gate 5: same-direction duplicate check (its own rule), then max per symbol
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
   if (sameDirectionExists && !config.allowSameDirectionStacking) {
     gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
-  } else if (symbolPositions >= config.maxPerSymbol) {
-    gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
+  } else if (symbolPositions >= caps.maxPerSymbol) {
+    gates.push({ passed: false, reason: `Max ${caps.maxPerSymbol} positions for ${symbol} reached` });
   } else {
-    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
+    gates.push({ passed: true, reason: `${symbolPositions}/${caps.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
   }
 
   // Gate 6: Portfolio heat (actual risk per position)
@@ -4193,15 +4196,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
           console.log(`[pending] Confirmation tier: ${confirmationSignal.tier}, type: ${confirmationSignal.type}`);
 
-          // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
+          // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time,
+          // with the same caps as placement (step 12 single owner).
+          const huntCaps = resolvePositionCaps((config as any).__rawConfigJson, "hunt_fill", config);
           const currentOpenCount = openPosArr.length;
           const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
-          if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
-            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
+          if (currentOpenCount >= huntCaps.maxOpenPositions) {
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${huntCaps.maxOpenPositions})`);
             await supabase.from("pending_orders").update({
               status: "cancelled",
               terminal_reason: "CANCELLED_POSITION_CAP" as TerminalReason,
-              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at confirmation time`,
+              cancel_reason: `Max open positions reached (${currentOpenCount}/${huntCaps.maxOpenPositions}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
@@ -4211,23 +4216,23 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             confirmationHunt.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "blocked_max_open_positions", tier: confirmationSignal.tier,
-              openCount: currentOpenCount, cap: config.maxOpenPositions,
+              openCount: currentOpenCount, cap: huntCaps.maxOpenPositions, capsMode: huntCaps.mode,
             });
             continue;
           }
-          if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
-            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
+          if (currentSymbolCount >= huntCaps.maxPerSymbol) {
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${huntCaps.maxPerSymbol})`);
             await supabase.from("pending_orders").update({
               status: "cancelled",
               terminal_reason: "CANCELLED_POSITION_CAP" as TerminalReason,
-              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at confirmation time`,
+              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${huntCaps.maxPerSymbol}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
             confirmationHunt.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "blocked_max_per_symbol", tier: confirmationSignal.tier,
-              symbolCount: currentSymbolCount, cap: config.maxPerSymbol,
+              symbolCount: currentSymbolCount, cap: huntCaps.maxPerSymbol, capsMode: huntCaps.mode,
             });
             continue;
           }
@@ -4797,13 +4802,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   // ── Dynamic Scan Skip: management-only mode when max positions reached ──
-  // Reads maxOpenPositions from live config each cycle — fully dynamic.
-  // If positions close or config.maxOpenPositions increases, scanning resumes next cycle.
+  // Reads the global cap from the single owner (step 12) each cycle — fully dynamic.
+  // If positions close or the cap increases, scanning resumes next cycle.
   // Note: openPosArr was already filtered to position_status="open" by the Supabase query (line 3607),
   // so .length IS the true open count. The redundant filter was removed to prevent edge-case miscount.
   const currentOpenCount = openPosArr.length;
-  const maxOpen = parseInt(String(config.maxOpenPositions), 10) || 3;
-  console.log(`[scan ${scanCycleId}] SCAN-STOP CHECK: ${currentOpenCount} open positions, maxOpen=${maxOpen}, config.maxOpenPositions=${config.maxOpenPositions} (type: ${typeof config.maxOpenPositions})`);
+  const scanStopCaps = resolvePositionCaps((config as any).__rawConfigJson, "scan_stop", config);
+  const maxOpen = scanStopCaps.maxOpenPositions;
+  console.log(`[scan ${scanCycleId}] SCAN-STOP CHECK: ${currentOpenCount} open positions, maxOpen=${maxOpen} (${scanStopCaps.mode}: ${scanStopCaps.source})`);
   if (currentOpenCount >= maxOpen) {
     console.log(`[scan ${scanCycleId}] MAX POSITIONS REACHED (${currentOpenCount}/${maxOpen}) — management only, skipping new entry scan. Saves API credits & compute.`);
     // Still ran: price refresh + management (trailing SL, break-even, partial TP, close-on-reverse, structure invalidation)
@@ -7612,8 +7618,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             candidate: { symbol: pair, direction: analysis.direction, size: 0.01 },
             openPositions: slimPositions(openPosArr.filter((p: any) => p.position_status === "open")),
             options: { staticOnly: true },
-            maxOpenPositions: config.maxOpenPositions,
-            maxPositionsPerSymbol: (config as any).maxPositionsPerSymbol ?? null,
+            // The caps placement enforced for this pair (step 12 owner). The old
+            // per-symbol field read a config key that never exists, so it was always null.
+            ...(() => {
+              const c = resolvePositionCaps((pairConfig as any).__rawConfigJson, "decision_record", pairConfig);
+              return { maxOpenPositions: c.maxOpenPositions, maxPositionsPerSymbol: c.maxPerSymbol, capsMode: c.mode };
+            })(),
             maxCorrelatedPositions: (config as any).maxCorrelatedPositions ?? null,
             maxCorrelation: (config as any).maxCorrelation ?? null,
             maxPortfolioHeat: (config as any).maxPortfolioHeat ?? null,
