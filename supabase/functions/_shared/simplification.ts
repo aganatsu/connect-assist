@@ -30,6 +30,13 @@ export interface SimplificationSwitches {
   /** While entries_locked: run the full pipeline and place Route 2 orders flagged
    *  dry_run (never filled into positions) to measure the funnel. */
   dryRunWhenLocked: boolean;
+  /** Step 9: "legacy" keeps the placement-time Route 2 size (with the 0.5×
+   *  standalone cut); "fill_time" sizes at the actual fill to riskPercent. */
+  sizingMode: "legacy" | "fill_time";
+  /** Risk per trade (% of balance at fill) for fill_time sizing. */
+  riskPercent: number;
+  /** Safety ceiling in lots (the 10× leverage cap also applies). */
+  maxLotsPerTrade: number;
 }
 
 export const LEGACY_SWITCHES: SimplificationSwitches = {
@@ -40,6 +47,9 @@ export const LEGACY_SWITCHES: SimplificationSwitches = {
   newsGateMode: "gate",
   unifiedModifiersEnabled: true,
   dryRunWhenLocked: false,
+  sizingMode: "legacy",
+  riskPercent: 0.5,
+  maxLotsPerTrade: 20,
 };
 
 const mode = (v: unknown, fallback: GateMode): GateMode => (v === "gate" || v === "log" ? v : fallback);
@@ -56,6 +66,9 @@ export function resolveSimplification(raw: Record<string, unknown> | null | unde
     newsGateMode: mode(s.newsGateMode, LEGACY_SWITCHES.newsGateMode),
     unifiedModifiersEnabled: s.unifiedModifiersEnabled === false ? false : true,
     dryRunWhenLocked: s.dryRunWhenLocked === true,
+    sizingMode: s.sizingMode === "fill_time" ? "fill_time" : "legacy",
+    riskPercent: typeof s.riskPercent === "number" && s.riskPercent > 0 && s.riskPercent <= 5 ? s.riskPercent : LEGACY_SWITCHES.riskPercent,
+    maxLotsPerTrade: typeof s.maxLotsPerTrade === "number" && s.maxLotsPerTrade > 0 ? s.maxLotsPerTrade : LEGACY_SWITCHES.maxLotsPerTrade,
   };
 }
 
