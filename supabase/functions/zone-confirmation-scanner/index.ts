@@ -29,6 +29,7 @@ import {
 } from "../_shared/smcTradeTelemetry.ts";
 import { buildPollRecord, type TerminalReason } from "../_shared/route2Forward.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
+import { resolveSimplification } from "../_shared/simplification.ts";
 import { ROUTE2_LIFECYCLE_VERSION, mayResetNow } from "../_shared/route2Lifecycle.ts";
 import {
   buildConfirmationRecord, buildRoute2Provenance, tierLabel, typeLabel,
@@ -291,6 +292,14 @@ Deno.serve(async (req) => {
         _brokerConn = { api_key: authToken, account_id: metaAccountId };
       }
 
+      // Step 11: the second Route 2 poller is switched off for this account —
+      // the bot-scanner hunt is the single source of every lifecycle action.
+      // Skipping here (before userDataMap) means its orders are not touched
+      // and no candles are fetched for them.
+      if (resolveSimplification((botConfig?.config_json ?? {}) as Record<string, unknown>).secondPollerEnabled === false) {
+        console.log(`[zone-confirm] second poller disabled for ${userId} (simplification.secondPollerEnabled=false) — skipping`);
+        continue;
+      }
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
