@@ -273,7 +273,11 @@ Deno.test("10 · config_hash is stable under key order and sensitive to value ch
 Deno.test("config_hash is persisted on the order and its body is archived", () => {
   assert(/const _configHash = configHash\(config\)/.test(SCANNER), "hash must be computed per scan");
   assert(/from\("bot_config_history"\)\.upsert\(/.test(SCANNER), "the body must be archived");
-  assert(/configHash: _configHash/.test(SCANNER), "the order must carry the hash");
+  // Step 15: new orders carry the CANONICAL hash (bot_configs.config_version,
+  // = bot_config_change_log.next_hash), not this 16-hex one; the 16-hex body is
+  // still archived so pre-step-15 orders keep resolving.
+  assert(/configHash: String\(\(config as any\)\.__configVersion \?\? ""\)/.test(SCANNER), "the order must carry the canonical hash");
+  assert(!/configHash: _configHash/.test(SCANNER), "the 16-hex hash is no longer written on orders");
   assert(/unique \(bot_id, config_hash\)/.test(MIGRATION), "one row per distinct config");
 });
 

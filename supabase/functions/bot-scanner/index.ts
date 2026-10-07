@@ -2325,8 +2325,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // bot_configs is a single MUTABLE row carrying only `updated_at`. In the
   // universe audit 11 of 35 live orders could not be attributed to a config
   // because no history existed. Hash the resolved config and record the body
-  // the first time each hash is seen, so `pending_orders.config_hash`
-  // resolves to something. Observational; failures never block a scan.
+  // the first time each hash is seen. Orders placed before step 15 carry this
+  // 16-hex hash and resolve here; since step 15 new orders carry the canonical
+  // bot_configs.config_version and resolve via bot_config_change_log.next_hash.
+  // Observational; failures never block a scan.
   const _configHash = configHash(config);
   try {
     await supabase.from("bot_config_history").upsert({
@@ -8210,7 +8212,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             distanceAtr: r2DistanceAtr,
             initialStopLoss: limitSL,
             initialTakeProfit: limitTP,
-            configHash: _configHash,
+            // Step 15: the canonical stored-config hash (md5(config_json::text),
+            // the change log's next_hash) — the same value the attribution row
+            // carries. A missing hash never reaches an order: placement fails
+            // closed on attribution first.
+            configHash: String((config as any).__configVersion ?? ""),
             // The Route 1 arming condition minus the config flag, so the two
             // strata stay separable once Route 1 is switched off.
             wouldHaveBeenRoute1: priceIsAtValidatedZone && priceOnCorrectSide,
@@ -8338,6 +8344,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
+          // The order and its attribution carry the exact same config hash.
+          route2OrderRow.config_hash = configVersion;
           const placement = await placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede });
           if (placement.superseded.length > 0) {
             console.log(`[pending] Expired ${placement.superseded.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
