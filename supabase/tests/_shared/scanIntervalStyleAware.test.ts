@@ -45,12 +45,14 @@ Deno.test("zero no longer collapses to the default", () => {
 
 Deno.test("the gate resolves the style before reading the interval", () => {
   const gate = scanner.indexOf("const intervalMinutes =");
-  const styleLoop = scanner.indexOf("if (STYLE_OVERRIDES[resolvedStyle]) {");
+  const styleLoop = scanner.indexOf("} else if (STYLE_OVERRIDES[resolvedStyle]) {");
   assert(gate > -1 && styleLoop > gate, "the loop still runs after the gate — that is why this fix exists");
+  // Step 14: under styleOverridesMode "off" the stored interval is used; in
+  // legacy mode the gate still consults STYLE_OVERRIDES itself.
   assert(
-    /const intervalMinutes = \(STYLE_OVERRIDES as any\)\[_intervalStyle\]\?\.scanIntervalMinutes\s*\n\s*\?\? config\.scanIntervalMinutes \?\? 15;/
+    /const intervalMinutes = styleOverridesMode === "off"\n\s+\? \(config\.scanIntervalMinutes \?\? 15\)\n\s+: \(\(STYLE_OVERRIDES as any\)\[_intervalStyle\]\?\.scanIntervalMinutes \?\? config\.scanIntervalMinutes \?\? 15\);/
       .test(scanner),
-    "the gate must consult STYLE_OVERRIDES itself",
+    "the gate must consult STYLE_OVERRIDES itself (legacy mode)",
   );
   assert(
     !/const intervalMinutes = config\.scanIntervalMinutes \|\| 15;/.test(scanner),

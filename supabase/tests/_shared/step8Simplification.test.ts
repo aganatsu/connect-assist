@@ -32,7 +32,9 @@ Deno.test("the approved minimal switches resolve exactly", () => {
     // step 10 stop anchor is not part of the step 8 config → legacy default
     stopAnchor: "market",
     // step 11 poller switch is not part of the step 8 config → legacy default
-    secondPollerEnabled: true });
+    secondPollerEnabled: true,
+    // step 14 switches are not part of the step 8 config → legacy defaults
+    styleOverridesMode: "legacy", marketEntriesEnabled: true });
 });
 
 const gates: GateResult[] = [
